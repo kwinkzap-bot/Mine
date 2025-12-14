@@ -1,0 +1,412 @@
+import pandas as pd
+from datetime import datetime, timedelta
+from kiteconnect import KiteConnect
+import os
+from dotenv import load_dotenv
+import logging
+from typing import Optional, List, Dict, Tuple, Any
+
+# Configure logging for this module
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Load environment variables once at the module level
+load_dotenv()
+
+class CPRFilterService:
+    """
+    Service class to fetch historical data, calculate multi-timeframe CPR levels,
+    and filter F&O stocks based on predefined CPR strategy criteria.
+    """
+    # --- Constants (Class Attributes for better structure) ---
+    HISTORICAL_DATA_DAYS: int = 45        # Max days of data to fetch
+    MIN_DATA_RECORDS: int = 25            # Minimum daily records needed for reliable calculation
+    MONTHLY_DATA_LOOKBACK: int = 21       # Number of trading days for monthly CPR calculation
+    PERCENTAGE_DIFF_THRESHOLD: float = 2.0 # 2.0% for weekly/monthly BC/TC difference (Narrow Confluence)
+    INDEX_SYMBOLS: List[str] = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+
+    def __init__(self, kite_instance: Optional[KiteConnect] = None, api_key: Optional[str] = None):
+        """Initializes the service and the KiteConnect instance."""
+        if kite_instance:
+            self.kite: KiteConnect = kite_instance
+            logger.info("CPRFilterService: Using existing KiteConnect instance.")
+        else:
+            self.api_key: Optional[str] = api_key or os.getenv("API_KEY")
+            self.access_token: Optional[str] = os.getenv("ACCESS_TOKEN") 
+            
+            if not self.api_key:
+                raise ValueError("API_KEY not provided or set as environment variable for CPRFilterService")
+            
+            self.kite = KiteConnect(api_key=self.api_key)
+            if self.access_token and self.access_token.strip():
+                self.kite.set_access_token(self.access_token)
+                logger.info("CPRFilterService: Created new KiteConnect instance with access token.")
+            else:
+                logger.warning("CPRFilterService: Created new KiteConnect instance without access token. Ensure authentication is handled elsewhere if required for API calls.")
+        
+        # Caching attributes: Initialize _instruments as an empty list (safe iterable)
+        self._instruments: List[Dict[str, Any]] = [] # FIX 1: Initialized as empty list instead of Optional[List]
+        self._fo_stocks: Optional[List[str]] = None
+        self._load_instruments() # Preload instruments for efficiency
+
+    def _load_instruments(self) -> None:
+        """Loads and caches all NSE instruments."""
+        try:
+            # Check if list is empty (i.e., not loaded yet)
+            if not self._instruments: 
+                logger.info("Loading NSE instruments for symbol mapping...")
+                self._instruments = self.kite.instruments('NSE')
+                logger.info(f"Loaded {len(self._instruments)} NSE instruments.")
+        except Exception as e:
+            logger.error(f"Error loading NSE instruments: {e}")
+            # FIX 2: Ensure it remains an empty list on failure
+            self._instruments = [] 
+
+    @staticmethod
+    def calculate_cpr(high: float, low: float, close: float) -> Tuple[float, float, float]:
+        """Calculate Central Pivot Range levels (PP, BC, TC)."""
+        pp: float = (high + low + close) / 3
+        bc: float = (high + low) / 2
+        tc: float = (2 * pp) - bc
+        return pp, bc, tc
+    
+    def get_instrument_token(self, symbol: str) -> Optional[int]:
+        """Get instrument token for NSE equity."""
+        # FIX 3: Since _instruments is initialized to [], check for emptiness
+        if not self._instruments:
+             self._load_instruments()
+        
+        # self._instruments is now guaranteed to be a list (even if empty)
+        for instrument in self._instruments: 
+            if instrument.get('tradingsymbol') == symbol and instrument.get('instrument_type') == 'EQ':
+                return instrument.get('instrument_token')
+            
+        logger.warning(f"No instrument token found for equity symbol: {symbol}")
+        return None
+    
+    def get_historical_data(self, symbol: str, days_back: int, interval: str = 'day') -> Optional[pd.DataFrame]:
+        """Get historical data from Zerodha and convert to DataFrame."""
+        try:
+            token = self.get_instrument_token(symbol)
+            if token is None:
+                return None
+            
+            end_date: datetime = datetime.now()
+            start_date: datetime = end_date - timedelta(days=days_back)
+            
+            data: List[Dict[str, Any]] = self.kite.historical_data(
+                instrument_token=token,
+                from_date=start_date.date(),
+                to_date=end_date.date(),
+                interval=interval,
+                continuous=False
+            )
+            
+            if not data:
+                logger.info(f"No data returned for {symbol} within the date range.")
+                return None
+            
+            df = pd.DataFrame(data)
+            required_cols = ['date', 'high', 'low', 'close']
+            if not all(col in df.columns for col in required_cols):
+                 logger.error(f"Missing required columns in data for {symbol}.")
+                 return None
+                 
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+
+            return df
+        except Exception as e:
+            logger.error(f"Error fetching historical data for {symbol}: {e}")
+            return None
+
+    def _get_period_cpr_data(self, data_frame: pd.DataFrame, lookback_days: int, offset: int = 0) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        """
+        Helper to get high, low, close for a specific, preceding period.
+        """
+        if len(data_frame) < lookback_days + offset:
+            return None, None, None 
+        
+        end_slice: Optional[int] = -offset if offset > 0 else None
+        period_data: pd.DataFrame = data_frame.iloc[-(lookback_days + offset): end_slice]
+        
+        high: float = period_data['high'].max()
+        low: float = period_data['low'].min()
+        close: float = period_data['close'].iloc[-1] 
+        
+        return high, low, close
+
+    def _check_above_cpr(self, current_price: float, daily_tc: float, weekly_tc: float, monthly_tc: float,
+                         daily_bc: float, weekly_bc: float, monthly_bc: float,
+                         current_low: float, weekly_bc_monthly_tc_diff: float, buy_signal_condition: bool) -> bool:
+        """Helper to check all bullish conditions for ABOVE CPR."""
+        
+        above_all_tc: bool = (current_price > daily_tc and 
+                              current_price > weekly_tc and 
+                              current_price > monthly_tc)
+        
+        trend_confluence: bool = (weekly_bc > monthly_bc)
+        
+        narrow_confluence: bool = (weekly_bc_monthly_tc_diff <= self.PERCENTAGE_DIFF_THRESHOLD)
+        
+        initial_above_cpr: bool = (above_all_tc and 
+                                   trend_confluence and
+                                   narrow_confluence and
+                                   buy_signal_condition)
+        
+        if initial_above_cpr:
+            tc_touch_condition: bool = (
+                (current_low <= weekly_tc and current_price > weekly_tc) or
+                (current_low <= monthly_tc and current_price > monthly_tc)
+            )
+            return tc_touch_condition
+        
+        return False
+
+    def _check_below_cpr(self, current_price: float, daily_tc: float, weekly_tc: float, monthly_tc: float,
+                         daily_bc: float, weekly_bc: float, monthly_bc: float,
+                         current_high: float, weekly_tc_monthly_bc_diff: float, sell_signal_condition: bool) -> bool:
+        """Helper to check all bearish conditions for BELOW CPR."""
+        
+        below_all_bc: bool = (current_price < daily_bc and 
+                              current_price < weekly_bc and 
+                              current_price < monthly_bc)
+        
+        trend_confluence: bool = (weekly_tc < monthly_tc)
+        
+        narrow_confluence: bool = (weekly_tc_monthly_bc_diff <= self.PERCENTAGE_DIFF_THRESHOLD)
+        
+        initial_below_cpr: bool = (below_all_bc and 
+                                   trend_confluence and 
+                                   narrow_confluence and
+                                   sell_signal_condition)
+        
+        if initial_below_cpr:
+            bc_touch_condition: bool = (
+                (current_high >= weekly_bc and current_price < weekly_bc) or
+                (current_high >= monthly_bc and current_price < monthly_bc)
+            )
+            return bc_touch_condition
+        
+        return False
+    
+    def _calculate_gap_percentages(self, current_price: float, status: str,
+                                   daily_tc: float, daily_bc: float,
+                                   weekly_tc: float, weekly_bc: float,
+                                   monthly_tc: float, monthly_bc: float) -> Tuple[float, float, float]:
+        """Calculates gap percentages based on current price and CPR status."""
+        
+        if status == "✅ ABOVE CPR TC":
+            target_daily_level = daily_tc
+            target_weekly_level = weekly_tc
+            target_monthly_level = monthly_tc
+            is_above = True
+        elif status == "❌ BELOW CPR BC":
+            target_daily_level = daily_bc
+            target_weekly_level = weekly_bc
+            target_monthly_level = monthly_bc
+            is_above = False
+        else:
+            return 0.0, 0.0, 0.0
+        
+        def calculate_gap(price, level, is_above):
+            if level <= 0: return 100.0
+            if is_above:
+                return round(((price - level) / level) * 100, 2)
+            else:
+                return round(((level - price) / level) * 100, 2)
+                
+        d_gap: float = calculate_gap(current_price, target_daily_level, is_above)
+        w_gap: float = calculate_gap(current_price, target_weekly_level, is_above)
+        m_gap: float = calculate_gap(current_price, target_monthly_level, is_above)
+            
+        return d_gap, w_gap, m_gap
+
+    def _evaluate_cpr_status(self, current_price: float, daily_tc: float, weekly_tc: float, monthly_tc: float,
+                             daily_bc: float, weekly_bc: float, monthly_bc: float,
+                             current_low: float, current_high: float,
+                             weekly_bc_monthly_tc_diff: float, weekly_tc_monthly_bc_diff: float) -> str:
+        """Evaluates CPR conditions and returns the stock's status."""
+        
+        buy_signal_condition: bool = (weekly_bc <= daily_tc)
+        logger.debug(f"BUY Signal condition (WBC <= DTC): {buy_signal_condition}")
+        
+        above_cpr: bool = self._check_above_cpr(current_price, daily_tc, weekly_tc, monthly_tc,
+                                           daily_bc, weekly_bc, monthly_bc,
+                                           current_low, weekly_bc_monthly_tc_diff, buy_signal_condition)
+        
+        if above_cpr:
+            return "✅ ABOVE CPR TC"
+            
+        sell_signal_condition: bool = (weekly_tc >= daily_bc)
+        logger.debug(f"SELL Signal condition (WTC >= DBC): {sell_signal_condition}")
+
+        below_cpr: bool = self._check_below_cpr(current_price, daily_tc, weekly_tc, monthly_tc,
+                                           daily_bc, weekly_bc, monthly_bc,
+                                           current_high, weekly_tc_monthly_bc_diff, sell_signal_condition)
+        
+        if below_cpr:
+            return "❌ BELOW CPR BC"
+        else:
+            return "🟡 IN CPR"
+
+
+    def get_fo_stocks(self) -> List[str]:
+        """
+        Get F&O stocks from Zerodha instruments, excluding index symbols.
+        Caches the result.
+        """
+        try:
+            if self._fo_stocks is not None:
+                return self._fo_stocks
+            
+            nfo_instruments: List[Dict[str, Any]] = self.kite.instruments('NFO')
+            fo_symbols: set[str] = set()
+            
+            for instrument in nfo_instruments:
+                if instrument.get('instrument_type') == 'FUT' and instrument.get('name'):
+                    if not any(idx in instrument['name'] for idx in self.INDEX_SYMBOLS):
+                        fo_symbols.add(instrument['name'])
+            
+            self._fo_stocks = sorted(list(fo_symbols))
+            logger.info(f"Found {len(self._fo_stocks)} F&O stocks for filtering.")
+            return self._fo_stocks
+        except Exception as e: 
+            logger.error(f"Error fetching F&O stocks: {e}. Returning empty list.")
+            self._fo_stocks = []
+            return []
+    
+    def _calculate_cpr_levels(self, data: pd.DataFrame) -> Optional[Dict[str, float]]:
+        """
+        Calculates daily, weekly, and monthly CPR levels from historical data.
+        Ensures all inputs to calculate_cpr are guaranteed floats.
+        """
+        if len(data) < self.MIN_DATA_RECORDS:
+            return None
+
+        # --- Daily CPR Calculation (Previous Day) ---
+        try:
+            prev_day: pd.Series = data.iloc[-2]
+        except IndexError:
+            logger.warning("Dataframe has less than 2 rows for previous day CPR.")
+            return None
+            
+        d_high: float = float(prev_day['high'])
+        d_low: float = float(prev_day['low'])
+        d_close: float = float(prev_day['close'])
+
+        if pd.isna(d_high) or pd.isna(d_low) or pd.isna(d_close):
+             logger.warning("Previous day data contains NaN values for CPR calculation.")
+             return None
+
+        daily_pp, daily_bc, daily_tc = self.calculate_cpr(d_high, d_low, d_close)
+        
+        # --- Weekly CPR Calculation ---
+        week_high, week_low, week_close = self._get_period_cpr_data(data, 5, 1) 
+        
+        if week_high is None or week_low is None or week_close is None: 
+            logger.warning("Insufficient data for weekly CPR calculation.")
+            return None
+        weekly_pp, weekly_bc, weekly_tc = self.calculate_cpr(week_high, week_low, week_close)
+        
+        # --- Monthly CPR Calculation ---
+        month_high, month_low, month_close = self._get_period_cpr_data(data, self.MONTHLY_DATA_LOOKBACK, 1) 
+        
+        if month_high is None or month_low is None or month_close is None: 
+            logger.warning("Insufficient data for monthly CPR calculation.")
+            return None
+        monthly_pp, monthly_bc, monthly_tc = self.calculate_cpr(month_high, month_low, month_close)
+
+        return {
+            'daily_pp': daily_pp, 'daily_bc': daily_bc, 'daily_tc': daily_tc,
+            'weekly_pp': weekly_pp, 'weekly_bc': weekly_bc, 'weekly_tc': weekly_tc,
+            'monthly_pp': monthly_pp, 'monthly_bc': monthly_bc, 'monthly_tc': monthly_tc,
+            'current_day_low': float(data.iloc[-1]['low']),
+            'current_day_high': float(data.iloc[-1]['high']),
+            'current_price': float(data.iloc[-1]['close'])
+        }
+
+    def filter_cpr_stocks(self) -> List[Dict[str, Any]]:
+        """
+        Filter stocks based on CPR criteria and return a list of actionable results.
+        """
+        results: List[Dict[str, Any]] = []
+        fo_stocks: List[str] = self.get_fo_stocks()
+        
+        current_log_level = logger.level
+        logger.setLevel(logging.WARNING) 
+        
+        for symbol in fo_stocks:
+            try:
+                # 1. Data Fetching
+                data = self.get_historical_data(symbol, self.HISTORICAL_DATA_DAYS, 'day')
+                
+                if data is None or len(data) < self.MIN_DATA_RECORDS:
+                    logger.debug(f"Skipping {symbol}: Insufficient data.")
+                    continue
+                
+                # 2. CPR Calculation
+                cpr_levels = self._calculate_cpr_levels(data)
+                if cpr_levels is None:
+                    logger.debug(f"Skipping {symbol}: CPR calculation failed due to insufficient/bad data.")
+                    continue
+                
+                # Unpack levels
+                current_price: float = cpr_levels.pop('current_price')
+                current_low: float = cpr_levels.pop('current_day_low')
+                current_high: float = cpr_levels.pop('current_day_high')
+                
+                daily_tc: float = cpr_levels['daily_tc']
+                daily_bc: float = cpr_levels['daily_bc']
+                weekly_tc: float = cpr_levels['weekly_tc']
+                weekly_bc: float = cpr_levels['weekly_bc']
+                monthly_tc: float = cpr_levels['monthly_tc']
+                monthly_bc: float = cpr_levels['monthly_bc']
+                
+                # 3. Calculate Narrow Confluence Differences
+                # Using 1e-6 (a very small number) to safely prevent ZeroDivisionError
+                weekly_bc_monthly_tc_diff: float = abs(weekly_bc - monthly_tc) / max(weekly_bc, 1e-6) * 100
+                weekly_tc_monthly_bc_diff: float = abs(weekly_tc - monthly_bc) / max(weekly_tc, 1e-6) * 100
+                
+                # 4. Evaluate Status
+                status: str = self._evaluate_cpr_status(
+                    current_price, daily_tc, weekly_tc, monthly_tc,
+                    daily_bc, weekly_bc, monthly_bc,
+                    current_low, current_high,
+                    weekly_bc_monthly_tc_diff, weekly_tc_monthly_bc_diff
+                )
+                
+                logger.debug(f"Final status for {symbol}: {status}")
+                
+                # 5. Calculate Gaps & Append Results
+                if status != "🟡 IN CPR":
+                    d_gap, w_gap, m_gap = self._calculate_gap_percentages(
+                        current_price, status,
+                        daily_tc, daily_bc,
+                        weekly_tc, weekly_bc,
+                        monthly_tc, monthly_bc
+                    )
+                    
+                    results.append({
+                        'symbol': symbol,
+                        'current_price': round(current_price, 2),
+                        'status': status,
+                        'daily_tc': round(daily_tc, 2),
+                        'daily_bc': round(daily_bc, 2),
+                        'weekly_tc': round(weekly_tc, 2),
+                        'weekly_bc': round(weekly_bc, 2),
+                        'monthly_tc': round(monthly_tc, 2),
+                        'monthly_bc': round(monthly_bc, 2),
+                        'd_gap': d_gap,
+                        'w_gap': w_gap,
+                        'm_gap': m_gap,
+                        'wbc_mtc_diff': round(weekly_bc_monthly_tc_diff, 2),
+                        'wtc_mbc_diff': round(weekly_tc_monthly_bc_diff, 2)
+                    })
+                
+            except Exception as e:
+                logger.error(f"❌ Unhandled error processing {symbol}: {e}")
+                continue
+        
+        logger.setLevel(current_log_level)
+        return sorted(results, key=lambda x: x['symbol'])

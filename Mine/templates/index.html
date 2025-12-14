@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}Home{% endblock %}
+
+{% block content %}
+<div class="container" style="text-align: center;"> <div id="statusMessage"></div> <div style="margin-top: 30px; display: flex; gap: 15px; justify-content: center; flex-wrap: wrap;">
+        <button class="btn" id="loginZerodhaBtn" onclick="window.location.href='/login'">Login to Zerodha</button> 
+        <button class="btn" id="refreshBtn" style="background: #28a745;">🔄 Refresh</button> 
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/index.js') }}"></script>
+{% endblock %}

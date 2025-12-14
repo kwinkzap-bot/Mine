@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block title %}Strategy Backtest{% endblock %}
+
+{% block head %}
+    {{ super() }}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/strategy.css') }}">
+{% endblock %}
+
+{% block content %}
+<div id="strategy-backtest-app"> <h1>Options Strategy Backtest</h1>
+
+    <form id="backtestForm">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Symbol:</label>
+                <select id="symbol"> <option value="NIFTY">NIFTY</option>
+                    <option value="BANKNIFTY">BANKNIFTY</option>
+                    <option value="FINNIFTY">FINNIFTY</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Start Date:</label>
+                <input type="date" id="startDate"> </div>
+            <div class="form-group">
+                <label>End Date:</label>
+                <input type="date" id="endDate"> </div>
+            <div class="form-group">
+                <button type="submit" class="btn" style="margin-top: 25px; width: 100%;">Run Backtest</button>
+            </div>
+        </div>
+    </form>
+    
+    <div id="status-message" class="status">
+        Enter parameters and click 'Run Backtest'
+    </div>
+    
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    {{ super() }}
+    <script src="{{ url_for('static', filename='js/services/strategy.service.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/strategy.app.js') }}"></script>
+{% endblock %}

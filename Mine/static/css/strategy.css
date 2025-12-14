@@ -1,0 +1,90 @@
+/*
+ * strategy.css
+ * ONLY contains styles specific to the Strategy Backtest page, 
+ * leveraging all global styles from main.css for common elements.
+ */
+
+/* --- Strategy Backtest SPECIFIC Styles --- */
+
+/* Status Message Styles (Essential to this page) */
+.status {
+    margin: 20px 0;
+    padding: 15px;
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all 0.3s;
+}
+
+/* Status variants */
+.status.success {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+.status.error {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+.status.loading {
+    background: #d1ecf1;
+    color: #0c5460;
+    border: 1px solid #bee5eb;
+}
+.status.info {
+    background: #e2e3e5;
+    color: #383d41;
+    border: 1px solid #d6d8db;
+}
+
+/* Results Statistics Display */
+.stats-container {
+    margin-bottom: 25px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    justify-content: space-between;
+}
+
+.stat-box {
+    background: #fff;
+    padding: 15px 20px;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    flex: 1;
+    min-width: 150px;
+    text-align: center;
+}
+
+.stat-box h4 {
+    margin-top: 0;
+    margin-bottom: 5px;
+    color: #667eea;
+}
+
+.stat-value {
+    font-size: 1.5em;
+    font-weight: 700;
+}
+
+/* Table specific colors for strategy results */
+.trade-signal-buy {
+    color: #26a69a;
+    font-weight: 600;
+}
+.trade-signal-sell {
+    color: #ef5350;
+    font-weight: 600;
+}
+
+/* Ensure button in strategy form fills correctly and aligns */
+.form-button {
+    margin-top: 25px; 
+}
+
+.no-data-message {
+    text-align: center;
+    padding: 30px;
+    color: #6c757d;
+    font-style: italic;
+}

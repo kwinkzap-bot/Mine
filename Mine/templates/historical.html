@@ -1,0 +1,30 @@
+<form id="historicalForm">
+    <div class="form-row">
+        <div class="form-group">
+            <label for="fromDate">From Date</label>
+            <input type="date" id="fromDate">
+        </div>
+        <div class="form-group">
+            <label for="toDate">To Date</label>
+            <input type="date" id="toDate">
+        </div>
+        <div class="form-group hidden" id="manualTokenGroup">
+            <label for="manualTokenInput">Manual Token</label>
+            <input type="text" id="manualTokenInput" placeholder="Enter instrument token">
+        </div>
+    </div>
+    
+    <div class="form-row">
+        <div class="form-group">
+            <label>Interval:</label>
+            <select id="interval">
+                </select>
+        </div>
+        <div class="form-group">
+            <button type="button" id="manualTokenBtn" class="btn form-button">Use Manual Token</button> 
+        </div>
+        <div class="form-group">
+            <button type="submit" class="btn form-button">Fetch Data</button>
+        </div>
+    </div>
+</form>

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Options Chart Viewer{% endblock %}
+
+{% block head %}
+    {{ super() }}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/options_chart.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="form-container" id="options-chart-app">
+    <div class="form-row header-info">
+        <h2 style="margin: 0;">NIFTY Price: <span id="nifty-ltp" style="color: #00bcd4;">
+            {% if nifty_val is defined and nifty_val is not none %}
+                ₹{{ "{:.2f}".format(nifty_val) }}
+            {% else %}
+                N/A
+            {% endif %}
+        </span></h2>
+    </div>
+    
+    <form id="optionsChartForm"> <div class="form-row">
+            <div class="form-group">
+                <label for="symbol">Symbol</label>
+                <select id="symbol" data-action="getStrikes">
+                    <option value="NIFTY" selected>NIFTY</option>
+                    <option value="BANKNIFTY">BANKNIFTY</option>
+                    <option value="FINNIFTY">FINNIFTY</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="ceStrike">CE Strike</label>
+                <select id="ceStrike"></select>
+            </div>
+            <div class="form-group">
+                <label for="peStrike">PE Strike</label>
+                <select id="peStrike"></select>
+            </div>
+            <div class="form-group">
+                <label>Price Source</label>
+                <div class="radio-group">
+                    <input type="radio" id="current_ltp" name="priceSource" value="current_ltp" checked> 
+                    <label for="current_ltp">LTP</label>
+                    <input type="radio" id="current_close" name="priceSource" value="current_close">
+                    <label for="current_close">Previous Close</label>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <button id="fetchChartBtn" type="submit" class="btn form-button">Fetch Chart Data</button>
+            </div>
+        </div>
+    </form>
+
+    <div class="charts-container">
+        <div class="chart-grid">
+            <div class="chart-wrapper">
+                <h3>CE Chart <span id="ce-strike-display" class="strike-display"></span></h3>
+                <div id="ceChart" class="chart-element"></div>
+            </div>
+            <div class="chart-wrapper">
+                <h3>PE Chart <span id="pe-strike-display" class="strike-display"></span></h3>
+                <div id="peChart" class="chart-element"></div>
+            </div>
+        </div>
+        <div class="combined-chart-section">
+            <h3>Combined CE & PE Price <span id="combined-ce-strike-display" class="strike-display"></span> <span id="combined-pe-strike-display" class="strike-display"></span></h3>
+            <div id="combinedChart" class="chart-element"></div>
+        </div>
+    </div>
+    
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    {{ super() }}
+    
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    
+    <script src="{{ url_for('static', filename='js/options_chart_app.js') }}"></script>
+{% endblock %}
