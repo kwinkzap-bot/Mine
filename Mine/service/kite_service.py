@@ -75,6 +75,58 @@ class KiteService:
             logging.error(f"Error getting instrument token for {symbol}: {e}")
             return None
     
+    def get_current_ltp(self, symbol: str) -> Optional[float]:
+        """Get current Last Traded Price (LTP) for a symbol."""
+        try:
+            # Map symbol to NSE instrument key
+            if symbol == 'NIFTY':
+                instrument_key = 'NSE:NIFTY 50'
+            elif symbol == 'BANKNIFTY':
+                instrument_key = 'NSE:NIFTY BANK'
+            elif symbol == 'FINNIFTY':
+                instrument_key = 'NSE:NIFTY FIN SERVICE'
+            else:
+                instrument_key = f'NSE:{symbol}'
+            
+            # Fetch LTP data
+            ltp_data = self.kite.ltp([instrument_key])
+            if ltp_data and instrument_key in ltp_data:
+                ltp = ltp_data[instrument_key].get('last_price')
+                if ltp:
+                    return float(ltp)
+            
+            logging.warning(f"Could not fetch LTP for {symbol}")
+            return None
+        except Exception as e:
+            logging.error(f"Error getting current LTP for {symbol}: {e}")
+            return None
+    
+    def get_previous_close(self, symbol: str) -> Optional[float]:
+        """Get previous day's close price (PDC) for a symbol."""
+        try:
+            # Map symbol to NSE instrument key
+            if symbol == 'NIFTY':
+                instrument_key = 'NSE:NIFTY 50'
+            elif symbol == 'BANKNIFTY':
+                instrument_key = 'NSE:NIFTY BANK'
+            elif symbol == 'FINNIFTY':
+                instrument_key = 'NSE:NIFTY FIN SERVICE'
+            else:
+                instrument_key = f'NSE:{symbol}'
+            
+            # Fetch quote which contains previous close
+            quote_data = self.kite.quote([instrument_key])
+            if quote_data and instrument_key in quote_data:
+                pdc = quote_data[instrument_key].get('ohlc', {}).get('close')
+                if pdc:
+                    return float(pdc)
+            
+            logging.warning(f"Could not fetch previous close for {symbol}")
+            return None
+        except Exception as e:
+            logging.error(f"Error getting previous close for {symbol}: {e}")
+            return None
+    
     def get_fo_stocks(self) -> List[str]:
         """Get list of F&O underlying stocks, including FUTURES and OPTIONS."""
         try:

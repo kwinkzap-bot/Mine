@@ -10,8 +10,10 @@ let isManualTokenMode = false;
 
 // Set default dates to current day
 const today = new Date().toISOString().split('T')[0];
-document.getElementById('toDate').value = today;
-document.getElementById('fromDate').value = today;
+const toDateEl = document.getElementById('toDate');
+const fromDateEl = document.getElementById('fromDate');
+if (toDateEl) toDateEl.value = today;
+if (fromDateEl) fromDateEl.value = today;
 
 // Initial setup
 document.addEventListener('DOMContentLoaded', function() {
@@ -21,22 +23,37 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function addEventListeners() {
-    document.getElementById('instrumentType').addEventListener('change', loadSymbols);
-    document.getElementById('symbolSelect').addEventListener('change', handleSymbolOrFnoChange);
-    document.getElementById('fnoType').addEventListener('change', handleSymbolOrFnoChange);
-    document.getElementById('expiryDate').addEventListener('change', loadStrikePrices);
-    document.getElementById('strikePrice').addEventListener('change', loadInstruments);
-    document.getElementById('historicalForm').addEventListener('submit', handleFormSubmission);
-    document.getElementById('manual-token-btn').addEventListener('click', toggleManualTokenMode);
+    const instrumentType = document.getElementById('instrumentType');
+    const symbolSelect = document.getElementById('symbolSelect');
+    const fnoType = document.getElementById('fnoType');
+    const expiryDate = document.getElementById('expiryDate');
+    const strikePrice = document.getElementById('strikePrice');
+    const historicalForm = document.getElementById('historicalForm');
+    const manualTokenBtn = document.getElementById('manual-token-btn');
+
+    if (instrumentType) instrumentType.addEventListener('change', loadSymbols);
+    if (symbolSelect) symbolSelect.addEventListener('change', handleSymbolOrFnoChange);
+    if (fnoType) fnoType.addEventListener('change', handleSymbolOrFnoChange);
+    if (expiryDate) expiryDate.addEventListener('change', loadStrikePrices);
+    if (strikePrice) strikePrice.addEventListener('change', loadInstruments);
+    if (historicalForm) historicalForm.addEventListener('submit', handleFormSubmission);
+    if (manualTokenBtn) manualTokenBtn.addEventListener('click', toggleManualTokenMode);
 }
 
 /**
  * Toggles the visibility of Option fields (Expiry, Strike) based on F&O Type.
  */
 function toggleOptionFields() {
-    const fnoType = document.getElementById('fnoType').value;
-    const instrumentType = document.getElementById('instrumentType').value;
+    const fnoTypeEl = document.getElementById('fnoType');
+    const instrumentTypeEl = document.getElementById('instrumentType');
     const optionFields = document.getElementById('optionFields');
+    
+    if (!fnoTypeEl || !instrumentTypeEl || !optionFields) {
+        return; // Elements not found, skip toggle
+    }
+    
+    const fnoType = fnoTypeEl.value;
+    const instrumentType = instrumentTypeEl.value;
     
     // Option fields are only relevant for F&O -> Options
     if (instrumentType === 'equity' && fnoType === 'options') {
@@ -53,19 +70,26 @@ function toggleOptionFields() {
 function handleSymbolOrFnoChange() {
     toggleOptionFields(); // Re-evaluate visibility
 
-    const symbol = document.getElementById('symbolSelect').value;
-    const fnoType = document.getElementById('fnoType').value;
+    const symbolSelect = document.getElementById('symbolSelect');
+    const fnoType = document.getElementById('fnoType');
+    
+    if (!symbolSelect || !fnoType) return;
+    
+    const symbol = symbolSelect.value;
+    const fnoTypeValue = fnoType.value;
     
     if (!symbol) return;
 
-    if (fnoType === 'options') {
+    if (fnoTypeValue === 'options') {
         loadExpiryDates(symbol);
     } else {
-        // Futures or Equity
+        // Futures or Indices
         // Clear option fields
-        document.getElementById('expiryDate').innerHTML = '<option value="">Select expiry</option>';
-        document.getElementById('strikePrice').innerHTML = '<option value="">Select strike</option>';
-        loadInstruments(symbol);
+        const expiryDate = document.getElementById('expiryDate');
+        const strikePrice = document.getElementById('strikePrice');
+        if (expiryDate) expiryDate.innerHTML = '<option value="">Select expiry</option>';
+        if (strikePrice) strikePrice.innerHTML = '<option value="">Select strike</option>';
+        loadInstruments();
     }
 }
 
@@ -109,15 +133,21 @@ function toggleManualTokenMode() {
  */
 async function loadSymbols() {
     const symbolSelect = document.getElementById('symbolSelect');
+    const instrumentTypeEl = document.getElementById('instrumentType');
+    
+    if (!symbolSelect || !instrumentTypeEl) return;
+    
+    const instrumentType = instrumentTypeEl.value;
     symbolSelect.innerHTML = '<option value="">Loading symbols...</option>';
     
     try {
-        // Use the global fetchJson utility
-        const data = await fetchJson('/api/fo-stocks'); // Assumed API endpoint
+        // Fetch symbols based on instrument type
+        const endpoint = instrumentType === 'indices' ? '/api/symbols?type=indices' : '/api/symbols?type=fno';
+        const data = await fetchJson(endpoint);
         
-        if (data.success) {
-            symbolSelect.innerHTML = '';
-            data.stocks.forEach(symbol => {
+        if (data.success && data.symbols && data.symbols.length > 0) {
+            symbolSelect.innerHTML = '<option value="">Select symbol</option>';
+            data.symbols.forEach(symbol => {
                 const option = document.createElement('option');
                 option.value = symbol;
                 option.textContent = symbol;
@@ -125,11 +155,22 @@ async function loadSymbols() {
             });
             // Trigger instrument loading for the first item
             handleSymbolOrFnoChange();
+        } else if (data.auth_error) {
+            symbolSelect.innerHTML = '<option value="">Please login to load symbols</option>';
+            if (typeof showNotification === 'function') {
+                showNotification('Authentication required. Please login first.', 'warning');
+            }
         } else {
-            symbolSelect.innerHTML = '<option value="">Error loading symbols</option>';
+            symbolSelect.innerHTML = '<option value="">No symbols available</option>';
+            if (typeof showNotification === 'function') {
+                showNotification(data.error || 'Error loading symbols', 'error');
+            }
         }
     } catch (error) {
         symbolSelect.innerHTML = '<option value="">Network Error</option>';
+        if (typeof showNotification === 'function') {
+            showNotification(`Network error: ${error.message || error}`, 'error');
+        }
     }
 }
 
@@ -211,7 +252,7 @@ async function loadStrikePrices() {
  * This function also sets the token in a hidden field for form submission.
  */
 async function loadInstruments() {
-    const statusDiv = document.getElementById('status');
+    const statusDiv = document.getElementById('statusMessage') || document.getElementById('status');
     const instrumentType = document.getElementById('instrumentType').value;
     const fnoType = document.getElementById('fnoType').value;
     const symbol = document.getElementById('symbolSelect').value;
@@ -220,8 +261,14 @@ async function loadInstruments() {
 
     selectedInstrumentToken = null; // Reset token
 
+    // If no status div, just return without trying to update UI
+    if (!statusDiv) {
+        console.warn('Status div not found');
+        return;
+    }
+
     // 1. Handle Options: token should be in currentInstruments
-    if (instrumentType === 'equity' && fnoType === 'options' && symbol && expiry && strike && currentInstruments.length > 0) {
+    if (instrumentType === 'fno' && fnoType === 'options' && symbol && expiry && strike && currentInstruments.length > 0) {
         const selectedInstrument = currentInstruments.find(inst => inst.strike == strike); // Assuming 'strike' is the field
         if (selectedInstrument) {
             selectedInstrumentToken = selectedInstrument.token; // Assuming 'token' is the field
@@ -230,7 +277,7 @@ async function loadInstruments() {
         }
     }
 
-    // 2. Handle Futures/Equity: need an API call for a single token
+    // 2. Handle Futures/Indices: need an API call for a single token
     if (symbol) {
         statusDiv.innerHTML = '<div class="status loading">Finding instrument token...</div>';
         try {
@@ -255,11 +302,23 @@ async function handleFormSubmission(e) {
     e.preventDefault();
     
     const table = document.getElementById('dataTable');
-    const tbody = document.getElementById('dataBody');
-    const statusDiv = document.getElementById('status');
+    const tbody = document.getElementById('dataBody') || document.getElementById('dataTableBody');
+    const statusDiv = document.getElementById('statusMessage') || document.getElementById('status');
+    
+    // Early return if required elements don't exist
+    if (!statusDiv) {
+        console.error('Status div not found');
+        return;
+    }
+    
+    if (!tbody) {
+        console.error('Table body not found');
+        statusDiv.innerHTML = '<div class="status error">Error: Data table not found.</div>';
+        return;
+    }
     
     tbody.innerHTML = '';
-    table.classList.add('hidden');
+    if (table) table.classList.add('hidden');
     statusDiv.innerHTML = '<div class="status loading">⏳ Fetching historical data...</div>';
     
     let instrumentToken = isManualTokenMode 
@@ -271,11 +330,20 @@ async function handleFormSubmission(e) {
         return;
     }
     
+    const fromDateEl = document.getElementById('fromDate');
+    const toDateEl = document.getElementById('toDate');
+    const intervalEl = document.getElementById('interval');
+    
+    if (!fromDateEl || !toDateEl || !intervalEl) {
+        statusDiv.innerHTML = '<div class="status error">Error: Form elements not found.</div>';
+        return;
+    }
+    
     const formData = {
         instrument_token: instrumentToken,
-        from_date: document.getElementById('fromDate').value,
-        to_date: document.getElementById('toDate').value,
-        interval: document.getElementById('interval').value
+        from_date: fromDateEl.value,
+        to_date: toDateEl.value,
+        interval: intervalEl.value
     };
     
     // Use the global fetchJson utility
@@ -303,7 +371,7 @@ async function handleFormSubmission(e) {
             tbody.appendChild(tr);
         });
         
-        table.classList.remove('hidden');
+        if (table) table.classList.remove('hidden');
         // Add sorting functionality to the table headers
         document.querySelectorAll('#dataTable th').forEach((header, index) => {
              header.dataset.columnIndex = index;

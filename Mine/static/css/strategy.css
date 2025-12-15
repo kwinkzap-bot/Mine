@@ -8,8 +8,8 @@
 
 /* Status Message Styles (Essential to this page) */
 .status {
-    margin: 20px 0;
-    padding: 15px;
+    margin: 12px 0;
+    padding: 12px;
     border-radius: 8px;
     font-weight: 600;
     transition: all 0.3s;
@@ -39,16 +39,16 @@
 
 /* Results Statistics Display */
 .stats-container {
-    margin-bottom: 25px;
+    margin-bottom: 18px;
     display: flex;
     flex-wrap: wrap;
-    gap: 20px;
+    gap: 15px;
     justify-content: space-between;
 }
 
 .stat-box {
     background: #fff;
-    padding: 15px 20px;
+    padding: 12px 15px;
     border-radius: 8px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     flex: 1;
@@ -79,7 +79,7 @@
 
 /* Ensure button in strategy form fills correctly and aligns */
 .form-button {
-    margin-top: 25px; 
+    margin-top: 15px; 
 }
 
 .no-data-message {

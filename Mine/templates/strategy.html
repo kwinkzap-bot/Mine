@@ -1,45 +1,58 @@
 {% extends "base.html" %}
-
 {% block title %}Strategy Backtest{% endblock %}
-
 {% block head %}
-    {{ super() }}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/strategy.css') }}">
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/strategy.css') }}">
 {% endblock %}
-
 {% block content %}
-<div id="strategy-backtest-app"> <h1>Options Strategy Backtest</h1>
-
+<div id="strategy-backtest-app">
+    <h1>Options Strategy Backtest</h1>
     <form id="backtestForm">
         <div class="form-row">
             <div class="form-group">
                 <label>Symbol:</label>
-                <select id="symbol"> <option value="NIFTY">NIFTY</option>
+                <select id="symbol">
+                    <option value="NIFTY">NIFTY</option>
                     <option value="BANKNIFTY">BANKNIFTY</option>
                     <option value="FINNIFTY">FINNIFTY</option>
                 </select>
             </div>
             <div class="form-group">
                 <label>Start Date:</label>
-                <input type="date" id="startDate"> </div>
+                <input type="date" id="startDate">
+            </div>
             <div class="form-group">
                 <label>End Date:</label>
-                <input type="date" id="endDate"> </div>
+                <input type="date" id="endDate">
+            </div>
             <div class="form-group">
-                <button type="submit" class="btn" style="margin-top: 25px; width: 100%;">Run Backtest</button>
+                <button type="submit" class="btn" style="margin-top: 15px; width: 100%;">Run Backtest</button>
             </div>
         </div>
     </form>
-    
-    <div id="status-message" class="status">
-        Enter parameters and click 'Run Backtest'
+    <div id="status-message" class="status">Enter parameters and click 'Run Backtest'</div>
+    <div id="statsContainer" style="display: none; margin: 15px 0; padding: 12px; background: #f5f5f5; border-radius: 4px;"></div>
+    <div id="resultsSection" style="display: none; margin-top: 20px;">
+        <h2>Backtest Results</h2>
+        <div style="overflow-x: auto;">
+            <table id="resultsTable" class="results-table">
+                <thead><tr>
+                    <th>Date</th><th>NIFTY Close</th><th>CE Strike</th><th>CE Prev High</th><th>CE Prev Low</th>
+                    <th>PE Strike</th><th>PE Prev High</th><th>PE Prev Low</th><th>Signal</th><th>Expiry Date</th>
+                    <th>Buy Price</th><th>Target</th><th>Stop Loss</th><th>Exit Price</th><th>Entry Time</th>
+                    <th>Exit Time</th><th>P&L</th>
+                </tr></thead>
+                <tbody id="tradesBody"></tbody>
+            </table>
+        </div>
     </div>
-    
+    <div id="noData" style="display: none; margin: 15px 0; padding: 12px; background: #fff3cd; border-radius: 4px; text-align: center;">
+        No trades generated for the selected period.
     </div>
+</div>
 {% endblock %}
-
 {% block scripts %}
-    {{ super() }}
-    <script src="{{ url_for('static', filename='js/services/strategy.service.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/strategy.app.js') }}"></script>
+{{ super() }}
+<script src="{{ url_for('static', filename='js/services/strategy.service.js') }}"></script>
+<script src="{{ url_for('static', filename='js/strategy.js') }}"></script>
 {% endblock %}

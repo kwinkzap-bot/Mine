@@ -8,7 +8,25 @@ let sortDirection = {};
 
 // Auto-load data when page loads
 window.addEventListener('load', function() {
-    document.getElementById('status-bar').textContent = '⏳ Loading initial data...';
+    // Debug: Log all expected elements
+    console.log('Checking for required DOM elements...');
+    console.log('status-bar:', !!document.getElementById('status-bar'));
+    console.log('aboveResults:', !!document.getElementById('aboveResults'));
+    console.log('aboveBody:', !!document.getElementById('aboveBody'));
+    console.log('aboveCount:', !!document.getElementById('aboveCount'));
+    console.log('aboveTable:', !!document.getElementById('aboveTable'));
+    console.log('belowResults:', !!document.getElementById('belowResults'));
+    console.log('belowBody:', !!document.getElementById('belowBody'));
+    console.log('belowCount:', !!document.getElementById('belowCount'));
+    console.log('belowTable:', !!document.getElementById('belowTable'));
+    
+    const statusBar = document.getElementById('status-bar');
+    if (!statusBar) {
+        console.error('status-bar element not found');
+        return;
+    }
+    
+    statusBar.textContent = '⏳ Loading initial data...';
     loadCPRData();
     // Set interval for continuous refresh (5 minutes = 300000 ms)
     setInterval(loadCPRData, 300000); 
@@ -33,47 +51,105 @@ window.addEventListener('load', function() {
  */
 async function loadCPRData() {
     const statusBar = document.getElementById('status-bar');
+    
+    // Check if statusBar exists
+    if (!statusBar) {
+        console.error('Status bar not found');
+        return;
+    }
+    
     const isInitialLoad = statusBar.textContent.indexOf('Loading initial data') !== -1;
     
     statusBar.textContent = isInitialLoad ? '⏳ Loading initial data...' : `⏳ Refreshing data... (Last: ${new Date().toLocaleTimeString()})`;
     
     try {
         // Use the global fetchJson utility
-        const data = await fetchJson('/api/cpr-filter');
+        const response = await fetchJson('/api/cpr-filter');
         
-        if (data.success) {
-            // Display results for both above and below sections
-            displayResults('above', data.above_results);
-            displayResults('below', data.below_results);
-            updateStats(data.above_count, data.below_count);
+        console.log('CPR Filter API Response:', response);
+        
+        if (response && response.success) {
+            // Process the API response
+            // API returns { success: true, data: [...] }
+            const allData = response.data || [];
+            
+            // Split data into above and below CPR
+            const aboveResults = [];
+            const belowResults = [];
+            
+            allData.forEach(stock => {
+                // Transform API field names to match expected format
+                const transformedStock = {
+                    symbol: stock.symbol,
+                    current_price: stock.current_price,
+                    daily_tc: stock.daily_tc,
+                    daily_bc: stock.daily_bc,
+                    weekly_tc: stock.weekly_tc,
+                    weekly_bc: stock.weekly_bc,
+                    monthly_tc: stock.monthly_tc,
+                    monthly_bc: stock.monthly_bc,
+                    status: stock.status,
+                    d_gap_percent: stock.d_gap,
+                    w_gap_percent: stock.w_gap,
+                    m_gap_percent: stock.m_gap
+                };
+                
+                // Categorize by status (ABOVE or BELOW in status field)
+                if (stock.status && stock.status.includes('ABOVE')) {
+                    aboveResults.push(transformedStock);
+                } else if (stock.status && stock.status.includes('BELOW')) {
+                    belowResults.push(transformedStock);
+                }
+            });
+            
+            const aboveCount = aboveResults.length;
+            const belowCount = belowResults.length;
+            
+            console.log(`Data loaded - Above: ${aboveCount}, Below: ${belowCount}`);
+            
+            // Display results
+            displayResults('above', aboveResults);
+            displayResults('below', belowResults);
+            updateStats(aboveCount, belowCount);
             
             // Hide the controls section if we have data to show results
-            document.getElementById('controls').classList.add('results-hidden');
+            const controls = document.getElementById('controls');
+            if (controls) {
+                controls.classList.add('results-hidden');
+            }
             
             // Show/hide above results section
-            if (data.above_count > 0) {
-                document.getElementById('aboveResults').classList.remove('results-hidden');
-            } else {
-                document.getElementById('aboveResults').classList.add('results-hidden');
+            const aboveResultsDiv = document.getElementById('aboveResults');
+            if (aboveResultsDiv) {
+                if (aboveCount > 0) {
+                    aboveResultsDiv.classList.remove('results-hidden');
+                } else {
+                    aboveResultsDiv.classList.add('results-hidden');
+                }
             }
             
             // Show/hide below results section
-            if (data.below_count > 0) {
-                // Ensure there is a margin-top if the above results are hidden
-                if (data.above_count === 0) {
-                     document.getElementById('belowResults').classList.add('results-margin-top-only');
+            const belowResultsDiv = document.getElementById('belowResults');
+            if (belowResultsDiv) {
+                if (belowCount > 0) {
+                    // Ensure there is a margin-top if the above results are hidden
+                    if (aboveCount === 0) {
+                         belowResultsDiv.classList.add('results-margin-top-only');
+                    } else {
+                         belowResultsDiv.classList.remove('results-margin-top-only');
+                    }
+                    belowResultsDiv.classList.remove('results-hidden');
                 } else {
-                     document.getElementById('belowResults').classList.remove('results-margin-top-only');
+                    belowResultsDiv.classList.add('results-hidden');
                 }
-                document.getElementById('belowResults').classList.remove('results-hidden');
-            } else {
-                document.getElementById('belowResults').classList.add('results-hidden');
             }
             
-            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()}`;
-        } else if (!data.needs_login) {
+            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}`;
+        } else if (response && !response.needs_login) {
             // Only show error if it's not a session expiration handled by fetchJson
-            statusBar.textContent = `❌ Error loading data: ${data.message}`;
+            const errorMsg = response.message || 'Unknown error';
+            statusBar.textContent = `❌ Error loading data: ${errorMsg}`;
+            console.error('API Error:', response);
         }
     } catch (error) {
         console.error('Error fetching CPR data:', error);
@@ -90,6 +166,21 @@ function displayResults(type, results) {
     const tbody = document.getElementById(`${type}Body`);
     const container = document.getElementById(`${type}Results`);
     const countSpan = document.getElementById(`${type}Count`);
+    
+    // Check if all required elements exist
+    if (!tbody || !container || !countSpan) {
+        console.error(`Missing elements for type '${type}':`, { tbody: !!tbody, container: !!container, countSpan: !!countSpan });
+        return;
+    }
+    
+    // Check if results is valid
+    if (!results || !Array.isArray(results)) {
+        console.error(`Invalid results for type '${type}':`, results);
+        tbody.innerHTML = '';
+        container.classList.add('results-hidden');
+        countSpan.textContent = '(0)';
+        return;
+    }
     
     tbody.innerHTML = ''; // Clear existing rows
 
@@ -108,21 +199,31 @@ function displayResults(type, results) {
         const weeklyCpr = (type === 'above' ? stock.weekly_tc : stock.weekly_bc) || 0;
         const monthlyCpr = (type === 'above' ? stock.monthly_tc : stock.monthly_bc) || 0;
 
+        // Get gap values (handle both new and old field names)
+        const dGap = stock.d_gap_percent !== undefined ? stock.d_gap_percent : (stock.d_gap || 0);
+        const wGap = stock.w_gap_percent !== undefined ? stock.w_gap_percent : (stock.w_gap || 0);
+        const mGap = stock.m_gap_percent !== undefined ? stock.m_gap_percent : (stock.m_gap || 0);
+
         const statusClass = stock.status === 'WIDE CPR' ? 'status-wide' : 
                             (stock.status === 'NARROW CPR' ? 'status-narrow' : 
                             '');
-        const dGapClass = stock.d_gap_percent > 0 ? 'gap-up' : (stock.d_gap_percent < 0 ? 'gap-down' : '');
+        const dGapClass = dGap > 0 ? 'gap-up' : (dGap < 0 ? 'gap-down' : '');
         
         const row = document.createElement('tr');
+        
+        // Create TradingView link for symbol
+        const tradingViewUrl = `https://in.tradingview.com/chart/?symbol=NSE:${stock.symbol}`;
+        const symbolLink = `<a href="${tradingViewUrl}" target="_blank" rel="noopener noreferrer" style="color: #667eea; text-decoration: none; cursor: pointer; font-weight: 500;">${stock.symbol}</a>`;
+        
         row.innerHTML = `
-            <td>${stock.symbol}</td>
+            <td>${symbolLink}</td>
             <td>${stock.current_price.toFixed(2)}</td>
             <td>${dailyCpr.toFixed(2)}</td>
             <td>${weeklyCpr.toFixed(2)}</td>
             <td>${monthlyCpr.toFixed(2)}</td>
-            <td class="${dGapClass}">${stock.d_gap_percent.toFixed(2)}%</td>
-            <td>${(stock.w_gap_percent || 0).toFixed(2)}%</td>
-            <td>${(stock.m_gap_percent || 0).toFixed(2)}%</td>
+            <td class="${dGapClass}">${dGap.toFixed(2)}%</td>
+            <td>${wGap.toFixed(2)}%</td>
+            <td>${mGap.toFixed(2)}%</td>
             <td class="${statusClass}">${stock.status}</td>
         `;
         tbody.appendChild(row);
@@ -135,8 +236,15 @@ function displayResults(type, results) {
  * @param {number} belowCount 
  */
 function updateStats(aboveCount, belowCount) {
-    document.getElementById('aboveCount').textContent = `(${aboveCount})`;
-    document.getElementById('belowCount').textContent = `(${belowCount})`;
+    const aboveCountEl = document.getElementById('aboveCount');
+    const belowCountEl = document.getElementById('belowCount');
+    
+    if (aboveCountEl) {
+        aboveCountEl.textContent = `(${aboveCount})`;
+    }
+    if (belowCountEl) {
+        belowCountEl.textContent = `(${belowCount})`;
+    }
 }
 
 /**
@@ -147,7 +255,18 @@ function updateStats(aboveCount, belowCount) {
 function sortTable(tableId, columnIndexStr) {
     const columnIndex = parseInt(columnIndexStr);
     const table = document.getElementById(tableId);
+    
+    if (!table) {
+        console.error(`Table with id '${tableId}' not found`);
+        return;
+    }
+    
     const tbody = table.querySelector('tbody');
+    
+    if (!tbody) {
+        console.error(`Tbody not found in table '${tableId}'`);
+        return;
+    }
     const rows = Array.from(tbody.querySelectorAll('tr'));
     const header = table.querySelector(`th[data-column-index="${columnIndexStr}"]`);
     if (!header) return;

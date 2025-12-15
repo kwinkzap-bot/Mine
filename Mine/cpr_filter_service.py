@@ -5,6 +5,9 @@ import os
 from dotenv import load_dotenv
 import logging
 from typing import Optional, List, Dict, Tuple, Any
+import time  # Added for rate limiting
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Configure logging for this module
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -47,6 +50,8 @@ class CPRFilterService:
         # Caching attributes: Initialize _instruments as an empty list (safe iterable)
         self._instruments: List[Dict[str, Any]] = [] # FIX 1: Initialized as empty list instead of Optional[List]
         self._fo_stocks: Optional[List[str]] = None
+        self._historical_data_cache: Dict[str, pd.DataFrame] = {}  # Cache for historical data
+        self._cache_lock = threading.Lock()  # Thread-safe caching
         self._load_instruments() # Preload instruments for efficiency
 
     def _load_instruments(self) -> None:
@@ -85,22 +90,50 @@ class CPRFilterService:
         return None
     
     def get_historical_data(self, symbol: str, days_back: int, interval: str = 'day') -> Optional[pd.DataFrame]:
-        """Get historical data from Zerodha and convert to DataFrame."""
+        """Get historical data from Zerodha and convert to DataFrame. Uses caching for performance."""
+        # Check cache first
+        cache_key = f"{symbol}_{days_back}_{interval}"
+        with self._cache_lock:
+            if cache_key in self._historical_data_cache:
+                logger.debug(f"Cache hit for {symbol}")
+                return self._historical_data_cache[cache_key]
+        
         try:
             token = self.get_instrument_token(symbol)
             if token is None:
+                logger.warning(f"Could not find instrument token for {symbol}")
                 return None
             
             end_date: datetime = datetime.now()
             start_date: datetime = end_date - timedelta(days=days_back)
             
-            data: List[Dict[str, Any]] = self.kite.historical_data(
-                instrument_token=token,
-                from_date=start_date.date(),
-                to_date=end_date.date(),
-                interval=interval,
-                continuous=False
-            )
+            # Ensure we have a valid KiteConnect instance with access token
+            if not hasattr(self.kite, 'access_token') or not self.kite.access_token:
+                logger.error(f"No access token set for {symbol}. Cannot fetch historical data. Please login first.")
+                # Raise exception so caller knows this is an auth issue
+                raise ValueError("No valid access token set on KiteConnect instance. User must be authenticated.")
+            
+            try:
+                # Convert datetime to date objects and format as strings (YYYY-MM-DD) for KiteConnect API
+                from_date_str: str = start_date.strftime('%Y-%m-%d')
+                to_date_str: str = end_date.strftime('%Y-%m-%d')
+                
+                data: List[Dict[str, Any]] = self.kite.historical_data(
+                    instrument_token=token,
+                    from_date=from_date_str,
+                    to_date=to_date_str,
+                    interval=interval,
+                    continuous=False
+                )
+            except Exception as api_error:
+                # Check if it's an authentication error
+                error_str = str(api_error).lower()
+                if 'api_key' in error_str or 'access_token' in error_str or 'unauthorized' in error_str:
+                    logger.error(f"Authentication error for {symbol}: {api_error}. Access token may have expired or is invalid.")
+                    raise ValueError(f"Authentication failed for {symbol}: {api_error}")
+                else:
+                    logger.error(f"API error fetching historical data for {symbol}: {api_error}")
+                return None
             
             if not data:
                 logger.info(f"No data returned for {symbol} within the date range.")
@@ -115,7 +148,14 @@ class CPRFilterService:
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
 
+            # Cache the result
+            with self._cache_lock:
+                self._historical_data_cache[cache_key] = df
+            
             return df
+        except ValueError as ve:
+            # Re-raise ValueError so it bubbles up to caller
+            raise ve
         except Exception as e:
             logger.error(f"Error fetching historical data for {symbol}: {e}")
             return None
@@ -326,87 +366,120 @@ class CPRFilterService:
             'current_price': float(data.iloc[-1]['close'])
         }
 
-    def filter_cpr_stocks(self) -> List[Dict[str, Any]]:
+    def _process_single_stock(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
-        Filter stocks based on CPR criteria and return a list of actionable results.
+        Process a single stock and return its CPR analysis result.
+        This method is designed to run in parallel threads.
+        """
+        try:
+            # 1. Data Fetching (with caching)
+            data = self.get_historical_data(symbol, self.HISTORICAL_DATA_DAYS, 'day')
+            
+            if data is None or len(data) < self.MIN_DATA_RECORDS:
+                logger.debug(f"Skipping {symbol}: Insufficient data.")
+                return None
+            
+            # 2. CPR Calculation
+            cpr_levels = self._calculate_cpr_levels(data)
+            if cpr_levels is None:
+                logger.debug(f"Skipping {symbol}: CPR calculation failed.")
+                return None
+            
+            # Unpack levels
+            current_price: float = cpr_levels.pop('current_price')
+            current_low: float = cpr_levels.pop('current_day_low')
+            current_high: float = cpr_levels.pop('current_day_high')
+            
+            daily_tc: float = cpr_levels['daily_tc']
+            daily_bc: float = cpr_levels['daily_bc']
+            weekly_tc: float = cpr_levels['weekly_tc']
+            weekly_bc: float = cpr_levels['weekly_bc']
+            monthly_tc: float = cpr_levels['monthly_tc']
+            monthly_bc: float = cpr_levels['monthly_bc']
+            
+            # 3. Calculate Narrow Confluence Differences
+            weekly_bc_monthly_tc_diff: float = abs(weekly_bc - monthly_tc) / max(weekly_bc, 1e-6) * 100
+            weekly_tc_monthly_bc_diff: float = abs(weekly_tc - monthly_bc) / max(weekly_tc, 1e-6) * 100
+            
+            # 4. Evaluate Status
+            status: str = self._evaluate_cpr_status(
+                current_price, daily_tc, weekly_tc, monthly_tc,
+                daily_bc, weekly_bc, monthly_bc,
+                current_low, current_high,
+                weekly_bc_monthly_tc_diff, weekly_tc_monthly_bc_diff
+            )
+            
+            # 5. Only return if not IN CPR
+            if status == "🟡 IN CPR":
+                return None
+            
+            d_gap, w_gap, m_gap = self._calculate_gap_percentages(
+                current_price, status,
+                daily_tc, daily_bc,
+                weekly_tc, weekly_bc,
+                monthly_tc, monthly_bc
+            )
+            
+            return {
+                'symbol': symbol,
+                'current_price': round(current_price, 2),
+                'status': status,
+                'daily_tc': round(daily_tc, 2),
+                'daily_bc': round(daily_bc, 2),
+                'weekly_tc': round(weekly_tc, 2),
+                'weekly_bc': round(weekly_bc, 2),
+                'monthly_tc': round(monthly_tc, 2),
+                'monthly_bc': round(monthly_bc, 2),
+                'd_gap': d_gap,
+                'w_gap': w_gap,
+                'm_gap': m_gap,
+                'wbc_mtc_diff': round(weekly_bc_monthly_tc_diff, 2),
+                'wtc_mbc_diff': round(weekly_tc_monthly_bc_diff, 2)
+            }
+            
+        except Exception as e:
+            logger.debug(f"Error processing {symbol}: {e}")
+            return None
+
+    def filter_cpr_stocks(self, max_workers: int = 8) -> List[Dict[str, Any]]:
+        """
+        Filter stocks based on CPR criteria using parallel processing.
+        Args:
+            max_workers: Number of parallel threads (default 8 for balanced performance)
         """
         results: List[Dict[str, Any]] = []
         fo_stocks: List[str] = self.get_fo_stocks()
         
         current_log_level = logger.level
-        logger.setLevel(logging.WARNING) 
+        logger.setLevel(logging.WARNING)
         
-        for symbol in fo_stocks:
-            try:
-                # 1. Data Fetching
-                data = self.get_historical_data(symbol, self.HISTORICAL_DATA_DAYS, 'day')
-                
-                if data is None or len(data) < self.MIN_DATA_RECORDS:
-                    logger.debug(f"Skipping {symbol}: Insufficient data.")
-                    continue
-                
-                # 2. CPR Calculation
-                cpr_levels = self._calculate_cpr_levels(data)
-                if cpr_levels is None:
-                    logger.debug(f"Skipping {symbol}: CPR calculation failed due to insufficient/bad data.")
-                    continue
-                
-                # Unpack levels
-                current_price: float = cpr_levels.pop('current_price')
-                current_low: float = cpr_levels.pop('current_day_low')
-                current_high: float = cpr_levels.pop('current_day_high')
-                
-                daily_tc: float = cpr_levels['daily_tc']
-                daily_bc: float = cpr_levels['daily_bc']
-                weekly_tc: float = cpr_levels['weekly_tc']
-                weekly_bc: float = cpr_levels['weekly_bc']
-                monthly_tc: float = cpr_levels['monthly_tc']
-                monthly_bc: float = cpr_levels['monthly_bc']
-                
-                # 3. Calculate Narrow Confluence Differences
-                # Using 1e-6 (a very small number) to safely prevent ZeroDivisionError
-                weekly_bc_monthly_tc_diff: float = abs(weekly_bc - monthly_tc) / max(weekly_bc, 1e-6) * 100
-                weekly_tc_monthly_bc_diff: float = abs(weekly_tc - monthly_bc) / max(weekly_tc, 1e-6) * 100
-                
-                # 4. Evaluate Status
-                status: str = self._evaluate_cpr_status(
-                    current_price, daily_tc, weekly_tc, monthly_tc,
-                    daily_bc, weekly_bc, monthly_bc,
-                    current_low, current_high,
-                    weekly_bc_monthly_tc_diff, weekly_tc_monthly_bc_diff
-                )
-                
-                logger.debug(f"Final status for {symbol}: {status}")
-                
-                # 5. Calculate Gaps & Append Results
-                if status != "🟡 IN CPR":
-                    d_gap, w_gap, m_gap = self._calculate_gap_percentages(
-                        current_price, status,
-                        daily_tc, daily_bc,
-                        weekly_tc, weekly_bc,
-                        monthly_tc, monthly_bc
-                    )
-                    
-                    results.append({
-                        'symbol': symbol,
-                        'current_price': round(current_price, 2),
-                        'status': status,
-                        'daily_tc': round(daily_tc, 2),
-                        'daily_bc': round(daily_bc, 2),
-                        'weekly_tc': round(weekly_tc, 2),
-                        'weekly_bc': round(weekly_bc, 2),
-                        'monthly_tc': round(monthly_tc, 2),
-                        'monthly_bc': round(monthly_bc, 2),
-                        'd_gap': d_gap,
-                        'w_gap': w_gap,
-                        'm_gap': m_gap,
-                        'wbc_mtc_diff': round(weekly_bc_monthly_tc_diff, 2),
-                        'wtc_mbc_diff': round(weekly_tc_monthly_bc_diff, 2)
-                    })
-                
-            except Exception as e:
-                logger.error(f"❌ Unhandled error processing {symbol}: {e}")
-                continue
+        logger.info(f"Starting CPR filter with {max_workers} parallel workers on {len(fo_stocks)} stocks...")
+        start_time = time.time()
+        
+        # Use ThreadPoolExecutor for parallel API calls
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all stock processing tasks
+            future_to_symbol = {executor.submit(self._process_single_stock, symbol): symbol for symbol in fo_stocks}
+            
+            # Collect results as they complete
+            completed = 0
+            for future in as_completed(future_to_symbol):
+                result = future.result()
+                if result is not None:
+                    results.append(result)
+                completed += 1
+                if completed % 20 == 0:
+                    logger.info(f"Processed {completed}/{len(fo_stocks)} stocks...")
         
         logger.setLevel(current_log_level)
+        
+        elapsed_time = time.time() - start_time
+        logger.info(f"CPR Filter completed in {elapsed_time:.2f}s. Found {len(results)} stocks matching criteria.")
+        
         return sorted(results, key=lambda x: x['symbol'])
+    
+    def clear_cache(self) -> None:
+        """Clear the historical data cache to force fresh API calls on next run."""
+        with self._cache_lock:
+            self._historical_data_cache.clear()
+            logger.info("Historical data cache cleared.")

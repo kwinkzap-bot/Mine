@@ -1,14 +1,15 @@
 {% extends "base.html" %}
-
 {% block title %}Options Chart Viewer{% endblock %}
-
 {% block head %}
-    {{ super() }}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/options_chart.css') }}">
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/options_chart.css') }}">
 {% endblock %}
-
 {% block content %}
 <div class="form-container" id="options-chart-app">
+    <div id="api-loader" class="api-loader hidden">
+        <div class="spinner"></div>
+        <p>Loading...</p>
+    </div>
     <div class="form-row header-info">
         <h2 style="margin: 0;">NIFTY Price: <span id="nifty-ltp" style="color: #00bcd4;">
             {% if nifty_val is defined and nifty_val is not none %}
@@ -18,8 +19,8 @@
             {% endif %}
         </span></h2>
     </div>
-    
-    <form id="optionsChartForm"> <div class="form-row">
+    <form id="optionsChartForm">
+        <div class="form-row">
             <div class="form-group">
                 <label for="symbol">Symbol</label>
                 <select id="symbol" data-action="getStrikes">
@@ -39,19 +40,31 @@
             <div class="form-group">
                 <label>Price Source</label>
                 <div class="radio-group">
-                    <input type="radio" id="current_ltp" name="priceSource" value="current_ltp" checked> 
-                    <label for="current_ltp">LTP</label>
-                    <input type="radio" id="current_close" name="priceSource" value="current_close">
-                    <label for="current_close">Previous Close</label>
+                    <input type="radio" id="ltp" name="priceSource" value="ltp" checked> 
+                    <label for="ltp">LTP</label>
+                    <input type="radio" id="previous_close" name="priceSource" value="previous_close">
+                    <label for="previous_close">Previous Close</label>
                 </div>
             </div>
-            
             <div class="form-group">
                 <button id="fetchChartBtn" type="submit" class="btn form-button">Fetch Chart Data</button>
             </div>
         </div>
     </form>
-
+    <div class="timeframe-countdown-section">
+        <div class="timeframe-buttons">
+            <label>Timeframe:</label>
+            <button class="timeframe-btn" data-timeframe="1minute">1m</button>
+            <button class="timeframe-btn" data-timeframe="3minute">3m</button>
+            <button class="timeframe-btn" data-timeframe="5minute">5m</button>
+            <button class="timeframe-btn" data-timeframe="15minute">15m</button>
+            <button class="timeframe-btn" data-timeframe="60minute">1h</button>
+            <button class="timeframe-btn" data-timeframe="1day">1D</button>
+        </div>
+        <div class="countdown-display">
+            Next update in: <span id="countdown-timer">0</span>s
+        </div>
+    </div>
     <div class="charts-container">
         <div class="chart-grid">
             <div class="chart-wrapper">
@@ -68,14 +81,10 @@
             <div id="combinedChart" class="chart-element"></div>
         </div>
     </div>
-    
-    </div>
+</div>
 {% endblock %}
-
 {% block scripts %}
-    {{ super() }}
-    
-    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-    
-    <script src="{{ url_for('static', filename='js/options_chart_app.js') }}"></script>
+{{ super() }}
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="{{ url_for('static', filename='js/options_chart_app.js') }}"></script>
 {% endblock %}

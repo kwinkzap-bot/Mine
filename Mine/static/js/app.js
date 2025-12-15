@@ -41,8 +41,20 @@
                 throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
             }
             
+            // Parse the response
+            const data = await response.json();
+            
+            // Check if response contains auth_error flag (even with 200 status)
+            if (data && data.auth_error === true) {
+                if (typeof showNotification === 'function') {
+                    showNotification(data.error || 'Authentication required. Redirecting to login...', 'warning');
+                }
+                setTimeout(() => { window.location.href = '/login'; }, 1000);
+                return { success: false, message: 'Unauthorized', needs_login: true };
+            }
+            
             // Return parsed JSON data
-            return await response.json();
+            return data;
         } catch (error) {
             console.error('Fetch error:', error);
             // Handle network errors or other exceptions

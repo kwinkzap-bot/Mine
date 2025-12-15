@@ -1,40 +1,32 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='trading.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/notifications.css') }}">
-
     <title>{% block title %}Stock Scanner{% endblock %}</title>
     {% block head %}{% endblock %}
 </head>
-
 <body>
     <div id="notification-container"></div>
     <div class="container">
         <div class="navigation-bar">
-            <a href="/" class="nav-link">🏠 Home</a>
-            <a href="/strategy" class="nav-link">📊 Strategy</a>
-            <a href="/cpr-filter" class="nav-link">🔍 CPR Filter</a>
-            <a href="/multi-cpr-backtest" class="nav-link">🧪 Multi-CPR Backtest</a>
-            <a href="/historical" class="nav-link">📈 Historical</a>
-            <a href="/options-chart" class="nav-link">📉 Options Chart</a>
+            <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">🏠 Home</a>
+            <a href="/strategy" class="nav-link {% if request.path == '/strategy' %}active{% endif %}">📊 Strategy</a>
+            <a href="/cpr-filter" class="nav-link {% if request.path == '/cpr-filter' %}active{% endif %}">🔍 CPR Filter</a>
+            <a href="/multi-cpr-backtest" class="nav-link {% if request.path == '/multi-cpr-backtest' %}active{% endif %}">🧪 Multi-CPR Backtest</a>
+            <a href="/historical" class="nav-link {% if request.path == '/historical' %}active{% endif %}">📈 Historical</a>
+            <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉 Options Chart</a>
             <a href="/login" class="nav-link-login">🔑 Login to Zerodha</a>
         </div>
-
         <main>
             {% block content %}{% endblock %}
         </main>
     </div>
-
     <script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-
     {% block scripts %}{% endblock %}
-
 </body>
-
 </html>

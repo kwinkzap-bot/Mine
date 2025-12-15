@@ -1,35 +1,48 @@
 {% extends "base.html" %}
-
 {% block title %}CPR Filter - Stock Scanner{% endblock %}
-
 {% block content %}
 <div id="status-bar" class="status-bar text-right status-bar-height"></div>
-
-<div id="controls" class="controls">
-    <form id="cprFilterForm"> <div class="form-row">
-            <div class="form-group">
-                <label for="symbolSelect">Index/Exchange</label>
-                <select id="symbolSelect"> <option value="">Loading symbols...</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <button type="submit" class="btn form-button" id="runFilterBtn">Run CPR Filter</button>
-            </div>
+<div class="results-container">
+    <div id="aboveResults" class="results results-hidden results-block">
+        <h3>📈 CPR Above <span id="aboveCount">(0)</span></h3>
+        <div class="results-scroll">
+            <table id="aboveTable">
+                <thead><tr>
+                    <th data-column-index="0">Symbol</th>
+                    <th data-column-index="1">Price</th>
+                    <th data-column-index="2">Daily CPR</th>
+                    <th data-column-index="3">Weekly CPR</th>
+                    <th data-column-index="4">Monthly CPR</th>
+                    <th data-column-index="5">D Gap %</th>
+                    <th data-column-index="6">W Gap %</th>
+                    <th data-column-index="7">M Gap %</th>
+                    <th data-column-index="8">Status</th>
+                </tr></thead>
+                <tbody id="aboveBody"></tbody>
+            </table>
         </div>
-    </form>
-</div>
-
-<div id="aboveResults" class="results results-hidden">
-    <tbody id="aboveBody">
-    </tbody>
-</div>
-
-<div id="belowResults" class="results results-hidden results-margin-top">
-    <tbody id="belowBody">
-    </tbody>
+    </div>
+    <div id="belowResults" class="results results-hidden results-block">
+        <h3>📉 CPR Below <span id="belowCount">(0)</span></h3>
+        <div class="results-scroll">
+            <table id="belowTable">
+                <thead><tr>
+                    <th data-column-index="0">Symbol</th>
+                    <th data-column-index="1">Price</th>
+                    <th data-column-index="2">Daily CPR</th>
+                    <th data-column-index="3">Weekly CPR</th>
+                    <th data-column-index="4">Monthly CPR</th>
+                    <th data-column-index="5">D Gap %</th>
+                    <th data-column-index="6">W Gap %</th>
+                    <th data-column-index="7">M Gap %</th>
+                    <th data-column-index="8">Status</th>
+                </tr></thead>
+                <tbody id="belowBody"></tbody>
+            </table>
+        </div>
+    </div>
 </div>
 {% endblock %}
-
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/cpr_filter.js') }}"></script>
 {% endblock %}

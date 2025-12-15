@@ -27,8 +27,14 @@ class OptionsChartService:
         
         return float(ce_strike_price), float(pe_strike_price) # Explicit cast to float
 
-    def get_strikes_for_symbol(self, symbol: str) -> Dict[str, Any]:
-        """Get available CE and PE strikes for a symbol and return default selections."""
+    def get_strikes_for_symbol(self, symbol: str, price_source: str = 'previous_close') -> Dict[str, Any]:
+        """
+        Get available CE and PE strikes for a symbol and return default selections.
+        
+        Args:
+            symbol: The trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
+            price_source: 'ltp' for current price or 'previous_close' for previous day close
+        """
         try:
             instruments = self.kite_service.kite.instruments("NFO")
             
@@ -70,27 +76,53 @@ class OptionsChartService:
             elif symbol.upper() == 'FINNIFTY':
                 instrument_key = 'NSE:NIFTY FIN SERVICE'
 
-            previous_close = 0.0
+            base_price = 0.0
             
-            # Robustly fetch previous close
-            try:
-                # Fetch quote which contains ohlc (previous close)
-                quote_data = self.kite_service.kite.quote([instrument_key])
-                previous_close = float(quote_data[instrument_key]['ohlc']['close']) # FIX: Explicit cast
-            except Exception as quote_error:
-                logging.warning(f"Error getting quote for {instrument_key}: {quote_error}. Falling back to LTP or mid strike.")
+            # Fetch price based on price_source parameter
+            if price_source == 'ltp':
+                # Get current LTP
                 try:
-                    ltp_data = self.kite_service.kite.ltp([instrument_key])
-                    previous_close = float(ltp_data[instrument_key]['last_price']) # FIX: Explicit cast
-                except Exception as ltp_error:
-                    logging.warning(f"Error getting LTP for {instrument_key}: {ltp_error}. Falling back to mid strike.")
-                    if strikes:
-                        previous_close = strikes[len(strikes) // 2]['strike']
+                    base_price = self.kite_service.get_current_ltp(symbol)
+                    if base_price:
+                        logging.info(f"Using current LTP for {symbol}: {base_price}")
                     else:
-                        # FIX: Raise a proper error if no price can be determined and no strikes are available
-                        raise ValueError("Could not determine base price for strike calculation and no strikes found.")
+                        raise ValueError("Could not fetch LTP")
+                except Exception as ltp_error:
+                    logging.warning(f"Error getting LTP for {symbol}: {ltp_error}. Falling back to previous close.")
+                    try:
+                        base_price = self.kite_service.get_previous_close(symbol)
+                        if base_price:
+                            logging.info(f"Using previous close for {symbol}: {base_price}")
+                    except Exception as pdc_error:
+                        logging.warning(f"Error getting previous close: {pdc_error}. Falling back to mid strike.")
+                        if strikes:
+                            base_price = strikes[len(strikes) // 2]['strike']
+            else:  # previous_close (default)
+                # Get previous close (PDC)
+                try:
+                    base_price = self.kite_service.get_previous_close(symbol)
+                    if base_price:
+                        logging.info(f"Using previous close for {symbol}: {base_price}")
+                    else:
+                        raise ValueError("Could not fetch previous close")
+                except Exception as pdc_error:
+                    logging.warning(f"Error getting previous close for {symbol}: {pdc_error}. Falling back to LTP or mid strike.")
+                    try:
+                        base_price = self.kite_service.get_current_ltp(symbol)
+                        if base_price:
+                            logging.info(f"Using current LTP as fallback for {symbol}: {base_price}")
+                    except Exception as ltp_error:
+                        logging.warning(f"Error getting LTP: {ltp_error}. Falling back to mid strike.")
+                        if strikes:
+                            base_price = strikes[len(strikes) // 2]['strike']
             
-            default_ce_strike, default_pe_strike = self._calculate_default_strikes(previous_close, symbol)
+            if not base_price and strikes:
+                # Final fallback: use mid strike
+                base_price = strikes[len(strikes) // 2]['strike']
+            elif not base_price:
+                raise ValueError("Could not determine base price for strike calculation and no strikes found.")
+            
+            default_ce_strike, default_pe_strike = self._calculate_default_strikes(base_price, symbol)
 
             default_ce_token: Optional[int] = None
             default_pe_token: Optional[int] = None
@@ -105,7 +137,7 @@ class OptionsChartService:
             if not strikes:
                 atm_strike_obj = None
             else:
-                 atm_strike_obj = min(strikes, key=lambda x: abs(x['strike'] - previous_close))
+                 atm_strike_obj = min(strikes, key=lambda x: abs(x['strike'] - base_price))
 
             atm_index = -1
             if atm_strike_obj:
@@ -174,6 +206,9 @@ class OptionsChartService:
     def get_chart_data(self, ce_token: int, pe_token: int, timeframe: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Get historical data for CE and PE strikes"""
         try:
+            import pytz
+            ist = pytz.timezone('Asia/Kolkata')
+            
             to_date = datetime.now()
             from_date = to_date - timedelta(days=7)
             
@@ -192,12 +227,30 @@ class OptionsChartService:
             )
             
             # Using list comprehension for cleaner data transformation
+            # Kite API returns naive datetime objects (assumed to be IST)
+            # We need to make them timezone-aware before converting to timestamp
             ce_formatted = [
-                {'date': c['date'].isoformat(), 'open': c['open'], 'high': c['high'], 'low': c['low'], 'close': c['close'], 'volume': c['volume']} 
+                {
+                    # Make datetime IST-aware if it's naive, then convert to Unix timestamp
+                    'date': int(ist.localize(c['date']).timestamp()) if c['date'].tzinfo is None else int(c['date'].timestamp()),
+                    'open': c['open'], 
+                    'high': c['high'], 
+                    'low': c['low'], 
+                    'close': c['close'], 
+                    'volume': c['volume']
+                } 
                 for c in ce_data
             ]
             pe_formatted = [
-                {'date': c['date'].isoformat(), 'open': c['open'], 'high': c['high'], 'low': c['low'], 'close': c['close'], 'volume': c['volume']} 
+                {
+                    # Make datetime IST-aware if it's naive, then convert to Unix timestamp
+                    'date': int(ist.localize(c['date']).timestamp()) if c['date'].tzinfo is None else int(c['date'].timestamp()),
+                    'open': c['open'], 
+                    'high': c['high'], 
+                    'low': c['low'], 
+                    'close': c['close'], 
+                    'volume': c['volume']
+                } 
                 for c in pe_data
             ]
             

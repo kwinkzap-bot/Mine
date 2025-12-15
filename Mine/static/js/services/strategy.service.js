@@ -6,7 +6,7 @@
 const StrategyService = (function() {
     'use strict';
 
-    const API_ENDPOINT = '/api/run-backtest';
+    const API_ENDPOINT = '/api/strategy-backtest';
 
     /**
      * Runs the backtest by calling the backend API.
