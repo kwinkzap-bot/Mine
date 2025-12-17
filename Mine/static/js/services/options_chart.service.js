@@ -10,8 +10,8 @@ const optionsChartService = (() => {
      * @param {string} symbol - The trading symbol.
      * @returns {Promise<Object>} A promise that resolves to the strike data.
      */
-    async function getStrikes(symbol) {
-        const url = `${API_BASE_URL}/api/options-strikes?symbol=${encodeURIComponent(symbol)}`;
+    async function getStrikes(symbol, priceSource = 'previous_close') {
+        const url = `${API_BASE_URL}/api/options-init?symbol=${encodeURIComponent(symbol)}&price_source=${priceSource}`;
         const response = await fetch(url);
         if (!response.ok) {
             const errorText = await response.text();

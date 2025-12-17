@@ -1,7 +1,7 @@
 from kiteconnect import KiteConnect
 from datetime import datetime
 import calendar
-from typing import Dict, Any, Optional, Tuple, Union
+from typing import Dict, Any, Optional, Tuple
 
 class TradeService:
     def __init__(self, kite_instance: KiteConnect):

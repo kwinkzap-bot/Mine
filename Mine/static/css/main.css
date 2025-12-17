@@ -210,4 +210,40 @@ a[href*="tradingview"]:hover {
     text-decoration: underline;
 }
 
+/* Chart countdown display below each chart */
+.chart-countdown {
+    text-align: center;
+    padding: 8px;
+    font-size: 13px;
+    color: #666;
+    background: #f8f9fa;
+    border: 1px solid #e0e0e0;
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    margin-top: -4px;
+}
+
+/* Watchlist Button Styles */
+.watchlist-btn {
+    transition: all 0.2s ease;
+    font-size: 11px !important;
+    font-weight: bold !important;
+    padding: 3px 8px !important;
+}
+
+.watchlist-btn:hover {
+    background: #5568d3 !important;
+    transform: scale(1.1);
+    box-shadow: 0 2px 6px rgba(102, 126, 234, 0.4);
+}
+
+.watchlist-btn:active {
+    transform: scale(0.95);
+}
+
+.watchlist-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
 /* The notification styles (from notifications.css) are NOT included here to respect your file separation. */

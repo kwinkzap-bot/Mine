@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import time
 import sys
 import os
-from typing import Optional, Tuple, Dict, Any, List, Union
+from typing import Optional, Tuple, Dict, Any, List
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
 from service.kite_service import KiteService

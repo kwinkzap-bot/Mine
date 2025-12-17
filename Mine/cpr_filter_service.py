@@ -370,6 +370,7 @@ class CPRFilterService:
         """
         Process a single stock and return its CPR analysis result.
         This method is designed to run in parallel threads.
+        Raises ValueError for authentication errors (to be caught by caller).
         """
         try:
             # 1. Data Fetching (with caching)
@@ -437,6 +438,9 @@ class CPRFilterService:
                 'wtc_mbc_diff': round(weekly_tc_monthly_bc_diff, 2)
             }
             
+        except ValueError as ve:
+            # Re-raise ValueError for authentication errors
+            raise ve
         except Exception as e:
             logger.debug(f"Error processing {symbol}: {e}")
             return None
@@ -456,6 +460,8 @@ class CPRFilterService:
         logger.info(f"Starting CPR filter with {max_workers} parallel workers on {len(fo_stocks)} stocks...")
         start_time = time.time()
         
+        auth_errors_count = 0
+        
         # Use ThreadPoolExecutor for parallel API calls
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all stock processing tasks
@@ -464,9 +470,20 @@ class CPRFilterService:
             # Collect results as they complete
             completed = 0
             for future in as_completed(future_to_symbol):
-                result = future.result()
-                if result is not None:
-                    results.append(result)
+                try:
+                    result = future.result()
+                    if result is not None:
+                        results.append(result)
+                except ValueError as ve:
+                    # Authentication error - bubble it up
+                    logger.error(f"Auth error in filter_cpr_stocks: {ve}")
+                    auth_errors_count += 1
+                    if auth_errors_count > 3:  # If multiple auth errors, stop processing
+                        raise ValueError(f"Authentication failed. Your access token may be invalid or expired. Error: {ve}")
+                except Exception as e:
+                    logger.debug(f"Error processing stock: {e}")
+                    pass  # Continue with other stocks
+                
                 completed += 1
                 if completed % 20 == 0:
                     logger.info(f"Processed {completed}/{len(fo_stocks)} stocks...")

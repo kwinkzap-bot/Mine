@@ -9,9 +9,9 @@ const OptionsChartApp = (function() {
     // These variables are kept private to the module (closure)
     let ceChart = null;
     let peChart = null;
-    let combinedChart = null;
     let ceSeries = null;
     let peSeries = null;
+    let combinedChart = null;
     let combinedCeSeries = null;
     let combinedPeSeries = null;
     let ceData = null;
@@ -20,8 +20,8 @@ const OptionsChartApp = (function() {
     let currentPeToken = null; // Token for auto-update
     let currentTimeframe = '5minute';
     let autoUpdateInterval = null;
-    let currentSymbol = 'NIFTY'; 
-    let currentPriceSource = 'current_close'; 
+    let currentSymbol = 'NIFTY';
+    let currentPriceSource = 'previous_close';
     let cePriceLines = []; // Price lines for individual charts
     let pePriceLines = []; // Price lines for individual charts
     let ceTimerPriceLine = null; // Price line for combined chart (CE)
@@ -33,9 +33,14 @@ const OptionsChartApp = (function() {
     // Hover markers
     let ceHoverMarker = [];
     let peHoverMarker = [];
+    // Previous day high/low data from backend
+    let currentPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+    // Countdown state for price-line badges
     let countdownInterval = null;
     let countdownValue = 0;
-    let timeframeIntervals = {
+    let ceCountdownLine = null;
+    let peCountdownLine = null;
+    const timeframeIntervals = {
         '1minute': 60,
         '3minute': 180,
         '5minute': 300,
@@ -46,26 +51,6 @@ const OptionsChartApp = (function() {
 
     // --- DOM Elements cache ---
     const DOM = {};
-
-    // --- Constants ---
-    const CONSTANTS = {
-        API_ENDPOINTS: {
-            UNDERLYING_PRICE: '/api/underlying-price',
-            OPTIONS_STRIKES: '/api/options-strikes',
-            OPTIONS_DEFAULT_STRIKES: '/api/options-default-strikes',
-            OPTIONS_CHART_DATA: '/api/options-chart-data'
-        },
-        CSS_CLASSES: {
-            TIMEFRAME_BTN: 'timeframe-btn',
-            ACTIVE: 'active'
-        },
-        CHART_CONFIG: {
-            CE_COLOR: '#00c853', // Green
-            PE_COLOR: '#2962ff'  // Blue
-        }
-    };
-
-    // --- Utility Functions ---
 
     /**
      * Caches all required DOM elements.
@@ -83,96 +68,99 @@ const OptionsChartApp = (function() {
         DOM.peStrikeDisplay = document.getElementById('pe-strike-display');
         DOM.combinedCeStrikeDisplay = document.getElementById('combined-ce-strike-display');
         DOM.combinedPeStrikeDisplay = document.getElementById('combined-pe-strike-display');
-        DOM.countdownTimer = document.getElementById('countdown-timer');
-    }
-    
-    /**
-     * Shows the API loader.
-     */
-    function showLoader() {
-        if (DOM.apiLoader) {
-            DOM.apiLoader.classList.remove('hidden');
-        }
     }
 
     /**
-     * Hides the API loader.
+     * Shows the API loader overlay/spinner if present.
+     */
+    function showLoader() {
+        if (DOM.apiLoader) DOM.apiLoader.classList.remove('hidden');
+    }
+
+    /**
+     * Hides the API loader overlay/spinner if present.
      */
     function hideLoader() {
-        if (DOM.apiLoader) {
-            DOM.apiLoader.classList.add('hidden');
-        }
+        if (DOM.apiLoader) DOM.apiLoader.classList.add('hidden');
     }
-    
+
     /**
-     * Populates a select element with options.
+     * Populate a select element with options.
      */
     function populateSelect(selectElement, options, defaultMessage = 'Select...') {
         if (!selectElement) return;
-
         selectElement.innerHTML = `<option value="">${defaultMessage}</option>`;
-        options.forEach(optionValue => {
-            const option = document.createElement('option');
-            option.value = optionValue;
-            option.textContent = optionValue;
-            selectElement.appendChild(option);
+        options.forEach(val => {
+            const opt = document.createElement('option');
+            opt.value = val;
+            opt.textContent = val;
+            selectElement.appendChild(opt);
         });
     }
 
     /**
-     * Checks if the current time is within Indian market hours (9:15 AM to 3:30 PM) on a weekday.
-     * @returns {boolean}
+     * Check if current time is within Indian market hours (Mon-Fri 09:15-15:30 IST).
      */
     function isMarketHours() {
         const now = new Date();
-        const hours = now.getHours();
-        const minutes = now.getMinutes();
-        const timeInMinutes = hours * 60 + minutes;
-        const day = now.getDay(); // 0 = Sunday, 6 = Saturday
-
-        // 9:15 AM = 555 minutes
-        // 3:30 PM = 930 minutes
-        const marketOpen = 555;
-        const marketClose = 930;
-
-        // Check if it's a weekday (Monday=1 to Friday=5) and within time range
-        return day >= 1 && day <= 5 && timeInMinutes >= marketOpen && timeInMinutes <= marketClose;
+        const day = now.getDay(); // 0=Sun, 6=Sat
+        if (day === 0 || day === 6) return false;
+        const minutes = now.getHours() * 60 + now.getMinutes();
+        const open = 9 * 60 + 15;   // 555
+        const close = 15 * 60 + 30; // 930
+        return minutes >= open && minutes <= close;
     }
+
+    // --- Constants ---
+    const CONSTANTS = {
+        API_ENDPOINTS: {
+            OPTIONS_INIT: '/api/options-init',
+            UNDERLYING_PRICE: '/api/underlying-price',
+            OPTIONS_STRIKES: '/api/options-strikes',
+            OPTIONS_DEFAULT_STRIKES: '/api/options-default-strikes',
+            OPTIONS_CHART_DATA: '/api/options-chart-data',
+            OPTIONS_PDH_PDL: '/api/options-pdh-pdl'
+        },
+        CSS_CLASSES: {
+            TIMEFRAME_BTN: 'timeframe-btn',
+            ACTIVE: 'active'
+        },
+        CHART_CONFIG: {
+            CE_COLOR: '#00c853', // Green
+            PE_COLOR: '#2962ff'  // Blue
+        }
+    };
+
+    // --- Utility Functions ---
 
     /**
      * Converts raw data to the Lightweight Charts format.
-     * Backend sends UTC timestamps, we don't adjust them since Lightweight Charts handles timezone display.
+     * Backend sends UTC timestamps.
      */
     function formatChartData(data) {
         return data.map(item => {
             let timestamp;
-            
-            // Handle different date formats
+
             if (typeof item.date === 'number') {
-                // If it's already a Unix timestamp in milliseconds
                 if (item.date > 10000000000) {
-                    timestamp = Math.floor(item.date / 1000); // Convert ms to seconds
+                    timestamp = Math.floor(item.date / 1000);
                 } else {
-                    // If it's already in seconds (this is what backend sends)
                     timestamp = item.date;
                 }
             } else if (typeof item.date === 'string') {
-                // Parse ISO format date string
                 const dateObj = new Date(item.date);
                 timestamp = Math.floor(dateObj.getTime() / 1000);
             } else {
                 timestamp = Math.floor(new Date(item.date).getTime() / 1000);
             }
-            
+
             return {
-                // Lightweight Charts expects time in seconds (Unix timestamp)
-                // No adjustment needed - backend sends correct UTC timestamps
                 time: timestamp,
                 open: item.open,
                 high: item.high,
                 low: item.low,
                 close: item.close,
-                value: item.close // For line series
+                value: item.close
             };
         });
     }
@@ -183,6 +171,116 @@ const OptionsChartApp = (function() {
     function getLatestPrice(data) {
         if (!data || data.length === 0) return null;
         return data[data.length - 1].close;
+    }
+
+    /**
+     * Gets previous day's high and low from chart data.
+     * Uses the second-to-last candle (yesterday's data, not today's partial)
+     */
+    function getPreviousDayHighLow(data) {
+        if (!data || data.length < 2) return { high: null, low: null };
+        // Use second-to-last candle (yesterday's complete data)
+        const previousDayCandle = data[data.length - 2];
+        return {
+            high: previousDayCandle.high || null,
+            low: previousDayCandle.low || null
+        };
+    }
+
+    /**
+     * Adds previous day high/low price lines to a chart
+     * Returns array of created price lines for later removal
+     */
+    function addPreviousDayLines(series, cePdh, cePdl, pePdh, pePdl, isForCeChart) {
+        const lines = [];
+        
+        if (isForCeChart) {
+            // CE Chart lines
+            if (cePdh !== null) {
+                lines.push(series.createPriceLine({
+                    price: cePdh,
+                    color: '#000000',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'CE PDH'
+                }));
+            }
+            if (cePdl !== null) {
+                lines.push(series.createPriceLine({
+                    price: cePdl,
+                    color: '#000000',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'CE PDL'
+                }));
+            }
+            if (pePdh !== null) {
+                lines.push(series.createPriceLine({
+                    price: pePdh,
+                    color: '#10b981',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'PE PDH'
+                }));
+            }
+            if (pePdl !== null) {
+                lines.push(series.createPriceLine({
+                    price: pePdl,
+                    color: '#ef4444',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'PE PDL'
+                }));
+            }
+        } else {
+            // PE Chart lines
+            if (pePdh !== null) {
+                lines.push(series.createPriceLine({
+                    price: pePdh,
+                    color: '#000000',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'PE PDH'
+                }));
+            }
+            if (pePdl !== null) {
+                lines.push(series.createPriceLine({
+                    price: pePdl,
+                    color: '#000000',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'PE PDL'
+                }));
+            }
+            if (cePdh !== null) {
+                lines.push(series.createPriceLine({
+                    price: cePdh,
+                    color: '#10b981',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'CE PDH'
+                }));
+            }
+            if (cePdl !== null) {
+                lines.push(series.createPriceLine({
+                    price: cePdl,
+                    color: '#ef4444',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'CE PDL'
+                }));
+            }
+        }
+        
+        return lines;
     }
 
     // --- UI/State Management Functions ---
@@ -202,19 +300,33 @@ const OptionsChartApp = (function() {
 
     /**
      * Fetches and updates the underlying index price based on price source.
+     * Now uses cached data from loadStrikes() to avoid redundant API calls.
      */
     async function updateUnderlyingPrice() {
         if (!currentSymbol || !DOM.niftyPriceDisplay) return;
 
-        try {
-            // Use the selected price source directly (already in correct format)
-            const priceSource = currentPriceSource === 'previous_close' ? 'previous_close' : 'ltp';
-            const data = await fetchJson(`${CONSTANTS.API_ENDPOINTS.UNDERLYING_PRICE}?symbol=${currentSymbol}&price_source=${priceSource}`);
+        // If we have cached underlying price data from loadStrikes(), use it
+        if (window._cachedUnderlyingPrice && window._cachedUnderlyingPrice.symbol === currentSymbol) {
+            const data = window._cachedUnderlyingPrice;
+            const sourceLabel = data.source_label || '';
+            DOM.niftyPriceDisplay.textContent = (data.requested_price || 0).toFixed(2) + sourceLabel;
+            return;
+        }
 
-            if (data.success) {
-                const displayPrice = data.requested_price || data.ltp || 0;
-                const sourceLabel = priceSource === 'previous_close' ? ' (Close)' : ' (LTP)';
-                DOM.niftyPriceDisplay.textContent = displayPrice.toFixed(2) + sourceLabel;
+        // Fallback: refetch from merged init endpoint if no cached data
+        try {
+            const priceSource = currentPriceSource === 'previous_close' ? 'previous_close' : 'ltp';
+            const data = await fetchJson(`${CONSTANTS.API_ENDPOINTS.OPTIONS_INIT}?symbol=${currentSymbol}&price_source=${priceSource}`);
+
+            if (data.success && data.underlying_price) {
+                const sourceLabel = data.underlying_price.source_label || '';
+                DOM.niftyPriceDisplay.textContent = (data.underlying_price.requested_price || 0).toFixed(2) + sourceLabel;
+                // Update cache
+                window._cachedUnderlyingPrice = {
+                    symbol: currentSymbol,
+                    requested_price: data.underlying_price.requested_price,
+                    source_label: data.underlying_price.source_label
+                };
             }
         } catch (error) {
             console.error('Error fetching underlying price:', error);
@@ -247,34 +359,30 @@ const OptionsChartApp = (function() {
     function setTimeframe(timeframe) {
         currentTimeframe = timeframe;
         updateActiveButton(timeframe);
-        resetCountdown(); // Reset countdown timer when timeframe changes
         loadChartData();
+        // Restart chart countdown badges to match new timeframe
+        resetCountdown();
     }
 
     /**
      * Resets and starts the countdown timer.
      */
+    // Countdown removed
     function resetCountdown() {
-        // Clear existing countdown
         if (countdownInterval) clearInterval(countdownInterval);
-        
-        // Set countdown to the timeframe interval
         const intervalSeconds = timeframeIntervals[currentTimeframe] || 300;
         countdownValue = intervalSeconds;
-        updateCountdownDisplay();
-
-        // Start countdown
+        // Start ticking and updating badge labels
         countdownInterval = setInterval(() => {
-            countdownValue--;
-            updateCountdownDisplay();
-
-            // Auto-update charts when countdown reaches zero
+            countdownValue = Math.max(0, countdownValue - 1);
+            updateCountdownPriceLines(countdownValue);
             if (countdownValue <= 0) {
                 clearInterval(countdownInterval);
-                loadChartData(); // Auto-fetch chart data
-                resetCountdown(); // Restart countdown
+                // Auto-fetch fresh data, then restart countdown
+                loadChartData();
+                resetCountdown();
             }
-        }, 1000); // Update every 1 second
+        }, 1000);
     }
 
     /**
@@ -295,38 +403,65 @@ const OptionsChartApp = (function() {
     /**
      * Updates the countdown display in the UI.
      */
-    function updateCountdownDisplay() {
-        // Update main countdown timer (if exists)
-        if (DOM.countdownTimer) {
-            DOM.countdownTimer.textContent = countdownValue;
+    // Countdown UI removed
+
+    /**
+     * Creates/updates price-line badges on CE/PE charts showing remaining seconds (TradingView-style)
+     */
+    // Countdown price-line badges removed
+    function updateCountdownPriceLines(secondsRemaining) {
+        if (!ceSeries || !peSeries || !ceData || !peData) return;
+
+        const latestCePrice = getLatestPrice(ceData);
+        const latestPePrice = getLatestPrice(peData);
+        const label = formatCountdownLabel(secondsRemaining);
+
+        // CE chart badge
+        if (ceCountdownLine) {
+            try { ceSeries.removePriceLine(ceCountdownLine); } catch (e) {}
+            ceCountdownLine = null;
         }
-        
-        // Update chart watermark with countdown
-        updateChartWatermark(ceChart, currentTimeframe, countdownValue);
-        updateChartWatermark(peChart, currentTimeframe, countdownValue);
-        updateChartWatermark(combinedChart, currentTimeframe, countdownValue);
+        if (latestCePrice !== null) {
+            ceCountdownLine = ceSeries.createPriceLine({
+                price: latestCePrice,
+                color: CONSTANTS.CHART_CONFIG.CE_COLOR,
+                lineWidth: 1,
+                lineStyle: LightweightCharts.LineStyle.Dotted,
+                axisLabelVisible: true,
+                title: label
+            });
+        }
+
+        // PE chart badge
+        if (peCountdownLine) {
+            try { peSeries.removePriceLine(peCountdownLine); } catch (e) {}
+            peCountdownLine = null;
+        }
+        if (latestPePrice !== null) {
+            peCountdownLine = peSeries.createPriceLine({
+                price: latestPePrice,
+                color: CONSTANTS.CHART_CONFIG.PE_COLOR,
+                lineWidth: 1,
+                lineStyle: LightweightCharts.LineStyle.Dotted,
+                axisLabelVisible: true,
+                title: label
+            });
+        }
+    }
+
+    // Formats countdown seconds to mm:ss (e.g., 06:10)
+    // Countdown label removed
+    function formatCountdownLabel(totalSeconds) {
+        const secs = Math.max(0, Math.floor(totalSeconds));
+        const m = Math.floor(secs / 60).toString().padStart(2, '0');
+        const s = (secs % 60).toString().padStart(2, '0');
+        return `${m}:${s}`;
     }
 
     /**
      * Updates the chart watermark to show timeframe and countdown in TradingView style.
      */
-    function updateChartWatermark(chart, timeframe, countdown) {
-        if (!chart) return;
-        
-        const timeframeLabel = getTimeframeLabel(timeframe);
-        const watermarkText = `⏱ ${timeframeLabel} ${countdown}s`;
-        
-        chart.applyOptions({
-            watermark: {
-                color: 'rgba(102, 126, 234, 0.3)',
-                visible: true,
-                text: watermarkText,
-                fontSize: 18,
-                horzAlign: 'right',
-                vertAlign: 'top'
-            }
-        });
-    }
+    // Watermark countdown removed
     
     
     // --- Chart Initialization and Drawing ---
@@ -391,42 +526,54 @@ const OptionsChartApp = (function() {
         };
     }
 
-    /**
-     * Initializes the Lightweight Charts objects with proper IST time formatting
-     */
-function initCharts() {
-        if (!window.LightweightCharts) {
-            console.error("Lightweight Charts library not loaded.");
-            showNotification("Chart library not loaded. Check your HTML head.", "error");
-            return;
-        }
-        const { createChart, CandlestickSeries, LineSeries } = LightweightCharts;
-
-        // Create IST time formatter
-        const timeFormatter = createChartTimeFormatter();
-
-        // Light theme configuration with white background and IST time formatting
-        const lightTheme = {
-            layout: { 
-                textColor: '#333333',
-                background: { color: '#ffffff', type: 'solid' }
-            },
-            grid: { 
-                vertLines: { color: '#e0e0e0' },
-                horzLines: { color: '#e0e0e0' }
-            },
-            timeScale: {
-                textColor: '#333333',
-                timeVisible: true,
-                secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'  // Show seconds for intraday
-            },
-            rightPriceScale: {
-                textColor: '#333333'
-            },
-            crosshair: {
-                mode: LightweightCharts.CrosshairMode.Normal,  // Follow mouse exactly, don't snap to candles
+        /**
+         * Initializes the Lightweight Charts objects with proper IST time formatting
+         */
+        function initCharts() {
+            if (!window.LightweightCharts) {
+                console.error("Lightweight Charts library not loaded.");
+                showNotification("Chart library not loaded. Check your HTML head.", "error");
+                return;
             }
-        };
+            const { createChart, CandlestickSeries, LineSeries } = LightweightCharts;
+
+            // Create IST time formatter
+            const timeFormatter = createChartTimeFormatter();
+
+            // Light theme configuration with white background and IST time formatting
+            const lightTheme = {
+                layout: {
+                    textColor: '#1f2937',
+                    background: { color: '#ffffff', type: 'solid' }
+                },
+                grid: {
+                    vertLines: { color: '#f0f0f0' },
+                    horzLines: { color: '#f0f0f0' }
+                },
+                timeScale: {
+                    textColor: '#6b7280',
+                    borderColor: '#e5e7eb',
+                    timeVisible: true,
+                    secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute' // Show seconds for intraday
+                },
+                rightPriceScale: {
+                    textColor: '#6b7280',
+                    borderColor: '#e5e7eb'
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal, // Follow mouse exactly, don't snap to candles
+                    vertLine: {
+                        color: '#d1d5db',
+                        width: 1,
+                        style: 0
+                    },
+                    horzLine: {
+                        color: '#d1d5db',
+                        width: 1,
+                        style: 0
+                    }
+                }
+            };
 
         // Initialize CE Chart
         if (ceChart) ceChart.remove();
@@ -435,7 +582,7 @@ function initCharts() {
             timeVisible: true,
             secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
         });
-        ceSeries = ceChart.addSeries(CandlestickSeries, { upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+        ceSeries = ceChart.addSeries(CandlestickSeries, { upColor: '#10b981', downColor: '#ef4444', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#ef4444' });
 
         // Initialize PE Chart
         if (peChart) peChart.remove();
@@ -444,7 +591,14 @@ function initCharts() {
             timeVisible: true,
             secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
         });
-        peSeries = peChart.addSeries(CandlestickSeries, { upColor: '#2962ff', downColor: '#ef5350', borderVisible: false, wickUpColor: '#2962ff', wickDownColor: '#ef5350' });
+        peSeries = peChart.addSeries(CandlestickSeries, {
+            upColor: '#3b82f6',
+            downColor: '#000000',
+            borderVisible: false,
+            borderColor: '#3b82f6',
+            wickUpColor: '#3b82f6',
+            wickDownColor: '#111827'
+        });
 
         // Initialize Combined Chart
         if (combinedChart) combinedChart.remove();
@@ -453,8 +607,23 @@ function initCharts() {
             timeVisible: true,
             secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
         });
-        combinedCeSeries = combinedChart.addSeries(CandlestickSeries, { upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350', title: 'CE Price' });
-        combinedPeSeries = combinedChart.addSeries(CandlestickSeries, { upColor: '#2962ff', downColor: '#ef5350', borderVisible: false, wickUpColor: '#2962ff', wickDownColor: '#ef5350', title: 'PE Price' });
+        combinedCeSeries = combinedChart.addSeries(CandlestickSeries, {
+            upColor: '#10b981',
+            downColor: '#ef4444',
+            borderVisible: false,
+            wickUpColor: '#10b981',
+            wickDownColor: '#ef4444',
+            title: 'CE Price'
+        });
+        combinedPeSeries = combinedChart.addSeries(CandlestickSeries, {
+            upColor: '#3b82f6',
+            downColor: '#000000',
+            borderVisible: false,
+            borderColor: '#3b82f6',
+            wickUpColor: '#3b82f6',
+            wickDownColor: '#111827',
+            title: 'PE Price'
+        });
         
         // Note: Lightweight Charts handles crosshair sync natively when multiple charts are on the same page.
         // The native crosshair cursors across charts will synchronize automatically.
@@ -478,6 +647,32 @@ function initCharts() {
         pePriceLines.forEach(line => peSeries.removePriceLine(line));
         cePriceLines = [];
         pePriceLines = [];
+
+        // Use PDH/PDL from backend if available, otherwise fallback to chart data
+        let cePdh = currentPdhPdl.ce_pdh;
+        let cePdl = currentPdhPdl.ce_pdl;
+        let pePdh = currentPdhPdl.pe_pdh;
+        let pePdl = currentPdhPdl.pe_pdl;
+        
+        if (cePdh === null || cePdl === null || pePdh === null || pePdl === null) {
+            // Fallback to chart data if backend values not available
+            const cePdh_pdl = getPreviousDayHighLow(ceData);
+            const pePdh_pdl = getPreviousDayHighLow(peData);
+            cePdh = cePdh || cePdh_pdl.high;
+            cePdl = cePdl || cePdh_pdl.low;
+            pePdh = pePdh || pePdh_pdl.high;
+            pePdl = pePdl || pePdh_pdl.low;
+        }
+
+        // Add PDH/PDL lines to CE Chart
+        cePriceLines = cePriceLines.concat(
+            addPreviousDayLines(ceSeries, cePdh, cePdl, pePdh, pePdl, true)
+        );
+
+        // Add PDH/PDL lines to PE Chart
+        pePriceLines = pePriceLines.concat(
+            addPreviousDayLines(peSeries, cePdh, cePdl, pePdh, pePdl, false)
+        );
 
         // Add latest price line if fetching current price and in market hours
         const latestCePrice = getLatestPrice(ceData);
@@ -504,16 +699,26 @@ function initCharts() {
                 title: 'LTP'
             }));
         }
+        // Refresh countdown badges after rendering, using current countdown value
+        updateCountdownPriceLines(countdownValue);
     }
     
     /**
      * Renders the combined CE and PE candlestick chart.
      */
-    function renderCombinedChart() {
+    function renderCombinedChart(cePdh, cePdl, pePdh, pePdl) {
         if (!combinedCeSeries || !combinedPeSeries || !ceData || !peData) {
             console.log('renderCombinedChart early exit:', { combinedCeSeries: !!combinedCeSeries, combinedPeSeries: !!combinedPeSeries, ceData: !!ceData, peData: !!peData });
             return;
         }
+        
+        // Use provided PDH/PDL if passed, else fallback to cached values
+        currentPdhPdl = {
+            ce_pdh: cePdh !== undefined ? cePdh : currentPdhPdl.ce_pdh,
+            ce_pdl: cePdl !== undefined ? cePdl : currentPdhPdl.ce_pdl,
+            pe_pdh: pePdh !== undefined ? pePdh : currentPdhPdl.pe_pdh,
+            pe_pdl: pePdl !== undefined ? pePdl : currentPdhPdl.pe_pdl
+        };
         
         // Always format fresh data (cache is cleared before calling this function)
         ceFormattedData = formatChartData(ceData);
@@ -528,11 +733,13 @@ function initCharts() {
         // Remove old timer lines
         if (ceTimerPriceLine) combinedCeSeries.removePriceLine(ceTimerPriceLine);
         if (peTimerPriceLine) combinedPeSeries.removePriceLine(peTimerPriceLine);
+        ceTimerPriceLine = null;
+        peTimerPriceLine = null;
         
         const latestCePrice = getLatestPrice(ceData);
         const latestPePrice = getLatestPrice(peData);
 
-        // Add price lines for the last traded price if in market hours
+        // Add price lines for the last traded price if in market hours (no PDH/PDL lines in combined chart)
         if (latestCePrice !== null && currentPriceSource === 'current_close' && isMarketHours()) {
             ceTimerPriceLine = combinedCeSeries.createPriceLine({
                 price: latestCePrice,
@@ -559,19 +766,46 @@ function initCharts() {
         
         // Fit content and apply zoom-in on initial load for larger candles
         if (isInitialLoad) {
-            // Fit content first
-            ceChart.timeScale().fitContent();
-            peChart.timeScale().fitContent();
-            combinedChart.timeScale().fitContent();
-            
-            // Apply stronger zoom-in to make candles larger
+            // Set visible range to show only last 2 days
             setTimeout(() => {
-                applyZoom(ceChart, -0.5);
-                applyZoom(peChart, -0.5);
-                applyZoom(combinedChart, -0.3);
+                setVisibleRangeToDays(ceChart, 2);
+                setVisibleRangeToDays(peChart, 2);
+                setVisibleRangeToDays(combinedChart, 2);
             }, 100);
             
             isInitialLoad = false;
+        }
+    }
+
+    /**
+     * Sets the visible time range to show only the specified number of days from the end
+     */
+    function setVisibleRangeToDays(chart, days) {
+        try {
+            const timeScale = chart.timeScale();
+            const visibleRange = timeScale.getVisibleLogicalRange();
+            
+            if (visibleRange && ceFormattedData && ceFormattedData.length > 0) {
+                const totalBars = ceFormattedData.length;
+                // Estimate bars per day based on timeframe
+                const barsPerDay = {
+                    '1minute': 375,    // 6.25 hours * 60 minutes
+                    '3minute': 125,    // 6.25 hours * 20
+                    '5minute': 75,     // 6.25 hours * 12
+                    '15minute': 25,    // 6.25 hours * 4
+                    '60minute': 7,     // ~6-7 hours
+                    '1day': 1
+                };
+                
+                const barsToShow = (barsPerDay[currentTimeframe] || 75) * days;
+                const from = Math.max(0, totalBars - barsToShow);
+                const to = totalBars;
+                
+                timeScale.setVisibleLogicalRange({ from, to });
+                console.log(`Set visible range to ${days} days:`, { from, to, totalBars, barsToShow });
+            }
+        } catch (error) {
+            console.error('Error setting visible range:', error);
         }
     }
 
@@ -607,7 +841,7 @@ function initCharts() {
     // --- Data Fetching Logic ---
 
     /**
-     * Fetches strikes and default strikes in a single API call, updates the dropdowns.
+     * Fetches strikes, underlying price, and PDH/PDL in a single merged API call.
      */
     async function loadStrikes() {
         DOM.ceStrikeSelect.innerHTML = '<option value="">Loading...</option>';
@@ -621,8 +855,8 @@ function initCharts() {
             // Get the selected price source (LTP or Previous Close)
             const priceSource = document.querySelector('input[name="priceSource"]:checked')?.value || 'previous_close';
             
-            // Single merged API call that returns both strikes and default strikes
-            const data = await fetchJson(`${CONSTANTS.API_ENDPOINTS.OPTIONS_STRIKES}?symbol=${symbol}&price_source=${priceSource}`);
+            // Single merged API call that returns strikes, underlying price, and PDH/PDL
+            const data = await fetchJson(`${CONSTANTS.API_ENDPOINTS.OPTIONS_INIT}?symbol=${symbol}&price_source=${priceSource}`);
 
             if (data.success) {
                 const strikes = data.strikes.map(s => s.strike.toString());
@@ -649,6 +883,22 @@ function initCharts() {
                 DOM.peStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `(${DOM.peStrikeSelect.value})` : '';
                 DOM.combinedCeStrikeDisplay.textContent = DOM.ceStrikeSelect.value ? `CE: ${DOM.ceStrikeSelect.value}` : '';
                 DOM.combinedPeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `PE: ${DOM.peStrikeSelect.value}` : '';
+                
+                // Cache underlying price data
+                if (data.underlying_price) {
+                    window._cachedUnderlyingPrice = {
+                        symbol: symbol,
+                        requested_price: data.underlying_price.requested_price,
+                        source_label: data.underlying_price.source_label
+                    };
+                }
+                
+                // Update tokens for auto-update
+                if (data.default_ce_token) currentCeToken = data.default_ce_token;
+                if (data.default_pe_token) currentPeToken = data.default_pe_token;
+                
+                // Update underlying price display
+                updateUnderlyingPrice();
                 
                 // Load initial chart data
                 loadChartData();
@@ -682,23 +932,45 @@ function initCharts() {
         showLoader();
         
         try {
-            // Pass strikes, symbol, timeframe, and price source to backend
+            // PDH/PDL is now cached from loadStrikes(), but refetch if strikes changed
+            if (!currentPdhPdl.ce_pdh && !currentPdhPdl.ce_pdl && currentCeToken && currentPeToken) {
+                const pdhPayload = {
+                    symbol: currentSymbol,
+                    ce_strike: ceStrike,
+                    pe_strike: peStrike,
+                    ce_token: currentCeToken,
+                    pe_token: currentPeToken
+                };
+                const pdhResp = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_PDH_PDL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(pdhPayload)
+                });
+                if (pdhResp?.success) {
+                    currentPdhPdl = pdhResp.pdh_pdl || { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+                    if (pdhResp.ce_token) currentCeToken = pdhResp.ce_token;
+                    if (pdhResp.pe_token) currentPeToken = pdhResp.pe_token;
+                }
+            }
+
+            // Pass tokens to backend for FAST PATH (no token lookup needed)
             const data = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_CHART_DATA, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    symbol: currentSymbol,
-                    ce_strike: ceStrike,
-                    pe_strike: peStrike,
-                    price_source: currentPriceSource,
+                    ce_token: currentCeToken,
+                    pe_token: currentPeToken,
                     timeframe: currentTimeframe
                 })
             });
 
-            if (data.success) {
-                console.log('Chart data fetched:', { ceDataLength: data.ce_data?.length, peDataLength: data.pe_data?.length });
-                ceData = data.ce_data;
-                peData = data.pe_data;
+            if (data.success && data.data) {
+                // Parse merged data array and separate CE/PE by type field
+                ceData = data.data.filter(candle => candle.type === 'CE');
+                peData = data.data.filter(candle => candle.type === 'PE');
+                
+                console.log('Chart data fetched:', { ceDataLength: ceData.length, peDataLength: peData.length });
+                
                 // Clear cached formatted data to force re-formatting
                 ceFormattedData = null;
                 peFormattedData = null;
@@ -706,12 +978,9 @@ function initCharts() {
                 // Reinitialize charts with timeframe-aware time formatter
                 initCharts();
                 
-                console.log('Calling renderCombinedChart...');
-                renderCombinedChart();
+                console.log('Calling renderCombinedChart with PDH/PDL:', currentPdhPdl);
+                renderCombinedChart(currentPdhPdl.ce_pdh, currentPdhPdl.ce_pdl, currentPdhPdl.pe_pdh, currentPdhPdl.pe_pdl);
                 
-                // Set tokens for auto-update using the latest fetched data tokens
-                currentCeToken = data.ce_token;
-                currentPeToken = data.pe_token;
                 startAutoUpdate(); // Restart auto-update with new data
 
                 showNotification('Chart data loaded successfully.', 'success');
@@ -743,7 +1012,7 @@ function initCharts() {
         
         console.log('Starting auto-update interval...');
         
-        // Set a 1-second interval for fetching live data
+        // Set a 10-second interval for fetching live data (reduced API pressure)
         autoUpdateInterval = setInterval(async () => {
             // Only update if tokens are set AND it's market hours
             if (!currentCeToken || !currentPeToken) {
@@ -766,8 +1035,8 @@ function initCharts() {
                     body: JSON.stringify({
                         ce_token: currentCeToken,
                         pe_token: currentPeToken,
-                        timeframe: currentTimeframe
-                        // NOTE: Backend logic should be smart enough to use these tokens to fetch the latest data efficiently
+                        timeframe: currentTimeframe,
+                        live: true
                     })
                 });
 
@@ -776,11 +1045,12 @@ function initCharts() {
                     return; // fetchJson handles the redirect/notification
                 }
 
-                if (data.success) {
-                    // Assuming the backend returns the full, updated data for the timeframe
-                    console.log('Auto-update: New data received', { ceDataLength: data.ce_data?.length, peDataLength: data.pe_data?.length });
-                    ceData = data.ce_data;
-                    peData = data.pe_data;
+                if (data.success && data.data) {
+                    // Parse merged data array and separate CE/PE by type field
+                    ceData = data.data.filter(candle => candle.type === 'CE');
+                    peData = data.data.filter(candle => candle.type === 'PE');
+                    
+                    console.log('Auto-update: New data received', { ceDataLength: ceData.length, peDataLength: peData.length });
                     // Clear cached formatted data to force re-formatting
                     ceFormattedData = null;
                     peFormattedData = null;
@@ -790,7 +1060,7 @@ function initCharts() {
             } catch (error) {
                 console.error('Auto-update error:', error);
             }
-        }, 1000); // Update every 1 second
+        }, 10000); // Update every 10 seconds
     }
 
 
@@ -873,15 +1143,18 @@ function initCharts() {
 
         // Set initial state based on HTML defaults
         currentSymbol = DOM.symbolSelect?.value || 'NIFTY';
-        const selectedPriceSourceRadio = document.querySelector('input[name="priceSource"]:checked');
-        if (selectedPriceSourceRadio) {
-            currentPriceSource = selectedPriceSourceRadio.value;
+
+        // Force default to 'previous_close' on load (override any stale browser state)
+        const ltpRadio = document.getElementById('ltp');
+        const pdcRadio = document.getElementById('previous_close');
+        if (pdcRadio) {
+            pdcRadio.checked = true;
+            currentPriceSource = 'previous_close';
+            if (ltpRadio) ltpRadio.checked = false;
         } else {
-            // Default to 'ltp'
-            const defaultRadio = document.getElementById('ltp');
-            if (defaultRadio) {
-                defaultRadio.checked = true;
-                currentPriceSource = 'ltp';
+            const selectedPriceSourceRadio = document.querySelector('input[name="priceSource"]:checked');
+            if (selectedPriceSourceRadio) {
+                currentPriceSource = selectedPriceSourceRadio.value;
             }
         }
         
@@ -890,14 +1163,14 @@ function initCharts() {
 
         // Initial load of strikes and chart data
         if (currentSymbol) {
-            setSymbol(currentSymbol); // This will trigger loadStrikes and then loadChartData
+            setSymbol(currentSymbol); // This will trigger loadStrikes (which caches underlying price) and then loadChartData
         }
         
-        // Start countdown timer
+        // Start chart countdown badges
         resetCountdown();
         
-        // Load underlying price once on init (will be updated when price source changes)
-        updateUnderlyingPrice();
+        // Note: updateUnderlyingPrice() is NOT called here to avoid duplicate API call
+        // loadStrikes() already caches underlying price data from the merged /api/options-init endpoint
     }
 
     return {

@@ -31,13 +31,6 @@ load_dotenv(override=True)
 
 class OptionsStrategy:
     # --- Constants ---
-    # Strike Price Calculation
-    BANKNIFTY_ROUNDING_UNIT = 100
-    BANKNIFTY_STRIKE_OFFSET = 100 # For CE/PE strike calculation
-    NIFTY_FINNIFTY_ROUNDING_UNIT = 50
-    NIFTY_FINNIFTY_STRIKE_STEP_1 = 150 
-    NIFTY_FINNIFTY_STRIKE_STEP_2 = 200 # Unused in current logic
-
     # Intervals
     INTERVAL_5MINUTE = '5minute'
     INTERVAL_DAY = 'day'

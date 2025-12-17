@@ -35,11 +35,14 @@ async function updateUnderlyingPrice() {
     if (!symbol) return;
 
     try {
-        const response = await fetch(`/api/underlying-price?symbol=${symbol}`);
+        // Use merged endpoint or fallback to direct API
+        const priceSource = document.querySelector('input[name="priceSource"]:checked')?.value || 'previous_close';
+        const response = await fetch(`/api/options-init?symbol=${symbol}&price_source=${priceSource}`);
         const data = await response.json();
 
-        if (data.success) {
-            document.getElementById('nifty-price').textContent = data.ltp.toFixed(2);
+        if (data.success && data.underlying_price) {
+            const displayPrice = priceSource === 'ltp' ? data.underlying_price.ltp : data.underlying_price.previous_close;
+            document.getElementById('nifty-price').textContent = (displayPrice || 0).toFixed(2);
         }
     } catch (error) {
         console.error('Error fetching underlying price:', error);
@@ -169,12 +172,13 @@ async function loadStrikes() {
     peSelect.innerHTML = '<option value="">Loading...</option>';
 
     try {
-        const response = await fetch(`/api/options-strikes?symbol=${symbol}`);
+        const priceSource = document.querySelector('input[name="priceSource"]:checked')?.value || 'previous_close';
+        const response = await fetch(`/api/options-init?symbol=${symbol}&price_source=${priceSource}`);
         const data = await response.json();
 
         if (data.needs_login) {
             showNotification('Session expired. Redirecting to login...', 'warning');
-            window.location.href = '/login';
+            window.location.href = '/auth/login';
             return;
         }
 
@@ -301,7 +305,7 @@ async function loadChartData() {
 
         if (data.needs_login) {
             showNotification('Session expired. Redirecting to login...', 'warning');
-            window.location.href = '/login';
+            window.location.href = '/auth/login';
             return;
         }
 
@@ -617,7 +621,7 @@ function startAutoUpdate() {
             if (data.needs_login) {
                 clearInterval(autoUpdateInterval);
                 showNotification('Session expired. Redirecting to login...', 'warning');
-                window.location.href = '/login';
+                window.location.href = '/auth/login';
                 return;
             }
 

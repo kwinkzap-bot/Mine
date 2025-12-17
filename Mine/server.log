@@ -1,0 +1,1314 @@
+C:\Python313\Lib\site-packages\flask_limiter\_extension.py:364: UserWarning: Using the in-memory storage for tracking rate limits as no storage was explicitly specified. This is not recommended for production use. See: https://flask-limiter.readthedocs.io#configuring-a-storage-backend for documentation about configuring the storage backend.
+  warnings.warn(
+2025-12-17 20:29:36,780 - app.utils.logger - INFO - Flask app created with config: DevelopmentConfig
+2025-12-17 20:29:36,782 - app.utils.logger - INFO - Templates: D:\Trading\Mine\Mine\templates
+2025-12-17 20:29:36,782 - app.utils.logger - INFO - Static: D:\Trading\Mine\Mine\static
+2025-12-17 20:29:36,803 - app.utils.logger - INFO - Starting Flask app on 127.0.0.1:5000 (Debug: False)
+ * Serving Flask app 'app'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5000
+Press CTRL+C to quit
+127.0.0.1 - - [17/Dec/2025 20:33:53] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:33:54] "GET /static/css/main.css HTTP/1.1" 304 -
+127.0.0.1 - - [17/Dec/2025 20:33:54] "GET /static/css/notifications.css HTTP/1.1" 304 -
+127.0.0.1 - - [17/Dec/2025 20:33:54] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+127.0.0.1 - - [17/Dec/2025 20:33:54] "GET /static/js/options_chart_app.js HTTP/1.1" 304 -
+127.0.0.1 - - [17/Dec/2025 20:33:54] "GET /static/js/app.js HTTP/1.1" 304 -
+127.0.0.1 - - [17/Dec/2025 20:33:54] "GET /static/js/notifications.js HTTP/1.1" 304 -
+127.0.0.1 - - [17/Dec/2025 20:33:54] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+127.0.0.1 - - [17/Dec/2025 20:33:55] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 20:34:01,867 - app.utils.logger - INFO - Initializing CPRFilterService...
+2025-12-17 20:34:01,867 - INFO - Initializing CPRFilterService...
+2025-12-17 20:34:01,868 - INFO - CPRFilterService: Using existing KiteConnect instance.
+2025-12-17 20:34:01,869 - INFO - Loading NSE instruments for symbol mapping...
+2025-12-17 20:34:05,517 - INFO - Loaded 8690 NSE instruments.
+2025-12-17 20:34:05,517 - app.utils.logger - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:34:05,517 - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:34:05,928 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:34:05,928 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:34:16,559 - INFO - Found 208 F&O stocks for filtering.
+2025-12-17 20:34:16,626 - INFO - \u2713 Fetched NFO from API in 10.7s (36680 records)
+2025-12-17 20:34:16,636 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:34:16,858 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 10.93s
+2025-12-17 20:34:16,859 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 22.25s
+2025-12-17 20:34:16,859 - INFO - \u2713 options-init(NIFTY) completed in 22.25s
+127.0.0.1 - - [17/Dec/2025 20:34:16] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:34:16,918 - INFO - 127.0.0.1 - - [17/Dec/2025 20:34:16] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:34:23,195 - ERROR - API error fetching historical data for DMART: Too many requests
+2025-12-17 20:34:23,248 - ERROR - API error fetching historical data for ADANIGREEN: Too many requests
+2025-12-17 20:34:23,265 - ERROR - API error fetching historical data for DRREDDY: Too many requests
+2025-12-17 20:34:23,266 - ERROR - API error fetching historical data for ABCAPITAL: Too many requests
+2025-12-17 20:34:23,280 - ERROR - API error fetching historical data for EICHERMOT: Too many requests
+2025-12-17 20:34:23,283 - ERROR - API error fetching historical data for ADANIENSOL: Too many requests
+2025-12-17 20:34:23,291 - ERROR - API error fetching historical data for EXIDEIND: Too many requests
+2025-12-17 20:34:23,296 - ERROR - API error fetching historical data for ETERNAL: Too many requests
+2025-12-17 20:34:23,683 - WARNING - NetworkException on historical_data (attempt 1/5) for token 14588418: Too many requests. Backing off 0.83s
+127.0.0.1 - - [17/Dec/2025 20:34:24] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:34:24,827 - INFO - 127.0.0.1 - - [17/Dec/2025 20:34:24] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:34:26,531 - ERROR - API error fetching historical data for ICICIBANK: Too many requests
+2025-12-17 20:34:26,540 - ERROR - API error fetching historical data for IDFCFIRSTB: Too many requests
+2025-12-17 20:34:26,543 - ERROR - API error fetching historical data for IEX: Too many requests
+2025-12-17 20:34:26,549 - ERROR - API error fetching historical data for IIFL: Too many requests
+2025-12-17 20:34:26,551 - ERROR - API error fetching historical data for ICICIGI: Too many requests
+2025-12-17 20:34:26,555 - ERROR - API error fetching historical data for ICICIPRULI: Too many requests
+2025-12-17 20:34:26,564 - ERROR - API error fetching historical data for INDHOTEL: Too many requests
+2025-12-17 20:34:26,608 - ERROR - API error fetching historical data for INDIANB: Too many requests
+2025-12-17 20:34:26,675 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:34:27,151 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:34:27,152 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.32s
+2025-12-17 20:34:27,152 - INFO - \u2713 options-chart-data completed in 2.32s
+127.0.0.1 - - [17/Dec/2025 20:34:27] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:34:27,177 - INFO - 127.0.0.1 - - [17/Dec/2025 20:34:27] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:34:29,890 - ERROR - API error fetching historical data for KPITTECH: Too many requests
+2025-12-17 20:34:29,895 - ERROR - API error fetching historical data for KFINTECH: Too many requests
+2025-12-17 20:34:29,947 - ERROR - API error fetching historical data for LAURUSLABS: Too many requests
+2025-12-17 20:34:29,949 - ERROR - API error fetching historical data for LICHSGFIN: Too many requests
+2025-12-17 20:34:30,006 - ERROR - API error fetching historical data for LODHA: Too many requests
+2025-12-17 20:34:30,009 - ERROR - API error fetching historical data for LT: Too many requests
+2025-12-17 20:34:30,012 - ERROR - API error fetching historical data for LICI: Too many requests
+2025-12-17 20:34:30,017 - ERROR - API error fetching historical data for LTF: Too many requests
+2025-12-17 20:34:33,262 - ERROR - API error fetching historical data for OFSS: Too many requests
+2025-12-17 20:34:33,265 - ERROR - API error fetching historical data for NMDC: Too many requests
+2025-12-17 20:34:33,277 - ERROR - API error fetching historical data for PAGEIND: Too many requests
+2025-12-17 20:34:33,280 - ERROR - API error fetching historical data for NUVAMA: Too many requests
+2025-12-17 20:34:33,282 - ERROR - API error fetching historical data for ONGC: Too many requests
+2025-12-17 20:34:33,286 - ERROR - API error fetching historical data for NYKAA: Too many requests
+2025-12-17 20:34:33,291 - ERROR - API error fetching historical data for OBEROIRLTY: Too many requests
+2025-12-17 20:34:33,309 - ERROR - API error fetching historical data for OIL: Too many requests
+2025-12-17 20:34:36,562 - ERROR - API error fetching historical data for RVNL: Too many requests
+2025-12-17 20:34:36,583 - ERROR - API error fetching historical data for SBICARD: Too many requests
+2025-12-17 20:34:36,584 - ERROR - API error fetching historical data for SAMMAANCAP: Too many requests
+2025-12-17 20:34:36,586 - ERROR - API error fetching historical data for SAIL: Too many requests
+2025-12-17 20:34:36,588 - ERROR - API error fetching historical data for SBIN: Too many requests
+2025-12-17 20:34:36,589 - ERROR - API error fetching historical data for SBILIFE: Too many requests
+2025-12-17 20:34:36,614 - ERROR - API error fetching historical data for SHREECEM: Too many requests
+2025-12-17 20:34:36,631 - ERROR - API error fetching historical data for SHRIRAMFIN: Too many requests
+2025-12-17 20:34:39,884 - ERROR - API error fetching historical data for TVSMOTOR: Too many requests
+2025-12-17 20:34:39,893 - ERROR - API error fetching historical data for TORNTPOWER: Too many requests
+2025-12-17 20:34:39,898 - ERROR - API error fetching historical data for UNIONBANK: Too many requests
+2025-12-17 20:34:39,966 - ERROR - API error fetching historical data for UPL: Too many requests
+2025-12-17 20:34:39,968 - ERROR - API error fetching historical data for VOLTAS: Too many requests
+2025-12-17 20:34:39,969 - ERROR - API error fetching historical data for VBL: Too many requests
+2025-12-17 20:34:39,970 - ERROR - API error fetching historical data for VEDL: Too many requests
+2025-12-17 20:34:39,972 - ERROR - API error fetching historical data for UNOMINDA: Too many requests
+2025-12-17 20:34:39,989 - INFO - CPR Filter completed in 23.39s. Found 11 stocks matching criteria.
+2025-12-17 20:34:39,990 - app.utils.logger - INFO - CPR filter completed. Found 11 stocks.
+2025-12-17 20:34:39,990 - INFO - CPR filter completed. Found 11 stocks.
+127.0.0.1 - - [17/Dec/2025 20:34:40] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 20:34:40,008 - INFO - 127.0.0.1 - - [17/Dec/2025 20:34:40] "GET /api/cpr-filter HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:35:31] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 20:35:31,364 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:31] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:35:31] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 20:35:31,554 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:31] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 20:35:31] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 20:35:31,915 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:31] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:31] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 20:35:31,926 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:31] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:31] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 20:35:31,952 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:31] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:32] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 20:35:32,096 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:32] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:32] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 20:35:32,128 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:32] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:32] "GET /static/js/options_chart_app.js HTTP/1.1" 304 -
+2025-12-17 20:35:32,187 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:32] "[36mGET /static/js/options_chart_app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:32] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 20:35:32,853 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:32] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 20:35:34,686 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:35:34,686 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:35:38,648 - INFO - \u2713 Fetched NFO from API in 4.0s (36680 records)
+2025-12-17 20:35:38,650 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:35:38,717 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 4.03s
+2025-12-17 20:35:38,718 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 6.47s
+2025-12-17 20:35:38,718 - INFO - \u2713 options-init(NIFTY) completed in 6.47s
+127.0.0.1 - - [17/Dec/2025 20:35:38] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:35:38,730 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:38] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:35:40] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:35:40,619 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:40] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:35:42,216 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:35:42,774 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:35:42,777 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.14s
+2025-12-17 20:35:42,777 - INFO - \u2713 options-chart-data completed in 2.14s
+127.0.0.1 - - [17/Dec/2025 20:35:42] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:35:42,808 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:42] "POST /api/options-chart-data HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:35:47] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 20:35:47,272 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:47] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:35:47] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 20:35:47,332 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:47] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:47] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 20:35:47,366 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:47] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:47] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 20:35:47,377 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:47] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:47] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 20:35:47,427 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:47] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:47] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 20:35:47,430 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:47] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:47] "GET /static/js/options_chart_app.js HTTP/1.1" 304 -
+2025-12-17 20:35:47,449 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:47] "[36mGET /static/js/options_chart_app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:35:47] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 20:35:47,465 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:47] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 20:35:47] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 20:35:47,861 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:47] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 20:35:49,468 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:35:49,468 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:35:54,260 - INFO - \u2713 Fetched NFO from API in 4.8s (36680 records)
+2025-12-17 20:35:54,261 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:35:54,326 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 4.86s
+2025-12-17 20:35:54,327 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 6.71s
+2025-12-17 20:35:54,327 - INFO - \u2713 options-init(NIFTY) completed in 6.71s
+127.0.0.1 - - [17/Dec/2025 20:35:54] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:35:54,333 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:54] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:35:55] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:35:55,725 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:55] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:35:57,334 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:35:57,881 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:35:57,882 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.15s
+2025-12-17 20:35:57,882 - INFO - \u2713 options-chart-data completed in 2.15s
+127.0.0.1 - - [17/Dec/2025 20:35:57] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:35:57,895 - INFO - 127.0.0.1 - - [17/Dec/2025 20:35:57] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:36:02,916 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:36:02,916 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:36:06,653 - INFO - \u2713 Fetched NFO from API in 3.7s (36680 records)
+2025-12-17 20:36:06,654 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:36:06,729 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.81s
+2025-12-17 20:36:06,729 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 5.58s
+2025-12-17 20:36:06,729 - INFO - \u2713 options-init(NIFTY) completed in 5.58s
+127.0.0.1 - - [17/Dec/2025 20:36:06] "GET /api/options-init?symbol=NIFTY&price_source=ltp HTTP/1.1" 200 -
+2025-12-17 20:36:06,735 - INFO - 127.0.0.1 - - [17/Dec/2025 20:36:06] "GET /api/options-init?symbol=NIFTY&price_source=ltp HTTP/1.1" 200 -
+2025-12-17 20:36:08,423 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:36:08,978 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:36:08,979 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.23s
+2025-12-17 20:36:08,979 - INFO - \u2713 options-chart-data completed in 2.23s
+127.0.0.1 - - [17/Dec/2025 20:36:08] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:36:08,988 - INFO - 127.0.0.1 - - [17/Dec/2025 20:36:08] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:36:17,077 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:36:17,077 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:36:20,096 - INFO - \u2713 Fetched NFO from API in 3.0s (36680 records)
+2025-12-17 20:36:20,097 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:36:20,160 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.09s
+2025-12-17 20:36:20,160 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 4.63s
+2025-12-17 20:36:20,160 - INFO - \u2713 options-init(NIFTY) completed in 4.63s
+127.0.0.1 - - [17/Dec/2025 20:36:20] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:36:20,167 - INFO - 127.0.0.1 - - [17/Dec/2025 20:36:20] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:36:44,636 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:36:45,160 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:36:45,162 - app.utils.logger - INFO - \u2713 options-chart-data completed in 3.21s
+2025-12-17 20:36:45,162 - INFO - \u2713 options-chart-data completed in 3.21s
+127.0.0.1 - - [17/Dec/2025 20:36:45] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:36:45,171 - INFO - 127.0.0.1 - - [17/Dec/2025 20:36:45] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:37:11,161 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:37:11,161 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:37:15,006 - INFO - \u2713 Fetched NFO from API in 3.8s (36680 records)
+2025-12-17 20:37:15,006 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:37:15,080 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.93s
+2025-12-17 20:37:15,081 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 5.42s
+2025-12-17 20:37:15,081 - INFO - \u2713 options-init(NIFTY) completed in 5.42s
+127.0.0.1 - - [17/Dec/2025 20:37:15] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:37:15,088 - INFO - 127.0.0.1 - - [17/Dec/2025 20:37:15] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:37:16,760 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:37:17,294 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:37:17,295 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.16s
+2025-12-17 20:37:17,295 - INFO - \u2713 options-chart-data completed in 2.16s
+127.0.0.1 - - [17/Dec/2025 20:37:17] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:37:17,303 - INFO - 127.0.0.1 - - [17/Dec/2025 20:37:17] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:37:35,750 - INFO - \u2713 Fetched chart data: CE=1243 candles, PE=1250 candles
+2025-12-17 20:37:36,079 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:37:36,082 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.76s
+2025-12-17 20:37:36,082 - INFO - \u2713 options-chart-data completed in 2.76s
+127.0.0.1 - - [17/Dec/2025 20:37:36] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:37:36,105 - INFO - 127.0.0.1 - - [17/Dec/2025 20:37:36] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:37:42,720 - INFO - \u2713 Fetched chart data: CE=1124 candles, PE=1124 candles
+2025-12-17 20:37:43,145 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:37:43,147 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.50s
+2025-12-17 20:37:43,147 - INFO - \u2713 options-chart-data completed in 2.50s
+127.0.0.1 - - [17/Dec/2025 20:37:43] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:37:43,170 - INFO - 127.0.0.1 - - [17/Dec/2025 20:37:43] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:37:51,739 - INFO - \u2713 Fetched chart data: CE=249 candles, PE=250 candles
+2025-12-17 20:37:52,288 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:37:52,289 - app.utils.logger - INFO - \u2713 options-chart-data completed in 3.15s
+2025-12-17 20:37:52,289 - INFO - \u2713 options-chart-data completed in 3.15s
+127.0.0.1 - - [17/Dec/2025 20:37:52] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:37:52,315 - INFO - 127.0.0.1 - - [17/Dec/2025 20:37:52] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:37:55,884 - ERROR - Timeout or error fetching futures for tokens 14588418, 14594050: invalid interval: 1day
+2025-12-17 20:37:56,202 - ERROR - Error getting chart data for tokens 14588418, 14594050: invalid interval: 1day
+Traceback (most recent call last):
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 519, in get_chart_data
+    ce_data = ce_future.result(timeout=30) or []
+              ~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Python313\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 75, in _historical_with_retry
+    return self.kite_service.kite.historical_data(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        instrument_token=int(instrument_token),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        interval=interval
+        ^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 632, in historical_data
+    data = self._get("market.historical",
+                     url_args={"instrument_token": instrument_token, "interval": interval},
+    ...<5 lines>...
+                         "oi": 1 if oi else 0
+                     })
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 861, in _get
+    return self._request(route, "GET", url_args=url_args, params=params, is_json=is_json)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 937, in _request
+    raise exp(data["message"], code=r.status_code)
+kiteconnect.exceptions.InputException: invalid interval: 1day
+2025-12-17 20:37:56,215 - app.utils.logger - ERROR - Error fetching chart data: invalid interval: 1day
+Traceback (most recent call last):
+  File "D:\Trading\Mine\Mine\app\routes\api.py", line 371, in get_options_chart_data
+    ce_data, pe_data, pdh_pdl = chart_service.get_chart_data(ce_token, pe_token, timeframe, use_cache=True)
+                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 553, in get_chart_data
+    raise e
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 519, in get_chart_data
+    ce_data = ce_future.result(timeout=30) or []
+              ~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Python313\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 75, in _historical_with_retry
+    return self.kite_service.kite.historical_data(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        instrument_token=int(instrument_token),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        interval=interval
+        ^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 632, in historical_data
+    data = self._get("market.historical",
+                     url_args={"instrument_token": instrument_token, "interval": interval},
+    ...<5 lines>...
+                         "oi": 1 if oi else 0
+                     })
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 861, in _get
+    return self._request(route, "GET", url_args=url_args, params=params, is_json=is_json)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 937, in _request
+    raise exp(data["message"], code=r.status_code)
+kiteconnect.exceptions.InputException: invalid interval: 1day
+2025-12-17 20:37:56,215 - ERROR - Error fetching chart data: invalid interval: 1day
+Traceback (most recent call last):
+  File "D:\Trading\Mine\Mine\app\routes\api.py", line 371, in get_options_chart_data
+    ce_data, pe_data, pdh_pdl = chart_service.get_chart_data(ce_token, pe_token, timeframe, use_cache=True)
+                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 553, in get_chart_data
+    raise e
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 519, in get_chart_data
+    ce_data = ce_future.result(timeout=30) or []
+              ~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Python313\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 75, in _historical_with_retry
+    return self.kite_service.kite.historical_data(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        instrument_token=int(instrument_token),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        interval=interval
+        ^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 632, in historical_data
+    data = self._get("market.historical",
+                     url_args={"instrument_token": instrument_token, "interval": interval},
+    ...<5 lines>...
+                         "oi": 1 if oi else 0
+                     })
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 861, in _get
+    return self._request(route, "GET", url_args=url_args, params=params, is_json=is_json)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 937, in _request
+    raise exp(data["message"], code=r.status_code)
+kiteconnect.exceptions.InputException: invalid interval: 1day
+127.0.0.1 - - [17/Dec/2025 20:37:56] "POST /api/options-chart-data HTTP/1.1" 500 -
+2025-12-17 20:37:56,224 - INFO - 127.0.0.1 - - [17/Dec/2025 20:37:56] "[35m[1mPOST /api/options-chart-data HTTP/1.1[0m" 500 -
+2025-12-17 20:38:56,179 - app.utils.logger - INFO - Initializing CPRFilterService...
+2025-12-17 20:38:56,179 - INFO - Initializing CPRFilterService...
+2025-12-17 20:38:56,179 - INFO - CPRFilterService: Using existing KiteConnect instance.
+2025-12-17 20:38:56,179 - INFO - Loading NSE instruments for symbol mapping...
+2025-12-17 20:38:57,279 - INFO - Loaded 8690 NSE instruments.
+2025-12-17 20:38:57,279 - app.utils.logger - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:38:57,279 - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:39:00,714 - INFO - Found 208 F&O stocks for filtering.
+2025-12-17 20:39:07,274 - ERROR - API error fetching historical data for DIVISLAB: Too many requests
+2025-12-17 20:39:07,279 - ERROR - API error fetching historical data for DLF: Too many requests
+2025-12-17 20:39:07,280 - ERROR - API error fetching historical data for EICHERMOT: Too many requests
+2025-12-17 20:39:07,283 - ERROR - API error fetching historical data for DRREDDY: Too many requests
+2025-12-17 20:39:07,284 - ERROR - API error fetching historical data for DMART: Too many requests
+2025-12-17 20:39:07,298 - ERROR - API error fetching historical data for ADANIGREEN: Too many requests
+2025-12-17 20:39:07,353 - ERROR - API error fetching historical data for EXIDEIND: Too many requests
+2025-12-17 20:39:07,356 - ERROR - API error fetching historical data for ETERNAL: Too many requests
+2025-12-17 20:39:10,520 - ERROR - API error fetching historical data for HUDCO: Too many requests
+2025-12-17 20:39:10,546 - ERROR - API error fetching historical data for ICICIGI: Too many requests
+2025-12-17 20:39:10,559 - ERROR - API error fetching historical data for ICICIPRULI: Too many requests
+2025-12-17 20:39:10,563 - ERROR - API error fetching historical data for ICICIBANK: Too many requests
+2025-12-17 20:39:10,570 - ERROR - API error fetching historical data for IDEA: Too many requests
+2025-12-17 20:39:10,575 - ERROR - API error fetching historical data for IDFCFIRSTB: Too many requests
+2025-12-17 20:39:10,598 - ERROR - API error fetching historical data for IEX: Too many requests
+2025-12-17 20:39:10,601 - ERROR - API error fetching historical data for IIFL: Too many requests
+2025-12-17 20:39:13,826 - ERROR - API error fetching historical data for KEI: Too many requests
+2025-12-17 20:39:13,838 - ERROR - API error fetching historical data for KOTAKBANK: Too many requests
+2025-12-17 20:39:13,843 - ERROR - API error fetching historical data for KPITTECH: Too many requests
+2025-12-17 20:39:13,849 - ERROR - API error fetching historical data for LAURUSLABS: Too many requests
+2025-12-17 20:39:13,849 - ERROR - API error fetching historical data for LICHSGFIN: Too many requests
+2025-12-17 20:39:13,855 - ERROR - API error fetching historical data for LICI: Too many requests
+2025-12-17 20:39:13,862 - ERROR - API error fetching historical data for LODHA: Too many requests
+2025-12-17 20:39:13,905 - ERROR - API error fetching historical data for LT: Too many requests
+2025-12-17 20:39:17,148 - ERROR - API error fetching historical data for NESTLEIND: Too many requests
+2025-12-17 20:39:17,150 - ERROR - API error fetching historical data for NUVAMA: Too many requests
+2025-12-17 20:39:17,151 - ERROR - API error fetching historical data for NHPC: Too many requests
+2025-12-17 20:39:17,156 - ERROR - API error fetching historical data for NYKAA: Too many requests
+2025-12-17 20:39:17,191 - ERROR - API error fetching historical data for NMDC: Too many requests
+2025-12-17 20:39:17,240 - ERROR - API error fetching historical data for OIL: Too many requests
+2025-12-17 20:39:17,265 - ERROR - API error fetching historical data for OFSS: Too many requests
+2025-12-17 20:39:17,325 - ERROR - API error fetching historical data for OBEROIRLTY: Too many requests
+2025-12-17 20:39:20,626 - ERROR - API error fetching historical data for RVNL: Too many requests
+2025-12-17 20:39:20,631 - ERROR - API error fetching historical data for SAIL: Too many requests
+2025-12-17 20:39:20,633 - ERROR - API error fetching historical data for SBICARD: Too many requests
+2025-12-17 20:39:20,640 - ERROR - API error fetching historical data for SAMMAANCAP: Too many requests
+2025-12-17 20:39:20,646 - ERROR - API error fetching historical data for SBIN: Too many requests
+2025-12-17 20:39:20,648 - ERROR - API error fetching historical data for RELIANCE: Too many requests
+2025-12-17 20:39:20,653 - ERROR - API error fetching historical data for SBILIFE: Too many requests
+2025-12-17 20:39:20,655 - ERROR - API error fetching historical data for SHREECEM: Too many requests
+2025-12-17 20:39:23,960 - ERROR - API error fetching historical data for TMPV: Too many requests
+2025-12-17 20:39:23,966 - ERROR - API error fetching historical data for TITAGARH: Too many requests
+2025-12-17 20:39:23,969 - ERROR - API error fetching historical data for ULTRACEMCO: Too many requests
+2025-12-17 20:39:23,984 - ERROR - API error fetching historical data for TORNTPOWER: Too many requests
+2025-12-17 20:39:24,018 - ERROR - API error fetching historical data for UNIONBANK: Too many requests
+2025-12-17 20:39:24,113 - ERROR - API error fetching historical data for UPL: Too many requests
+2025-12-17 20:39:24,117 - ERROR - API error fetching historical data for UNOMINDA: Too many requests
+2025-12-17 20:39:24,140 - ERROR - API error fetching historical data for UNITDSPR: Too many requests
+2025-12-17 20:39:24,152 - INFO - CPR Filter completed in 23.42s. Found 11 stocks matching criteria.
+2025-12-17 20:39:24,152 - app.utils.logger - INFO - CPR filter completed. Found 11 stocks.
+2025-12-17 20:39:24,152 - INFO - CPR filter completed. Found 11 stocks.
+127.0.0.1 - - [17/Dec/2025 20:39:24] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 20:39:24,175 - INFO - 127.0.0.1 - - [17/Dec/2025 20:39:24] "GET /api/cpr-filter HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:40:36] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 20:40:36,317 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:36] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:40:36] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 20:40:36,371 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:36] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:40:36] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 20:40:36,405 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:36] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:40:36] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 20:40:36,418 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:36] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:40:36] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 20:40:36,432 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:36] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:40:36] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 20:40:36,442 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:36] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:40:36] "GET /static/js/options_chart_app.js HTTP/1.1" 304 -
+2025-12-17 20:40:36,453 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:36] "[36mGET /static/js/options_chart_app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:40:36] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 20:40:36,489 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:36] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 20:40:36] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 20:40:36,778 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:36] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 20:40:38,291 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:40:38,291 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:40:41,959 - INFO - \u2713 Fetched NFO from API in 3.7s (36680 records)
+2025-12-17 20:40:41,960 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:40:42,032 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.74s
+2025-12-17 20:40:42,033 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 5.46s
+2025-12-17 20:40:42,033 - INFO - \u2713 options-init(NIFTY) completed in 5.46s
+127.0.0.1 - - [17/Dec/2025 20:40:42] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:40:42,040 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:42] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:40:43] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:40:43,578 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:43] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:40:45,536 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:40:46,056 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:40:46,057 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.46s
+2025-12-17 20:40:46,057 - INFO - \u2713 options-chart-data completed in 2.46s
+127.0.0.1 - - [17/Dec/2025 20:40:46] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:40:46,076 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:46] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:40:56,011 - ERROR - Timeout or error fetching futures for tokens 14588418, 14594050: invalid interval: 1day
+2025-12-17 20:40:56,316 - ERROR - Error getting chart data for tokens 14588418, 14594050: invalid interval: 1day
+Traceback (most recent call last):
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 519, in get_chart_data
+    self._respect_rate_limit(min_gap_seconds=0.25)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Python313\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 75, in _historical_with_retry
+    return self.kite_service.kite.historical_data(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        instrument_token=int(instrument_token),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        interval=interval
+        ^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 632, in historical_data
+    data = self._get("market.historical",
+                     url_args={"instrument_token": instrument_token, "interval": interval},
+    ...<5 lines>...
+                         "oi": 1 if oi else 0
+                     })
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 861, in _get
+    return self._request(route, "GET", url_args=url_args, params=params, is_json=is_json)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 937, in _request
+    raise exp(data["message"], code=r.status_code)
+kiteconnect.exceptions.InputException: invalid interval: 1day
+2025-12-17 20:40:56,320 - app.utils.logger - ERROR - Error fetching chart data: invalid interval: 1day
+Traceback (most recent call last):
+  File "D:\Trading\Mine\Mine\app\routes\api.py", line 371, in get_options_chart_data
+    ce_data, pe_data, pdh_pdl = chart_service.get_chart_data(ce_token, pe_token, timeframe, use_cache=True)
+                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 553, in get_chart_data
+    with self._cache_lock:
+    ^^^
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 519, in get_chart_data
+    self._respect_rate_limit(min_gap_seconds=0.25)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Python313\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 75, in _historical_with_retry
+    return self.kite_service.kite.historical_data(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        instrument_token=int(instrument_token),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        interval=interval
+        ^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 632, in historical_data
+    data = self._get("market.historical",
+                     url_args={"instrument_token": instrument_token, "interval": interval},
+    ...<5 lines>...
+                         "oi": 1 if oi else 0
+                     })
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 861, in _get
+    return self._request(route, "GET", url_args=url_args, params=params, is_json=is_json)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 937, in _request
+    raise exp(data["message"], code=r.status_code)
+kiteconnect.exceptions.InputException: invalid interval: 1day
+2025-12-17 20:40:56,320 - ERROR - Error fetching chart data: invalid interval: 1day
+Traceback (most recent call last):
+  File "D:\Trading\Mine\Mine\app\routes\api.py", line 371, in get_options_chart_data
+    ce_data, pe_data, pdh_pdl = chart_service.get_chart_data(ce_token, pe_token, timeframe, use_cache=True)
+                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 553, in get_chart_data
+    with self._cache_lock:
+    ^^^
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 519, in get_chart_data
+    self._respect_rate_limit(min_gap_seconds=0.25)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 449, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "C:\Python313\Lib\concurrent\futures\_base.py", line 401, in __get_result
+    raise self._exception
+  File "C:\Python313\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "D:\Trading\Mine\Mine\service\options_chart_service.py", line 75, in _historical_with_retry
+    return self.kite_service.kite.historical_data(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        instrument_token=int(instrument_token),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        interval=interval
+        ^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 632, in historical_data
+    data = self._get("market.historical",
+                     url_args={"instrument_token": instrument_token, "interval": interval},
+    ...<5 lines>...
+                         "oi": 1 if oi else 0
+                     })
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 861, in _get
+    return self._request(route, "GET", url_args=url_args, params=params, is_json=is_json)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\site-packages\kiteconnect\connect.py", line 937, in _request
+    raise exp(data["message"], code=r.status_code)
+kiteconnect.exceptions.InputException: invalid interval: 1day
+127.0.0.1 - - [17/Dec/2025 20:40:56] "POST /api/options-chart-data HTTP/1.1" 500 -
+2025-12-17 20:40:56,325 - INFO - 127.0.0.1 - - [17/Dec/2025 20:40:56] "[35m[1mPOST /api/options-chart-data HTTP/1.1[0m" 500 -
+2025-12-17 20:41:03,922 - INFO - \u2713 Fetched chart data: CE=70 candles, PE=70 candles
+2025-12-17 20:41:04,515 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:41:04,516 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.67s
+2025-12-17 20:41:04,516 - INFO - \u2713 options-chart-data completed in 2.67s
+127.0.0.1 - - [17/Dec/2025 20:41:04] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:41:04,525 - INFO - 127.0.0.1 - - [17/Dec/2025 20:41:04] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:43:56,242 - app.utils.logger - INFO - Initializing CPRFilterService...
+2025-12-17 20:43:56,242 - INFO - Initializing CPRFilterService...
+2025-12-17 20:43:56,242 - INFO - CPRFilterService: Using existing KiteConnect instance.
+2025-12-17 20:43:56,242 - INFO - Loading NSE instruments for symbol mapping...
+2025-12-17 20:43:57,595 - INFO - Loaded 8690 NSE instruments.
+2025-12-17 20:43:57,595 - app.utils.logger - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:43:57,595 - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:44:00,146 - INFO - Found 208 F&O stocks for filtering.
+2025-12-17 20:44:05,737 - ERROR - API error fetching historical data for CROMPTON: Too many requests
+2025-12-17 20:44:05,738 - ERROR - API error fetching historical data for COLPAL: Too many requests
+2025-12-17 20:44:05,739 - ERROR - API error fetching historical data for CONCOR: Too many requests
+2025-12-17 20:44:05,744 - ERROR - API error fetching historical data for ABCAPITAL: Too many requests
+2025-12-17 20:44:05,751 - ERROR - API error fetching historical data for ADANIGREEN: Too many requests
+2025-12-17 20:44:05,779 - ERROR - API error fetching historical data for CYIENT: Too many requests
+2025-12-17 20:44:05,788 - ERROR - API error fetching historical data for CUMMINSIND: Too many requests
+2025-12-17 20:44:05,796 - ERROR - API error fetching historical data for DABUR: Too many requests
+2025-12-17 20:44:09,060 - ERROR - API error fetching historical data for HDFCLIFE: Too many requests
+2025-12-17 20:44:09,075 - ERROR - API error fetching historical data for HDFCBANK: Too many requests
+2025-12-17 20:44:09,144 - ERROR - API error fetching historical data for HEROMOTOCO: Too many requests
+2025-12-17 20:44:09,151 - ERROR - API error fetching historical data for HFCL: Too many requests
+2025-12-17 20:44:09,153 - ERROR - API error fetching historical data for HINDPETRO: Too many requests
+2025-12-17 20:44:09,154 - ERROR - API error fetching historical data for HINDUNILVR: Too many requests
+2025-12-17 20:44:09,155 - ERROR - API error fetching historical data for HINDZINC: Too many requests
+2025-12-17 20:44:09,182 - ERROR - API error fetching historical data for HINDALCO: Too many requests
+2025-12-17 20:44:12,525 - ERROR - API error fetching historical data for JINDALSTEL: Too many requests
+2025-12-17 20:44:12,525 - ERROR - API error fetching historical data for IRFC: Too many requests
+2025-12-17 20:44:12,529 - ERROR - API error fetching historical data for JIOFIN: Too many requests
+2025-12-17 20:44:12,530 - ERROR - API error fetching historical data for JUBLFOOD: Too many requests
+2025-12-17 20:44:12,532 - ERROR - API error fetching historical data for KALYANKJIL: Too many requests
+2025-12-17 20:44:12,610 - ERROR - API error fetching historical data for KAYNES: Too many requests
+2025-12-17 20:44:12,611 - ERROR - API error fetching historical data for KFINTECH: Too many requests
+2025-12-17 20:44:12,628 - ERROR - API error fetching historical data for KEI: Too many requests
+2025-12-17 20:44:15,852 - ERROR - API error fetching historical data for MOTHERSON: Too many requests
+2025-12-17 20:44:15,969 - ERROR - API error fetching historical data for NATIONALUM: Too many requests
+2025-12-17 20:44:15,969 - ERROR - API error fetching historical data for NAUKRI: Too many requests
+2025-12-17 20:44:15,972 - ERROR - API error fetching historical data for NBCC: Too many requests
+2025-12-17 20:44:15,975 - ERROR - API error fetching historical data for NESTLEIND: Too many requests
+2025-12-17 20:44:15,977 - ERROR - API error fetching historical data for NHPC: Too many requests
+2025-12-17 20:44:15,979 - ERROR - API error fetching historical data for NCC: Too many requests
+2025-12-17 20:44:15,980 - ERROR - API error fetching historical data for MUTHOOTFIN: Too many requests
+2025-12-17 20:44:19,342 - ERROR - API error fetching historical data for PPLPHARMA: Too many requests
+2025-12-17 20:44:19,344 - ERROR - API error fetching historical data for PRESTIGE: Too many requests
+2025-12-17 20:44:19,345 - ERROR - API error fetching historical data for POLYCAB: Too many requests
+2025-12-17 20:44:19,352 - ERROR - API error fetching historical data for POLICYBZR: Too many requests
+2025-12-17 20:44:19,440 - ERROR - API error fetching historical data for RECLTD: Too many requests
+2025-12-17 20:44:19,442 - ERROR - API error fetching historical data for RVNL: Too many requests
+2025-12-17 20:44:19,443 - ERROR - API error fetching historical data for RELIANCE: Too many requests
+2025-12-17 20:44:19,452 - ERROR - API error fetching historical data for RBLBANK: Too many requests
+2025-12-17 20:44:22,756 - ERROR - API error fetching historical data for TCS: Too many requests
+2025-12-17 20:44:22,758 - ERROR - API error fetching historical data for TITAGARH: Too many requests
+2025-12-17 20:44:22,762 - ERROR - API error fetching historical data for TITAN: Too many requests
+2025-12-17 20:44:22,763 - ERROR - API error fetching historical data for TMPV: Too many requests
+2025-12-17 20:44:22,766 - ERROR - API error fetching historical data for TORNTPOWER: Too many requests
+2025-12-17 20:44:22,769 - ERROR - API error fetching historical data for TECHM: Too many requests
+2025-12-17 20:44:22,772 - ERROR - API error fetching historical data for TORNTPHARM: Too many requests
+2025-12-17 20:44:22,786 - ERROR - API error fetching historical data for TIINDIA: Too many requests
+2025-12-17 20:44:23,026 - INFO - CPR Filter completed in 22.86s. Found 8 stocks matching criteria.
+2025-12-17 20:44:23,026 - app.utils.logger - INFO - CPR filter completed. Found 8 stocks.
+2025-12-17 20:44:23,026 - INFO - CPR filter completed. Found 8 stocks.
+127.0.0.1 - - [17/Dec/2025 20:44:23] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 20:44:23,045 - INFO - 127.0.0.1 - - [17/Dec/2025 20:44:23] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 20:48:56,203 - app.utils.logger - INFO - Initializing CPRFilterService...
+2025-12-17 20:48:56,203 - INFO - Initializing CPRFilterService...
+2025-12-17 20:48:56,203 - INFO - CPRFilterService: Using existing KiteConnect instance.
+2025-12-17 20:48:56,204 - INFO - Loading NSE instruments for symbol mapping...
+2025-12-17 20:48:57,248 - INFO - Loaded 8690 NSE instruments.
+2025-12-17 20:48:57,248 - app.utils.logger - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:48:57,248 - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:49:00,377 - INFO - Found 208 F&O stocks for filtering.
+2025-12-17 20:49:06,510 - ERROR - API error fetching historical data for DLF: Too many requests
+2025-12-17 20:49:06,587 - ERROR - API error fetching historical data for DRREDDY: Too many requests
+2025-12-17 20:49:06,588 - ERROR - API error fetching historical data for DMART: Too many requests
+2025-12-17 20:49:06,589 - ERROR - API error fetching historical data for ALKEM: Too many requests
+2025-12-17 20:49:06,594 - ERROR - API error fetching historical data for EICHERMOT: Too many requests
+2025-12-17 20:49:06,597 - ERROR - API error fetching historical data for ETERNAL: Too many requests
+2025-12-17 20:49:06,618 - ERROR - API error fetching historical data for ADANIENSOL: Too many requests
+2025-12-17 20:49:06,633 - ERROR - API error fetching historical data for ADANIPORTS: Too many requests
+2025-12-17 20:49:09,952 - ERROR - API error fetching historical data for HINDZINC: Too many requests
+2025-12-17 20:49:09,954 - ERROR - API error fetching historical data for HUDCO: Too many requests
+2025-12-17 20:49:09,961 - ERROR - API error fetching historical data for ICICIPRULI: Too many requests
+2025-12-17 20:49:10,046 - ERROR - API error fetching historical data for IDEA: Too many requests
+2025-12-17 20:49:10,050 - ERROR - API error fetching historical data for INDHOTEL: Too many requests
+2025-12-17 20:49:10,054 - ERROR - API error fetching historical data for IEX: Too many requests
+2025-12-17 20:49:10,059 - ERROR - API error fetching historical data for IIFL: Too many requests
+2025-12-17 20:49:10,061 - ERROR - API error fetching historical data for IDFCFIRSTB: Too many requests
+2025-12-17 20:49:13,360 - ERROR - API error fetching historical data for KOTAKBANK: Too many requests
+2025-12-17 20:49:13,363 - ERROR - API error fetching historical data for LICI: Too many requests
+2025-12-17 20:49:13,365 - ERROR - API error fetching historical data for LAURUSLABS: Too many requests
+2025-12-17 20:49:13,367 - ERROR - API error fetching historical data for LT: Too many requests
+2025-12-17 20:49:13,370 - ERROR - API error fetching historical data for KPITTECH: Too many requests
+2025-12-17 20:49:13,375 - ERROR - API error fetching historical data for LODHA: Too many requests
+2025-12-17 20:49:13,377 - ERROR - API error fetching historical data for KFINTECH: Too many requests
+2025-12-17 20:49:13,424 - ERROR - API error fetching historical data for LTF: Too many requests
+2025-12-17 20:49:16,756 - ERROR - API error fetching historical data for NUVAMA: Too many requests
+2025-12-17 20:49:16,758 - ERROR - API error fetching historical data for NHPC: Too many requests
+2025-12-17 20:49:16,762 - ERROR - API error fetching historical data for NTPC: Too many requests
+2025-12-17 20:49:16,774 - ERROR - API error fetching historical data for NMDC: Too many requests
+2025-12-17 20:49:16,862 - ERROR - API error fetching historical data for ONGC: Too many requests
+2025-12-17 20:49:16,862 - ERROR - API error fetching historical data for OFSS: Too many requests
+2025-12-17 20:49:16,864 - ERROR - API error fetching historical data for OBEROIRLTY: Too many requests
+2025-12-17 20:49:16,869 - ERROR - API error fetching historical data for OIL: Too many requests
+2025-12-17 20:49:20,129 - ERROR - API error fetching historical data for RVNL: Too many requests
+2025-12-17 20:49:20,131 - ERROR - API error fetching historical data for SAIL: Too many requests
+2025-12-17 20:49:20,184 - ERROR - API error fetching historical data for SAMMAANCAP: Too many requests
+2025-12-17 20:49:20,210 - ERROR - API error fetching historical data for SHREECEM: Too many requests
+2025-12-17 20:49:20,212 - ERROR - API error fetching historical data for SBILIFE: Too many requests
+2025-12-17 20:49:20,212 - ERROR - API error fetching historical data for SBICARD: Too many requests
+2025-12-17 20:49:20,213 - ERROR - API error fetching historical data for SHRIRAMFIN: Too many requests
+2025-12-17 20:49:20,268 - ERROR - API error fetching historical data for SBIN: Too many requests
+2025-12-17 20:49:23,514 - ERROR - API error fetching historical data for UNOMINDA: Too many requests
+2025-12-17 20:49:23,514 - ERROR - API error fetching historical data for TRENT: Too many requests
+2025-12-17 20:49:23,516 - ERROR - API error fetching historical data for ULTRACEMCO: Too many requests
+2025-12-17 20:49:23,516 - ERROR - API error fetching historical data for TORNTPHARM: Too many requests
+2025-12-17 20:49:23,518 - ERROR - API error fetching historical data for UNIONBANK: Too many requests
+2025-12-17 20:49:23,589 - ERROR - API error fetching historical data for VEDL: Too many requests
+2025-12-17 20:49:23,591 - ERROR - API error fetching historical data for UPL: Too many requests
+2025-12-17 20:49:23,601 - ERROR - API error fetching historical data for VBL: Too many requests
+2025-12-17 20:49:23,621 - INFO - CPR Filter completed in 23.22s. Found 10 stocks matching criteria.
+2025-12-17 20:49:23,622 - app.utils.logger - INFO - CPR filter completed. Found 10 stocks.
+2025-12-17 20:49:23,622 - INFO - CPR filter completed. Found 10 stocks.
+127.0.0.1 - - [17/Dec/2025 20:49:23] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 20:49:23,647 - INFO - 127.0.0.1 - - [17/Dec/2025 20:49:23] "GET /api/cpr-filter HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:52:11] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 20:52:11,962 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:11] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:52:12] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 20:52:12,783 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:12] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 20:52:12] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 20:52:12,804 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:12] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:52:12] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 20:52:12,806 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:12] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:52:12] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 20:52:12,808 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:12] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:52:12] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 20:52:12,809 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:12] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:52:12] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 20:52:12,831 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:12] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:52:12] "GET /static/js/options_chart_app.js HTTP/1.1" 304 -
+2025-12-17 20:52:12,843 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:12] "[36mGET /static/js/options_chart_app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:52:14] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 20:52:14,100 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:14] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 20:52:16,700 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:52:16,700 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:52:20,551 - INFO - \u2713 Fetched NFO from API in 3.9s (36680 records)
+2025-12-17 20:52:20,551 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:52:20,651 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.95s
+2025-12-17 20:52:20,651 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 6.90s
+2025-12-17 20:52:20,651 - INFO - \u2713 options-init(NIFTY) completed in 6.90s
+127.0.0.1 - - [17/Dec/2025 20:52:20] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:52:20,658 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:20] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:52:22] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:52:22,132 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:22] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:52:24,063 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:52:24,507 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:52:24,507 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.36s
+2025-12-17 20:52:24,507 - INFO - \u2713 options-chart-data completed in 2.36s
+127.0.0.1 - - [17/Dec/2025 20:52:24] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:52:24,518 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:24] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:52:47,203 - INFO - \u2713 Fetched chart data: CE=1243 candles, PE=1250 candles
+2025-12-17 20:52:47,603 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:52:47,605 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.69s
+2025-12-17 20:52:47,605 - INFO - \u2713 options-chart-data completed in 2.69s
+127.0.0.1 - - [17/Dec/2025 20:52:47] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:52:47,632 - INFO - 127.0.0.1 - - [17/Dec/2025 20:52:47] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:53:56,195 - app.utils.logger - INFO - Initializing CPRFilterService...
+2025-12-17 20:53:56,195 - INFO - Initializing CPRFilterService...
+2025-12-17 20:53:56,197 - INFO - CPRFilterService: Using existing KiteConnect instance.
+2025-12-17 20:53:56,197 - INFO - Loading NSE instruments for symbol mapping...
+2025-12-17 20:53:57,182 - INFO - Loaded 8690 NSE instruments.
+2025-12-17 20:53:57,182 - app.utils.logger - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:53:57,182 - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:53:59,603 - INFO - Found 208 F&O stocks for filtering.
+2025-12-17 20:54:05,278 - ERROR - API error fetching historical data for COLPAL: Too many requests
+2025-12-17 20:54:05,299 - ERROR - API error fetching historical data for ADANIPORTS: Too many requests
+2025-12-17 20:54:05,308 - ERROR - API error fetching historical data for ALKEM: Too many requests
+2025-12-17 20:54:05,310 - ERROR - API error fetching historical data for CROMPTON: Too many requests
+2025-12-17 20:54:05,314 - ERROR - API error fetching historical data for CUMMINSIND: Too many requests
+2025-12-17 20:54:05,318 - ERROR - API error fetching historical data for CYIENT: Too many requests
+2025-12-17 20:54:05,361 - ERROR - API error fetching historical data for DABUR: Too many requests
+2025-12-17 20:54:05,367 - ERROR - API error fetching historical data for DALBHARAT: Too many requests
+2025-12-17 20:54:08,581 - ERROR - API error fetching historical data for HEROMOTOCO: Too many requests
+2025-12-17 20:54:08,584 - ERROR - API error fetching historical data for HDFCBANK: Too many requests
+2025-12-17 20:54:08,589 - ERROR - API error fetching historical data for HDFCLIFE: Too many requests
+2025-12-17 20:54:08,628 - ERROR - API error fetching historical data for HFCL: Too many requests
+2025-12-17 20:54:08,652 - ERROR - API error fetching historical data for HINDUNILVR: Too many requests
+2025-12-17 20:54:08,653 - ERROR - API error fetching historical data for HINDPETRO: Too many requests
+2025-12-17 20:54:08,668 - ERROR - API error fetching historical data for HINDALCO: Too many requests
+2025-12-17 20:54:08,726 - ERROR - API error fetching historical data for HINDZINC: Too many requests
+2025-12-17 20:54:11,907 - ERROR - API error fetching historical data for JINDALSTEL: Too many requests
+2025-12-17 20:54:11,918 - ERROR - API error fetching historical data for JIOFIN: Too many requests
+2025-12-17 20:54:11,944 - ERROR - API error fetching historical data for JSWENERGY: Too many requests
+2025-12-17 20:54:11,951 - ERROR - API error fetching historical data for JSWSTEEL: Too many requests
+2025-12-17 20:54:11,983 - ERROR - API error fetching historical data for KALYANKJIL: Too many requests
+2025-12-17 20:54:11,983 - ERROR - API error fetching historical data for KAYNES: Too many requests
+2025-12-17 20:54:11,985 - ERROR - API error fetching historical data for KEI: Too many requests
+2025-12-17 20:54:12,017 - ERROR - API error fetching historical data for JUBLFOOD: Too many requests
+2025-12-17 20:54:15,183 - ERROR - API error fetching historical data for MOTHERSON: Too many requests
+2025-12-17 20:54:15,188 - ERROR - API error fetching historical data for MPHASIS: Too many requests
+2025-12-17 20:54:15,214 - ERROR - API error fetching historical data for MUTHOOTFIN: Too many requests
+2025-12-17 20:54:15,258 - ERROR - API error fetching historical data for NESTLEIND: Too many requests
+2025-12-17 20:54:15,259 - ERROR - API error fetching historical data for NAUKRI: Too many requests
+2025-12-17 20:54:15,260 - ERROR - API error fetching historical data for NBCC: Too many requests
+2025-12-17 20:54:15,262 - ERROR - API error fetching historical data for NATIONALUM: Too many requests
+2025-12-17 20:54:15,295 - ERROR - API error fetching historical data for NCC: Too many requests
+2025-12-17 20:54:18,603 - ERROR - API error fetching historical data for POLICYBZR: Too many requests
+2025-12-17 20:54:18,609 - ERROR - API error fetching historical data for POWERGRID: Too many requests
+2025-12-17 20:54:18,612 - ERROR - API error fetching historical data for POLYCAB: Too many requests
+2025-12-17 20:54:18,618 - ERROR - API error fetching historical data for POWERINDIA: Too many requests
+2025-12-17 20:54:18,621 - ERROR - API error fetching historical data for PRESTIGE: Too many requests
+2025-12-17 20:54:18,626 - ERROR - API error fetching historical data for PPLPHARMA: Too many requests
+2025-12-17 20:54:18,627 - ERROR - API error fetching historical data for RBLBANK: Too many requests
+2025-12-17 20:54:18,670 - ERROR - API error fetching historical data for RECLTD: Too many requests
+2025-12-17 20:54:21,938 - ERROR - API error fetching historical data for TECHM: Too many requests
+2025-12-17 20:54:21,939 - ERROR - API error fetching historical data for TITAGARH: Too many requests
+2025-12-17 20:54:21,942 - ERROR - API error fetching historical data for TATATECH: Too many requests
+2025-12-17 20:54:21,944 - ERROR - API error fetching historical data for TATAPOWER: Too many requests
+2025-12-17 20:54:21,949 - ERROR - API error fetching historical data for TATASTEEL: Too many requests
+2025-12-17 20:54:21,961 - ERROR - API error fetching historical data for TIINDIA: Too many requests
+2025-12-17 20:54:22,038 - ERROR - API error fetching historical data for TITAN: Too many requests
+2025-12-17 20:54:22,051 - ERROR - API error fetching historical data for TMPV: Too many requests
+2025-12-17 20:54:22,287 - INFO - CPR Filter completed in 22.67s. Found 8 stocks matching criteria.
+2025-12-17 20:54:22,287 - app.utils.logger - INFO - CPR filter completed. Found 8 stocks.
+2025-12-17 20:54:22,287 - INFO - CPR filter completed. Found 8 stocks.
+127.0.0.1 - - [17/Dec/2025 20:54:22] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 20:54:22,320 - INFO - 127.0.0.1 - - [17/Dec/2025 20:54:22] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 20:55:46,771 - INFO - \u2713 Fetched chart data: CE=1243 candles, PE=1250 candles
+2025-12-17 20:55:47,260 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:55:47,263 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.34s
+2025-12-17 20:55:47,263 - INFO - \u2713 options-chart-data completed in 2.34s
+127.0.0.1 - - [17/Dec/2025 20:55:47] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:55:47,288 - INFO - 127.0.0.1 - - [17/Dec/2025 20:55:47] "POST /api/options-chart-data HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:56:50] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 20:56:50,084 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:50] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:56:50] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 20:56:50,169 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:50] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:56:50] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 20:56:50,197 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:50] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:56:50] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 20:56:50,209 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:50] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:56:50] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 20:56:50,223 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:50] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:56:50] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 20:56:50,245 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:50] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 20:56:50] "GET /static/js/options_chart_app.js HTTP/1.1" 200 -
+2025-12-17 20:56:50,248 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:50] "GET /static/js/options_chart_app.js HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:56:50] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 20:56:50,322 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:50] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 20:56:51] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 20:56:51,239 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:51] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 20:56:53,169 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:56:53,169 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:56:57,125 - INFO - \u2713 Fetched NFO from API in 4.0s (36680 records)
+2025-12-17 20:56:57,126 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:56:57,203 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 4.04s
+2025-12-17 20:56:57,204 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 6.12s
+2025-12-17 20:56:57,204 - INFO - \u2713 options-init(NIFTY) completed in 6.12s
+127.0.0.1 - - [17/Dec/2025 20:56:57] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:56:57,214 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:57] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 20:56:58] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:56:58,781 - INFO - 127.0.0.1 - - [17/Dec/2025 20:56:58] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 20:57:00,467 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:57:00,974 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:57:00,977 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.17s
+2025-12-17 20:57:00,977 - INFO - \u2713 options-chart-data completed in 2.17s
+127.0.0.1 - - [17/Dec/2025 20:57:00] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:57:00,997 - INFO - 127.0.0.1 - - [17/Dec/2025 20:57:00] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:57:16,713 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:57:16,713 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:57:19,780 - INFO - \u2713 Fetched NFO from API in 3.1s (36680 records)
+2025-12-17 20:57:19,781 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:57:19,858 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.15s
+2025-12-17 20:57:19,858 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 4.39s
+2025-12-17 20:57:19,858 - INFO - \u2713 options-init(NIFTY) completed in 4.39s
+127.0.0.1 - - [17/Dec/2025 20:57:19] "GET /api/options-init?symbol=NIFTY&price_source=ltp HTTP/1.1" 200 -
+2025-12-17 20:57:19,864 - INFO - 127.0.0.1 - - [17/Dec/2025 20:57:19] "GET /api/options-init?symbol=NIFTY&price_source=ltp HTTP/1.1" 200 -
+2025-12-17 20:57:21,806 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:57:22,345 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:57:22,346 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.44s
+2025-12-17 20:57:22,346 - INFO - \u2713 options-chart-data completed in 2.44s
+127.0.0.1 - - [17/Dec/2025 20:57:22] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:57:22,365 - INFO - 127.0.0.1 - - [17/Dec/2025 20:57:22] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:57:39,454 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:57:39,454 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:57:42,127 - INFO - \u2713 Fetched NFO from API in 2.7s (36680 records)
+2025-12-17 20:57:42,128 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:57:42,192 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 2.74s
+2025-12-17 20:57:42,192 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 4.03s
+2025-12-17 20:57:42,192 - INFO - \u2713 options-init(NIFTY) completed in 4.03s
+127.0.0.1 - - [17/Dec/2025 20:57:42] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:57:42,197 - INFO - 127.0.0.1 - - [17/Dec/2025 20:57:42] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 20:57:43,874 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 20:57:44,423 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 20:57:44,424 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.21s
+2025-12-17 20:57:44,424 - INFO - \u2713 options-chart-data completed in 2.21s
+127.0.0.1 - - [17/Dec/2025 20:57:44] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:57:44,446 - INFO - 127.0.0.1 - - [17/Dec/2025 20:57:44] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 20:58:08,173 - app.utils.logger - INFO - Initializing CPRFilterService...
+2025-12-17 20:58:08,173 - INFO - Initializing CPRFilterService...
+2025-12-17 20:58:08,173 - INFO - CPRFilterService: Using existing KiteConnect instance.
+2025-12-17 20:58:08,173 - INFO - Loading NSE instruments for symbol mapping...
+2025-12-17 20:58:09,179 - INFO - Loaded 8690 NSE instruments.
+2025-12-17 20:58:09,179 - app.utils.logger - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:58:09,179 - INFO - Starting CPR filter stocks processing...
+2025-12-17 20:58:12,515 - INFO - Found 208 F&O stocks for filtering.
+2025-12-17 20:58:18,942 - ERROR - API error fetching historical data for ADANIENSOL: Too many requests
+2025-12-17 20:58:18,986 - ERROR - API error fetching historical data for DELHIVERY: Too many requests
+2025-12-17 20:58:19,030 - ERROR - API error fetching historical data for DIVISLAB: Too many requests
+2025-12-17 20:58:19,032 - ERROR - API error fetching historical data for DIXON: Too many requests
+2025-12-17 20:58:19,037 - ERROR - API error fetching historical data for EICHERMOT: Too many requests
+2025-12-17 20:58:19,045 - ERROR - API error fetching historical data for DLF: Too many requests
+2025-12-17 20:58:19,047 - ERROR - API error fetching historical data for DRREDDY: Too many requests
+2025-12-17 20:58:19,049 - ERROR - API error fetching historical data for DMART: Too many requests
+2025-12-17 20:58:22,274 - ERROR - API error fetching historical data for HINDUNILVR: Too many requests
+2025-12-17 20:58:22,323 - ERROR - API error fetching historical data for HUDCO: Too many requests
+2025-12-17 20:58:22,335 - ERROR - API error fetching historical data for ICICIGI: Too many requests
+2025-12-17 20:58:22,342 - ERROR - API error fetching historical data for ICICIBANK: Too many requests
+2025-12-17 20:58:22,348 - ERROR - API error fetching historical data for HINDZINC: Too many requests
+2025-12-17 20:58:22,353 - ERROR - API error fetching historical data for IDFCFIRSTB: Too many requests
+2025-12-17 20:58:22,355 - ERROR - API error fetching historical data for ICICIPRULI: Too many requests
+2025-12-17 20:58:22,362 - ERROR - API error fetching historical data for IDEA: Too many requests
+2025-12-17 20:58:25,658 - ERROR - API error fetching historical data for KPITTECH: Too many requests
+2025-12-17 20:58:25,661 - ERROR - API error fetching historical data for KEI: Too many requests
+2025-12-17 20:58:25,663 - ERROR - API error fetching historical data for KAYNES: Too many requests
+2025-12-17 20:58:25,673 - ERROR - API error fetching historical data for KFINTECH: Too many requests
+2025-12-17 20:58:25,677 - ERROR - API error fetching historical data for KOTAKBANK: Too many requests
+2025-12-17 20:58:25,679 - ERROR - API error fetching historical data for LAURUSLABS: Too many requests
+2025-12-17 20:58:25,680 - ERROR - API error fetching historical data for LICHSGFIN: Too many requests
+2025-12-17 20:58:25,698 - ERROR - API error fetching historical data for LICI: Too many requests
+2025-12-17 20:58:29,076 - ERROR - API error fetching historical data for NATIONALUM: Too many requests
+2025-12-17 20:58:29,080 - ERROR - API error fetching historical data for NBCC: Too many requests
+2025-12-17 20:58:29,089 - ERROR - API error fetching historical data for NAUKRI: Too many requests
+2025-12-17 20:58:29,175 - ERROR - API error fetching historical data for NMDC: Too many requests
+2025-12-17 20:58:29,191 - ERROR - API error fetching historical data for OBEROIRLTY: Too many requests
+2025-12-17 20:58:29,193 - ERROR - API error fetching historical data for NYKAA: Too many requests
+2025-12-17 20:58:29,194 - ERROR - API error fetching historical data for NTPC: Too many requests
+2025-12-17 20:58:29,200 - ERROR - API error fetching historical data for NUVAMA: Too many requests
+2025-12-17 20:58:32,492 - ERROR - API error fetching historical data for RBLBANK: Too many requests
+2025-12-17 20:58:32,503 - ERROR - API error fetching historical data for RELIANCE: Too many requests
+2025-12-17 20:58:32,505 - ERROR - API error fetching historical data for RECLTD: Too many requests
+2025-12-17 20:58:32,506 - ERROR - API error fetching historical data for PRESTIGE: Too many requests
+2025-12-17 20:58:32,507 - ERROR - API error fetching historical data for SBICARD: Too many requests
+2025-12-17 20:58:32,508 - ERROR - API error fetching historical data for SAMMAANCAP: Too many requests
+2025-12-17 20:58:32,510 - ERROR - API error fetching historical data for RVNL: Too many requests
+2025-12-17 20:58:32,516 - ERROR - API error fetching historical data for SAIL: Too many requests
+2025-12-17 20:58:35,799 - ERROR - API error fetching historical data for TIINDIA: Too many requests
+2025-12-17 20:58:35,801 - ERROR - API error fetching historical data for TORNTPOWER: Too many requests
+2025-12-17 20:58:35,811 - ERROR - API error fetching historical data for TORNTPHARM: Too many requests
+2025-12-17 20:58:35,814 - ERROR - API error fetching historical data for TITAN: Too many requests
+2025-12-17 20:58:35,815 - ERROR - API error fetching historical data for TMPV: Too many requests
+2025-12-17 20:58:35,827 - ERROR - API error fetching historical data for TVSMOTOR: Too many requests
+2025-12-17 20:58:35,829 - ERROR - API error fetching historical data for TRENT: Too many requests
+2025-12-17 20:58:35,860 - ERROR - API error fetching historical data for ULTRACEMCO: Too many requests
+2025-12-17 20:58:36,009 - INFO - CPR Filter completed in 23.47s. Found 11 stocks matching criteria.
+2025-12-17 20:58:36,009 - app.utils.logger - INFO - CPR filter completed. Found 11 stocks.
+2025-12-17 20:58:36,009 - INFO - CPR filter completed. Found 11 stocks.
+127.0.0.1 - - [17/Dec/2025 20:58:36] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 20:58:36,043 - INFO - 127.0.0.1 - - [17/Dec/2025 20:58:36] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 20:59:54,678 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 20:59:54,678 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 20:59:58,035 - INFO - \u2713 Fetched NFO from API in 3.4s (36680 records)
+2025-12-17 20:59:58,040 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 20:59:58,130 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.45s
+2025-12-17 20:59:58,130 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 4.97s
+2025-12-17 20:59:58,130 - INFO - \u2713 options-init(NIFTY) completed in 4.97s
+127.0.0.1 - - [17/Dec/2025 20:59:58] "GET /api/options-init?symbol=NIFTY&price_source=ltp HTTP/1.1" 200 -
+2025-12-17 20:59:58,142 - INFO - 127.0.0.1 - - [17/Dec/2025 20:59:58] "GET /api/options-init?symbol=NIFTY&price_source=ltp HTTP/1.1" 200 -
+2025-12-17 20:59:59,914 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 21:00:00,426 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 21:00:00,429 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.27s
+2025-12-17 21:00:00,429 - INFO - \u2713 options-chart-data completed in 2.27s
+127.0.0.1 - - [17/Dec/2025 21:00:00] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:00:00,457 - INFO - 127.0.0.1 - - [17/Dec/2025 21:00:00] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:01:42,038 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 21:01:42,038 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 21:01:44,667 - INFO - \u2713 Fetched NFO from API in 2.6s (36680 records)
+2025-12-17 21:01:44,667 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 21:01:44,725 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 2.69s
+2025-12-17 21:01:44,726 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 3.88s
+2025-12-17 21:01:44,726 - INFO - \u2713 options-init(NIFTY) completed in 3.88s
+127.0.0.1 - - [17/Dec/2025 21:01:44] "GET /api/options-init?symbol=NIFTY&price_source=ltp HTTP/1.1" 200 -
+2025-12-17 21:01:44,731 - INFO - 127.0.0.1 - - [17/Dec/2025 21:01:44] "GET /api/options-init?symbol=NIFTY&price_source=ltp HTTP/1.1" 200 -
+2025-12-17 21:01:56,764 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 21:01:57,278 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 21:01:57,281 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.10s
+2025-12-17 21:01:57,281 - INFO - \u2713 options-chart-data completed in 2.10s
+127.0.0.1 - - [17/Dec/2025 21:01:57] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:01:57,303 - INFO - 127.0.0.1 - - [17/Dec/2025 21:01:57] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:03:56,213 - app.utils.logger - INFO - Initializing CPRFilterService...
+2025-12-17 21:03:56,213 - INFO - Initializing CPRFilterService...
+2025-12-17 21:03:56,213 - INFO - CPRFilterService: Using existing KiteConnect instance.
+2025-12-17 21:03:56,213 - INFO - Loading NSE instruments for symbol mapping...
+2025-12-17 21:03:57,237 - INFO - Loaded 8690 NSE instruments.
+2025-12-17 21:03:57,237 - app.utils.logger - INFO - Starting CPR filter stocks processing...
+2025-12-17 21:03:57,237 - INFO - Starting CPR filter stocks processing...
+2025-12-17 21:03:59,700 - INFO - Found 208 F&O stocks for filtering.
+2025-12-17 21:04:05,123 - ERROR - API error fetching historical data for COFORGE: Too many requests
+2025-12-17 21:04:05,132 - ERROR - API error fetching historical data for ADANIENSOL: Too many requests
+2025-12-17 21:04:05,136 - ERROR - API error fetching historical data for CIPLA: Too many requests
+2025-12-17 21:04:05,139 - ERROR - API error fetching historical data for ADANIGREEN: Too many requests
+2025-12-17 21:04:05,145 - ERROR - API error fetching historical data for COLPAL: Too many requests
+2025-12-17 21:04:05,151 - ERROR - API error fetching historical data for CONCOR: Too many requests
+2025-12-17 21:04:05,158 - ERROR - API error fetching historical data for ADANIENT: Too many requests
+2025-12-17 21:04:05,199 - ERROR - API error fetching historical data for CROMPTON: Too many requests
+2025-12-17 21:04:08,427 - ERROR - API error fetching historical data for HCLTECH: Too many requests
+2025-12-17 21:04:08,430 - ERROR - API error fetching historical data for GODREJPROP: Too many requests
+2025-12-17 21:04:08,436 - ERROR - API error fetching historical data for HDFCAMC: Too many requests
+2025-12-17 21:04:08,438 - ERROR - API error fetching historical data for HAL: Too many requests
+2025-12-17 21:04:08,447 - ERROR - API error fetching historical data for HDFCBANK: Too many requests
+2025-12-17 21:04:08,448 - ERROR - API error fetching historical data for HDFCLIFE: Too many requests
+2025-12-17 21:04:08,461 - ERROR - API error fetching historical data for HAVELLS: Too many requests
+2025-12-17 21:04:08,475 - ERROR - API error fetching historical data for HEROMOTOCO: Too many requests
+2025-12-17 21:04:11,768 - ERROR - API error fetching historical data for INFY: Too many requests
+2025-12-17 21:04:11,773 - ERROR - API error fetching historical data for IRFC: Too many requests
+2025-12-17 21:04:11,782 - ERROR - API error fetching historical data for IRCTC: Too many requests
+2025-12-17 21:04:11,787 - ERROR - API error fetching historical data for INDUSTOWER: Too many requests
+2025-12-17 21:04:11,791 - ERROR - API error fetching historical data for ITC: Too many requests
+2025-12-17 21:04:11,860 - ERROR - API error fetching historical data for JIOFIN: Too many requests
+2025-12-17 21:04:11,864 - ERROR - API error fetching historical data for JSWENERGY: Too many requests
+2025-12-17 21:04:11,893 - ERROR - API error fetching historical data for JINDALSTEL: Too many requests
+127.0.0.1 - - [17/Dec/2025 21:04:12] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 21:04:12,057 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:12] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:04:12] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 21:04:12,220 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:12] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:04:12] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 21:04:12,223 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:12] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:04:12] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 21:04:12,229 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:12] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:04:12] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 21:04:12,232 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:12] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:04:12] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 21:04:12,249 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:12] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:04:12] "GET /static/js/options_chart_app.js HTTP/1.1" 200 -
+2025-12-17 21:04:12,271 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:12] "GET /static/js/options_chart_app.js HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:04:13] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 21:04:13,051 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:13] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 21:04:13] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 21:04:13,119 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:13] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 21:04:15,124 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 21:04:15,124 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 21:04:15,249 - ERROR - API error fetching historical data for MFSL: Too many requests
+2025-12-17 21:04:15,274 - ERROR - API error fetching historical data for MAZDOCK: Too many requests
+2025-12-17 21:04:15,287 - ERROR - API error fetching historical data for NATIONALUM: Too many requests
+2025-12-17 21:04:15,288 - ERROR - API error fetching historical data for MAXHEALTH: Too many requests
+2025-12-17 21:04:15,296 - ERROR - API error fetching historical data for MPHASIS: Too many requests
+2025-12-17 21:04:15,303 - ERROR - API error fetching historical data for MUTHOOTFIN: Too many requests
+2025-12-17 21:04:15,304 - ERROR - API error fetching historical data for MCX: Too many requests
+2025-12-17 21:04:15,305 - ERROR - API error fetching historical data for MOTHERSON: Too many requests
+2025-12-17 21:04:19,013 - ERROR - API error fetching historical data for PIDILITIND: Too many requests
+2025-12-17 21:04:19,014 - ERROR - API error fetching historical data for PIIND: Too many requests
+2025-12-17 21:04:19,162 - ERROR - API error fetching historical data for PNB: Too many requests
+2025-12-17 21:04:19,212 - ERROR - API error fetching historical data for POWERGRID: Too many requests
+2025-12-17 21:04:19,213 - ERROR - API error fetching historical data for PNBHOUSING: Too many requests
+2025-12-17 21:04:19,213 - ERROR - API error fetching historical data for POLYCAB: Too many requests
+2025-12-17 21:04:19,279 - ERROR - API error fetching historical data for POWERINDIA: Too many requests
+2025-12-17 21:04:19,379 - ERROR - API error fetching historical data for POLICYBZR: Too many requests
+2025-12-17 21:04:19,605 - INFO - \u2713 Fetched NFO from API in 4.5s (36680 records)
+2025-12-17 21:04:19,656 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 21:04:19,768 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 4.65s
+2025-12-17 21:04:19,770 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 6.66s
+2025-12-17 21:04:19,770 - INFO - \u2713 options-init(NIFTY) completed in 6.66s
+127.0.0.1 - - [17/Dec/2025 21:04:19] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 21:04:19,779 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:19] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:04:21] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:04:21,152 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:21] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:04:22,721 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 21:04:22,736 - ERROR - API error fetching historical data for SYNGENE: Too many requests
+2025-12-17 21:04:22,747 - ERROR - API error fetching historical data for TATACONSUM: Too many requests
+2025-12-17 21:04:22,788 - ERROR - API error fetching historical data for TATAELXSI: Too many requests
+2025-12-17 21:04:22,813 - ERROR - API error fetching historical data for TATAPOWER: Too many requests
+2025-12-17 21:04:22,815 - ERROR - API error fetching historical data for TECHM: Too many requests
+2025-12-17 21:04:22,817 - ERROR - API error fetching historical data for TATASTEEL: Too many requests
+2025-12-17 21:04:22,818 - ERROR - API error fetching historical data for TATATECH: Too many requests
+2025-12-17 21:04:22,822 - ERROR - API error fetching historical data for TCS: Too many requests
+2025-12-17 21:04:23,017 - INFO - CPR Filter completed in 23.31s. Found 7 stocks matching criteria.
+2025-12-17 21:04:23,018 - app.utils.logger - INFO - CPR filter completed. Found 7 stocks.
+2025-12-17 21:04:23,018 - INFO - CPR filter completed. Found 7 stocks.
+127.0.0.1 - - [17/Dec/2025 21:04:23] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 21:04:23,036 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:23] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 21:04:23,303 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 21:04:23,307 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.15s
+2025-12-17 21:04:23,307 - INFO - \u2713 options-chart-data completed in 2.15s
+127.0.0.1 - - [17/Dec/2025 21:04:23] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:04:23,337 - INFO - 127.0.0.1 - - [17/Dec/2025 21:04:23] "POST /api/options-chart-data HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:05:30] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 21:05:30,539 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:30] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:05:30] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 21:05:30,616 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:30] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:05:30] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 21:05:30,700 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:30] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:05:30] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 21:05:30,705 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:30] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:05:30] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 21:05:30,820 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:30] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:05:30] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 21:05:30,840 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:30] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:05:30] "GET /static/js/options_chart_app.js HTTP/1.1" 304 -
+2025-12-17 21:05:30,918 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:30] "[36mGET /static/js/options_chart_app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:05:30] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 21:05:30,992 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:30] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 21:05:31] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 21:05:31,560 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:31] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 21:05:33,185 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 21:05:33,185 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 21:05:36,697 - INFO - \u2713 Fetched NFO from API in 3.5s (36680 records)
+2025-12-17 21:05:36,698 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 21:05:36,767 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.59s
+2025-12-17 21:05:36,768 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 5.21s
+2025-12-17 21:05:36,768 - INFO - \u2713 options-init(NIFTY) completed in 5.21s
+127.0.0.1 - - [17/Dec/2025 21:05:36] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 21:05:36,774 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:36] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:05:38] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:05:38,252 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:38] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:05:40,035 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 21:05:40,546 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 21:05:40,547 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.28s
+2025-12-17 21:05:40,547 - INFO - \u2713 options-chart-data completed in 2.28s
+127.0.0.1 - - [17/Dec/2025 21:05:40] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:05:40,557 - INFO - 127.0.0.1 - - [17/Dec/2025 21:05:40] "POST /api/options-chart-data HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:07:17] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 21:07:17,831 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:17] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:07:17] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 21:07:17,920 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:17] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:07:17] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 21:07:17,938 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:17] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:07:18] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 21:07:18,004 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:18] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:07:18] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 21:07:18,135 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:18] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:07:18] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 21:07:18,226 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:18] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:07:18] "GET /static/js/options_chart_app.js HTTP/1.1" 304 -
+2025-12-17 21:07:18,292 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:18] "[36mGET /static/js/options_chart_app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:07:18] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 21:07:18,386 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:18] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 21:07:19] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 21:07:19,006 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:19] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 21:07:20,732 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 21:07:20,732 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 21:07:26,558 - INFO - \u2713 Fetched NFO from API in 5.8s (36680 records)
+2025-12-17 21:07:26,559 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 21:07:26,669 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 5.94s
+2025-12-17 21:07:26,669 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 7.67s
+2025-12-17 21:07:26,669 - INFO - \u2713 options-init(NIFTY) completed in 7.67s
+127.0.0.1 - - [17/Dec/2025 21:07:26] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 21:07:26,685 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:26] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:07:28] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:07:28,148 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:28] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:07:29,988 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 21:07:30,424 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 21:07:30,425 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.27s
+2025-12-17 21:07:30,425 - INFO - \u2713 options-chart-data completed in 2.27s
+127.0.0.1 - - [17/Dec/2025 21:07:30] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:07:30,436 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:30] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:07:34,987 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 21:07:34,987 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 21:07:39,226 - INFO - \u2713 Fetched NFO from API in 4.2s (36680 records)
+2025-12-17 21:07:39,226 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 21:07:39,304 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 4.32s
+2025-12-17 21:07:39,305 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 5.91s
+2025-12-17 21:07:39,305 - INFO - \u2713 options-init(NIFTY) completed in 5.91s
+127.0.0.1 - - [17/Dec/2025 21:07:39] "GET /api/options-init?symbol=NIFTY&price_source=ltp HTTP/1.1" 200 -
+2025-12-17 21:07:39,311 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:39] "GET /api/options-init?symbol=NIFTY&price_source=ltp HTTP/1.1" 200 -
+2025-12-17 21:07:41,105 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 21:07:41,659 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 21:07:41,660 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.33s
+2025-12-17 21:07:41,660 - INFO - \u2713 options-chart-data completed in 2.33s
+127.0.0.1 - - [17/Dec/2025 21:07:41] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:07:41,677 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:41] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:07:53,203 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 21:07:53,203 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 21:07:56,382 - INFO - \u2713 Fetched NFO from API in 3.2s (36680 records)
+2025-12-17 21:07:56,385 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 21:07:56,450 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.25s
+2025-12-17 21:07:56,451 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 4.51s
+2025-12-17 21:07:56,451 - INFO - \u2713 options-init(NIFTY) completed in 4.51s
+127.0.0.1 - - [17/Dec/2025 21:07:56] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 21:07:56,458 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:56] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 21:07:58,106 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 21:07:58,637 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 21:07:58,641 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.16s
+2025-12-17 21:07:58,641 - INFO - \u2713 options-chart-data completed in 2.16s
+127.0.0.1 - - [17/Dec/2025 21:07:58] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:07:58,659 - INFO - 127.0.0.1 - - [17/Dec/2025 21:07:58] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:08:56,203 - app.utils.logger - INFO - Initializing CPRFilterService...
+2025-12-17 21:08:56,203 - INFO - Initializing CPRFilterService...
+2025-12-17 21:08:56,204 - INFO - CPRFilterService: Using existing KiteConnect instance.
+2025-12-17 21:08:56,204 - INFO - Loading NSE instruments for symbol mapping...
+2025-12-17 21:08:57,158 - INFO - Loaded 8690 NSE instruments.
+2025-12-17 21:08:57,158 - app.utils.logger - INFO - Starting CPR filter stocks processing...
+2025-12-17 21:08:57,158 - INFO - Starting CPR filter stocks processing...
+2025-12-17 21:08:59,976 - INFO - Found 208 F&O stocks for filtering.
+2025-12-17 21:09:05,995 - ERROR - API error fetching historical data for CUMMINSIND: Too many requests
+2025-12-17 21:09:05,997 - ERROR - API error fetching historical data for AMBER: Too many requests
+2025-12-17 21:09:06,075 - ERROR - API error fetching historical data for DELHIVERY: Too many requests
+2025-12-17 21:09:06,077 - ERROR - API error fetching historical data for DALBHARAT: Too many requests
+2025-12-17 21:09:06,080 - ERROR - API error fetching historical data for DABUR: Too many requests
+2025-12-17 21:09:06,084 - ERROR - API error fetching historical data for CYIENT: Too many requests
+2025-12-17 21:09:06,238 - ERROR - API error fetching historical data for ADANIPORTS: Too many requests
+2025-12-17 21:09:06,350 - ERROR - API error fetching historical data for ASIANPAINT: Too many requests
+2025-12-17 21:09:09,322 - ERROR - API error fetching historical data for HDFCAMC: Too many requests
+2025-12-17 21:09:09,325 - ERROR - API error fetching historical data for HDFCLIFE: Too many requests
+2025-12-17 21:09:09,349 - ERROR - API error fetching historical data for HEROMOTOCO: Too many requests
+2025-12-17 21:09:09,408 - ERROR - API error fetching historical data for HINDALCO: Too many requests
+2025-12-17 21:09:09,412 - ERROR - API error fetching historical data for HINDPETRO: Too many requests
+2025-12-17 21:09:09,418 - ERROR - API error fetching historical data for HINDZINC: Too many requests
+2025-12-17 21:09:09,419 - ERROR - API error fetching historical data for HINDUNILVR: Too many requests
+2025-12-17 21:09:09,435 - ERROR - API error fetching historical data for HFCL: Too many requests
+2025-12-17 21:09:12,805 - ERROR - API error fetching historical data for JSWSTEEL: Too many requests
+2025-12-17 21:09:12,808 - ERROR - API error fetching historical data for KALYANKJIL: Too many requests
+2025-12-17 21:09:12,810 - ERROR - API error fetching historical data for JINDALSTEL: Too many requests
+2025-12-17 21:09:12,816 - ERROR - API error fetching historical data for JUBLFOOD: Too many requests
+2025-12-17 21:09:12,946 - ERROR - API error fetching historical data for KEI: Too many requests
+2025-12-17 21:09:12,951 - ERROR - API error fetching historical data for KPITTECH: Too many requests
+2025-12-17 21:09:12,962 - ERROR - API error fetching historical data for KOTAKBANK: Too many requests
+2025-12-17 21:09:12,966 - ERROR - API error fetching historical data for KFINTECH: Too many requests
+2025-12-17 21:09:16,309 - ERROR - API error fetching historical data for NATIONALUM: Too many requests
+2025-12-17 21:09:16,312 - ERROR - API error fetching historical data for NMDC: Too many requests
+2025-12-17 21:09:16,313 - ERROR - API error fetching historical data for NCC: Too many requests
+2025-12-17 21:09:16,315 - ERROR - API error fetching historical data for NBCC: Too many requests
+2025-12-17 21:09:16,318 - ERROR - API error fetching historical data for NAUKRI: Too many requests
+2025-12-17 21:09:16,319 - ERROR - API error fetching historical data for NTPC: Too many requests
+2025-12-17 21:09:16,320 - ERROR - API error fetching historical data for NHPC: Too many requests
+2025-12-17 21:09:16,321 - ERROR - API error fetching historical data for NESTLEIND: Too many requests
+2025-12-17 21:09:19,707 - ERROR - API error fetching historical data for PRESTIGE: Too many requests
+2025-12-17 21:09:19,710 - ERROR - API error fetching historical data for POLYCAB: Too many requests
+2025-12-17 21:09:19,713 - ERROR - API error fetching historical data for POLICYBZR: Too many requests
+2025-12-17 21:09:19,818 - ERROR - API error fetching historical data for RBLBANK: Too many requests
+2025-12-17 21:09:19,819 - ERROR - API error fetching historical data for RECLTD: Too many requests
+2025-12-17 21:09:19,824 - ERROR - API error fetching historical data for RVNL: Too many requests
+2025-12-17 21:09:19,825 - ERROR - API error fetching historical data for SAIL: Too many requests
+2025-12-17 21:09:19,828 - ERROR - API error fetching historical data for RELIANCE: Too many requests
+2025-12-17 21:09:23,061 - ERROR - API error fetching historical data for TECHM: Too many requests
+2025-12-17 21:09:23,070 - ERROR - API error fetching historical data for TMPV: Too many requests
+2025-12-17 21:09:23,072 - ERROR - API error fetching historical data for TIINDIA: Too many requests
+2025-12-17 21:09:23,074 - ERROR - API error fetching historical data for TORNTPHARM: Too many requests
+2025-12-17 21:09:23,077 - ERROR - API error fetching historical data for TITAGARH: Too many requests
+2025-12-17 21:09:23,080 - ERROR - API error fetching historical data for TITAN: Too many requests
+2025-12-17 21:09:23,088 - ERROR - API error fetching historical data for TORNTPOWER: Too many requests
+2025-12-17 21:09:23,102 - ERROR - API error fetching historical data for TRENT: Too many requests
+2025-12-17 21:09:23,328 - INFO - CPR Filter completed in 23.30s. Found 10 stocks matching criteria.
+2025-12-17 21:09:23,329 - app.utils.logger - INFO - CPR filter completed. Found 10 stocks.
+2025-12-17 21:09:23,329 - INFO - CPR filter completed. Found 10 stocks.
+127.0.0.1 - - [17/Dec/2025 21:09:23] "GET /api/cpr-filter HTTP/1.1" 200 -
+2025-12-17 21:09:23,395 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:23] "GET /api/cpr-filter HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:09:23] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 21:09:23,542 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:23] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:09:23] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 21:09:23,594 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:23] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:23] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 21:09:23,628 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:23] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:23] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 21:09:23,838 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:23] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:23] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 21:09:23,920 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:23] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:24] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 21:09:24,005 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:24] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:24] "GET /static/js/options_chart_app.js HTTP/1.1" 304 -
+2025-12-17 21:09:24,045 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:24] "[36mGET /static/js/options_chart_app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:24] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 21:09:24,047 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:24] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 21:09:24] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 21:09:24,686 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:24] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 21:09:27,204 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 21:09:27,204 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 21:09:30,541 - INFO - \u2713 Fetched NFO from API in 3.3s (36680 records)
+2025-12-17 21:09:30,542 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 21:09:30,606 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.41s
+2025-12-17 21:09:30,606 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 5.93s
+2025-12-17 21:09:30,606 - INFO - \u2713 options-init(NIFTY) completed in 5.93s
+127.0.0.1 - - [17/Dec/2025 21:09:30] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 21:09:30,612 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:30] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:09:31] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:09:31,997 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:31] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:09:33,742 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 21:09:34,267 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 21:09:34,268 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.26s
+2025-12-17 21:09:34,268 - INFO - \u2713 options-chart-data completed in 2.26s
+127.0.0.1 - - [17/Dec/2025 21:09:34] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:09:34,277 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:34] "POST /api/options-chart-data HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:09:46] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 21:09:46,863 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:46] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:09:46] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 21:09:46,958 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:46] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:46] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 21:09:46,991 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:46] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:47] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 21:09:47,009 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:47] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:47] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 21:09:47,011 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:47] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:47] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 21:09:47,015 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:47] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:47] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 21:09:47,042 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:47] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 21:09:47] "GET /static/js/options_chart_app.js HTTP/1.1" 304 -
+2025-12-17 21:09:47,044 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:47] "[36mGET /static/js/options_chart_app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:09:47] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 21:09:47,739 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:47] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 21:09:49,874 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 21:09:49,874 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 21:09:53,243 - INFO - \u2713 Fetched NFO from API in 3.4s (36680 records)
+2025-12-17 21:09:53,244 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 21:09:53,310 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 3.44s
+2025-12-17 21:09:53,311 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 6.14s
+2025-12-17 21:09:53,311 - INFO - \u2713 options-init(NIFTY) completed in 6.14s
+127.0.0.1 - - [17/Dec/2025 21:09:53] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 21:09:53,321 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:53] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:09:54] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:09:54,692 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:54] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:09:56,582 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 21:09:57,119 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 21:09:57,121 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.42s
+2025-12-17 21:09:57,121 - INFO - \u2713 options-chart-data completed in 2.42s
+127.0.0.1 - - [17/Dec/2025 21:09:57] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:09:57,140 - INFO - 127.0.0.1 - - [17/Dec/2025 21:09:57] "POST /api/options-chart-data HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:10:19] "GET /options-chart HTTP/1.1" 200 -
+2025-12-17 21:10:19,207 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:19] "GET /options-chart HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:10:19] "GET /static/css/main.css HTTP/1.1" 304 -
+2025-12-17 21:10:19,256 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:19] "[36mGET /static/css/main.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:10:19] "GET /static/css/notifications.css HTTP/1.1" 304 -
+2025-12-17 21:10:19,309 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:19] "[36mGET /static/css/notifications.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:10:19] "GET /static/css/options_chart.css HTTP/1.1" 304 -
+2025-12-17 21:10:19,326 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:19] "[36mGET /static/css/options_chart.css HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:10:19] "GET /static/js/notifications.js HTTP/1.1" 304 -
+2025-12-17 21:10:19,344 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:19] "[36mGET /static/js/notifications.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:10:19] "GET /static/js/app.js HTTP/1.1" 304 -
+2025-12-17 21:10:19,374 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:19] "[36mGET /static/js/app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:10:19] "GET /static/js/options_chart_app.js HTTP/1.1" 304 -
+2025-12-17 21:10:19,380 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:19] "[36mGET /static/js/options_chart_app.js HTTP/1.1[0m" 304 -
+127.0.0.1 - - [17/Dec/2025 21:10:19] "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 -
+2025-12-17 21:10:19,397 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:19] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+127.0.0.1 - - [17/Dec/2025 21:10:20] "GET /static/trading.png HTTP/1.1" 304 -
+2025-12-17 21:10:20,502 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:20] "[36mGET /static/trading.png HTTP/1.1[0m" 304 -
+2025-12-17 21:10:22,205 - WARNING - Error loading disk cache: Expecting value: line 1 column 140 (char 139)
+2025-12-17 21:10:22,205 - INFO - Fetching NFO instruments from Kite API (5-10s)...
+2025-12-17 21:10:26,916 - INFO - \u2713 Fetched NFO from API in 4.7s (36680 records)
+2025-12-17 21:10:26,921 - WARNING - Error saving to disk cache: Object of type date is not JSON serializable
+2025-12-17 21:10:26,993 - INFO - \u2713 get_strikes_for_symbol(NIFTY) completed in 4.79s
+2025-12-17 21:10:26,993 - app.utils.logger - INFO - \u2713 options-init(NIFTY) completed in 7.55s
+2025-12-17 21:10:26,993 - INFO - \u2713 options-init(NIFTY) completed in 7.55s
+127.0.0.1 - - [17/Dec/2025 21:10:27] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+2025-12-17 21:10:27,003 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:27] "GET /api/options-init?symbol=NIFTY&price_source=previous_close HTTP/1.1" 200 -
+127.0.0.1 - - [17/Dec/2025 21:10:28] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:10:28,536 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:28] "POST /api/options-pdh-pdl HTTP/1.1" 200 -
+2025-12-17 21:10:30,273 - INFO - \u2713 Fetched chart data: CE=375 candles, PE=375 candles
+2025-12-17 21:10:30,812 - INFO - \u2713 Fetched PDH/PDL for tokens 14588418, 14594050
+2025-12-17 21:10:30,813 - app.utils.logger - INFO - \u2713 options-chart-data completed in 2.27s
+2025-12-17 21:10:30,813 - INFO - \u2713 options-chart-data completed in 2.27s
+127.0.0.1 - - [17/Dec/2025 21:10:30] "POST /api/options-chart-data HTTP/1.1" 200 -
+2025-12-17 21:10:30,826 - INFO - 127.0.0.1 - - [17/Dec/2025 21:10:30] "POST /api/options-chart-data HTTP/1.1" 200 -

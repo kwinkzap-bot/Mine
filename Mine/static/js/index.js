@@ -27,7 +27,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Replace ng-click with vanilla JS event listener and clean up attribute
         loginBtn.removeAttribute('ng-click');
         loginBtn.addEventListener('click', function() {
-            window.location.href = '/login';
+            window.location.href = '/auth/login';
         });
     }
 

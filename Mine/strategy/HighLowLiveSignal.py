@@ -6,7 +6,6 @@ from kiteconnect import KiteConnect
 import os
 from dotenv import load_dotenv
 
-import sys
 import importlib.util
 
 # Fix import issues

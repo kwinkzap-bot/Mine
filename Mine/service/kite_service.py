@@ -125,8 +125,7 @@ class KiteService:
             return None
         except Exception as e:
             logging.error(f"Error getting previous close for {symbol}: {e}")
-            return None
-    
+            return None    
     def get_fo_stocks(self) -> List[str]:
         """Get list of F&O underlying stocks, including FUTURES and OPTIONS."""
         try:

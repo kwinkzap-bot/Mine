@@ -1,6 +1,5 @@
 import pandas as pd
 from datetime import datetime, timedelta
-from kiteconnect import KiteConnect
 import os
 import sys
 from typing import Dict, Any, List, Tuple, Optional, Union # Added typing imports
