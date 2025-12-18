@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Union
 
 from app.utils.logger import logger
-from app.extensions import csrf
+from app.extensions import csrf, limiter
 
 api_bp = Blueprint('api', __name__)
 
@@ -196,6 +196,7 @@ def get_fo_stocks() -> EndpointResponse:
 
 
 @api_bp.route('/options-init', methods=['GET'])
+@limiter.exempt  # Exempt from rate limiting - called on page load
 def get_options_init() -> EndpointResponse:
     """
     FAST endpoint - returns strikes immediately using cached NFO instruments and disk cache.
@@ -313,6 +314,7 @@ def get_options_strikes() -> EndpointResponse:
 
 @api_bp.route('/options-chart-data', methods=['POST'])
 @csrf.exempt
+@limiter.exempt  # Exempt from rate limiting - called frequently during trading
 def get_options_chart_data() -> EndpointResponse:
     """
     Get historical chart data for CE and PE options.
@@ -396,7 +398,7 @@ def get_options_chart_data() -> EndpointResponse:
                     'error': f'Could not find tokens for the given strikes: CE {ce_strike}, PE {pe_strike}'
                 }), 404
         
-        ce_data, pe_data, pdh_pdl = chart_service.get_chart_data(ce_token, pe_token, timeframe, use_cache=True)
+        ce_data, pe_data = chart_service.get_chart_data(ce_token, pe_token, timeframe, use_cache=True)
         
         combined_data = []
         for candle in ce_data:
@@ -425,9 +427,9 @@ def get_options_chart_data() -> EndpointResponse:
             }), 401
         return jsonify({'success': False, 'error': str(e)}), 500
 
-
 @api_bp.route('/options-pdh-pdl', methods=['POST'])
 @csrf.exempt
+@limiter.exempt  # Exempt from rate limiting - called frequently during chart updates
 def get_options_pdh_pdl() -> EndpointResponse:
     """Get previous day high/low for CE/PE options."""
     auth_error = check_auth()

@@ -13,8 +13,8 @@ import os
 class OptionsChartService:
     def __init__(self, kite_instance):
         self.kite_service = KiteService(kite_instance)
-        # Cache for historical data - {(ce_token, pe_token, timeframe): (ce_data, pe_data, pdh_pdl)}
-        self._chart_data_cache: Dict[Tuple[int, int, str], Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Optional[float]]]] = {}
+        # Cache for historical data - {(ce_token, pe_token, timeframe): (ce_data, pe_data)}
+        self._chart_data_cache: Dict[Tuple[int, int, str], Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]] = {}
         self._cache_lock = threading.Lock()
         # Cache for instruments - {expiry: instruments}
         self._instruments_cache: Dict[str, List[Dict[str, Any]]] = {}
@@ -377,21 +377,57 @@ class OptionsChartService:
         """Public method to fetch PDH/PDL using instrument tokens."""
         return self._fetch_pdh_pdl_from_tokens(ce_token, pe_token)
 
+    def _is_market_hours(self, date_val) -> bool:
+        """Check if a candle timestamp is within market hours (9:15 AM - 3:40 PM IST)."""
+        try:
+            # Convert to IST if needed
+            if date_val.tzinfo is None:
+                ist_time = self._ist.localize(date_val)
+            else:
+                ist_time = date_val.astimezone(self._ist)
+            
+            # Market hours: 9:15 AM (555 min) to 3:40 PM (940 min)
+            hours = ist_time.hour
+            minutes = ist_time.minute
+            total_minutes = hours * 60 + minutes
+            
+            # 9:15 AM = 555 minutes, 3:40 PM = 940 minutes
+            is_after_open = total_minutes >= 555  # 9:15 AM
+            is_before_close = total_minutes <= 940  # 3:40 PM
+            
+            return is_after_open and is_before_close
+        except Exception as e:
+            logging.warning(f"Error checking market hours for {date_val}: {e}")
+            return True  # Default to including candle if time check fails
+
     def _convert_candle_to_dict(self, candle: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert a single candle to formatted dict with Unix timestamp (IST)."""
+        """Convert a single candle to formatted dict with IST-adjusted timestamp for Lightweight Charts.
+        
+        Kite API returns naive datetimes in IST timezone.
+        Lightweight Charts treats timestamps as UTC, so we add the IST offset (5.5 hours) 
+        to the Unix timestamp so the displayed time matches the actual IST time.
+        """
         try:
             date_val = candle.get('date')
             if not date_val:
                 raise KeyError("No date field in candle")
             
-            # Handle timezone-aware dates
+            # Kite returns naive datetime in IST - localize to IST to get proper handling
             if date_val.tzinfo is None:
-                timestamp = int(self._ist.localize(date_val).timestamp())
+                ist_time = self._ist.localize(date_val)
             else:
-                timestamp = int(date_val.timestamp())
+                ist_time = date_val.astimezone(self._ist)
+            
+            # Convert to Unix timestamp (UTC-based representation of IST time)
+            utc_timestamp = int(ist_time.timestamp())
+            
+            # Add IST offset (5.5 hours = 19800 seconds) so Lightweight Charts displays IST time
+            # When LC displays this adjusted timestamp as UTC, it will show the correct IST time
+            ist_offset_seconds = int(5.5 * 3600)  # 19800 seconds
+            adjusted_timestamp = utc_timestamp + ist_offset_seconds
             
             return {
-                'date': timestamp,
+                'date': adjusted_timestamp,
                 'open': float(candle.get('open', 0)),
                 'high': float(candle.get('high', 0)),
                 'low': float(candle.get('low', 0)),
@@ -456,7 +492,7 @@ class OptionsChartService:
         
         return pdh_pdl_dict
 
-    def get_chart_data(self, ce_token: int, pe_token: int, timeframe: str, use_cache: bool = True) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    def get_chart_data(self, ce_token: int, pe_token: int, timeframe: str, use_cache: bool = True) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Get historical data for CE and PE strikes using parallel API calls.
         
         Args:
@@ -465,11 +501,7 @@ class OptionsChartService:
             timeframe: Timeframe for chart data ('1minute', '5minute', 'day', 'week', 'month', etc.)
             use_cache: Whether to use in-memory cache
         
-        Returns: (ce_data, pe_data, pdh_pdl_dict) where pdh_pdl_dict contains:
-        {
-            'ce_pdh': CE previous day high, 'ce_pdl': CE previous day low,
-            'pe_pdh': PE previous day high, 'pe_pdl': PE previous day low
-        }
+        Returns: (ce_data, pe_data) - formatted candlestick data for CE and PE
         """
         # Normalize timeframe for KiteConnect API
         # Valid intervals: minute, 3minute, 5minute, 10minute, 15minute, 30minute, 60minute, day, week, month
@@ -528,14 +560,17 @@ class OptionsChartService:
             
             logging.info(f"✓ Fetched chart data: CE={len(ce_data)} candles, PE={len(pe_data)} candles")
             
+            # Filter candles to market hours (9:15 AM - 3:40 PM IST) and format efficiently
+            ce_market_hours = [c for c in ce_data if self._is_market_hours(c.get('date'))]
+            pe_market_hours = [c for c in pe_data if self._is_market_hours(c.get('date'))]
+            
+            logging.info(f"✓ Filtered to market hours: CE={len(ce_market_hours)} candles, PE={len(pe_market_hours)} candles")
+            
             # Format candles efficiently using list comprehension with helper
-            ce_formatted = [self._convert_candle_to_dict(c) for c in ce_data] if ce_data else []
-            pe_formatted = [self._convert_candle_to_dict(c) for c in pe_data] if pe_data else []
+            ce_formatted = [self._convert_candle_to_dict(c) for c in ce_market_hours] if ce_market_hours else []
+            pe_formatted = [self._convert_candle_to_dict(c) for c in pe_market_hours] if pe_market_hours else []
             
-            # Fetch PDH/PDL in parallel while not blocking
-            pdh_pdl_dict = self._fetch_quote_safe([ce_token, pe_token])
-            
-            result = (ce_formatted, pe_formatted, pdh_pdl_dict)
+            result = (ce_formatted, pe_formatted)
             
             # Cache the result if allowed
             if use_cache:

@@ -14,4 +14,9 @@ def init_extensions(app):
     """Initialize all Flask extensions with the app."""
     limiter.init_app(app)
     csrf.init_app(app)
+    
+    # Initialize scheduler for recurring tasks
+    from app.scheduler import init_scheduler
+    init_scheduler(app)
+    
     return app
