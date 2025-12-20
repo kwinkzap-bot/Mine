@@ -32,11 +32,15 @@ const OptionsChartApp = (function () {
     let peFormattedData = null;
     // Previous day high/low data from backend
     let currentPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
-    // Countdown state for price-line badges
-    let countdownInterval = null;
-    let countdownValue = 0;
-    let ceCountdownLine = null;
-    let peCountdownLine = null;
+    // Cache for OPTIONS_INIT response to avoid duplicate calls
+    let cachedInitResponse = null;
+    let cachedInitSymbol = null;
+    let cachedInitPriceSource = null;
+    // // Countdown state for price-line badges (COMMENTED OUT)
+    // let countdownInterval = null;
+    // let countdownValue = 0;
+    // let ceCountdownLine = null;
+    // let peCountdownLine = null;
     const timeframeIntervals = {
         '1minute': 60,
         '3minute': 180,
@@ -55,7 +59,7 @@ const OptionsChartApp = (function () {
     function cacheDomElements() {
         DOM.optionsChartApp = document.getElementById('options-chart-app');
         DOM.apiLoader = document.getElementById('api-loader');
-        DOM.symbolSelect = document.getElementById('symbol');
+
         DOM.ceStrikeSelect = document.getElementById('ceStrike');
         DOM.peStrikeSelect = document.getElementById('peStrike');
         DOM.loadChartBtn = document.getElementById('fetchChartBtn');
@@ -108,25 +112,11 @@ const OptionsChartApp = (function () {
         return minutes >= open && minutes <= close;
     }
 
-    // --- Constants ---
-    const CONSTANTS = {
-        API_ENDPOINTS: {
-            OPTIONS_INIT: '/api/options-init',
-            UNDERLYING_PRICE: '/api/underlying-price',
-            OPTIONS_STRIKES: '/api/options-strikes',
-            OPTIONS_DEFAULT_STRIKES: '/api/options-default-strikes',
-            OPTIONS_CHART_DATA: '/api/options-chart-data',
-            OPTIONS_PDH_PDL: '/api/options-pdh-pdl'
-        },
-        CSS_CLASSES: {
-            TIMEFRAME_BTN: 'timeframe-btn',
-            ACTIVE: 'active'
-        },
-        CHART_CONFIG: {
-            CE_COLOR: '#00c853', // Green
-            PE_COLOR: '#2962ff'  // Blue
-        }
-    };
+    // --- Use global CONSTANTS from constants.js ---
+    // The following are now available globally:
+    // - CONSTANTS.API_ENDPOINTS
+    // - CONSTANTS.CSS_CLASSES
+    // - CONSTANTS.CHART_CONFIG
 
     // --- Utility Functions ---
 
@@ -327,21 +317,16 @@ const OptionsChartApp = (function () {
             console.error('Error fetching underlying price:', error);
         }
     }
-
-    /**
-     * Sets the current symbol and triggers strike loading.
-     */
-    function setSymbol(symbol) {
-        currentSymbol = symbol;
-        loadStrikes();
-    }
-
     /**
      * Sets the price source and triggers strike reloading, price update, and chart data loading.
      */
     function setPriceSource(source) {
         currentPriceSource = source;
         console.log('Price source changed to:', currentPriceSource);
+        // Invalidate cached OPTIONS_INIT response since price source changed
+        cachedInitResponse = null;
+        cachedInitSymbol = null;
+        cachedInitPriceSource = null;
         // Update the price display
         updateUnderlyingPrice();
         // Reload strikes with the new price source
@@ -349,20 +334,64 @@ const OptionsChartApp = (function () {
     }
 
     /**
-     * Sets the timeframe and triggers chart data loading.
+     * Sets the timeframe and fetches chart data for new timeframe only.
+     * Uses existing tokens - no need to refetch tokens or PDH/PDL as they don't change with timeframe.
      */
     function setTimeframe(timeframe) {
         currentTimeframe = timeframe;
         updateActiveButton(timeframe);
-        loadChartData();
-        // Restart chart countdown badges to match new timeframe
-        resetCountdown();
+        fetchChartDataOnlyForTimeframe();
+        // // Restart chart countdown badges to match new timeframe (COMMENTED OUT)
+        // resetCountdown();
+    }
+
+    /**
+     * Fetches ONLY chart data for the current timeframe without refetching tokens or PDH/PDL.
+     * Optimized for timeframe changes where tokens and PDH/PDL remain constant.
+     */
+    async function fetchChartDataOnlyForTimeframe() {
+        if (!currentCeToken || !currentPeToken) {
+            console.warn('Tokens not available, cannot fetch chart data for timeframe change');
+            return;
+        }
+
+        showLoader();
+
+        try {
+            // Fetch only chart data using existing tokens
+            const result = await fetchChartDataFromApi(currentCeToken, currentPeToken);
+
+            if (result.success && result.ceData && result.peData) {
+                ceData = result.ceData;
+                peData = result.peData;
+
+                console.log('Chart data loaded for timeframe:', { timeframe: currentTimeframe, ceDataLength: ceData.length, peDataLength: peData.length });
+
+                // Clear cached formatted data to force re-formatting
+                ceFormattedData = null;
+                peFormattedData = null;
+
+                // Render chart with existing PDH/PDL
+                console.log('Rendering chart for timeframe change with existing PDH/PDL:', currentPdhPdl);
+                renderCombinedChart(currentPdhPdl.ce_pdh, currentPdhPdl.ce_pdl, currentPdhPdl.pe_pdh, currentPdhPdl.pe_pdl);
+
+                showNotification(`Chart data loaded for ${currentTimeframe} timeframe.`, 'success');
+            } else {
+                showNotification(result.message || 'Failed to load chart data.', 'error');
+            }
+        } catch (error) {
+            console.error('Error fetching chart data for timeframe:', error);
+            showNotification('Error loading chart data.', 'error');
+        } finally {
+            hideLoader();
+        }
     }
 
     /**
      * Resets and starts the countdown timer.
      */
-    // Countdown removed
+    // COMMENTED OUT: Countdown functionality disabled
+    /* 
     function resetCountdown() {
         if (countdownInterval) clearInterval(countdownInterval);
         const intervalSeconds = timeframeIntervals[currentTimeframe] || 300;
@@ -374,11 +403,12 @@ const OptionsChartApp = (function () {
             if (countdownValue <= 0) {
                 clearInterval(countdownInterval);
                 // Auto-fetch fresh data, then restart countdown
-                loadChartData();
+                // loadChartData();
                 resetCountdown();
             }
         }, 1000);
     }
+    */
 
     /**
      * Updates the countdown display in the UI.
@@ -388,7 +418,8 @@ const OptionsChartApp = (function () {
     /**
      * Creates/updates price-line badges on CE/PE charts showing remaining seconds (TradingView-style)
      */
-    // Countdown price-line badges removed
+    // COMMENTED OUT: Countdown functionality disabled
+    /*
     function updateCountdownPriceLines(secondsRemaining) {
         if (!ceSeries || !peSeries || !ceData || !peData) return;
 
@@ -428,15 +459,17 @@ const OptionsChartApp = (function () {
             });
         }
     }
+    */
 
-    // Formats countdown seconds to mm:ss (e.g., 06:10)
-    // Countdown label removed
+    // COMMENTED OUT: Countdown functionality disabled
+    /*
     function formatCountdownLabel(totalSeconds) {
         const secs = Math.max(0, Math.floor(totalSeconds));
         const m = Math.floor(secs / 60).toString().padStart(2, '0');
         const s = (secs % 60).toString().padStart(2, '0');
         return `${m}:${s}`;
     }
+    */
 
     /**
      * Creates a time formatter for the chart's x-axis based on the current timeframe
@@ -502,12 +535,12 @@ const OptionsChartApp = (function () {
                 borderColor: '#e5e7eb',
                 timeVisible: true,
                 secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute', // Show seconds for intraday
-                rightOffset: 450
+                rightOffset: 250
             },
             rightPriceScale: {
                 textColor: '#6b7280',
                 borderColor: '#e5e7eb',
-                scaleMargins: { top: 0.1, bottom: 0.1 }
+                // scaleMargins: { top: 0.1, bottom: 0.1 }
             },
             crosshair: {
                 mode: LightweightCharts.CrosshairMode.Normal, // Follow mouse exactly, don't snap to candles
@@ -567,12 +600,30 @@ const OptionsChartApp = (function () {
     function renderIndividualCharts() {
         if (!ceSeries || !peSeries || !ceData || !peData) return;
 
+        // Preserve visible ranges before updating data
+        const ceTimeScale = ceChart?.timeScale();
+        const peTimeScale = peChart?.timeScale();
+        const cePreservedRange = ceTimeScale?.getVisibleLogicalRange();
+        const pePreservedRange = peTimeScale?.getVisibleLogicalRange();
+
         // Cache formatted data for hover synchronization
         ceFormattedData = formatChartData(ceData);
         peFormattedData = formatChartData(peData);
 
         ceSeries.setData(ceFormattedData);
         peSeries.setData(peFormattedData);
+
+        // Restore visible ranges after data update
+        if (cePreservedRange && ceTimeScale && !isInitialLoad) {
+            setTimeout(() => {
+                ceTimeScale.setVisibleLogicalRange(cePreservedRange);
+            }, 0);
+        }
+        if (pePreservedRange && peTimeScale && !isInitialLoad) {
+            setTimeout(() => {
+                peTimeScale.setVisibleLogicalRange(pePreservedRange);
+            }, 0);
+        }
 
         // Remove old price lines
         cePriceLines.forEach(line => ceSeries.removePriceLine(line));
@@ -617,8 +668,8 @@ const OptionsChartApp = (function () {
         if (latestPePrice !== null && currentPriceSource === 'current_close' && isMarketHours()) {
             // LTP line removed - showing only countdown timer
         }
-        // Refresh countdown badges after rendering, using current countdown value
-        updateCountdownPriceLines(countdownValue);
+        // // Refresh countdown badges after rendering, using current countdown value (COMMENTED OUT)
+        // updateCountdownPriceLines(countdownValue);
     }
 
     /**
@@ -644,9 +695,20 @@ const OptionsChartApp = (function () {
 
         console.log('Setting formatted data:', { ceFormattedData: ceFormattedData?.length, peFormattedData: peFormattedData?.length });
 
+        // Preserve visible range before updating data
+        const ceTimeScale = combinedChart?.timeScale();
+        const preservedRange = ceTimeScale?.getVisibleLogicalRange();
+
         // Set data on chart series
         combinedCeSeries.setData(ceFormattedData);
         combinedPeSeries.setData(peFormattedData);
+
+        // Restore visible range after data update (prevents resetting to all data)
+        if (preservedRange && ceTimeScale && !isInitialLoad) {
+            setTimeout(() => {
+                ceTimeScale.setVisibleLogicalRange(preservedRange);
+            }, 0);
+        }
 
         // Remove old timer lines
         if (ceTimerPriceLine) combinedCeSeries.removePriceLine(ceTimerPriceLine);
@@ -729,14 +791,63 @@ const OptionsChartApp = (function () {
     // --- Data Fetching Logic ---
 
     /**
+     * Fetches chart data from the API endpoint and returns separated CE/PE data.
+     * @param {string} ceToken - CE instrument token
+     * @param {string} peToken - PE instrument token
+     * @returns {Promise<Object>} { success: boolean, ceData: array, peData: array, message: string }
+     */
+    async function fetchChartDataFromApi(ceToken, peToken) {
+        try {
+            console.log('fetchChartDataFromApi called with tokens:', { ceToken, peToken, timeframe: currentTimeframe });
+            
+            if (!ceToken || !peToken) {
+                console.error('Missing tokens for chart data fetch:', { ceToken, peToken });
+                return { success: false, ceData: null, peData: null, message: 'Missing CE or PE token' };
+            }
+            
+            const payload = {
+                ce_token: ceToken,
+                pe_token: peToken,
+                timeframe: currentTimeframe,
+                live: true
+            };
+            
+            console.log('Sending payload to OPTIONS_CHART_DATA:', payload);
+            
+            const data = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_CHART_DATA, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (data.needs_login) {
+                return { success: false, ceData: null, peData: null, message: 'Login required', needsLogin: true };
+            }
+
+            if (data.success && data.data) {
+                // Parse merged data array and separate CE/PE by type field
+                const ceChartData = data.data.filter(candle => candle.type === 'CE');
+                const peChartData = data.data.filter(candle => candle.type === 'PE');
+
+                console.log('Chart data fetched from API:', { ceDataLength: ceChartData.length, peDataLength: peChartData.length });
+                return { success: true, ceData: ceChartData, peData: peChartData, message: '' };
+            } else {
+                return { success: false, ceData: null, peData: null, message: data.message || 'Failed to load chart data.' };
+            }
+        } catch (error) {
+            console.error('Error fetching chart data from API:', error);
+            return { success: false, ceData: null, peData: null, message: error.message };
+        }
+    }
+
+    /**
      * Fetches strikes, underlying price, and PDH/PDL in a single merged API call.
      */
     async function loadStrikes() {
         DOM.ceStrikeSelect.innerHTML = '<option value="">Loading...</option>';
         DOM.peStrikeSelect.innerHTML = '<option value="">Loading...</option>';
 
-        const symbol = DOM.symbolSelect.value;
-        if (!symbol) return;
+        const symbol = 'NIFTY';  // NIFTY 50 only
 
         showLoader();
         try {
@@ -785,6 +896,11 @@ const OptionsChartApp = (function () {
                 if (data.default_ce_token) currentCeToken = data.default_ce_token;
                 if (data.default_pe_token) currentPeToken = data.default_pe_token;
 
+                // IMPORTANT: Cache the full OPTIONS_INIT response to avoid duplicate calls in loadChartData()
+                cachedInitResponse = data;
+                cachedInitSymbol = symbol;
+                cachedInitPriceSource = priceSource;
+
                 // Update underlying price display
                 updateUnderlyingPrice();
 
@@ -803,6 +919,8 @@ const OptionsChartApp = (function () {
 
     /**
      * Fetches and displays the chart data.
+     * Only updates the data without reinitializing the charts (they're initialized once in init()).
+     * Fetches tokens for the currently selected strikes to ensure fresh data.
      */
     async function loadChartData() {
         const ceStrike = DOM.ceStrikeSelect.value;
@@ -820,60 +938,131 @@ const OptionsChartApp = (function () {
         showLoader();
 
         try {
-            // PDH/PDL is now cached from loadStrikes(), but refetch if strikes changed
-            if (!currentPdhPdl.ce_pdh && !currentPdhPdl.ce_pdl && currentCeToken && currentPeToken) {
+            // IMPORTANT: Fetch tokens for the CURRENTLY SELECTED strikes, not the cached default ones
+            // This ensures we get fresh tokens when user manually changes strikes
+            let ceTokenToUse = null;
+            let peTokenToUse = null;
+            let pdhToUse = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+
+            // Step 1: Get tokens for the selected strikes
+            // Try to use cached OPTIONS_INIT response first to avoid duplicate API calls
+            try {
+                const priceSource = currentPriceSource === 'previous_close' ? 'previous_close' : 'ltp';
+                
+                // Check if we have a valid cached response for this symbol and price source
+                let initResp = null;
+                if (cachedInitResponse && cachedInitSymbol === currentSymbol && cachedInitPriceSource === priceSource) {
+                    console.log('Using cached OPTIONS_INIT response');
+                    initResp = cachedInitResponse;
+                } else {
+                    console.log('Fetching fresh OPTIONS_INIT response (cache miss or params changed)');
+                    initResp = await fetchJson(`${CONSTANTS.API_ENDPOINTS.OPTIONS_INIT}?symbol=${currentSymbol}&price_source=${priceSource}`);
+                    // Update cache
+                    if (initResp?.success) {
+                        cachedInitResponse = initResp;
+                        cachedInitSymbol = currentSymbol;
+                        cachedInitPriceSource = priceSource;
+                    }
+                }
+
+                if (initResp?.success) {
+                    // Get the strikes data to find tokens for currently selected strikes
+                    const strikes = initResp.strikes || [];
+                    console.log(`Looking for strikes in OPTIONS_INIT response: CE strike=${ceStrike}, PE strike=${peStrike}`);
+                    console.log('Available strikes:', strikes.map(s => `${s.strike} (CE: ${s.ce_token}, PE: ${s.pe_token})`));
+                    
+                    // Find strike objects for CE and PE (normalize to strings for comparison)
+                    const ceStrikeStr = ceStrike.toString();
+                    const peStrikeStr = peStrike.toString();
+                    const ceStrikeObj = strikes.find(s => {
+                        const strikeStr = s.strike.toString();
+                        return strikeStr === ceStrikeStr;
+                    });
+                    const peStrikeObj = strikes.find(s => {
+                        const strikeStr = s.strike.toString();
+                        return strikeStr === peStrikeStr;
+                    });
+                    
+                    console.log('Found strike objects:', { ceStrikeObj, peStrikeObj });
+                    
+                    if (ceStrikeObj && peStrikeObj) {
+                        ceTokenToUse = ceStrikeObj.ce_token;
+                        peTokenToUse = peStrikeObj.pe_token;
+                        if (!ceTokenToUse || !peTokenToUse) {
+                            console.warn('Strike objects found but missing tokens:', { ceStrikeObj, peStrikeObj });
+                            // Fallback to cached tokens
+                            ceTokenToUse = currentCeToken;
+                            peTokenToUse = currentPeToken;
+                        }
+                        console.log(`Got tokens for selected strikes CE=${ceStrike}, PE=${peStrike}:`, { ceTokenToUse, peTokenToUse });
+                    } else {
+                        // Fallback to cached tokens if strikes not found in response
+                        ceTokenToUse = currentCeToken;
+                        peTokenToUse = currentPeToken;
+                        console.warn('Selected strikes not found in OPTIONS_INIT response, using cached tokens');
+                    }
+                } else {
+                    ceTokenToUse = currentCeToken;
+                    peTokenToUse = currentPeToken;
+                    console.warn('Failed to get OPTIONS_INIT data, using cached tokens');
+                }
+            } catch (error) {
+                console.error('Error getting tokens from OPTIONS_INIT:', error);
+                ceTokenToUse = currentCeToken;
+                peTokenToUse = currentPeToken;
+            }
+
+            // Step 2: Call OPTIONS_PDH_PDL endpoint with TOKENS (not strikes)
+            try {
                 const pdhPayload = {
-                    symbol: currentSymbol,
-                    ce_strike: ceStrike,
-                    pe_strike: peStrike,
-                    ce_token: currentCeToken,
-                    pe_token: currentPeToken
+                    ce_token: ceTokenToUse,
+                    pe_token: peTokenToUse
                 };
+                
                 const pdhResp = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_PDH_PDL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(pdhPayload)
                 });
+
                 if (pdhResp?.success) {
-                    currentPdhPdl = pdhResp.pdh_pdl || { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
-                    if (pdhResp.ce_token) currentCeToken = pdhResp.ce_token;
-                    if (pdhResp.pe_token) currentPeToken = pdhResp.pe_token;
+                    pdhToUse = pdhResp.pdh_pdl || { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+                    console.log('Fetched PDH/PDL using tokens:', pdhToUse);
+                } else {
+                    console.warn('Failed to fetch PDH/PDL:', pdhResp?.error);
                 }
+            } catch (error) {
+                console.error('Error fetching PDH/PDL with tokens:', error);
             }
 
-            // Pass tokens to backend for FAST PATH (no token lookup needed)
-            const data = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_CHART_DATA, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ce_token: currentCeToken,
-                    pe_token: currentPeToken,
-                    timeframe: currentTimeframe
-                })
-            });
+            // Step 3: Use tokens for chart data fetch
+            const result = await fetchChartDataFromApi(ceTokenToUse, peTokenToUse);
 
-            if (data.success && data.data) {
-                // Parse merged data array and separate CE/PE by type field
-                ceData = data.data.filter(candle => candle.type === 'CE');
-                peData = data.data.filter(candle => candle.type === 'PE');
+            if (result.success && result.ceData && result.peData) {
+                ceData = result.ceData;
+                peData = result.peData;
 
-                console.log('Chart data fetched:', { ceDataLength: ceData.length, peDataLength: peData.length });
+                // Update global tokens for auto-update
+                currentCeToken = ceTokenToUse;
+                currentPeToken = peTokenToUse;
+                currentPdhPdl = pdhToUse;
+
+                console.log('Chart data loaded:', { ceDataLength: ceData.length, peDataLength: peData.length });
 
                 // Clear cached formatted data to force re-formatting
                 ceFormattedData = null;
                 peFormattedData = null;
 
-                // Reinitialize charts with timeframe-aware time formatter
-                initCharts();
-
+                // IMPORTANT: Do NOT reinitialize charts here - they're already initialized in init()
+                // Only call renderCombinedChart() to update the data on existing chart objects
                 console.log('Calling renderCombinedChart with PDH/PDL:', currentPdhPdl);
                 renderCombinedChart(currentPdhPdl.ce_pdh, currentPdhPdl.ce_pdl, currentPdhPdl.pe_pdh, currentPdhPdl.pe_pdl);
 
-                startAutoUpdate(); // Restart auto-update with new data
+                startAutoUpdate(); // Restart auto-update with new data and tokens
 
                 showNotification('Chart data loaded successfully.', 'success');
             } else {
-                showNotification(data.message || 'Failed to load chart data.', 'error');
+                showNotification(result.message, 'error');
             }
         } catch (error) {
             console.error('Error fetching chart data:', error);
@@ -917,26 +1106,16 @@ const OptionsChartApp = (function () {
 
             // Fetch latest chart data (pass tokens for optimized fetch)
             try {
-                const data = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_CHART_DATA, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        ce_token: currentCeToken,
-                        pe_token: currentPeToken,
-                        timeframe: currentTimeframe,
-                        live: true
-                    })
-                });
+                const result = await fetchChartDataFromApi(currentCeToken, currentPeToken);
 
-                if (data.needs_login) {
+                if (result.needsLogin) {
                     clearInterval(autoUpdateInterval);
                     return; // fetchJson handles the redirect/notification
                 }
 
-                if (data.success && data.data) {
-                    // Parse merged data array and separate CE/PE by type field
-                    ceData = data.data.filter(candle => candle.type === 'CE');
-                    peData = data.data.filter(candle => candle.type === 'PE');
+                if (result.success && result.ceData && result.peData) {
+                    ceData = result.ceData;
+                    peData = result.peData;
 
                     console.log('Auto-update: New data received', { ceDataLength: ceData.length, peDataLength: peData.length });
                     // Clear cached formatted data to force re-formatting
@@ -948,43 +1127,11 @@ const OptionsChartApp = (function () {
             } catch (error) {
                 console.error('Auto-update error:', error);
             }
-        }, 10000); // Update every 10 seconds
+        }, 3000); // Update every 3 seconds
     }
 
 
     // --- Event Listeners and Initialization ---
-
-    /**
-     * Handles mouse wheel zoom for charts.
-     */
-    function attachChartZoom(chart) {
-        if (!chart) return;
-        
-        const container = chart.chartElement();
-        if (!container) return;
-
-        container.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            
-            const timeScale = chart.timeScale();
-            if (!timeScale) return;
-            
-            const visibleRange = timeScale.getVisibleLogicalRange();
-            if (!visibleRange) return;
-
-            const zoomFactor = e.deltaY > 0 ? 0.8 : 2.0; // Zoom in on scroll up (50%), out on scroll down (50%)
-            const logicalFrom = visibleRange.from;
-            const logicalTo = visibleRange.to;
-            const logicalRange = logicalTo - logicalFrom;
-            const logicalCenter = logicalFrom + logicalRange / 2;
-            
-            const newRange = logicalRange / zoomFactor;
-            const newFrom = logicalCenter - newRange / 2;
-            const newTo = logicalCenter + newRange / 2;
-            
-            timeScale.setVisibleLogicalRange({ from: newFrom, to: newTo });
-        }, { passive: false });
-    }
 
     /**
      * Attaches all necessary event listeners to DOM elements.
@@ -993,9 +1140,7 @@ const OptionsChartApp = (function () {
         // Event delegation for the main container (change events for select/radio)
         DOM.optionsChartApp.addEventListener('change', (event) => {
             const target = event.target;
-            if (target === DOM.symbolSelect) {
-                setSymbol(target.value);
-            } else if (Array.from(DOM.priceSourceRadios).includes(target)) {
+            if (Array.from(DOM.priceSourceRadios).includes(target)) {
                 setPriceSource(target.value);
             } else if (target === DOM.ceStrikeSelect || target === DOM.peStrikeSelect) {
                 // Update strike displays instantly
@@ -1028,7 +1173,6 @@ const OptionsChartApp = (function () {
                 const newRect = entries[0].contentRect;
                 ceChart.applyOptions({ height: newRect.height, width: newRect.width });
             }).observe(ceContainer);
-            attachChartZoom(ceChart);
         }
 
         if (peContainer && peChart) {
@@ -1037,7 +1181,6 @@ const OptionsChartApp = (function () {
                 const newRect = entries[0].contentRect;
                 peChart.applyOptions({ height: newRect.height, width: newRect.width });
             }).observe(peContainer);
-            attachChartZoom(peChart);
         }
 
         if (combinedContainer && combinedChart) {
@@ -1046,9 +1189,10 @@ const OptionsChartApp = (function () {
                 const newRect = entries[0].contentRect;
                 combinedChart.applyOptions({ height: newRect.height, width: newRect.width });
             }).observe(combinedContainer);
-            attachChartZoom(combinedChart);
         }
     }
+
+
 
     /**
      * Main initialization function.
@@ -1064,8 +1208,8 @@ const OptionsChartApp = (function () {
         initCharts(); // Initialize charts first
         attachEventListeners();
 
-        // Set initial state based on HTML defaults
-        currentSymbol = DOM.symbolSelect?.value || 'NIFTY';
+        // Set NIFTY as the only symbol
+        currentSymbol = 'NIFTY';
 
         // Force default to 'previous_close' on load (override any stale browser state)
         const ltpRadio = document.getElementById('ltp');
@@ -1084,13 +1228,11 @@ const OptionsChartApp = (function () {
         // Set initial timeframe button active state
         updateActiveButton(currentTimeframe);
 
-        // Initial load of strikes and chart data
-        if (currentSymbol) {
-            setSymbol(currentSymbol); // This will trigger loadStrikes (which caches underlying price) and then loadChartData
-        }
+        // Initial load of strikes and chart data for NIFTY
+        loadStrikes();
 
-        // Start chart countdown badges
-        resetCountdown();
+        // // Start chart countdown badges (COMMENTED OUT)
+        // resetCountdown();
 
         // Note: updateUnderlyingPrice() is NOT called here to avoid duplicate API call
         // loadStrikes() already caches underlying price data from the merged /api/options-init endpoint

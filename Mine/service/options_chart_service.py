@@ -121,24 +121,33 @@ class OptionsChartService:
                 attempt += 1
     
     def _calculate_default_strikes(self, base_price: Union[float, int], symbol: str) -> Tuple[float, float]:
-        """Calculate default CE and PE strikes based on new logic."""
+        """Calculate default CE and PE strikes based on symbol-specific logic."""
         
-        # 1. Round PDC to the nearest 50
-        rounded_base = round(base_price / 50) * 50
+        # NIFTY only configuration
+        config = {
+            'round_to': 50,
+            'offset_50': 150,   # When rounded_base % 100 == 50
+            'offset_100': 200   # When rounded_base % 100 == 0
+        }
         
-        # 2. Determine offset
+        # 1. Round to symbol-specific value
+        round_to = config['round_to']
+        rounded_base = round(base_price / round_to) * round_to
+        
+        # 2. Determine offset based on symbol-specific logic
         if rounded_base % 100 == 50:
-            # e.g., 26850, 26950
-            diff = 150
+            diff = config['offset_50']
+            offset_type = "offset_50"
         else:
-            # e.g., 26800, 26900
-            diff = 200
+            diff = config['offset_100']
+            offset_type = "offset_100"
         
         # 3. Calculate target strikes
         ce_strike_price = rounded_base - diff
         pe_strike_price = rounded_base + diff
         
-        return float(ce_strike_price), float(pe_strike_price) # Explicit cast to float
+        logging.info(f"[STRIKE_CALC] Symbol={symbol}, BasePrice={base_price:.2f}, RoundTo={round_to}, RoundedBase={rounded_base}, OffsetType={offset_type}, Diff={diff}, CE={ce_strike_price}, PE={pe_strike_price}")
+        return float(ce_strike_price), float(pe_strike_price)
 
     def get_strikes_for_symbol(self, symbol: str, price_source: str = 'previous_close', skip_pricing: bool = False) -> Dict[str, Any]:
         """
@@ -218,20 +227,24 @@ class OptionsChartService:
                 key=lambda x: x['strike']
             )
             
-            # STEP 3: Quick return if pricing not needed
-            if skip_pricing or not strikes:
-                logging.info(f"✓ get_strikes_for_symbol({symbol}) completed in {time_module.time() - start_time:.2f}s (no pricing)")
+            if not strikes:
                 return {
                     'strikes': strikes,
-                    'default_ce_token': strikes[len(strikes)//2]['ce_token'] if strikes else None,
-                    'default_pe_token': strikes[len(strikes)//2]['pe_token'] if strikes else None
+                    'default_ce_strike': None,
+                    'default_pe_strike': None,
+                    'default_ce_token': None,
+                    'default_pe_token': None,
+                    'base_price': None
                 }
             
-            # STEP 4: Fetch pricing data in parallel (with tight timeouts)
+            # Initialize defaults
             default_ce_strike = None
             default_pe_strike = None
+            default_ce_token = None
+            default_pe_token = None
             base_price = None
             
+            # STEP 3: Fetch pricing data to calculate defaults
             try:
                 with ThreadPoolExecutor(max_workers=1, thread_name_prefix="pricing") as executor:
                     # Fetch ONLY previous close (faster than both LTP and quote)
@@ -249,17 +262,43 @@ class OptionsChartService:
             if not base_price and strikes:
                 base_price = strikes[len(strikes) // 2]['strike']
             
+            # Calculate default strikes and find their tokens
             if base_price:
                 default_ce_strike, default_pe_strike = self._calculate_default_strikes(base_price, symbol)
+                
+                # Try exact match first
+                for s in strikes:
+                    if default_ce_strike and s['strike'] == default_ce_strike:
+                        default_ce_token = s['ce_token']
+                    if default_pe_strike and s['strike'] == default_pe_strike:
+                        default_pe_token = s['pe_token']
+                
+                # If exact matches not found, use closest available strikes
+                if not default_ce_token and default_ce_strike and strikes:
+                    closest_ce = min(strikes, key=lambda x: abs(x['strike'] - default_ce_strike))
+                    default_ce_token = closest_ce['ce_token']
+                    default_ce_strike = closest_ce['strike']  # Update to actual available strike
+                    logging.warning(f"CE strike {default_ce_strike} not found, using closest: {closest_ce['strike']}")
+                
+                if not default_pe_token and default_pe_strike and strikes:
+                    closest_pe = min(strikes, key=lambda x: abs(x['strike'] - default_pe_strike))
+                    default_pe_token = closest_pe['pe_token']
+                    default_pe_strike = closest_pe['strike']  # Update to actual available strike
+                    logging.warning(f"PE strike {default_pe_strike} not found, using closest: {closest_pe['strike']}")
+                
+                logging.info(f"Default strikes selected: CE={default_ce_strike}, PE={default_pe_strike}")
             
-            # Find tokens for default strikes
-            default_ce_token = None
-            default_pe_token = None
-            for s in strikes:
-                if default_ce_strike and s['strike'] == default_ce_strike:
-                    default_ce_token = s['ce_token']
-                if default_pe_strike and s['strike'] == default_pe_strike:
-                    default_pe_token = s['pe_token']
+            # If skip_pricing, return now with calculated defaults
+            if skip_pricing:
+                logging.info(f"✓ get_strikes_for_symbol({symbol}) completed in {time_module.time() - start_time:.2f}s (pricing skipped)")
+                return {
+                    'strikes': strikes,
+                    'default_ce_strike': default_ce_strike,
+                    'default_pe_strike': default_pe_strike,
+                    'default_ce_token': default_ce_token,
+                    'default_pe_token': default_pe_token,
+                    'base_price': base_price
+                }
             
             # Mark ATM strike
             if base_price:
@@ -272,6 +311,8 @@ class OptionsChartService:
             
             return {
                 'strikes': strikes,
+                'default_ce_strike': default_ce_strike,
+                'default_pe_strike': default_pe_strike,
                 'default_ce_token': default_ce_token,
                 'default_pe_token': default_pe_token,
                 'base_price': base_price

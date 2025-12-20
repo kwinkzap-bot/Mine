@@ -44,26 +44,14 @@ function populateStocks(stocks) {
     if (!DOM.symbolSelect) return;
     DOM.symbolSelect.innerHTML = ''; // Clear existing options
     
-    // Add default options first
-    ['NIFTY', 'BANKNIFTY', 'FINNIFTY'].forEach(symbol => {
-        const option = document.createElement('option');
-        option.value = symbol;
-        option.textContent = symbol;
-        DOM.symbolSelect.appendChild(option);
-    });
+    // Add NIFTY only
+    const option = document.createElement('option');
+    option.value = 'NIFTY';
+    option.textContent = 'NIFTY 50';
+    DOM.symbolSelect.appendChild(option);
 
-    // Add F&O stocks, excluding the ones already added
-    stocks.forEach(symbol => {
-        if (!['NIFTY', 'BANKNIFTY', 'FINNIFTY'].includes(symbol)) {
-            const option = document.createElement('option');
-            option.value = symbol;
-            option.textContent = symbol;
-            DOM.symbolSelect.appendChild(option);
-        }
-    });
-
-    // Auto-select NIFTY or the first available option
-    DOM.symbolSelect.value = DOM.symbolSelect.querySelector('option[value="NIFTY"]') ? 'NIFTY' : DOM.symbolSelect.options[0]?.value || '';
+    // Auto-select NIFTY
+    DOM.symbolSelect.value = 'NIFTY';
 }
 
 /**

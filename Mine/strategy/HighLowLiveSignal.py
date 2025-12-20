@@ -11,17 +11,27 @@ import importlib.util
 # Fix import issues
 try:
     from strategy.HighLowSignal import HighLowSignal
+    from service.options_chart_service import OptionsChartService
 except ImportError:
     try:
         from .HighLowSignal import HighLowSignal
+        from service.options_chart_service import OptionsChartService
     except ImportError:
         # Fallback import
         current_dir = os.path.dirname(os.path.abspath(__file__))
         signal_path = os.path.join(current_dir, 'HighLowSignal.py')
         spec = importlib.util.spec_from_file_location("HighLowSignal", signal_path)
-        signal_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(signal_module)
-        HighLowSignal = signal_module.HighLowSignal
+        if spec and spec.loader:
+            signal_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(signal_module)
+            HighLowSignal = signal_module.HighLowSignal
+        
+        service_path = os.path.join(os.path.dirname(current_dir), 'service', 'options_chart_service.py')
+        spec_service = importlib.util.spec_from_file_location("OptionsChartService", service_path)
+        if spec_service and spec_service.loader:
+            service_module = importlib.util.module_from_spec(spec_service)
+            spec_service.loader.exec_module(service_module)
+            OptionsChartService = service_module.OptionsChartService
 
 load_dotenv()
 
@@ -49,33 +59,10 @@ class HighLowLiveSignal:
         self.live_trading = True  # Enable/disable live trading
         
     def get_strike_prices(self, close_price):
-        """Calculate strike prices based on close price"""
-        close_int = int(close_price)
-        
-        if self.symbol == 'BANKNIFTY':
-            rounded_base = round(close_price / 100) * 100
-            ce_strike = int(rounded_base - 300)
-            pe_strike = int(rounded_base + 300)
-        else:
-            last_two_digits = close_int % 100
-            
-            if last_two_digits <= 25:
-                rounded_base = close_int - last_two_digits
-            elif last_two_digits <= 75:
-                rounded_base = close_int - last_two_digits + 50
-            else:
-                rounded_base = close_int - last_two_digits + 100
-                
-            last_two_digits = rounded_base % 100
-            
-            if last_two_digits == 50:
-                ce_strike = rounded_base - 150
-                pe_strike = rounded_base + 150
-            else:
-                ce_strike = rounded_base - 200
-                pe_strike = rounded_base + 200
-            
-        return ce_strike, pe_strike
+        """Calculate strike prices using OptionsChartService._calculate_default_strikes"""
+        chart_service = OptionsChartService(self.kite)
+        ce_strike, pe_strike = chart_service._calculate_default_strikes(close_price, self.symbol)
+        return int(ce_strike), int(pe_strike)
     
     def get_option_data(self, strike, option_type, start_date, end_date):
         """Get option data for given parameters"""
@@ -123,9 +110,7 @@ class HighLowLiveSignal:
             
             # Get instrument token
             instrument_tokens = {
-                'NIFTY': 256265,
-                'BANKNIFTY': 260105,
-                'FINNIFTY': 257801
+                'NIFTY': 256265
             }
             
             # Get previous day close
@@ -199,11 +184,11 @@ class HighLowLiveSignal:
             # Check CE signal
             ce_signal, ce_entry = self.signal_detector.check_ce_buy_conditions(
                 ce_current_data, pe_current_data, 
-                self.ce_prev_high, self.ce_prev_low, 
-                self.pe_prev_high, self.pe_prev_low
+                self.ce_prev_high or 0.0, self.ce_prev_low or 0.0, 
+                self.pe_prev_high or 0.0, self.pe_prev_low or 0.0
             )
             
-            if ce_signal:
+            if ce_signal and ce_entry:
                 print(f"CE BUY Signal at {now.strftime('%H:%M:%S')} @ {ce_entry['entry_price']:.2f}")
                 
                 # Place live order
@@ -221,11 +206,11 @@ class HighLowLiveSignal:
             # Check PE signal
             pe_signal, pe_entry = self.signal_detector.check_pe_buy_conditions(
                 pe_current_data, ce_current_data,
-                self.pe_prev_high, self.pe_prev_low,
-                self.ce_prev_high, self.ce_prev_low
+                self.pe_prev_high or 0.0, self.pe_prev_low or 0.0,
+                self.ce_prev_high or 0.0, self.ce_prev_low or 0.0
             )
             
-            if pe_signal:
+            if pe_signal and pe_entry:
                 print(f"PE BUY Signal at {now.strftime('%H:%M:%S')} @ {pe_entry['entry_price']:.2f}")
                 
                 # Place live order
@@ -321,6 +306,8 @@ class HighLowLiveSignal:
         except Exception as e:
             print(f"Error placing sell order: {e}")
             return None
+            print(f"Error placing sell order: {e}")
+            return None
     
     def monitor_position(self):
         """Monitor active position for exit"""
@@ -359,12 +346,6 @@ class HighLowLiveSignal:
             
             # Place sell order at market price
             self.place_sell_order(option_type, strike, current_price)
-            self.active_position = Nonetarget - entry_price
-            print(f"{option_type} EXIT: Target @ {target:.2f}, PnL: {pnl:.2f}")
-            self.active_position = None
-        elif now_time >= datetime.strptime('15:25:00', '%H:%M:%S').time():
-            pnl = current_price - entry_price
-            print(f"{option_type} EXIT: Market Close @ {current_price:.2f}, PnL: {pnl:.2f}")
             self.active_position = None
     
     def start_live_monitoring(self):

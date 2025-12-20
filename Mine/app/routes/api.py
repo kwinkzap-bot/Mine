@@ -51,9 +51,7 @@ def get_instrument_key(symbol: str) -> str:
     """Get the instrument key for a symbol."""
     symbol = symbol.upper()
     mapping = {
-        'NIFTY': 'NSE:NIFTY 50',
-        'BANKNIFTY': 'NSE:NIFTY BANK',
-        'FINNIFTY': 'NSE:NIFTY FIN SERVICE'
+        'NIFTY': 'NSE:NIFTY 50'
     }
     return mapping.get(symbol, f'NSE:{symbol}')
 
@@ -118,7 +116,7 @@ def get_underlying_price() -> EndpointResponse:
 
 @api_bp.route('/symbols', methods=['GET'])
 def get_symbols() -> EndpointResponse:
-    """Get list of available symbols (F&O or indices)."""
+    """Get list of available symbols."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -128,27 +126,12 @@ def get_symbols() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
     try:
-        from cpr_filter_service import CPRFilterService
-        
-        symbol_type = request.args.get('type', 'fno').lower()
-        symbols = []
-        
-        if symbol_type == 'indices':
-            symbols = sorted(['NIFTY', 'BANKNIFTY', 'FINNIFTY'])
-        else:
-            try:
-                cpr_service = CPRFilterService(kite_instance=current_kite)
-                fo_symbols = cpr_service.get_fo_stocks()
-                indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
-                symbols = sorted(list(set(fo_symbols + indices)))
-            except Exception as e:
-                logger.warning(f"Failed to fetch F&O stocks: {e}, returning indices only")
-                symbols = sorted(['NIFTY', 'BANKNIFTY', 'FINNIFTY'])
+        # Return only NIFTY 50
+        symbols = ['NIFTY']
         
         return jsonify({
             'success': True,
-            'symbols': symbols,
-            'type': symbol_type
+            'symbols': symbols
         })
     except Exception as e:
         logger.error(f"Error fetching symbols: {e}")
@@ -229,8 +212,8 @@ def get_options_init() -> EndpointResponse:
         
         chart_service = OptionsChartService(current_kite)
         
-        # Skip pricing for faster response - get strikes only
-        result = chart_service.get_strikes_for_symbol(symbol, price_source, skip_pricing=False)
+        # Skip pricing in service - fetch it once here to avoid duplication
+        result = chart_service.get_strikes_for_symbol(symbol, price_source, skip_pricing=True)
         
         if 'strikes' not in result:
             return jsonify({'success': False, 'error': 'Could not retrieve strike data.'}), 500
@@ -238,19 +221,11 @@ def get_options_init() -> EndpointResponse:
         strikes = result.get('strikes', [])
         default_ce_token = result.get('default_ce_token')
         default_pe_token = result.get('default_pe_token')
+        default_ce_strike = result.get('default_ce_strike')
+        default_pe_strike = result.get('default_pe_strike')
         base_price = result.get('base_price')
         
-        # Extract strike prices
-        default_ce_strike = None
-        default_pe_strike = None
-        
-        for strike_info in strikes:
-            if strike_info.get('ce_token') == default_ce_token:
-                default_ce_strike = strike_info.get('strike')
-            if strike_info.get('pe_token') == default_pe_token:
-                default_pe_strike = strike_info.get('strike')
-        
-        # Fetch the requested price based on price_source parameter
+        # Fetch the requested price based on price_source parameter (only once)
         requested_price = base_price or 0.0
         requested_source_label = ' (Close)'
         
@@ -431,7 +406,13 @@ def get_options_chart_data() -> EndpointResponse:
 @csrf.exempt
 @limiter.exempt  # Exempt from rate limiting - called frequently during chart updates
 def get_options_pdh_pdl() -> EndpointResponse:
-    """Get previous day high/low for CE/PE options."""
+    """
+    Get previous day high/low for CE/PE options.
+    
+    Accepts one of two input methods:
+    1. Tokens: ce_token and pe_token (preferred - faster)
+    2. Strikes: symbol, ce_strike, pe_strike (fallback - will resolve to tokens)
+    """
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -450,9 +431,11 @@ def get_options_pdh_pdl() -> EndpointResponse:
         
         chart_service = OptionsChartService(current_kite)
         
+        # PREFERRED METHOD: Get tokens from request
         ce_token = data.get('ce_token')
         pe_token = data.get('pe_token')
         
+        # FALLBACK METHOD: If tokens not provided, resolve them from strikes
         if not ce_token or not pe_token:
             symbol = data.get('symbol')
             ce_strike_str = data.get('ce_strike')
@@ -461,7 +444,7 @@ def get_options_pdh_pdl() -> EndpointResponse:
             if not symbol or not ce_strike_str or not pe_strike_str:
                 return jsonify({
                     'success': False,
-                    'error': 'Symbol, CE strike, and PE strike are required when tokens are not provided'
+                    'error': 'Either provide ce_token & pe_token, or provide symbol & ce_strike & pe_strike'
                 }), 400
             
             ce_strike = float(ce_strike_str)
@@ -475,6 +458,7 @@ def get_options_pdh_pdl() -> EndpointResponse:
                     'error': f'Could not find tokens for the given strikes: CE {ce_strike}, PE {pe_strike}'
                 }), 404
         
+        # Fetch PDH/PDL using tokens
         pdh_pdl = chart_service.get_pdh_pdl(ce_token, pe_token)
         
         return jsonify({
@@ -486,6 +470,13 @@ def get_options_pdh_pdl() -> EndpointResponse:
     except Exception as e:
         logger.error(f"Error fetching PDH/PDL: {e}", exc_info=True)
         error_str = str(e).lower()
+        if 'access_token' in error_str or 'unauthorized' in error_str:
+            return jsonify({
+                'success': False,
+                'error': 'Authentication failed. Please login again.',
+                'auth_error': True
+            }), 401
+        return jsonify({'success': False, 'error': str(e)}), 500
         if 'access_token' in error_str or 'unauthorized' in error_str:
             return jsonify({
                 'success': False,
@@ -561,7 +552,7 @@ def get_instrument_token() -> EndpointResponse:
         
         instrument_token = None
         
-        if symbol_type == 'indices' or symbol in ['NIFTY', 'BANKNIFTY', 'FINNIFTY']:
+        if symbol == 'NIFTY':
             try:
                 kite_service = KiteService(kite_instance=current_kite)
                 instrument_token = kite_service.get_instrument_token(symbol)

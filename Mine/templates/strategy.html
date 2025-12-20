@@ -12,9 +12,7 @@
             <div class="form-group">
                 <label>Symbol:</label>
                 <select id="symbol">
-                    <option value="NIFTY">NIFTY</option>
-                    <option value="BANKNIFTY">BANKNIFTY</option>
-                    <option value="FINNIFTY">FINNIFTY</option>
+                    <option value="NIFTY" selected>NIFTY 50</option>
                 </select>
             </div>
             <div class="form-group">
@@ -52,6 +50,8 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<!-- Ensure constants.js is loaded first -->
+<script src="{{ url_for('static', filename='js/constants.js') }}"></script>
 {{ super() }}
 <script src="{{ url_for('static', filename='js/services/strategy.service.js') }}"></script>
 <script src="{{ url_for('static', filename='js/strategy.js') }}"></script>

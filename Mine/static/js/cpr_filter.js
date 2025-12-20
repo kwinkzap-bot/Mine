@@ -20,7 +20,7 @@ window.addEventListener('load', function() {
     console.log('belowCount:', !!document.getElementById('belowCount'));
     console.log('belowTable:', !!document.getElementById('belowTable'));
     
-    const statusBar = document.getElementById('status-bar');
+    const statusBar = document.getElementById(CONSTANTS.DOM_IDS.STATUS_BAR);
     if (!statusBar) {
         console.error('status-bar element not found');
         return;
@@ -28,20 +28,20 @@ window.addEventListener('load', function() {
     
     statusBar.textContent = '⏳ Loading initial data...';
     loadCPRData();
-    // Set interval for continuous refresh (5 minutes = 300000 ms)
-    setInterval(loadCPRData, 300000); 
+    // Set interval for continuous refresh
+    setInterval(loadCPRData, CONSTANTS.TIMEOUTS.CPR_REFRESH_INTERVAL); 
 
     // Add sort listeners to both tables
-    document.querySelectorAll('#aboveTable th').forEach(header => {
+    document.querySelectorAll(`#${CONSTANTS.DOM_IDS.ABOVE_TABLE} th`).forEach(header => {
         header.addEventListener('click', () => {
             // columnIndex is stored in data-column-index
-            sortTable('aboveTable', header.dataset.columnIndex);
+            sortTable(CONSTANTS.DOM_IDS.ABOVE_TABLE, header.dataset.columnIndex);
         });
     });
-    document.querySelectorAll('#belowTable th').forEach(header => {
+    document.querySelectorAll(`#${CONSTANTS.DOM_IDS.BELOW_TABLE} th`).forEach(header => {
         header.addEventListener('click', () => {
             // columnIndex is stored in data-column-index
-            sortTable('belowTable', header.dataset.columnIndex);
+            sortTable(CONSTANTS.DOM_IDS.BELOW_TABLE, header.dataset.columnIndex);
         });
     });
 });

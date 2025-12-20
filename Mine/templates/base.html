@@ -14,9 +14,9 @@
     <div class="container">
         <div class="navigation-bar">
             <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">🏠 Home</a>
-            <a href="/strategy" class="nav-link {% if request.path == '/strategy' %}active{% endif %}">📊 Strategy</a>
             <a href="/multi-cpr-backtest" class="nav-link {% if request.path == '/multi-cpr-backtest' %}active{% endif %}">🧪 Multi-CPR Backtest</a>
             <a href="/historical" class="nav-link {% if request.path == '/historical' %}active{% endif %}">📈 Historical</a>
+            <a href="/strategy" class="nav-link {% if request.path == '/strategy' %}active{% endif %}">📊 Strategy</a>
             <a href="/cpr-filter" class="nav-link {% if request.path == '/cpr-filter' %}active{% endif %}">🔍 CPR Filter</a>
             <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉 Options Chart</a>
             <a href="/auth/login" class="nav-link-login">🔑 Login to Zerodha</a>
@@ -25,6 +25,8 @@
             {% block content %}{% endblock %}
         </main>
     </div>
+    <!-- Constants must be loaded first -->
+    <script src="{{ url_for('static', filename='js/constants.js') }}"></script>
     <script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script src="{{ url_for('static', filename='js/cpr_filter_scheduler.js') }}"></script>

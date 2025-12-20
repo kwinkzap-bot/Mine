@@ -27,6 +27,7 @@ class CPRFilterService:
     MONTHLY_DATA_LOOKBACK: int = 21       # Number of trading days for monthly CPR calculation
     PERCENTAGE_DIFF_THRESHOLD: float = 2.0 # 2.0% for weekly/monthly BC/TC difference (Narrow Confluence)
     INDEX_SYMBOLS: List[str] = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+    API_RATE_LIMIT_DELAY: float = 0.6     # Minimum delay between API requests (seconds) - ~1.7 req/sec, well below Zerodha limit
 
     def __init__(self, kite_instance: Optional[KiteConnect] = None, api_key: Optional[str] = None):
         """Initializes the service and the KiteConnect instance."""
@@ -52,6 +53,8 @@ class CPRFilterService:
         self._fo_stocks: Optional[List[str]] = None
         self._historical_data_cache: Dict[str, pd.DataFrame] = {}  # Cache for historical data
         self._cache_lock = threading.Lock()  # Thread-safe caching
+        self._last_api_call_time: float = 0.0  # Track last API call for rate limiting
+        self._api_call_lock = threading.Lock()  # Lock for thread-safe rate limiting
         self._load_instruments() # Preload instruments for efficiency
 
     def _load_instruments(self) -> None:
@@ -59,11 +62,12 @@ class CPRFilterService:
         try:
             # Check if list is empty (i.e., not loaded yet)
             if not self._instruments: 
-                logger.info("Loading NSE instruments for symbol mapping...")
+                logger.info("🔗 API CALL: Loading NSE instruments for symbol mapping...")
+                self._apply_rate_limit()
                 self._instruments = self.kite.instruments('NSE')
-                logger.info(f"Loaded {len(self._instruments)} NSE instruments.")
+                logger.info(f"✅ API SUCCESS: Loaded {len(self._instruments)} NSE instruments.")
         except Exception as e:
-            logger.error(f"Error loading NSE instruments: {e}")
+            logger.error(f"❌ API ERROR: Error loading NSE instruments: {e}")
             # FIX 2: Ensure it remains an empty list on failure
             self._instruments = [] 
 
@@ -75,18 +79,31 @@ class CPRFilterService:
         tc: float = (2 * pp) - bc
         return pp, bc, tc
     
+    def _apply_rate_limit(self) -> None:
+        """Apply rate limiting to prevent 'Too many requests' errors from Zerodha API."""
+        with self._api_call_lock:
+            elapsed = time.time() - self._last_api_call_time
+            if elapsed < self.API_RATE_LIMIT_DELAY:
+                sleep_time = self.API_RATE_LIMIT_DELAY - elapsed
+                logger.debug(f"Rate limiting: sleeping for {sleep_time:.3f}s")
+                time.sleep(sleep_time)
+            self._last_api_call_time = time.time()
+    
     def get_instrument_token(self, symbol: str) -> Optional[int]:
         """Get instrument token for NSE equity."""
         # FIX 3: Since _instruments is initialized to [], check for emptiness
         if not self._instruments:
+             logger.debug(f"🔍 Instruments cache empty, reloading...")
              self._load_instruments()
         
         # self._instruments is now guaranteed to be a list (even if empty)
         for instrument in self._instruments: 
             if instrument.get('tradingsymbol') == symbol and instrument.get('instrument_type') == 'EQ':
-                return instrument.get('instrument_token')
+                token = instrument.get('instrument_token')
+                logger.debug(f"✅ Found token for {symbol}: {token}")
+                return token
             
-        logger.warning(f"No instrument token found for equity symbol: {symbol}")
+        logger.warning(f"⚠️ No instrument token found for equity symbol: {symbol}")
         return None
     
     def get_historical_data(self, symbol: str, days_back: int, interval: str = 'day') -> Optional[pd.DataFrame]:
@@ -95,13 +112,13 @@ class CPRFilterService:
         cache_key = f"{symbol}_{days_back}_{interval}"
         with self._cache_lock:
             if cache_key in self._historical_data_cache:
-                logger.debug(f"Cache hit for {symbol}")
+                logger.info(f"💾 CACHE HIT: {symbol} ({days_back}d, {interval}) - Returning cached data")
                 return self._historical_data_cache[cache_key]
         
         try:
             token = self.get_instrument_token(symbol)
             if token is None:
-                logger.warning(f"Could not find instrument token for {symbol}")
+                logger.warning(f"⚠️ Could not find instrument token for {symbol}")
                 return None
             
             end_date: datetime = datetime.now()
@@ -109,15 +126,19 @@ class CPRFilterService:
             
             # Ensure we have a valid KiteConnect instance with access token
             if not hasattr(self.kite, 'access_token') or not self.kite.access_token:
-                logger.error(f"No access token set for {symbol}. Cannot fetch historical data. Please login first.")
+                logger.error(f"❌ No access token set for {symbol}. Cannot fetch historical data. Please login first.")
                 # Raise exception so caller knows this is an auth issue
                 raise ValueError("No valid access token set on KiteConnect instance. User must be authenticated.")
             
             try:
+                # Apply rate limiting before API call
+                self._apply_rate_limit()
+                
                 # Convert datetime to date objects and format as strings (YYYY-MM-DD) for KiteConnect API
                 from_date_str: str = start_date.strftime('%Y-%m-%d')
                 to_date_str: str = end_date.strftime('%Y-%m-%d')
                 
+                logger.info(f"🔗 API CALL: Fetching {symbol} historical data | Token: {token} | Period: {from_date_str} to {to_date_str} | Interval: {interval}")
                 data: List[Dict[str, Any]] = self.kite.historical_data(
                     instrument_token=token,
                     from_date=from_date_str,
@@ -125,24 +146,30 @@ class CPRFilterService:
                     interval=interval,
                     continuous=False
                 )
+                logger.info(f"✅ API SUCCESS: Received {len(data) if data else 0} candles for {symbol}")
             except Exception as api_error:
                 # Check if it's an authentication error
                 error_str = str(api_error).lower()
                 if 'api_key' in error_str or 'access_token' in error_str or 'unauthorized' in error_str:
-                    logger.error(f"Authentication error for {symbol}: {api_error}. Access token may have expired or is invalid.")
+                    logger.error(f"❌ API AUTH ERROR: Authentication error for {symbol}: {api_error}. Access token may have expired or is invalid.")
                     raise ValueError(f"Authentication failed for {symbol}: {api_error}")
+                elif 'too many requests' in error_str or '429' in error_str:
+                    logger.warning(f"⚠️ API RATE LIMIT: Rate limit exceeded for {symbol}. Waiting 2 seconds before retry...")
+                    # Increase wait time for retry
+                    time.sleep(2.0)
+                    return self.get_historical_data(symbol, days_back, interval)  # Retry
                 else:
-                    logger.error(f"API error fetching historical data for {symbol}: {api_error}")
+                    logger.error(f"❌ API ERROR: Error fetching historical data for {symbol}: {api_error}")
                 return None
             
             if not data:
-                logger.info(f"No data returned for {symbol} within the date range.")
+                logger.info(f"⚠️ No data returned for {symbol} within the date range {from_date_str} to {to_date_str}.")
                 return None
             
             df = pd.DataFrame(data)
             required_cols = ['date', 'high', 'low', 'close']
             if not all(col in df.columns for col in required_cols):
-                 logger.error(f"Missing required columns in data for {symbol}.")
+                 logger.error(f"❌ Missing required columns in data for {symbol}.")
                  return None
                  
             df['date'] = pd.to_datetime(df['date'])
@@ -152,12 +179,13 @@ class CPRFilterService:
             with self._cache_lock:
                 self._historical_data_cache[cache_key] = df
             
+            logger.info(f"💾 CACHE SAVED: {symbol} ({days_back}d, {interval}) - Stored {len(df)} candles in cache")
             return df
         except ValueError as ve:
             # Re-raise ValueError so it bubbles up to caller
             raise ve
         except Exception as e:
-            logger.error(f"Error fetching historical data for {symbol}: {e}")
+            logger.error(f"❌ ERROR: Error fetching historical data for {symbol}: {e}")
             return None
 
     def _get_period_cpr_data(self, data_frame: pd.DataFrame, lookback_days: int, offset: int = 0) -> Tuple[Optional[float], Optional[float], Optional[float]]:
@@ -298,9 +326,13 @@ class CPRFilterService:
         """
         try:
             if self._fo_stocks is not None:
+                logger.info(f"💾 CACHE HIT: F&O stocks - Returning {len(self._fo_stocks)} cached symbols")
                 return self._fo_stocks
             
+            logger.info(f"🔗 API CALL: Loading NFO instruments for F&O stocks...")
+            self._apply_rate_limit()
             nfo_instruments: List[Dict[str, Any]] = self.kite.instruments('NFO')
+            logger.info(f"✅ API SUCCESS: Received {len(nfo_instruments)} NFO instruments")
             fo_symbols: set[str] = set()
             
             for instrument in nfo_instruments:
@@ -309,10 +341,10 @@ class CPRFilterService:
                         fo_symbols.add(instrument['name'])
             
             self._fo_stocks = sorted(list(fo_symbols))
-            logger.info(f"Found {len(self._fo_stocks)} F&O stocks for filtering.")
+            logger.info(f"✅ Found {len(self._fo_stocks)} F&O stocks (excluding indices: {', '.join(self.INDEX_SYMBOLS)})")
             return self._fo_stocks
         except Exception as e: 
-            logger.error(f"Error fetching F&O stocks: {e}. Returning empty list.")
+            logger.error(f"❌ API ERROR: Error fetching F&O stocks: {e}. Returning empty list.")
             self._fo_stocks = []
             return []
     

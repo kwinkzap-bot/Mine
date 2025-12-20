@@ -21,14 +21,7 @@
     </div>
     <form id="optionsChartForm">
         <div class="form-row">
-            <div class="form-group">
-                <label for="symbol">Symbol</label>
-                <select id="symbol" data-action="getStrikes">
-                    <option value="NIFTY" selected>NIFTY</option>
-                    <option value="BANKNIFTY">BANKNIFTY</option>
-                    <option value="FINNIFTY">FINNIFTY</option>
-                </select>
-            </div>
+
             <div class="form-group">
                 <label for="ceStrike">CE Strike</label>
                 <select id="ceStrike"></select>
@@ -49,19 +42,17 @@
             <div class="form-group">
                 <button id="fetchChartBtn" type="submit" class="btn form-button">Fetch Chart Data</button>
             </div>
+            <div class="timeframe-buttons" style="margin-left: auto;">
+                <label>Timeframe:</label>
+                <button type="button" class="timeframe-btn" data-timeframe="1minute">1m</button>
+                <button type="button" class="timeframe-btn" data-timeframe="3minute">3m</button>
+                <button type="button" class="timeframe-btn" data-timeframe="5minute">5m</button>
+                <button type="button" class="timeframe-btn" data-timeframe="15minute">15m</button>
+                <button type="button" class="timeframe-btn" data-timeframe="60minute">1h</button>
+                <button type="button" class="timeframe-btn" data-timeframe="1day">1D</button>
+            </div>
         </div>
     </form>
-    <div class="timeframe-countdown-section">
-        <div class="timeframe-buttons">
-            <label>Timeframe:</label>
-            <button class="timeframe-btn" data-timeframe="1minute">1m</button>
-            <button class="timeframe-btn" data-timeframe="3minute">3m</button>
-            <button class="timeframe-btn" data-timeframe="5minute">5m</button>
-            <button class="timeframe-btn" data-timeframe="15minute">15m</button>
-            <button class="timeframe-btn" data-timeframe="60minute">1h</button>
-            <button class="timeframe-btn" data-timeframe="1day">1D</button>
-        </div>
-    </div>
     <div class="charts-container">
         <div class="chart-grid">
             <div class="chart-wrapper">
@@ -81,6 +72,8 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<!-- Ensure constants.js is loaded first -->
+<script src="{{ url_for('static', filename='js/constants.js') }}"></script>
 {{ super() }}
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script src="{{ url_for('static', filename='js/options_chart_app.js') }}"></script>

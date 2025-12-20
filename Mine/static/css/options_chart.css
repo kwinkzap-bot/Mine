@@ -77,24 +77,12 @@
     position: relative;
 }
 
-/* Timeframe and Countdown Section (Common for all charts) */
-.timeframe-countdown-section {
-    background: #f8f9fa;
-    border: 1px solid #ddd;
-    border-radius: 6px;
-    padding: 12px;
-    margin: 15px 0;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 15px;
-}
-
+/* Timeframe Buttons (now integrated in form row) */
 .timeframe-buttons {
     display: flex;
     gap: 10px;
     align-items: center;
+    flex-wrap: wrap;
 }
 
 .timeframe-buttons label {

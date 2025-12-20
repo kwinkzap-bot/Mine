@@ -131,6 +131,9 @@
 {% endblock %}
 
 {% block scripts %}
+    <!-- Ensure constants.js is loaded first -->
+    <script src="{{ url_for('static', filename='js/constants.js') }}"></script>
+    {{ super() }}
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@latest/dist/lightweight-charts.standalone.production.js"></script>
     <script src="{{ url_for('static', filename='js/historical.js') }}"></script>
 {% endblock %}
