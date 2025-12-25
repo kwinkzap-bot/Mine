@@ -63,6 +63,8 @@ const OptionsChartApp = (function () {
         DOM.ceStrikeSelect = document.getElementById('ceStrike');
         DOM.peStrikeSelect = document.getElementById('peStrike');
         DOM.loadChartBtn = document.getElementById('fetchChartBtn');
+        DOM.buyPeBtn = document.getElementById('buyPeBtn');
+        DOM.buyCeBtn = document.getElementById('buyCeBtn');
         DOM.priceSourceRadios = document.querySelectorAll('input[name="priceSource"]');
         DOM.niftyPriceDisplay = document.getElementById('nifty-ltp');
         DOM.ceStrikeDisplay = document.getElementById('ce-strike-display');
@@ -1131,6 +1133,91 @@ const OptionsChartApp = (function () {
     }
 
 
+    // --- Order Placement Functions ---
+
+    /**
+     * Place an order for a given option type (CE or PE)
+     * @param {string} optionType - 'CE' or 'PE'
+     */
+    async function placeOrder(optionType) {
+        const strike = optionType === 'CE' ? DOM.ceStrikeSelect.value : DOM.peStrikeSelect.value;
+        
+        if (!strike) {
+            alert(`Please select a ${optionType} strike first`);
+            return;
+        }
+
+        const button = optionType === 'CE' ? DOM.buyCeBtn : DOM.buyPeBtn;
+        const originalText = button.textContent;
+        
+        try {
+            button.disabled = true;
+            button.textContent = 'Placing...';
+            
+            // Call the API to place the order
+            const response = await fetch('/api/place-live-order', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCSRFToken()
+                },
+                body: JSON.stringify({
+                    option_type: optionType,
+                    strike: parseInt(strike),
+                    symbol: currentSymbol
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                button.textContent = '✅ Order Placed!';
+                showNotification(`${optionType} Order placed successfully! Order ID: ${data.order_id}`, 'success');
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.disabled = false;
+                }, 3000);
+            } else {
+                button.textContent = originalText;
+                button.disabled = false;
+                showNotification(`Error: ${data.error || 'Failed to place order'}`, 'error');
+            }
+        } catch (error) {
+            button.textContent = originalText;
+            button.disabled = false;
+            console.error(`Error placing ${optionType} order:`, error);
+            showNotification(`Error: ${error.message}`, 'error');
+        }
+    }
+
+    /**
+     * Get CSRF token from the page
+     */
+    function getCSRFToken() {
+        const name = 'csrf_token';
+        const cookies = document.cookie.split(';');
+        for (let cookie of cookies) {
+            cookie = cookie.trim();
+            if (cookie.startsWith(name + '=')) {
+                return cookie.substring(name.length + 1);
+            }
+        }
+        // Try to get from meta tag if not in cookies
+        const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+        return csrfMeta ? csrfMeta.getAttribute('content') : '';
+    }
+
+    /**
+     * Show notification to user
+     */
+    function showNotification(message, type = 'info') {
+        if (typeof window.showNotification === 'function') {
+            window.showNotification(message, type);
+        } else {
+            alert(message);
+        }
+    }
+
     // --- Event Listeners and Initialization ---
 
     /**
@@ -1156,6 +1243,10 @@ const OptionsChartApp = (function () {
             const target = event.target;
             if (target.id === 'fetchChartBtn') {
                 loadChartData();
+            } else if (target.id === 'buyPeBtn') {
+                placeOrder('PE');
+            } else if (target.id === 'buyCeBtn') {
+                placeOrder('CE');
             } else if (target.classList.contains(CONSTANTS.CSS_CLASSES.TIMEFRAME_BTN)) {
                 const timeframe = target.dataset.timeframe;
                 setTimeframe(timeframe);

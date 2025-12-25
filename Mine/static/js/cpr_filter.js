@@ -26,10 +26,22 @@ window.addEventListener('load', function() {
         return;
     }
     
-    statusBar.textContent = '⏳ Loading initial data...';
-    loadCPRData();
-    // Set interval for continuous refresh
-    setInterval(loadCPRData, CONSTANTS.TIMEOUTS.CPR_REFRESH_INTERVAL); 
+    const scheduler = window.CPRFilterScheduler;
+    const schedulerActive = scheduler && typeof scheduler.isActive === 'function' && scheduler.isActive();
+    const schedulerMarketOpen = scheduler && typeof scheduler.isMarketOpen === 'function' && scheduler.isMarketOpen();
+
+    // Avoid double-triggering the API when the scheduler is already running during market hours
+    if (schedulerActive && schedulerMarketOpen) {
+        statusBar.textContent = '⏳ Scheduler active - waiting for next run...';
+    } else {
+        statusBar.textContent = '⏳ Loading initial data...';
+        loadCPRData();
+    }
+
+    // Set interval for continuous refresh - only if scheduler is not already running
+    if (!schedulerActive) {
+        setInterval(loadCPRData, CONSTANTS.TIMEOUTS.CPR_REFRESH_INTERVAL);
+    } 
 
     // Add sort listeners to both tables
     document.querySelectorAll(`#${CONSTANTS.DOM_IDS.ABOVE_TABLE} th`).forEach(header => {
@@ -213,12 +225,10 @@ function displayResults(type, results) {
         
         // Create TradingView link for symbol
         const tradingViewUrl = `https://in.tradingview.com/chart/?symbol=NSE:${stock.symbol}`;
-        const watchlistUrl = `https://in.tradingview.com/watchlist/`;
         
-        // Create symbol cell with chart link and watchlist button
+        // Create symbol cell with chart link
         const symbolCell = `
-            <a href="${tradingViewUrl}" target="_blank" rel="noopener noreferrer" style="color: #667eea; text-decoration: none; cursor: pointer; font-weight: 500;">${stock.symbol}</a>
-            <button class="watchlist-btn" data-symbol="${stock.symbol}" title="Add to TradingView Watchlist" style="margin-left: 8px; padding: 2px 6px; background: #667eea; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: bold;">+</button>
+            <a href="${tradingViewUrl}" target="_blank" rel="noopener noreferrer" class="symbol-link">${stock.symbol}</a>
         `;
         
         row.innerHTML = `
@@ -319,101 +329,3 @@ function sortTable(tableId, columnIndexStr) {
     rows.forEach(row => tbody.appendChild(row));
 }
 
-/**
- * Delegate click handler for watchlist buttons
- * Uses event delegation to handle dynamically added buttons
- */
-document.addEventListener('click', function(e) {
-    if (e.target && e.target.classList.contains('watchlist-btn')) {
-        const symbol = e.target.dataset.symbol;
-        handleWatchlistClick(symbol, e.target);
-    }
-});
-
-/**
- * Handles adding symbol to watchlist
- * Opens TradingView watchlist and shows feedback to user
- * @param {string} symbol - The stock symbol to add
- * @param {HTMLElement} button - The button element that was clicked
- */
-function handleWatchlistClick(symbol, button) {
-    // Save to local storage for user's watchlist tracker
-    saveToLocalWatchlist(symbol);
-    
-    // Open TradingView watchlist in new tab
-    const watchlistUrl = `https://in.tradingview.com/watchlist/`;
-    window.open(watchlistUrl, '_blank');
-    
-    // Visual feedback: change button color briefly
-    const originalBg = button.style.background;
-    const originalText = button.textContent;
-    
-    button.style.background = '#4caf50';
-    button.textContent = '✓';
-    button.disabled = true;
-    
-    setTimeout(() => {
-        button.style.background = originalBg;
-        button.textContent = originalText;
-        button.disabled = false;
-    }, 1500);
-    
-    // Show notification
-    showWatchlistNotification(symbol);
-}
-
-/**
- * Saves symbol to browser's local storage for personal tracking
- * @param {string} symbol - The stock symbol to save
- */
-function saveToLocalWatchlist(symbol) {
-    try {
-        let watchlist = JSON.parse(localStorage.getItem('cprWatchlist') || '[]');
-        
-        // Add symbol if not already present
-        if (!watchlist.includes(symbol)) {
-            watchlist.unshift(symbol); // Add to beginning
-            
-            // Keep only last 50 symbols
-            if (watchlist.length > 50) {
-                watchlist = watchlist.slice(0, 50);
-            }
-            
-            localStorage.setItem('cprWatchlist', JSON.stringify(watchlist));
-        }
-    } catch (error) {
-        console.error('Error saving to local watchlist:', error);
-    }
-}
-
-/**
- * Shows a notification when symbol is added to watchlist
- * @param {string} symbol - The symbol that was added
- */
-function showWatchlistNotification(symbol) {
-    // Create a simple notification element
-    const notification = document.createElement('div');
-    notification.className = 'watchlist-notification';
-    notification.textContent = `📌 ${symbol} added to watchlist! Opening TradingView...`;
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        background: #4caf50;
-        color: white;
-        padding: 12px 20px;
-        border-radius: 4px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        z-index: 10000;
-        font-size: 14px;
-        animation: slideIn 0.3s ease-out;
-    `;
-    
-    document.body.appendChild(notification);
-    
-    // Remove notification after 3 seconds
-    setTimeout(() => {
-        notification.style.animation = 'slideOut 0.3s ease-out';
-        setTimeout(() => notification.remove(), 300);
-    }, 3000);
-}

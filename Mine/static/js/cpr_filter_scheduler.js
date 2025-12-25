@@ -159,13 +159,21 @@ const CPRFilterScheduler = (function() {
         stop: stop,
         getStatus: getStatus,
         executeNow: executeCPRFilter,
-        isMarketOpen: isMarketOpen
+        isMarketOpen: isMarketOpen,
+        isActive: function() { return isRunning; }
     };
 })();
 
-// Auto-start scheduler when page loads if user is authenticated
+// Auto-start scheduler only on the CPR Filter page when user is authenticated
 document.addEventListener('DOMContentLoaded', function() {
-    // Check if user is authenticated by attempting to call a protected endpoint
+    const path = window.location.pathname;
+    const isCprFilterPage = path === '/cpr-filter' || path === '/cpr-filter/';
+
+    if (!isCprFilterPage) {
+        console.log('[CPR Scheduler] Skipping scheduler - not on CPR Filter page');
+        return;
+    }
+
     fetch('/api/health')
         .then(response => {
             if (response.ok) {

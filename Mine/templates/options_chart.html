@@ -10,7 +10,7 @@
         <div class="spinner"></div>
         <p>Loading...</p>
     </div>
-    <div class="form-row header-info">
+    <div class="form-row header-info" style="display: flex; justify-content: space-between; align-items: center;">
         <h2 style="margin: 0;">NIFTY Price: <span id="nifty-ltp" style="color: #00bcd4;">
             {% if nifty_val is defined and nifty_val is not none %}
                 ₹{{ "{:.2f}".format(nifty_val) }}
@@ -18,6 +18,14 @@
                 N/A
             {% endif %}
         </span></h2>
+        <div class="order-buttons-group" style="display: flex; gap: 10px;">
+            <button id="buyPeBtn" type="button" class="btn order-btn order-btn-pe" title="Place buy order for PE strike">
+                🔴 BUY PE
+            </button>
+            <button id="buyCeBtn" type="button" class="btn order-btn order-btn-ce" title="Place buy order for CE strike">
+                🟢 BUY CE
+            </button>
+        </div>
     </div>
     <form id="optionsChartForm">
         <div class="form-row">

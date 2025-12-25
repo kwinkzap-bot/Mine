@@ -15,7 +15,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const statusDiv = document.getElementById('status-message'); // New ID for the status element
     const resultsTable = document.getElementById('resultsTable'); // Assuming the table is wrapped in an element with this ID
     const resultsBody = document.getElementById('tradesBody');
-    const statsContainer = document.getElementById('statsContainer'); // New ID for stats container
 
     // --- Helper Functions ---
 
@@ -79,8 +78,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const pnlMessage = `<span style="color: ${pnlColor}">Net P&L: ${formatCurrency(stats.totalPnL)}</span>`;
         
         updateStatus('success', `${message} | ${pnlMessage}`);
-        
-        if(statsContainer) statsContainer.style.display = 'block'; // Show the stats container
     }
 
     /** Renders the trade results table rows. */
@@ -106,18 +103,18 @@ document.addEventListener('DOMContentLoaded', function() {
             tr.innerHTML = `
                 <td>${valOrDash(row.date)}</td>
                 <td>${toFixedOrDash(row.nifty_close)}</td>
-                <td>${valOrDash(row.ce_strike)}</td>
+                <td>${toFixedOrDash(row.ce_strike)}</td>
                 <td>${toFixedOrDash(row.ce_prev_high)}</td>
                 <td>${toFixedOrDash(row.ce_prev_low)}</td>
-                <td>${valOrDash(row.pe_strike)}</td>
+                <td>${toFixedOrDash(row.pe_strike)}</td>
                 <td>${toFixedOrDash(row.pe_prev_high)}</td>
                 <td>${toFixedOrDash(row.pe_prev_low)}</td>
                 <td>${valOrDash(row.signal)}</td>
                 <td>${valOrDash(row.expiry_date)}</td>
-                <td>${valOrDash(row.buy_price)}</td>
-                <td>${valOrDash(row.target)}</td>
-                <td>${valOrDash(row.stop_loss)}</td>
-                <td>${valOrDash(row.exit_price)}</td>
+                <td>${toFixedOrDash(row.buy_price)}</td>
+                <td>${toFixedOrDash(row.target)}</td>
+                <td>${toFixedOrDash(row.stop_loss)}</td>
+                <td>${toFixedOrDash(row.exit_price)}</td>
                 <td>${valOrDash(row.entry_time)}</td>
                 <td>${valOrDash(row.exit_time)}</td>
                 <td class="${pnlClass}">${toFixedOrDash(row.pnl)}</td>
@@ -150,7 +147,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (resultsBody) resultsBody.innerHTML = '';
         const resultsSection = document.getElementById('resultsSection');
         if (resultsSection) resultsSection.style.display = 'none';
-        if (statsContainer) statsContainer.style.display = 'none';
 
         try {
             const data = await StrategyService.runBacktest(symbol, startDate, endDate);

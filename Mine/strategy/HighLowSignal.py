@@ -32,15 +32,25 @@ class HighLowSignal:
     def check_ce_buy_conditions(self, ce_data: pd.DataFrame, pe_data: pd.DataFrame, ce_prev_high: float, ce_prev_low: float, pe_prev_high: float, pe_prev_low: float) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Check CE buy conditions with High-Low logic
         
+        Entry logic between 9:15 AM to 3:20 PM IST, every 5 minutes (9:15, 9:20, 9:25, ..., 3:15, 3:20)
+        
         CE Entry Condition:
-        - If Open Price is below PE PDH:
-            - CE Current Price crossed above and Closed above PE PDH
-            - PE current price should trade below CE PDL
-        - If Open Price is above or equal to PE PDH:
-            - CE Current Price touch and Closed above PE PDH AND PE traded below CE PDL
-            - OR CE crossed above and Closed above PE PDH AND PE traded below CE PDL
+        - If Open Price < PE PDH:
+            - CE crossed above and Closed above PE PDH (CE open <= PE PDH and CE close > PE PDH)
+            - PE must trade below CE PDL
+        - If Open Price >= PE PDH:
+            - CE touched and Closed above PE PDH (CE high >= PE PDH and CE close > PE PDH)
+            - PE must trade below CE PDL
+            OR
+            - CE crossed above and Closed above PE PDH (CE open <= PE PDH and CE close > PE PDH)
+            - PE must trade below CE PDL
+        
+        Target: CE PDH
+        Stop Loss: 20 points from entry
+        Trailing SL: Every 20 points profit
         """
         self.stop_loss_level = None
+        self.is_Current_day_touch_CE_PDH = False
         
         if ce_data.empty or pe_data.empty:
             return False, None
@@ -50,6 +60,15 @@ class HighLowSignal:
         
         for i in range(1, min_len):
             current_time = pd.Timestamp(ce_data.index[i]).time()
+            candle_time = pd.Timestamp(ce_data.index[i])
+            
+            # Check if within valid entry time (9:15 AM to 3:20 PM IST)
+            if not self.is_valid_entry_time(current_time):
+                continue
+            
+            # Check if on 5-minute interval (including 3:20 PM)
+            if not self.is_five_minute_candle(candle_time):
+                continue
             
             # Exit all trades at 3:20 PM IST
             if self.is_market_close_time(current_time):
@@ -58,25 +77,32 @@ class HighLowSignal:
                     self.in_trade = False
                 continue
             
-            # Check entry only at 5-minute intervals and during valid entry window
-            if not self.is_valid_entry_time(current_time) or not self.is_five_minute_candle(pd.Timestamp(ce_data.index[i])):
-                continue
-            
             # Only one trade at a time
-            if self.in_trade:
+            if self.in_trade or self.is_Current_day_touch_CE_PDH:
                 continue
             
             ce_current = ce_data['close'].iloc[i]
             ce_high = ce_data['high'].iloc[i]
+            ce_low = ce_data['low'].iloc[i]
+            ce_open_candle = ce_data['open'].iloc[i]
             pe_low = pe_data['low'].iloc[i]
-            ce_prev_close = ce_data['close'].iloc[i-1] if i > 0 else ce_open
             
-            # CE Entry Logic:
-            # Case 1: If Open Price is below PE PDH
+            # CE Entry Logic: Only if CE PDH > PE PDH
+            # if ce_prev_high < pe_prev_high or pe_prev_high > ce_prev_low:
+            if ce_prev_high < pe_prev_high:
+                continue
+            
+            # Check if CE has touched its PDH on the current day
+            if ce_high >= ce_prev_high:
+                self.is_Current_day_touch_CE_PDH = True
+                continue
+            
+            # Case 1: If Day's Open Price is below PE PDH
             if ce_open < pe_prev_high:
-                # CE closed above PE PDH (crossed above)
-                if ce_prev_close <= pe_prev_high and ce_current > pe_prev_high and pe_low < ce_prev_low:
-                    logger.info(f"CE Entry: Open < PE_PDH, crossed above and closed above PE_PDH at {ce_current:.2f}")
+                # CE crossed above and Closed above PE PDH
+                # Crossed = current candle open <= PE PDH, close > PE PDH, and low <= PE PDH
+                if ce_open_candle <= pe_prev_high and ce_current > pe_prev_high and ce_low <= pe_prev_high and pe_low < ce_prev_low:
+                    logger.info(f"CE Entry: Open < PE_PDH, crossed above PE_PDH at {ce_current:.2f}, Entry Time: {candle_time.strftime('%H:%M')}")
                     self.entry_price = ce_current
                     self.current_sl = ce_current - 20  # 20 points SL
                     self.in_trade = True
@@ -90,13 +116,12 @@ class HighLowSignal:
                         'stop_loss': self.current_sl
                     }
             
-            # Case 2: If Open Price is above or equal to PE PDH
+            # Case 2: If Day's Open Price is >= PE PDH
             elif ce_open >= pe_prev_high:
-                ce_prev_close = ce_data['close'].iloc[i-1] if i > 0 else ce_open
-                
-                # Sub-case A: CE touched and closed above PE PDH
-                if ce_high >= pe_prev_high and ce_current > pe_prev_high and pe_low < ce_prev_low:
-                    logger.info(f"CE Entry: Open >= PE_PDH, touched and closed above PE_PDH at {ce_current:.2f}")
+                # Sub-case A: CE touched and Closed above PE PDH
+                # Touched = high >= PE PDH, low <= PE PDH and close > PE PDH
+                if ce_high >= pe_prev_high and ce_low <= pe_prev_high and ce_current > pe_prev_high and pe_low < ce_prev_low:
+                    logger.info(f"CE Entry: Open >= PE_PDH, touched and closed above PE_PDH at {ce_current:.2f}, Entry Time: {candle_time.strftime('%H:%M')}")
                     self.entry_price = ce_current
                     self.current_sl = ce_current - 20  # 20 points SL
                     self.in_trade = True
@@ -110,9 +135,10 @@ class HighLowSignal:
                         'stop_loss': self.current_sl
                     }
                 
-                # Sub-case B: CE crossed above and closed above PE PDH
-                elif ce_prev_close <= pe_prev_high and ce_current > pe_prev_high and pe_low < ce_prev_low:
-                    logger.info(f"CE Entry: Open >= PE_PDH, crossed above and closed above PE_PDH at {ce_current:.2f}")
+                # Sub-case B: CE crossed above and Closed above PE PDH
+                # Crossed = open <= PE PDH, close > PE PDH, and low <= PE PDH
+                elif ce_open_candle <= pe_prev_high and ce_current > pe_prev_high and ce_low <= pe_prev_high and pe_low < ce_prev_low:
+                    logger.info(f"CE Entry: Open >= PE_PDH, crossed above PE_PDH at {ce_current:.2f}, Entry Time: {candle_time.strftime('%H:%M')}")
                     self.entry_price = ce_current
                     self.current_sl = ce_current - 20  # 20 points SL
                     self.in_trade = True
@@ -131,15 +157,25 @@ class HighLowSignal:
     def check_pe_buy_conditions(self, pe_data: pd.DataFrame, ce_data: pd.DataFrame, pe_prev_high: float, pe_prev_low: float, ce_prev_high: float, ce_prev_low: float) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """Check PE buy conditions with High-Low logic
         
+        Entry logic between 9:15 AM to 3:20 PM IST, every 5 minutes (9:15, 9:20, 9:25, ..., 3:15, 3:20)
+        
         PE Entry Condition:
-        - If Open Price is below CE PDH:
-            - PE Current Price crossed above and Closed above CE PDH
-            - CE current price should trade below PE PDL
-        - If Open Price is above or equal to CE PDH:
-            - PE Current Price touch and Closed above CE PDH AND CE traded below PE PDL
-            - OR PE crossed above and Closed above CE PDH AND CE traded below PE PDL
+        - If Open Price < CE PDH:
+            - PE crossed above and Closed above CE PDH (PE open <= CE PDH and PE close > CE PDH)
+            - CE must trade below PE PDL
+        - If Open Price >= CE PDH:
+            - PE touched and Closed above CE PDH (PE high >= CE PDH and PE close > CE PDH)
+            - CE must trade below PE PDL
+            OR
+            - PE crossed above and Closed above CE PDH (PE open <= CE PDH and PE close > CE PDH)
+            - CE must trade below PE PDL
+        
+        Target: PE PDH
+        Stop Loss: 20 points from entry
+        Trailing SL: Every 20 points profit
         """
         self.stop_loss_level = None
+        self.is_Current_day_touch_PE_PDH = False
         
         if pe_data.empty or ce_data.empty:
             return False, None
@@ -149,6 +185,15 @@ class HighLowSignal:
         
         for i in range(1, min_len):
             current_time = pd.Timestamp(pe_data.index[i]).time()
+            candle_time = pd.Timestamp(pe_data.index[i])
+            
+            # Check if within valid entry time (9:15 AM to 3:20 PM IST)
+            if not self.is_valid_entry_time(current_time):
+                continue
+            
+            # Check if on 5-minute interval (including 3:20 PM)
+            if not self.is_five_minute_candle(candle_time):
+                continue
             
             # Exit all trades at 3:20 PM IST
             if self.is_market_close_time(current_time):
@@ -157,25 +202,32 @@ class HighLowSignal:
                     self.in_trade = False
                 continue
             
-            # Check entry only at 5-minute intervals and during valid entry window
-            if not self.is_valid_entry_time(current_time) or not self.is_five_minute_candle(pd.Timestamp(pe_data.index[i])):
-                continue
-            
             # Only one trade at a time
-            if self.in_trade:
+            if self.in_trade or self.is_Current_day_touch_PE_PDH:
                 continue
             
             pe_current = pe_data['close'].iloc[i]
             pe_high = pe_data['high'].iloc[i]
+            pe_low = pe_data['low'].iloc[i]
+            pe_open_candle = pe_data['open'].iloc[i]
             ce_low = ce_data['low'].iloc[i]
-            pe_prev_close = pe_data['close'].iloc[i-1] if i > 0 else pe_open
             
-            # PE Entry Logic:
-            # Case 1: If Open Price is below CE PDH
+            # PE Entry Logic: Only if PE PDH > CE PDH
+            # if pe_prev_high <= ce_prev_high or pe_prev_high < ce_prev_low:
+            if pe_prev_high <= ce_prev_high:
+                continue
+            
+            # Check if PE has touched its PDH on the current day
+            if pe_high >= pe_prev_high:
+                self.is_Current_day_touch_PE_PDH = True
+                continue
+            
+            # Case 1: If Day's Open Price is below CE PDH
             if pe_open < ce_prev_high:
-                # PE closed above CE PDH (crossed above)
-                if pe_prev_close <= ce_prev_high and pe_current > ce_prev_high and ce_low < pe_prev_low:
-                    logger.info(f"PE Entry: Open < CE_PDH, crossed above and closed above CE_PDH at {pe_current:.2f}")
+                # PE crossed above and Closed above CE PDH
+                # Crossed = current candle open <= CE PDH, close > CE PDH, and low <= CE PDH
+                if pe_open_candle <= ce_prev_high and pe_current > ce_prev_high and pe_low <= ce_prev_high and ce_low < pe_prev_low:
+                    logger.info(f"PE Entry: Open < CE_PDH, crossed above CE_PDH at {pe_current:.2f}, Entry Time: {candle_time.strftime('%H:%M')}")
                     self.entry_price = pe_current
                     self.current_sl = pe_current - 20  # 20 points SL
                     self.in_trade = True
@@ -189,13 +241,12 @@ class HighLowSignal:
                         'stop_loss': self.current_sl
                     }
             
-            # Case 2: If Open Price is above or equal to CE PDH
+            # Case 2: If Day's Open Price is >= CE PDH
             elif pe_open >= ce_prev_high:
-                pe_prev_close = pe_data['close'].iloc[i-1] if i > 0 else pe_open
-                
-                # Sub-case A: PE touched and closed above CE PDH
-                if pe_high >= ce_prev_high and pe_current > ce_prev_high and ce_low < pe_prev_low:
-                    logger.info(f"PE Entry: Open >= CE_PDH, touched and closed above CE_PDH at {pe_current:.2f}")
+                # Sub-case A: PE touched and Closed above CE PDH
+                # Touched = high >= CE PDH, low <= CE PDH and close > CE PDH
+                if pe_high >= ce_prev_high and pe_low <= ce_prev_high and pe_current > ce_prev_high and ce_low < pe_prev_low:
+                    logger.info(f"PE Entry: Open >= CE_PDH, touched and closed above CE_PDH at {pe_current:.2f}, Entry Time: {candle_time.strftime('%H:%M')}")
                     self.entry_price = pe_current
                     self.current_sl = pe_current - 20  # 20 points SL
                     self.in_trade = True
@@ -209,9 +260,10 @@ class HighLowSignal:
                         'stop_loss': self.current_sl
                     }
                 
-                # Sub-case B: PE crossed above and closed above CE PDH
-                elif pe_prev_close <= ce_prev_high and pe_current > ce_prev_high and ce_low < pe_prev_low:
-                    logger.info(f"PE Entry: Open >= CE_PDH, crossed above and closed above CE_PDH at {pe_current:.2f}")
+                # Sub-case B: PE crossed above and Closed above CE PDH
+                # Crossed = open <= CE PDH, close > CE PDH, and low <= CE PDH
+                elif pe_open_candle <= ce_prev_high and pe_current > ce_prev_high and pe_low <= ce_prev_high and ce_low < pe_prev_low:
+                    logger.info(f"PE Entry: Open >= CE_PDH, crossed above CE_PDH at {pe_current:.2f}, Entry Time: {candle_time.strftime('%H:%M')}")
                     self.entry_price = pe_current
                     self.current_sl = pe_current - 20  # 20 points SL
                     self.in_trade = True
@@ -236,6 +288,12 @@ class HighLowSignal:
         Trailing SL: Every 20 points profit, SL trails by 20 points
         Exit Checks: Only at 5-minute intervals AND at 3:20 PM IST
         Exit: At 3:20 PM IST market close
+        
+        Check priority:
+        1. Market close (3:20 PM) - Always exit
+        2. Stop loss hit
+        3. Target hit
+        4. Trailing SL update
         """
         if not entry_signal or option_data.empty:
             return None
@@ -252,7 +310,7 @@ class HighLowSignal:
                 entry_idx = i
                 break
         
-        # Iterate through candles after entry - CHECK ONLY AT 5-MINUTE INTERVALS
+        # Iterate through candles after entry
         for i in range(entry_idx + 1, len(option_data)):
             candle_time = pd.Timestamp(option_data.index[i])
             current_time = candle_time.time()
@@ -260,7 +318,7 @@ class HighLowSignal:
             candle_low = option_data['low'].iloc[i]
             candle_close = option_data['close'].iloc[i]
             
-            # ALWAYS check market close (3:20 PM) even if not on 5-min boundary
+            # ALWAYS check market close (3:20 PM) - exit immediately at market close
             if self.is_market_close_time(current_time):
                 self.in_trade = False
                 return {

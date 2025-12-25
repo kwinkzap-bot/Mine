@@ -740,6 +740,66 @@ def run_strategy_backtest() -> EndpointResponse:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@api_bp.route('/place-live-order', methods=['POST'])
+@csrf.exempt
+def place_live_order() -> EndpointResponse:
+    """Place a live order for options in Zerodha Kite.
+    
+    Request JSON:
+    {
+        "option_type": "CE" or "PE",
+        "strike": integer,
+        "symbol": "NIFTY" (optional, defaults to NIFTY)
+    }
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    
+    try:
+        data = request.get_json()
+        option_type = data.get('option_type')
+        strike = data.get('strike')
+        symbol = data.get('symbol', 'NIFTY')
+        
+        # Validation
+        if not option_type or option_type not in ['CE', 'PE']:
+            return jsonify({'success': False, 'error': 'Invalid option_type. Must be CE or PE'}), 400
+        
+        if not strike or not isinstance(strike, int):
+            return jsonify({'success': False, 'error': 'Invalid strike. Must be an integer'}), 400
+        
+        kite = get_kite()
+        if not kite:
+            return jsonify({'success': False, 'error': 'Failed to initialize Kite API'}), 401
+        
+        # Use KiteService to place the order
+        from service.kite_service import KiteService
+        kite_service = KiteService(kite_instance=kite)
+        
+        result = kite_service.place_option_order(
+            symbol=symbol,
+            strike=strike,
+            option_type=option_type,
+            transaction_type=kite.TRANSACTION_TYPE_BUY
+            # quantity: None uses dynamic lot size from Kite
+        )
+        
+        if result['success']:
+            logger.info(f"✅ Order placed via API: {option_type} {strike} | Order ID: {result['order_id']}")
+            return jsonify(result), 200
+        else:
+            logger.error(f"❌ Order placement failed: {result['error']}")
+            return jsonify(result), 400
+    
+    except Exception as e:
+        logger.error(f"Error in place_live_order endpoint: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+
 @api_bp.errorhandler(404)
 def not_found(error):
     """Handle 404 errors."""
