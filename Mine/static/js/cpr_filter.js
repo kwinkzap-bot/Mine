@@ -19,6 +19,14 @@ window.addEventListener('load', function() {
     console.log('belowBody:', !!document.getElementById('belowBody'));
     console.log('belowCount:', !!document.getElementById('belowCount'));
     console.log('belowTable:', !!document.getElementById('belowTable'));
+    console.log('crossAboveResults:', !!document.getElementById('crossAboveResults'));
+    console.log('crossAboveBody:', !!document.getElementById('crossAboveBody'));
+    console.log('crossAboveCount:', !!document.getElementById('crossAboveCount'));
+    console.log('crossAboveTable:', !!document.getElementById('crossAboveTable'));
+    console.log('crossBelowResults:', !!document.getElementById('crossBelowResults'));
+    console.log('crossBelowBody:', !!document.getElementById('crossBelowBody'));
+    console.log('crossBelowCount:', !!document.getElementById('crossBelowCount'));
+    console.log('crossBelowTable:', !!document.getElementById('crossBelowTable'));
     
     const statusBar = document.getElementById(CONSTANTS.DOM_IDS.STATUS_BAR);
     if (!statusBar) {
@@ -56,6 +64,16 @@ window.addEventListener('load', function() {
             sortTable(CONSTANTS.DOM_IDS.BELOW_TABLE, header.dataset.columnIndex);
         });
     });
+    document.querySelectorAll(`#${CONSTANTS.DOM_IDS.CROSS_ABOVE_TABLE} th`).forEach(header => {
+        header.addEventListener('click', () => {
+            sortTable(CONSTANTS.DOM_IDS.CROSS_ABOVE_TABLE, header.dataset.columnIndex);
+        });
+    });
+    document.querySelectorAll(`#${CONSTANTS.DOM_IDS.CROSS_BELOW_TABLE} th`).forEach(header => {
+        header.addEventListener('click', () => {
+            sortTable(CONSTANTS.DOM_IDS.CROSS_BELOW_TABLE, header.dataset.columnIndex);
+        });
+    });
 });
 
 /**
@@ -82,8 +100,11 @@ async function loadCPRData() {
         
         if (response && response.success) {
             // Process the API response
-            // API returns { success: true, data: [...] }
+            // API returns { success: true, data: [...], weekly_cross: { crossed_above: [...], crossed_below: [...] } }
             const allData = response.data || [];
+            const weeklyCross = response.weekly_cross || {};
+            const crossAboveResults = weeklyCross.crossed_above || [];
+            const crossBelowResults = weeklyCross.crossed_below || [];
             
             // Split data into above and below CPR
             const aboveResults = [];
@@ -116,13 +137,17 @@ async function loadCPRData() {
             
             const aboveCount = aboveResults.length;
             const belowCount = belowResults.length;
+            const crossAboveCount = crossAboveResults.length;
+            const crossBelowCount = crossBelowResults.length;
             
-            console.log(`Data loaded - Above: ${aboveCount}, Below: ${belowCount}`);
+            console.log(`Data loaded - Above: ${aboveCount}, Below: ${belowCount}, Crossed Above Weekly: ${crossAboveCount}, Crossed Below Weekly: ${crossBelowCount}`);
             
             // Display results
             displayResults('above', aboveResults);
             displayResults('below', belowResults);
-            updateStats(aboveCount, belowCount);
+            displayResults('crossAbove', crossAboveResults);
+            displayResults('crossBelow', crossBelowResults);
+            updateStats(aboveCount, belowCount, crossAboveCount, crossBelowCount);
             
             // Hide the controls section if we have data to show results
             const controls = document.getElementById('controls');
@@ -155,8 +180,28 @@ async function loadCPRData() {
                     belowResultsDiv.classList.add('results-hidden');
                 }
             }
+
+            // Show/hide cross above results section
+            const crossAboveDiv = document.getElementById('crossAboveResults');
+            if (crossAboveDiv) {
+                if (crossAboveCount > 0) {
+                    crossAboveDiv.classList.remove('results-hidden');
+                } else {
+                    crossAboveDiv.classList.add('results-hidden');
+                }
+            }
+
+            // Show/hide cross below results section
+            const crossBelowDiv = document.getElementById('crossBelowResults');
+            if (crossBelowDiv) {
+                if (crossBelowCount > 0) {
+                    crossBelowDiv.classList.remove('results-hidden');
+                } else {
+                    crossBelowDiv.classList.add('results-hidden');
+                }
+            }
             
-            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}`;
+            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}, Crossed Above Weekly: ${crossAboveCount}, Crossed Below Weekly: ${crossBelowCount}`;
         } else if (response && !response.needs_login) {
             // Only show error if it's not a session expiration handled by fetchJson
             const errorMsg = response.message || 'Unknown error';
@@ -205,11 +250,20 @@ function displayResults(type, results) {
     container.classList.remove('results-hidden');
     countSpan.textContent = `(${results.length})`;
 
+    const tableConfig = {
+        above: { dailyKey: 'daily_tc', weeklyKey: 'weekly_tc', monthlyKey: 'monthly_tc', showGaps: true },
+        below: { dailyKey: 'daily_bc', weeklyKey: 'weekly_bc', monthlyKey: 'monthly_bc', showGaps: true },
+        crossAbove: { dailyKey: 'daily_tc', weeklyKey: 'weekly_tc', monthlyKey: 'monthly_tc', showGaps: false },
+        crossBelow: { dailyKey: 'daily_bc', weeklyKey: 'weekly_bc', monthlyKey: 'monthly_bc', showGaps: false }
+    };
+    const config = tableConfig[type] || tableConfig.above;
+    const showGaps = config.showGaps;
+
     results.forEach(stock => {
         // Determine which CPR levels to display based on the table type
-        const dailyCpr = (type === 'above' ? stock.daily_tc : stock.daily_bc) || 0;
-        const weeklyCpr = (type === 'above' ? stock.weekly_tc : stock.weekly_bc) || 0;
-        const monthlyCpr = (type === 'above' ? stock.monthly_tc : stock.monthly_bc) || 0;
+        const dailyCpr = Number(stock[config.dailyKey] || 0);
+        const weeklyCpr = Number(stock[config.weeklyKey] || 0);
+        const monthlyCpr = Number(stock[config.monthlyKey] || 0);
 
         // Get gap values (handle both new and old field names)
         const dGap = stock.d_gap_percent !== undefined ? stock.d_gap_percent : (stock.d_gap || 0);
@@ -230,18 +284,29 @@ function displayResults(type, results) {
         const symbolCell = `
             <a href="${tradingViewUrl}" target="_blank" rel="noopener noreferrer" class="symbol-link">${stock.symbol}</a>
         `;
-        
-        row.innerHTML = `
-            <td>${symbolCell}</td>
-            <td>${stock.current_price.toFixed(2)}</td>
-            <td>${dailyCpr.toFixed(2)}</td>
-            <td>${weeklyCpr.toFixed(2)}</td>
-            <td>${monthlyCpr.toFixed(2)}</td>
-            <td class="${dGapClass}">${dGap.toFixed(2)}%</td>
-            <td>${wGap.toFixed(2)}%</td>
-            <td>${mGap.toFixed(2)}%</td>
-            <td class="${statusClass}">${stock.status}</td>
-        `;
+
+        if (showGaps) {
+            row.innerHTML = `
+                <td>${symbolCell}</td>
+                <td>${stock.current_price.toFixed(2)}</td>
+                <td>${dailyCpr.toFixed(2)}</td>
+                <td>${weeklyCpr.toFixed(2)}</td>
+                <td>${monthlyCpr.toFixed(2)}</td>
+                <td class="${dGapClass}">${dGap.toFixed(2)}%</td>
+                <td>${wGap.toFixed(2)}%</td>
+                <td>${mGap.toFixed(2)}%</td>
+                <td class="${statusClass}">${stock.status}</td>
+            `;
+        } else {
+            row.innerHTML = `
+                <td>${symbolCell}</td>
+                <td>${stock.current_price.toFixed(2)}</td>
+                <td>${dailyCpr.toFixed(2)}</td>
+                <td>${weeklyCpr.toFixed(2)}</td>
+                <td>${monthlyCpr.toFixed(2)}</td>
+                <td class="${statusClass}">${stock.status}</td>
+            `;
+        }
         tbody.appendChild(row);
     });
 }
@@ -251,15 +316,23 @@ function displayResults(type, results) {
  * @param {number} aboveCount 
  * @param {number} belowCount 
  */
-function updateStats(aboveCount, belowCount) {
+function updateStats(aboveCount, belowCount, crossAboveCount = 0, crossBelowCount = 0) {
     const aboveCountEl = document.getElementById('aboveCount');
     const belowCountEl = document.getElementById('belowCount');
+    const crossAboveCountEl = document.getElementById('crossAboveCount');
+    const crossBelowCountEl = document.getElementById('crossBelowCount');
     
     if (aboveCountEl) {
         aboveCountEl.textContent = `(${aboveCount})`;
     }
     if (belowCountEl) {
         belowCountEl.textContent = `(${belowCount})`;
+    }
+    if (crossAboveCountEl) {
+        crossAboveCountEl.textContent = `(${crossAboveCount})`;
+    }
+    if (crossBelowCountEl) {
+        crossBelowCountEl.textContent = `(${crossBelowCount})`;
     }
 }
 
@@ -306,6 +379,10 @@ function sortTable(tableId, columnIndexStr) {
 
     const isAsc = newDirection === 'asc';
     
+    // Determine numeric column range based on table type (cross tables have fewer columns and no gaps)
+    const isCrossTable = tableId === CONSTANTS.DOM_IDS.CROSS_ABOVE_TABLE || tableId === CONSTANTS.DOM_IDS.CROSS_BELOW_TABLE;
+    const numericMaxCol = isCrossTable ? 4 : 7; // indices 1..4 numeric for cross, 1..7 numeric for main tables
+
     // Sort rows
     rows.sort((a, b) => {
         // Remove currency symbols, commas, and % for numeric comparison
@@ -316,8 +393,8 @@ function sortTable(tableId, columnIndexStr) {
         const bNum = parseFloat(bCell);
         
         // Check if both are numbers (for price and percentage columns)
-        // Column indices 1 to 7 are numeric columns based on cpr_filter.html
-        if (!isNaN(aNum) && !isNaN(bNum) && columnIndex >= 1 && columnIndex <= 7) {
+        const maxNumericIndex = numericMaxCol;
+        if (!isNaN(aNum) && !isNaN(bNum) && columnIndex >= 1 && columnIndex <= maxNumericIndex) {
             return isAsc ? aNum - bNum : bNum - aNum;
         } else {
             // String comparison (for Symbol and Status columns)

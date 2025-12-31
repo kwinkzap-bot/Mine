@@ -176,8 +176,13 @@ td {
 }
 .results-container {
     display: flex;
+    flex-direction: column;
     gap: 20px;
     margin-top: 15px;
+}
+.results-row {
+    display: flex;
+    gap: 20px;
     flex-wrap: wrap;
 }
 .results-block {

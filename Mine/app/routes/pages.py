@@ -23,11 +23,6 @@ def historical():
     """Historical data page."""
     return render_template('historical.html')
 
-@pages_bp.route('/multi-cpr-backtest')
-def multi_cpr_backtest():
-    """Multi-CPR backtest page."""
-    return render_template('multi_cpr_backtest.html')
-
 @pages_bp.route('/options-chart')
 def options_chart():
     """Options chart page."""

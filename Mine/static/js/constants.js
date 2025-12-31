@@ -31,8 +31,7 @@ window.CONSTANTS = {
         LOGIN: '/auth/login',
         LOGOUT: '/auth/logout',
         
-        // Multi CPR endpoints
-        MULTI_CPR_BACKTEST: '/api/multi-cpr-backtest',
+        // Multi CPR endpoint
         MULTI_CPR_LIVE: '/api/multi-cpr-live'
     },
 
@@ -61,6 +60,14 @@ window.CONSTANTS = {
         BELOW_BODY: 'belowBody',
         BELOW_COUNT: 'belowCount',
         BELOW_TABLE: 'belowTable',
+        CROSS_ABOVE_RESULTS: 'crossAboveResults',
+        CROSS_ABOVE_BODY: 'crossAboveBody',
+        CROSS_ABOVE_COUNT: 'crossAboveCount',
+        CROSS_ABOVE_TABLE: 'crossAboveTable',
+        CROSS_BELOW_RESULTS: 'crossBelowResults',
+        CROSS_BELOW_BODY: 'crossBelowBody',
+        CROSS_BELOW_COUNT: 'crossBelowCount',
+        CROSS_BELOW_TABLE: 'crossBelowTable',
         
         // Strategy elements
         STRATEGY_FORM: 'strategyForm',

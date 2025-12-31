@@ -583,11 +583,11 @@ const OptionsChartApp = (function () {
             title: 'CE Price'
         });
         combinedPeSeries = combinedChart.addSeries(CandlestickSeries, {
-            upColor: '#3b82f6',
+            upColor: '#00bcd4',
             downColor: '#000000',
             borderVisible: false,
-            borderColor: '#3b82f6',
-            wickUpColor: '#3b82f6',
+            borderColor: '#00bcd4',
+            wickUpColor: '#00bcd4',
             wickDownColor: '#111827',
             title: 'PE Price'
         });

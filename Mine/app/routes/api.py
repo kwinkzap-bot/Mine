@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional, Union
 from app.utils.logger import logger
 from app.extensions import csrf, limiter
 
+
 api_bp = Blueprint('api', __name__)
 
 # Type alias for API responses
@@ -515,8 +516,16 @@ def get_cpr_filter_results() -> EndpointResponse:
         logger.info("Starting CPR filter stocks processing...")
         results = cpr_service.filter_cpr_stocks()
         
-        logger.info(f"CPR filter completed. Found {len(results)} stocks.")
-        return jsonify({'success': True, 'data': results})
+        signals = results.get('signals', []) if isinstance(results, dict) else []
+        weekly_cross = results.get('weekly_cross', {}) if isinstance(results, dict) else {}
+
+        logger.info(
+            "CPR filter completed. "
+            f"Found {len(signals)} primary signals, "
+            f"{len(weekly_cross.get('crossed_above', []))} crossed above weekly CPR, "
+            f"{len(weekly_cross.get('crossed_below', []))} crossed below weekly CPR."
+        )
+        return jsonify({'success': True, 'data': signals, 'weekly_cross': weekly_cross})
     except Exception as e:
         logger.error(f"Error in CPR filter: {type(e).__name__}: {e}", exc_info=True)
         error_str = str(e).lower()
@@ -527,6 +536,35 @@ def get_cpr_filter_results() -> EndpointResponse:
                 'auth_error': True
             }), 401
         return jsonify({'success': False, 'error': f'CPR filter error: {str(e)}'}), 500
+
+
+@api_bp.route('/notify-whatsapp', methods=['POST'])
+@csrf.exempt
+def notify_whatsapp() -> EndpointResponse:
+    """Send a WhatsApp message using WhatsApp Cloud API credentials from env vars."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    data = request.get_json(silent=True) or {}
+    message = (data.get('message') or '').strip()
+    to_number = (data.get('to') or '').strip()
+
+    if not message:
+        return jsonify({'success': False, 'error': 'message is required'}), 400
+
+    try:
+        from service.whatsapp_service import WhatsAppService
+
+        wa_service = WhatsAppService()
+        result = wa_service.send_text(message, to_number if to_number else None)
+
+        if result.get('success'):
+            return jsonify({'success': True})
+        return jsonify({'success': False, 'error': result.get('error', 'WhatsApp send failed')}), 500
+    except Exception as e:
+        logger.error(f"WhatsApp notify error: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @api_bp.route('/historical/instrument-token', methods=['GET'])

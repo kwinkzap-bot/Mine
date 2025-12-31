@@ -3,42 +3,78 @@
 {% block content %}
 <div id="status-bar" class="status-bar text-right status-bar-height"></div>
 <div class="results-container">
-    <div id="aboveResults" class="results results-hidden results-block">
-        <h3>📈 CPR Above <span id="aboveCount">(0)</span></h3>
-        <div class="results-scroll">
-            <table id="aboveTable">
-                <thead><tr>
-                    <th data-column-index="0">Symbol</th>
-                    <th data-column-index="1">Price</th>
-                    <th data-column-index="2">Daily CPR</th>
-                    <th data-column-index="3">Weekly CPR</th>
-                    <th data-column-index="4">Monthly CPR</th>
-                    <th data-column-index="5">D Gap %</th>
-                    <th data-column-index="6">W Gap %</th>
-                    <th data-column-index="7">M Gap %</th>
-                    <th data-column-index="8">Status</th>
-                </tr></thead>
-                <tbody id="aboveBody"></tbody>
-            </table>
+    <div class="results-row">
+        <div id="aboveResults" class="results results-hidden results-block">
+            <h3>📈 CPR Above <span id="aboveCount">(0)</span></h3>
+            <div class="results-scroll">
+                <table id="aboveTable">
+                    <thead><tr>
+                        <th data-column-index="0">Symbol</th>
+                        <th data-column-index="1">Price</th>
+                        <th data-column-index="2">Daily CPR</th>
+                        <th data-column-index="3">Weekly CPR</th>
+                        <th data-column-index="4">Monthly CPR</th>
+                        <th data-column-index="5">D Gap %</th>
+                        <th data-column-index="6">W Gap %</th>
+                        <th data-column-index="7">M Gap %</th>
+                        <th data-column-index="8">Status</th>
+                    </tr></thead>
+                    <tbody id="aboveBody"></tbody>
+                </table>
+            </div>
+        </div>
+        <div id="belowResults" class="results results-hidden results-block">
+            <h3>📉 CPR Below <span id="belowCount">(0)</span></h3>
+            <div class="results-scroll">
+                <table id="belowTable">
+                    <thead><tr>
+                        <th data-column-index="0">Symbol</th>
+                        <th data-column-index="1">Price</th>
+                        <th data-column-index="2">Daily CPR</th>
+                        <th data-column-index="3">Weekly CPR</th>
+                        <th data-column-index="4">Monthly CPR</th>
+                        <th data-column-index="5">D Gap %</th>
+                        <th data-column-index="6">W Gap %</th>
+                        <th data-column-index="7">M Gap %</th>
+                        <th data-column-index="8">Status</th>
+                    </tr></thead>
+                    <tbody id="belowBody"></tbody>
+                </table>
+            </div>
         </div>
     </div>
-    <div id="belowResults" class="results results-hidden results-block">
-        <h3>📉 CPR Below <span id="belowCount">(0)</span></h3>
-        <div class="results-scroll">
-            <table id="belowTable">
-                <thead><tr>
-                    <th data-column-index="0">Symbol</th>
-                    <th data-column-index="1">Price</th>
-                    <th data-column-index="2">Daily CPR</th>
-                    <th data-column-index="3">Weekly CPR</th>
-                    <th data-column-index="4">Monthly CPR</th>
-                    <th data-column-index="5">D Gap %</th>
-                    <th data-column-index="6">W Gap %</th>
-                    <th data-column-index="7">M Gap %</th>
-                    <th data-column-index="8">Status</th>
-                </tr></thead>
-                <tbody id="belowBody"></tbody>
-            </table>
+    <div class="results-row">
+        <div id="crossAboveResults" class="results results-hidden results-block">
+            <h3>⏫ Crossed Above Weekly CPR <span id="crossAboveCount">(0)</span></h3>
+            <div class="results-scroll">
+                <table id="crossAboveTable">
+                    <thead><tr>
+                        <th data-column-index="0">Symbol</th>
+                        <th data-column-index="1">Price</th>
+                        <th data-column-index="2">Daily CPR</th>
+                        <th data-column-index="3">Weekly CPR</th>
+                        <th data-column-index="4">Monthly CPR</th>
+                        <th data-column-index="5">Status</th>
+                    </tr></thead>
+                    <tbody id="crossAboveBody"></tbody>
+                </table>
+            </div>
+        </div>
+        <div id="crossBelowResults" class="results results-hidden results-block">
+            <h3>⏬ Crossed Below Weekly CPR <span id="crossBelowCount">(0)</span></h3>
+            <div class="results-scroll">
+                <table id="crossBelowTable">
+                    <thead><tr>
+                        <th data-column-index="0">Symbol</th>
+                        <th data-column-index="1">Price</th>
+                        <th data-column-index="2">Daily CPR</th>
+                        <th data-column-index="3">Weekly CPR</th>
+                        <th data-column-index="4">Monthly CPR</th>
+                        <th data-column-index="5">Status</th>
+                    </tr></thead>
+                    <tbody id="crossBelowBody"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>

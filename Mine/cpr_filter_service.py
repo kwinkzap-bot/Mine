@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import os
 from dotenv import load_dotenv
 import logging
-from typing import Optional, List, Dict, Tuple, cast
+from typing import Optional, List, Dict, Tuple, cast, Union
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
@@ -33,12 +33,21 @@ class CPRLevels:
     current_price: float
     current_high: float
     current_low: float
+    previous_close: float
+
+# Type aliases for clearer payload structure
+SignalPayload = Dict[str, Union[float, str]]
+WeeklyCrossPayload = Dict[str, List[SignalPayload]]
+FilterResult = Dict[str, Union[List[SignalPayload], WeeklyCrossPayload]]
 
 class CPRFilterService:
-    PERCENTAGE_DIFF_THRESHOLD = 2.0
+    PERCENTAGE_DIFF_THRESHOLD = 3.0
     INDEX_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
     API_RATE_LIMIT_DELAY = 0.05  # Reduced from 0.1 - works better with thread pool
     MAX_WORKERS = 4  # Reduced from 8 to avoid API throttling
+
+    CROSS_ABOVE_WEEKLY = "↗ CROSSED ABOVE WEEKLY CPR"
+    CROSS_BELOW_WEEKLY = "↘ CROSSED BELOW WEEKLY CPR"
 
     def __init__(self, kite_instance=None, api_key=None):
         self.kite = kite_instance or KiteConnect(api_key or os.getenv("API_KEY"))
@@ -189,7 +198,7 @@ class CPRFilterService:
         
         logger.debug(f"CPR levels calculated for {symbol}")
         return CPRLevels(d_pp, d_bc, d_tc, w_pp, w_bc, w_tc, m_pp, m_bc, m_tc, 
-                        curr_price, curr_high, curr_low)
+                        curr_price, curr_high, curr_low, c)
 
     def get_fo_stocks(self) -> List[str]:
         if self._fo_stocks is not None:
@@ -240,7 +249,30 @@ class CPRFilterService:
         elif status == "❌ BELOW CPR BC":
             gaps = tuple(round(abs(price - lvl) / lvl * 100, 2) for lvl in [levels.daily_bc, levels.weekly_bc, levels.monthly_bc])
             return cast(Tuple[float, float, float], gaps)
+        elif status == self.CROSS_ABOVE_WEEKLY:
+            return 0.0, round(abs(price - levels.weekly_tc) / max(levels.weekly_tc, 1e-6) * 100, 2), 0.0
+        elif status == self.CROSS_BELOW_WEEKLY:
+            return 0.0, round(abs(price - levels.weekly_bc) / max(levels.weekly_bc, 1e-6) * 100, 2), 0.0
         return 0.0, 0.0, 0.0
+
+    def detect_weekly_cross(self, levels: CPRLevels) -> Optional[str]:
+        prev_close = levels.previous_close
+        cross_above = (
+            prev_close <= levels.weekly_pp
+            and levels.current_price > levels.weekly_tc
+            and levels.current_low <= levels.weekly_pp  # low pierced below then moved above
+        )
+        cross_below = (
+            prev_close >= levels.weekly_pp
+            and levels.current_price < levels.weekly_bc
+            and levels.current_high >= levels.weekly_pp  # high was above then moved below
+        )
+
+        if cross_above and not cross_below:
+            return self.CROSS_ABOVE_WEEKLY
+        if cross_below and not cross_above:
+            return self.CROSS_BELOW_WEEKLY
+        return None
 
     def process_stock(self, symbol: str) -> Optional[Dict]:
         try:
@@ -249,39 +281,62 @@ class CPRFilterService:
                 logger.debug(f"{symbol}: No CPR levels")
                 return None
             
-            status = self.evaluate_status(cpr)
-            if status == "🟡 IN CPR":
-                logger.debug(f"{symbol}: IN CPR")
-                return None
-            
-            d_gap, w_gap, m_gap = self.calc_gaps(cpr.current_price, status, cpr)
-            
-            result = {
-                'symbol': symbol,
-                'current_price': round(cpr.current_price, 2),
-                'status': status,
-                'daily_tc': round(cpr.daily_tc, 2),
-                'daily_bc': round(cpr.daily_bc, 2),
-                'weekly_tc': round(cpr.weekly_tc, 2),
-                'weekly_bc': round(cpr.weekly_bc, 2),
-                'monthly_tc': round(cpr.monthly_tc, 2),
-                'monthly_bc': round(cpr.monthly_bc, 2),
-                'd_gap': d_gap,
-                'w_gap': w_gap,
-                'm_gap': m_gap
-            }
-            logger.debug(f"{symbol}: {status}")
-            return result
+            primary_status = self.evaluate_status(cpr)
+            weekly_cross_status = self.detect_weekly_cross(cpr)
+
+            payloads: Dict[str, Optional[Dict]] = {'signal': None, 'weekly_cross': None}
+
+            if primary_status != "🟡 IN CPR":
+                gaps = self.calc_gaps(cpr.current_price, primary_status, cpr)
+                payloads['signal'] = {
+                    'symbol': symbol,
+                    'current_price': round(cpr.current_price, 2),
+                    'status': primary_status,
+                    'daily_tc': round(cpr.daily_tc, 2),
+                    'daily_bc': round(cpr.daily_bc, 2),
+                    'weekly_tc': round(cpr.weekly_tc, 2),
+                    'weekly_bc': round(cpr.weekly_bc, 2),
+                    'monthly_tc': round(cpr.monthly_tc, 2),
+                    'monthly_bc': round(cpr.monthly_bc, 2),
+                    'd_gap': gaps[0],
+                    'w_gap': gaps[1],
+                    'm_gap': gaps[2]
+                }
+                logger.debug(f"{symbol}: {primary_status}")
+
+            if weekly_cross_status:
+                cross_gaps = self.calc_gaps(cpr.current_price, weekly_cross_status, cpr)
+                payloads['weekly_cross'] = {
+                    'status': weekly_cross_status,
+                    'payload': {
+                        'symbol': symbol,
+                        'current_price': round(cpr.current_price, 2),
+                        'status': weekly_cross_status,
+                        'daily_tc': round(cpr.daily_tc, 2),
+                        'daily_bc': round(cpr.daily_bc, 2),
+                        'weekly_tc': round(cpr.weekly_tc, 2),
+                        'weekly_bc': round(cpr.weekly_bc, 2),
+                        'monthly_tc': round(cpr.monthly_tc, 2),
+                        'monthly_bc': round(cpr.monthly_bc, 2),
+                        'd_gap': cross_gaps[0],
+                        'w_gap': cross_gaps[1],
+                        'm_gap': cross_gaps[2]
+                    }
+                }
+
+            return payloads if payloads['signal'] or payloads['weekly_cross'] else None
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
             return None
 
-    def filter_cpr_stocks(self) -> List[Dict]:
+    def filter_cpr_stocks(self) -> FilterResult:
         stocks = self.get_fo_stocks()
         # stocks = ["COLPAL"]
         logger.info(f"Filtering {len(stocks)} F&O stocks (cache size: {len(self._historical_data_cache)})...")
         
-        results = []
+        signals: List[Dict] = []
+        cross_above: List[Dict] = []
+        cross_below: List[Dict] = []
         processed = 0
         failed = 0
         start_time = time.time()
@@ -293,7 +348,14 @@ class CPRFilterService:
                 try:
                     result = future.result(timeout=25)  # 25 second timeout per stock
                     if result:
-                        results.append(result)
+                        if result.get('signal'):
+                            signals.append(result['signal'])
+                        cross = result.get('weekly_cross')
+                        if cross and cross.get('payload'):
+                            if cross.get('status') == self.CROSS_ABOVE_WEEKLY:
+                                cross_above.append(cross['payload'])
+                            elif cross.get('status') == self.CROSS_BELOW_WEEKLY:
+                                cross_below.append(cross['payload'])
                     processed += 1
                     if processed % 10 == 0:
                         elapsed = time.time() - start_time
@@ -304,8 +366,18 @@ class CPRFilterService:
                     processed += 1
         
         total_time = time.time() - start_time
-        logger.info(f"Filter complete: {len(results)} match criteria ({failed} failed) in {total_time:.1f}s. Cache: {len(self._historical_data_cache)} entries")
-        return sorted(results, key=lambda x: x['symbol'])
+        logger.info(
+            f"Filter complete: {len(signals)} match criteria, "
+            f"{len(cross_above)} crossed above weekly CPR, {len(cross_below)} crossed below weekly CPR "
+            f"({failed} failed) in {total_time:.1f}s. Cache: {len(self._historical_data_cache)} entries"
+        )
+        return {
+            'signals': sorted(signals, key=lambda x: x['symbol']),
+            'weekly_cross': {
+                'crossed_above': sorted(cross_above, key=lambda x: x['symbol']),
+                'crossed_below': sorted(cross_below, key=lambda x: x['symbol'])
+            }
+        }
 
     def clear_cache(self):
         with self._cache_lock:
