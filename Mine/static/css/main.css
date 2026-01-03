@@ -202,7 +202,7 @@ td {
     margin-top: 0;
 }
 .results-scroll {
-    max-height: 700px;
+    max-height: 400px;
     overflow-y: auto;
     border: 1px solid #e0e0e0;
     border-radius: 6px;

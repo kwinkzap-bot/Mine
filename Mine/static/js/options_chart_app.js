@@ -14,16 +14,35 @@ const OptionsChartApp = (function () {
     let combinedChart = null;
     let combinedCeSeries = null;
     let combinedPeSeries = null;
+    // Separate charts for same-strike comparisons
+    let cePairCeChart = null; // CE chart for CE strike
+    let cePairPeChart = null; // PE chart for CE strike
+    let pePairCeChart = null; // CE chart for PE strike
+    let pePairPeChart = null; // PE chart for PE strike
+    let cePairCeSeries = null;
+    let cePairPeSeries = null;
+    let pePairCeSeries = null;
+    let pePairPeSeries = null;
     let ceData = null;
     let peData = null;
+    let cePairData = { ce: null, pe: null };
+    let pePairData = { ce: null, pe: null };
+    let cePairPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+    let pePairPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
     let currentCeToken = null; // Token for auto-update
     let currentPeToken = null; // Token for auto-update
+    let cePairTokens = { ce: null, pe: null }; // Tokens for CE strike pair chart
+    let pePairTokens = { ce: null, pe: null }; // Tokens for PE strike pair chart
     let currentTimeframe = '5minute';
     let autoUpdateInterval = null;
     let currentSymbol = 'NIFTY';
     let currentPriceSource = 'previous_close';
     let cePriceLines = []; // Price lines for individual charts
     let pePriceLines = []; // Price lines for individual charts
+    let cePairCePriceLines = [];
+    let cePairPePriceLines = [];
+    let pePairCePriceLines = [];
+    let pePairPePriceLines = [];
     let ceTimerPriceLine = null; // Price line for combined chart (CE)
     let peTimerPriceLine = null; // Price line for combined chart (PE)
     let isInitialLoad = true;
@@ -71,6 +90,17 @@ const OptionsChartApp = (function () {
         DOM.peStrikeDisplay = document.getElementById('pe-strike-display');
         DOM.combinedCeStrikeDisplay = document.getElementById('combined-ce-strike-display');
         DOM.combinedPeStrikeDisplay = document.getElementById('combined-pe-strike-display');
+        DOM.cePairCeStrikeDisplay = document.getElementById('ce-pair-ce-strike-display');
+        DOM.cePairPeStrikeDisplay = document.getElementById('ce-pair-pe-strike-display');
+        DOM.pePairCeStrikeDisplay = document.getElementById('pe-pair-ce-strike-display');
+        DOM.pePairPeStrikeDisplay = document.getElementById('pe-pair-pe-strike-display');
+        DOM.ceStatus = document.getElementById('ce-status');
+        DOM.peStatus = document.getElementById('pe-status');
+        DOM.combinedStatus = document.getElementById('combined-status');
+        DOM.cePairCeStatus = document.getElementById('ce-pair-ce-status');
+        DOM.cePairPeStatus = document.getElementById('ce-pair-pe-status');
+        DOM.pePairCeStatus = document.getElementById('pe-pair-ce-status');
+        DOM.pePairPeStatus = document.getElementById('pe-pair-pe-status');
     }
 
     /**
@@ -268,6 +298,47 @@ const OptionsChartApp = (function () {
         }
 
         return lines;
+    }
+
+    /**
+     * Determines price position relative to previous day high/low.
+     */
+    function evaluateStatus(price, high, low) {
+        if (price === null || price === undefined || high === null || low === null) {
+            return { text: '--', className: 'status-na' };
+        }
+        if (price > high) return { text: 'WIN', className: 'status-win' };
+        if (price < low) return { text: 'LOSS', className: 'status-loss' };
+        return { text: 'SIDEWAY', className: 'status-sideway' };
+    }
+
+    /**
+     * Applies status text and styling to a badge element.
+     */
+    function updateStatusBadge(el, status) {
+        if (!el || !status) return;
+        const statusClasses = ['status-na', 'status-sideway', 'status-win', 'status-loss'];
+        statusClasses.forEach(cls => el.classList.remove(cls));
+        el.classList.add(status.className || 'status-na');
+        el.textContent = status.text || '--';
+    }
+
+    /**
+     * Updates combined chart badge using CE and PE statuses.
+     */
+    function updateCombinedStatusBadge(ceStatus, peStatus) {
+        if (!DOM.combinedStatus) return;
+        const priorityClass = (ceStatus.className === 'status-loss' || peStatus.className === 'status-loss')
+            ? 'status-loss'
+            : (ceStatus.className === 'status-win' || peStatus.className === 'status-win')
+                ? 'status-win'
+                : (ceStatus.className === 'status-sideway' || peStatus.className === 'status-sideway')
+                    ? 'status-sideway'
+                    : 'status-na';
+        updateStatusBadge(DOM.combinedStatus, {
+            text: `CE: ${ceStatus.text} | PE: ${peStatus.text}`,
+            className: priorityClass
+        });
     }
 
     // --- UI/State Management Functions ---
@@ -592,6 +663,78 @@ const OptionsChartApp = (function () {
             title: 'PE Price'
         });
 
+        // Initialize CE Strike Pair Charts (separate CE and PE charts for the CE strike)
+        const cePairCeContainer = document.getElementById('cePairCeChart');
+        const cePairPeContainer = document.getElementById('cePairPeChart');
+        if (cePairCeContainer) {
+            if (cePairCeChart) cePairCeChart.remove();
+            cePairCeChart = createChart(cePairCeContainer, lightTheme);
+            cePairCeChart.timeScale().applyOptions({
+                timeVisible: true,
+                secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+            });
+            cePairCeSeries = cePairCeChart.addSeries(CandlestickSeries, {
+                upColor: '#10b981',
+                downColor: '#ef4444',
+                borderVisible: false,
+                wickUpColor: '#10b981',
+                wickDownColor: '#ef4444',
+                title: 'CE Price'
+            });
+        }
+        if (cePairPeContainer) {
+            if (cePairPeChart) cePairPeChart.remove();
+            cePairPeChart = createChart(cePairPeContainer, lightTheme);
+            cePairPeChart.timeScale().applyOptions({
+                timeVisible: true,
+                secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+            });
+            cePairPeSeries = cePairPeChart.addSeries(CandlestickSeries, {
+                upColor: '#10b981',
+                downColor: '#ef4444',
+                borderVisible: false,
+                wickUpColor: '#10b981',
+                wickDownColor: '#ef4444',
+                title: 'PE Price'
+            });
+        }
+
+        // Initialize PE Strike Pair Charts (separate CE and PE charts for the PE strike)
+        const pePairCeContainer = document.getElementById('pePairCeChart');
+        const pePairPeContainer = document.getElementById('pePairPeChart');
+        if (pePairCeContainer) {
+            if (pePairCeChart) pePairCeChart.remove();
+            pePairCeChart = createChart(pePairCeContainer, lightTheme);
+            pePairCeChart.timeScale().applyOptions({
+                timeVisible: true,
+                secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+            });
+            pePairCeSeries = pePairCeChart.addSeries(CandlestickSeries, {
+                upColor: '#10b981',
+                downColor: '#ef4444',
+                borderVisible: false,
+                wickUpColor: '#10b981',
+                wickDownColor: '#ef4444',
+                title: 'CE Price'
+            });
+        }
+        if (pePairPeContainer) {
+            if (pePairPeChart) pePairPeChart.remove();
+            pePairPeChart = createChart(pePairPeContainer, lightTheme);
+            pePairPeChart.timeScale().applyOptions({
+                timeVisible: true,
+                secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+            });
+            pePairPeSeries = pePairPeChart.addSeries(CandlestickSeries, {
+                upColor: '#10b981',
+                downColor: '#ef4444',
+                borderVisible: false,
+                wickUpColor: '#10b981',
+                wickDownColor: '#ef4444',
+                title: 'PE Price'
+            });
+        }
+
         // Note: Lightweight Charts handles crosshair sync natively when multiple charts are on the same page.
         // The native crosshair cursors across charts will synchronize automatically.
     }
@@ -600,7 +743,13 @@ const OptionsChartApp = (function () {
      * Renders the individual CE and PE charts.
      */
     function renderIndividualCharts() {
-        if (!ceSeries || !peSeries || !ceData || !peData) return;
+        if (!ceSeries || !peSeries || !ceData || !peData) {
+            const naStatus = { text: '--', className: 'status-na' };
+            updateStatusBadge(DOM.ceStatus, naStatus);
+            updateStatusBadge(DOM.peStatus, naStatus);
+            updateCombinedStatusBadge(naStatus, naStatus);
+            return;
+        }
 
         // Preserve visible ranges before updating data
         const ceTimeScale = ceChart?.timeScale();
@@ -670,6 +819,13 @@ const OptionsChartApp = (function () {
         if (latestPePrice !== null && currentPriceSource === 'current_close' && isMarketHours()) {
             // LTP line removed - showing only countdown timer
         }
+        // Update status badges for CE/PE and combined view
+        // Cross-leg status: CE uses PE PDH/PDL, PE uses CE PDH/PDL
+        const ceStatus = evaluateStatus(latestCePrice, pePdh, pePdl);
+        const peStatus = evaluateStatus(latestPePrice, cePdh, cePdl);
+        updateStatusBadge(DOM.ceStatus, ceStatus);
+        updateStatusBadge(DOM.peStatus, peStatus);
+        updateCombinedStatusBadge(ceStatus, peStatus);
         // // Refresh countdown badges after rendering, using current countdown value (COMMENTED OUT)
         // updateCountdownPriceLines(countdownValue);
     }
@@ -746,6 +902,9 @@ const OptionsChartApp = (function () {
         // Rerender individual charts
         renderIndividualCharts();
 
+        // Render comparison charts (same-strike CE/PE views)
+        renderComparisonCharts();
+
         // Show 2 days of data on initial load
         if (isInitialLoad) {
             setTimeout(() => {
@@ -756,6 +915,67 @@ const OptionsChartApp = (function () {
 
             isInitialLoad = false;
         }
+    }
+
+    /**
+     * Renders both comparison charts where CE and PE use the same strike.
+     */
+    function renderComparisonCharts() {
+        const naStatus = { text: '--', className: 'status-na' };
+
+        if (cePairData?.ce) {
+            renderPairSingleChart(cePairCeChart, cePairCeSeries, cePairData.ce, cePairPdhPdl, true, cePairCePriceLines, DOM.cePairCeStatus);
+        } else {
+            updateStatusBadge(DOM.cePairCeStatus, naStatus);
+        }
+
+        if (cePairData?.pe) {
+            renderPairSingleChart(cePairPeChart, cePairPeSeries, cePairData.pe, cePairPdhPdl, false, cePairPePriceLines, DOM.cePairPeStatus);
+        } else {
+            updateStatusBadge(DOM.cePairPeStatus, naStatus);
+        }
+
+        if (pePairData?.ce) {
+            renderPairSingleChart(pePairCeChart, pePairCeSeries, pePairData.ce, pePairPdhPdl, true, pePairCePriceLines, DOM.pePairCeStatus);
+        } else {
+            updateStatusBadge(DOM.pePairCeStatus, naStatus);
+        }
+
+        if (pePairData?.pe) {
+            renderPairSingleChart(pePairPeChart, pePairPeSeries, pePairData.pe, pePairPdhPdl, false, pePairPePriceLines, DOM.pePairPeStatus);
+        } else {
+            updateStatusBadge(DOM.pePairPeStatus, naStatus);
+        }
+    }
+
+    /**
+     * Renders a single comparison chart with PDH/PDL lines using existing logic.
+     */
+    function renderPairSingleChart(chart, seriesObj, data, pdhPdl, isCeChart, priceLinesStore, statusEl) {
+        if (!chart || !seriesObj || !data) return;
+
+        const formatted = formatChartData(data);
+        seriesObj.setData(formatted);
+
+        // Remove old price lines
+        priceLinesStore.forEach(line => seriesObj.removePriceLine(line));
+        priceLinesStore.length = 0;
+
+        // Use PDH/PDL from fetched values for this strike pair
+        const cePdh = pdhPdl.ce_pdh;
+        const cePdl = pdhPdl.ce_pdl;
+        const pePdh = pdhPdl.pe_pdh;
+        const pePdl = pdhPdl.pe_pdl;
+
+        const newLines = addPreviousDayLines(seriesObj, cePdh, cePdl, pePdh, pePdl, isCeChart);
+        priceLinesStore.push(...newLines);
+
+        const latestPrice = getLatestPrice(data);
+        // Cross-leg status: CE chart compares against PE PDH/PDL and vice versa
+        const high = isCeChart ? pePdh : cePdh;
+        const low = isCeChart ? pePdl : cePdl;
+        const status = evaluateStatus(latestPrice, high, low);
+        updateStatusBadge(statusEl, status);
     }
 
     /**
@@ -884,6 +1104,10 @@ const OptionsChartApp = (function () {
                 DOM.peStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `(${DOM.peStrikeSelect.value})` : '';
                 DOM.combinedCeStrikeDisplay.textContent = DOM.ceStrikeSelect.value ? `CE: ${DOM.ceStrikeSelect.value}` : '';
                 DOM.combinedPeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `PE: ${DOM.peStrikeSelect.value}` : '';
+                DOM.cePairCeStrikeDisplay.textContent = DOM.ceStrikeSelect.value ? `CE ${DOM.ceStrikeSelect.value}` : '';
+                DOM.cePairPeStrikeDisplay.textContent = DOM.ceStrikeSelect.value ? `PE ${DOM.ceStrikeSelect.value}` : '';
+                DOM.pePairCeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `CE ${DOM.peStrikeSelect.value}` : '';
+                DOM.pePairPeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `PE ${DOM.peStrikeSelect.value}` : '';
 
                 // Cache underlying price data
                 if (data.underlying_price) {
@@ -927,6 +1151,8 @@ const OptionsChartApp = (function () {
     async function loadChartData() {
         const ceStrike = DOM.ceStrikeSelect.value;
         const peStrike = DOM.peStrikeSelect.value;
+        let ceStrikeObj = null;
+        let peStrikeObj = null;
 
         if (!ceStrike || !peStrike) {
             // Only show warning if one is selected but not the other
@@ -976,11 +1202,11 @@ const OptionsChartApp = (function () {
                     // Find strike objects for CE and PE (normalize to strings for comparison)
                     const ceStrikeStr = ceStrike.toString();
                     const peStrikeStr = peStrike.toString();
-                    const ceStrikeObj = strikes.find(s => {
+                    ceStrikeObj = strikes.find(s => {
                         const strikeStr = s.strike.toString();
                         return strikeStr === ceStrikeStr;
                     });
-                    const peStrikeObj = strikes.find(s => {
+                    peStrikeObj = strikes.find(s => {
                         const strikeStr = s.strike.toString();
                         return strikeStr === peStrikeStr;
                     });
@@ -1014,6 +1240,16 @@ const OptionsChartApp = (function () {
                 peTokenToUse = currentPeToken;
             }
 
+            // Store tokens for comparison charts (same-strike CE/PE pairs)
+            cePairTokens = {
+                ce: ceStrikeObj?.ce_token || null,
+                pe: ceStrikeObj?.pe_token || null
+            };
+            pePairTokens = {
+                ce: peStrikeObj?.ce_token || null,
+                pe: peStrikeObj?.pe_token || null
+            };
+
             // Step 2: Call OPTIONS_PDH_PDL endpoint with TOKENS (not strikes)
             try {
                 const pdhPayload = {
@@ -1037,12 +1273,68 @@ const OptionsChartApp = (function () {
                 console.error('Error fetching PDH/PDL with tokens:', error);
             }
 
-            // Step 3: Use tokens for chart data fetch
-            const result = await fetchChartDataFromApi(ceTokenToUse, peTokenToUse);
+            // Fetch PDH/PDL for CE strike pair tokens
+            try {
+                if (cePairTokens.ce && cePairTokens.pe) {
+                    const pdhRespCePair = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_PDH_PDL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ce_token: cePairTokens.ce, pe_token: cePairTokens.pe })
+                    });
+                    if (pdhRespCePair?.success) {
+                        cePairPdhPdl = pdhRespCePair.pdh_pdl || { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+                    } else {
+                        cePairPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+                    }
+                }
+            } catch (error) {
+                console.error('Error fetching PDH/PDL for CE pair tokens:', error);
+                cePairPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+            }
+
+            // Fetch PDH/PDL for PE strike pair tokens
+            try {
+                if (pePairTokens.ce && pePairTokens.pe) {
+                    const pdhRespPePair = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_PDH_PDL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ce_token: pePairTokens.ce, pe_token: pePairTokens.pe })
+                    });
+                    if (pdhRespPePair?.success) {
+                        pePairPdhPdl = pdhRespPePair.pdh_pdl || { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+                    } else {
+                        pePairPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+                    }
+                }
+            } catch (error) {
+                console.error('Error fetching PDH/PDL for PE pair tokens:', error);
+                pePairPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+            }
+
+            // Step 3: Use tokens for chart data fetch (primary + comparison pairs)
+            const chartDataPromises = [
+                fetchChartDataFromApi(ceTokenToUse, peTokenToUse),
+                cePairTokens.ce && cePairTokens.pe ? fetchChartDataFromApi(cePairTokens.ce, cePairTokens.pe) : Promise.resolve(null),
+                pePairTokens.ce && pePairTokens.pe ? fetchChartDataFromApi(pePairTokens.ce, pePairTokens.pe) : Promise.resolve(null)
+            ];
+
+            const [result, cePairResult, pePairResult] = await Promise.all(chartDataPromises);
 
             if (result.success && result.ceData && result.peData) {
                 ceData = result.ceData;
                 peData = result.peData;
+
+                // Store comparison chart data when available
+                if (cePairResult?.success && cePairResult.ceData && cePairResult.peData) {
+                    cePairData = { ce: cePairResult.ceData, pe: cePairResult.peData };
+                } else {
+                    cePairData = { ce: null, pe: null };
+                }
+                if (pePairResult?.success && pePairResult.ceData && pePairResult.peData) {
+                    pePairData = { ce: pePairResult.ceData, pe: pePairResult.peData };
+                } else {
+                    pePairData = { ce: null, pe: null };
+                }
 
                 // Update global tokens for auto-update
                 currentCeToken = ceTokenToUse;
@@ -1059,6 +1351,7 @@ const OptionsChartApp = (function () {
                 // Only call renderCombinedChart() to update the data on existing chart objects
                 console.log('Calling renderCombinedChart with PDH/PDL:', currentPdhPdl);
                 renderCombinedChart(currentPdhPdl.ce_pdh, currentPdhPdl.ce_pdl, currentPdhPdl.pe_pdh, currentPdhPdl.pe_pdl);
+                renderComparisonCharts();
 
                 startAutoUpdate(); // Restart auto-update with new data and tokens
 
@@ -1108,7 +1401,13 @@ const OptionsChartApp = (function () {
 
             // Fetch latest chart data (pass tokens for optimized fetch)
             try {
-                const result = await fetchChartDataFromApi(currentCeToken, currentPeToken);
+                const updatePromises = [
+                    fetchChartDataFromApi(currentCeToken, currentPeToken),
+                    cePairTokens.ce && cePairTokens.pe ? fetchChartDataFromApi(cePairTokens.ce, cePairTokens.pe) : Promise.resolve(null),
+                    pePairTokens.ce && pePairTokens.pe ? fetchChartDataFromApi(pePairTokens.ce, pePairTokens.pe) : Promise.resolve(null)
+                ];
+
+                const [result, cePairResult, pePairResult] = await Promise.all(updatePromises);
 
                 if (result.needsLogin) {
                     clearInterval(autoUpdateInterval);
@@ -1126,6 +1425,16 @@ const OptionsChartApp = (function () {
                     console.log('Rendering updated chart...');
                     renderCombinedChart();
                 }
+
+                if (cePairResult?.success && cePairResult.ceData && cePairResult.peData) {
+                    cePairData = { ce: cePairResult.ceData, pe: cePairResult.peData };
+                }
+
+                if (pePairResult?.success && pePairResult.ceData && pePairResult.peData) {
+                    pePairData = { ce: pePairResult.ceData, pe: pePairResult.peData };
+                }
+
+                renderComparisonCharts();
             } catch (error) {
                 console.error('Auto-update error:', error);
             }
@@ -1235,6 +1544,10 @@ const OptionsChartApp = (function () {
                 DOM.peStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `(${DOM.peStrikeSelect.value})` : '';
                 DOM.combinedCeStrikeDisplay.textContent = DOM.ceStrikeSelect.value ? `CE: ${DOM.ceStrikeSelect.value}` : '';
                 DOM.combinedPeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `PE: ${DOM.peStrikeSelect.value}` : '';
+                DOM.cePairCeStrikeDisplay.textContent = DOM.ceStrikeSelect.value ? `CE ${DOM.ceStrikeSelect.value}` : '';
+                DOM.cePairPeStrikeDisplay.textContent = DOM.ceStrikeSelect.value ? `PE ${DOM.ceStrikeSelect.value}` : '';
+                DOM.pePairCeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `CE ${DOM.peStrikeSelect.value}` : '';
+                DOM.pePairPeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `PE ${DOM.peStrikeSelect.value}` : '';
             }
         });
 
@@ -1257,6 +1570,10 @@ const OptionsChartApp = (function () {
         const ceContainer = document.getElementById('ceChart');
         const peContainer = document.getElementById('peChart');
         const combinedContainer = document.getElementById('combinedChart');
+        const cePairCeContainer = document.getElementById('cePairCeChart');
+        const cePairPeContainer = document.getElementById('cePairPeChart');
+        const pePairCeContainer = document.getElementById('pePairCeChart');
+        const pePairPeContainer = document.getElementById('pePairPeChart');
 
         if (ceContainer && ceChart) {
             new ResizeObserver(entries => {
@@ -1280,6 +1597,38 @@ const OptionsChartApp = (function () {
                 const newRect = entries[0].contentRect;
                 combinedChart.applyOptions({ height: newRect.height, width: newRect.width });
             }).observe(combinedContainer);
+        }
+
+        if (cePairCeContainer && cePairCeChart) {
+            new ResizeObserver(entries => {
+                if (entries.length === 0 || entries[0].target !== cePairCeContainer) { return; }
+                const newRect = entries[0].contentRect;
+                cePairCeChart.applyOptions({ height: newRect.height, width: newRect.width });
+            }).observe(cePairCeContainer);
+        }
+
+        if (cePairPeContainer && cePairPeChart) {
+            new ResizeObserver(entries => {
+                if (entries.length === 0 || entries[0].target !== cePairPeContainer) { return; }
+                const newRect = entries[0].contentRect;
+                cePairPeChart.applyOptions({ height: newRect.height, width: newRect.width });
+            }).observe(cePairPeContainer);
+        }
+
+        if (pePairCeContainer && pePairCeChart) {
+            new ResizeObserver(entries => {
+                if (entries.length === 0 || entries[0].target !== pePairCeContainer) { return; }
+                const newRect = entries[0].contentRect;
+                pePairCeChart.applyOptions({ height: newRect.height, width: newRect.width });
+            }).observe(pePairCeContainer);
+        }
+
+        if (pePairPeContainer && pePairPeChart) {
+            new ResizeObserver(entries => {
+                if (entries.length === 0 || entries[0].target !== pePairPeContainer) { return; }
+                const newRect = entries[0].contentRect;
+                pePairPeChart.applyOptions({ height: newRect.height, width: newRect.width });
+            }).observe(pePairPeContainer);
         }
     }
 

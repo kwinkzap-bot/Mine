@@ -64,16 +64,57 @@
     <div class="charts-container">
         <div class="chart-grid">
             <div class="chart-wrapper">
-                <h3>CE Chart <span id="ce-strike-display" class="strike-display"></span></h3>
+                <div class="chart-header">
+                    <h3>CE Chart <span id="ce-strike-display" class="strike-display"></span></h3>
+                    <span id="ce-status" class="chart-status status-na">--</span>
+                </div>
                 <div id="ceChart" class="chart-element"></div>
             </div>
             <div class="chart-wrapper">
-                <h3>PE Chart <span id="pe-strike-display" class="strike-display"></span></h3>
+                <div class="chart-header">
+                    <h3>PE Chart <span id="pe-strike-display" class="strike-display"></span></h3>
+                    <span id="pe-status" class="chart-status status-na">--</span>
+                </div>
                 <div id="peChart" class="chart-element"></div>
             </div>
         </div>
+        <div class="chart-grid">
+            <div class="chart-wrapper">
+                <div class="chart-header">
+                    <h3>CE Strike - CE Chart <span id="ce-pair-ce-strike-display" class="strike-display"></span></h3>
+                    <span id="ce-pair-ce-status" class="chart-status status-na">--</span>
+                </div>
+                <div id="cePairCeChart" class="chart-element"></div>
+            </div>
+            <div class="chart-wrapper">
+                <div class="chart-header">
+                    <h3>CE Strike - PE Chart <span id="ce-pair-pe-strike-display" class="strike-display"></span></h3>
+                    <span id="ce-pair-pe-status" class="chart-status status-na">--</span>
+                </div>
+                <div id="cePairPeChart" class="chart-element"></div>
+            </div>
+        </div>
+        <div class="chart-grid">
+            <div class="chart-wrapper">
+                <div class="chart-header">
+                    <h3>PE Strike - CE Chart <span id="pe-pair-ce-strike-display" class="strike-display"></span></h3>
+                    <span id="pe-pair-ce-status" class="chart-status status-na">--</span>
+                </div>
+                <div id="pePairCeChart" class="chart-element"></div>
+            </div>
+            <div class="chart-wrapper">
+                <div class="chart-header">
+                    <h3>PE Strike - PE Chart <span id="pe-pair-pe-strike-display" class="strike-display"></span></h3>
+                    <span id="pe-pair-pe-status" class="chart-status status-na">--</span>
+                </div>
+                <div id="pePairPeChart" class="chart-element"></div>
+            </div>
+        </div>
         <div class="combined-chart-section">
-            <h3>Combined CE & PE Price <span id="combined-ce-strike-display" class="strike-display"></span> <span id="combined-pe-strike-display" class="strike-display"></span></h3>
+            <div class="chart-header">
+                <h3>Combined CE & PE Price <span id="combined-ce-strike-display" class="strike-display"></span> <span id="combined-pe-strike-display" class="strike-display"></span></h3>
+                <span id="combined-status" class="chart-status status-na">--</span>
+            </div>
             <div id="combinedChart" class="chart-element"></div>
         </div>
     </div>
