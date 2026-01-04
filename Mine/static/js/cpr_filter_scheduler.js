@@ -10,8 +10,8 @@ const CPRFilterScheduler = (function() {
     const MARKET_CLOSE_HOUR = 15;
     const MARKET_CLOSE_MINUTE = 40;
     
-    // Recurring interval (in minutes)
-    const INTERVAL_MINUTES = 5;
+    // Target minute to execute at every hour (e.g., 15 means 9:15, 10:15, 11:15, etc.)
+    const EXECUTE_AT_MINUTE = 15;
     
     let intervalId = null;
     let isRunning = false;
@@ -34,6 +34,14 @@ const CPRFilterScheduler = (function() {
         const currentTime = currentHour * 60 + currentMinute;
         
         return isWeekday && (currentTime >= openTime && currentTime <= closeTime);
+    }
+    
+    /**
+     * Check if current time matches the target execution minute
+     */
+    function shouldExecuteNow() {
+        const now = new Date();
+        return now.getMinutes() === EXECUTE_AT_MINUTE;
     }
     
     /**
@@ -102,19 +110,19 @@ const CPRFilterScheduler = (function() {
         
         isRunning = true;
         
-        // Execute immediately if market is open
+        // Execute immediately if market is open and we're at or past the target minute
         if (isMarketOpen()) {
             executeCPRFilter();
         }
         
-        // Set recurring interval
+        // Set recurring interval to check every minute
         intervalId = setInterval(() => {
-            if (isMarketOpen()) {
+            if (isMarketOpen() && shouldExecuteNow()) {
                 executeCPRFilter();
             }
-        }, INTERVAL_MINUTES * 60 * 1000);  // Convert minutes to milliseconds
+        }, 60 * 1000);  // Check every minute (60 seconds)
         
-        console.log(`[CPR Scheduler] Started - CPR filter will execute every ${INTERVAL_MINUTES} minutes during market hours`);
+        console.log(`[CPR Scheduler] Started - CPR filter will execute at :${String(EXECUTE_AT_MINUTE).padStart(2, '0')} of every hour during market hours`);
     }
     
     /**
@@ -149,7 +157,19 @@ const CPRFilterScheduler = (function() {
         }
         
         const now = new Date();
-        const nextExecution = new Date(now.getTime() + INTERVAL_MINUTES * 60 * 1000);
+        const currentMinute = now.getMinutes();
+        
+        // If we haven't reached the target minute this hour, calculate for this hour
+        // Otherwise, calculate for next hour
+        let nextExecution = new Date(now);
+        
+        if (currentMinute < EXECUTE_AT_MINUTE) {
+            nextExecution.setMinutes(EXECUTE_AT_MINUTE, 0, 0);
+        } else {
+            nextExecution.setHours(nextExecution.getHours() + 1);
+            nextExecution.setMinutes(EXECUTE_AT_MINUTE, 0, 0);
+        }
+        
         return nextExecution.toLocaleTimeString();
     }
     

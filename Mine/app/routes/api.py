@@ -408,11 +408,16 @@ def get_options_chart_data() -> EndpointResponse:
 @limiter.exempt  # Exempt from rate limiting - called frequently during chart updates
 def get_options_pdh_pdl() -> EndpointResponse:
     """
-    Get previous day high/low for CE/PE options.
+    Get previous day high/low for CE/PE options AND the underlying index.
     
     Accepts one of two input methods:
     1. Tokens: ce_token and pe_token (preferred - faster)
     2. Strikes: symbol, ce_strike, pe_strike (fallback - will resolve to tokens)
+    
+    Returns:
+    - pdh/pdl: Previous day high/low for the underlying index
+    - ce_pdh/ce_pdl: Previous day high/low for CE option
+    - pe_pdh/pe_pdl: Previous day high/low for PE option
     """
     auth_error = check_auth()
     if auth_error:
@@ -435,6 +440,7 @@ def get_options_pdh_pdl() -> EndpointResponse:
         # PREFERRED METHOD: Get tokens from request
         ce_token = data.get('ce_token')
         pe_token = data.get('pe_token')
+        symbol = data.get('symbol')  # Optional for getting underlying PDH/PDL
         
         # FALLBACK METHOD: If tokens not provided, resolve them from strikes
         if not ce_token or not pe_token:
@@ -459,25 +465,45 @@ def get_options_pdh_pdl() -> EndpointResponse:
                     'error': f'Could not find tokens for the given strikes: CE {ce_strike}, PE {pe_strike}'
                 }), 404
         
-        # Fetch PDH/PDL using tokens
+        # Fetch PDH/PDL for options using tokens
         pdh_pdl = chart_service.get_pdh_pdl(ce_token, pe_token)
         
+        # Fetch PDH/PDL for the underlying index if symbol is provided
+        underlying_pdh = None
+        underlying_pdl = None
+        
+        if symbol:
+            try:
+                # Get the underlying instrument token for the symbol
+                symbol_map = {
+                    'NIFTY': 256265985,      # NSE:NIFTY 50
+                    'BANKNIFTY': 260105729,  # NSE:NIFTY BANK
+                    'FINNIFTY': 257356037    # NSE:NIFTY FIN SERVICE
+                }
+                
+                underlying_token = symbol_map.get(symbol.upper())
+                if underlying_token:
+                    # Fetch previous day's OHLC for the underlying
+                    underlying_ohlc = chart_service._fetch_prev_day_ohlc(underlying_token)
+                    underlying_pdh = underlying_ohlc.get('high')
+                    underlying_pdl = underlying_ohlc.get('low')
+                    logger.info(f"Underlying {symbol} PDH/PDL: {underlying_pdh}/{underlying_pdl}")
+            except Exception as e:
+                logger.warning(f"Error fetching underlying PDH/PDL for {symbol}: {e}")
+        
+        # Return both options PDH/PDL and underlying PDH/PDL
         return jsonify({
             'success': True,
             'pdh_pdl': pdh_pdl,
+            'pdh': underlying_pdh,  # Global index PDH
+            'pdl': underlying_pdl,  # Global index PDL
             'ce_token': ce_token,
-            'pe_token': pe_token
+            'pe_token': pe_token,
+            'symbol': symbol
         })
     except Exception as e:
         logger.error(f"Error fetching PDH/PDL: {e}", exc_info=True)
         error_str = str(e).lower()
-        if 'access_token' in error_str or 'unauthorized' in error_str:
-            return jsonify({
-                'success': False,
-                'error': 'Authentication failed. Please login again.',
-                'auth_error': True
-            }), 401
-        return jsonify({'success': False, 'error': str(e)}), 500
         if 'access_token' in error_str or 'unauthorized' in error_str:
             return jsonify({
                 'success': False,
@@ -836,6 +862,52 @@ def place_live_order() -> EndpointResponse:
             'success': False,
             'error': f'Server error: {str(e)}'
         }), 500
+
+
+@api_bp.route('/multi-strike', methods=['GET'])
+@limiter.exempt  # Exempt from rate limiting
+def get_multi_strike() -> EndpointResponse:
+    """
+    Get multi-strike options data for a symbol.
+    
+    Query params:
+    - symbol: Trading symbol (e.g., 'NIFTY', 'BANKNIFTY')
+    - num_strikes: Number of strikes above/below ATM (default 3)
+    
+    Returns: Multi-strike data with PDH/PDL lines
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    
+    symbol = request.args.get('symbol', 'NIFTY')
+    num_strikes = int(request.args.get('num_strikes', 3))
+    
+    try:
+        current_kite = get_kite()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+        
+        from service.multi_strike_service import MultiStrikeService
+        
+        multi_strike_service = MultiStrikeService(current_kite)
+        result = multi_strike_service.get_multi_strike_data(symbol, num_strikes)
+        
+        if not result.get('success'):
+            return jsonify(result), 500
+        
+        return jsonify(result), 200
+    
+    except Exception as e:
+        logger.error(f"Error in multi-strike endpoint: {e}", exc_info=True)
+        error_str = str(e).lower()
+        if 'access_token' in error_str or 'unauthorized' in error_str:
+            return jsonify({
+                'success': False,
+                'error': 'Authentication failed. Please login again.',
+                'auth_error': True
+            }), 401
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @api_bp.errorhandler(404)

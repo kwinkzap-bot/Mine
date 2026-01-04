@@ -28,6 +28,11 @@ def options_chart():
     """Options chart page."""
     return render_template('options_chart.html')
 
+@pages_bp.route('/multi-strike')
+def multi_strike():
+    """Multi-strike options page."""
+    return render_template('multi_strike.html')
+
 @pages_bp.route('/login')
 def login():
     """Login page - redirects to /auth/login."""

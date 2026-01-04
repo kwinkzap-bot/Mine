@@ -1,0 +1,345 @@
+/* Multi Strike Options Styles */
+
+.multi-strike-container {
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+.controls-section {
+    background: white;
+    padding: 12px;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    margin-bottom: 12px;
+}
+
+.form-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    min-width: 140px;
+}
+
+.form-group label {
+    margin-bottom: 3px;
+    font-weight: 500;
+    color: #333;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.form-group select,
+.form-group input {
+    padding: 7px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+    height: 32px;
+    line-height: 32px;
+}
+
+.form-group select:focus,
+.form-group input:focus {
+    outline: none;
+    border-color: #00bcd4;
+    box-shadow: 0 0 0 2px rgba(0, 188, 212, 0.1);
+}
+
+.form-button {
+    padding: 8px 16px;
+    background: #00bcd4;
+    color: #FFFFFF;
+    border: 1px solid #00bcd4;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+    height: 32px;
+    line-height: 32px;
+    font-size: 13px;
+    margin-top: 16px;
+    align-self: flex-end;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 120px;
+    text-align: center;
+}
+
+.form-button:hover {
+    background: #00a0c6;
+    border-color: #00a0c6;
+    color: #FFFFFF;
+}
+
+.form-button:active {
+    transform: scale(0.98);
+}
+
+/* Data Container */
+.data-container {
+    opacity: 1;
+    transition: opacity 0.3s;
+}
+
+.data-container.hidden {
+    display: none;
+    opacity: 0;
+}
+
+.header-info {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.info-box {
+    background: white;
+    padding: 10px 12px;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.info-box .label {
+    font-weight: 500;
+    color: #666;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.info-box .value {
+    font-size: 16px;
+    font-weight: bold;
+    color: #00bcd4;
+    text-align: right;
+}
+
+/* Chart */
+.charts-container {
+    background: white;
+    padding: 12px;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    margin-bottom: 12px;
+}
+
+.strike-charts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+    gap: 12px;
+}
+
+.chart-wrapper {
+    background: white;
+    border: 1px solid #e5e7eb;
+    padding: 12px;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    display: flex;
+    flex-direction: column;
+}
+
+.chart-header {
+    margin-bottom: 8px;
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 8px;
+}
+
+.chart-header h3 {
+    margin: 0;
+    color: #333;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.chart-element {
+    width: 100%;
+    height: 350px;
+    min-height: 350px;
+    display: block;
+    flex-grow: 1;
+}
+
+/* Table */
+.table-wrapper {
+    background: white;
+    padding: 12px;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.table-wrapper h3 {
+    margin: 0 0 10px 0;
+    color: #333;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    font-weight: 600;
+}
+
+.table-scroll {
+    overflow-x: auto;
+    border-radius: 4px;
+}
+
+.strike-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.strike-table thead {
+    background: #f5f5f5;
+    position: sticky;
+    top: 0;
+}
+
+.strike-table th {
+    padding: 8px 10px;
+    text-align: right;
+    font-weight: 600;
+    color: #333;
+    border-bottom: 1px solid #ddd;
+    font-size: 12px;
+}
+
+.strike-table td {
+    padding: 7px 10px;
+    text-align: right;
+    border-bottom: 1px solid #f0f0f0;
+    color: #666;
+    font-size: 13px;
+}
+
+.strike-table tbody tr:hover {
+    background: #fafafa;
+}
+
+.strike-table tbody tr.atm-row {
+    background: #e0f7fa;
+    font-weight: 600;
+}
+
+.strike-table tbody tr.atm-row td {
+    color: #00695c;
+}
+
+.strike-table td:first-child,
+.strike-table th:first-child {
+    text-align: left;
+    font-weight: 500;
+}
+
+/* Loader */
+.loader {
+    text-align: center;
+    padding: 40px;
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.loader.hidden {
+    display: none !important;
+    visibility: hidden;
+    height: 0;
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.spinner {
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #00bcd4;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 15px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.loader p {
+    color: #666;
+    margin: 0;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .multi-strike-container {
+        padding: 8px;
+    }
+
+    .controls-section {
+        padding: 8px;
+        margin-bottom: 8px;
+    }
+
+    .form-row {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .form-group {
+        width: 100%;
+        min-width: unset;
+    }
+
+    .form-button {
+        width: 100%;
+    }
+
+    .header-info {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 8px;
+    }
+
+    .info-box {
+        flex-direction: column;
+        text-align: center;
+        gap: 4px;
+        padding: 8px;
+    }
+
+    .chart-element {
+        height: 250px;
+    }
+
+    .strike-table {
+        font-size: 11px;
+    }
+
+    .strike-table th,
+    .strike-table td {
+        padding: 6px 8px;
+    }
+}
+
+/* Utility classes */
+.hidden {
+    display: none !important;
+}
+
+.text-right {
+    text-align: right;
+}

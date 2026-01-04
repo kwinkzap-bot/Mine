@@ -295,7 +295,6 @@ function displayResults(type, results) {
                 <td class="${dGapClass}">${dGap.toFixed(2)}%</td>
                 <td>${wGap.toFixed(2)}%</td>
                 <td>${mGap.toFixed(2)}%</td>
-                <td class="${statusClass}">${stock.status}</td>
             `;
         } else {
             row.innerHTML = `
@@ -304,7 +303,6 @@ function displayResults(type, results) {
                 <td>${dailyCpr.toFixed(2)}</td>
                 <td>${weeklyCpr.toFixed(2)}</td>
                 <td>${monthlyCpr.toFixed(2)}</td>
-                <td class="${statusClass}">${stock.status}</td>
             `;
         }
         tbody.appendChild(row);
@@ -381,7 +379,7 @@ function sortTable(tableId, columnIndexStr) {
     
     // Determine numeric column range based on table type (cross tables have fewer columns and no gaps)
     const isCrossTable = tableId === CONSTANTS.DOM_IDS.CROSS_ABOVE_TABLE || tableId === CONSTANTS.DOM_IDS.CROSS_BELOW_TABLE;
-    const numericMaxCol = isCrossTable ? 4 : 7; // indices 1..4 numeric for cross, 1..7 numeric for main tables
+    const numericMaxCol = isCrossTable ? 4 : 7; // indices 1..7 numeric for all tables (no Status column)
 
     // Sort rows
     rows.sort((a, b) => {

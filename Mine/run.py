@@ -5,6 +5,10 @@ Run the Flask application.
 import os
 import sys
 import threading
+
+# Add the parent directory to the Python path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from app import create_app
 from app.utils.logger import logger
 from strategy.HighLowLiveSignal import HighLowLiveSignal
