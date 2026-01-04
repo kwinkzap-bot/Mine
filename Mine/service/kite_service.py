@@ -1,7 +1,7 @@
 import logging
 from kiteconnect import KiteConnect
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional # Added typing imports
@@ -126,7 +126,69 @@ class KiteService:
             return None
         except Exception as e:
             logging.error(f"Error getting previous close for {symbol}: {e}")
-            return None    
+            return None
+    
+    def get_previous_trading_day_close(self, symbol: str) -> Optional[float]:
+        """
+        Get the previous trading day's close price using historical data.
+        
+        Handles weekends and market holidays by going back in time until finding a trading day.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'NIFTY', 'BANKNIFTY')
+        
+        Returns:
+            Previous trading day's close price, or None if not available
+        """
+        try:
+            # Get the instrument token for the symbol
+            instrument_token = self.get_instrument_token(symbol)
+            if not instrument_token:
+                logging.error(f"Could not find instrument token for {symbol}")
+                return None
+            
+            # Fetch daily OHLC data for the last 5-10 days to find a previous trading day
+            # Go back up to 10 days to account for weekends and holidays
+            to_date = datetime.now()
+            from_date = to_date - timedelta(days=10)
+            
+            logging.info(f"Fetching daily data for {symbol} (token: {instrument_token}) from {from_date.date()} to {to_date.date()}")
+            
+            try:
+                historical_data = self.kite.historical_data(
+                    instrument_token=int(instrument_token),
+                    from_date=from_date,
+                    to_date=to_date,
+                    interval='day'
+                )
+                logging.info(f"Daily historical data retrieved: {len(historical_data) if historical_data else 0} days")
+            except Exception as api_err:
+                logging.error(f"Error fetching daily historical data: {api_err}", exc_info=True)
+                return None
+            
+            if not historical_data:
+                logging.warning(f"No daily historical data returned for {symbol}")
+                return None
+            
+            # Sort by date in descending order and get the first (most recent trading day before today)
+            sorted_data = sorted(historical_data, key=lambda x: x['date'], reverse=True)
+            
+            if len(sorted_data) > 0:
+                # Get the most recent trading day's close
+                previous_day_data = sorted_data[0]
+                previous_close = float(previous_day_data['close'])
+                previous_date = previous_day_data['date']
+                
+                logging.info(f"Previous trading day close for {symbol} on {previous_date}: {previous_close}")
+                return previous_close
+            else:
+                logging.warning(f"No trading day data found for {symbol}")
+                return None
+        
+        except Exception as e:
+            logging.error(f"Error in get_previous_trading_day_close: {e}", exc_info=True)
+            return None
+
     def get_fo_stocks(self) -> List[str]:
         """Get list of F&O underlying stocks, including FUTURES and OPTIONS."""
         try:

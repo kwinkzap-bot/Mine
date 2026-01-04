@@ -247,11 +247,11 @@ class OptionsChartService:
             # STEP 3: Fetch pricing data to calculate defaults
             try:
                 with ThreadPoolExecutor(max_workers=1, thread_name_prefix="pricing") as executor:
-                    # Fetch ONLY previous close (faster than both LTP and quote)
-                    pdc_future = executor.submit(self.kite_service.get_previous_close, symbol)
+                    # Fetch previous trading day close using historical data (handles weekends/holidays)
+                    pdc_future = executor.submit(self.kite_service.get_previous_trading_day_close, symbol)
                     
                     try:
-                        base_price = pdc_future.result(timeout=3)  # 3s timeout
+                        base_price = pdc_future.result(timeout=5)  # 5s timeout for historical data fetch
                     except Exception:
                         logging.warning(f"Timeout fetching price for {symbol}, using mid-strike")
                         pass
