@@ -8,10 +8,28 @@
 
 /* Header & Info */
 .header-info {
+    display: flex;
+    justify-content: space-between;
     align-items: center;
-    padding-bottom: 8px;
+    padding: 12px 0;
     border-bottom: 1px solid #ddd;
     margin-bottom: 15px;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.header-info h2 {
+    margin: 0;
+    flex: 1;
+    font-size: 22px;
+    font-weight: 600;
+    color: #333;
+    min-width: 300px;
+}
+
+.header-info #nifty-ltp {
+    color: #00bcd4;
+    font-weight: 700;
 }
 
 /* Utility Class (needed for manual token group) */
@@ -90,6 +108,8 @@
     gap: 10px;
     align-items: center;
     flex-wrap: wrap;
+    margin-left: auto;
+    white-space: nowrap;
 }
 
 .timeframe-buttons label {
@@ -254,6 +274,7 @@
     display: flex;
     gap: 10px;
     align-items: center;
+    flex-shrink: 0;
 }
 
 .order-btn {

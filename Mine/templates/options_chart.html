@@ -10,15 +10,15 @@
         <div class="spinner"></div>
         <p>Loading...</p>
     </div>
-    <div class="form-row header-info" style="display: flex; justify-content: space-between; align-items: center;">
-        <h2 style="margin: 0;">NIFTY Price: <span id="nifty-ltp" style="color: #00bcd4;">
+    <div class="header-info">
+        <h2>NIFTY Price: <span id="nifty-ltp">
             {% if nifty_val is defined and nifty_val is not none %}
                 ₹{{ "{:.2f}".format(nifty_val) }}
             {% else %}
                 N/A
             {% endif %}
         </span></h2>
-        <div class="order-buttons-group" style="display: flex; gap: 10px;">
+        <div class="order-buttons-group">
             <button id="buyPeBtn" type="button" class="btn order-btn order-btn-pe" title="Place buy order for PE strike">
                 🔴 BUY PE
             </button>
@@ -50,7 +50,7 @@
             <div class="form-group">
                 <button id="fetchChartBtn" type="submit" class="btn form-button">Fetch Chart Data</button>
             </div>
-            <div class="timeframe-buttons" style="margin-left: auto;">
+            <div class="timeframe-buttons">
                 <label>Timeframe:</label>
                 <button type="button" class="timeframe-btn" data-timeframe="1minute">1m</button>
                 <button type="button" class="timeframe-btn" data-timeframe="3minute">3m</button>
