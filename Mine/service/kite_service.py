@@ -149,12 +149,11 @@ class KiteService:
                 return None
             
             # Fetch daily OHLC data for the last 10-15 days to find a previous trading day
-            # Start from yesterday to exclude today's incomplete data
-            today = datetime.now().date()
-            to_date = datetime.combine(today - timedelta(days=1), datetime.max.time())
+            # Go back 15 days to capture weekends/holidays and get at least 5-10 trading days
+            to_date = datetime.now()
             from_date = to_date - timedelta(days=15)
             
-            logging.info(f"Fetching daily data for {symbol} (token: {instrument_token}) from {from_date.date()} to {to_date.date()}")
+            logging.info(f"[get_previous_trading_day_close] {symbol}: Fetching from {from_date.date()} to {to_date.date()}")
             
             try:
                 historical_data = self.kite.historical_data(
@@ -163,20 +162,24 @@ class KiteService:
                     to_date=to_date,
                     interval='day'
                 )
-                logging.info(f"Daily historical data retrieved: {len(historical_data) if historical_data else 0} days")
+                logging.info(f"[get_previous_trading_day_close] {symbol}: Retrieved {len(historical_data) if historical_data else 0} days")
                 if historical_data:
-                    for data in historical_data:
-                        logging.debug(f"  {data['date'].date()}: close={data['close']}")
+                    for i, data in enumerate(historical_data):
+                        logging.debug(f"[get_previous_trading_day_close]   [{i}] {data['date'].date()}: O={data['open']}, H={data['high']}, L={data['low']}, C={data['close']}")
             except Exception as api_err:
-                logging.error(f"Error fetching daily historical data: {api_err}", exc_info=True)
+                logging.error(f"[get_previous_trading_day_close] Error fetching daily data: {api_err}", exc_info=True)
                 return None
             
             if not historical_data:
-                logging.warning(f"No daily historical data returned for {symbol}")
+                logging.warning(f"[get_previous_trading_day_close] {symbol}: No historical data returned")
                 return None
             
-            # Sort by date in descending order and get the first (most recent complete trading day)
+            # Sort by date in descending order to get the most recent trading day
             sorted_data = sorted(historical_data, key=lambda x: x['date'], reverse=True)
+            
+            logging.info(f"[get_previous_trading_day_close] {symbol}: After sorting (descending by date):")
+            for i, data in enumerate(sorted_data[:3]):  # Log top 3 most recent
+                logging.info(f"[get_previous_trading_day_close]   [{i}] {data['date'].date()}: close={data['close']}")
             
             if len(sorted_data) > 0:
                 # Get the most recent trading day's close
@@ -184,14 +187,14 @@ class KiteService:
                 previous_close = float(previous_day_data['close'])
                 previous_date = previous_day_data['date'].date()
                 
-                logging.info(f"Previous trading day close for {symbol} on {previous_date}: {previous_close}")
+                logging.info(f"[get_previous_trading_day_close] ✓ {symbol} on {previous_date}: {previous_close}")
                 return previous_close
             else:
-                logging.warning(f"No trading day data found for {symbol}")
+                logging.warning(f"[get_previous_trading_day_close] {symbol}: No trading day data found after sorting")
                 return None
         
         except Exception as e:
-            logging.error(f"Error in get_previous_trading_day_close: {e}", exc_info=True)
+            logging.error(f"[get_previous_trading_day_close] Error: {e}", exc_info=True)
             return None
 
     def get_fo_stocks(self) -> List[str]:

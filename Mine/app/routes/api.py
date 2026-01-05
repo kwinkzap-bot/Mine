@@ -232,7 +232,7 @@ def get_options_init() -> EndpointResponse:
         requested_price = base_price or 0.0
         requested_source_label = ' (Close)' if price_source == 'previous_close' else ' (LTP)'
         
-        logger.info(f"Price source: {price_source}, requested_price: {requested_price}, source_label: {requested_source_label}")
+        logger.info(f"[options-init] {symbol}: price_source={price_source}, base_price={base_price}, requested_price={requested_price}, label={requested_source_label}")
         
         total_time = time_module.time() - start_time
         logger.info(f"✓ options-init({symbol}) completed in {total_time:.2f}s")

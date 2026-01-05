@@ -253,26 +253,26 @@ class OptionsChartService:
                         ltp_future = executor.submit(self.kite_service.get_current_ltp, symbol)
                         try:
                             base_price = ltp_future.result(timeout=3)
-                            logging.info(f"Using LTP price for {symbol}: {base_price}")
+                            logging.info(f"[get_strikes] {symbol}: Using LTP price: {base_price}")
                         except Exception as e:
-                            logging.warning(f"Error fetching LTP for {symbol}: {e}, falling back to previous close")
+                            logging.warning(f"[get_strikes] {symbol}: Error fetching LTP: {e}, falling back to previous close")
                             # Fallback to previous close if LTP fails
                             try:
                                 pdc_future = executor.submit(self.kite_service.get_previous_trading_day_close, symbol)
                                 base_price = pdc_future.result(timeout=5)
-                                logging.info(f"Using previous close (fallback) for {symbol}: {base_price}")
+                                logging.info(f"[get_strikes] {symbol}: Using previous close (LTP fallback): {base_price}")
                             except Exception:
-                                logging.warning(f"Timeout fetching fallback price for {symbol}, using mid-strike")
+                                logging.warning(f"[get_strikes] {symbol}: Timeout fetching fallback price, using mid-strike")
                     else:
                         # Fetch previous trading day close using historical data (handles weekends/holidays)
                         pdc_future = executor.submit(self.kite_service.get_previous_trading_day_close, symbol)
                         try:
                             base_price = pdc_future.result(timeout=5)
-                            logging.info(f"Using previous close price for {symbol}: {base_price}")
-                        except Exception:
-                            logging.warning(f"Timeout fetching price for {symbol}, using mid-strike")
+                            logging.info(f"[get_strikes] {symbol}: Using previous close price: {base_price}")
+                        except Exception as e:
+                            logging.warning(f"[get_strikes] {symbol}: Timeout fetching price: {e}, using mid-strike")
             except Exception as e:
-                logging.warning(f"Error fetching pricing: {e}")
+                logging.warning(f"[get_strikes] {symbol}: Error fetching pricing: {e}")
             
             # Use midpoint strike as fallback
             if not base_price and strikes:
