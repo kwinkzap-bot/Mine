@@ -149,85 +149,197 @@ class OptionsChartService:
         logging.info(f"[STRIKE_CALC] Symbol={symbol}, BasePrice={base_price:.2f}, RoundTo={round_to}, RoundedBase={rounded_base}, OffsetType={offset_type}, Diff={diff}, CE={ce_strike_price}, PE={pe_strike_price}")
         return float(ce_strike_price), float(pe_strike_price)
 
+    def _load_or_fetch_nfo_instruments(self) -> List[Dict[str, Any]]:
+        """Load NFO instruments from cache or fetch from Kite API."""
+        import time as time_module
+        
+        # Try disk cache first (24h validity)
+        instruments = self._load_nfo_from_disk_cache()
+        if instruments:
+            return instruments
+        
+        # Try memory cache (1h validity)
+        now = time_module.time()
+        with self._instruments_lock:
+            if self._instruments_cache.get('NFO') and now < self._instruments_expiry:
+                instruments = self._instruments_cache['NFO']
+                logging.info(f"✓ Using memory-cached NFO instruments ({len(instruments)} records)")
+                return instruments
+        
+        # Fetch from Kite API
+        logging.info("Fetching NFO instruments from Kite API (5-10s)...")
+        fetch_start = time_module.time()
+        instruments = self.kite_service.kite.instruments("NFO")
+        fetch_time = time_module.time() - fetch_start
+        logging.info(f"✓ Fetched NFO from API in {fetch_time:.1f}s ({len(instruments)} records)")
+        
+        # Save to both caches
+        with self._instruments_lock:
+            self._instruments_cache['NFO'] = instruments
+            self._instruments_expiry = now + 3600
+        self._save_nfo_to_disk_cache(instruments)
+        
+        return instruments
+
+    def _get_symbol_expiry_instruments(self, instruments: List[Dict[str, Any]], symbol: str) -> List[Dict[str, Any]]:
+        """Get all instruments for a symbol with current expiry."""
+        symbol_upper = symbol.upper()
+        
+        # Filter to symbol and option types
+        symbol_instruments = [
+            inst for inst in instruments
+            if inst['name'].upper() == symbol_upper and inst['instrument_type'] in ['CE', 'PE']
+        ]
+        
+        if not symbol_instruments:
+            return []
+        
+        # Get current expiry
+        expiries = sorted(list(set(inst['expiry'] for inst in symbol_instruments)))
+        current_expiry = expiries[0] if expiries else None
+        
+        if not current_expiry:
+            return []
+        
+        # Filter by current expiry
+        return [
+            inst for inst in symbol_instruments
+            if inst['expiry'] == current_expiry
+        ]
+
+    def _build_strikes_from_instruments(self, instruments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Build strikes list with CE and PE tokens from instruments."""
+        strikes_dict: Dict[float, Dict[str, Any]] = {}
+        
+        for inst in instruments:
+            strike = float(inst['strike'])
+            if strike not in strikes_dict:
+                strikes_dict[strike] = {'strike': strike, 'ce_token': None, 'pe_token': None}
+            
+            if inst['instrument_type'] == 'CE':
+                strikes_dict[strike]['ce_token'] = inst['instrument_token']
+            elif inst['instrument_type'] == 'PE':
+                strikes_dict[strike]['pe_token'] = inst['instrument_token']
+        
+        # Only include strikes that have both CE and PE
+        strikes = sorted(
+            [s for s in strikes_dict.values() if s['ce_token'] and s['pe_token']],
+            key=lambda x: x['strike']
+        )
+        
+        return strikes
+
+    def _fetch_base_price(self, symbol: str, price_source: str) -> Optional[float]:
+        """Fetch base price based on price_source parameter."""
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="pricing") as executor:
+            if price_source == 'ltp':
+                return self._fetch_ltp_with_fallback(executor, symbol)
+            else:  # previous_close
+                return self._fetch_previous_close(executor, symbol)
+
+    def _fetch_ltp_with_fallback(self, executor, symbol: str) -> Optional[float]:
+        """Fetch LTP with fallback to previous close."""
+        ltp_future = executor.submit(self.kite_service.get_current_ltp, symbol)
+        try:
+            base_price = ltp_future.result(timeout=3)
+            logging.info(f"[get_strikes] {symbol}: Using LTP price: {base_price}")
+            return base_price
+        except Exception as e:
+            logging.warning(f"[get_strikes] {symbol}: Error fetching LTP: {e}, falling back to previous close")
+            return self._fetch_previous_close(executor, symbol)
+
+    def _fetch_previous_close(self, executor, symbol: str) -> Optional[float]:
+        """Fetch previous trading day close."""
+        pdc_future = executor.submit(self.kite_service.get_previous_trading_day_close, symbol)
+        try:
+            base_price = pdc_future.result(timeout=5)
+            logging.info(f"[get_strikes] {symbol}: Using previous close price: {base_price}")
+            return base_price
+        except Exception as e:
+            logging.warning(f"[get_strikes] {symbol}: Timeout fetching price: {e}, using mid-strike")
+            return None
+
+    def _calculate_and_assign_defaults(self, base_price: Optional[float], symbol: str, 
+                                       strikes: List[Dict[str, Any]]) -> Tuple[Optional[float], Optional[float], 
+                                                                                Optional[int], Optional[int]]:
+        """Calculate default CE/PE strikes and find their tokens."""
+        default_ce_strike = None
+        default_pe_strike = None
+        default_ce_token = None
+        default_pe_token = None
+        
+        if not base_price:
+            if strikes:
+                base_price = strikes[len(strikes) // 2]['strike']
+            else:
+                return None, None, None, None
+        
+        # Calculate default strikes
+        default_ce_strike, default_pe_strike = self._calculate_default_strikes(base_price, symbol)
+        
+        # Try exact match first
+        for s in strikes:
+            if default_ce_strike and s['strike'] == default_ce_strike:
+                default_ce_token = s['ce_token']
+            if default_pe_strike and s['strike'] == default_pe_strike:
+                default_pe_token = s['pe_token']
+        
+        # If exact matches not found, use closest available strikes
+        if not default_ce_token and default_ce_strike and strikes:
+            closest_ce = min(strikes, key=lambda x: abs(x['strike'] - default_ce_strike))
+            default_ce_token = closest_ce['ce_token']
+            default_ce_strike = closest_ce['strike']
+            logging.warning(f"CE strike {default_ce_strike} not found, using closest: {closest_ce['strike']}")
+        
+        if not default_pe_token and default_pe_strike and strikes:
+            closest_pe = min(strikes, key=lambda x: abs(x['strike'] - default_pe_strike))
+            default_pe_token = closest_pe['pe_token']
+            default_pe_strike = closest_pe['strike']
+            logging.warning(f"PE strike {default_pe_strike} not found, using closest: {closest_pe['strike']}")
+        
+        if default_ce_strike and default_pe_strike:
+            logging.info(f"Default strikes selected: CE={default_ce_strike}, PE={default_pe_strike}")
+        
+        return default_ce_strike, default_pe_strike, default_ce_token, default_pe_token
+
     def get_strikes_for_symbol(self, symbol: str, price_source: str = 'previous_close', skip_pricing: bool = False) -> Dict[str, Any]:
         """
-        Fast method to get strikes. Skip pricing data if not needed (skip_pricing=True).
-        Returns strikes immediately without waiting for price data.
+        Get available strikes for a symbol with default CE/PE selection.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'NIFTY')
+            price_source: 'previous_close' or 'ltp' for calculating default strikes
+            skip_pricing: If True, returns immediately with calculated defaults
+        
+        Returns:
+            Dict with strikes, default CE/PE strikes and tokens, and base_price
         """
         import time as time_module
         start_time = time_module.time()
         
         try:
-            # STEP 1: Load NFO instruments (try disk cache first, then Kite API)
-            instruments = None
+            # STEP 1: Load NFO instruments
+            instruments = self._load_or_fetch_nfo_instruments()
             
-            # Try disk cache first (24h validity)
-            instruments = self._load_nfo_from_disk_cache()
+            # STEP 2: Get instruments for this symbol and current expiry
+            expiry_instruments = self._get_symbol_expiry_instruments(instruments, symbol)
             
-            if not instruments:
-                # Try memory cache (1h validity)
-                now = time_module.time()
-                with self._instruments_lock:
-                    if self._instruments_cache.get('NFO') and now < self._instruments_expiry:
-                        instruments = self._instruments_cache['NFO']
-                        logging.info(f"✓ Using memory-cached NFO instruments ({len(instruments)} records)")
-                
-                # If still no cache, fetch from Kite
-                if not instruments:
-                    logging.info("Fetching NFO instruments from Kite API (5-10s)...")
-                    fetch_start = time_module.time()
-                    instruments = self.kite_service.kite.instruments("NFO")
-                    fetch_time = time_module.time() - fetch_start
-                    logging.info(f"✓ Fetched NFO from API in {fetch_time:.1f}s ({len(instruments)} records)")
-                    
-                    # Save to both caches
-                    with self._instruments_lock:
-                        self._instruments_cache['NFO'] = instruments
-                        self._instruments_expiry = now + 3600
-                    self._save_nfo_to_disk_cache(instruments)
+            if not expiry_instruments:
+                logging.warning(f"No instruments found for {symbol}")
+                return {
+                    'strikes': [],
+                    'default_ce_strike': None,
+                    'default_pe_strike': None,
+                    'default_ce_token': None,
+                    'default_pe_token': None,
+                    'base_price': None
+                }
             
-            # STEP 2: Filter to symbol + expiry (FAST - no API call)
-            symbol_upper = symbol.upper()
-            symbol_instruments = [
-                inst for inst in instruments
-                if inst['name'].upper() == symbol_upper and inst['instrument_type'] in ['CE', 'PE']
-            ]
-            
-            if not symbol_instruments:
-                return {'strikes': [], 'default_ce_token': None, 'default_pe_token': None}
-            
-            # Get current expiry
-            expiries = sorted(list(set(inst['expiry'] for inst in symbol_instruments)))
-            current_expiry = expiries[0] if expiries else None
-            
-            if not current_expiry:
-                return {'strikes': [], 'default_ce_token': None, 'default_pe_token': None}
-            
-            # Filter by current expiry
-            current_expiry_instruments = [
-                inst for inst in symbol_instruments
-                if inst['expiry'] == current_expiry
-            ]
-            
-            # Build strikes dict
-            strikes_dict: Dict[float, Dict[str, Any]] = {}
-            for inst in current_expiry_instruments:
-                strike = float(inst['strike'])
-                if strike not in strikes_dict:
-                    strikes_dict[strike] = {'strike': strike, 'ce_token': None, 'pe_token': None}
-                
-                if inst['instrument_type'] == 'CE':
-                    strikes_dict[strike]['ce_token'] = inst['instrument_token']
-                elif inst['instrument_type'] == 'PE':
-                    strikes_dict[strike]['pe_token'] = inst['instrument_token']
-            
-            # Only include strikes that have both CE and PE
-            strikes = sorted(
-                [s for s in strikes_dict.values() if s['ce_token'] and s['pe_token']],
-                key=lambda x: x['strike']
-            )
+            # STEP 3: Build strikes dictionary
+            strikes = self._build_strikes_from_instruments(expiry_instruments)
             
             if not strikes:
+                logging.warning(f"No complete strikes (CE+PE pairs) found for {symbol}")
                 return {
                     'strikes': strikes,
                     'default_ce_strike': None,
@@ -237,90 +349,12 @@ class OptionsChartService:
                     'base_price': None
                 }
             
-            # Initialize defaults
-            default_ce_strike = None
-            default_pe_strike = None
-            default_ce_token = None
-            default_pe_token = None
-            base_price = None
+            # STEP 4: Fetch base price
+            base_price = self._fetch_base_price(symbol, price_source)
             
-            # STEP 3: Fetch pricing data to calculate defaults (use price_source parameter)
-            try:
-                with ThreadPoolExecutor(max_workers=1, thread_name_prefix="pricing") as executor:
-                    # Fetch price based on price_source parameter
-                    if price_source == 'ltp':
-                        # Fetch real-time LTP
-                        ltp_future = executor.submit(self.kite_service.get_current_ltp, symbol)
-                        try:
-                            base_price = ltp_future.result(timeout=3)
-                            logging.info(f"[get_strikes] {symbol}: Using LTP price: {base_price}")
-                        except Exception as e:
-                            logging.warning(f"[get_strikes] {symbol}: Error fetching LTP: {e}, falling back to previous close")
-                            # Fallback to previous close if LTP fails
-                            try:
-                                pdc_future = executor.submit(self.kite_service.get_previous_trading_day_close, symbol)
-                                base_price = pdc_future.result(timeout=5)
-                                logging.info(f"[get_strikes] {symbol}: Using previous close (LTP fallback): {base_price}")
-                            except Exception:
-                                logging.warning(f"[get_strikes] {symbol}: Timeout fetching fallback price, using mid-strike")
-                    else:
-                        # Fetch previous trading day close using historical data (handles weekends/holidays)
-                        pdc_future = executor.submit(self.kite_service.get_previous_trading_day_close, symbol)
-                        try:
-                            base_price = pdc_future.result(timeout=5)
-                            logging.info(f"[get_strikes] {symbol}: Using previous close price: {base_price}")
-                        except Exception as e:
-                            logging.warning(f"[get_strikes] {symbol}: Timeout fetching price: {e}, using mid-strike")
-            except Exception as e:
-                logging.warning(f"[get_strikes] {symbol}: Error fetching pricing: {e}")
-            
-            # Use midpoint strike as fallback
-            if not base_price and strikes:
-                base_price = strikes[len(strikes) // 2]['strike']
-            
-            # Calculate default strikes and find their tokens
-            if base_price:
-                default_ce_strike, default_pe_strike = self._calculate_default_strikes(base_price, symbol)
-                
-                # Try exact match first
-                for s in strikes:
-                    if default_ce_strike and s['strike'] == default_ce_strike:
-                        default_ce_token = s['ce_token']
-                    if default_pe_strike and s['strike'] == default_pe_strike:
-                        default_pe_token = s['pe_token']
-                
-                # If exact matches not found, use closest available strikes
-                if not default_ce_token and default_ce_strike and strikes:
-                    closest_ce = min(strikes, key=lambda x: abs(x['strike'] - default_ce_strike))
-                    default_ce_token = closest_ce['ce_token']
-                    default_ce_strike = closest_ce['strike']  # Update to actual available strike
-                    logging.warning(f"CE strike {default_ce_strike} not found, using closest: {closest_ce['strike']}")
-                
-                if not default_pe_token and default_pe_strike and strikes:
-                    closest_pe = min(strikes, key=lambda x: abs(x['strike'] - default_pe_strike))
-                    default_pe_token = closest_pe['pe_token']
-                    default_pe_strike = closest_pe['strike']  # Update to actual available strike
-                    logging.warning(f"PE strike {default_pe_strike} not found, using closest: {closest_pe['strike']}")
-                
-                logging.info(f"Default strikes selected: CE={default_ce_strike}, PE={default_pe_strike}")
-            
-            # If skip_pricing, return now with calculated defaults
-            if skip_pricing:
-                logging.info(f"✓ get_strikes_for_symbol({symbol}) completed in {time_module.time() - start_time:.2f}s (pricing skipped)")
-                return {
-                    'strikes': strikes,
-                    'default_ce_strike': default_ce_strike,
-                    'default_pe_strike': default_pe_strike,
-                    'default_ce_token': default_ce_token,
-                    'default_pe_token': default_pe_token,
-                    'base_price': base_price
-                }
-            
-            # Mark ATM strike
-            if base_price:
-                atm_strike = min(strikes, key=lambda x: abs(x['strike'] - base_price))
-                for s in strikes:
-                    s['is_atm'] = (s['strike'] == atm_strike['strike'])
+            # STEP 5: Calculate and assign default strikes
+            default_ce_strike, default_pe_strike, default_ce_token, default_pe_token = \
+                self._calculate_and_assign_defaults(base_price, symbol, strikes)
             
             elapsed = time_module.time() - start_time
             logging.info(f"✓ get_strikes_for_symbol({symbol}) completed in {elapsed:.2f}s")
