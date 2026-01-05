@@ -5,6 +5,7 @@ All Flask extensions are initialized here to avoid circular imports.
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import CSRFProtect
+from flask_cors import CORS
 
 # Initialize extensions (without app binding)
 limiter = Limiter(key_func=get_remote_address)
@@ -14,6 +15,16 @@ def init_extensions(app):
     """Initialize all Flask extensions with the app."""
     limiter.init_app(app)
     csrf.init_app(app)
+    
+    # Enable CORS for localhost development
+    CORS(app, resources={
+        r"/*": {
+            "origins": ["http://localhost:*", "http://127.0.0.1:*"],
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"],
+            "supports_credentials": True
+        }
+    })
     
     # Initialize scheduler for recurring tasks
     from app.scheduler import init_scheduler
