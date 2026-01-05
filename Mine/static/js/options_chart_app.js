@@ -65,8 +65,7 @@ const OptionsChartApp = (function () {
         '3minute': 180,
         '5minute': 300,
         '15minute': 900,
-        '60minute': 3600,
-        '1day': 86400
+        '60minute': 3600
     };
 
     // --- DOM Elements cache ---
@@ -554,15 +553,7 @@ const OptionsChartApp = (function () {
             const date = new Date(timestamp * 1000);
 
             // Format based on timeframe for better readability using IST timezone
-            if (currentTimeframe === '1day') {
-                // For daily: show date (DD/MM/YY)
-                return new Intl.DateTimeFormat('en-IN', {
-                    timeZone: 'Asia/Kolkata',
-                    day: '2-digit',
-                    month: '2-digit',
-                    year: '2-digit'
-                }).format(date);
-            } else if (currentTimeframe === '60minute') {
+            if (currentTimeframe === '60minute') {
                 // For hourly: show time (HH:MM)
                 return new Intl.DateTimeFormat('en-IN', {
                     timeZone: 'Asia/Kolkata',
@@ -607,7 +598,7 @@ const OptionsChartApp = (function () {
                 textColor: '#6b7280',
                 borderColor: '#e5e7eb',
                 timeVisible: true,
-                secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute', // Show seconds for intraday
+                secondsVisible: currentTimeframe !== '60minute', // Show seconds for intraday
                 rightOffset: 250
             },
             rightPriceScale: {
@@ -625,7 +616,7 @@ const OptionsChartApp = (function () {
         ceChart = createChart(document.getElementById('ceChart'), lightTheme);
         ceChart.timeScale().applyOptions({
             timeVisible: true,
-            secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+            secondsVisible: currentTimeframe !== '60minute'
         });
         ceSeries = ceChart.addSeries(CandlestickSeries, { upColor: '#10b981', downColor: '#ef4444', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#ef4444' });
 
@@ -634,7 +625,7 @@ const OptionsChartApp = (function () {
         peChart = createChart(document.getElementById('peChart'), lightTheme);
         peChart.timeScale().applyOptions({
             timeVisible: true,
-            secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+            secondsVisible: currentTimeframe !== '60minute'
         });
         peSeries = peChart.addSeries(CandlestickSeries, { upColor: '#10b981', downColor: '#ef4444', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#ef4444' });
 
@@ -643,7 +634,7 @@ const OptionsChartApp = (function () {
         combinedChart = createChart(document.getElementById('combinedChart'), lightTheme);
         combinedChart.timeScale().applyOptions({
             timeVisible: true,
-            secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+            secondsVisible: currentTimeframe !== '60minute'
         });
         combinedCeSeries = combinedChart.addSeries(CandlestickSeries, {
             upColor: '#10b981',
@@ -671,7 +662,7 @@ const OptionsChartApp = (function () {
             cePairCeChart = createChart(cePairCeContainer, lightTheme);
             cePairCeChart.timeScale().applyOptions({
                 timeVisible: true,
-                secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+                secondsVisible: currentTimeframe !== '60minute'
             });
             cePairCeSeries = cePairCeChart.addSeries(CandlestickSeries, {
                 upColor: '#10b981',
@@ -687,7 +678,7 @@ const OptionsChartApp = (function () {
             cePairPeChart = createChart(cePairPeContainer, lightTheme);
             cePairPeChart.timeScale().applyOptions({
                 timeVisible: true,
-                secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+                secondsVisible: currentTimeframe !== '60minute'
             });
             cePairPeSeries = cePairPeChart.addSeries(CandlestickSeries, {
                 upColor: '#10b981',
@@ -707,7 +698,7 @@ const OptionsChartApp = (function () {
             pePairCeChart = createChart(pePairCeContainer, lightTheme);
             pePairCeChart.timeScale().applyOptions({
                 timeVisible: true,
-                secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+                secondsVisible: currentTimeframe !== '60minute'
             });
             pePairCeSeries = pePairCeChart.addSeries(CandlestickSeries, {
                 upColor: '#10b981',
@@ -723,7 +714,7 @@ const OptionsChartApp = (function () {
             pePairPeChart = createChart(pePairPeContainer, lightTheme);
             pePairPeChart.timeScale().applyOptions({
                 timeVisible: true,
-                secondsVisible: currentTimeframe !== '1day' && currentTimeframe !== '60minute'
+                secondsVisible: currentTimeframe !== '60minute'
             });
             pePairPeSeries = pePairPeChart.addSeries(CandlestickSeries, {
                 upColor: '#10b981',
@@ -994,8 +985,7 @@ const OptionsChartApp = (function () {
                     '3minute': 125,    // 6.25 hours * 20
                     '5minute': 75,     // 6.25 hours * 12
                     '15minute': 25,    // 6.25 hours * 4
-                    '60minute': 7,     // ~6-7 hours
-                    '1day': 1
+                    '60minute': 7      // ~6-7 hours
                 };
 
                 const barsToShow = (barsPerDay[currentTimeframe] || 75) * days;
