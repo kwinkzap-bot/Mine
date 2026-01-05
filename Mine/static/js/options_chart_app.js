@@ -1065,6 +1065,7 @@ const OptionsChartApp = (function () {
         try {
             // Get the selected price source (LTP or Previous Close)
             const priceSource = document.querySelector('input[name="priceSource"]:checked')?.value || 'previous_close';
+            console.log('[loadStrikes] Using price source:', priceSource, 'currentPriceSource:', currentPriceSource);
 
             // Single merged API call that returns strikes, underlying price, and PDH/PDL
             const data = await fetchJson(`${CONSTANTS.API_ENDPOINTS.OPTIONS_INIT}?symbol=${symbol}&price_source=${priceSource}`);
