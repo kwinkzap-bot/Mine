@@ -226,34 +226,13 @@ def get_options_init() -> EndpointResponse:
         default_pe_strike = result.get('default_pe_strike')
         base_price = result.get('base_price')
         
-        # Fetch the requested price based on price_source parameter (only once)
+        # Use the base_price already calculated by the service (respects price_source)
+        # For 'previous_close', base_price comes from historical data (get_previous_trading_day_close)
+        # For 'ltp', base_price comes from get_current_ltp
         requested_price = base_price or 0.0
-        requested_source_label = ' (Close)'
+        requested_source_label = ' (Close)' if price_source == 'previous_close' else ' (LTP)'
         
-        try:
-            instrument_key = get_instrument_key(symbol)
-            
-            if price_source == 'ltp':
-                try:
-                    ltp_data = current_kite.ltp([instrument_key])
-                    requested_price = float(ltp_data.get(instrument_key, {}).get('last_price', base_price or 0.0))
-                    requested_source_label = ' (LTP)'
-                except Exception as e:
-                    logger.warning(f"Error fetching LTP for {symbol}: {e}")
-                    requested_price = base_price or 0.0
-                    requested_source_label = ' (LTP)'
-            else:  # previous_close
-                try:
-                    quote_data = current_kite.quote([instrument_key])
-                    requested_price = float(quote_data.get(instrument_key, {}).get('ohlc', {}).get('close', base_price or 0.0))
-                    requested_source_label = ' (Close)'
-                except Exception as e:
-                    logger.warning(f"Error fetching previous close for {symbol}: {e}")
-                    requested_price = base_price or 0.0
-                    requested_source_label = ' (Close)'
-        except Exception as e:
-            logger.warning(f"Error fetching price data for {symbol}: {e}")
-            requested_price = base_price or 0.0
+        logger.info(f"Price source: {price_source}, requested_price: {requested_price}, source_label: {requested_source_label}")
         
         total_time = time_module.time() - start_time
         logger.info(f"✓ options-init({symbol}) completed in {total_time:.2f}s")
