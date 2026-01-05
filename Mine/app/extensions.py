@@ -22,7 +22,7 @@ csrf = CSRFProtect()
 
 def init_extensions(app):
     """Initialize all Flask extensions with the app."""
-    limiter.init_app(app, default_limits=[])  # No default limits
+    limiter.init_app(app)
     csrf.init_app(app)
     
     # Enable CORS for localhost development
