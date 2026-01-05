@@ -133,6 +133,7 @@ class KiteService:
         Get the previous trading day's close price using historical data.
         
         Handles weekends and market holidays by going back in time until finding a trading day.
+        Excludes today's data to ensure we get a complete trading day's close.
         
         Args:
             symbol: Trading symbol (e.g., 'NIFTY', 'BANKNIFTY')
@@ -147,10 +148,11 @@ class KiteService:
                 logging.error(f"Could not find instrument token for {symbol}")
                 return None
             
-            # Fetch daily OHLC data for the last 5-10 days to find a previous trading day
-            # Go back up to 10 days to account for weekends and holidays
-            to_date = datetime.now()
-            from_date = to_date - timedelta(days=10)
+            # Fetch daily OHLC data for the last 10-15 days to find a previous trading day
+            # Start from yesterday to exclude today's incomplete data
+            today = datetime.now().date()
+            to_date = datetime.combine(today - timedelta(days=1), datetime.max.time())
+            from_date = to_date - timedelta(days=15)
             
             logging.info(f"Fetching daily data for {symbol} (token: {instrument_token}) from {from_date.date()} to {to_date.date()}")
             
@@ -162,6 +164,9 @@ class KiteService:
                     interval='day'
                 )
                 logging.info(f"Daily historical data retrieved: {len(historical_data) if historical_data else 0} days")
+                if historical_data:
+                    for data in historical_data:
+                        logging.debug(f"  {data['date'].date()}: close={data['close']}")
             except Exception as api_err:
                 logging.error(f"Error fetching daily historical data: {api_err}", exc_info=True)
                 return None
@@ -170,14 +175,14 @@ class KiteService:
                 logging.warning(f"No daily historical data returned for {symbol}")
                 return None
             
-            # Sort by date in descending order and get the first (most recent trading day before today)
+            # Sort by date in descending order and get the first (most recent complete trading day)
             sorted_data = sorted(historical_data, key=lambda x: x['date'], reverse=True)
             
             if len(sorted_data) > 0:
                 # Get the most recent trading day's close
                 previous_day_data = sorted_data[0]
                 previous_close = float(previous_day_data['close'])
-                previous_date = previous_day_data['date']
+                previous_date = previous_day_data['date'].date()
                 
                 logging.info(f"Previous trading day close for {symbol} on {previous_date}: {previous_close}")
                 return previous_close
