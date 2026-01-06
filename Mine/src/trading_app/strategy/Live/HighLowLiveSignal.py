@@ -11,8 +11,7 @@ import schedule
 from dotenv import load_dotenv
 from kiteconnect import KiteConnect
 
-from app.utils.logger import logger
-from utils.excel_logger import excel_logger
+from trading_app.app.utils.logger import logger
 
 # Import from local HighLowSignal in same folder
 from .HighLowSignal import HighLowSignal

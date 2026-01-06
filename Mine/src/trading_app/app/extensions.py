@@ -38,7 +38,7 @@ def init_extensions(app):
     })
     
     # Initialize scheduler for recurring tasks
-    from app.scheduler import init_scheduler
+    from trading_app.app.scheduler import init_scheduler
     init_scheduler(app)
     
     return app

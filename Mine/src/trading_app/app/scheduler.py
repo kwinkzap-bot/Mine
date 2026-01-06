@@ -4,7 +4,7 @@ Handles market hours checking and scheduled API calls.
 """
 from datetime import datetime, time
 from typing import Optional, Any
-from app.utils.logger import logger
+from trading_app.app.utils.logger import logger
 
 # Optional: APScheduler for background scheduling
 try:
