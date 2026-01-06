@@ -4,14 +4,15 @@ Creates and configures the Flask application.
 """
 import os
 from flask import Flask
-from app.config import current_config
-from app.extensions import init_extensions
-from app.utils.logger import logger
+from trading_app.app.config import current_config
+from trading_app.app.extensions import init_extensions
+from trading_app.app.utils.logger import logger
 
 def create_app(config=None):
     """Application factory function."""
-    # Get absolute paths for static and template folders
-    basedir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+    # Get paths for static and template folders (in root, not in src)
+    # Go up from src/trading_app/app to root, then to templates/static
+    basedir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
     static_path = os.path.join(basedir, 'static')
     template_path = os.path.join(basedir, 'templates')
     
@@ -30,7 +31,7 @@ def create_app(config=None):
     logger.info(f"Static: {static_path}")
     
     # Register blueprints
-    from app.routes import register_blueprints
+    from trading_app.app.routes import register_blueprints
     register_blueprints(app)
     
     return app

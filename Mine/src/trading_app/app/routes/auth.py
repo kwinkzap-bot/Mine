@@ -2,8 +2,8 @@
 from flask import Blueprint, redirect, request, session, url_for, jsonify
 from kiteconnect import KiteConnect
 import os
-from app.utils.logger import logger
-from app.config import current_config
+from trading_app.app.utils.logger import logger
+from trading_app.app.config import current_config
 
 auth_bp = Blueprint('auth', __name__)
 

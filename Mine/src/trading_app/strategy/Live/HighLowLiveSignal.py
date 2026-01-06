@@ -23,7 +23,7 @@ load_dotenv()
 def _initialize_options_chart_service():
     """Initialize OptionsChartService with fallback imports."""
     try:
-        from service.options_chart_service import OptionsChartService
+        from trading_app.service.options_chart_service import OptionsChartService
         return OptionsChartService
     except ImportError:
         try:
@@ -97,7 +97,7 @@ class HighLowLiveSignal:
         self.signal_detector = HighLowSignal()
         
         # Initialize KiteService for order placement
-        from service.kite_service import KiteService
+        from trading_app.service.kite_service import KiteService
         self.kite_service = KiteService(kite_instance=self.kite)
         
         # Cache

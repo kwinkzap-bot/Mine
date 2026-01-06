@@ -4,9 +4,9 @@ from flask import Blueprint
 def register_blueprints(app):
     """Register all blueprints with the Flask app."""
     # Import blueprints
-    from app.routes.pages import pages_bp
-    from app.routes.api import api_bp
-    from app.routes.auth import auth_bp
+    from trading_app.app.routes.pages import pages_bp
+    from trading_app.app.routes.api import api_bp
+    from trading_app.app.routes.auth import auth_bp
     
     # Register blueprints
     app.register_blueprint(pages_bp)

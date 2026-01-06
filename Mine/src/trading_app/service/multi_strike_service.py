@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Tuple, Optional
-from service.kite_service import KiteService
+from trading_app.service.kite_service import KiteService
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class MultiStrikeService:
                 }
             
             # Get instruments for the symbol
-            from service.options_chart_service import OptionsChartService
+            from trading_app.service.options_chart_service import OptionsChartService
             chart_service = OptionsChartService(self.kite_service.kite)
             
             result = chart_service.get_strikes_for_symbol(symbol, 'previous_close', skip_pricing=True)
@@ -162,7 +162,7 @@ class MultiStrikeService:
             
             try:
                 # Try to get PDH/PDL from historical data
-                from service.options_chart_service import OptionsChartService
+                from trading_app.service.options_chart_service import OptionsChartService
                 chart_service = OptionsChartService(self.kite_service.kite)
                 
                 # Get the underlying instrument token for PDH/PDL

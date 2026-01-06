@@ -2,7 +2,7 @@
 Logging and utility functions.
 """
 import logging
-from app.config import current_config
+from trading_app.app.config import current_config
 
 def setup_logger(name):
     """Create and configure a logger."""

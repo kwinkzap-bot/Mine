@@ -4,8 +4,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, Any, Optional, Union
 
-from app.utils.logger import logger
-from app.extensions import csrf, limiter
+from trading_app.app.utils.logger import logger
+from trading_app.app.extensions import csrf, limiter
 
 
 api_bp = Blueprint('api', __name__)
@@ -158,7 +158,7 @@ def get_fo_stocks() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
     try:
-        from cpr_filter_service import CPRFilterService
+        from trading_app.filters import CPRFilterService
         
         cpr_service = CPRFilterService(kite_instance=current_kite)
         fo_stocks = cpr_service.get_fo_stocks()
@@ -209,7 +209,7 @@ def get_options_init() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
     try:
-        from service.options_chart_service import OptionsChartService
+        from trading_app.service.options_chart_service import OptionsChartService
         
         chart_service = OptionsChartService(current_kite)
         
@@ -310,7 +310,7 @@ def get_options_chart_data() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
     try:
-        from service.options_chart_service import OptionsChartService
+        from trading_app.service.options_chart_service import OptionsChartService
         
         chart_service = OptionsChartService(current_kite)
         
@@ -412,7 +412,7 @@ def get_options_pdh_pdl() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
     try:
-        from service.options_chart_service import OptionsChartService
+        from trading_app.service.options_chart_service import OptionsChartService
         
         chart_service = OptionsChartService(current_kite)
         
@@ -513,7 +513,7 @@ def get_cpr_filter_results() -> EndpointResponse:
                 'auth_error': True
             }), 401
         
-        from cpr_filter_service import CPRFilterService
+        from trading_app.filters.cpr_filter import CPRFilterService
         
         logger.info("Initializing CPRFilterService...")
         cpr_service = CPRFilterService(kite_instance=current_kite)
@@ -559,7 +559,7 @@ def notify_whatsapp() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'message is required'}), 400
 
     try:
-        from service.whatsapp_service import WhatsAppService
+        from trading_app.service.whatsapp_service import WhatsAppService
 
         wa_service = WhatsAppService()
         result = wa_service.send_text(message, to_number if to_number else None)
@@ -584,7 +584,7 @@ def get_instrument_token() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
     try:
-        from service.kite_service import KiteService
+        from trading_app.service.kite_service import KiteService
         
         symbol = request.args.get('symbol', '').upper()
         symbol_type = request.args.get('type', 'fno').lower()
@@ -817,7 +817,7 @@ def place_live_order() -> EndpointResponse:
             return jsonify({'success': False, 'error': 'Failed to initialize Kite API'}), 401
         
         # Use KiteService to place the order
-        from service.kite_service import KiteService
+        from trading_app.service.kite_service import KiteService
         kite_service = KiteService(kite_instance=kite)
         
         result = kite_service.place_option_order(
@@ -867,7 +867,7 @@ def get_multi_strike() -> EndpointResponse:
         if not current_kite:
             return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
         
-        from service.multi_strike_service import MultiStrikeService
+        from trading_app.service.multi_strike_service import MultiStrikeService
         
         multi_strike_service = MultiStrikeService(current_kite)
         result = multi_strike_service.get_multi_strike_data(symbol, num_strikes)
@@ -927,7 +927,7 @@ def send_notification() -> EndpointResponse:
         
         # Try to send via WhatsApp
         try:
-            from service.whatsapp_service import WhatsAppService
+            from trading_app.service.whatsapp_service import WhatsAppService
             
             whatsapp = WhatsAppService()
             # Use the mobile number: 8880802168 (India: +91)
