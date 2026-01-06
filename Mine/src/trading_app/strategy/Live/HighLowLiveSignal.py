@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import sys
 import time
 from datetime import datetime, timedelta, time as time_type, date
 from typing import Optional, Dict, Any, Tuple
@@ -15,6 +16,9 @@ from trading_app.app.utils.logger import logger
 
 # Import from local HighLowSignal in same folder
 from .HighLowSignal import HighLowSignal
+
+# Import excel logger
+from trading_app.utils.excel_logger import excel_logger
 
 load_dotenv()
 
