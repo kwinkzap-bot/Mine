@@ -31,12 +31,12 @@ class NumpyEncoder(json.JSONEncoder):
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from strategy.HighLowSignal import HighLowSignal
+    from strategy.Live.HighLowSignal import HighLowSignal
     from service.options_chart_service import OptionsChartService
 except ImportError:
     # Fallback for direct execution
     import importlib.util
-    spec = importlib.util.spec_from_file_location("HighLowSignal", os.path.join(os.path.dirname(__file__), "strategy", "HighLowSignal.py"))
+    spec = importlib.util.spec_from_file_location("HighLowSignal", os.path.join(os.path.dirname(__file__), "strategy", "Live", "HighLowSignal.py"))
     if spec and spec.loader:
         HighLowSignal_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(HighLowSignal_module)
