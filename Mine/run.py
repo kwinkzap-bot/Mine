@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app import create_app
 from app.utils.logger import logger
-from strategy.HighLowLiveSignal import HighLowLiveSignal
+from strategy.Live.HighLowLiveSignal import HighLowLiveSignal
 
 def start_live_monitoring():
     """Initialize and start the live signal monitoring in a separate thread."""

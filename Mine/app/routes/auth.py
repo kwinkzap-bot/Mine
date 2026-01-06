@@ -71,12 +71,74 @@ def callback():
         
         # Store in environment for later use
         os.environ['ACCESS_TOKEN'] = access_token
+        os.environ['REQUEST_TOKEN'] = request_token
+        
+        # Update .env file with new tokens
+        _update_env_tokens(access_token, request_token)
         
         return redirect(url_for('pages.index'))
     
     except Exception as e:
         logger.error(f"Error during callback: {e}", exc_info=True)
         return jsonify({'error': f'Authentication failed: {str(e)}'}), 500
+
+
+def _update_env_tokens(access_token: str, request_token: str) -> bool:
+    """Update ACCESS_TOKEN and REQUEST_TOKEN in .env file.
+    
+    Args:
+        access_token: New access token from Zerodha
+        request_token: New request token from Zerodha
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+        
+        if not os.path.exists(env_file):
+            logger.warning(f"Environment file not found: {env_file}")
+            return False
+        
+        # Read current .env file
+        with open(env_file, 'r') as f:
+            lines = f.readlines()
+        
+        # Update or add tokens
+        updated_lines = []
+        access_token_found = False
+        request_token_found = False
+        
+        for line in lines:
+            if line.startswith('ACCESS_TOKEN='):
+                updated_lines.append(f'ACCESS_TOKEN={access_token}\n')
+                access_token_found = True
+            elif line.startswith('REQUEST_TOKEN='):
+                updated_lines.append(f'REQUEST_TOKEN={request_token}\n')
+                request_token_found = True
+            else:
+                updated_lines.append(line)
+        
+        # Add tokens if they don't exist
+        if not access_token_found:
+            updated_lines.append(f'\nACCESS_TOKEN={access_token}\n')
+        
+        if not request_token_found:
+            updated_lines.append(f'REQUEST_TOKEN={request_token}\n')
+        
+        # Write updated .env file
+        with open(env_file, 'w') as f:
+            f.writelines(updated_lines)
+        
+        logger.info(f"✓ .env file updated with new tokens")
+        logger.info(f"  ACCESS_TOKEN: {access_token[:20]}...")
+        logger.info(f"  REQUEST_TOKEN: {request_token[:20]}...")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Error updating .env file: {e}", exc_info=True)
+        return False
 
 
 @auth_bp.route('/logout')

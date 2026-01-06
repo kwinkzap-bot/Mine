@@ -10,7 +10,11 @@ def setup_logger(name):
     
     if not logger.handlers:
         handler = logging.StreamHandler()
-        formatter = logging.Formatter(current_config.LOG_FORMAT)
+        # Enhanced format with more detail
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
         handler.setFormatter(formatter)
         logger.addHandler(handler)
         logger.setLevel(current_config.LOG_LEVEL)
@@ -19,3 +23,4 @@ def setup_logger(name):
 
 # Create app logger
 logger = setup_logger(__name__)
+

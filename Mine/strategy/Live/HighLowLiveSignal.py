@@ -14,34 +14,22 @@ from kiteconnect import KiteConnect
 from app.utils.logger import logger
 from utils.excel_logger import excel_logger
 
+# Import from local HighLowSignal in same folder
+from .HighLowSignal import HighLowSignal
+
 load_dotenv()
 
 
-def _initialize_imports() -> Tuple[type, type]:
-    """Initialize HighLowSignal and OptionsChartService with fallback imports."""
+def _initialize_options_chart_service():
+    """Initialize OptionsChartService with fallback imports."""
     try:
-        from strategy.HighLowSignal import HighLowSignal
         from service.options_chart_service import OptionsChartService
-        return HighLowSignal, OptionsChartService
+        return OptionsChartService
     except ImportError:
         try:
-            from .HighLowSignal import HighLowSignal
-            from service.options_chart_service import OptionsChartService
-            return HighLowSignal, OptionsChartService
-        except ImportError:
-            # Fallback import for direct execution
+            import sys
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            
-            signal_path = os.path.join(current_dir, 'HighLowSignal.py')
-            spec = importlib.util.spec_from_file_location("HighLowSignal", signal_path)
-            if not spec or not spec.loader:
-                raise ImportError("Could not load HighLowSignal module")
-            
-            signal_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(signal_module)
-            HighLowSignal = signal_module.HighLowSignal
-            
-            service_path = os.path.join(os.path.dirname(current_dir), 'service', 'options_chart_service.py')
+            service_path = os.path.join(os.path.dirname(os.path.dirname(current_dir)), 'service', 'options_chart_service.py')
             spec_service = importlib.util.spec_from_file_location("OptionsChartService", service_path)
             if not spec_service or not spec_service.loader:
                 raise ImportError("Could not load OptionsChartService module")
@@ -49,11 +37,12 @@ def _initialize_imports() -> Tuple[type, type]:
             service_module = importlib.util.module_from_spec(spec_service)
             spec_service.loader.exec_module(service_module)
             OptionsChartService = service_module.OptionsChartService
-            
-            return HighLowSignal, OptionsChartService
+            return OptionsChartService
+        except ImportError as e:
+            raise ImportError(f"Could not load OptionsChartService: {e}")
 
 
-HighLowSignal, OptionsChartService = _initialize_imports()
+OptionsChartService = _initialize_options_chart_service()
 
 class HighLowLiveSignal:
     """Real-time live trading signal detector for options strategies.
