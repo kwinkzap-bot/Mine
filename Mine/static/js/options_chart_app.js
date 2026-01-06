@@ -51,6 +51,12 @@ const OptionsChartApp = (function () {
     let peFormattedData = null;
     // Previous day high/low data from backend
     let currentPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+    // Trend and Entry/Exit tracking
+    let currentTrend = 'NEUTRAL';
+    let previousTrend = 'NEUTRAL'; // Track previous trend for change detection
+    let entrySignal = null;
+    let currentDayLow = null;
+    let currentDayHigh = null;
     // Cache for OPTIONS_INIT response to avoid duplicate calls
     let cachedInitResponse = null;
     let cachedInitSymbol = null;
@@ -85,6 +91,9 @@ const OptionsChartApp = (function () {
         DOM.buyCeBtn = document.getElementById('buyCeBtn');
         DOM.priceSourceRadios = document.querySelectorAll('input[name="priceSource"]');
         DOM.niftyPriceDisplay = document.getElementById('nifty-ltp');
+        DOM.trendDisplay = document.getElementById('trend-display');
+        DOM.entrySignalBox = document.getElementById('entry-signal-box');
+        DOM.entrySignalContent = document.getElementById('entry-signal-content');
         DOM.ceStrikeDisplay = document.getElementById('ce-strike-display');
         DOM.peStrikeDisplay = document.getElementById('pe-strike-display');
         DOM.combinedCeStrikeDisplay = document.getElementById('combined-ce-strike-display');
@@ -340,7 +349,254 @@ const OptionsChartApp = (function () {
         });
     }
 
+    /**
+     * Calculates and updates the overall trend based on exact logic from strike pair statuses.
+     * Also determines entry and exit signals based on trend and price action.
+     */
+    function calculateAndUpdateTrend() {
+        if (!DOM.trendDisplay) return;
+
+        // Get statuses from comparison charts
+        const cePrice = DOM.ceStatus?.textContent || '--'; // 26200 CE
+        const pePrice = DOM.peStatus?.textContent || '--'; // 26500 PE
+        const cePairCe = DOM.cePairCeStatus?.textContent || '--'; // 26200 CE chart
+        const cePairPe = DOM.cePairPeStatus?.textContent || '--'; // 26200 PE chart
+        const pePairCe = DOM.pePairCeStatus?.textContent || '--'; // 26500 CE chart
+        const pePairPe = DOM.pePairPeStatus?.textContent || '--'; // 26500 PE chart
+
+        let trend = 'NEUTRAL';
+        let trendClass = 'trend-na';
+
+        // STRONG BUY: All CE charts are WIN
+        if (cePrice === 'WIN' && cePairCe === 'WIN' && pePairCe === 'WIN') {
+            trend = 'STRONG BUY';
+            trendClass = 'trend-strong-buy';
+        }
+        // BUY: CE charts are mostly WIN (cePairPe is SIDEWAY/LOSS, others are WIN)
+        else if ((pePairCe === 'SIDEWAY' || pePairCe === 'LOSS') && cePrice === 'WIN' && cePairCe === 'WIN') {
+            trend = 'BUY';
+            trendClass = 'trend-buy';
+        }
+        // SIDEWAY: At least one CE chart is SIDEWAY
+        else if (cePrice === 'SIDEWAY' || pePrice === 'SIDEWAY') {
+            trend = 'SIDEWAY';
+            trendClass = 'trend-sideway';
+        }
+        // STRONG SELL: All PE charts are WIN
+        else if (cePairPe === 'WIN' && pePrice === 'WIN' && pePairPe === 'WIN') {
+            trend = 'STRONG SELL';
+            trendClass = 'trend-strong-sell';
+        }
+        // SELL: PE charts are mostly WIN (pePairPe is LOSS/SIDEWAY, others are WIN)
+        else if (pePairPe === 'WIN' && pePrice === 'WIN' && (cePairPe === 'LOSS' || cePairPe === 'SIDEWAY')) {
+            trend = 'SELL';
+            trendClass = 'trend-sell';
+        }
+
+        // Update the trend display
+        DOM.trendDisplay.textContent = trend;
+        const trendClasses = ['trend-na', 'trend-strong-buy', 'trend-buy', 'trend-sideway', 'trend-sell', 'trend-strong-sell'];
+        trendClasses.forEach(cls => DOM.trendDisplay.classList.remove(cls));
+        DOM.trendDisplay.classList.add(trendClass);
+
+        // Detect trend change and send notifications
+        if (trend !== previousTrend && previousTrend !== 'NEUTRAL') {
+            const timestamp = new Date().toLocaleTimeString('en-IN');
+            const message = `🚀 Trend Changed: ${previousTrend} → ${trend} (${timestamp})`;
+            
+            // Send browser notification
+            sendBrowserNotification('Trend Alert', message);
+            
+            // Send mobile app message via WhatsApp/API
+            sendMobileNotification(message);
+            
+            console.log('Trend change detected:', { from: previousTrend, to: trend });
+        }
+
+        // Store current trend for entry/exit logic
+        previousTrend = currentTrend; // Save previous trend before updating
+        currentTrend = trend;
+        
+        // Calculate entry and exit signals
+        calculateEntryExitSignals();
+
+        console.log('Trend calculated:', { trend, statuses: { cePairCe, cePairPe, pePairCe, pePairPe }, entrySignal });
+    }
+
+    /**
+     * Calculates entry and exit signals based on current trend and price levels.
+     * Entry Logic:
+     * - BUY/STRONG BUY: Entry when CE price closes above PE PDH + 10
+     *   Target: CE PDH | SL: Current Day Low
+     * - SELL/STRONG SELL: Entry when PE price closes above CE PDH + 10
+     *   Target: PE PDH | SL: Current Day Low
+     */
+    function calculateEntryExitSignals() {
+        entrySignal = null;
+        
+        // Get current prices and levels
+        const ceCurrentPrice = ceData && ceData.length > 0 ? ceData[ceData.length - 1].close : null;
+        const peCurrentPrice = peData && peData.length > 0 ? peData[peData.length - 1].close : null;
+        const ceLow = ceData && ceData.length > 0 ? ceData[ceData.length - 1].low : null;
+        const peHigh = peData && peData.length > 0 ? peData[peData.length - 1].high : null;
+        const peLow = peData && peData.length > 0 ? peData[peData.length - 1].low : null;
+        const ceHigh = ceData && ceData.length > 0 ? ceData[ceData.length - 1].high : null;
+
+        // Update current day high/low
+        if (ceData && ceData.length > 0) {
+            currentDayLow = ceData.reduce((min, candle) => Math.min(min, candle.low), ceData[0].low);
+            currentDayHigh = ceData.reduce((max, candle) => Math.max(max, candle.high), ceData[0].high);
+        }
+
+        // BUY or STRONG BUY: Entry on CE when price closes above PE PDH + 10
+        if ((currentTrend === 'BUY' || currentTrend === 'STRONG BUY') && ceCurrentPrice && currentPdhPdl.pe_pdh) {
+            const entryLevel = currentPdhPdl.pe_pdh + 10;
+            const targetLevel = currentPdhPdl.ce_pdh;
+            if (ceCurrentPrice > entryLevel && ceLow <= entryLevel) {
+                entrySignal = {
+                    type: 'BUY',
+                    entry: entryLevel,
+                    target: targetLevel
+                };
+            }
+        }
+        
+        // SELL or STRONG SELL: Entry on PE when price closes above CE PDH + 10
+        if ((currentTrend === 'SELL' || currentTrend === 'STRONG SELL') && peCurrentPrice && currentPdhPdl.ce_pdh) {
+            const entryLevel = currentPdhPdl.ce_pdh + 10;
+            const targetLevel = currentPdhPdl.pe_pdh;
+            if (peCurrentPrice > entryLevel && peHigh >= entryLevel) {
+                entrySignal = {
+                    type: 'SELL',
+                    entry: entryLevel,
+                    target: targetLevel
+                };
+            }
+        }
+        
+        // Display entry signal
+        displayEntrySignal();
+    }
+
+    /**
+     * Displays the entry signal on the UI with trade details.
+     */
+    function displayEntrySignal() {
+        if (!DOM.entrySignalBox || !DOM.entrySignalContent) return;
+
+        if (!entrySignal) {
+            DOM.entrySignalBox.classList.add('hidden');
+            return;
+        }
+
+        const { type, entry, target } = entrySignal;
+        
+        // Build HTML for entry signal - single line near trend
+        let html = `<span class="entry-value">Entry: ₹${entry.toFixed(2)}</span> | <span class="exit-value">Exit: ₹${target.toFixed(2)}</span>`;
+
+        DOM.entrySignalContent.innerHTML = html;
+        DOM.entrySignalBox.classList.remove('hidden');
+        DOM.entrySignalBox.classList.remove('buy-signal', 'sell-signal');
+        DOM.entrySignalBox.classList.add(type.toLowerCase() === 'buy' ? 'buy-signal' : 'sell-signal');
+    }
+
+    /**
+     * Requests browser notification permission on user gesture.
+     * Must be called from a user interaction (click, load, etc.)
+     */
+    function requestNotificationPermission() {
+        if (!('Notification' in window)) {
+            console.log('Browser notifications not supported');
+            return;
+        }
+
+        if (Notification.permission === 'granted') {
+            console.log('Notification permission already granted');
+            return;
+        }
+
+        if (Notification.permission !== 'denied') {
+            // Only request if not already denied - must be from user gesture
+            Notification.requestPermission().then(permission => {
+                console.log('Notification permission result:', permission);
+            });
+        }
+    }
+
+    /**
+     * Send a browser notification when trend changes
+     * Note: Permission must be already granted (request it separately on user gesture)
+     */
+    function sendBrowserNotification(title, message) {
+        if (!('Notification' in window)) {
+            console.log('Browser notifications not supported');
+            return;
+        }
+
+        // Only send if permission is already granted
+        if (Notification.permission === 'granted') {
+            new Notification(title, {
+                body: message,
+                icon: '/static/images/trend-icon.png',
+                tag: 'trend-alert',
+                requireInteraction: false
+            });
+        } else {
+            // Permission not granted - log for debugging
+            console.log('Notification permission not granted. Current permission:', Notification.permission);
+        }
+    }
+
+    /**
+     * Send trend change notification to mobile via WhatsApp or app API
+     */
+    async function sendMobileNotification(message) {
+        try {
+            // Check if WhatsApp service is available (from whatsapp_service.js)
+            if (window.WhatsAppService && typeof window.WhatsAppService.sendMessage === 'function') {
+                await window.WhatsAppService.sendMessage({
+                    title: 'Options Chart - Trend Alert',
+                    message: message
+                });
+                console.log('Mobile notification sent via WhatsApp');
+            } else {
+                // Fallback: Send via custom API endpoint
+                await fetch('/api/send-notification', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        type: 'trend_alert',
+                        message: message,
+                        timestamp: new Date().toISOString()
+                    })
+                }).then(res => {
+                    if (res.ok) console.log('Mobile notification sent via API');
+                }).catch(err => console.error('Error sending mobile notification:', err));
+            }
+        } catch (error) {
+            console.error('Error in sendMobileNotification:', error);
+        }
+    }
+
     // --- UI/State Management Functions ---
+
+    /**
+     * TEST: Manually trigger trend change notifications for testing
+     * Call this in browser console: OptionsChartApp.testNotifications()
+     */
+    function testNotifications() {
+        console.log('🧪 Testing Notification System...');
+        
+        // Test 1: Browser Notification
+        console.log('Test 1: Browser Notification');
+        sendBrowserNotification('Test Alert', '🚀 Trend Changed: BUY → SELL (Test)');
+        
+        // Test 2: Mobile Notification
+        console.log('Test 2: Mobile Notification via API');
+        sendMobileNotification('🧪 Test Message: Trend Changed from BUY to SELL');
+        
+        console.log('✅ Notification tests triggered. Check console and your phone.');
+    }
 
     /**
      * Updates the active state of the timeframe buttons.
@@ -937,6 +1193,9 @@ const OptionsChartApp = (function () {
         } else {
             updateStatusBadge(DOM.pePairPeStatus, naStatus);
         }
+
+        // Calculate and update overall trend based on all statuses
+        calculateAndUpdateTrend();
     }
 
     /**
@@ -1659,6 +1918,9 @@ const OptionsChartApp = (function () {
         // Set initial timeframe button active state
         updateActiveButton(currentTimeframe);
 
+        // Request browser notification permission on page load (user gesture context)
+        requestNotificationPermission();
+
         // Initial load of strikes and chart data for NIFTY
         loadStrikes();
 
@@ -1670,7 +1932,12 @@ const OptionsChartApp = (function () {
     }
 
     return {
-        init: init
+        init: init,
+        // Expose notification functions for testing and manual triggering
+        requestNotificationPermission: requestNotificationPermission,
+        testNotifications: testNotifications,
+        sendBrowserNotification: sendBrowserNotification,
+        sendMobileNotification: sendMobileNotification
     };
 })();
 

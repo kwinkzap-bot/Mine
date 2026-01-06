@@ -30,6 +30,9 @@ class CPRLevels:
     monthly_pp: float
     monthly_bc: float
     monthly_tc: float
+    yearly_pp: float
+    yearly_bc: float
+    yearly_tc: float
     current_price: float
     current_high: float
     current_low: float
@@ -135,6 +138,12 @@ class CPRFilterService:
         first_prev = last_prev.replace(day=1)
         return first_prev, last_prev
 
+    def get_prev_year_range(self) -> Tuple[datetime, datetime]:
+        today = datetime.now()
+        last_prev = today.replace(month=1, day=1) - timedelta(days=1)
+        first_prev = last_prev.replace(month=1, day=1)
+        return first_prev, last_prev
+
     def get_hist_range(self, symbol: str, from_date: datetime, to_date: datetime, interval='day') -> Optional[pd.DataFrame]:
         key = f"{symbol}_{from_date.date()}_{to_date.date()}_{interval}"
         with self._cache_lock:
@@ -193,12 +202,22 @@ class CPRFilterService:
         m_h, m_l, m_c = float(month_df['high'].max()), float(month_df['low'].min()), float(month_df['close'].iloc[-1])
         m_pp, m_bc, m_tc = CPRService.calculate_cpr(m_h, m_l, m_c)
         
+        # Yearly CPR (prev year)
+        logger.debug(f"Fetching yearly data for {symbol}...")
+        year_start, year_end = self.get_prev_year_range()
+        year_df = self.get_hist_range(symbol, year_start, year_end)
+        if year_df is None: 
+            logger.debug(f"No yearly data for {symbol} ({year_start.date()} to {year_end.date()})")
+            return None
+        y_h, y_l, y_c = float(year_df['high'].max()), float(year_df['low'].min()), float(year_df['close'].iloc[-1])
+        y_pp, y_bc, y_tc = CPRService.calculate_cpr(y_h, y_l, y_c)
+        
         # Current candle
         curr_price, curr_high, curr_low = [float(daily_df.iloc[-1][col]) for col in ['close', 'high', 'low']]
         
         logger.debug(f"CPR levels calculated for {symbol}")
         return CPRLevels(d_pp, d_bc, d_tc, w_pp, w_bc, w_tc, m_pp, m_bc, m_tc, 
-                        curr_price, curr_high, curr_low, c)
+                        y_pp, y_bc, y_tc, curr_price, curr_high, curr_low, c)
 
     def get_fo_stocks(self) -> List[str]:
         if self._fo_stocks is not None:
@@ -225,17 +244,25 @@ class CPRFilterService:
     def evaluate_status(self, cpr: CPRLevels) -> str:
         wbc_mtc_diff = abs(cpr.weekly_bc - cpr.monthly_tc) / max(cpr.weekly_bc, 1e-6) * 100
         wtc_mbc_diff = abs(cpr.weekly_tc - cpr.monthly_bc) / max(cpr.weekly_tc, 1e-6) * 100
+        mbc_ytc_diff = abs(cpr.monthly_bc - cpr.yearly_tc) / max(cpr.monthly_bc, 1e-6) * 100
+        mtc_ybc_diff = abs(cpr.monthly_tc - cpr.yearly_bc) / max(cpr.monthly_tc, 1e-6) * 100
         
         buy_cond = cpr.weekly_bc <= cpr.daily_tc
         if (self.is_above_all_tc(cpr.current_price, cpr.daily_tc, cpr.weekly_tc, cpr.monthly_tc) and
-            cpr.weekly_bc > cpr.monthly_bc and wbc_mtc_diff <= self.PERCENTAGE_DIFF_THRESHOLD and
+            cpr.current_price > cpr.yearly_tc and
+            cpr.weekly_bc > cpr.monthly_bc and cpr.monthly_bc > cpr.yearly_bc and
+            wbc_mtc_diff <= self.PERCENTAGE_DIFF_THRESHOLD and
+            mbc_ytc_diff <= self.PERCENTAGE_DIFF_THRESHOLD and
             buy_cond and ((cpr.current_low <= cpr.weekly_tc <= cpr.current_price) or 
                          (cpr.current_low <= cpr.monthly_tc <= cpr.current_price))):
             return "✅ ABOVE CPR TC"
         
         sell_cond = cpr.weekly_tc >= cpr.daily_bc
         if (self.is_below_all_bc(cpr.current_price, cpr.daily_bc, cpr.weekly_bc, cpr.monthly_bc) and
-            cpr.weekly_tc < cpr.monthly_tc and wtc_mbc_diff <= self.PERCENTAGE_DIFF_THRESHOLD and
+            cpr.current_price < cpr.yearly_bc and
+            cpr.weekly_tc < cpr.monthly_tc and cpr.monthly_tc < cpr.yearly_tc and
+            wtc_mbc_diff <= self.PERCENTAGE_DIFF_THRESHOLD and
+            mtc_ybc_diff <= self.PERCENTAGE_DIFF_THRESHOLD and
             sell_cond and ((cpr.current_high >= cpr.weekly_bc >= cpr.current_price) or 
                           (cpr.current_high >= cpr.monthly_bc >= cpr.current_price))):
             return "❌ BELOW CPR BC"
@@ -261,11 +288,15 @@ class CPRFilterService:
             prev_close <= levels.weekly_pp
             and levels.current_price > levels.weekly_tc
             and levels.current_low <= levels.weekly_pp  # low pierced below then moved above
+            and levels.current_price > levels.monthly_tc  # Price must be above monthly CPR TC
+            and levels.current_price > levels.yearly_tc  # Price must be above yearly CPR TC
         )
         cross_below = (
             prev_close >= levels.weekly_pp
             and levels.current_price < levels.weekly_bc
             and levels.current_high >= levels.weekly_pp  # high was above then moved below
+            and levels.current_price < levels.monthly_bc  # Price must be below monthly CPR BC
+            and levels.current_price < levels.yearly_bc  # Price must be below yearly CPR BC
         )
 
         if cross_above and not cross_below:
@@ -298,6 +329,8 @@ class CPRFilterService:
                     'weekly_bc': round(cpr.weekly_bc, 2),
                     'monthly_tc': round(cpr.monthly_tc, 2),
                     'monthly_bc': round(cpr.monthly_bc, 2),
+                    'yearly_tc': round(cpr.yearly_tc, 2),
+                    'yearly_bc': round(cpr.yearly_bc, 2),
                     'd_gap': gaps[0],
                     'w_gap': gaps[1],
                     'm_gap': gaps[2]
@@ -318,6 +351,8 @@ class CPRFilterService:
                         'weekly_bc': round(cpr.weekly_bc, 2),
                         'monthly_tc': round(cpr.monthly_tc, 2),
                         'monthly_bc': round(cpr.monthly_bc, 2),
+                        'yearly_tc': round(cpr.yearly_tc, 2),
+                        'yearly_bc': round(cpr.yearly_bc, 2),
                         'd_gap': cross_gaps[0],
                         'w_gap': cross_gaps[1],
                         'm_gap': cross_gaps[2]

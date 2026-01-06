@@ -889,6 +889,82 @@ def get_multi_strike() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/send-notification', methods=['POST'])
+def send_notification() -> EndpointResponse:
+    """
+    Send trend alert notifications via WhatsApp or SMS.
+    
+    Request JSON:
+    {
+        "type": "trend_alert",
+        "message": "🚀 Trend Changed: BUY → SELL",
+        "timestamp": "2026-01-05T10:30:00"
+    }
+    
+    Returns:
+    {
+        "success": true/false,
+        "message": "Notification sent successfully",
+        "method": "whatsapp" or "api"
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        alert_type = data.get('type', 'trend_alert')
+        message = data.get('message', 'Trend Alert')
+        timestamp = data.get('timestamp', '')
+        
+        # Format the message
+        full_message = f"{message}"
+        if timestamp:
+            full_message += f" [{timestamp}]"
+        
+        # Add prefix for trend alerts
+        if alert_type == 'trend_alert':
+            full_message = f"📊 *Options Chart Alert*\n\n{full_message}"
+        
+        logger.info(f"Sending {alert_type} notification: {full_message}")
+        
+        # Try to send via WhatsApp
+        try:
+            from service.whatsapp_service import WhatsAppService
+            
+            whatsapp = WhatsAppService()
+            # Use the mobile number: 8880802168 (India: +91)
+            response = whatsapp.send_text(
+                message=full_message,
+                to_number='918880802168'  # Format: country code + number
+            )
+            
+            if response.get('success'):
+                return jsonify({
+                    'success': True,
+                    'message': 'Notification sent via WhatsApp',
+                    'method': 'whatsapp'
+                }), 200
+            else:
+                logger.warning(f"WhatsApp send failed: {response.get('error')}")
+                # Continue to fallback
+        except Exception as e:
+            logger.warning(f"WhatsApp service unavailable: {e}")
+            # Continue to fallback
+        
+        # Fallback: Log notification (can be extended for SMS/Email later)
+        logger.info(f"Notification logged (WhatsApp unavailable): {full_message}")
+        return jsonify({
+            'success': True,
+            'message': 'Notification logged successfully',
+            'method': 'log'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error sending notification: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @api_bp.errorhandler(404)
 def not_found(error):
     """Handle 404 errors."""

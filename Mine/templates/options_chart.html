@@ -17,7 +17,10 @@
             {% else %}
                 N/A
             {% endif %}
-        </span></h2>
+        </span> | Trend: <span id="trend-display" class="trend-badge trend-na">--</span></h2>
+        <div id="entry-signal-box" class="entry-signal-box hidden">
+            <div id="entry-signal-content"></div>
+        </div>
         <div class="order-buttons-group">
             <button id="buyPeBtn" type="button" class="btn order-btn order-btn-pe" title="Place buy order for PE strike">
                 🔴 BUY PE
