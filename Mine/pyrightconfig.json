@@ -1,0 +1,7 @@
+{
+  "pythonVersion": "3.9",
+  "include": ["src"],
+  "exclude": ["**/node_modules", "**/__pycache__", "tests"],
+  "typeCheckingMode": "standard",
+  "extraPaths": ["src"]
+}
