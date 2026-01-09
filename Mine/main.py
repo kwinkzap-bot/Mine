@@ -12,12 +12,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from trading_app.app import create_app
 from trading_app.app.utils.logger import logger
-from trading_app.strategy.Live.HighLowLiveSignal import HighLowLiveSignal
 
 def start_live_monitoring():
     """Initialize and start the live signal monitoring in a separate thread."""
     try:
+        # Only start live monitoring if ACCESS_TOKEN is set
+        if not os.getenv('ACCESS_TOKEN'):
+            logger.info("⚠️  ACCESS_TOKEN not set - skipping live monitoring")
+            return
+        
         logger.info("Initializing live signal monitoring...")
+        from trading_app.strategy.Live.HighLowLiveSignal import HighLowLiveSignal
         live_signal = HighLowLiveSignal(symbol='NIFTY')
         live_signal.start_live_monitoring()
     except Exception as e:
@@ -27,9 +32,12 @@ def main():
     """Run the Flask application and live monitoring."""
     app = create_app()
 
-    # Start live monitoring in a background thread
-    monitoring_thread = threading.Thread(target=start_live_monitoring, daemon=True)
-    monitoring_thread.start()
+    # Start live monitoring in a background thread (only if access token exists)
+    if os.getenv('ACCESS_TOKEN'):
+        monitoring_thread = threading.Thread(target=start_live_monitoring, daemon=True)
+        monitoring_thread.start()
+    else:
+        logger.info("ACCESS_TOKEN not configured - live monitoring disabled")
     
     # Get host and port from environment
     host = os.getenv('FLASK_HOST', '127.0.0.1')

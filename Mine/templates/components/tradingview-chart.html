@@ -1,0 +1,108 @@
+<!-- 
+    tradingview-chart.html
+    Reusable HTML template for TradingView Lightweight Charts
+    Include this template where you need to render a chart
+    
+    Usage in parent template:
+    {% include 'components/tradingview-chart.html' %}
+    
+    Then initialize with JavaScript:
+    const chart = TradingViewChart.create({
+        containerId: 'chart-ce',
+        data: candleData,
+        pdh: 25900,
+        pdl: 25800,
+        currentPrice: 25850,
+        type: 'CE',
+        timeframe: '5minute'
+    });
+-->
+
+<!-- Single Chart Container (reusable) -->
+<template id="chart-template">
+    <div class="chart-wrapper">
+        <div class="chart-header">
+            <h3>
+                <span class="chart-title">Chart</span>
+                <span class="strike-display"></span>
+            </h3>
+            <span class="chart-status status-na">--</span>
+        </div>
+        <div class="chart-element"></div>
+    </div>
+</template>
+
+<!-- Chart Pair Template (for CE/PE comparison on same strike) -->
+<template id="chart-pair-template">
+    <div class="chart-grid">
+        <div class="chart-wrapper">
+            <div class="chart-header">
+                <h3>
+                    <span class="chart-title">CE Chart</span>
+                    <span class="strike-display"></span>
+                </h3>
+                <span class="chart-status status-na ce-status">--</span>
+            </div>
+            <div class="chart-element ce-chart"></div>
+        </div>
+        <div class="chart-wrapper">
+            <div class="chart-header">
+                <h3>
+                    <span class="chart-title">PE Chart</span>
+                    <span class="strike-display"></span>
+                </h3>
+                <span class="chart-status status-na pe-status">--</span>
+            </div>
+            <div class="chart-element pe-chart"></div>
+        </div>
+    </div>
+</template>
+
+<!-- Combined Chart Container -->
+<template id="combined-chart-template">
+    <div class="combined-chart-section">
+        <div class="chart-header">
+            <h3>
+                <span class="chart-title">Combined CE & PE</span>
+                <span class="strike-display ce-strike"></span>
+                <span class="strike-display pe-strike"></span>
+            </h3>
+            <span class="chart-status status-na">--</span>
+        </div>
+        <div class="chart-element"></div>
+    </div>
+</template>
+
+<!-- 
+    Inline chart container (when you want to directly insert HTML)
+    Use this div structure as reference for your layout:
+    
+    Example for Options Chart Page:
+    <div class="chart-grid">
+        <div id="ceChart" class="chart-wrapper">
+            <div class="chart-header">
+                <h3>CE Chart <span id="ce-strike-display" class="strike-display"></span></h3>
+                <span id="ce-status" class="chart-status status-na">--</span>
+            </div>
+            <div id="ceChartContainer" class="chart-element"></div>
+        </div>
+        <div id="peChart" class="chart-wrapper">
+            <div class="chart-header">
+                <h3>PE Chart <span id="pe-strike-display" class="strike-display"></span></h3>
+                <span id="pe-status" class="chart-status status-na">--</span>
+            </div>
+            <div id="peChartContainer" class="chart-element"></div>
+        </div>
+    </div>
+    
+    Then in JavaScript:
+    const ceChart = TradingViewChart.create({
+        containerId: 'ceChartContainer',
+        data: ceCandles,
+        pdh: cePdh,
+        pdl: cePdl,
+        currentPrice: cePrice,
+        type: 'CE',
+        timeframe: '5minute'
+    });
+-->

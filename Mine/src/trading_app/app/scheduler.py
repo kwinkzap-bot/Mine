@@ -8,15 +8,23 @@ from trading_app.app.utils.logger import logger
 
 # Optional: APScheduler for background scheduling
 try:
+    # Fix for APScheduler 3.10+ compatibility with Python 3.9+
+    # The issue is with entry_points() API change in Python 3.10+
+    import sys
+    if sys.version_info >= (3, 10):
+        from importlib.metadata import entry_points
+    else:
+        from importlib_metadata import entry_points
+    
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
     APSCHEDULER_AVAILABLE = True
-except ImportError:
+except (ImportError, KeyError) as e:
     APSCHEDULER_AVAILABLE = False
     # Define as None for type checking when not available
     BackgroundScheduler = None  # type: ignore
     CronTrigger = None  # type: ignore
-    logger.warning("APScheduler not installed. Background scheduler disabled. Install with: pip install apscheduler==3.10.4")
+    logger.warning(f"APScheduler not available. Background scheduler disabled. Error: {e}")
 
 
 class MarketScheduler:

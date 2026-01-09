@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='trading.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/notifications.css') }}">
@@ -19,6 +20,7 @@
             <a href="/cpr-filter" class="nav-link {% if request.path == '/cpr-filter' %}active{% endif %}">🔍 CPR Filter</a>
             <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉 Options Chart</a>
             <a href="/multi-strike" class="nav-link {% if request.path == '/multi-strike' %}active{% endif %}">⚡ Multi Strike</a>
+            <a href="/intraday-option" class="nav-link {% if request.path == '/intraday-option' %}active{% endif %}">💹 Intraday Option</a>
             <a href="/auth/login" class="nav-link-login">🔑 Login to Zerodha</a>
         </div>
         <main>

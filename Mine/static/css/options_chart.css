@@ -21,7 +21,7 @@
 .header-info h2 {
     margin: 0;
     flex: 1;
-    font-size: 22px;
+    font-size: 16px;
     font-weight: 600;
     color: #333;
     min-width: 300px;
@@ -144,7 +144,7 @@
 
 .timeframe-btn {
     padding: 8px 14px;
-    font-size: 13px;
+    font-size: 12px;
     background: #e8e8e8;
     color: #333;
     border: 1px solid #ccc;
@@ -166,7 +166,7 @@
 }
 
 .countdown-display {
-    font-size: 14px;
+    font-size: 12px;
     color: #555;
     white-space: nowrap;
 }
@@ -174,7 +174,7 @@
 #countdown-timer {
     font-weight: bold;
     color: #667eea;
-    font-size: 16px;
+    font-size: 14px;
 }
 
 /* Timeframe buttons - Make them look like toggles */
@@ -218,7 +218,7 @@
 
 .chart-status {
     font-weight: 700;
-    font-size: 12px;
+    font-size: 10px;
     padding: 4px 10px;
     border-radius: 999px;
     border: 1px solid transparent;
@@ -254,7 +254,7 @@
 /* Trend Badge Styles */
 .trend-badge {
     font-weight: 700;
-    font-size: 13px;
+    font-size: 11px;
     padding: 4px 12px;
     border-radius: 999px;
     border: 1px solid transparent;
@@ -328,14 +328,14 @@
 }
 
 #entry-signal-content {
-    font-size: 14px;
+    font-size: 11px;
     color: #1f2937;
     line-height: 1.6;
 }
 
 #entry-signal-content .signal-type {
     font-weight: 800;
-    font-size: 15px;
+    font-size: 13px;
     margin-bottom: 8px;
 }
 
@@ -417,7 +417,7 @@
 .api-loader p {
     color: white;
     margin-top: 20px;
-    font-size: 18px;
+    font-size: 16px;
     font-weight: 600;
 }
 
@@ -431,7 +431,7 @@
 
 .order-btn {
     padding: 10px 16px !important;
-    font-size: 14px !important;
+    font-size: 12px !important;
     font-weight: 600 !important;
     border-radius: 6px !important;
     border: none !important;

@@ -3,6 +3,7 @@
 {% block head %}
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/options_chart.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/tradingview-chart.css') }}">
 {% endblock %}
 {% block content %}
 <div class="form-container" id="options-chart-app">
@@ -114,7 +115,12 @@
         </div>
         <div class="combined-chart-section">
             <div class="chart-header">
-                <h3>Combined CE & PE Price <span id="combined-ce-strike-display" class="strike-display"></span> <span id="combined-pe-strike-display" class="strike-display"></span></h3>
+                <h3>Combined CE & PE Price 
+                    <span id="combined-ce-strike-display" class="strike-display"></span>
+                    <span id="combined-ce-price" class="price-display"></span>
+                    <span id="combined-pe-strike-display" class="strike-display"></span>
+                    <span id="combined-pe-price" class="price-display"></span>
+                </h3>
                 <span id="combined-status" class="chart-status status-na">--</span>
             </div>
             <div id="combinedChart" class="chart-element"></div>
@@ -126,6 +132,7 @@
 <!-- Ensure constants.js is loaded first -->
 <script src="{{ url_for('static', filename='js/constants.js') }}"></script>
 {{ super() }}
-<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
+<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}"></script>
 <script src="{{ url_for('static', filename='js/options_chart_app.js') }}"></script>
 {% endblock %}

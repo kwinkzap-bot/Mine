@@ -34,7 +34,7 @@
     margin-bottom: 8px;
     font-weight: 600;
     color: #333;
-    font-size: 14px;
+    font-size: 12px;
 }
 
 .form-group input,
@@ -43,7 +43,7 @@
     padding: 12px;
     border: 1px solid #ddd;
     border-radius: 6px;
-    font-size: 14px;
+    font-size: 12px;
     background: white;
     transition: border-color 0.3s;
 }
@@ -62,7 +62,7 @@
     padding: 12px 24px;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 600;
     transition: all 0.3s;
     width: 100%;
@@ -105,7 +105,7 @@
 .results-section h2 {
     color: #333;
     margin-bottom: 20px;
-    font-size: 20px;
+    font-size: 18px;
 }
 
 /* Chart Container */
@@ -127,7 +127,7 @@
 table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 13px;
+    font-size: 11px;
 }
 
 table thead {
@@ -194,7 +194,7 @@ table td.numeric {
 }
 
 .stat-card h3 {
-    font-size: 12px;
+    font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
     opacity: 0.9;
@@ -202,7 +202,7 @@ table td.numeric {
 }
 
 .stat-card .value {
-    font-size: 24px;
+    font-size: 22px;
     font-weight: 700;
 }
 
@@ -267,7 +267,7 @@ table td.numeric {
 }
 
 .no-data-text {
-    font-size: 16px;
+    font-size: 14px;
     color: #666;
 }
 
@@ -291,7 +291,7 @@ table td.numeric {
     }
 
     table {
-        font-size: 12px;
+        font-size: 10px;
     }
 
     table th,

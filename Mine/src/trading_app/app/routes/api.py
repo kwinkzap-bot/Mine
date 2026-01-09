@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify, session, Response
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Dict, Any, Optional, Union
+import os
 
 from trading_app.app.utils.logger import logger
 from trading_app.app.extensions import csrf, limiter
@@ -39,12 +40,21 @@ def get_kite() -> Optional[Any]:
 
 def check_auth() -> Optional[tuple]:
     """Check if user is authenticated. Returns error tuple if not."""
-    if 'access_token' not in session or not session.get('access_token'):
+    # Check session first, then fallback to environment variable
+    access_token = session.get('access_token') or os.getenv('ACCESS_TOKEN')
+    
+    if not access_token:
         return jsonify({
             'success': False,
             'error': 'Authentication required. Please login first at /auth/login',
             'auth_error': True
         }), 401
+    
+    # Ensure session has the token for consistency
+    if 'access_token' not in session and access_token:
+        session['access_token'] = access_token
+        session.permanent = True
+    
     return None
 
 
@@ -296,9 +306,11 @@ def get_options_chart_data() -> EndpointResponse:
     import time as time_module
     start_time = time_module.time()
     
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
+    # NOTE: Authentication check removed to allow real-time chart updates
+    # from /options-chart page without login. Chart data endpoint is public.
+    # This matches the /options-chart page route which is also accessible
+    # without authentication. For protected operations, use ACCESS_TOKEN
+    # environment variable or handle auth in the service layer.
     
     data = request.get_json(silent=True) or {}
     
@@ -959,6 +971,419 @@ def send_notification() -> EndpointResponse:
         
     except Exception as e:
         logger.error(f"Error sending notification: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+
+
+@api_bp.route('/intraday-option/symbol-payload', methods=['GET'])
+@csrf.exempt
+def get_symbol_payload() -> EndpointResponse:
+    """
+    Get symbol payload with current price, PDH, PDL, PDC
+    Called before starting monitoring to display basic symbol data
+    
+    Query Parameters:
+        symbol (str): Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
+        
+    Returns:
+        JSON with current_price, pdh, pdl, pdc (previous day close)
+    """
+    try:
+        auth_error = check_auth()
+        if auth_error:
+            return auth_error
+        
+        # Get parameters
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        
+        # Validate symbol
+        valid_symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+        if symbol not in valid_symbols:
+            return jsonify({
+                'success': False,
+                'error': f'Invalid symbol. Must be one of {valid_symbols}'
+            }), 400
+        
+        # Get KiteConnect instance
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to initialize Kite connection'
+            }), 500
+        
+        # Import trader
+        from trading_app.app.intraday_option import IntradayOptionTrader
+        trader = IntradayOptionTrader(kite)
+        
+        # Get symbol payload
+        payload = trader.get_symbol_payload(symbol)
+        
+        return jsonify({
+            'success': not payload.get('error'),
+            'data': payload
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in symbol_payload endpoint: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/intraday-option/debug-strikes', methods=['GET'])
+@csrf.exempt
+def debug_available_strikes() -> EndpointResponse:
+    """
+    Debug endpoint to check available strike options for a symbol
+    
+    Query Parameters:
+        symbol (str): Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
+        
+    Returns:
+        JSON with available strikes and their tokens
+    """
+    try:
+        auth_error = check_auth()
+        if auth_error:
+            return auth_error
+        
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        
+        # Validate symbol
+        valid_symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+        if symbol not in valid_symbols:
+            return jsonify({
+                'success': False,
+                'error': f'Invalid symbol. Must be one of {valid_symbols}'
+            }), 400
+        
+        # Get KiteConnect instance
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to initialize Kite connection'
+            }), 500
+        
+        # Import trader
+        from trading_app.app.intraday_option import IntradayOptionTrader
+        trader = IntradayOptionTrader(kite)
+        
+        # Get underlying quote to determine ATM
+        underlying_data = trader.data_service._get_underlying_quote(symbol)
+        underlying_price = underlying_data.get('last_price', 0)
+        
+        # Get available strikes
+        available_strikes = trader.data_service.get_available_strikes(symbol, range_size=10)
+        
+        if not available_strikes:
+            # Provide diagnostic information
+            return jsonify({
+                'success': False,
+                'symbol': symbol,
+                'underlying_price': underlying_price,
+                'available_strikes': [],
+                'error': 'No available strikes found. Market may be closed or symbol not available.',
+                'diagnostic_info': {
+                    'message': 'This usually happens when:',
+                    'reasons': [
+                        '1. Market is closed (check if trading hours)',
+                        '2. Symbol/expiry format is incorrect',
+                        '3. No option contracts exist for this symbol',
+                        '4. API token list is stale - try refreshing'
+                    ],
+                    'next_steps': [
+                        'Check if NSE market is currently open',
+                        'Verify the symbol exists',
+                        'Check Kite Connect API credentials',
+                        'Try a different symbol (BANKNIFTY, FINNIFTY)'
+                    ]
+                }
+            })
+        
+        return jsonify({
+            'success': True,
+            'symbol': symbol,
+            'underlying_price': underlying_price,
+            'available_strikes_count': len(available_strikes),
+            'available_strikes': available_strikes[:20],  # Return first 20
+            'sample_ce_strikes': [s['strike'] for s in available_strikes],
+            'recommended_strike': available_strikes[len(available_strikes)//2]['strike'] if available_strikes else None
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in debug_strikes endpoint: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/intraday-option', methods=['GET', 'POST'])
+@csrf.exempt
+def get_intraday_option_data() -> EndpointResponse:
+    """
+    Get intraday option data with real-time quotes and candlesticks
+    
+    GET Query Parameters:
+        symbol (str): Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
+        strike_price (float, optional): Strike price (auto-selected if omitted)
+        timeframe (str): Candle interval (5minute, 15minute, 30minute, 60minute)
+    
+    POST Payload:
+        {
+            "symbol": "NIFTY",
+            "timeframe": "5minute",
+            "strikes": [23500, 23600, 23700]  // List of strike prices
+        }
+        
+    Returns:
+        JSON with CE and PE candlestick data, PDH/PDL, quotes, and trading signals for each strike
+    """
+    try:
+        auth_error = check_auth()
+        if auth_error:
+            return auth_error
+        
+        # Determine if request is POST with payload or GET with query params
+        if request.method == 'POST':
+            data = request.get_json()
+            if not data:
+                return jsonify({
+                    'success': False,
+                    'error': 'Request body must contain JSON'
+                }), 400
+            
+            symbol = data.get('symbol', 'NIFTY').upper()
+            strikes = data.get('strikes', [])
+            timeframe = data.get('timeframe', '5minute')
+            
+            # Validate strikes parameter
+            if not strikes or not isinstance(strikes, list):
+                return jsonify({
+                    'success': False,
+                    'error': 'strikes parameter is required and must be a list of strike prices'
+                }), 400
+            
+            # Fetch data for multiple strikes
+            kite = get_kite()
+            if not kite:
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to initialize Kite connection'
+                }), 500
+            
+            from trading_app.app.intraday_option import IntradayOptionTrader
+            trader = IntradayOptionTrader(kite)
+            
+            # Validate symbol
+            valid_symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+            if symbol not in valid_symbols:
+                return jsonify({
+                    'success': False,
+                    'error': f'Invalid symbol. Must be one of {valid_symbols}'
+                }), 400
+            
+            # Validate timeframe
+            valid_timeframes = ['5minute', '15minute', '30minute', '60minute']
+            if timeframe not in valid_timeframes:
+                return jsonify({
+                    'success': False,
+                    'error': f'Invalid timeframe. Must be one of {valid_timeframes}'
+                }), 400
+            
+            # Fetch data for each strike
+            strikes_data = []
+            for strike_price in strikes:
+                try:
+                    option_data = trader.get_option_data(symbol, float(strike_price), timeframe)
+                    strikes_data.append(option_data)
+                except Exception as e:
+                    logger.error(f"Error fetching data for strike {strike_price}: {str(e)}")
+                    strikes_data.append({
+                        'strike': strike_price,
+                        'symbol': symbol,
+                        'success': False,
+                        'error': str(e)
+                    })
+            
+            return jsonify({
+                'success': True,
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'strikes': strikes,
+                'data': strikes_data
+            })
+        
+        else:  # GET request (backward compatibility)
+            # Get parameters
+            symbol = request.args.get('symbol', 'NIFTY').upper()
+            strike_price = request.args.get('strike_price', type=float, default=None)
+            ce_strike = request.args.get('ce_strike', type=float, default=None)
+            pe_strike = request.args.get('pe_strike', type=float, default=None)
+            timeframe = request.args.get('timeframe', '5minute')
+            days_back = request.args.get('days_back', type=int, default=None)  # New parameter for historical data
+            
+            # Validate symbol
+            valid_symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+            if symbol not in valid_symbols:
+                return jsonify({
+                    'success': False,
+                    'error': f'Invalid symbol. Must be one of {valid_symbols}'
+                }), 400
+            
+            # Validate timeframe
+            valid_timeframes = ['5minute', '15minute', '30minute', '60minute']
+            if timeframe not in valid_timeframes:
+                return jsonify({
+                    'success': False,
+                    'error': f'Invalid timeframe. Must be one of {valid_timeframes}'
+                }), 400
+            
+            # Validate days_back if provided
+            if days_back is not None and days_back <= 0:
+                return jsonify({
+                    'success': False,
+                    'error': 'days_back must be greater than 0'
+                }), 400
+            
+            # Get KiteConnect instance
+            kite = get_kite()
+            if not kite:
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to initialize Kite connection'
+                }), 500
+            
+            # Import and initialize trader
+            from trading_app.app.intraday_option import IntradayOptionTrader
+            trader = IntradayOptionTrader(kite)
+            
+            # Get option data with CE and PE strikes if provided
+            option_data = trader.get_option_data(
+                symbol, 
+                strike_price=strike_price, 
+                timeframe=timeframe,
+                ce_strike=ce_strike,
+                pe_strike=pe_strike,
+                days_back=days_back  # Pass days_back parameter
+            )
+            
+            return jsonify({
+                'success': option_data.get('success', True),
+                'data': option_data
+            })
+        
+    except Exception as e:
+        logger.error(f"Error in intraday_option endpoint: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/intraday-option/positions', methods=['GET'])
+@csrf.exempt
+def get_intraday_positions() -> EndpointResponse:
+    """
+    Get current intraday option positions and P&L
+    
+    Returns:
+        JSON with open positions, total P&L, and unrealised gains/losses
+    """
+    try:
+        auth_error = check_auth()
+        if auth_error:
+            return auth_error
+        
+        # Get KiteConnect instance
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to initialize Kite connection'
+            }), 500
+        
+        # Import and initialize trader
+        from trading_app.app.intraday_option import IntradayOptionTrader
+        trader = IntradayOptionTrader(kite)
+        
+        # Get positions
+        positions_data = trader.get_position_info()
+        
+        return jsonify({
+            'success': not positions_data.get('error'),
+            'data': positions_data
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in intraday_positions endpoint: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/intraday-option/multiple-strikes', methods=['GET'])
+@csrf.exempt
+def get_intraday_multiple_strikes() -> EndpointResponse:
+    """
+    Get intraday option data for multiple strikes
+    
+    Query Parameters:
+        symbol (str): Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
+        strike_price (float): Central strike price
+        num_strikes (int, optional): Number of strikes above/below central strike (default: 5)
+        timeframe (str): Candle interval (5minute, 15minute, 30minute, 60minute)
+        
+    Returns:
+        JSON with data for multiple strikes
+    """
+    try:
+        auth_error = check_auth()
+        if auth_error:
+            return auth_error
+        
+        # Get parameters
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        strike_price = request.args.get('strike_price', type=float)
+        num_strikes = request.args.get('num_strikes', type=int, default=5)
+        timeframe = request.args.get('timeframe', '5minute')
+        
+        if not strike_price:
+            return jsonify({
+                'success': False,
+                'error': 'strike_price parameter is required'
+            }), 400
+        
+        # Get KiteConnect instance
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to initialize Kite connection'
+            }), 500
+        
+        # Import and initialize trader
+        from trading_app.app.intraday_option import IntradayOptionTrader
+        trader = IntradayOptionTrader(kite)
+        
+        # Get multiple strikes data
+        strikes_data = trader.get_multiple_strikes(symbol, strike_price, num_strikes)
+        
+        return jsonify({
+            'success': not strikes_data.get('error'),
+            'data': strikes_data
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in multiple_strikes endpoint: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)

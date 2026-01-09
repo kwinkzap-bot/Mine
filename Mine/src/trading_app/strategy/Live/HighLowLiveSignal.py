@@ -304,22 +304,12 @@ class HighLowLiveSignal:
         return True
     
     def initialize_daily_data(self) -> bool:
-        """Initialize previous day data at market open with timeout protection.
+        """Initialize previous day data at market open.
         
         Returns:
             True if initialization successful, False otherwise
         """
-        import signal
-        
-        def timeout_handler(signum, frame):
-            logger.error("⏱️  Data initialization timeout (30 seconds) - continuing without full init")
-            raise TimeoutError("Initialization timeout")
-        
         try:
-            # Set timeout for initialization (30 seconds max)
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(30)
-            
             today = datetime.now().date()
             prev_date = today - timedelta(days=1)
             
@@ -329,7 +319,6 @@ class HighLowLiveSignal:
             index_close = self._get_previous_day_close(prev_date)
             if index_close is None:
                 logger.warning(f"Could not get previous day close for {prev_date}")
-                signal.alarm(0)  # Cancel timeout
                 return False
             
             logger.info(f"Previous day close: {index_close}")
@@ -346,8 +335,6 @@ class HighLowLiveSignal:
             ce_prev_data = self.get_option_data(self.ce_strike, 'CE', prev_start, prev_end)
             pe_prev_data = self.get_option_data(self.pe_strike, 'PE', prev_start, prev_end)
             
-            signal.alarm(0)  # Cancel timeout
-            
             result = self._update_strike_data(ce_prev_data, pe_prev_data)
             if result:
                 logger.info("✓ Daily data initialization successful")
@@ -355,12 +342,8 @@ class HighLowLiveSignal:
                 logger.warning("⚠️  Daily data initialization failed")
             return result
             
-        except TimeoutError:
-            logger.error("⏱️  Data initialization timeout - system will continue with existing data")
-            return False
         except Exception as e:
             logger.error(f"Error initializing daily data: {e}", exc_info=True)
-            signal.alarm(0)  # Cancel timeout
             return False
     
     def _get_current_day_data(self, now: datetime) -> Tuple[pd.DataFrame, pd.DataFrame]:

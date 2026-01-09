@@ -20,12 +20,15 @@ class Config:
     WTF_CSRF_ENABLED = False  # Disable CSRF entirely for development
     WTF_CSRF_CHECK_DEFAULT = False  
     WTF_CSRF_SSL_STRICT = False
+    WTF_CSRF_TIME_LIMIT = None  # Disable token time limit
     
-    # Session - Relaxed for development
+    # Session - Extended timeout to prevent 403 errors during active trading
     SESSION_COOKIE_SECURE = False
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
-    PERMANENT_SESSION_LIFETIME = 86400 * 7  # 7 days
+    PERMANENT_SESSION_LIFETIME = 86400 * 7  # 7 days (604800 seconds)
+    SESSION_REFRESH_EACH_REQUEST = True  # Refresh session timeout on each request
+    SESSION_COOKIE_NAME = 'trading_session'
     
     # Rate Limiting - Disabled for development
     RATELIMIT_ENABLED = False  # No rate limiting in development

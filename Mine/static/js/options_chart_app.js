@@ -5,67 +5,49 @@
  */
 
 const OptionsChartApp = (function () {
-    // --- Global Chart State ---
-    // These variables are kept private to the module (closure)
-    let ceChart = null;
-    let peChart = null;
-    let ceSeries = null;
-    let peSeries = null;
-    let combinedChart = null;
-    let combinedCeSeries = null;
-    let combinedPeSeries = null;
-    // Separate charts for same-strike comparisons
-    let cePairCeChart = null; // CE chart for CE strike
-    let cePairPeChart = null; // PE chart for CE strike
-    let pePairCeChart = null; // CE chart for PE strike
-    let pePairPeChart = null; // PE chart for PE strike
-    let cePairCeSeries = null;
-    let cePairPeSeries = null;
-    let pePairCeSeries = null;
-    let pePairPeSeries = null;
+    // --- Chart State (Now managed by TradingViewChart module) ---
+    let ceChart = null;          // TradingViewChart instance
+    let peChart = null;          // TradingViewChart instance
+    let combinedChart = null;    // TradingViewChart instance (manages 2 series internally)
+    let cePairCeChart = null;    // TradingViewChart instance
+    let cePairPeChart = null;    // TradingViewChart instance
+    let pePairCeChart = null;    // TradingViewChart instance
+    let pePairPeChart = null;    // TradingViewChart instance
+    
+    // Data storage
     let ceData = null;
     let peData = null;
     let cePairData = { ce: null, pe: null };
     let pePairData = { ce: null, pe: null };
     let cePairPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
     let pePairPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
-    let currentCeToken = null; // Token for auto-update
-    let currentPeToken = null; // Token for auto-update
-    let cePairTokens = { ce: null, pe: null }; // Tokens for CE strike pair chart
-    let pePairTokens = { ce: null, pe: null }; // Tokens for PE strike pair chart
+    
+    // Tokens and state
+    let currentCeToken = null;
+    let currentPeToken = null;
+    let cePairTokens = { ce: null, pe: null };
+    let pePairTokens = { ce: null, pe: null };
     let currentTimeframe = '5minute';
     let autoUpdateInterval = null;
     let currentSymbol = 'NIFTY';
     let currentPriceSource = 'previous_close';
-    let cePriceLines = []; // Price lines for individual charts
-    let pePriceLines = []; // Price lines for individual charts
-    let cePairCePriceLines = [];
-    let cePairPePriceLines = [];
-    let pePairCePriceLines = [];
-    let pePairPePriceLines = [];
-    let ceTimerPriceLine = null; // Price line for combined chart (CE)
-    let peTimerPriceLine = null; // Price line for combined chart (PE)
     let isInitialLoad = true;
-    // Cached formatted data for hover synchronization
-    let ceFormattedData = null;
-    let peFormattedData = null;
+    
     // Previous day high/low data from backend
     let currentPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
+    
     // Trend and Entry/Exit tracking
     let currentTrend = 'NEUTRAL';
-    let previousTrend = 'NEUTRAL'; // Track previous trend for change detection
+    let previousTrend = 'NEUTRAL';
     let entrySignal = null;
     let currentDayLow = null;
     let currentDayHigh = null;
-    // Cache for OPTIONS_INIT response to avoid duplicate calls
+    
+    // Cache for OPTIONS_INIT response
     let cachedInitResponse = null;
     let cachedInitSymbol = null;
     let cachedInitPriceSource = null;
-    // // Countdown state for price-line badges (COMMENTED OUT)
-    // let countdownInterval = null;
-    // let countdownValue = 0;
-    // let ceCountdownLine = null;
-    // let peCountdownLine = null;
+    
     const timeframeIntervals = {
         '1minute': 60,
         '3minute': 180,
@@ -97,7 +79,9 @@ const OptionsChartApp = (function () {
         DOM.ceStrikeDisplay = document.getElementById('ce-strike-display');
         DOM.peStrikeDisplay = document.getElementById('pe-strike-display');
         DOM.combinedCeStrikeDisplay = document.getElementById('combined-ce-strike-display');
+        DOM.combinedCePrice = document.getElementById('combined-ce-price');
         DOM.combinedPeStrikeDisplay = document.getElementById('combined-pe-strike-display');
+        DOM.combinedPePrice = document.getElementById('combined-pe-price');
         DOM.cePairCeStrikeDisplay = document.getElementById('ce-pair-ce-strike-display');
         DOM.cePairPeStrikeDisplay = document.getElementById('ce-pair-pe-strike-display');
         DOM.pePairCeStrikeDisplay = document.getElementById('pe-pair-ce-strike-display');
@@ -152,174 +136,10 @@ const OptionsChartApp = (function () {
         return minutes >= open && minutes <= close;
     }
 
-    // --- Use global CONSTANTS from constants.js ---
-    // The following are now available globally:
-    // - CONSTANTS.API_ENDPOINTS
-    // - CONSTANTS.CSS_CLASSES
-    // - CONSTANTS.CHART_CONFIG
-
-    // --- Utility Functions ---
-
     /**
      * Converts raw data to the Lightweight Charts format.
      * Backend sends UTC timestamps.
      */
-    function formatChartData(data) {
-        // Backend provides UTC timestamps - Lightweight Charts displays them in browser's timezone
-        return data.map(item => {
-            let timestamp;
-
-            if (typeof item.date === 'number') {
-                // Backend returns UTC Unix timestamp
-                timestamp = item.date;
-            } else if (typeof item.date === 'string') {
-                const dateObj = new Date(item.date);
-                timestamp = Math.floor(dateObj.getTime() / 1000);
-            } else {
-                timestamp = Math.floor(new Date(item.date).getTime() / 1000);
-            }
-
-            return {
-                time: timestamp,
-                open: item.open,
-                high: item.high,
-                low: item.low,
-                close: item.close,
-                value: item.close
-            };
-        });
-    }
-
-    /**
-     * Gets the latest close price from the chart data.
-     */
-    function getLatestPrice(data) {
-        if (!data || data.length === 0) return null;
-        return data[data.length - 1].close;
-    }
-
-    /**
-     * Gets previous day's high and low from chart data.
-     * Uses the second-to-last candle (yesterday's data, not today's partial)
-     */
-    function getPreviousDayHighLow(data) {
-        if (!data || data.length < 2) return { high: null, low: null };
-        // Use second-to-last candle (yesterday's complete data)
-        const previousDayCandle = data[data.length - 2];
-        return {
-            high: previousDayCandle.high || null,
-            low: previousDayCandle.low || null
-        };
-    }
-
-    /**
-     * Adds previous day high/low price lines to a chart
-     * Returns array of created price lines for later removal
-     */
-    function addPreviousDayLines(series, cePdh, cePdl, pePdh, pePdl, isForCeChart) {
-        const lines = [];
-
-        if (isForCeChart) {
-            // CE Chart lines
-            if (cePdh !== null) {
-                lines.push(series.createPriceLine({
-                    price: cePdh,
-                    color: '#000000',
-                    lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true,
-                    title: 'CE PDH'
-                }));
-            }
-            if (cePdl !== null) {
-                lines.push(series.createPriceLine({
-                    price: cePdl,
-                    color: '#000000',
-                    lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true,
-                    title: 'CE PDL'
-                }));
-            }
-            if (pePdh !== null) {
-                lines.push(series.createPriceLine({
-                    price: pePdh,
-                    color: '#10b981',
-                    lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true,
-                    title: 'PE PDH'
-                }));
-            }
-            if (pePdl !== null) {
-                lines.push(series.createPriceLine({
-                    price: pePdl,
-                    color: '#ef4444',
-                    lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true,
-                    title: 'PE PDL'
-                }));
-            }
-        } else {
-            // PE Chart lines
-            if (pePdh !== null) {
-                lines.push(series.createPriceLine({
-                    price: pePdh,
-                    color: '#000000',
-                    lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true,
-                    title: 'PE PDH'
-                }));
-            }
-            if (pePdl !== null) {
-                lines.push(series.createPriceLine({
-                    price: pePdl,
-                    color: '#000000',
-                    lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true,
-                    title: 'PE PDL'
-                }));
-            }
-            if (cePdh !== null) {
-                lines.push(series.createPriceLine({
-                    price: cePdh,
-                    color: '#10b981',
-                    lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true,
-                    title: 'CE PDH'
-                }));
-            }
-            if (cePdl !== null) {
-                lines.push(series.createPriceLine({
-                    price: cePdl,
-                    color: '#ef4444',
-                    lineWidth: 2,
-                    lineStyle: LightweightCharts.LineStyle.Solid,
-                    axisLabelVisible: true,
-                    title: 'CE PDL'
-                }));
-            }
-        }
-
-        return lines;
-    }
-
-    /**
-     * Determines price position relative to previous day high/low.
-     */
-    function evaluateStatus(price, high, low) {
-        if (price === null || price === undefined || high === null || low === null) {
-            return { text: '--', className: 'status-na' };
-        }
-        if (price > high) return { text: 'WIN', className: 'status-win' };
-        if (price < low) return { text: 'LOSS', className: 'status-loss' };
-        return { text: 'SIDEWAY', className: 'status-sideway' };
-    }
-
     /**
      * Applies status text and styling to a badge element.
      */
@@ -695,10 +515,6 @@ const OptionsChartApp = (function () {
 
                 console.log('Chart data loaded for timeframe:', { timeframe: currentTimeframe, ceDataLength: ceData.length, peDataLength: peData.length });
 
-                // Clear cached formatted data to force re-formatting
-                ceFormattedData = null;
-                peFormattedData = null;
-
                 // Render chart with existing PDH/PDL
                 console.log('Rendering chart for timeframe change with existing PDH/PDL:', currentPdhPdl);
                 renderCombinedChart(currentPdhPdl.ce_pdh, currentPdhPdl.ce_pdl, currentPdhPdl.pe_pdh, currentPdhPdl.pe_pdl);
@@ -832,165 +648,112 @@ const OptionsChartApp = (function () {
     /**
      * Initializes the Lightweight Charts objects with proper IST time formatting
      */
+    /**
+     * Initializes all charts using the reusable TradingViewChart module.
+     * This replaces ~500 lines of duplicate chart setup code with concise module calls.
+     */
     function initCharts() {
-        if (!window.LightweightCharts) {
-            console.error("Lightweight Charts library not loaded.");
-            showNotification("Chart library not loaded. Check your HTML head.", "error");
+        if (!window.TradingViewChart) {
+            console.error("TradingViewChart module not loaded.");
+            showNotification("Chart module not loaded. Check your HTML head.", "error");
             return;
         }
-        const { createChart, CandlestickSeries } = LightweightCharts;
 
-        // Light theme configuration with white background and IST time formatting
-        const lightTheme = {
-            layout: {
-                textColor: '#1f2937',
-                background: { color: '#ffffff', type: 'solid' }
-            },
-            grid: {
-                vertLines: { color: '#f0f0f0' },
-                horzLines: { color: '#f0f0f0' }
-            },
-            timeScale: {
-                textColor: '#6b7280',
-                borderColor: '#e5e7eb',
-                timeVisible: true,
-                secondsVisible: currentTimeframe !== '60minute', // Show seconds for intraday
-                rightOffset: 250
-            },
-            rightPriceScale: {
-                textColor: '#6b7280',
-                borderColor: '#e5e7eb',
-                // scaleMargins: { top: 0.1, bottom: 0.1 }
-            },
-            crosshair: {
-                mode: LightweightCharts.CrosshairMode.Normal, // Follow mouse exactly, don't snap to candles
-            }
-        };
+        // Get colors from CONSTANTS
+        const ceColor = CONSTANTS.CHART_CONFIG.CE_COLOR || '#00c853';
+        const peColor = CONSTANTS.CHART_CONFIG.PE_COLOR || '#2962ff';
 
         // Initialize CE Chart
-        if (ceChart) ceChart.remove();
-        ceChart = createChart(document.getElementById('ceChart'), lightTheme);
-        ceChart.timeScale().applyOptions({
-            timeVisible: true,
-            secondsVisible: currentTimeframe !== '60minute'
+        ceChart = TradingViewChart.create({
+            containerId: 'ceChart',
+            data: [],
+            pdh: null,
+            pdl: null,
+            type: 'CE',
+            timeframe: currentTimeframe,
+            ceColor: ceColor,
+            peColor: peColor
         });
-        ceSeries = ceChart.addSeries(CandlestickSeries, { upColor: '#10b981', downColor: '#ef4444', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#ef4444' });
 
         // Initialize PE Chart
-        if (peChart) peChart.remove();
-        peChart = createChart(document.getElementById('peChart'), lightTheme);
-        peChart.timeScale().applyOptions({
-            timeVisible: true,
-            secondsVisible: currentTimeframe !== '60minute'
-        });
-        peSeries = peChart.addSeries(CandlestickSeries, { upColor: '#10b981', downColor: '#ef4444', borderVisible: false, wickUpColor: '#10b981', wickDownColor: '#ef4444' });
-
-        // Initialize Combined Chart
-        if (combinedChart) combinedChart.remove();
-        combinedChart = createChart(document.getElementById('combinedChart'), lightTheme);
-        combinedChart.timeScale().applyOptions({
-            timeVisible: true,
-            secondsVisible: currentTimeframe !== '60minute'
-        });
-        combinedCeSeries = combinedChart.addSeries(CandlestickSeries, {
-            upColor: '#10b981',
-            downColor: '#ef4444',
-            borderVisible: false,
-            wickUpColor: '#10b981',
-            wickDownColor: '#ef4444',
-            title: 'CE Price'
-        });
-        combinedPeSeries = combinedChart.addSeries(CandlestickSeries, {
-            upColor: '#00bcd4',
-            downColor: '#000000',
-            borderVisible: false,
-            borderColor: '#00bcd4',
-            wickUpColor: '#00bcd4',
-            wickDownColor: '#111827',
-            title: 'PE Price'
+        peChart = TradingViewChart.create({
+            containerId: 'peChart',
+            data: [],
+            pdh: null,
+            pdl: null,
+            type: 'PE',
+            timeframe: currentTimeframe,
+            ceColor: ceColor,
+            peColor: peColor
         });
 
-        // Initialize CE Strike Pair Charts (separate CE and PE charts for the CE strike)
-        const cePairCeContainer = document.getElementById('cePairCeChart');
-        const cePairPeContainer = document.getElementById('cePairPeChart');
-        if (cePairCeContainer) {
-            if (cePairCeChart) cePairCeChart.remove();
-            cePairCeChart = createChart(cePairCeContainer, lightTheme);
-            cePairCeChart.timeScale().applyOptions({
-                timeVisible: true,
-                secondsVisible: currentTimeframe !== '60minute'
-            });
-            cePairCeSeries = cePairCeChart.addSeries(CandlestickSeries, {
-                upColor: '#10b981',
-                downColor: '#ef4444',
-                borderVisible: false,
-                wickUpColor: '#10b981',
-                wickDownColor: '#ef4444',
-                title: 'CE Price'
-            });
-        }
-        if (cePairPeContainer) {
-            if (cePairPeChart) cePairPeChart.remove();
-            cePairPeChart = createChart(cePairPeContainer, lightTheme);
-            cePairPeChart.timeScale().applyOptions({
-                timeVisible: true,
-                secondsVisible: currentTimeframe !== '60minute'
-            });
-            cePairPeSeries = cePairPeChart.addSeries(CandlestickSeries, {
-                upColor: '#10b981',
-                downColor: '#ef4444',
-                borderVisible: false,
-                wickUpColor: '#10b981',
-                wickDownColor: '#ef4444',
-                title: 'PE Price'
-            });
-        }
+        // Initialize Combined Chart (handles both CE and PE series internally)
+        combinedChart = TradingViewChart.create({
+            containerId: 'combinedChart',
+            data: [],
+            pdh: null,
+            pdl: null,
+            type: 'COMBINED',
+            timeframe: currentTimeframe,
+            isCombined: true,
+            ceColor: ceColor,
+            peColor: peColor
+        });
 
-        // Initialize PE Strike Pair Charts (separate CE and PE charts for the PE strike)
-        const pePairCeContainer = document.getElementById('pePairCeChart');
-        const pePairPeContainer = document.getElementById('pePairPeChart');
-        if (pePairCeContainer) {
-            if (pePairCeChart) pePairCeChart.remove();
-            pePairCeChart = createChart(pePairCeContainer, lightTheme);
-            pePairCeChart.timeScale().applyOptions({
-                timeVisible: true,
-                secondsVisible: currentTimeframe !== '60minute'
-            });
-            pePairCeSeries = pePairCeChart.addSeries(CandlestickSeries, {
-                upColor: '#10b981',
-                downColor: '#ef4444',
-                borderVisible: false,
-                wickUpColor: '#10b981',
-                wickDownColor: '#ef4444',
-                title: 'CE Price'
-            });
-        }
-        if (pePairPeContainer) {
-            if (pePairPeChart) pePairPeChart.remove();
-            pePairPeChart = createChart(pePairPeContainer, lightTheme);
-            pePairPeChart.timeScale().applyOptions({
-                timeVisible: true,
-                secondsVisible: currentTimeframe !== '60minute'
-            });
-            pePairPeSeries = pePairPeChart.addSeries(CandlestickSeries, {
-                upColor: '#10b981',
-                downColor: '#ef4444',
-                borderVisible: false,
-                wickUpColor: '#10b981',
-                wickDownColor: '#ef4444',
-                title: 'PE Price'
-            });
-        }
+        // Initialize CE Pair Charts (CE strike with both CE and PE charts)
+        cePairCeChart = TradingViewChart.create({
+            containerId: 'cePairCeChart',
+            data: [],
+            pdh: null,
+            pdl: null,
+            type: 'CE',
+            timeframe: currentTimeframe,
+            ceColor: ceColor,
+            peColor: peColor
+        });
 
-        // Note: Lightweight Charts handles crosshair sync natively when multiple charts are on the same page.
-        // The native crosshair cursors across charts will synchronize automatically.
+        cePairPeChart = TradingViewChart.create({
+            containerId: 'cePairPeChart',
+            data: [],
+            pdh: null,
+            pdl: null,
+            type: 'PE',
+            timeframe: currentTimeframe,
+            ceColor: ceColor,
+            peColor: peColor
+        });
+
+        // Initialize PE Pair Charts (PE strike with both CE and PE charts)
+        pePairCeChart = TradingViewChart.create({
+            containerId: 'pePairCeChart',
+            data: [],
+            pdh: null,
+            pdl: null,
+            type: 'CE',
+            timeframe: currentTimeframe,
+            ceColor: ceColor,
+            peColor: peColor
+        });
+
+        pePairPeChart = TradingViewChart.create({
+            containerId: 'pePairPeChart',
+            data: [],
+            pdh: null,
+            pdl: null,
+            type: 'PE',
+            timeframe: currentTimeframe,
+            ceColor: ceColor,
+            peColor: peColor
+        });
+
+        console.log('All charts initialized using TradingViewChart module', { ceColor, peColor });
     }
 
     /**
-     * Renders the individual CE and PE charts.
+     * Renders the individual CE and PE charts using TradingViewChart module.
      */
     function renderIndividualCharts() {
-        if (!ceSeries || !peSeries || !ceData || !peData) {
+        if (!ceData || !peData || !ceChart || !peChart) {
             const naStatus = { text: '--', className: 'status-na' };
             updateStatusBadge(DOM.ceStatus, naStatus);
             updateStatusBadge(DOM.peStatus, naStatus);
@@ -998,95 +761,47 @@ const OptionsChartApp = (function () {
             return;
         }
 
-        // Preserve visible ranges before updating data
-        const ceTimeScale = ceChart?.timeScale();
-        const peTimeScale = peChart?.timeScale();
-        const cePreservedRange = ceTimeScale?.getVisibleLogicalRange();
-        const pePreservedRange = peTimeScale?.getVisibleLogicalRange();
-
-        // Cache formatted data for hover synchronization
-        ceFormattedData = formatChartData(ceData);
-        peFormattedData = formatChartData(peData);
-
-        ceSeries.setData(ceFormattedData);
-        peSeries.setData(peFormattedData);
-
-        // Restore visible ranges after data update
-        if (cePreservedRange && ceTimeScale && !isInitialLoad) {
-            setTimeout(() => {
-                ceTimeScale.setVisibleLogicalRange(cePreservedRange);
-            }, 0);
-        }
-        if (pePreservedRange && peTimeScale && !isInitialLoad) {
-            setTimeout(() => {
-                peTimeScale.setVisibleLogicalRange(pePreservedRange);
-            }, 0);
-        }
-
-        // Remove old price lines
-        cePriceLines.forEach(line => ceSeries.removePriceLine(line));
-        pePriceLines.forEach(line => peSeries.removePriceLine(line));
-        cePriceLines = [];
-        pePriceLines = [];
-
-        // Use PDH/PDL from backend if available, otherwise fallback to chart data
+        // Use PDH/PDL from backend if available
         let cePdh = currentPdhPdl.ce_pdh;
         let cePdl = currentPdhPdl.ce_pdl;
         let pePdh = currentPdhPdl.pe_pdh;
         let pePdl = currentPdhPdl.pe_pdl;
 
-        if (cePdh === null || cePdl === null || pePdh === null || pePdl === null) {
-            // Fallback to chart data if backend values not available
-            const cePdh_pdl = getPreviousDayHighLow(ceData);
-            const pePdh_pdl = getPreviousDayHighLow(peData);
-            cePdh = cePdh || cePdh_pdl.high;
-            cePdl = cePdl || cePdh_pdl.low;
-            pePdh = pePdh || pePdh_pdl.high;
-            pePdl = pePdl || pePdh_pdl.low;
-        }
-
-        // Add PDH/PDL lines to CE Chart
-        cePriceLines = cePriceLines.concat(
-            addPreviousDayLines(ceSeries, cePdh, cePdl, pePdh, pePdl, true)
-        );
-
-        // Add PDH/PDL lines to PE Chart
-        pePriceLines = pePriceLines.concat(
-            addPreviousDayLines(peSeries, cePdh, cePdl, pePdh, pePdl, false)
-        );
-
-        // Add latest price line if fetching current price and in market hours
-        const latestCePrice = getLatestPrice(ceData);
-        const latestPePrice = getLatestPrice(peData);
-
-        if (latestCePrice !== null && currentPriceSource === 'current_close' && isMarketHours()) {
-            // LTP line removed - showing only countdown timer
-        }
-
-        if (latestPePrice !== null && currentPriceSource === 'current_close' && isMarketHours()) {
-            // LTP line removed - showing only countdown timer
-        }
-        // Update status badges for CE/PE and combined view
-        // Cross-leg status: CE uses PE PDH/PDL, PE uses CE PDH/PDL
-        const ceStatus = evaluateStatus(latestCePrice, pePdh, pePdl);
-        const peStatus = evaluateStatus(latestPePrice, cePdh, cePdl);
+        // Update CE chart - pass all 4 values (CE PDH, CE PDL, PE PDH, PE PDL)
+        ceChart.update(ceData, null, null);
+        ceChart.updatePdhPdl(cePdh, cePdl, pePdh, pePdl);
+        let ceStatus = ceChart.getStatus();
         updateStatusBadge(DOM.ceStatus, ceStatus);
+
+        // Update PE chart - pass all 4 values (CE PDH, CE PDL, PE PDH, PE PDL)
+        peChart.update(peData, null, null);
+        peChart.updatePdhPdl(cePdh, cePdl, pePdh, pePdl);
+        let peStatus = peChart.getStatus();
         updateStatusBadge(DOM.peStatus, peStatus);
+
         updateCombinedStatusBadge(ceStatus, peStatus);
-        // // Refresh countdown badges after rendering, using current countdown value (COMMENTED OUT)
-        // updateCountdownPriceLines(countdownValue);
+
+        // Update combined chart price displays
+        const ceLatestPrice = ceChart.getLatestPrice();
+        const peLatestPrice = peChart.getLatestPrice();
+        if (DOM.combinedCePrice && ceLatestPrice !== null) {
+            DOM.combinedCePrice.textContent = `₹${ceLatestPrice.toFixed(2)}`;
+        }
+        if (DOM.combinedPePrice && peLatestPrice !== null) {
+            DOM.combinedPePrice.textContent = `₹${peLatestPrice.toFixed(2)}`;
+        }
     }
 
     /**
-     * Renders the combined CE and PE candlestick chart.
+     * Renders the combined CE and PE candlestick chart using TradingViewChart module.
      */
     function renderCombinedChart(cePdh, cePdl, pePdh, pePdl) {
-        if (!combinedCeSeries || !combinedPeSeries || !ceData || !peData) {
-            console.log('renderCombinedChart early exit:', { combinedCeSeries: !!combinedCeSeries, combinedPeSeries: !!combinedPeSeries, ceData: !!ceData, peData: !!peData });
+        if (!combinedChart || !ceData || !peData) {
+            console.log('renderCombinedChart early exit');
             return;
         }
 
-        // Use provided PDH/PDL if passed, else fallback to cached values
+        // Update cache with provided values
         currentPdhPdl = {
             ce_pdh: cePdh !== undefined ? cePdh : currentPdhPdl.ce_pdh,
             ce_pdl: cePdl !== undefined ? cePdl : currentPdhPdl.ce_pdl,
@@ -1094,102 +809,47 @@ const OptionsChartApp = (function () {
             pe_pdl: pePdl !== undefined ? pePdl : currentPdhPdl.pe_pdl
         };
 
-        // Always format fresh data (cache is cleared before calling this function)
-        ceFormattedData = formatChartData(ceData);
-        peFormattedData = formatChartData(peData);
+        // Combined chart doesn't use PDH/PDL (shows both CE and PE data)
+        combinedChart.update(ceData, null, null, peData);
 
-        console.log('Setting formatted data:', { ceFormattedData: ceFormattedData?.length, peFormattedData: peFormattedData?.length });
-
-        // Preserve visible range before updating data
-        const ceTimeScale = combinedChart?.timeScale();
-        const preservedRange = ceTimeScale?.getVisibleLogicalRange();
-
-        // Set data on chart series
-        combinedCeSeries.setData(ceFormattedData);
-        combinedPeSeries.setData(peFormattedData);
-
-        // Restore visible range after data update (prevents resetting to all data)
-        if (preservedRange && ceTimeScale && !isInitialLoad) {
-            setTimeout(() => {
-                ceTimeScale.setVisibleLogicalRange(preservedRange);
-            }, 0);
-        }
-
-        // Remove old timer lines
-        if (ceTimerPriceLine) combinedCeSeries.removePriceLine(ceTimerPriceLine);
-        if (peTimerPriceLine) combinedPeSeries.removePriceLine(peTimerPriceLine);
-        ceTimerPriceLine = null;
-        peTimerPriceLine = null;
-
-        const latestCePrice = getLatestPrice(ceData);
-        const latestPePrice = getLatestPrice(peData);
-
-        // Add price lines for the last traded price if in market hours (no PDH/PDL lines in combined chart)
-        if (latestCePrice !== null && currentPriceSource === 'current_close' && isMarketHours()) {
-            ceTimerPriceLine = combinedCeSeries.createPriceLine({
-                price: latestCePrice,
-                color: CONSTANTS.CHART_CONFIG.CE_COLOR,
-                lineWidth: 2,
-                lineStyle: LightweightCharts.LineStyle.Solid,
-                axisLabelVisible: true,
-                title: `CE: ${latestCePrice.toFixed(2)}`
-            });
-        }
-        if (latestPePrice !== null && currentPriceSource === 'current_close' && isMarketHours()) {
-            peTimerPriceLine = combinedPeSeries.createPriceLine({
-                price: latestPePrice,
-                color: CONSTANTS.CHART_CONFIG.PE_COLOR,
-                lineWidth: 2,
-                lineStyle: LightweightCharts.LineStyle.Solid,
-                axisLabelVisible: true,
-                title: `PE: ${latestPePrice.toFixed(2)}`
-            });
-        }
-
-        // Rerender individual charts
+        // Render individual charts
         renderIndividualCharts();
 
-        // Render comparison charts (same-strike CE/PE views)
+        // Render comparison charts
         renderComparisonCharts();
 
         // Show 2 days of data on initial load
         if (isInitialLoad) {
-            setTimeout(() => {
-                setVisibleRangeToDays(ceChart, 2);
-                setVisibleRangeToDays(peChart, 2);
-                setVisibleRangeToDays(combinedChart, 2);
-            }, 100);
-
             isInitialLoad = false;
         }
     }
 
     /**
-     * Renders both comparison charts where CE and PE use the same strike.
+     * Renders both comparison charts where CE and PE use the same strike (using module).
      */
     function renderComparisonCharts() {
         const naStatus = { text: '--', className: 'status-na' };
 
-        if (cePairData?.ce) {
-            renderPairSingleChart(cePairCeChart, cePairCeSeries, cePairData.ce, cePairPdhPdl, true, cePairCePriceLines, DOM.cePairCeStatus);
+        if (cePairData?.ce && cePairCeChart) {
+            renderPairSingleChart(cePairCeChart, cePairData.ce, cePairPdhPdl, true, DOM.cePairCeStatus);
         } else {
             updateStatusBadge(DOM.cePairCeStatus, naStatus);
         }
 
-        if (cePairData?.pe) {
-            renderPairSingleChart(cePairPeChart, cePairPeSeries, cePairData.pe, cePairPdhPdl, false, cePairPePriceLines, DOM.cePairPeStatus);
+        if (cePairData?.pe && cePairPeChart) {
+            renderPairSingleChart(cePairPeChart, cePairData.pe, cePairPdhPdl, false, DOM.cePairPeStatus);
         } else {
             updateStatusBadge(DOM.cePairPeStatus, naStatus);
         }
 
-        if (pePairData?.ce) {
-            renderPairSingleChart(pePairCeChart, pePairCeSeries, pePairData.ce, pePairPdhPdl, true, pePairCePriceLines, DOM.pePairCeStatus);
+        if (pePairData?.ce && pePairCeChart) {
+            renderPairSingleChart(pePairCeChart, pePairData.ce, pePairPdhPdl, true, DOM.pePairCeStatus);
         } else {
             updateStatusBadge(DOM.pePairCeStatus, naStatus);
         }
 
-        if (pePairData?.pe) {
-            renderPairSingleChart(pePairPeChart, pePairPeSeries, pePairData.pe, pePairPdhPdl, false, pePairPePriceLines, DOM.pePairPeStatus);
+        if (pePairData?.pe && pePairPeChart) {
+            renderPairSingleChart(pePairPeChart, pePairData.pe, pePairPdhPdl, false, DOM.pePairPeStatus);
         } else {
             updateStatusBadge(DOM.pePairPeStatus, naStatus);
         }
@@ -1199,66 +859,25 @@ const OptionsChartApp = (function () {
     }
 
     /**
-     * Renders a single comparison chart with PDH/PDL lines using existing logic.
+     * Renders a single comparison chart using TradingViewChart module.
      */
-    function renderPairSingleChart(chart, seriesObj, data, pdhPdl, isCeChart, priceLinesStore, statusEl) {
-        if (!chart || !seriesObj || !data) return;
+    function renderPairSingleChart(chart, data, pdhPdl, isCeChart, statusEl) {
+        if (!chart || !data) return;
 
-        const formatted = formatChartData(data);
-        seriesObj.setData(formatted);
-
-        // Remove old price lines
-        priceLinesStore.forEach(line => seriesObj.removePriceLine(line));
-        priceLinesStore.length = 0;
-
-        // Use PDH/PDL from fetched values for this strike pair
-        const cePdh = pdhPdl.ce_pdh;
-        const cePdl = pdhPdl.ce_pdl;
-        const pePdh = pdhPdl.pe_pdh;
-        const pePdl = pdhPdl.pe_pdl;
-
-        const newLines = addPreviousDayLines(seriesObj, cePdh, cePdl, pePdh, pePdl, isCeChart);
-        priceLinesStore.push(...newLines);
-
-        const latestPrice = getLatestPrice(data);
-        // Cross-leg status: CE chart compares against PE PDH/PDL and vice versa
-        const high = isCeChart ? pePdh : cePdh;
-        const low = isCeChart ? pePdl : cePdl;
-        const status = evaluateStatus(latestPrice, high, low);
+        // Update chart with data
+        chart.update(data, null, null);
+        
+        // Update with all 4 PDH/PDL values (CE PDH, CE PDL, PE PDH, PE PDL)
+        chart.updatePdhPdl(pdhPdl.ce_pdh, pdhPdl.ce_pdl, pdhPdl.pe_pdh, pdhPdl.pe_pdl);
+        
+        // Get status from chart module
+        let status = chart.getStatus();
         updateStatusBadge(statusEl, status);
     }
 
     /**
      * Sets the visible time range to show only the specified number of days from the end
      */
-    function setVisibleRangeToDays(chart, days) {
-        try {
-            const timeScale = chart.timeScale();
-            const visibleRange = timeScale.getVisibleLogicalRange();
-
-            if (visibleRange && ceFormattedData && ceFormattedData.length > 0) {
-                const totalBars = ceFormattedData.length;
-                // Estimate bars per day based on timeframe
-                const barsPerDay = {
-                    '1minute': 375,    // 6.25 hours * 60 minutes
-                    '3minute': 125,    // 6.25 hours * 20
-                    '5minute': 75,     // 6.25 hours * 12
-                    '15minute': 25,    // 6.25 hours * 4
-                    '60minute': 7      // ~6-7 hours
-                };
-
-                const barsToShow = (barsPerDay[currentTimeframe] || 75) * days;
-                const from = Math.max(0, totalBars - barsToShow);
-                const to = totalBars;
-
-                timeScale.setVisibleLogicalRange({ from, to });
-                console.log(`Set visible range to ${days} days:`, { from, to, totalBars, barsToShow });
-            }
-        } catch (error) {
-            console.error('Error setting visible range:', error);
-        }
-    }
-
     // --- Data Fetching Logic ---
 
     /**
@@ -1593,10 +1212,6 @@ const OptionsChartApp = (function () {
 
                 console.log('Chart data loaded:', { ceDataLength: ceData.length, peDataLength: peData.length });
 
-                // Clear cached formatted data to force re-formatting
-                ceFormattedData = null;
-                peFormattedData = null;
-
                 // IMPORTANT: Do NOT reinitialize charts here - they're already initialized in init()
                 // Only call renderCombinedChart() to update the data on existing chart objects
                 console.log('Calling renderCombinedChart with PDH/PDL:', currentPdhPdl);
@@ -1604,6 +1219,13 @@ const OptionsChartApp = (function () {
                 renderComparisonCharts();
 
                 startAutoUpdate(); // Restart auto-update with new data and tokens
+
+                // Request notification permission only after first successful user interaction
+                // This is a user gesture (form submission) so browser will allow the request
+                if (isInitialLoad) {
+                    requestNotificationPermission();
+                    isInitialLoad = false;
+                }
 
                 showNotification('Chart data loaded successfully.', 'success');
             } else {
@@ -1670,8 +1292,6 @@ const OptionsChartApp = (function () {
 
                     console.log('Auto-update: New data received', { ceDataLength: ceData.length, peDataLength: peData.length });
                     // Clear cached formatted data to force re-formatting
-                    ceFormattedData = null;
-                    peFormattedData = null;
                     console.log('Rendering updated chart...');
                     renderCombinedChart();
                 }
@@ -1828,56 +1448,49 @@ const OptionsChartApp = (function () {
         if (ceContainer && ceChart) {
             new ResizeObserver(entries => {
                 if (entries.length === 0 || entries[0].target !== ceContainer) { return; }
-                const newRect = entries[0].contentRect;
-                ceChart.applyOptions({ height: newRect.height, width: newRect.width });
+                ceChart.resize();
             }).observe(ceContainer);
         }
 
         if (peContainer && peChart) {
             new ResizeObserver(entries => {
                 if (entries.length === 0 || entries[0].target !== peContainer) { return; }
-                const newRect = entries[0].contentRect;
-                peChart.applyOptions({ height: newRect.height, width: newRect.width });
+                peChart.resize();
             }).observe(peContainer);
         }
 
         if (combinedContainer && combinedChart) {
             new ResizeObserver(entries => {
                 if (entries.length === 0 || entries[0].target !== combinedContainer) { return; }
-                const newRect = entries[0].contentRect;
-                combinedChart.applyOptions({ height: newRect.height, width: newRect.width });
+                combinedChart.resize();
             }).observe(combinedContainer);
         }
 
         if (cePairCeContainer && cePairCeChart) {
             new ResizeObserver(entries => {
                 if (entries.length === 0 || entries[0].target !== cePairCeContainer) { return; }
-                const newRect = entries[0].contentRect;
-                cePairCeChart.applyOptions({ height: newRect.height, width: newRect.width });
+                cePairCeChart.resize();
             }).observe(cePairCeContainer);
         }
 
         if (cePairPeContainer && cePairPeChart) {
             new ResizeObserver(entries => {
                 if (entries.length === 0 || entries[0].target !== cePairPeContainer) { return; }
-                const newRect = entries[0].contentRect;
-                cePairPeChart.applyOptions({ height: newRect.height, width: newRect.width });
+                cePairPeChart.resize();
             }).observe(cePairPeContainer);
         }
 
         if (pePairCeContainer && pePairCeChart) {
             new ResizeObserver(entries => {
                 if (entries.length === 0 || entries[0].target !== pePairCeContainer) { return; }
-                const newRect = entries[0].contentRect;
-                pePairCeChart.applyOptions({ height: newRect.height, width: newRect.width });
+                pePairCeChart.resize();
             }).observe(pePairCeContainer);
         }
 
         if (pePairPeContainer && pePairPeChart) {
             new ResizeObserver(entries => {
                 if (entries.length === 0 || entries[0].target !== pePairPeContainer) { return; }
-                const newRect = entries[0].contentRect;
-                pePairPeChart.applyOptions({ height: newRect.height, width: newRect.width });
+                pePairPeChart.resize();
             }).observe(pePairPeContainer);
         }
     }
@@ -1917,9 +1530,6 @@ const OptionsChartApp = (function () {
 
         // Set initial timeframe button active state
         updateActiveButton(currentTimeframe);
-
-        // Request browser notification permission on page load (user gesture context)
-        requestNotificationPermission();
 
         // Initial load of strikes and chart data for NIFTY
         loadStrikes();
