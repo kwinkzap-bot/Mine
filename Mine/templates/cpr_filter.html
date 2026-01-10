@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 {% block title %}CPR Filter - Stock Scanner{% endblock %}
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cpr_filter.css') }}">
+{% endblock %}
 {% block content %}
 <div id="status-bar" class="status-bar text-right status-bar-height"></div>
 <div class="results-container">
