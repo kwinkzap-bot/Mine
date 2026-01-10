@@ -4,6 +4,7 @@ from kiteconnect import KiteConnect
 import os
 from trading_app.app.utils.logger import logger
 from trading_app.app.config import current_config
+from trading_app.app.utils.token_manager import save_access_token, clear_access_token
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -69,9 +70,13 @@ def callback():
         logger.info("Session generated successfully, access_token stored")
         logger.info(f"User authenticated with access_token: {access_token[:20]}...")
         
-        # Store in environment for later use
+        # Store in environment for immediate use
         os.environ['ACCESS_TOKEN'] = access_token
         os.environ['REQUEST_TOKEN'] = request_token
+        
+        # Store in persistent cache to survive socket pool flushes
+        save_access_token(access_token, request_token)
+        logger.info("Token saved to persistent cache")
         
         # Update .env file with new tokens
         _update_env_tokens(access_token, request_token)
@@ -145,7 +150,9 @@ def _update_env_tokens(access_token: str, request_token: str) -> bool:
 def logout():
     """Logout user."""
     session.clear()
-    logger.info("User logged out")
+    # Also clear the persistent token cache
+    clear_access_token()
+    logger.info("User logged out, token cache cleared")
     return redirect(url_for('pages.index'))
 
 

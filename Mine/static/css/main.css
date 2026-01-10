@@ -19,7 +19,7 @@ body {
 
 /* Navigation Bar */
 .navigation-bar {
-    padding: 12px;
+    padding: 5px 5px 5px 10px;
     background: #f8f9fa;
     border-radius: 8px;
     margin-bottom: 10px;
@@ -40,10 +40,58 @@ body {
 .nav-link-login {
     color: #28a745;
     margin-left: auto;
+    background: none;
+    border: none;
+    cursor: pointer;
 }
 .nav-link:hover, .nav-link-login:hover {
     color: #000;
 }
+
+/* Login Dropdown */
+.login-dropdown {
+    position: relative;
+    margin-left: auto;
+}
+
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    min-width: 180px;
+    z-index: 1000;
+    margin-top: 8px;
+}
+
+.dropdown-menu.show {
+    display: block;
+}
+
+.dropdown-item {
+    display: block;
+    padding: 12px 16px;
+    color: #333;
+    text-decoration: none;
+    font-size: 14px;
+    border-bottom: 1px solid #f0f0f0;
+    transition: background 0.2s;
+}
+
+.dropdown-item:last-child {
+    border-bottom: none;
+}
+
+.dropdown-item:hover {
+    background: #f8f9fa;
+    color: #28a745;
+    font-weight: 500;
+}
+
 .nav-link.active {
     color: #667eea;
     font-weight: 600;
@@ -115,7 +163,6 @@ table {
     font-size: 12px;
 }
 th, td {
-    border: 1px solid #e0e0e0;
     padding: 6px 8px;
     text-align: left;
 }

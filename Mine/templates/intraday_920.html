@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Intraday 9:20 Strategy{% endblock %}
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/intraday_920.css') }}">
+<script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
+<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}"></script>
+{% endblock %}
+{% block content %}
+<div class="intraday-920-container">
+    <!-- Hidden controls for symbol and timeframe selection -->
+    <select id="symbolSelect" style="display: none;">
+        <option value="NIFTY">NIFTY</option>
+        <option value="BANKNIFTY">BANKNIFTY</option>
+        <option value="FINNIFTY">FINNIFTY</option>
+    </select>
+    <select id="timeFrameSelect" style="display: none;">
+        <option value="5minute">5 Minute</option>
+        <option value="15minute">15 Minute</option>
+        <option value="30minute">30 Minute</option>
+        <option value="60minute">1 Hour</option>
+    </select>
+
+    <div id="dataContainer" class="data-container">
+        <!-- NIFTY Data & CE/PE Strikes Summary (Top) -->
+        <div class="price-info-grid">
+            <!-- NIFTY Data -->
+            <div class="info-card highlight-high">
+                <span class="label">First 5 Min High</span>
+                <span id="first5MinHigh" class="value">--</span>
+            </div>
+            <div class="info-card highlight-low">
+                <span class="label">First 5 Min Low</span>
+                <span id="first5MinLow" class="value">--</span>
+            </div>
+            <div class="info-card">
+                <span class="label">Last Update</span>
+                <span id="lastUpdate" class="value">--</span>
+            </div>
+
+            <!-- CE & PE Strikes -->
+            <div class="info-card">
+                <span class="label">CE Strike (High)</span>
+                <span id="highCeStrike" class="value">--</span>
+                <span class="sub-info">H: <span id="highCeHigh">--</span> | L: <span id="highCeLow">--</span></span>
+            </div>
+            <div class="info-card">
+                <span class="label">PE Strike (High)</span>
+                <span id="highPeStrike" class="value">--</span>
+                <span class="sub-info">H: <span id="highPeHigh">--</span> | L: <span id="highPeLow">--</span></span>
+            </div>
+            <div class="info-card">
+                <span class="label">CE Strike (Low)</span>
+                <span id="lowCeStrike" class="value">--</span>
+                <span class="sub-info">H: <span id="lowCeHigh">--</span> | L: <span id="lowCeLow">--</span></span>
+            </div>
+            <div class="info-card">
+                <span class="label">PE Strike (Low)</span>
+                <span id="lowPeStrike" class="value">--</span>
+                <span class="sub-info">H: <span id="lowPeHigh">--</span> | L: <span id="lowPeLow">--</span></span>
+            </div>
+        </div>
+
+        <!-- Charts Section -->
+        <div class="charts-section">
+            
+            <!-- High Strike Charts -->
+            <div class="strike-subsection">
+                <div class="strike-header">
+                    <h4>📈 HIGH Strike (From: <span id="highStrikeLabel">--</span>)</h4>
+                    <div class="date-picker-wrapper">
+                        <input type="date" id="dataDatePicker" class="date-picker" title="Select a date to fetch data for that date">
+                        <small class="date-picker-hint">or leave empty for latest</small>
+                    </div>
+                </div>
+                <div class="chart-row">
+                    <div class="chart-container">
+                        <h5>CE Chart (High) <span id="highCeStrikeChart">--</span></h5>
+                        <div id="highCeChart" class="chart"></div>
+                    </div>
+                    <div class="chart-container">
+                        <h5>PE Chart (High) <span id="highPeStrikeChart">--</span></h5>
+                        <div id="highPeChart" class="chart"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Low Strike Charts -->
+            <div class="strike-subsection">
+                <h4>📉 LOW Strike (From: <span id="lowStrikeLabel">--</span>)</h4>
+                <div class="chart-row">
+                    <div class="chart-container">
+                        <h5>CE Chart (Low) <span id="lowCeStrikeChart">--</span></h5>
+                        <div id="lowCeChart" class="chart"></div>
+                    </div>
+                    <div class="chart-container">
+                        <h5>PE Chart (Low) <span id="lowPeStrikeChart">--</span></h5>
+                        <div id="lowPeChart" class="chart"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Signals Section -->
+        <div class="signals-section">
+            <h3>📊 Signals & Alerts</h3>
+            <div id="signalsContainer" class="signals-log">
+                <div class="signal-entry">
+                    <span class="time">--:--:--</span>
+                    <span class="message">Waiting for signals...</span>
+                    <span class="type">INFO</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/intraday_920.js') }}"></script>
+{% endblock %}

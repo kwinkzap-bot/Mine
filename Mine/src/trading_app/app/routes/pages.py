@@ -72,6 +72,11 @@ def intraday_option():
     """Intraday option trading page."""
     return render_template('intraday_option.html')
 
+@pages_bp.route('/intraday-920')
+def intraday_920():
+    """Intraday 9:20 strategy page."""
+    return render_template('intraday_920.html')
+
 @pages_bp.route('/login')
 def login():
     """Login page - redirects to /auth/login."""

@@ -368,16 +368,16 @@ window.TradingViewChart = (function () {
                     }
                 },
                 crosshair: {
-                    mode: 1,                        // Magnet mode
+                    mode: 0,                        // Normal mode - follows cursor exactly (not snapping to candle)
                     vertLine: {
-                        color: '#d1d5db',           // Light grey crosshair vertical
-                        width: 1,
-                        style: 1                     // Dashed
+                        color: '#9ca3af',           // Lighter grey crosshair vertical
+                        width: 1,                   // Slightly thicker for better visibility
+                        style: 3                     // Large dashed line style
                     },
                     horzLine: {
-                        color: '#d1d5db',           // Light grey crosshair horizontal
-                        width: 1,
-                        style: 1                     // Dashed
+                        color: '#9ca3af',           // Lighter grey crosshair horizontal
+                        width: 1,                   // Slightly thicker for better visibility
+                        style: 3                     // Large dashed line style
                     }
                 },
                 timeScale: {
@@ -569,6 +569,34 @@ window.TradingViewChart = (function () {
                 }, 100); // Small delay to let chart render
             }
 
+            // Add cursor change on hover over candles/lines
+            // When hovering over candles or reference lines, show pointer cursor (clickable)
+            // Otherwise show crosshair cursor
+            chart.subscribeClick((param) => {
+                // On click, check if cursor is over a candle or line
+                if (param && param.time) {
+                    container.style.cursor = 'pointer';
+                }
+            });
+
+            // Subscribe to cursor movement to change cursor based on what's under it
+            chart.subscribeCrosshairMove((param) => {
+                if (!param || !param.point) {
+                    // No data at cursor, show default crosshair
+                    container.style.cursor = 'crosshair';
+                    return;
+                }
+
+                // Check if hovering over series data (candles)
+                if (param.seriesPrices && param.seriesPrices.size > 0) {
+                    // Hovering over a candle - show pointer
+                    container.style.cursor = 'pointer';
+                } else {
+                    // Not hovering over candle - show crosshair
+                    container.style.cursor = 'crosshair';
+                }
+            });
+
             // Track if initialization has been done (to prevent re-initialization on updates)
             let isInitialized = false;
 
@@ -592,13 +620,26 @@ window.TradingViewChart = (function () {
                  * NOTE: Chart settings (zoom, timeScale, etc.) are initialized ONCE on creation
                  * Subsequent updates only modify the data and reference lines
                  */
-                update: function (newData, referenceOrPeData = null) {
+                update: function (newData, referenceOrPeData = null, refresh = false) {
                     // Check if this is a combined chart with PE data (array of candles)
                     const isCombinedUpdate = this.isCombined && referenceOrPeData && Array.isArray(referenceOrPeData);
                     // Or check if it's a reference object (has price-level properties)
                     const isReferenceUpdate = referenceOrPeData && typeof referenceOrPeData === 'object' && !Array.isArray(referenceOrPeData) &&
                         (referenceOrPeData.ce_payload_high !== undefined || referenceOrPeData.pe_payload_high !== undefined ||
                          referenceOrPeData.ce_payload_low !== undefined || referenceOrPeData.pe_payload_low !== undefined);
+
+                    // If refresh flag is true, clear existing price lines before updating
+                    if (refresh) {
+                        console.log('[Chart] Refresh mode: clearing existing price lines');
+                        // Remove all existing price lines
+                        if (priceLinesArray && priceLinesArray.length > 0) {
+                            priceLinesArray.forEach(line => {
+                                series ? series.removePriceLine(line) : (ceSeries && ceSeries.removePriceLine(line));
+                            });
+                            // Clear the array without reassigning (avoid const violation)
+                            priceLinesArray.splice(0, priceLinesArray.length);
+                        }
+                    }
 
                     if (isCombinedUpdate) {
                         // Combined chart: update both CE and PE series

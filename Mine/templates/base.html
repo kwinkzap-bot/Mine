@@ -14,14 +14,21 @@
     <div id="notification-container"></div>
     <div class="container">
         <div class="navigation-bar">
-            <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">🏠 Home</a>
             <a href="/historical" class="nav-link {% if request.path == '/historical' %}active{% endif %}">📈 Historical</a>
             <a href="/strategy" class="nav-link {% if request.path == '/strategy' %}active{% endif %}">📊 Strategy</a>
+            <a href="/multi-strike" class="nav-link {% if request.path == '/multi-strike' %}active{% endif %}">⚡ Multi Strike</a>
             <a href="/cpr-filter" class="nav-link {% if request.path == '/cpr-filter' %}active{% endif %}">🔍 CPR Filter</a>
             <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉 Options Chart</a>
-            <a href="/multi-strike" class="nav-link {% if request.path == '/multi-strike' %}active{% endif %}">⚡ Multi Strike</a>
             <a href="/intraday-option" class="nav-link {% if request.path == '/intraday-option' %}active{% endif %}">💹 Intraday Option</a>
-            <a href="/auth/login" class="nav-link-login">🔑 Login to Zerodha</a>
+            <a href="/intraday-920" class="nav-link {% if request.path == '/intraday-920' %}active{% endif %}">⏰ Intraday 9:20</a>
+            <div class="login-dropdown">
+                <button class="nav-link-login" id="loginToggle">🔑</button>
+                <div class="dropdown-menu" id="dropdownMenu">
+                    <a href="/auth/login" class="dropdown-item">Login to Zerodha</a>
+                    <a href="/auth/login/dhan" class="dropdown-item">Login to Dhan</a>
+                    <a href="/auth/login/kotak" class="dropdown-item">Login to Kotak Neo</a>
+                </div>
+            </div>
         </div>
         <main>
             {% block content %}{% endblock %}
@@ -32,6 +39,22 @@
     <script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script src="{{ url_for('static', filename='js/cpr_filter_scheduler.js') }}"></script>
+    <script>
+        // Login dropdown toggle
+        document.getElementById('loginToggle').addEventListener('click', function(e) {
+            e.preventDefault();
+            const dropdownMenu = document.getElementById('dropdownMenu');
+            dropdownMenu.classList.toggle('show');
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(e) {
+            const dropdown = document.querySelector('.login-dropdown');
+            if (!dropdown.contains(e.target)) {
+                document.getElementById('dropdownMenu').classList.remove('show');
+            }
+        });
+    </script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

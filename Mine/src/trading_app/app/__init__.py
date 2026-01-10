@@ -3,7 +3,7 @@ Application factory and initialization.
 Creates and configures the Flask application.
 """
 import os
-from flask import Flask, jsonify
+from flask import Flask, jsonify, session
 from trading_app.app.config import current_config
 from trading_app.app.extensions import init_extensions
 from trading_app.app.utils.logger import logger
@@ -41,6 +41,26 @@ def create_app(config=None):
     logger.info(f"Flask app created with config: {config.__name__}")
     logger.info(f"Templates: {template_path}")
     logger.info(f"Static: {static_path}")
+    
+    # Add after-request handler to persist access token to environment
+    # This ensures token survives socket pool flushes and debug session resets
+    @app.after_request
+    def persist_access_token(response):
+        """Persist access token from session to environment after each request.
+        
+        This provides continuity when socket pools are flushed during debugging.
+        If the session has a valid access token, write it to .env and os.environ.
+        """
+        try:
+            access_token = session.get('access_token')
+            if access_token and response.status_code < 400:  # Only persist on successful responses
+                # Update environment variable (runtime)
+                os.environ['ACCESS_TOKEN'] = access_token
+                logger.debug(f"Access token persisted to environment (token: {access_token[:20]}...)")
+        except Exception as e:
+            logger.warning(f"Could not persist access token to environment: {e}")
+        
+        return response
     
     # Register error handlers
     @app.errorhandler(400)

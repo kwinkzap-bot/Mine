@@ -17,33 +17,78 @@ EndpointResponse = Union[Response, tuple[Response, int]]
 
 
 def get_kite() -> Optional[Any]:
-    """Get authenticated KiteConnect instance from session or create new one."""
+    """Get authenticated KiteConnect instance from session or create new one.
+    
+    Provides multiple fallback layers to handle socket pool flushes and 
+    debug session resets that clear Flask session data:
+    1. Session storage (immediate access)
+    2. Environment variable (restored after socket pool flush)
+    3. Persistent token cache file (survives process restart)
+    """
     try:
-        # Don't store KiteConnect in session as it's not JSON serializable
-        # Instead, create a new instance each time from credentials in session
         from kiteconnect import KiteConnect
+        from trading_app.app.utils.token_manager import get_access_token
         import os
         
         api_key = os.getenv('API_KEY')
-        access_token = session.get('access_token')
         
-        if not api_key or not access_token:
+        if not api_key:
+            logger.warning("API_KEY not found in environment")
             return None
         
+        # Get access token with multiple fallback layers
+        # 1. Check session first
+        access_token = session.get('access_token')
+        
+        # 2. Check environment variable (restored after socket pool flush)
+        if not access_token:
+            access_token = os.getenv('ACCESS_TOKEN')
+            if access_token:
+                logger.info("Access token restored from environment variable (socket pool flush recovery)")
+        
+        # 3. Check persistent token cache
+        if not access_token:
+            access_token = get_access_token()
+            if access_token:
+                logger.info("Access token restored from persistent cache")
+                # Update session and environment for future requests
+                session['access_token'] = access_token
+                os.environ['ACCESS_TOKEN'] = access_token
+                session.permanent = True
+        
+        if not access_token:
+            logger.warning("No access token available from any source")
+            return None
+        
+        # Ensure session is in sync (for future requests)
+        if 'access_token' not in session:
+            session['access_token'] = access_token
+            session.permanent = True
+        
+        # Initialize KiteConnect with the access token
         kite = KiteConnect(api_key=api_key)
         kite.set_access_token(access_token)
+        
+        logger.debug(f"KiteConnect initialized successfully (token: {access_token[:20]}...)")
         return kite
+        
     except Exception as e:
-        logger.error(f"Failed to initialize KiteConnect: {e}")
+        logger.error(f"Failed to initialize KiteConnect: {e}", exc_info=True)
         return None
 
 
 def check_auth() -> Optional[tuple]:
-    """Check if user is authenticated. Returns error tuple if not."""
+    """Check if user is authenticated. Returns error tuple if not.
+    
+    Falls back to environment variable to handle socket pool flushes
+    and debug session resets that clear Flask session data.
+    """
     # Check session first, then fallback to environment variable
+    # This provides continuity when socket pools are flushed during debugging
     access_token = session.get('access_token') or os.getenv('ACCESS_TOKEN')
     
     if not access_token:
+        logger.warning("Authentication check failed: no access token available")
         return jsonify({
             'success': False,
             'error': 'Authentication required. Please login first at /auth/login',
@@ -51,9 +96,11 @@ def check_auth() -> Optional[tuple]:
         }), 401
     
     # Ensure session has the token for consistency
+    # This restores the session from environment after socket pool flush
     if 'access_token' not in session and access_token:
         session['access_token'] = access_token
         session.permanent = True
+        logger.info("Session token restored from environment")
     
     return None
 
@@ -505,6 +552,7 @@ def get_options_pdh_pdl() -> EndpointResponse:
 
 
 @api_bp.route('/cpr-filter', methods=['GET'])
+@limiter.exempt
 def get_cpr_filter_results() -> EndpointResponse:
     """Get stocks filtered by CPR strategy."""
     auth_error = check_auth()
@@ -750,6 +798,7 @@ def get_historical_data() -> EndpointResponse:
 
 
 @csrf.exempt
+@limiter.exempt
 @api_bp.route('/strategy-backtest', methods=['POST'])
 def run_strategy_backtest() -> EndpointResponse:
     """Run strategy backtest with given parameters."""
@@ -981,6 +1030,7 @@ def send_notification() -> EndpointResponse:
 
 @api_bp.route('/intraday-option/symbol-payload', methods=['GET'])
 @csrf.exempt
+@limiter.exempt
 def get_symbol_payload() -> EndpointResponse:
     """
     Get symbol payload with current price, PDH, PDL, PDC
@@ -1038,6 +1088,7 @@ def get_symbol_payload() -> EndpointResponse:
 
 @api_bp.route('/intraday-option/debug-strikes', methods=['GET'])
 @csrf.exempt
+@limiter.exempt
 def debug_available_strikes() -> EndpointResponse:
     """
     Debug endpoint to check available strike options for a symbol
@@ -1127,6 +1178,7 @@ def debug_available_strikes() -> EndpointResponse:
 
 @api_bp.route('/intraday-option', methods=['GET', 'POST'])
 @csrf.exempt
+@limiter.exempt
 def get_intraday_option_data() -> EndpointResponse:
     """
     Get intraday option data with real-time quotes and candlesticks
@@ -1290,6 +1342,7 @@ def get_intraday_option_data() -> EndpointResponse:
 
 @api_bp.route('/intraday-option/positions', methods=['GET'])
 @csrf.exempt
+@limiter.exempt
 def get_intraday_positions() -> EndpointResponse:
     """
     Get current intraday option positions and P&L
@@ -1332,6 +1385,7 @@ def get_intraday_positions() -> EndpointResponse:
 
 @api_bp.route('/intraday-option/multiple-strikes', methods=['GET'])
 @csrf.exempt
+@limiter.exempt
 def get_intraday_multiple_strikes() -> EndpointResponse:
     """
     Get intraday option data for multiple strikes
@@ -1384,6 +1438,196 @@ def get_intraday_multiple_strikes() -> EndpointResponse:
         
     except Exception as e:
         logger.error(f"Error in multiple_strikes endpoint: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+# ==================== INTRADAY 9:20 STRATEGY ENDPOINTS ====================
+
+@api_bp.route('/intraday-920/data', methods=['GET'])
+@api_bp.route('/intraday-920/symbol-payload', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def get_intraday_920_symbol_payload() -> EndpointResponse:
+    """
+    Get first 5-minute candle data and calculate strikes for Intraday 9:20 strategy
+    Called before starting monitoring to display 9:20 strategy data
+    
+    Query Parameters:
+        symbol (str): Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
+        date (str, optional): Date in YYYY-MM-DD format to fetch data for that specific date.
+                             If not provided, uses last trading day's data.
+        
+    Returns:
+        JSON with first_5min_high, first_5min_low, high_strike, low_strike data
+    """
+    try:
+        auth_error = check_auth()
+        if auth_error:
+            return auth_error
+        
+        # Get parameters
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        date_str = request.args.get('date')  # Format: YYYY-MM-DD or None
+        
+        # Validate symbol
+        valid_symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+        if symbol not in valid_symbols:
+            return jsonify({
+                'success': False,
+                'error': f'Invalid symbol. Must be one of {valid_symbols}'
+            }), 400
+        
+        # Get KiteConnect instance
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to initialize Kite connection'
+            }), 500
+        
+        # Import strategy
+        from trading_app.app.intraday_option.intraday_9_20 import Intraday920Strategy
+        strategy = Intraday920Strategy(kite)
+        
+        # Get strategy data (pass date if provided)
+        if date_str:
+            try:
+                target_date = datetime.strptime(date_str, '%Y-%m-%d')
+                payload = strategy.get_intraday_920_data(symbol, target_date=target_date)
+            except ValueError:
+                return jsonify({
+                    'success': False,
+                    'error': f'Invalid date format. Use YYYY-MM-DD'
+                }), 400
+        else:
+            payload = strategy.get_intraday_920_data(symbol)
+        
+        return jsonify({
+            'success': payload.get('success', False),
+            'data': payload,
+            'timestamp': datetime.now().isoformat()
+        }), 200 if payload.get('success') else 400
+        
+    except Exception as e:
+        logger.error(f"Error in intraday-920 data endpoint: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
+@api_bp.route('/intraday-920/chart-data', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+def get_intraday_920_chart_data() -> EndpointResponse:
+    """
+    Get chart data for Intraday 9:20 strategy strikes
+    
+    POST Payload:
+        {
+            "ce_token": 12345678,
+            "pe_token": 87654321,
+            "timeframe": "5minute"
+        }
+        
+    Returns:
+        JSON with CE and PE chart data
+    """
+    try:
+        auth_error = check_auth()
+        if auth_error:
+            return auth_error
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Request body must contain JSON'
+            }), 400
+        
+        ce_token = data.get('ce_token')
+        pe_token = data.get('pe_token')
+        timeframe = data.get('timeframe', '5minute')
+        
+        if not ce_token or not pe_token:
+            return jsonify({
+                'success': False,
+                'error': 'ce_token and pe_token are required'
+            }), 400
+        
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to initialize Kite connection'
+            }), 500
+        
+        from trading_app.app.intraday_920.intraday_920 import Intraday920Trader
+        trader = Intraday920Trader(kite)
+        
+        chart_data = trader.get_chart_data(ce_token, pe_token, timeframe)
+        
+        return jsonify({
+            'success': not chart_data.get('error'),
+            'data': chart_data
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in intraday-920 chart_data endpoint: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@api_bp.route('/intraday-920/candles', methods=['GET'])
+@csrf.exempt
+@limiter.exempt 
+def intraday_920_candles() -> EndpointResponse:
+    """
+    Get candlestick data for a token (CE or PE).
+    
+    Used for charting the high and low strike options.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    
+    token = request.args.get('token', type=int)
+    interval = request.args.get('interval', '5minute')
+    days_back = request.args.get('days_back', 1, type=int)
+    
+    if not token:
+        return jsonify({
+            'success': False,
+            'error': 'Token is required'
+        }), 400
+    
+    try:
+        current_kite = get_kite()
+        if not current_kite:
+            return jsonify({
+                'success': False,
+                'error': 'KiteConnect initialization failed'
+            }), 401
+        
+        from trading_app.app.intraday_option.intraday_9_20 import Intraday920Strategy
+        strategy = Intraday920Strategy(current_kite)
+        
+        data = strategy.get_candle_data(token, interval, days_back)
+        
+        return jsonify({
+            'success': data.get('success', False),
+            'data': data,
+            'timestamp': datetime.now().isoformat()
+        }), 200 if data.get('success') else 400
+        
+    except Exception as e:
+        logger.error(f"Error in intraday_920_candles: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
