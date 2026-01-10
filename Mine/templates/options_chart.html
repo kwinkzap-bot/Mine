@@ -23,6 +23,7 @@
             <div id="entry-signal-content"></div>
         </div>
         <div class="order-buttons-group">
+            <input type="date" id="optionsChartDatePicker" class="date-picker" title="Select a date to fetch data for that date (or leave empty for latest)">
             <button id="buyPeBtn" type="button" class="btn order-btn order-btn-pe" title="Place buy order for PE strike">
                 🔴 BUY PE
             </button>
@@ -134,5 +135,5 @@
 {{ super() }}
 <script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
 <script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}"></script>
-<script src="{{ url_for('static', filename='js/options_chart_app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/options_chart.js') }}"></script>
 {% endblock %}

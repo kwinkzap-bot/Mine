@@ -429,8 +429,29 @@
     flex-shrink: 0;
 }
 
+.order-buttons-group .date-picker {
+    padding: 5px 8px;
+    font-size: 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background-color: #fff;
+    color: #333;
+    cursor: pointer;
+    transition: border-color 0.3s ease;
+}
+
+.order-buttons-group .date-picker:hover {
+    border-color: #999;
+}
+
+.order-buttons-group .date-picker:focus {
+    outline: none;
+    border-color: #00bcd4;
+    box-shadow: 0 0 3px rgba(0, 188, 212, 0.3);
+}
+
 .order-btn {
-    padding: 10px 16px !important;
+    padding: 5px 8px !important;
     font-size: 12px !important;
     font-weight: 600 !important;
     border-radius: 6px !important;
@@ -438,7 +459,7 @@
     cursor: pointer !important;
     transition: all 0.3s ease !important;
     white-space: nowrap;
-    min-width: 120px;
+    min-width: 85px;
 }
 
 .order-btn-ce {

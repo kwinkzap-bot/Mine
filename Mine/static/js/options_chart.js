@@ -32,6 +32,7 @@ const OptionsChartApp = (function () {
     let currentSymbol = 'NIFTY';
     let currentPriceSource = 'previous_close';
     let isInitialLoad = true;
+    let selectedDate = null;  // Track selected date for data fetching
     
     // Previous day high/low data from backend
     let currentPdhPdl = { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
@@ -71,6 +72,7 @@ const OptionsChartApp = (function () {
         DOM.loadChartBtn = document.getElementById('fetchChartBtn');
         DOM.buyPeBtn = document.getElementById('buyPeBtn');
         DOM.buyCeBtn = document.getElementById('buyCeBtn');
+        DOM.datePicker = document.getElementById('optionsChartDatePicker');
         DOM.priceSourceRadios = document.querySelectorAll('input[name="priceSource"]');
         DOM.niftyPriceDisplay = document.getElementById('nifty-ltp');
         DOM.trendDisplay = document.getElementById('trend-display');
@@ -434,12 +436,13 @@ const OptionsChartApp = (function () {
     /**
      * Fetches and updates the underlying index price based on price source.
      * Now uses cached data from loadStrikes() to avoid redundant API calls.
+     * @param {string} targetDate - Optional date in YYYY-MM-DD format
      */
-    async function updateUnderlyingPrice() {
+    async function updateUnderlyingPrice(targetDate = null) {
         if (!currentSymbol || !DOM.niftyPriceDisplay) return;
 
         // If we have cached underlying price data from loadStrikes(), use it
-        if (window._cachedUnderlyingPrice && window._cachedUnderlyingPrice.symbol === currentSymbol) {
+        if (window._cachedUnderlyingPrice && window._cachedUnderlyingPrice.symbol === currentSymbol && !targetDate) {
             const data = window._cachedUnderlyingPrice;
             const sourceLabel = data.source_label || '';
             DOM.niftyPriceDisplay.textContent = (data.requested_price || 0).toFixed(2) + sourceLabel;
@@ -449,17 +452,23 @@ const OptionsChartApp = (function () {
         // Fallback: refetch from merged init endpoint if no cached data
         try {
             const priceSource = currentPriceSource === 'previous_close' ? 'previous_close' : 'ltp';
-            const data = await fetchJson(`${CONSTANTS.API_ENDPOINTS.OPTIONS_INIT}?symbol=${currentSymbol}&price_source=${priceSource}`);
+            let apiUrl = `${CONSTANTS.API_ENDPOINTS.OPTIONS_INIT}?symbol=${currentSymbol}&price_source=${priceSource}`;
+            if (targetDate) {
+                apiUrl += `&date=${targetDate}`;
+            }
+            const data = await fetchJson(apiUrl);
 
             if (data.success && data.underlying_price) {
                 const sourceLabel = data.underlying_price.source_label || '';
                 DOM.niftyPriceDisplay.textContent = (data.underlying_price.requested_price || 0).toFixed(2) + sourceLabel;
-                // Update cache
-                window._cachedUnderlyingPrice = {
-                    symbol: currentSymbol,
-                    requested_price: data.underlying_price.requested_price,
-                    source_label: data.underlying_price.source_label
-                };
+                // Update cache only if no targetDate
+                if (!targetDate) {
+                    window._cachedUnderlyingPrice = {
+                        symbol: currentSymbol,
+                        requested_price: data.underlying_price.requested_price,
+                        source_label: data.underlying_price.source_label
+                    };
+                }
             }
         } catch (error) {
             console.error('Error fetching underlying price:', error);
@@ -933,7 +942,7 @@ const OptionsChartApp = (function () {
     /**
      * Fetches strikes, underlying price, and PDH/PDL in a single merged API call.
      */
-    async function loadStrikes() {
+    async function loadStrikes(targetDate = null) {
         DOM.ceStrikeSelect.innerHTML = '<option value="">Loading...</option>';
         DOM.peStrikeSelect.innerHTML = '<option value="">Loading...</option>';
 
@@ -946,7 +955,11 @@ const OptionsChartApp = (function () {
             console.log('[loadStrikes] Using price source:', priceSource, 'currentPriceSource:', currentPriceSource);
 
             // Single merged API call that returns strikes, underlying price, and PDH/PDL
-            const data = await fetchJson(`${CONSTANTS.API_ENDPOINTS.OPTIONS_INIT}?symbol=${symbol}&price_source=${priceSource}`);
+            let apiUrl = `${CONSTANTS.API_ENDPOINTS.OPTIONS_INIT}?symbol=${symbol}&price_source=${priceSource}`;
+            if (targetDate) {
+                apiUrl += `&date=${targetDate}`;
+            }
+            const data = await fetchJson(apiUrl);
 
             if (data.success) {
                 const strikes = data.strikes.map(s => s.strike.toString());
@@ -1017,7 +1030,7 @@ const OptionsChartApp = (function () {
      * Only updates the data without reinitializing the charts (they're initialized once in init()).
      * Fetches tokens for the currently selected strikes to ensure fresh data.
      */
-    async function loadChartData() {
+    async function loadChartData(targetDate = null) {
         const ceStrike = DOM.ceStrikeSelect.value;
         const peStrike = DOM.peStrikeSelect.value;
         let ceStrikeObj = null;
@@ -1048,14 +1061,18 @@ const OptionsChartApp = (function () {
                 
                 // Check if we have a valid cached response for this symbol and price source
                 let initResp = null;
-                if (cachedInitResponse && cachedInitSymbol === currentSymbol && cachedInitPriceSource === priceSource) {
+                if (cachedInitResponse && cachedInitSymbol === currentSymbol && cachedInitPriceSource === priceSource && !targetDate) {
                     console.log('Using cached OPTIONS_INIT response');
                     initResp = cachedInitResponse;
                 } else {
                     console.log('Fetching fresh OPTIONS_INIT response (cache miss or params changed)');
-                    initResp = await fetchJson(`${CONSTANTS.API_ENDPOINTS.OPTIONS_INIT}?symbol=${currentSymbol}&price_source=${priceSource}`);
-                    // Update cache
-                    if (initResp?.success) {
+                    let apiUrl = `${CONSTANTS.API_ENDPOINTS.OPTIONS_INIT}?symbol=${currentSymbol}&price_source=${priceSource}`;
+                    if (targetDate) {
+                        apiUrl += `&date=${targetDate}`;
+                    }
+                    initResp = await fetchJson(apiUrl);
+                    // Update cache only if no targetDate
+                    if (initResp?.success && !targetDate) {
                         cachedInitResponse = initResp;
                         cachedInitSymbol = currentSymbol;
                         cachedInitPriceSource = priceSource;
@@ -1418,6 +1435,17 @@ const OptionsChartApp = (function () {
                 DOM.cePairPeStrikeDisplay.textContent = DOM.ceStrikeSelect.value ? `PE ${DOM.ceStrikeSelect.value}` : '';
                 DOM.pePairCeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `CE ${DOM.peStrikeSelect.value}` : '';
                 DOM.pePairPeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `PE ${DOM.peStrikeSelect.value}` : '';
+            } else if (target === DOM.datePicker) {
+                // Handle date picker change
+                selectedDate = target.value ? new Date(target.value) : null;
+                console.log('[DatePicker] Selected date:', selectedDate);
+                // Reload strikes and update price with selected date
+                if (selectedDate) {
+                    const dateStr = selectedDate.toISOString().split('T')[0]; // Format as YYYY-MM-DD
+                    loadStrikes(dateStr);
+                } else {
+                    loadStrikes(); // Reload with current date
+                }
             }
         });
 
@@ -1425,7 +1453,13 @@ const OptionsChartApp = (function () {
         DOM.optionsChartApp.addEventListener('click', (event) => {
             const target = event.target;
             if (target.id === 'fetchChartBtn') {
-                loadChartData();
+                // Pass selected date to loadChartData if available
+                if (selectedDate) {
+                    const dateStr = selectedDate.toISOString().split('T')[0]; // Format as YYYY-MM-DD
+                    loadChartData(dateStr);
+                } else {
+                    loadChartData();
+                }
             } else if (target.id === 'buyPeBtn') {
                 placeOrder('PE');
             } else if (target.id === 'buyCeBtn') {
