@@ -44,13 +44,11 @@
                 <select id="peStrike"></select>
             </div>
             <div class="form-group">
-                <label>Price Source</label>
-                <div class="radio-group">
-                    <input type="radio" id="ltp" name="priceSource" value="ltp"> 
-                    <label for="ltp">LTP</label>
-                    <input type="radio" id="previous_close" name="priceSource" value="previous_close" checked>
-                    <label for="previous_close">Previous Close</label>
-                </div>
+                <label for="priceSource">Price Source</label>
+                <select id="priceSource" name="priceSource">
+                    <option value="previous_close" selected>Previous Close</option>
+                    <option value="ltp">LTP</option>
+                </select>
             </div>
             <div class="form-group">
                 <button id="fetchChartBtn" type="submit" class="btn form-button">Fetch</button>
