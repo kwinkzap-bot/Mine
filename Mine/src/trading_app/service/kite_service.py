@@ -128,7 +128,7 @@ class KiteService:
             logging.error(f"Error getting previous close for {symbol}: {e}")
             return None
     
-    def get_previous_trading_day_close(self, symbol: str) -> Optional[float]:
+    def get_previous_trading_day_close(self, symbol: str, target_date: Optional[str] = None) -> Optional[float]:
         """
         Get the previous trading day's close price using historical data.
         
@@ -137,6 +137,7 @@ class KiteService:
         
         Args:
             symbol: Trading symbol (e.g., 'NIFTY', 'BANKNIFTY')
+            target_date: Optional date string in YYYY-MM-DD format. If provided, returns close price for that date.
         
         Returns:
             Previous trading day's close price, or None if not available
@@ -148,6 +149,49 @@ class KiteService:
                 logging.error(f"[get_previous_trading_day_close] Could not find token for {symbol}")
                 return None
             
+            # If target_date is provided, fetch close price for that specific date
+            if target_date:
+                try:
+                    # Parse target_date (format: YYYY-MM-DD)
+                    target_dt = datetime.strptime(target_date, '%Y-%m-%d').date()
+                    
+                    # Fetch from 1 day before target to 1 day after target (to ensure we capture the target date)
+                    from_date = datetime.combine(target_dt - timedelta(days=1), datetime.min.time())
+                    to_date = datetime.combine(target_dt + timedelta(days=1), datetime.max.time())
+                    
+                    logging.info(f"[get_previous_trading_day_close] {symbol} (target_date={target_date}, token={instrument_token})")
+                    logging.info(f"[get_previous_trading_day_close]   Fetching from {from_date} to {to_date}")
+                    
+                    historical_data = self.kite.historical_data(
+                        instrument_token=int(instrument_token),
+                        from_date=from_date,
+                        to_date=to_date,
+                        interval='day'
+                    )
+                    
+                    if historical_data:
+                        # Find the data point for the target date
+                        for data in historical_data:
+                            data_date = data['date'].date() if hasattr(data['date'], 'date') else data['date']
+                            if data_date == target_dt:
+                                close_price = float(data['close'])
+                                logging.info(f"[get_previous_trading_day_close] ✓ Found close for {symbol} on {target_date}: {close_price:.2f}")
+                                return close_price
+                        
+                        logging.warning(f"[get_previous_trading_day_close] No data found for target date {target_date}, using most recent available")
+                        if historical_data:
+                            sorted_data = sorted(historical_data, key=lambda x: x['date'], reverse=True)
+                            close_price = float(sorted_data[0]['close'])
+                            logging.info(f"[get_previous_trading_day_close] ✓ Using fallback: {close_price:.2f}")
+                            return close_price
+                    else:
+                        logging.warning(f"[get_previous_trading_day_close] No historical data for target date {target_date}")
+                        return None
+                except Exception as e:
+                    logging.error(f"[get_previous_trading_day_close] Error fetching data for target_date {target_date}: {e}", exc_info=True)
+                    return None
+            
+            # Original logic for current date (when target_date is None)
             # IMPORTANT: Exclude today's incomplete data
             # Go back from yesterday to get only COMPLETE trading days
             today = datetime.now().date()

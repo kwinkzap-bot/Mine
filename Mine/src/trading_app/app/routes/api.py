@@ -241,7 +241,7 @@ def get_fo_stocks() -> EndpointResponse:
 def get_options_init() -> EndpointResponse:
     """
     FAST endpoint - returns strikes immediately using cached NFO instruments and disk cache.
-    Query params: symbol, price_source
+    Query params: symbol, price_source, date (optional)
     
     Performance optimizations:
     - Uses disk-cached NFO instruments (8-10s on first call, <500ms on cache hit)
@@ -257,6 +257,7 @@ def get_options_init() -> EndpointResponse:
     
     symbol = request.args.get('symbol')
     price_source = request.args.get('price_source', 'previous_close')
+    target_date = request.args.get('date')  # Optional date in YYYY-MM-DD format
     
     if not symbol:
         return jsonify({'success': False, 'error': 'Symbol is required'}), 400
@@ -271,7 +272,7 @@ def get_options_init() -> EndpointResponse:
         chart_service = OptionsChartService(current_kite)
         
         # Skip pricing in service - fetch it once here to avoid duplication
-        result = chart_service.get_strikes_for_symbol(symbol, price_source, skip_pricing=True)
+        result = chart_service.get_strikes_for_symbol(symbol, price_source, skip_pricing=True, target_date=target_date)
         
         if 'strikes' not in result:
             return jsonify({'success': False, 'error': 'Could not retrieve strike data.'}), 500
@@ -283,16 +284,17 @@ def get_options_init() -> EndpointResponse:
         default_pe_strike = result.get('default_pe_strike')
         base_price = result.get('base_price')
         
-        # Use the base_price already calculated by the service (respects price_source)
+        # Use the base_price already calculated by the service (respects price_source and target_date)
         # For 'previous_close', base_price comes from historical data (get_previous_trading_day_close)
         # For 'ltp', base_price comes from get_current_ltp
         requested_price = base_price or 0.0
         requested_source_label = ' (Close)' if price_source == 'previous_close' else ' (LTP)'
         
-        logger.info(f"[options-init] {symbol}: price_source={price_source}, base_price={base_price}, requested_price={requested_price}, label={requested_source_label}")
+        date_label = f" for {target_date}" if target_date else ""
+        logger.info(f"[options-init] {symbol}{date_label}: price_source={price_source}, base_price={base_price}, requested_price={requested_price}, label={requested_source_label}")
         
         total_time = time_module.time() - start_time
-        logger.info(f"✓ options-init({symbol}) completed in {total_time:.2f}s")
+        logger.info(f"✓ options-init({symbol}{date_label}) completed in {total_time:.2f}s")
         
         return jsonify({
             'success': True,

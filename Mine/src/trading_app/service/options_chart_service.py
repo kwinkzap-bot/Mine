@@ -229,16 +229,20 @@ class OptionsChartService:
         
         return strikes
 
-    def _fetch_base_price(self, symbol: str, price_source: str) -> Optional[float]:
-        """Fetch base price based on price_source parameter."""
+    def _fetch_base_price(self, symbol: str, price_source: str, target_date: Optional[str] = None) -> Optional[float]:
+        """Fetch base price based on price_source parameter. Supports optional target_date for historical data."""
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="pricing") as executor:
             if price_source == 'ltp':
-                return self._fetch_ltp_with_fallback(executor, symbol)
+                return self._fetch_ltp_with_fallback(executor, symbol, target_date)
             else:  # previous_close
-                return self._fetch_previous_close(executor, symbol)
+                return self._fetch_previous_close(executor, symbol, target_date)
 
-    def _fetch_ltp_with_fallback(self, executor, symbol: str) -> Optional[float]:
-        """Fetch LTP with fallback to previous close."""
+    def _fetch_ltp_with_fallback(self, executor, symbol: str, target_date: Optional[str] = None) -> Optional[float]:
+        """Fetch LTP with fallback to previous close. For historical dates, only uses previous_close."""
+        if target_date:
+            # For historical dates, use previous_close instead of LTP
+            return self._fetch_previous_close(executor, symbol, target_date)
+        
         ltp_future = executor.submit(self.kite_service.get_current_ltp, symbol)
         try:
             base_price = ltp_future.result(timeout=3)
@@ -246,14 +250,15 @@ class OptionsChartService:
             return base_price
         except Exception as e:
             logging.warning(f"[get_strikes] {symbol}: Error fetching LTP: {e}, falling back to previous close")
-            return self._fetch_previous_close(executor, symbol)
+            return self._fetch_previous_close(executor, symbol, target_date)
 
-    def _fetch_previous_close(self, executor, symbol: str) -> Optional[float]:
-        """Fetch previous trading day close."""
-        pdc_future = executor.submit(self.kite_service.get_previous_trading_day_close, symbol)
+    def _fetch_previous_close(self, executor, symbol: str, target_date: Optional[str] = None) -> Optional[float]:
+        """Fetch previous trading day close, or historical close for a specific target_date."""
+        pdc_future = executor.submit(self.kite_service.get_previous_trading_day_close, symbol, target_date)
         try:
             base_price = pdc_future.result(timeout=5)
-            logging.info(f"[get_strikes] {symbol}: Using previous close price: {base_price}")
+            date_label = f" for {target_date}" if target_date else ""
+            logging.info(f"[get_strikes] {symbol}: Using previous close price{date_label}: {base_price}")
             return base_price
         except Exception as e:
             logging.warning(f"[get_strikes] {symbol}: Timeout fetching price: {e}, using mid-strike")
@@ -302,7 +307,7 @@ class OptionsChartService:
         
         return default_ce_strike, default_pe_strike, default_ce_token, default_pe_token
 
-    def get_strikes_for_symbol(self, symbol: str, price_source: str = 'previous_close', skip_pricing: bool = False) -> Dict[str, Any]:
+    def get_strikes_for_symbol(self, symbol: str, price_source: str = 'previous_close', skip_pricing: bool = False, target_date: Optional[str] = None) -> Dict[str, Any]:
         """
         Get available strikes for a symbol with default CE/PE selection.
         
@@ -310,6 +315,7 @@ class OptionsChartService:
             symbol: Trading symbol (e.g., 'NIFTY')
             price_source: 'previous_close' or 'ltp' for calculating default strikes
             skip_pricing: If True, returns immediately with calculated defaults
+            target_date: Optional date in YYYY-MM-DD format for historical data
         
         Returns:
             Dict with strikes, default CE/PE strikes and tokens, and base_price
@@ -350,14 +356,14 @@ class OptionsChartService:
                 }
             
             # STEP 4: Fetch base price
-            base_price = self._fetch_base_price(symbol, price_source)
+            base_price = self._fetch_base_price(symbol, price_source, target_date)
             
             # STEP 5: Calculate and assign default strikes
             default_ce_strike, default_pe_strike, default_ce_token, default_pe_token = \
                 self._calculate_and_assign_defaults(base_price, symbol, strikes)
             
             elapsed = time_module.time() - start_time
-            logging.info(f"✓ get_strikes_for_symbol({symbol}) completed in {elapsed:.2f}s")
+            logging.info(f"✓ get_strikes_for_symbol({symbol}, target_date={target_date}) completed in {elapsed:.2f}s")
             
             return {
                 'strikes': strikes,
