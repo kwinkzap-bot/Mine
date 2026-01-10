@@ -991,8 +991,8 @@ const OptionsChartApp = (function () {
                 DOM.pePairCeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `CE ${DOM.peStrikeSelect.value}` : '';
                 DOM.pePairPeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `PE ${DOM.peStrikeSelect.value}` : '';
 
-                // Cache underlying price data
-                if (data.underlying_price) {
+                // Cache underlying price data only if no targetDate (to avoid caching historical data)
+                if (data.underlying_price && !targetDate) {
                     window._cachedUnderlyingPrice = {
                         symbol: symbol,
                         requested_price: data.underlying_price.requested_price,
@@ -1005,15 +1005,18 @@ const OptionsChartApp = (function () {
                 if (data.default_pe_token) currentPeToken = data.default_pe_token;
 
                 // IMPORTANT: Cache the full OPTIONS_INIT response to avoid duplicate calls in loadChartData()
-                cachedInitResponse = data;
-                cachedInitSymbol = symbol;
-                cachedInitPriceSource = priceSource;
+                // But only cache if no targetDate (historical data shouldn't be cached)
+                if (!targetDate) {
+                    cachedInitResponse = data;
+                    cachedInitSymbol = symbol;
+                    cachedInitPriceSource = priceSource;
+                }
 
-                // Update underlying price display
-                updateUnderlyingPrice();
+                // Update underlying price display - pass targetDate so it displays the correct date's price
+                updateUnderlyingPrice(targetDate);
 
                 // Load initial chart data
-                loadChartData();
+                loadChartData(targetDate);
 
             } else {
                 showNotification(data.message || 'Failed to load strikes.', 'error');
