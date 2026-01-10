@@ -90,39 +90,11 @@
     align-items: center !important;
 }
 
-/* Chart Layout and Structure */
-.chart-grid {
-    display: flex;
-    flex-wrap: wrap; 
-    gap: 15px;
-    margin-top: 15px;
-}
+/* Chart Layout and Structure - See tradingview-chart.css for reusable styles */
 
-.chart-wrapper {
-    flex: 1 1 45%; 
-    min-width: 300px; 
-    background: #fff;
-    border-radius: 8px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    padding: 8px;
-    position: relative;
-}
-
-.chart-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-}
-
+/* Options Chart specific overrides */
 .chart-element {
     height: 400px;
-    width: 100%;
-}
-
-.combined-chart-section {
-    margin-top: 20px;
-    position: relative;
 }
 
 /* Timeframe Buttons (now integrated in form row) */
@@ -209,47 +181,7 @@
     color: white;
 }
 
-/* Strike Display in chart titles */
-.strike-display {
-    font-weight: normal;
-    color: #555;
-    font-size: 0.9em;
-}
-
-.chart-status {
-    font-weight: 700;
-    font-size: 10px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    border: 1px solid transparent;
-    min-width: 90px;
-    text-align: center;
-    letter-spacing: 0.5px;
-}
-
-.chart-status.status-sideway {
-    background: #f3f4f6;
-    color: #374151;
-    border-color: #d1d5db;
-}
-
-.chart-status.status-win {
-    background: #ecfdf3;
-    color: #166534;
-    border-color: #22c55e;
-}
-
-.chart-status.status-loss {
-    background: #fef2f2;
-    color: #b91c1c;
-    border-color: #ef4444;
-}
-
-.chart-status.status-na {
-    background: #f9fafb;
-    color: #9ca3af;
-    border-color: #e5e7eb;
-}
+/* Chart status and display styles - See tradingview-chart.css for reusable styles */
 
 /* Trend Badge Styles */
 .trend-badge {
