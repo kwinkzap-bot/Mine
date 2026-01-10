@@ -155,14 +155,16 @@
 }
 
 /* Charts Section */
-.chart-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+.chart-grid {
+    display: flex;
+    flex-wrap: wrap;
     gap: 12px;
-    margin-bottom: 12px;
+    margin-top: 12px;
 }
 
-.chart-container {
+.chart-wrapper {
+    flex: 1 1 45%;
+    min-width: 300px;
     background: var(--bg-white);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -174,18 +176,72 @@
     cursor: crosshair;
 }
 
-.chart-container h4 {
-    margin: 0 0 6px 0;
-    font-size: 9px;
+.chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+.chart-header h3 {
+    margin: 0;
+    font-size: 13px;
     color: var(--text-primary);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    flex-shrink: 0;
+    flex: 1;
 }
 
-.chart {
+.chart-element {
     width: 100%;
+    height: 400px;
+}
+
+/* Chart Status Badge */
+.chart-status {
+    font-weight: 700;
+    font-size: 10px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    min-width: 70px;
+    text-align: center;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.chart-status.status-sideway {
+    background: #f3f4f6;
+    color: #374151;
+    border-color: #d1d5db;
+}
+
+.chart-status.status-win {
+    background: #ecfdf3;
+    color: #166534;
+    border-color: #22c55e;
+}
+
+.chart-status.status-loss {
+    background: #fef2f2;
+    color: #b91c1c;
+    border-color: #ef4444;
+}
+
+.chart-status.status-na {
+    background: #f9fafb;
+    color: #9ca3af;
+    border-color: #e5e7eb;
+}
+
+/* Strike Display in chart titles */
+.strike-display {
+    font-weight: normal;
+    color: #555;
+    font-size: 0.9em;
 }
 
 /* Signals Section */
@@ -277,7 +333,7 @@
 }
 
 /* Charts Section */
-.charts-section {
+.charts-container {
     background: var(--bg-white);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -286,7 +342,7 @@
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
-.charts-section h3 {
+.charts-container h3 {
     margin: 0 0 12px 0;
     font-size: 11px;
     color: var(--text-primary);
@@ -407,8 +463,16 @@
 
 /* Responsive Design */
 @media (max-width: 768px) {
-    .chart-row {
-        grid-template-columns: 1fr;
+    .chart-grid {
+        flex-direction: column;
+    }
+    
+    .chart-wrapper {
+        flex: 1 1 100%;
+    }
+    
+    .chart-element {
+        height: 300px;
     }
 }
 
@@ -437,15 +501,6 @@
         grid-template-columns: 1fr;
         gap: 6px;
         margin-bottom: 8px;
-    }
-    
-    .chart-row {
-        gap: 8px;
-        margin-bottom: 8px;
-    }
-    
-    .chart {
-        height: 250px;
     }
     
     .info-card {
