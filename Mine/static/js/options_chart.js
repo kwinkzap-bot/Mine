@@ -818,8 +818,8 @@ const OptionsChartApp = (function () {
             pe_pdl: pePdl !== undefined ? pePdl : currentPdhPdl.pe_pdl
         };
 
-        // Combined chart doesn't use PDH/PDL (shows both CE and PE data)
-        combinedChart.update(ceData, null, null, peData);
+        // Combined chart: update with CE data and PE data (second parameter for combined chart)
+        combinedChart.update(ceData, peData);
 
         // Render individual charts
         renderIndividualCharts();

@@ -1636,6 +1636,71 @@ def intraday_920_candles() -> EndpointResponse:
         }), 500
 
 
+@api_bp.route('/debug/token-status', methods=['GET'])
+@csrf.exempt
+def debug_token_status() -> EndpointResponse:
+    """Debug endpoint to check token status and Kite API connection."""
+    try:
+        import os
+        from kiteconnect import KiteConnect
+        
+        api_key = os.getenv('API_KEY')
+        access_token = os.getenv('ACCESS_TOKEN')
+        
+        response_data = {
+            'success': False,
+            'api_key': api_key[:10] + '...' if api_key else None,
+            'access_token': access_token[:20] + '...' if access_token else None,
+            'session_token': session.get('access_token')[:20] + '...' if session.get('access_token') else None,
+        }
+        
+        if not api_key:
+            response_data['error'] = 'API_KEY not found in environment'
+            return jsonify(response_data), 400
+        
+        if not access_token:
+            response_data['error'] = 'ACCESS_TOKEN not found in environment'
+            return jsonify(response_data), 400
+        
+        # Try to initialize KiteConnect
+        try:
+            kite = KiteConnect(api_key=api_key)
+            kite.set_access_token(access_token)
+            response_data['kite_initialized'] = True
+            
+            # Try a simple API call to verify token validity
+            try:
+                profile = kite.profile()
+                response_data['success'] = True
+                response_data['kite_api_working'] = True
+                response_data['user_name'] = profile.get('user_name')
+                response_data['broker'] = profile.get('broker')
+                response_data['message'] = 'Token is valid and API is working'
+            except Exception as api_error:
+                response_data['kite_api_working'] = False
+                response_data['api_error'] = str(api_error)
+                response_data['error_type'] = type(api_error).__name__
+                
+                # Check if it's an authorization error
+                if '403' in str(api_error) or 'Unauthorised' in str(api_error) or 'Invalid' in str(api_error):
+                    response_data['auth_issue'] = True
+                    response_data['recommendation'] = 'Token appears to be expired or invalid. Please re-authenticate via /auth/login'
+                
+                return jsonify(response_data), 400
+        except Exception as init_error:
+            response_data['error'] = f'Failed to initialize KiteConnect: {str(init_error)}'
+            return jsonify(response_data), 400
+        
+        return jsonify(response_data), 200
+        
+    except Exception as e:
+        logger.error(f"Error in debug_token_status: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @api_bp.errorhandler(404)
 def not_found(error):
     """Handle 404 errors."""

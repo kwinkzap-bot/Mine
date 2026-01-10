@@ -11,9 +11,9 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 0;
+    padding: 0 0 10px 0;
     border-bottom: 1px solid #ddd;
-    margin-bottom: 15px;
+    margin-bottom: 10px;
     gap: 20px;
     flex-wrap: wrap;
 }
@@ -38,11 +38,6 @@
 }
 
 /* Chart Layout and Structure - See tradingview-chart.css for reusable styles */
-
-/* Options Chart specific overrides */
-.chart-element {
-    height: 400px;
-}
 
 /* Timeframe Buttons (now integrated in form row) */
 .timeframe-buttons {

@@ -418,25 +418,25 @@ window.TradingViewChart = (function () {
             let peSeries = null;
 
             if (type === 'COMBINED' || config.isCombined) {
-                // Create CE series (primary series - green)
+                // Create CE series (primary series - green and red)
                 ceSeries = chart.addCandlestickSeries({
                     upColor: '#10b981',      // Green for CE up
-                    downColor: '#34d399',    // Light green for CE down
+                    downColor: '#ef4444',    // Red for CE down
                     borderUpColor: '#10b981',
-                    borderDownColor: '#34d399',
+                    borderDownColor: '#ef4444',
                     wickUpColor: '#10b981',
-                    wickDownColor: '#34d399',
+                    wickDownColor: '#ef4444',
                     title: 'CE'
                 });
 
-                // Create PE series (secondary series - blue/red)
+                // Create PE series (secondary series - violet/black)
                 peSeries = chart.addCandlestickSeries({
-                    upColor: '#3b82f6',      // Blue for PE up
-                    downColor: '#ef4444',    // Red for PE down
-                    borderUpColor: '#3b82f6',
-                    borderDownColor: '#ef4444',
-                    wickUpColor: '#3b82f6',
-                    wickDownColor: '#ef4444',
+                    upColor: '#8b5cf6',      // Violet for PE up
+                    downColor: '#1f2937',    // Black for PE down
+                    borderUpColor: '#8b5cf6',
+                    borderDownColor: '#1f2937',
+                    wickUpColor: '#8b5cf6',
+                    wickDownColor: '#1f2937',
                     title: 'PE'
                 });
 
