@@ -991,13 +991,19 @@ const OptionsChartApp = (function () {
                 DOM.pePairCeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `CE ${DOM.peStrikeSelect.value}` : '';
                 DOM.pePairPeStrikeDisplay.textContent = DOM.peStrikeSelect.value ? `PE ${DOM.peStrikeSelect.value}` : '';
 
-                // Cache underlying price data only if no targetDate (to avoid caching historical data)
-                if (data.underlying_price && !targetDate) {
-                    window._cachedUnderlyingPrice = {
-                        symbol: symbol,
-                        requested_price: data.underlying_price.requested_price,
-                        source_label: data.underlying_price.source_label
-                    };
+                // Update underlying price display directly from the response
+                if (data.underlying_price) {
+                    const sourceLabel = data.underlying_price.source_label || '';
+                    DOM.niftyPriceDisplay.textContent = (data.underlying_price.requested_price || 0).toFixed(2) + sourceLabel;
+                    
+                    // Cache underlying price data only if no targetDate (to avoid caching historical data)
+                    if (!targetDate) {
+                        window._cachedUnderlyingPrice = {
+                            symbol: symbol,
+                            requested_price: data.underlying_price.requested_price,
+                            source_label: data.underlying_price.source_label
+                        };
+                    }
                 }
 
                 // Update tokens for auto-update
@@ -1012,10 +1018,7 @@ const OptionsChartApp = (function () {
                     cachedInitPriceSource = priceSource;
                 }
 
-                // Update underlying price display - pass targetDate so it displays the correct date's price
-                updateUnderlyingPrice(targetDate);
-
-                // Load initial chart data
+                // Load initial chart data with the targetDate
                 loadChartData(targetDate);
 
             } else {
