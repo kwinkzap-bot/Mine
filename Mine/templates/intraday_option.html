@@ -3,6 +3,7 @@
 {% block head %}
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/intraday_option.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/tradingview-chart.css') }}">
 <script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
 <script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}"></script>
 {% endblock %}
@@ -59,15 +60,21 @@
             </div>
         </div>
 
-        <div class="charts-section">
-            <div class="chart-row">
-                <div class="chart-container">
-                    <h4>CE Price Movement <span id="ceStrikeChart">--</span></h4>
-                    <div id="ceChart"></div>
+        <div class="charts-container">
+            <div class="chart-grid">
+                <div class="chart-wrapper">
+                    <div class="chart-header">
+                        <h3>CE Price Movement <span id="ceStrikeChart" class="strike-display">--</span></h3>
+                        <span id="ceStatus" class="chart-status status-na">--</span>
+                    </div>
+                    <div id="ceChart" class="chart-element"></div>
                 </div>
-                <div class="chart-container">
-                    <h4>PE Price Movement <span id="peStrikeChart">--</span></h4>
-                    <div id="peChart"></div>
+                <div class="chart-wrapper">
+                    <div class="chart-header">
+                        <h3>PE Price Movement <span id="peStrikeChart" class="strike-display">--</span></h3>
+                        <span id="peStatus" class="chart-status status-na">--</span>
+                    </div>
+                    <div id="peChart" class="chart-element"></div>
                 </div>
             </div>
         </div>

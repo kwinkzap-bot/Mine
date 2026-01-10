@@ -32,7 +32,7 @@
 
 .chart-header h3 {
     margin: 0;
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 600;
     color: #333;
     flex: 1;
@@ -40,7 +40,6 @@
 
 /* Chart display container */
 .chart-element {
-    height: 400px;
     width: 100%;
     position: relative;
     background: #ffffff;
@@ -69,8 +68,8 @@
 .chart-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 15px;
-    margin-top: 15px;
+    gap: 10px;
+    margin-top: 5px;
 }
 
 .chart-grid-two {
