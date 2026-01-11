@@ -500,6 +500,9 @@ def get_options_pdh_pdl() -> EndpointResponse:
     1. Tokens: ce_token and pe_token (preferred - faster)
     2. Strikes: symbol, ce_strike, pe_strike (fallback - will resolve to tokens)
     
+    Optional:
+    - date: YYYY-MM-DD format to get PDH/PDL from the day before the specified date
+    
     Returns:
     - pdh/pdl: Previous day high/low for the underlying index
     - ce_pdh/ce_pdl: Previous day high/low for CE option
@@ -527,6 +530,7 @@ def get_options_pdh_pdl() -> EndpointResponse:
         ce_token = data.get('ce_token')
         pe_token = data.get('pe_token')
         symbol = data.get('symbol')  # Optional for getting underlying PDH/PDL
+        target_date = data.get('date')  # Optional date in YYYY-MM-DD format
         
         # FALLBACK METHOD: If tokens not provided, resolve them from strikes
         if not ce_token or not pe_token:
@@ -551,8 +555,8 @@ def get_options_pdh_pdl() -> EndpointResponse:
                     'error': f'Could not find tokens for the given strikes: CE {ce_strike}, PE {pe_strike}'
                 }), 404
         
-        # Fetch PDH/PDL for options using tokens
-        pdh_pdl = chart_service.get_pdh_pdl(ce_token, pe_token)
+        # Fetch PDH/PDL for options using tokens (with optional target_date)
+        pdh_pdl = chart_service.get_pdh_pdl(ce_token, pe_token, target_date)
         
         # Fetch PDH/PDL for the underlying index if symbol is provided
         underlying_pdh = None
@@ -569,11 +573,12 @@ def get_options_pdh_pdl() -> EndpointResponse:
                 
                 underlying_token = symbol_map.get(symbol.upper())
                 if underlying_token:
-                    # Fetch previous day's OHLC for the underlying
-                    underlying_ohlc = chart_service._fetch_prev_day_ohlc(underlying_token)
+                    # Fetch previous day's OHLC for the underlying (with optional target_date)
+                    underlying_ohlc = chart_service._fetch_prev_day_ohlc(underlying_token, target_date)
                     underlying_pdh = underlying_ohlc.get('high')
                     underlying_pdl = underlying_ohlc.get('low')
-                    logger.info(f"Underlying {symbol} PDH/PDL: {underlying_pdh}/{underlying_pdl}")
+                    date_label = f" for {target_date}" if target_date else ""
+                    logger.info(f"Underlying {symbol}{date_label} PDH/PDL: {underlying_pdh}/{underlying_pdl}")
             except Exception as e:
                 logger.warning(f"Error fetching underlying PDH/PDL for {symbol}: {e}")
         
@@ -585,7 +590,8 @@ def get_options_pdh_pdl() -> EndpointResponse:
             'pdl': underlying_pdl,  # Global index PDL
             'ce_token': ce_token,
             'pe_token': pe_token,
-            'symbol': symbol
+            'symbol': symbol,
+            'date': target_date
         })
     except Exception as e:
         logger.error(f"Error fetching PDH/PDL: {e}", exc_info=True)

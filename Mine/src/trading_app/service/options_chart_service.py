@@ -411,14 +411,28 @@ class OptionsChartService:
             logging.error(f"Error getting tokens for strikes: {e}", exc_info=True)
             return None, None
 
-    def _fetch_prev_day_ohlc(self, token: int) -> Dict[str, Optional[float]]:
-        """Fetch previous day's OHLC using daily historical data to avoid intraday highs."""
+    def _fetch_prev_day_ohlc(self, token: int, target_date: Optional[str] = None) -> Dict[str, Optional[float]]:
+        """Fetch previous day's OHLC using daily historical data to avoid intraday highs.
+        
+        Args:
+            token: Instrument token
+            target_date: Optional date in YYYY-MM-DD format. If provided, returns the previous day's OHLC before this date.
+        """
         try:
             ist = pytz.timezone('Asia/Kolkata')
-            today_ist = datetime.now(ist).date()
-            # Pull last 5 days to be safe and pick latest bar strictly before today
-            from_dt = datetime.combine(today_ist - timedelta(days=5), datetime.min.time()).replace(tzinfo=None)
-            to_dt = datetime.combine(today_ist, datetime.max.time()).replace(tzinfo=None)
+            
+            if target_date:
+                # When target_date is provided, get the previous day's OHLC before that date
+                target_dt = datetime.strptime(target_date, '%Y-%m-%d').date()
+                # Fetch from 10 days before to 1 day before the target (exclude target date itself)
+                from_dt = datetime.combine(target_dt - timedelta(days=10), datetime.min.time()).replace(tzinfo=None)
+                to_dt = datetime.combine(target_dt - timedelta(days=1), datetime.max.time()).replace(tzinfo=None)
+            else:
+                # Original logic: get previous day's OHLC before today
+                today_ist = datetime.now(ist).date()
+                # Pull last 5 days to be safe and pick latest bar strictly before today
+                from_dt = datetime.combine(today_ist - timedelta(days=5), datetime.min.time()).replace(tzinfo=None)
+                to_dt = datetime.combine(today_ist, datetime.max.time()).replace(tzinfo=None)
 
             data = self._historical_with_retry(
                 instrument_token=int(token),
@@ -430,20 +444,27 @@ class OptionsChartService:
             if not data:
                 return {'high': None, 'low': None, 'open': None, 'close': None}
 
-            # Find the last complete day before today
+            # Find the last complete day before the target/today
             prev_bar = None
-            for bar in reversed(data):
-                bar_date = bar.get('date')
-                if bar_date is None:
-                    continue
-                # bar_date may be tz-aware; convert to date in IST if needed
-                if bar_date.tzinfo:
-                    bar_local = bar_date.astimezone(ist)
-                else:
-                    bar_local = ist.localize(bar_date)
-                if bar_local.date() < today_ist:
-                    prev_bar = bar
-                    break
+            if target_date:
+                # For target_date, get the most recent bar (which is before target_date by design)
+                if data:
+                    prev_bar = data[-1]  # Last bar is the most recent before target_date
+            else:
+                # Original logic: find last day before today
+                today_ist = datetime.now(ist).date()
+                for bar in reversed(data):
+                    bar_date = bar.get('date')
+                    if bar_date is None:
+                        continue
+                    # bar_date may be tz-aware; convert to date in IST if needed
+                    if bar_date.tzinfo:
+                        bar_local = bar_date.astimezone(ist)
+                    else:
+                        bar_local = ist.localize(bar_date)
+                    if bar_local.date() < today_ist:
+                        prev_bar = bar
+                        break
 
             if not prev_bar:
                 return {'high': None, 'low': None, 'open': None, 'close': None}
@@ -458,10 +479,16 @@ class OptionsChartService:
             logging.error(f"Error fetching previous day OHLC for token {token}: {e}", exc_info=True)
             return {'high': None, 'low': None, 'open': None, 'close': None}
 
-    def _fetch_pdh_pdl_from_tokens(self, ce_token: int, pe_token: int) -> Dict[str, Optional[float]]:
-        """Fetch previous day high/low using daily historical bars (avoids live-day highs/lows)."""
-        ce = self._fetch_prev_day_ohlc(ce_token)
-        pe = self._fetch_prev_day_ohlc(pe_token)
+    def _fetch_pdh_pdl_from_tokens(self, ce_token: int, pe_token: int, target_date: Optional[str] = None) -> Dict[str, Optional[float]]:
+        """Fetch previous day high/low using daily historical bars (avoids live-day highs/lows).
+        
+        Args:
+            ce_token: CE instrument token
+            pe_token: PE instrument token
+            target_date: Optional date in YYYY-MM-DD format. If provided, returns PDH/PDL from the day before this date.
+        """
+        ce = self._fetch_prev_day_ohlc(ce_token, target_date)
+        pe = self._fetch_prev_day_ohlc(pe_token, target_date)
 
         return {
             'ce_pdh': ce.get('high'),
@@ -470,9 +497,15 @@ class OptionsChartService:
             'pe_pdl': pe.get('low')
         }
 
-    def get_pdh_pdl(self, ce_token: int, pe_token: int) -> Dict[str, Optional[float]]:
-        """Public method to fetch PDH/PDL using instrument tokens."""
-        return self._fetch_pdh_pdl_from_tokens(ce_token, pe_token)
+    def get_pdh_pdl(self, ce_token: int, pe_token: int, target_date: Optional[str] = None) -> Dict[str, Optional[float]]:
+        """Public method to fetch PDH/PDL using instrument tokens.
+        
+        Args:
+            ce_token: CE instrument token
+            pe_token: PE instrument token
+            target_date: Optional date in YYYY-MM-DD format. If provided, returns PDH/PDL from the day before this date.
+        """
+        return self._fetch_pdh_pdl_from_tokens(ce_token, pe_token, target_date)
 
     def _is_market_hours(self, date_val) -> bool:
         """Check if a candle timestamp is within market hours (9:15 AM - 3:40 PM IST)."""
