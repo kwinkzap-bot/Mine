@@ -1248,7 +1248,7 @@ const OptionsChartApp = (function () {
                 // Only call renderCombinedChart() to update the data on existing chart objects
                 console.log('Calling renderCombinedChart with PDH/PDL:', currentPdhPdl);
                 renderCombinedChart(currentPdhPdl.ce_pdh, currentPdhPdl.ce_pdl, currentPdhPdl.pe_pdh, currentPdhPdl.pe_pdl);
-                renderComparisonCharts();
+                // NOTE: renderCombinedChart() calls renderComparisonCharts() internally, so no need to call it again
 
                 startAutoUpdate(); // Restart auto-update with new data and tokens
 
