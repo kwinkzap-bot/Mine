@@ -156,16 +156,13 @@ class KiteService:
                     # Parse target_date (format: YYYY-MM-DD)
                     target_dt = datetime.strptime(target_date, '%Y-%m-%d').date()
                     
-                    # Get the previous trading day (accounting for weekends and holidays)
-                    # Go back up to 5 days to find the last trading day
-                    search_dt = target_dt - timedelta(days=1)
-                    
-                    # Fetch from 10 days before target to target date (should cover the previous trading day)
+                    # IMPORTANT: Fetch data BEFORE the target date to get previous day's close
+                    # Fetch from 10 days before target to 1 day before target (exclude target date itself)
                     from_date = datetime.combine(target_dt - timedelta(days=10), datetime.min.time())
-                    to_date = datetime.combine(target_dt, datetime.max.time())
+                    to_date = datetime.combine(target_dt - timedelta(days=1), datetime.max.time())
                     
                     logging.info(f"[get_previous_trading_day_close] {symbol} (target_date={target_date}, get previous day close, token={instrument_token})")
-                    logging.info(f"[get_previous_trading_day_close]   Fetching from {from_date} to {to_date}")
+                    logging.info(f"[get_previous_trading_day_close]   Fetching from {from_date} to {to_date} (BEFORE target_date)")
                     
                     historical_data = self.kite.historical_data(
                         instrument_token=int(instrument_token),
