@@ -105,6 +105,52 @@ def check_auth() -> Optional[tuple]:
     return None
 
 
+def handle_kite_error(error: Exception) -> tuple:
+    """Handle KiteConnect API errors and return appropriate HTTP response.
+    
+    Detects 403 "Access Denied" errors which typically mean:
+    1. Access token has expired (Zerodha tokens expire daily at 3:20 PM IST)
+    2. Invalid or revoked token
+    3. Session timed out
+    
+    Args:
+        error: The exception from KiteConnect API call
+        
+    Returns:
+        Tuple of (jsonify response, HTTP status code)
+    """
+    error_str = str(error).lower()
+    
+    # Check for 403 Forbidden / Access Denied
+    if 'access denied' in error_str or '403' in error_str or 'forbidden' in error_str:
+        logger.warning(f"Access denied (403) error - token likely expired: {error}")
+        return jsonify({
+            'success': False,
+            'error': 'Access token has expired. Please login again at /auth/login',
+            'auth_error': True,
+            'login_required': True,
+            'details': 'Zerodha access tokens expire daily at 3:20 PM IST'
+        }), 403
+    
+    # Check for other authentication errors
+    if 'access_token' in error_str or 'unauthorized' in error_str or '401' in error_str:
+        logger.warning(f"Authentication error: {error}")
+        return jsonify({
+            'success': False,
+            'error': 'Authentication failed. Please login again.',
+            'auth_error': True,
+            'login_required': True
+        }), 401
+    
+    # Generic error handling
+    logger.error(f"KiteConnect API error: {error}")
+    return jsonify({
+        'success': False,
+        'error': str(error),
+        'details': 'Check /api/debug/token-status for more information'
+    }), 500
+
+
 def get_instrument_key(symbol: str) -> str:
     """Get the instrument key for a symbol."""
     symbol = symbol.upper()
@@ -1637,67 +1683,80 @@ def intraday_920_candles() -> EndpointResponse:
 
 
 @api_bp.route('/debug/token-status', methods=['GET'])
-@csrf.exempt
 def debug_token_status() -> EndpointResponse:
-    """Debug endpoint to check token status and Kite API connection."""
+    """Debug endpoint to check token validity.
+    
+    Returns token status information for debugging 403 errors.
+    Helps identify if the issue is an expired token that requires re-login.
+    """
     try:
-        import os
         from kiteconnect import KiteConnect
         
         api_key = os.getenv('API_KEY')
-        access_token = os.getenv('ACCESS_TOKEN')
-        
-        response_data = {
-            'success': False,
-            'api_key': api_key[:10] + '...' if api_key else None,
-            'access_token': access_token[:20] + '...' if access_token else None,
-            'session_token': session.get('access_token')[:20] + '...' if session.get('access_token') else None,
-        }
+        access_token = session.get('access_token') or os.getenv('ACCESS_TOKEN')
         
         if not api_key:
-            response_data['error'] = 'API_KEY not found in environment'
-            return jsonify(response_data), 400
+            return jsonify({
+                'success': False,
+                'error': 'API_KEY not configured',
+                'token_status': 'UNCONFIGURED'
+            }), 500
         
         if not access_token:
-            response_data['error'] = 'ACCESS_TOKEN not found in environment'
-            return jsonify(response_data), 400
+            return jsonify({
+                'success': False,
+                'error': 'No access token available - please login',
+                'token_status': 'MISSING',
+                'login_required': True
+            }), 401
         
-        # Try to initialize KiteConnect
+        # Try to initialize KiteConnect and fetch user profile to verify token
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
+        
         try:
-            kite = KiteConnect(api_key=api_key)
-            kite.set_access_token(access_token)
-            response_data['kite_initialized'] = True
+            # This call will fail if token is expired
+            profile = kite.profile()
             
-            # Try a simple API call to verify token validity
-            try:
-                profile = kite.profile()
-                response_data['success'] = True
-                response_data['kite_api_working'] = True
-                response_data['user_name'] = profile.get('user_name')
-                response_data['broker'] = profile.get('broker')
-                response_data['message'] = 'Token is valid and API is working'
-            except Exception as api_error:
-                response_data['kite_api_working'] = False
-                response_data['api_error'] = str(api_error)
-                response_data['error_type'] = type(api_error).__name__
+            return jsonify({
+                'success': True,
+                'token_status': 'VALID',
+                'user_name': profile.get('user_name', 'Unknown'),
+                'user_shortname': profile.get('user_shortname', 'Unknown'),
+                'broker': profile.get('broker', 'Unknown'),
+                'access_token': f"{access_token[:20]}...{access_token[-5:]}"
+            }), 200
+            
+        except Exception as e:
+            error_str = str(e).lower()
+            
+            # Check if error indicates token is expired/invalid
+            if 'invalid' in error_str or 'denied' in error_str or 'unauthorized' in error_str or '403' in error_str:
+                logger.warning(f"Token validation failed - token appears expired or invalid: {e}")
                 
-                # Check if it's an authorization error
-                if '403' in str(api_error) or 'Unauthorised' in str(api_error) or 'Invalid' in str(api_error):
-                    response_data['auth_issue'] = True
-                    response_data['recommendation'] = 'Token appears to be expired or invalid. Please re-authenticate via /auth/login'
+                return jsonify({
+                    'success': False,
+                    'token_status': 'EXPIRED_OR_INVALID',
+                    'error': 'Access token is expired or invalid - please login again',
+                    'login_required': True,
+                    'details': str(e)
+                }), 401
+            else:
+                logger.error(f"Unexpected error checking token: {e}")
                 
-                return jsonify(response_data), 400
-        except Exception as init_error:
-            response_data['error'] = f'Failed to initialize KiteConnect: {str(init_error)}'
-            return jsonify(response_data), 400
-        
-        return jsonify(response_data), 200
-        
+                return jsonify({
+                    'success': False,
+                    'token_status': 'ERROR',
+                    'error': 'Error validating token',
+                    'details': str(e)
+                }), 500
+    
     except Exception as e:
-        logger.error(f"Error in debug_token_status: {e}", exc_info=True)
+        logger.error(f"Error in debug token check: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': 'Internal error during token check',
+            'details': str(e)
         }), 500
 
 

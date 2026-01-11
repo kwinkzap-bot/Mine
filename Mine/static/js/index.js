@@ -1,41 +1,76 @@
 /**
  * index.js - Pure Vanilla JavaScript for the home page.
- * Handles the click events for the Login and Refresh buttons.
- * It uses attribute selectors to maintain compatibility with the original HTML structure.
+ * Handles login, token status checking, and error detection.
  */
 document.addEventListener('DOMContentLoaded', function() {
     'use strict';
 
-    const statusDiv = document.getElementById('status');
-    // Target the buttons by their original ng-click attribute for robustness
-    const loginBtn = document.querySelector('[ng-click="vm.loginZerodha()"]'); 
-    const refreshBtn = document.querySelector('[ng-click="vm.refresh()"]'); 
+    const statusMessage = document.getElementById('statusMessage');
+    const loginBtn = document.getElementById('loginZerodhaBtn');
+    const refreshBtn = document.getElementById('refreshBtn');
 
-    if (statusDiv) {
-        // Initialize the status message, replacing the Angular variable if present.
-        if (statusDiv.textContent.includes('vm.message')) {
-            statusDiv.textContent = 'Welcome to the Stock Scanner!';
-        }
-        // Remove angular controller attribute from the container
-        const container = document.querySelector('[ng-controller="IndexController as vm"]');
-        if (container) {
-             container.removeAttribute('ng-controller');
-        }
-    }
-
+    // Setup button event listeners
     if (loginBtn) {
-        // Replace ng-click with vanilla JS event listener and clean up attribute
-        loginBtn.removeAttribute('ng-click');
-        loginBtn.addEventListener('click', function() {
+        loginBtn.addEventListener('click', function(e) {
+            e.preventDefault();
             window.location.href = '/auth/login';
         });
     }
 
     if (refreshBtn) {
-        // Replace ng-click with vanilla JS event listener and clean up attribute
-        refreshBtn.removeAttribute('ng-click');
-        refreshBtn.addEventListener('click', function() {
+        refreshBtn.addEventListener('click', function(e) {
+            e.preventDefault();
             window.location.reload();
         });
+    }
+
+    // Check token status on page load
+    checkTokenStatus();
+
+    function checkTokenStatus() {
+        if (!statusMessage) return;
+
+        fetch('/debug/status')
+            .then(response => {
+                if (response.status === 403) {
+                    showError('Your session has expired or token is invalid. Please login to continue.');
+                    return;
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (!data) return;
+                
+                if (data.session_token || data.env_token) {
+                    statusMessage.innerHTML = `
+                        <div style="color: #28a745; padding: 15px; background: #f0fff4; border-left: 4px solid #28a745; border-radius: 4px;">
+                            <strong>✓ Authentication Status:</strong> Token is available
+                            <br><small style="color: #666;">You can access all features</small>
+                        </div>
+                    `;
+                } else {
+                    statusMessage.innerHTML = `
+                        <div style="color: #dc3545; padding: 15px; background: #fff5f5; border-left: 4px solid #dc3545; border-radius: 4px;">
+                            <strong>⚠ Not Authenticated:</strong> Please login with Zerodha
+                            <br><small style="color: #666;">Click the "Login to Zerodha" button above to get started</small>
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                console.error('Error checking token status:', error);
+                showError('Could not verify authentication status. Please try refreshing.');
+            });
+    }
+
+    function showError(message) {
+        if (!statusMessage) return;
+        
+        statusMessage.innerHTML = `
+            <div style="color: #dc3545; padding: 15px; background: #fff5f5; border-left: 4px solid #dc3545; border-radius: 4px;">
+                <strong>❌ ${message}</strong>
+                <br><small style="color: #666; margin-top: 5px; display: block;">Click the "Login to Zerodha" button above</small>
+            </div>
+        `;
     }
 });

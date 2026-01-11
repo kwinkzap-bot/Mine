@@ -37,6 +37,20 @@ def index():
     """Home page."""
     return render_template('index.html')
 
+@pages_bp.route('/debug/status')
+def debug_status():
+    """Debug status endpoint - no auth required."""
+    from trading_app.app.utils.logger import logger
+    
+    access_token = session.get('access_token') or os.getenv('ACCESS_TOKEN')
+    
+    return jsonify({
+        'status': 'ok',
+        'session_token': access_token[:20] + '...' if access_token else None,
+        'env_token': os.getenv('ACCESS_TOKEN')[:20] + '...' if os.getenv('ACCESS_TOKEN') else None,
+        'message': 'Flask app is running - use /auth/login if you see 403 errors'
+    })
+
 @pages_bp.route('/strategy')
 @login_required
 def strategy():

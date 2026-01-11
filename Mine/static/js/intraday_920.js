@@ -185,15 +185,37 @@ class Intraday920Tracker {
 
     /**
      * Check if current time is within market hours (9:15 AM to 3:20 PM IST)
+     * Excludes weekends (Saturday and Sunday)
+     * Uses Intl.DateTimeFormat for accurate IST timezone conversion
      */
     isCurrentlyMarketHours() {
         const now = new Date();
-        const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
-        const hours = istTime.getHours();
-        const minutes = istTime.getMinutes();
+        
+        // Check if today is a weekend (0=Sunday, 6=Saturday)
+        const day = now.getDay();
+        if (day === 0 || day === 6) {
+            console.log(`[MarketHours] Today is ${day === 0 ? 'Sunday' : 'Saturday'} - market closed`);
+            return false;
+        }
+        
+        // Convert current time to IST (UTC+5:30)
+        // Create a date in IST timezone using toLocaleString
+        const istFormatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'Asia/Kolkata',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+        
+        const istTimeStr = istFormatter.format(now);
+        const [hours, minutes] = istTimeStr.split(':').map(Number);
         const currentMinutes = hours * 60 + minutes;
 
-        return currentMinutes >= this.marketOpenTime && currentMinutes <= this.marketCloseTime;
+        // Market hours: 9:15 AM (555 minutes) to 3:20 PM (920 minutes)
+        const isWithinHours = currentMinutes >= this.marketOpenTime && currentMinutes <= this.marketCloseTime;
+        
+        console.log(`[MarketHours] IST time: ${hours}:${String(minutes).padStart(2, '0')}, Within hours: ${isWithinHours}`);
+        return isWithinHours;
     }
 
     /**
@@ -358,6 +380,22 @@ class Intraday920Tracker {
             
             console.log(`[fetchChartData] ✓ Response received, status: ${response.status}`);
             
+            // CRITICAL: Handle 403 Forbidden - token expired or socket pool issue
+            if (response.status === 403) {
+                console.error(`[fetchChartData] ❌ 403 FORBIDDEN - Token likely expired or socket pool issue`);
+                this.addSignal('❌ Access Denied (403) - Your session has expired. Redirecting to login...', 'ERROR');
+                
+                // Stop auto-updates immediately
+                this.stopAutoUpdate();
+                
+                // Redirect to login after brief delay
+                setTimeout(() => {
+                    window.location.href = '/auth/login';
+                }, 2000);
+                
+                return { success: false, message: '403 Forbidden - Session expired', ceData: [], peData: [] };
+            }
+            
             if (!response.ok) {
                 let errorMsg = 'Unknown error';
                 try {
@@ -375,6 +413,11 @@ class Intraday920Tracker {
             
             if (data.needs_login) {
                 console.error('[fetchChartData] ❌ Login required');
+                this.addSignal('❌ Login required - Redirecting...', 'ERROR');
+                this.stopAutoUpdate();
+                setTimeout(() => {
+                    window.location.href = '/auth/login';
+                }, 2000);
                 return { success: false, message: 'Login required', ceData: [], peData: [] };
             }
             
@@ -619,12 +662,11 @@ class Intraday920Tracker {
         this.updateCount = 0;
         this.failedUpdateCount = 0;
 
-        // Don't call loadData() immediately - only refresh chart data
-        // The initial strategy data was already loaded on page load
-        if (this.strategyData) {
-            console.log('[AutoUpdate] Using cached strategy data, only refreshing charts');
-            this.loadChartsData(); // Only refresh chart data
-        }
+        // Don't call loadChartsData immediately - avoid duplicate API calls on page load
+        // The initial strategy data and chart data were already loaded by loadData()
+        // Only start the periodic polling interval
+        
+        console.log('[AutoUpdate] Using cached strategy data, only refreshing charts periodically');
 
         // Set up periodic polling - only refresh chart data
         this.autoUpdateInterval = setInterval(() => {

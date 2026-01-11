@@ -79,11 +79,26 @@ def create_app(config=None):
     
     @app.errorhandler(403)
     def forbidden(e):
-        """Handle 403 Forbidden."""
+        """Handle 403 Forbidden - returns helpful message instead of generic error."""
+        # Log the 403 error with details
+        logger.warning(f"403 Forbidden Error - {str(e)}")
+        logger.warning(f"  Error type: {type(e).__name__}")
+        logger.warning(f"  This usually means:")
+        logger.warning(f"    1. Access token has expired (expires at 3:20 PM IST)")
+        logger.warning(f"    2. CSRF token is invalid")
+        logger.warning(f"    3. Session has expired")
+        
+        # Return helpful JSON response
         return jsonify({
             'success': False,
-            'error': 'Forbidden - Access denied',
-            'csrf_error': True
+            'error': 'Access Forbidden (403)',
+            'message': 'This usually means your session has expired or access token is invalid',
+            'solutions': [
+                'Try refreshing the page',
+                'If still getting 403, go to /auth/login to get a fresh token',
+                'Zerodha tokens expire at 3:20 PM IST - you may need to re-login'
+            ],
+            'debug_url': '/debug/status'
         }), 403
     
     @app.errorhandler(404)

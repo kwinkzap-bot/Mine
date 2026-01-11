@@ -76,6 +76,13 @@ class IntradayOptionTracker {
     isCurrentlyMarketHours() {
         const now = new Date();
         
+        // Check if today is a weekend (0=Sunday, 6=Saturday)
+        const day = now.getDay();
+        if (day === 0 || day === 6) {
+            console.log(`[MarketHours] Today is ${day === 0 ? 'Sunday' : 'Saturday'} - market closed`);
+            return false;
+        }
+        
         // Convert current time to IST (UTC+5:30)
         // Create a date in IST timezone using toLocaleString
         const istFormatter = new Intl.DateTimeFormat('en-US', {
@@ -219,6 +226,22 @@ class IntradayOptionTracker {
             
             console.log(`[fetchChartData] ✓ Response received, status: ${response.status}`);
             
+            // CRITICAL: Handle 403 Forbidden - token expired or socket pool issue
+            if (response.status === 403) {
+                console.error(`[fetchChartData] ❌ 403 FORBIDDEN - Token likely expired or socket pool issue`);
+                this.addSignal('❌ Access Denied (403) - Your session has expired. Redirecting to login...', 'ERROR');
+                
+                // Stop auto-updates immediately
+                this.stopAutoUpdate();
+                
+                // Redirect to login after brief delay
+                setTimeout(() => {
+                    window.location.href = '/auth/login';
+                }, 2000);
+                
+                return { success: false, message: '403 Forbidden - Session expired', ceData: [], peData: [] };
+            }
+            
             if (!response.ok) {
                 let errorMsg = 'Unknown error';
                 try {
@@ -236,6 +259,11 @@ class IntradayOptionTracker {
             
             if (data.needs_login) {
                 console.error('[fetchChartData] ❌ Login required');
+                this.addSignal('❌ Login required - Redirecting...', 'ERROR');
+                this.stopAutoUpdate();
+                setTimeout(() => {
+                    window.location.href = '/auth/login';
+                }, 2000);
                 return { success: false, message: 'Login required', ceData: [], peData: [] };
             }
             

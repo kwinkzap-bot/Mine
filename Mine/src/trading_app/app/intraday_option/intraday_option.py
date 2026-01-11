@@ -2,9 +2,13 @@
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple
 import logging
+from pytz import timezone
 from .Kite_data_fetch_services import KiteDataFetchService
 
 logger = logging.getLogger(__name__)
+
+# IST timezone for Indian markets
+IST = timezone('Asia/Kolkata')
 
 
 class IntradayOptionTrader:
@@ -117,27 +121,90 @@ class IntradayOptionTrader:
             
             # Fetch candlestick data for CE and PE strikes to get their intraday H/L
             logger.info(f"Fetching candlestick data for CE strike {ce_strike} and PE strike {pe_strike}")
+            
+            # Determine last trading day (skip weekends) - using IST timezone
+            now_ist = datetime.now(IST)
+            last_trading_day = now_ist
+            
+            # Check if today is weekend in IST (Monday=0, Sunday=6)
+            weekday = last_trading_day.weekday()
+            logger.info(f"Current IST date: {now_ist.date()}, Weekday: {weekday} (0=Mon, 6=Sun)")
+            
+            if weekday == 6:  # Sunday
+                last_trading_day = now_ist - timedelta(days=2)  # Go back to Friday
+                logger.info(f"Today is Sunday (IST), using Friday: {last_trading_day.date()}")
+            elif weekday == 5:  # Saturday
+                last_trading_day = now_ist - timedelta(days=1)  # Go back to Friday
+                logger.info(f"Today is Saturday (IST), using Friday: {last_trading_day.date()}")
+            elif weekday == 0:  # Monday
+                last_trading_day = now_ist - timedelta(days=3)  # Go back to Friday
+                logger.info(f"Today is Monday (IST), using Friday: {last_trading_day.date()}")
+            else:
+                logger.info(f"Today is weekday (IST), using: {last_trading_day.date()}")
+            
+            # Initialize H/L values BEFORE try block
+            ce_intraday_hl = {'high': 0, 'low': 0}
+            pe_intraday_hl = {'high': 0, 'low': 0}
+            
             try:
-                ce_strike_data = self.data_service.get_strike_tokens(symbol, ce_strike)
-                pe_strike_data = self.data_service.get_strike_tokens(symbol, pe_strike)
+                # Get tokens for CE strike (get_strike_tokens returns both CE and PE for that strike)
+                ce_strike_tokens = self.data_service.get_strike_tokens(symbol, ce_strike)
+                ce_token = ce_strike_tokens.get('ce_token')
+                ce_symbol = ce_strike_tokens.get('ce_symbol')
+                pe_token = ce_strike_tokens.get('pe_token')  # PE token from CE strike
+                pe_symbol = ce_strike_tokens.get('pe_symbol')  # PE symbol from CE strike
                 
-                ce_token = ce_strike_data.get('ce_token')
-                pe_token = pe_strike_data.get('pe_token')
-                
-                ce_intraday_hl = {'high': 0, 'low': 0}
-                pe_intraday_hl = {'high': 0, 'low': 0}
+                logger.info(f"CE strike {ce_strike}: CE token={ce_token}, PE token={pe_token}")
+                logger.info(f"Symbols - CE: {ce_symbol}, PE: {pe_symbol}")
                 
                 if ce_token:
-                    ce_candles = self.data_service.get_candlestick_data(ce_token, interval='5minute', days_back=1)
-                    ce_intraday_hl = self._calculate_today_intraday_high_low(ce_candles)
-                    logger.info(f"CE {ce_strike} intraday: High={ce_intraday_hl.get('high', 0)}, Low={ce_intraday_hl.get('low', 0)}")
+                    logger.info(f"Fetching CE candles for token {ce_token} from {last_trading_day.date()}")
+                    from_time = last_trading_day.replace(hour=9, minute=15, second=0, microsecond=0)
+                    to_time = last_trading_day.replace(hour=15, minute=30, second=0, microsecond=0)
+                    
+                    ce_candles = self.data_service.get_candlestick_data(
+                        ce_token,
+                        interval='5minute',
+                        from_date=from_time,
+                        to_date=to_time
+                    )
+                    
+                    if ce_candles:
+                        ce_high = max([c.get('high', 0) for c in ce_candles], default=0)
+                        ce_low = min([c.get('low', 0) for c in ce_candles], default=0)
+                        ce_intraday_hl = {'high': ce_high, 'low': ce_low}
+                        logger.info(f"CE {ce_strike}: H={ce_high}, L={ce_low}, Candles={len(ce_candles)}")
+                    else:
+                        logger.warning(f"No CE candles found for {ce_strike} on {last_trading_day.date()}")
+                        ce_intraday_hl = {'high': 0, 'low': 0}
+                else:
+                    logger.warning(f"CE token not found for strike {ce_strike}")
                 
                 if pe_token:
-                    pe_candles = self.data_service.get_candlestick_data(pe_token, interval='5minute', days_back=1)
-                    pe_intraday_hl = self._calculate_today_intraday_high_low(pe_candles)
-                    logger.info(f"PE {pe_strike} intraday: High={pe_intraday_hl.get('high', 0)}, Low={pe_intraday_hl.get('low', 0)}")
+                    logger.info(f"Fetching PE candles for token {pe_token} from {last_trading_day.date()}")
+                    from_time = last_trading_day.replace(hour=9, minute=15, second=0, microsecond=0)
+                    to_time = last_trading_day.replace(hour=15, minute=30, second=0, microsecond=0)
+                    
+                    pe_candles = self.data_service.get_candlestick_data(
+                        pe_token,
+                        interval='5minute',
+                        from_date=from_time,
+                        to_date=to_time
+                    )
+                    
+                    if pe_candles:
+                        pe_high = max([c.get('high', 0) for c in pe_candles], default=0)
+                        pe_low = min([c.get('low', 0) for c in pe_candles], default=0)
+                        pe_intraday_hl = {'high': pe_high, 'low': pe_low}
+                        logger.info(f"PE {pe_strike}: H={pe_high}, L={pe_low}, Candles={len(pe_candles)}")
+                    else:
+                        logger.warning(f"No PE candles found for {pe_strike} on {last_trading_day.date()}")
+                        pe_intraday_hl = {'high': 0, 'low': 0}
+                else:
+                    logger.warning(f"PE token not found for strike {pe_strike}")
+
             except Exception as e:
-                logger.warning(f"Could not fetch CE/PE intraday H/L: {str(e)}")
+                logger.error(f"Could not fetch CE/PE intraday H/L: {str(e)}", exc_info=True)
                 ce_intraday_hl = {'high': 0, 'low': 0}
                 pe_intraday_hl = {'high': 0, 'low': 0}
             
