@@ -1158,6 +1158,11 @@ const OptionsChartApp = (function () {
                     pe_token: peTokenToUse
                 };
                 
+                // Include date in payload if targetDate is provided
+                if (targetDate) {
+                    pdhPayload.date = targetDate;
+                }
+                
                 const pdhResp = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_PDH_PDL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1177,10 +1182,20 @@ const OptionsChartApp = (function () {
             // Fetch PDH/PDL for CE strike pair tokens
             try {
                 if (cePairTokens.ce && cePairTokens.pe) {
+                    const cePairPayload = {
+                        ce_token: cePairTokens.ce,
+                        pe_token: cePairTokens.pe
+                    };
+                    
+                    // Include date in payload if targetDate is provided
+                    if (targetDate) {
+                        cePairPayload.date = targetDate;
+                    }
+                    
                     const pdhRespCePair = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_PDH_PDL, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ce_token: cePairTokens.ce, pe_token: cePairTokens.pe })
+                        body: JSON.stringify(cePairPayload)
                     });
                     if (pdhRespCePair?.success) {
                         cePairPdhPdl = pdhRespCePair.pdh_pdl || { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
@@ -1196,10 +1211,20 @@ const OptionsChartApp = (function () {
             // Fetch PDH/PDL for PE strike pair tokens
             try {
                 if (pePairTokens.ce && pePairTokens.pe) {
+                    const pePairPayload = {
+                        ce_token: pePairTokens.ce,
+                        pe_token: pePairTokens.pe
+                    };
+                    
+                    // Include date in payload if targetDate is provided
+                    if (targetDate) {
+                        pePairPayload.date = targetDate;
+                    }
+                    
                     const pdhRespPePair = await fetchJson(CONSTANTS.API_ENDPOINTS.OPTIONS_PDH_PDL, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ce_token: pePairTokens.ce, pe_token: pePairTokens.pe })
+                        body: JSON.stringify(pePairPayload)
                     });
                     if (pdhRespPePair?.success) {
                         pePairPdhPdl = pdhRespPePair.pdh_pdl || { ce_pdh: null, ce_pdl: null, pe_pdh: null, pe_pdl: null };
