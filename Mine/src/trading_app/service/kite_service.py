@@ -137,7 +137,7 @@ class KiteService:
         
         Args:
             symbol: Trading symbol (e.g., 'NIFTY', 'BANKNIFTY')
-            target_date: Optional date string in YYYY-MM-DD format. If provided, returns close price from 
+                target_date: Optional date string in YYYY-MM-DD format. If provided, returns close price from 
                         the PREVIOUS trading day (before the target_date).
         
         Returns:

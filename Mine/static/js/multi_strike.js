@@ -6,6 +6,7 @@
 let multiStrikeChart = null;
 let multiStrikeSeries = [];
 let currentData = null;
+let currentSelectedDate = null;  // Store selected date for PDH/PDL fetching
 let currentChartType = 'line'; // Track current chart type (default: line)
 let autoRefreshInterval = null; // Store interval ID for auto-refresh
 let cachedPdhPdl = {}; // Cache PDH/PDL data to avoid re-fetching on chart type switch
@@ -146,18 +147,25 @@ function waitForTradingView(callback, maxWait = 5000) {
 /**
  * Fetch PDH/PDL data from dedicated API endpoint
  */
-async function fetchPdhPdlData(ceToken, peToken, symbol) {
+async function fetchPdhPdlData(ceToken, peToken, symbol, targetDate = null) {
     try {
+        const requestBody = {
+            ce_token: ceToken,
+            pe_token: peToken,
+            symbol: symbol
+        };
+        
+        // Include date if provided
+        if (targetDate) {
+            requestBody.date = targetDate;
+        }
+        
         const response = await fetch('/api/options-pdh-pdl', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                ce_token: ceToken,
-                pe_token: peToken,
-                symbol: symbol
-            })
+            body: JSON.stringify(requestBody)
         });
 
         if (!response.ok) {
@@ -200,6 +208,7 @@ async function fetchPdhPdlData(ceToken, peToken, symbol) {
 async function fetchMultiStrikeData(silentMode = false) {
     const symbol = document.getElementById('symbolSelect').value;
     const numStrikes = parseInt(document.getElementById('numStrikes').value) || 0;
+    const selectedDate = document.getElementById('datePicker').value || null;  // Get selected date
     const loader = document.getElementById('loaderContainer');
     const dataContainer = document.getElementById('dataContainer');
 
@@ -332,6 +341,7 @@ async function fetchMultiStrikeData(silentMode = false) {
         result.strike_charts = strikeCharts;
 
         currentData = result;
+        currentSelectedDate = selectedDate;  // Store the selected date
         displayMultiStrikeData(result);
         
         // Only update UI if not in silent mode
@@ -371,14 +381,14 @@ function displayMultiStrikeData(data) {
 
     // Display chart (wait for TradingView to load)
     waitForTradingView(() => {
-        displayCharts(data);
+        displayCharts(data, false, currentSelectedDate);
     });
 }
 
 /**
  * Display charts after TradingView library is loaded
  */
-function displayCharts(data, isChartTypeSwitch = false) {
+function displayCharts(data, isChartTypeSwitch = false, selectedDate = null) {
     const strikeCharts = data.strike_charts || {};
     
     console.log('=== CHART DATA DEBUG ===');
@@ -386,18 +396,19 @@ function displayCharts(data, isChartTypeSwitch = false) {
     console.log('Strike charts keys count:', Object.keys(strikeCharts).length);
     console.log('Current chart type:', currentChartType);
     console.log('Is chart type switch:', isChartTypeSwitch);
+    console.log('Selected date:', selectedDate);
 
     // Use currentChartType to decide which chart to display
     if (currentChartType === 'candlestick') {
         console.log('Displaying candlestick chart');
-        displayCandlestickChartsInternal(data, isChartTypeSwitch);
+        displayCandlestickChartsInternal(data, isChartTypeSwitch, selectedDate);
     } else if (currentChartType === 'line') {
         console.log('Displaying line series chart');
-        displayLineChartsInternal(data, isChartTypeSwitch);
+        displayLineChartsInternal(data, isChartTypeSwitch, selectedDate);
     } else {
         // Fallback to candlestick
         console.log('Unknown chart type, falling back to candlestick');
-        displayCandlestickChartsInternal(data, isChartTypeSwitch);
+        displayCandlestickChartsInternal(data, isChartTypeSwitch, selectedDate);
     }
 }
 
@@ -431,7 +442,7 @@ function displayStrikeTable(strikesData) {
 /**
  * Display line chart using close prices from candlestick data
  */
-async function displayLineChartsInternal(data, skipPdhPdlFetch = false) {
+async function displayLineChartsInternal(data, skipPdhPdlFetch = false, selectedDate = null) {
     console.log('=== displayLineChartsInternal called ===');
     const chartsContainer = document.getElementById('strikeChartsContainer');
     if (!chartsContainer) {
@@ -486,7 +497,7 @@ async function displayLineChartsInternal(data, skipPdhPdlFetch = false) {
         console.log('=== Fetching PDH/PDL for all strikes ===');
         for (const strike of strikesToDisplay) {
             try {
-                const pdhPdlData = await fetchPdhPdlData(strike.ce_token, strike.pe_token, data.symbol || 'NIFTY');
+                const pdhPdlData = await fetchPdhPdlData(strike.ce_token, strike.pe_token, data.symbol || 'NIFTY', selectedDate);
                 if (pdhPdlData) {
                     strikePdhPdl[String(Math.floor(strike.strike))] = pdhPdlData;
                     console.log(`PDH/PDL fetched for strike ${strike.strike}:`, pdhPdlData);
@@ -868,7 +879,7 @@ async function displayLineChartsInternal(data, skipPdhPdlFetch = false) {
 /**
  * Display candlestick chart with OHLC data
  */
-async function displayCandlestickChartsInternal(data, skipPdhPdlFetch = false) {
+async function displayCandlestickChartsInternal(data, skipPdhPdlFetch = false, selectedDate = null) {
     console.log('=== displayCandlestickChartsInternal called ===');
     const chartsContainer = document.getElementById('strikeChartsContainer');
     
@@ -956,7 +967,7 @@ async function displayCandlestickChartsInternal(data, skipPdhPdlFetch = false) {
                     console.log('=== Fetching PDH/PDL for candlestick chart ===');
                     for (const strike of strikes) {
                         try {
-                            const pdData = await fetchPdhPdlData(strike.ce_token, strike.pe_token, data.symbol || 'NIFTY');
+                            const pdData = await fetchPdhPdlData(strike.ce_token, strike.pe_token, data.symbol || 'NIFTY', selectedDate);
                             if (pdData) {
                                 pdhPdlData[String(Math.floor(strike.strike))] = pdData;
                                 console.log(`PDH/PDL fetched for strike ${strike.strike}:`, pdData);
