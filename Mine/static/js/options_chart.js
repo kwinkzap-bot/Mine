@@ -48,6 +48,7 @@ const OptionsChartApp = (function () {
     let cachedInitResponse = null;
     let cachedInitSymbol = null;
     let cachedInitPriceSource = null;
+    let lastFetchedInitResponse = null;  // Store response from loadStrikes() to reuse in loadChartData()
     
     const timeframeIntervals = {
         '1minute': 60,
@@ -1017,6 +1018,9 @@ const OptionsChartApp = (function () {
                     cachedInitSymbol = symbol;
                     cachedInitPriceSource = priceSource;
                 }
+                
+                // Store the fetched response to reuse in loadChartData() to avoid duplicate API calls
+                lastFetchedInitResponse = data;
 
                 // Load initial chart data with the targetDate
                 loadChartData(targetDate);
@@ -1067,7 +1071,12 @@ const OptionsChartApp = (function () {
                 
                 // Check if we have a valid cached response for this symbol and price source
                 let initResp = null;
-                if (cachedInitResponse && cachedInitSymbol === currentSymbol && cachedInitPriceSource === priceSource && !targetDate) {
+                // IMPORTANT: Use lastFetchedInitResponse if available (set by loadStrikes) to avoid duplicate API calls
+                if (lastFetchedInitResponse && lastFetchedInitResponse.success) {
+                    console.log('Using lastFetched OPTIONS_INIT response (avoid duplicate API call)');
+                    initResp = lastFetchedInitResponse;
+                    lastFetchedInitResponse = null;  // Clear it so next time we use cache or fetch
+                } else if (cachedInitResponse && cachedInitSymbol === currentSymbol && cachedInitPriceSource === priceSource && !targetDate) {
                     console.log('Using cached OPTIONS_INIT response');
                     initResp = cachedInitResponse;
                 } else {
