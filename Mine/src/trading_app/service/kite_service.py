@@ -190,80 +190,79 @@ class KiteService:
                 except Exception as e:
                     logging.error(f"[get_previous_trading_day_close] Error fetching data for target_date {target_date}: {e}", exc_info=True)
                     return None
-            
-            # Original logic for current date (when target_date is None)
-            # IMPORTANT: Exclude today's incomplete data
-            # Go back from yesterday to get only COMPLETE trading days
-            today = datetime.now().date()
-            yesterday = today - timedelta(days=1)
-            
-            # Fetch from 20 days ago to yesterday (covers weekends/holidays)
-            to_date = datetime.combine(yesterday, datetime.max.time())
-            from_date = to_date - timedelta(days=20)
-            
-            logging.info(f"[get_previous_trading_day_close] {symbol} (token={instrument_token})")
-            logging.info(f"[get_previous_trading_day_close]   Current datetime: {datetime.now()}")
-            logging.info(f"[get_previous_trading_day_close]   Today's date: {today}")
-            logging.info(f"[get_previous_trading_day_close]   Yesterday's date: {yesterday}")
-            logging.info(f"[get_previous_trading_day_close]   Fetching from {from_date} to {to_date}")
-            
-            try:
-                historical_data = self.kite.historical_data(
-                    instrument_token=int(instrument_token),
-                    from_date=from_date,
-                    to_date=to_date,
-                    interval='day'
-                )
-                logging.info(f"[get_previous_trading_day_close]   Retrieved {len(historical_data) if historical_data else 0} days of data")
+            else:
+                    # Original logic for current date (when target_date is None)
+                    # IMPORTANT: Exclude today's incomplete data
+                    # Go back from yesterday to get only COMPLETE trading days
+                    today = datetime.now().date()
+                    yesterday = today - timedelta(days=1)
                 
-                if historical_data:
-                    logging.info(f"[get_previous_trading_day_close]   === RAW DATA FROM API ===")
-                    for i, data in enumerate(historical_data):
-                        data_date = data['date'].date() if hasattr(data['date'], 'date') else data['date']
-                        logging.info(f"[get_previous_trading_day_close]     [{i}] Date={data_date}, Type={type(data['date'])}, Close={data['close']:.2f}")
-            except Exception as api_err:
-                logging.error(f"[get_previous_trading_day_close]   Error fetching: {api_err}", exc_info=True)
-                return None
-            
-            if not historical_data:
-                logging.warning(f"[get_previous_trading_day_close]   No historical data returned for {symbol}")
-                return None
-            
-            # Sort by date in DESCENDING order to get the most recent (which should be yesterday or earlier)
-            sorted_data = sorted(historical_data, key=lambda x: x['date'], reverse=True)
-            
-            logging.info(f"[get_previous_trading_day_close]   === AFTER SORTING (DESCENDING) ===")
-            for i, data in enumerate(sorted_data[:5]):
-                data_date = data['date'].date() if hasattr(data['date'], 'date') else data['date']
-                logging.info(f"[get_previous_trading_day_close]     [{i}] Date={data_date}, Close={data['close']:.2f}")
-            
-            if len(sorted_data) > 0:
-                # Get the most recent trading day's close
-                previous_day_data = sorted_data[0]
-                previous_close = float(previous_day_data['close'])
-                previous_date = previous_day_data['date'].date() if hasattr(previous_day_data['date'], 'date') else previous_day_data['date']
+                    # Fetch from 20 days ago to yesterday (covers weekends/holidays)
+                    to_date = datetime.combine(yesterday, datetime.max.time())
+                    from_date = to_date - timedelta(days=20)
                 
-                logging.info(f"[get_previous_trading_day_close]   Selected: Date={previous_date}, Close={previous_close:.2f}")
-                logging.info(f"[get_previous_trading_day_close]   Today={today}, Previous={previous_date}, Same? {previous_date == today}")
+                    logging.info(f"[get_previous_trading_day_close] {symbol} (token={instrument_token})")
+                    logging.info(f"[get_previous_trading_day_close]   Current datetime: {datetime.now()}")
+                    logging.info(f"[get_previous_trading_day_close]   Today's date: {today}")
+                    logging.info(f"[get_previous_trading_day_close]   Yesterday's date: {yesterday}")
+                    logging.info(f"[get_previous_trading_day_close]   Fetching from {from_date} to {to_date}")
                 
-                # Verify we're not getting today's data
-                if previous_date == today:
-                    logging.warning(f"[get_previous_trading_day_close] ⚠️  Got today's data ({previous_date})! Using second-most-recent instead")
-                    if len(sorted_data) > 1:
-                        previous_day_data = sorted_data[1]
-                        previous_close = float(previous_day_data['close'])
-                        previous_date = previous_day_data['date'].date() if hasattr(previous_day_data['date'], 'date') else previous_day_data['date']
-                        logging.info(f"[get_previous_trading_day_close]   Fallback to: Date={previous_date}, Close={previous_close:.2f}")
-                    else:
-                        logging.error(f"[get_previous_trading_day_close] ❌ Only have today's data, cannot get previous day close")
+                    try:
+                        historical_data = self.kite.historical_data(
+                            instrument_token=int(instrument_token),
+                            from_date=from_date,
+                            to_date=to_date,
+                            interval='day'
+                        )
+                        logging.info(f"[get_previous_trading_day_close]   Retrieved {len(historical_data) if historical_data else 0} days of data")
+                    
+                        if historical_data:
+                            logging.info(f"[get_previous_trading_day_close]   === RAW DATA FROM API ===")
+                            for i, data in enumerate(historical_data):
+                                data_date = data['date'].date() if hasattr(data['date'], 'date') else data['date']
+                                logging.info(f"[get_previous_trading_day_close]     [{i}] Date={data_date}, Type={type(data['date'])}, Close={data['close']:.2f}")
+                    except Exception as api_err:
+                        logging.error(f"[get_previous_trading_day_close]   Error fetching: {api_err}", exc_info=True)
                         return None
                 
-                logging.info(f"[get_previous_trading_day_close] ✓ FINAL: {symbol} on {previous_date}: {previous_close:.2f}")
-                return previous_close
-            else:
-                logging.warning(f"[get_previous_trading_day_close]   No data points after sorting")
-                return None
-        
+                    if not historical_data:
+                        logging.warning(f"[get_previous_trading_day_close]   No historical data returned for {symbol}")
+                        return None
+                
+                    # Sort by date in DESCENDING order to get the most recent (which should be yesterday or earlier)
+                    sorted_data = sorted(historical_data, key=lambda x: x['date'], reverse=True)
+                
+                    logging.info(f"[get_previous_trading_day_close]   === AFTER SORTING (DESCENDING) ===")
+                    for i, data in enumerate(sorted_data[:5]):
+                        data_date = data['date'].date() if hasattr(data['date'], 'date') else data['date']
+                        logging.info(f"[get_previous_trading_day_close]     [{i}] Date={data_date}, Close={data['close']:.2f}")
+                
+                    if len(sorted_data) > 0:
+                        # Get the most recent trading day's close
+                        previous_day_data = sorted_data[0]
+                        previous_close = float(previous_day_data['close'])
+                        previous_date = previous_day_data['date'].date() if hasattr(previous_day_data['date'], 'date') else previous_day_data['date']
+                    
+                        logging.info(f"[get_previous_trading_day_close]   Selected: Date={previous_date}, Close={previous_close:.2f}")
+                        logging.info(f"[get_previous_trading_day_close]   Today={today}, Previous={previous_date}, Same? {previous_date == today}")
+                    
+                        # Verify we're not getting today's data
+                        if previous_date == today:
+                            logging.warning(f"[get_previous_trading_day_close] ⚠️  Got today's data ({previous_date})! Using second-most-recent instead")
+                            if len(sorted_data) > 1:
+                                previous_day_data = sorted_data[1]
+                                previous_close = float(previous_day_data['close'])
+                                previous_date = previous_day_data['date'].date() if hasattr(previous_day_data['date'], 'date') else previous_day_data['date']
+                                logging.info(f"[get_previous_trading_day_close]   Fallback to: Date={previous_date}, Close={previous_close:.2f}")
+                            else:
+                                logging.error(f"[get_previous_trading_day_close] ❌ Only have today's data, cannot get previous day close")
+                                return None
+                    
+                        logging.info(f"[get_previous_trading_day_close] ✓ FINAL: {symbol} on {previous_date}: {previous_close:.2f}")
+                        return previous_close
+                    else:
+                        logging.warning(f"[get_previous_trading_day_close]   No data points after sorting")
+                        return None
         except Exception as e:
             logging.error(f"[get_previous_trading_day_close] Exception: {e}", exc_info=True)
             return None

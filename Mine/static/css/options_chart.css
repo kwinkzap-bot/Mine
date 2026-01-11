@@ -14,7 +14,7 @@
     padding: 0 0 10px 0;
     border-bottom: 1px solid #ddd;
     margin-bottom: 10px;
-    gap: 20px;
+    gap: 10px;
     flex-wrap: wrap;
 }
 
@@ -182,7 +182,7 @@
     background: linear-gradient(135deg, #f0f9ff 0%, #e0f7ff 100%);
     border: 2px solid #0891b2;
     border-radius: 8px;
-    padding: 4px 10px;
+    padding: 3px 10px;
     font-weight: bold;
     animation: slideDown 0.3s ease-out;
 }
