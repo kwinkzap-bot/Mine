@@ -453,8 +453,11 @@ class Intraday920Tracker {
      * Makes 2 API calls instead of 4:
      * 1. High Strike: both CE and PE tokens
      * 2. Low Strike: both CE and PE tokens
+     * 
+     * @param {boolean} isPolling - If true, this is a periodic polling update (no reference lines)
+     *                             If false, this is initial load or date change (draw reference lines)
      */
-    async loadChartsData() {
+    async loadChartsData(isPolling = false) {
         if (!this.strategyData) {
             console.warn('[loadChartsData] No strategy data available');
             return;
@@ -462,13 +465,10 @@ class Intraday920Tracker {
 
         const highStrike = this.strategyData.high_strike || {};
         const lowStrike = this.strategyData.low_strike || {};
-        
-        // Check if this is a refresh (date picker was used)
-        const isRefresh = this.selectedDate !== null;
 
         console.log('[loadChartsData] High Strike:', highStrike);
         console.log('[loadChartsData] Low Strike:', lowStrike);
-        console.log('[loadChartsData] Refresh mode:', isRefresh);
+        console.log('[loadChartsData] Is Polling:', isPolling);
 
         // Call 1: Load data for High CE and PE together
         if (highStrike.ce_token && highStrike.pe_token && highStrike.success) {
@@ -480,7 +480,7 @@ class Intraday920Tracker {
                 highStrike.ce_strike,      // CE strike
                 highStrike.pe_strike,      // PE strike
                 'High Strike',
-                isRefresh
+                isPolling
             );
         } else {
             console.warn('[loadChartsData] High strike data incomplete:', { 
@@ -500,7 +500,7 @@ class Intraday920Tracker {
                 lowStrike.ce_strike,       // CE strike
                 lowStrike.pe_strike,       // PE strike
                 'Low Strike',
-                isRefresh
+                isPolling
             );
         } else {
             console.warn('[loadChartsData] Low strike data incomplete:', { 
@@ -514,10 +514,19 @@ class Intraday920Tracker {
     /**
      * Update two charts (CE and PE) with data from single API call
      * Passes current high/low as reference lines like intraday_option.js
+     * 
+     * @param {number} ceToken - CE option token
+     * @param {number} peToken - PE option token
+     * @param {string} ceKey - CE chart key
+     * @param {string} peKey - PE chart key
+     * @param {number} ceStrike - CE strike price
+     * @param {number} peStrike - PE strike price
+     * @param {string} label - Chart label
+     * @param {boolean} isPolling - If true, only update candles (polling); if false, draw reference lines (initial load)
      */
-    async updateChartsData(ceToken, peToken, ceKey, peKey, ceStrike, peStrike, label, refresh = false) {
+    async updateChartsData(ceToken, peToken, ceKey, peKey, ceStrike, peStrike, label, isPolling = false) {
         try {
-            console.log(`[updateChartsData] Starting update for ${label} (refresh: ${refresh})`);
+            console.log(`[updateChartsData] Starting update for ${label} (isPolling: ${isPolling})`);
             console.log(`[updateChartsData] Tokens - CE: ${ceToken}, PE: ${peToken}`);
             
             // Single API call with both CE and PE tokens
@@ -562,14 +571,14 @@ class Intraday920Tracker {
             };
 
             // Determine if this is an initial load or a polling update
-            // Initial load when refresh flag is false (first load)
-            // Polling update when refresh flag is true
-            const isInitialLoad = !refresh;
+            // isPolling=false (initial load or date change) → draw reference lines
+            // isPolling=true (periodic polling) → only update candles
+            const isInitialLoad = !isPolling;
 
             // Update CE chart with reference lines
             if (result.ceData.length > 0) {
                 console.log(`[updateChartsData] Updating ${ceKey} with ${result.ceData.length} candles`);
-                await this.setChartData(result.ceData, ceKey, `${label} CE`, ceReferenceLines, refresh, isInitialLoad);
+                await this.setChartData(result.ceData, ceKey, `${label} CE`, ceReferenceLines, false, isInitialLoad);
             } else {
                 console.warn(`[updateChartsData] No CE data for ${label}`);
                 this.addSignal(`⚠️ No CE chart data available for ${label}`, 'WARNING');
@@ -578,7 +587,7 @@ class Intraday920Tracker {
             // Update PE chart with reference lines
             if (result.peData.length > 0) {
                 console.log(`[updateChartsData] Updating ${peKey} with ${result.peData.length} candles`);
-                await this.setChartData(result.peData, peKey, `${label} PE`, peReferenceLines, refresh, isInitialLoad);
+                await this.setChartData(result.peData, peKey, `${label} PE`, peReferenceLines, false, isInitialLoad);
             } else {
                 console.warn(`[updateChartsData] No PE data for ${label}`);
                 this.addSignal(`⚠️ No PE chart data available for ${label}`, 'WARNING');
@@ -702,8 +711,9 @@ class Intraday920Tracker {
             }
 
             // Only refresh chart data, NOT full strategy data
+            // Pass isPolling=true to indicate this is a polling update (no reference lines)
             if (this.strategyData) {
-                this.loadChartsData();
+                this.loadChartsData(true);
             }
             this.updateCount++;
         }, this.refreshDelay);
