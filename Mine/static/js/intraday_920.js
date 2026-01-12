@@ -564,7 +564,7 @@ class Intraday920Tracker {
             // Update CE chart with reference lines
             if (result.ceData.length > 0) {
                 console.log(`[updateChartsData] Updating ${ceKey} with ${result.ceData.length} candles`);
-                await this.setChartData(result.ceData, ceKey, `${label} CE`, ceReferenceLines, refresh);
+                await this.setChartData(result.ceData, ceKey, `${label} CE`, ceReferenceLines, refresh, !isRefresh);
             } else {
                 console.warn(`[updateChartsData] No CE data for ${label}`);
                 this.addSignal(`⚠️ No CE chart data available for ${label}`, 'WARNING');
@@ -573,7 +573,7 @@ class Intraday920Tracker {
             // Update PE chart with reference lines
             if (result.peData.length > 0) {
                 console.log(`[updateChartsData] Updating ${peKey} with ${result.peData.length} candles`);
-                await this.setChartData(result.peData, peKey, `${label} PE`, peReferenceLines, refresh);
+                await this.setChartData(result.peData, peKey, `${label} PE`, peReferenceLines, refresh, !isRefresh);
             } else {
                 console.warn(`[updateChartsData] No PE data for ${label}`);
                 this.addSignal(`⚠️ No PE chart data available for ${label}`, 'WARNING');
@@ -609,11 +609,18 @@ class Intraday920Tracker {
      * - Chart rendering with proper formatting
      * 
      * IMPORTANT: When updating from /api/options-chart-data:
-     * - ONLY candlestick data is updated
-     * - Reference lines are NOT updated during chart data updates
-     * - This ensures clean candlestick-only updates
+     * - ONLY candlestick data is updated during polling
+     * - Reference lines are drawn on initial load, NOT updated during subsequent updates
+     * - This ensures clean candlestick-only updates during polling
+     * 
+     * @param {Array} candles - Candlestick data
+     * @param {string} key - Chart key (e.g., 'highCe', 'lowPe')
+     * @param {string} label - Display label
+     * @param {Object} referenceLines - Reference line data (high/low values)
+     * @param {boolean} refresh - Whether to refresh the chart
+     * @param {boolean} isInitialLoad - If true, draw reference lines; if false, only update candles
      */
-    setChartData(candles, key, label, referenceLines = null, refresh = false) {
+    setChartData(candles, key, label, referenceLines = null, refresh = false, isInitialLoad = true) {
         try {
             // Get raw candles - TradingViewChart.update() will format them internally
             if (!Array.isArray(candles) || candles.length === 0) {
@@ -635,14 +642,20 @@ class Intraday920Tracker {
                 return;
             }
 
-            console.log(`[setChartData] Updating ${label} with ${candles.length} candles (refresh: ${refresh})`);
+            console.log(`[setChartData] Updating ${label} with ${candles.length} candles (refresh: ${refresh}, isInitialLoad: ${isInitialLoad})`);
             console.log(`[setChartData] Sample candle:`, candles[0]);
             
-            // IMPORTANT: Only update candlestick data, NOT reference lines
-            // Reference lines should NOT be updated during options-chart-data updates
-            // Pass null as the second parameter to skip reference line updates
-            console.log(`[setChartData] Updating ONLY candlestick data (NO reference lines)`);
-            this.charts[key].update(candles, null, refresh);
+            // On initial load: update both candlesticks AND reference lines
+            // On polling updates: only update candlesticks (pass null to skip reference lines)
+            const linesToUse = isInitialLoad ? referenceLines : null;
+            
+            if (!isInitialLoad) {
+                console.log(`[setChartData] Polling update: Updating ONLY candlestick data (NO reference lines)`);
+            } else {
+                console.log(`[setChartData] Initial load: Updating candlesticks AND reference lines`);
+            }
+            
+            this.charts[key].update(candles, linesToUse, refresh);
             
             // Store for tracking
             this.lastCandles[key] = candles;
