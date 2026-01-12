@@ -950,12 +950,26 @@ class Intraday920Tracker {
     /**
      * Display backtest results on the UI
      * Only shows strikes that have entry signals
+     * Hides entire block if no signals found
      */
     displayBacktestResults(results) {
         const resultsContainer = document.getElementById('backtestResults');
         if (!resultsContainer) return;
 
-        // Show results container
+        // Check if any signals exist
+        const hasAnySignal = 
+            (results.highCe && results.highCe.has_signal) ||
+            (results.highPe && results.highPe.has_signal) ||
+            (results.lowCe && results.lowCe.has_signal) ||
+            (results.lowPe && results.lowPe.has_signal);
+
+        // Hide entire container if no signals
+        if (!hasAnySignal) {
+            resultsContainer.classList.add('hidden');
+            return;
+        }
+
+        // Show results container only if signals exist
         resultsContainer.classList.remove('hidden');
 
         // Update High CE
