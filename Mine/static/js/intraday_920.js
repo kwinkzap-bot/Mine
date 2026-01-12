@@ -187,6 +187,17 @@ class Intraday920Tracker {
             });
         }
 
+        // Handle close backtest button
+        const closeBacktestBtn = document.getElementById('closeBacktestBtn');
+        if (closeBacktestBtn) {
+            closeBacktestBtn.addEventListener('click', () => {
+                const backtestResults = document.getElementById('backtestResults');
+                if (backtestResults) {
+                    backtestResults.classList.add('hidden');
+                }
+            });
+        }
+
         // Load data on page load (initial only)
         this.loadData();
     }
