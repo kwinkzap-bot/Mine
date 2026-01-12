@@ -1119,20 +1119,42 @@ class Intraday920Tracker {
     }
 
     /**
-     * Format time from ISO string or timestamp
+     * Format time from Unix timestamp or ISO string to IST time
+     * Handles both seconds (from KiteConnect) and milliseconds
      */
-    formatTime(timeString) {
-        if (!timeString) return '--';
+    formatTime(timeValue) {
+        if (!timeValue) return '--';
         try {
-            if (typeof timeString === 'number') {
-                const date = new Date(timeString * 1000);
-                return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+            let date;
+            
+            if (typeof timeValue === 'number') {
+                // Unix timestamp - could be seconds or milliseconds
+                // KiteConnect returns seconds, so multiply by 1000 for milliseconds
+                if (timeValue < 10000000000) {
+                    // Likely seconds (before year 2286 in seconds, after 1970)
+                    date = new Date(timeValue * 1000);
+                } else {
+                    // Likely milliseconds
+                    date = new Date(timeValue);
+                }
+            } else if (typeof timeValue === 'string') {
+                // ISO string or date string
+                date = new Date(timeValue);
             } else {
-                const date = new Date(timeString);
-                return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                return '--';
             }
+            
+            // Format as HH:MM in IST timezone
+            // Use timeZone option to ensure correct IST conversion
+            return date.toLocaleTimeString('en-IN', {
+                timeZone: 'Asia/Kolkata',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            });
         } catch (e) {
-            return timeString.toString();
+            console.error('[formatTime] Error:', e);
+            return '--';
         }
     }
 
