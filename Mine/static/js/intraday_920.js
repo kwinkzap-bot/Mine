@@ -900,55 +900,33 @@ class Intraday920Tracker {
                 lowPe: null
             };
 
-            // Analyze High CE
+            // Analyze High Strike (both CE and PE in one call)
             if (highStrike.success && highStrike.ce_token && highStrike.pe_token) {
-                const ceSignal = await this.fetchEntrySignals(
+                const signals = await this.fetchEntrySignals(
                     highStrike.ce_token,
                     highStrike.pe_token,
                     highStrike.ce_high,
                     highStrike.pe_high,
                     'High Strike'
                 );
-                if (ceSignal.success) {
-                    backtestResults.highCe = ceSignal.ce_signal;
-                }
-
-                // Analyze High PE
-                const peSignal = await this.fetchEntrySignals(
-                    highStrike.ce_token,
-                    highStrike.pe_token,
-                    highStrike.ce_high,
-                    highStrike.pe_high,
-                    'High Strike'
-                );
-                if (peSignal.success) {
-                    backtestResults.highPe = peSignal.pe_signal;
+                if (signals.success) {
+                    backtestResults.highCe = signals.ce_signal;
+                    backtestResults.highPe = signals.pe_signal;
                 }
             }
 
-            // Analyze Low CE
+            // Analyze Low Strike (both CE and PE in one call)
             if (lowStrike.success && lowStrike.ce_token && lowStrike.pe_token) {
-                const ceSignal = await this.fetchEntrySignals(
+                const signals = await this.fetchEntrySignals(
                     lowStrike.ce_token,
                     lowStrike.pe_token,
                     lowStrike.ce_high,
                     lowStrike.pe_high,
                     'Low Strike'
                 );
-                if (ceSignal.success) {
-                    backtestResults.lowCe = ceSignal.ce_signal;
-                }
-
-                // Analyze Low PE
-                const peSignal = await this.fetchEntrySignals(
-                    lowStrike.ce_token,
-                    lowStrike.pe_token,
-                    lowStrike.ce_high,
-                    lowStrike.pe_high,
-                    'Low Strike'
-                );
-                if (peSignal.success) {
-                    backtestResults.lowPe = peSignal.pe_signal;
+                if (signals.success) {
+                    backtestResults.lowCe = signals.ce_signal;
+                    backtestResults.lowPe = signals.pe_signal;
                 }
             }
 
