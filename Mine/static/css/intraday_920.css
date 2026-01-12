@@ -494,24 +494,26 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 20px;
+    gap: 15px;
     margin-bottom: 15px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
 }
 
 .header-left {
     flex: 0 0 auto;
+    min-width: fit-content;
 }
 
 .header-left h4 {
     margin: 0;
     font-size: 16px;
     color: var(--text-primary);
+    white-space: nowrap;
 }
 
 .header-middle {
     flex: 1 1 auto;
-    min-width: 200px;
+    min-width: 180px;
 }
 
 .header-right {
@@ -521,41 +523,42 @@
 .date-picker-wrapper {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
 }
 
 .date-picker {
-    padding: 8px 12px;
+    padding: 6px 10px;
     border: 1px solid var(--border);
     border-radius: 6px;
-    font-size: 13px;
+    font-size: 12px;
     background: var(--bg-white);
     color: var(--text-primary);
 }
 
 .date-picker-hint {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-secondary);
     font-style: italic;
 }
 
 /* Backtest Button */
 .backtest-btn {
-    padding: 8px 16px;
+    padding: 6px 12px;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     border: none;
     border-radius: 6px;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.3s ease;
     box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+    white-space: nowrap;
 }
 
 .backtest-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    transform: translateY(-1px);
+    box-shadow: 0 3px 10px rgba(102, 126, 234, 0.4);
 }
 
 .backtest-btn:active {
@@ -648,11 +651,29 @@
 }
 
 /* Responsive Design */
+@media (max-width: 1200px) {
+    .strike-header {
+        gap: 12px;
+    }
+    
+    .header-middle {
+        min-width: 150px;
+    }
+    
+    .date-picker {
+        padding: 5px 8px;
+        font-size: 11px;
+    }
+    
+    .backtest-btn {
+        padding: 5px 10px;
+        font-size: 11px;
+    }
+}
+
 @media (max-width: 1024px) {
     .strike-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 12px;
+        flex-wrap: wrap;
     }
     
     .header-middle {
