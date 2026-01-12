@@ -756,7 +756,6 @@ class Intraday920Strategy:
         }
         
         if not candles:
-            result['error'] = 'No candles available'
             return result
         
         # Search for entry point
@@ -769,6 +768,7 @@ class Intraday920Strategy:
             if candle_low < reference_high and candle_close > reference_high:
                 entry_candle_idx = idx
                 result['has_entry'] = True
+                # Get time as Unix timestamp (already has IST offset from Kite_data_fetch_services)
                 result['entry_time'] = candle.get('time', candle.get('date'))
                 result['entry_price'] = candle_close
                 

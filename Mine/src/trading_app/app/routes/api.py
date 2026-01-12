@@ -1912,7 +1912,8 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
             'pe_analysis': results.get('pe_analysis', {}),
             'symbol': results.get('symbol'),
             'date': results.get('date'),
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'note': 'Times in entry_time/exit_time are Unix timestamps with IST offset (from Kite_data_fetch_services). Frontend converts to IST display format.'
         }), 200
         
     except Exception as e:
