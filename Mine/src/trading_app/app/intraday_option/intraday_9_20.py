@@ -337,24 +337,15 @@ class Intraday920Strategy:
             # Step 2: Try to get first 5-minute candle (if market is open)
             first_5min = self.get_first_5min_high_low(symbol, target_date=target_date)
             
-            # Determine the reference date (date of the first 5-min candle we're using)
+            # Determine the reference date for strike data
+            # If target_date provided, use that; otherwise start with current date
+            # The get_strike_data method will handle fallback to previous days if needed
             if target_date:
                 reference_date = target_date.replace(hour=9, minute=20, second=0, microsecond=0)
             else:
-                now = datetime.now()
-                reference_date = now.replace(hour=9, minute=20, second=0, microsecond=0)
-                
-                # Calculate the same last trading day used in get_first_5min_high_low
-                if now.weekday() == 0:  # Monday - get Friday
-                    reference_date = (now - timedelta(days=3)).replace(hour=9, minute=20, second=0, microsecond=0)
-                elif now.weekday() in [5, 6]:  # Saturday, Sunday - get Friday
-                    days_back = now.weekday() - 4
-                    reference_date = (now - timedelta(days=days_back)).replace(hour=9, minute=20, second=0, microsecond=0)
-                else:  # Weekday
-                    if now.hour < 9 or (now.hour == 9 and now.minute < 20):
-                        reference_date = (now - timedelta(days=1)).replace(hour=9, minute=20, second=0, microsecond=0)
-                    else:
-                        reference_date = (now - timedelta(days=1)).replace(hour=9, minute=20, second=0, microsecond=0)
+                # Start with CURRENT date (not yesterday)
+                # get_strike_data will fall back to previous days if no data found
+                reference_date = datetime.now().replace(hour=9, minute=20, second=0, microsecond=0)
             
             if first_5min.get('success'):
                 # Use actual 5-minute high/low
