@@ -971,6 +971,7 @@ class Intraday920Tracker {
 
     /**
      * Display backtest results on the UI
+     * Only shows strikes that have entry signals
      */
     displayBacktestResults(results) {
         const resultsContainer = document.getElementById('backtestResults');
@@ -994,26 +995,26 @@ class Intraday920Tracker {
 
     /**
      * Update individual backtest display section
+     * Hides section if no entry signal exists
      */
     updateBacktestDisplay(elementId, signal) {
         const element = document.getElementById(elementId);
         if (!element) return;
 
-        // Clear existing values
-        const rows = element.querySelectorAll('.data-row');
-        rows.forEach(row => {
-            const valueSpan = row.querySelector('.value');
-            if (valueSpan) {
-                valueSpan.textContent = '--';
-                valueSpan.className = 'value';
-            }
-        });
+        const section = element.closest('.backtest-section');
+        if (!section) return;
 
+        // Hide section if no signal
         if (!signal || !signal.has_signal) {
-            return; // Keep as '--' if no signal
+            section.style.display = 'none';
+            return;
         }
 
+        // Show section if signal exists
+        section.style.display = 'block';
+
         // Update values
+        const rows = element.querySelectorAll('.data-row');
         const dataMap = {
             'Entry:': signal.entry_price,
             'SL:': signal.sl,
