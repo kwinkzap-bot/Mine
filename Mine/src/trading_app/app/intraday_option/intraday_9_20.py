@@ -675,6 +675,12 @@ class Intraday920Strategy:
                 ce_high, pe_high, symbol
             )
             
+            # Remove IST offset from timestamps before returning
+            # Kite_data_fetch_services adds 5.5 hour offset for charts,
+            # but frontend formatTime() needs raw UTC timestamps for proper IST conversion
+            ce_result = self._remove_ist_offset_from_result(ce_result)
+            pe_result = self._remove_ist_offset_from_result(pe_result)
+            
             return {
                 'success': True,
                 'ce_analysis': ce_result,
@@ -817,5 +823,28 @@ class Intraday920Strategy:
             result['exit_reason'] = 'No Exit'
             result['pnl'] = last_candle.get('close', 0) - result['entry_price']
             logger.info(f"{side} No exit by EOD, Last price {last_candle.get('close', 0)}, PnL {result['pnl']}")
+        
+        return result
+
+    def _remove_ist_offset_from_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Remove the IST offset (5.5 hours = 19800 seconds) from entry/exit timestamps.
+        
+        Kite_data_fetch_services adds IST offset for chart display, but backtest API
+        needs raw UTC timestamps so frontend can properly convert to IST.
+        
+        Args:
+            result: Analysis result with potentially offset timestamps
+            
+        Returns:
+            Result with IST offset removed from timestamps
+        """
+        ist_offset_seconds = int(5.5 * 3600)  # 19800 seconds
+        
+        if result.get('entry_time') and isinstance(result['entry_time'], int):
+            result['entry_time'] = result['entry_time'] - ist_offset_seconds
+            
+        if result.get('exit_time') and isinstance(result['exit_time'], int):
+            result['exit_time'] = result['exit_time'] - ist_offset_seconds
         
         return result
