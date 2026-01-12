@@ -27,21 +27,19 @@ class Intraday920Strategy:
 
     def get_first_5min_high_low(self, symbol: str, target_date: Optional[datetime] = None) -> Dict[str, Any]:
         """
-        Get the first 5-minute candle's high and low for a specific date (or last trading day).
+        Get the first 5-minute candle's high and low for a specific date.
+        
+        If no date is selected, starts with current date (12 Jan 2026) and falls back to 
+        previous trading days until data is found.
         
         Args:
             symbol: Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
-            target_date: Optional datetime object for specific date. If None, uses last trading day.
+            target_date: Optional datetime object for specific date. If None, uses current date and falls back.
             
         Returns:
-            Dictionary with first_5min_high, first_5min_low from specified date
+            Dictionary with first_5min_high, first_5min_low from the date with available data
         """
         try:
-            if target_date:
-                logger.info(f"Fetching first 5-minute candle for {symbol} from {target_date.date()}")
-            else:
-                logger.info(f"Fetching first 5-minute candle for {symbol} from last trading day")
-            
             # Get symbol token
             symbol_token = self.data_service.get_symbol_token(symbol, exchange='NSE')
             if not symbol_token:
@@ -52,70 +50,71 @@ class Intraday920Strategy:
                     'success': False
                 }
             
-            # Determine which date to fetch data for
+            # Determine starting date
             if target_date:
                 # Use the provided target date
-                last_trading_day = target_date.replace(hour=9, minute=20, second=0, microsecond=0)
-                logger.info(f"Using target date: {last_trading_day.date()}")
+                current_check_date = target_date.replace(hour=9, minute=20, second=0, microsecond=0)
+                logger.info(f"Fetching first 5-minute candle for {symbol} from {current_check_date.date()}")
             else:
-                # Get LAST TRADING DAY's first 5-minute candle (09:15-09:20)
-                # Market opens at 9:15 AM, first 5-min candle closes at 9:20 AM
+                # Start with current date (12 Jan 2026 or today)
                 now = datetime.now()
+                current_check_date = now.replace(hour=9, minute=20, second=0, microsecond=0)
+                logger.info(f"Fetching first 5-minute candle for {symbol} starting from {current_check_date.date()}")
+            
+            # Try to fetch data, falling back to previous days if no data found
+            max_retries = 30  # Try up to 30 days back
+            for attempt in range(max_retries):
+                # Skip weekends
+                while current_check_date.weekday() in [5, 6]:  # Saturday=5, Sunday=6
+                    current_check_date -= timedelta(days=1)
                 
-                # Determine last trading day (skip weekends, holidays)
-                last_trading_day = now.replace(hour=9, minute=20, second=0, microsecond=0)
+                # Fetch from 9:15 AM to 9:20 AM of current check date
+                from_date = current_check_date.replace(minute=15)
+                to_date = current_check_date
                 
-                # If today is before market close (3:20 PM) or weekend, get yesterday
-                if now.weekday() == 0:  # Monday - get Friday
-                    last_trading_day = (now - timedelta(days=3)).replace(hour=9, minute=20, second=0, microsecond=0)
-                elif now.weekday() in [5, 6]:  # Saturday, Sunday - get Friday
-                    days_back = now.weekday() - 4
-                    last_trading_day = (now - timedelta(days=days_back)).replace(hour=9, minute=20, second=0, microsecond=0)
-                else:  # Weekday
-                    # If before 9:20 AM, get yesterday's candle
-                    if now.hour < 9 or (now.hour == 9 and now.minute < 20):
-                        last_trading_day = (now - timedelta(days=1)).replace(hour=9, minute=20, second=0, microsecond=0)
+                logger.info(f"Attempt {attempt + 1}: Fetching candles from {from_date} to {to_date}")
+                
+                try:
+                    candles = self.data_service.get_candlestick_data(
+                        symbol_token,
+                        interval='5minute',
+                        from_date=from_date,
+                        to_date=to_date
+                    )
+                    
+                    if candles and len(candles) > 0:
+                        # Found data! Get the first candle
+                        first_candle = candles[0]
+                        first_5min_high = first_candle.get('high', 0)
+                        first_5min_low = first_candle.get('low', 0)
+                        first_5min_close = first_candle.get('close', 0)
+                        
+                        logger.info(f"Found first 5min candle for {symbol} on {current_check_date.date()}: High={first_5min_high}, Low={first_5min_low}, Close={first_5min_close}")
+                        
+                        return {
+                            'symbol': symbol,
+                            'first_5min_high': round(first_5min_high, 2),
+                            'first_5min_low': round(first_5min_low, 2),
+                            'first_5min_close': round(first_5min_close, 2),
+                            'timestamp': datetime.now().isoformat(),
+                            'success': True,
+                            'data_date': current_check_date.date().isoformat()
+                        }
                     else:
-                        # After 9:20 AM, can use today's candle if market is open
-                        # But request asks for LAST trading day, so get yesterday
-                        last_trading_day = (now - timedelta(days=1)).replace(hour=9, minute=20, second=0, microsecond=0)
+                        logger.warning(f"No candles found for {symbol} on {current_check_date.date()}, trying previous day...")
+                
+                except Exception as e:
+                    logger.warning(f"Error fetching candles for {current_check_date.date()}: {str(e)}, trying previous day...")
+                
+                # Move to previous day and retry
+                current_check_date -= timedelta(days=1)
             
-            # Fetch from 9:15 AM of last trading day to 9:20 AM
-            from_date = last_trading_day.replace(minute=15)
-            to_date = last_trading_day
-            
-            logger.info(f"Fetching candles from {from_date} to {to_date}")
-            
-            candles = self.data_service.get_candlestick_data(
-                symbol_token,
-                interval='5minute',
-                from_date=from_date,
-                to_date=to_date
-            )
-            
-            if not candles or len(candles) == 0:
-                logger.warning(f"No candles found for {symbol} on {last_trading_day.date()}")
-                return {
-                    'symbol': symbol,
-                    'error': 'No candles found for last trading day',
-                    'success': False
-                }
-            
-            # First candle is the one we want (09:15-09:20)
-            first_candle = candles[0]
-            first_5min_high = first_candle.get('high', 0)
-            first_5min_low = first_candle.get('low', 0)
-            first_5min_close = first_candle.get('close', 0)
-            
-            logger.info(f"First 5min candle for {symbol} on {last_trading_day.date()}: High={first_5min_high}, Low={first_5min_low}, Close={first_5min_close}")
-            
+            # No data found after max retries
+            logger.error(f"No candle data found for {symbol} after {max_retries} days")
             return {
                 'symbol': symbol,
-                'first_5min_high': round(first_5min_high, 2),
-                'first_5min_low': round(first_5min_low, 2),
-                'first_5min_close': round(first_5min_close, 2),
-                'timestamp': datetime.now().isoformat(),
-                'success': True
+                'error': f'No candle data found for {symbol} in the last {max_retries} days',
+                'success': False
             }
             
         except Exception as e:
