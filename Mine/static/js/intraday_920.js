@@ -1038,83 +1038,36 @@ class Intraday920Tracker {
 
     /**
      * Update individual backtest display section
-     * Hides section if no entry signal exists
-     * Displays detailed entry/exit analysis
+     * Single line simple format
      */
     updateBacktestDisplay(elementId, analysis) {
         const element = document.getElementById(elementId);
         if (!element) return;
 
-        const section = element.closest('.backtest-section');
-        if (!section) return;
-
-        // Hide section if no entry
+        // Hide if no entry
         if (!analysis || !analysis.has_entry) {
-            section.classList.add('hidden');
+            element.innerHTML = '';
             return;
         }
 
-        // Show section if entry exists
-        section.classList.remove('hidden');
+        // Determine strike type from element ID
+        const strikeType = elementId.includes('highCe') ? 'HIGH CE' : 
+                          elementId.includes('highPe') ? 'HIGH PE' :
+                          elementId.includes('lowCe') ? 'LOW CE' : 'LOW PE';
 
-        // Create detailed HTML for full day analysis
-        let html = `
-            <div class="entry-exit-details">
-                <div class="entry-block">
-                    <div class="block-title">📍 ENTRY</div>
-                    <div class="detail-row">
-                        <span class="label">Time:</span>
-                        <span class="value">${this.formatTime(analysis.entry_time)}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="label">Price:</span>
-                        <span class="value">${this.formatPrice(analysis.entry_price)}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="label">SL:</span>
-                        <span class="value">${this.formatPrice(analysis.sl)}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="label">Target:</span>
-                        <span class="value">${this.formatPrice(analysis.target)}</span>
-                    </div>
-                </div>
-        `;
-
-        // Add exit block if exit exists
-        if (analysis.exit_time) {
-            const pnlClass = analysis.pnl >= 0 ? 'positive' : 'negative';
-            html += `
-                <div class="exit-block">
-                    <div class="block-title">🎯 EXIT - ${analysis.exit_reason}</div>
-                    <div class="detail-row">
-                        <span class="label">Time:</span>
-                        <span class="value">${this.formatTime(analysis.exit_time)}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="label">Price:</span>
-                        <span class="value">${this.formatPrice(analysis.exit_price)}</span>
-                    </div>
-                    <div class="detail-row">
-                        <span class="label">P&L:</span>
-                        <span class="value ${pnlClass}">${analysis.pnl >= 0 ? '+' : ''}${this.formatPrice(Math.abs(analysis.pnl))}</span>
-                    </div>
-                </div>
-            `;
-        } else {
-            html += `
-                <div class="no-exit-block">
-                    <div class="block-title">❌ NO EXIT</div>
-                    <div class="detail-row">
-                        <span class="label">Reason:</span>
-                        <span class="value">${analysis.exit_reason || 'No exit by EOD'}</span>
-                    </div>
-                </div>
-            `;
-        }
-
-        html += `</div>`;
+        // Create simple single-line format
+        let html = `<div class="backtest-item-content">`;
+        html += `<span class="strike-label">${strikeType}</span>`;
+        html += `<span class="entry-info">Entry: ${this.formatPrice(analysis.entry_price)} @ ${this.formatTime(analysis.entry_time)}</span>`;
         
+        if (analysis.exit_time) {
+            const exitClass = analysis.pnl >= 0 ? 'positive' : 'negative';
+            html += `<span class="exit-info ${exitClass}">Exit: ${this.formatPrice(analysis.exit_price)} (${analysis.exit_reason}) P&L: ${analysis.pnl >= 0 ? '+' : ''}${this.formatPrice(Math.abs(analysis.pnl))}</span>`;
+        } else {
+            html += `<span class="exit-info">No Exit</span>`;
+        }
+        
+        html += `</div>`;
         element.innerHTML = html;
     }
 

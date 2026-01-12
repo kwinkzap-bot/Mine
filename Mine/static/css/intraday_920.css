@@ -565,12 +565,12 @@
     transform: translateY(0);
 }
 
-/* Backtest Results Section */
+/* Backtest Results Section - Simple Single Line Design */
 .backtest-results {
     background: #f8f9fa;
-    border: 2px solid #e9ecef;
-    border-radius: 8px;
-    padding: 8px;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 8px 12px;
     margin-top: 10px;
     margin-bottom: 12px;
 }
@@ -583,129 +583,57 @@
     font-size: 11px;
     font-weight: 700;
     color: #2c3e50;
-    margin-bottom: 8px;
-    padding-bottom: 6px;
-    border-bottom: 2px solid #3498db;
+    margin-bottom: 6px;
 }
 
 .backtest-content {
     display: flex;
     flex-direction: row;
-    gap: 8px;
+    gap: 15px;
     flex-wrap: wrap;
-    justify-content: space-between;
+    align-items: center;
 }
 
-.backtest-column {
+.backtest-item {
+    flex: 1;
+    min-width: 200px;
+}
+
+.backtest-item-content {
     display: flex;
     flex-direction: row;
-    gap: 8px;
-    flex: 1;
-    min-width: 0;
-}
-
-.backtest-section {
+    gap: 10px;
+    align-items: center;
+    font-size: 11px;
+    padding: 6px 8px;
     background: white;
-    border: 1px solid #dee2e6;
-    border-radius: 6px;
-    padding: 6px;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
 }
 
-.backtest-section h5 {
-    margin: 0 0 4px 0;
-    font-size: 10px;
+.strike-label {
     font-weight: 700;
     color: #2c3e50;
-    padding-bottom: 4px;
-    border-bottom: 1px solid #e9ecef;
-}
-
-.backtest-data {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-}
-
-.data-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 10px;
-    padding: 2px 0;
-}
-
-.data-row .label {
-    font-weight: 600;
-    color: #495057;
     min-width: 60px;
+    padding-right: 8px;
+    border-right: 1px solid #dee2e6;
 }
 
-.data-row .value {
-    font-weight: 500;
+.entry-info {
+    color: #495057;
+}
+
+.exit-info {
+    font-weight: 600;
     color: #2c3e50;
-    text-align: right;
-    flex: 1;
 }
 
-.data-row .value.positive {
+.exit-info.positive {
     color: #27ae60;
 }
 
-.data-row .value.negative {
+.exit-info.negative {
     color: #e74c3c;
-}
-
-/* Entry/Exit Details for Full Day Backtest */
-.entry-exit-details {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.entry-block,
-.exit-block,
-.no-exit-block {
-    border-left: 4px solid #3498db;
-    padding-left: 8px;
-    padding-top: 4px;
-    padding-bottom: 4px;
-}
-
-.exit-block {
-    border-left-color: #27ae60;
-}
-
-.no-exit-block {
-    border-left-color: #e74c3c;
-}
-
-.block-title {
-    font-size: 11px;
-    font-weight: 700;
-    color: #2c3e50;
-    margin-bottom: 6px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.detail-row {
-    display: flex;
-    justify-content: space-between;
-    font-size: 11px;
-    padding: 3px 0;
-    line-height: 1.4;
-}
-
-.detail-row .label {
-    font-weight: 600;
-    color: #495057;
-    min-width: 55px;
-}
-
-.detail-row .value {
-    font-weight: 500;
-    color: #2c3e50;
-    text-align: right;
-    flex: 1;
 }
 
 .detail-row .value.positive {
