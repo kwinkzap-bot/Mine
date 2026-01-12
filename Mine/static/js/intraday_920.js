@@ -179,6 +179,14 @@ class Intraday920Tracker {
             });
         }
 
+        // Handle backtest button
+        const backtestBtn = document.getElementById('backtestBtn');
+        if (backtestBtn) {
+            backtestBtn.addEventListener('click', () => {
+                this.runBacktest();
+            });
+        }
+
         // Load data on page load (initial only)
         this.loadData();
     }
@@ -865,6 +873,178 @@ class Intraday920Tracker {
             }
             this.updateCount++;
         }, this.refreshDelay);
+    }
+
+    /**
+     * Run backtest analysis on the selected data
+     * Analyzes entry signals and exit conditions for all strikes
+     */
+    async runBacktest() {
+        try {
+            if (!this.strategyData) {
+                this.addSignal('❌ No strategy data available for backtest', 'ERROR');
+                return;
+            }
+
+            const backtestBtn = document.getElementById('backtestBtn');
+            backtestBtn.disabled = true;
+            backtestBtn.textContent = '⏳ Analyzing...';
+
+            const highStrike = this.strategyData.high_strike || {};
+            const lowStrike = this.strategyData.low_strike || {};
+
+            const backtestResults = {
+                highCe: null,
+                highPe: null,
+                lowCe: null,
+                lowPe: null
+            };
+
+            // Analyze High CE
+            if (highStrike.success && highStrike.ce_token && highStrike.pe_token) {
+                const ceSignal = await this.fetchEntrySignals(
+                    highStrike.ce_token,
+                    highStrike.pe_token,
+                    highStrike.ce_high,
+                    highStrike.pe_high,
+                    'High Strike'
+                );
+                if (ceSignal.success) {
+                    backtestResults.highCe = ceSignal.ce_signal;
+                }
+
+                // Analyze High PE
+                const peSignal = await this.fetchEntrySignals(
+                    highStrike.ce_token,
+                    highStrike.pe_token,
+                    highStrike.ce_high,
+                    highStrike.pe_high,
+                    'High Strike'
+                );
+                if (peSignal.success) {
+                    backtestResults.highPe = peSignal.pe_signal;
+                }
+            }
+
+            // Analyze Low CE
+            if (lowStrike.success && lowStrike.ce_token && lowStrike.pe_token) {
+                const ceSignal = await this.fetchEntrySignals(
+                    lowStrike.ce_token,
+                    lowStrike.pe_token,
+                    lowStrike.ce_high,
+                    lowStrike.pe_high,
+                    'Low Strike'
+                );
+                if (ceSignal.success) {
+                    backtestResults.lowCe = ceSignal.ce_signal;
+                }
+
+                // Analyze Low PE
+                const peSignal = await this.fetchEntrySignals(
+                    lowStrike.ce_token,
+                    lowStrike.pe_token,
+                    lowStrike.ce_high,
+                    lowStrike.pe_high,
+                    'Low Strike'
+                );
+                if (peSignal.success) {
+                    backtestResults.lowPe = peSignal.pe_signal;
+                }
+            }
+
+            // Display backtest results
+            this.displayBacktestResults(backtestResults);
+            this.addSignal('✅ Backtest analysis completed', 'SUCCESS');
+
+            backtestBtn.disabled = false;
+            backtestBtn.textContent = '📊 Backtest';
+
+        } catch (e) {
+            console.error('[Backtest] Error:', e);
+            this.addSignal(`❌ Backtest error: ${e.message}`, 'ERROR');
+
+            const backtestBtn = document.getElementById('backtestBtn');
+            backtestBtn.disabled = false;
+            backtestBtn.textContent = '📊 Backtest';
+        }
+    }
+
+    /**
+     * Display backtest results on the UI
+     */
+    displayBacktestResults(results) {
+        const resultsContainer = document.getElementById('backtestResults');
+        if (!resultsContainer) return;
+
+        // Show results container
+        resultsContainer.classList.remove('hidden');
+
+        // Update High CE
+        this.updateBacktestDisplay('highCeBacktest', results.highCe);
+
+        // Update High PE
+        this.updateBacktestDisplay('highPeBacktest', results.highPe);
+
+        // Update Low CE
+        this.updateBacktestDisplay('lowCeBacktest', results.lowCe);
+
+        // Update Low PE
+        this.updateBacktestDisplay('lowPeBacktest', results.lowPe);
+    }
+
+    /**
+     * Update individual backtest display section
+     */
+    updateBacktestDisplay(elementId, signal) {
+        const element = document.getElementById(elementId);
+        if (!element) return;
+
+        // Clear existing values
+        const rows = element.querySelectorAll('.data-row');
+        rows.forEach(row => {
+            const valueSpan = row.querySelector('.value');
+            if (valueSpan) {
+                valueSpan.textContent = '--';
+                valueSpan.className = 'value';
+            }
+        });
+
+        if (!signal || !signal.has_signal) {
+            return; // Keep as '--' if no signal
+        }
+
+        // Update values
+        const dataMap = {
+            'Entry:': signal.entry_price,
+            'SL:': signal.sl,
+            'Target:': signal.target,
+            'P&L:': this.calculatePnL(signal)
+        };
+
+        rows.forEach(row => {
+            const label = row.querySelector('.label');
+            const valueSpan = row.querySelector('.value');
+            if (label && valueSpan) {
+                const labelText = label.textContent;
+                if (dataMap[labelText] !== undefined) {
+                    const value = dataMap[labelText];
+                    if (labelText === 'P&L:') {
+                        valueSpan.textContent = value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
+                        valueSpan.className = value >= 0 ? 'value positive' : 'value negative';
+                    } else {
+                        valueSpan.textContent = this.formatPrice(value);
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * Calculate P&L from entry and SL
+     */
+    calculatePnL(signal) {
+        if (!signal || !signal.entry_price || !signal.sl) return 0;
+        return signal.entry_price - signal.sl;
     }
 
     /**

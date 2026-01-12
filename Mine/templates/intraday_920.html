@@ -67,10 +67,64 @@
             <!-- High Strike Charts -->
             <div class="strike-subsection">
                 <div class="strike-header">
-                    <h4>📈 HIGH Strike (From: <span id="highStrikeLabel">--</span>)</h4>
-                    <div class="date-picker-wrapper">
-                        <input type="date" id="dataDatePicker" class="date-picker" title="Select a date to fetch data for that date">
-                        <small class="date-picker-hint">or leave empty for latest</small>
+                    <div class="header-left">
+                        <h4>📈 HIGH Strike (From: <span id="highStrikeLabel">--</span>)</h4>
+                    </div>
+                    <div class="header-middle">
+                        <div class="date-picker-wrapper">
+                            <input type="date" id="dataDatePicker" class="date-picker" title="Select a date to fetch data for that date">
+                            <small class="date-picker-hint">or leave empty for latest</small>
+                        </div>
+                    </div>
+                    <div class="header-right">
+                        <button id="backtestBtn" class="backtest-btn">📊 Backtest</button>
+                    </div>
+                </div>
+                
+                <!-- Backtest Results Section -->
+                <div id="backtestResults" class="backtest-results hidden">
+                    <div class="backtest-results-header">Backtest Analysis Results</div>
+                    <div class="backtest-content">
+                        <div class="backtest-column">
+                            <div class="backtest-section">
+                                <h5>High Strike - CE</h5>
+                                <div class="backtest-data" id="highCeBacktest">
+                                    <div class="data-row"><span class="label">Entry:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">SL:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">Target:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">P&L:</span><span class="value">--</span></div>
+                                </div>
+                            </div>
+                            <div class="backtest-section">
+                                <h5>High Strike - PE</h5>
+                                <div class="backtest-data" id="highPeBacktest">
+                                    <div class="data-row"><span class="label">Entry:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">SL:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">Target:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">P&L:</span><span class="value">--</span></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="backtest-column">
+                            <div class="backtest-section">
+                                <h5>Low Strike - CE</h5>
+                                <div class="backtest-data" id="lowCeBacktest">
+                                    <div class="data-row"><span class="label">Entry:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">SL:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">Target:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">P&L:</span><span class="value">--</span></div>
+                                </div>
+                            </div>
+                            <div class="backtest-section">
+                                <h5>Low Strike - PE</h5>
+                                <div class="backtest-data" id="lowPeBacktest">
+                                    <div class="data-row"><span class="label">Entry:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">SL:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">Target:</span><span class="value">--</span></div>
+                                    <div class="data-row"><span class="label">P&L:</span><span class="value">--</span></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="chart-grid">
