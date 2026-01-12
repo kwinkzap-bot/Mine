@@ -607,6 +607,11 @@ class Intraday920Tracker {
      * - Timestamp conversion (seconds, milliseconds, ISO strings)
      * - Data validation and error handling
      * - Chart rendering with proper formatting
+     * 
+     * IMPORTANT: When updating from /api/options-chart-data:
+     * - ONLY candlestick data is updated
+     * - Reference lines are NOT updated during chart data updates
+     * - This ensures clean candlestick-only updates
      */
     setChartData(candles, key, label, referenceLines = null, refresh = false) {
         try {
@@ -632,10 +637,12 @@ class Intraday920Tracker {
 
             console.log(`[setChartData] Updating ${label} with ${candles.length} candles (refresh: ${refresh})`);
             console.log(`[setChartData] Sample candle:`, candles[0]);
-            console.log(`[setChartData] Reference lines:`, referenceLines);
-
-            // Call update with refresh flag - TradingViewChart handles all data formatting internally
-            this.charts[key].update(candles, referenceLines, refresh);
+            
+            // IMPORTANT: Only update candlestick data, NOT reference lines
+            // Reference lines should NOT be updated during options-chart-data updates
+            // Pass null as the second parameter to skip reference line updates
+            console.log(`[setChartData] Updating ONLY candlestick data (NO reference lines)`);
+            this.charts[key].update(candles, null, refresh);
             
             // Store for tracking
             this.lastCandles[key] = candles;
