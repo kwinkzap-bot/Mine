@@ -1120,38 +1120,46 @@ class Intraday920Tracker {
 
     /**
      * Format time from Unix timestamp or ISO string to IST time
-     * Handles both seconds (from KiteConnect) and milliseconds
+     * Uses same concept as tradingview-chart.js - Intl.DateTimeFormat with Asia/Kolkata timezone
+     * Backend returns timestamps in seconds (Unix epoch)
      */
     formatTime(timeValue) {
         if (!timeValue) return '--';
         try {
-            let date;
+            let timestamp;
             
             if (typeof timeValue === 'number') {
-                // Unix timestamp - could be seconds or milliseconds
-                // KiteConnect returns seconds, so multiply by 1000 for milliseconds
+                // KiteConnect returns timestamps in seconds
                 if (timeValue < 10000000000) {
-                    // Likely seconds (before year 2286 in seconds, after 1970)
-                    date = new Date(timeValue * 1000);
+                    // Already in seconds - use directly
+                    timestamp = timeValue;
                 } else {
-                    // Likely milliseconds
-                    date = new Date(timeValue);
+                    // In milliseconds - convert to seconds
+                    timestamp = Math.floor(timeValue / 1000);
                 }
             } else if (typeof timeValue === 'string') {
-                // ISO string or date string
-                date = new Date(timeValue);
+                // ISO string - parse and convert to seconds
+                const date = new Date(timeValue);
+                if (isNaN(date.getTime())) {
+                    return '--';
+                }
+                timestamp = Math.floor(date.getTime() / 1000);
             } else {
                 return '--';
             }
             
-            // Format as HH:MM in IST timezone
-            // Use timeZone option to ensure correct IST conversion
-            return date.toLocaleTimeString('en-IN', {
+            // Convert to milliseconds for Date constructor
+            const date = new Date(timestamp * 1000);
+            
+            // Format in IST timezone using Intl.DateTimeFormat (same as chart)
+            const formatter = new Intl.DateTimeFormat('en-IN', {
                 timeZone: 'Asia/Kolkata',
                 hour: '2-digit',
                 minute: '2-digit',
                 hour12: false
             });
+            
+            return formatter.format(date);
         } catch (e) {
             console.error('[formatTime] Error:', e);
             return '--';
