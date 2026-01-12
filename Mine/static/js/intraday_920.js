@@ -561,10 +561,15 @@ class Intraday920Tracker {
                 ce_payload_low: ceLow
             };
 
+            // Determine if this is an initial load or a polling update
+            // Initial load when refresh flag is false (first load)
+            // Polling update when refresh flag is true
+            const isInitialLoad = !refresh;
+
             // Update CE chart with reference lines
             if (result.ceData.length > 0) {
                 console.log(`[updateChartsData] Updating ${ceKey} with ${result.ceData.length} candles`);
-                await this.setChartData(result.ceData, ceKey, `${label} CE`, ceReferenceLines, refresh, !isRefresh);
+                await this.setChartData(result.ceData, ceKey, `${label} CE`, ceReferenceLines, refresh, isInitialLoad);
             } else {
                 console.warn(`[updateChartsData] No CE data for ${label}`);
                 this.addSignal(`⚠️ No CE chart data available for ${label}`, 'WARNING');
@@ -573,7 +578,7 @@ class Intraday920Tracker {
             // Update PE chart with reference lines
             if (result.peData.length > 0) {
                 console.log(`[updateChartsData] Updating ${peKey} with ${result.peData.length} candles`);
-                await this.setChartData(result.peData, peKey, `${label} PE`, peReferenceLines, refresh, !isRefresh);
+                await this.setChartData(result.peData, peKey, `${label} PE`, peReferenceLines, refresh, isInitialLoad);
             } else {
                 console.warn(`[updateChartsData] No PE data for ${label}`);
                 this.addSignal(`⚠️ No PE chart data available for ${label}`, 'WARNING');
