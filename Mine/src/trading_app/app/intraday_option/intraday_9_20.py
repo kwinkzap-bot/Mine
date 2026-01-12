@@ -439,3 +439,196 @@ class Intraday920Strategy:
                 'error': str(e),
                 'success': False
             }
+
+    def calculate_sl_for_entry(self, entry_price: float, reference_high: float) -> Dict[str, Any]:
+        """
+        Calculate stop loss based on entry price and reference high.
+        
+        SL Logic:
+        - If (Entry Price - Reference High) > 10 points: SL = Reference High - 10
+        - If (Entry Price - Reference High) <= 10 points: SL = Reference High - 20
+        
+        Args:
+            entry_price: Price at which entry occurred
+            reference_high: Reference high (PE high for CE entry, CE high for PE entry)
+            
+        Returns:
+            Dictionary with SL, target, and entry details
+        """
+        try:
+            price_diff = entry_price - reference_high
+            
+            # Determine SL based on price difference
+            if price_diff > 10:
+                sl = reference_high - 10
+            else:
+                sl = reference_high - 20
+            
+            # Target is 1:1 (profit = entry_price - sl)
+            profit = entry_price - sl
+            target = entry_price + profit
+            
+            logger.info(f"Entry: {entry_price}, Ref High: {reference_high}, Price Diff: {price_diff:.2f}")
+            logger.info(f"SL: {sl}, Target: {target}, Profit: {profit}")
+            
+            return {
+                'entry_price': round(entry_price, 2),
+                'reference_high': round(reference_high, 2),
+                'sl': round(sl, 2),
+                'target': round(target, 2),
+                'profit_points': round(profit, 2),
+                'success': True
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating SL: {str(e)}")
+            return {
+                'error': str(e),
+                'success': False
+            }
+
+    def check_entry_signal(self, ce_token: int, pe_token: int, ce_high: float, pe_high: float, 
+                          symbol: str = 'NIFTY', target_date: Optional[datetime] = None) -> Dict[str, Any]:
+        """
+        Check for entry signals on CE and PE sides.
+        
+        CE Entry Condition:
+        - Latest 5-min candle low < PE High
+        - Latest 5-min candle close > PE High
+        
+        PE Entry Condition:
+        - Latest 5-min candle low < CE High
+        - Latest 5-min candle close > CE High
+        
+        Args:
+            ce_token: CE option token
+            pe_token: PE option token
+            ce_high: CE first 5-min high
+            pe_high: PE first 5-min high
+            symbol: Trading symbol
+            target_date: Optional date to fetch candles from
+            
+        Returns:
+            Dictionary with entry signals for CE and PE sides
+        """
+        try:
+            # Fetch latest 5-minute candles for both CE and PE
+            ce_candles = self._get_latest_5min_candle(ce_token, target_date)
+            pe_candles = self._get_latest_5min_candle(pe_token, target_date)
+            
+            ce_signal = {
+                'side': 'CE',
+                'has_signal': False,
+                'entry_price': None,
+                'sl': None,
+                'target': None,
+                'reason': 'No signal'
+            }
+            
+            pe_signal = {
+                'side': 'PE',
+                'has_signal': False,
+                'entry_price': None,
+                'sl': None,
+                'target': None,
+                'reason': 'No signal'
+            }
+            
+            # Check CE Entry Signal
+            if ce_candles and len(ce_candles) > 0:
+                latest_ce = ce_candles[-1]  # Latest candle
+                ce_low = latest_ce.get('low', 0)
+                ce_close = latest_ce.get('close', 0)
+                
+                logger.info(f"CE Latest Candle - Low: {ce_low}, Close: {ce_close}, PE High: {pe_high}")
+                
+                if ce_low < pe_high and ce_close > pe_high:
+                    # CE Entry Signal - Price crossed above PE High
+                    sl_data = self.calculate_sl_for_entry(ce_close, pe_high)
+                    if sl_data.get('success'):
+                        ce_signal = {
+                            'side': 'CE',
+                            'has_signal': True,
+                            'entry_price': sl_data['entry_price'],
+                            'entry_high': pe_high,
+                            'sl': sl_data['sl'],
+                            'target': sl_data['target'],
+                            'reason': f'Low {ce_low:.2f} < PE High {pe_high:.2f}, Close {ce_close:.2f} > PE High'
+                        }
+                        logger.info(f"CE ENTRY SIGNAL: {ce_signal}")
+            
+            # Check PE Entry Signal
+            if pe_candles and len(pe_candles) > 0:
+                latest_pe = pe_candles[-1]  # Latest candle
+                pe_low = latest_pe.get('low', 0)
+                pe_close = latest_pe.get('close', 0)
+                
+                logger.info(f"PE Latest Candle - Low: {pe_low}, Close: {pe_close}, CE High: {ce_high}")
+                
+                if pe_low < ce_high and pe_close > ce_high:
+                    # PE Entry Signal - Price crossed above CE High
+                    sl_data = self.calculate_sl_for_entry(pe_close, ce_high)
+                    if sl_data.get('success'):
+                        pe_signal = {
+                            'side': 'PE',
+                            'has_signal': True,
+                            'entry_price': sl_data['entry_price'],
+                            'entry_high': ce_high,
+                            'sl': sl_data['sl'],
+                            'target': sl_data['target'],
+                            'reason': f'Low {pe_low:.2f} < CE High {ce_high:.2f}, Close {pe_close:.2f} > CE High'
+                        }
+                        logger.info(f"PE ENTRY SIGNAL: {pe_signal}")
+            
+            return {
+                'timestamp': datetime.now().isoformat(),
+                'ce_signal': ce_signal,
+                'pe_signal': pe_signal,
+                'success': True
+            }
+            
+        except Exception as e:
+            logger.error(f"Error checking entry signal: {str(e)}", exc_info=True)
+            return {
+                'error': str(e),
+                'timestamp': datetime.now().isoformat(),
+                'success': False
+            }
+
+    def _get_latest_5min_candle(self, token: int, target_date: Optional[datetime] = None) -> List[Dict]:
+        """
+        Get the latest 5-minute candle for a token.
+        
+        Args:
+            token: Instrument token
+            target_date: Optional date to fetch from
+            
+        Returns:
+            List of candles (latest first)
+        """
+        try:
+            if target_date is None:
+                target_date = datetime.now()
+            
+            # Get candles from current 5-min slot
+            from_time = target_date.replace(second=0, microsecond=0)
+            # Round down to nearest 5-minute interval
+            minute = (from_time.minute // 5) * 5
+            from_time = from_time.replace(minute=minute)
+            
+            to_time = from_time + timedelta(minutes=5)
+            
+            logger.info(f"Fetching candles from {from_time} to {to_time} for token {token}")
+            
+            candles = self.data_service.get_candlestick_data(
+                token,
+                interval='5minute',
+                from_date=from_time,
+                to_date=to_time
+            )
+            
+            return candles if candles else []
+            
+        except Exception as e:
+            logger.warning(f"Error fetching latest candle for token {token}: {str(e)}")
+            return []
