@@ -1007,12 +1007,12 @@ class Intraday920Tracker {
         const resultsContainer = document.getElementById('backtestResults');
         if (!resultsContainer) return;
 
-        // Check if any signals exist
+        // Check if any signals exist (check has_entry, not has_signal)
         const hasAnySignal = 
-            (results.highCe && results.highCe.has_signal) ||
-            (results.highPe && results.highPe.has_signal) ||
-            (results.lowCe && results.lowCe.has_signal) ||
-            (results.lowPe && results.lowPe.has_signal);
+            (results.highCe && results.highCe.has_entry) ||
+            (results.highPe && results.highPe.has_entry) ||
+            (results.lowCe && results.lowCe.has_entry) ||
+            (results.lowPe && results.lowPe.has_entry);
 
         // Hide entire container if no signals
         if (!hasAnySignal) {
@@ -1050,12 +1050,12 @@ class Intraday920Tracker {
 
         // Hide section if no entry
         if (!analysis || !analysis.has_entry) {
-            section.style.display = 'none';
+            section.classList.add('hidden');
             return;
         }
 
         // Show section if entry exists
-        section.style.display = 'block';
+        section.classList.remove('hidden');
 
         // Create detailed HTML for full day analysis
         let html = `
