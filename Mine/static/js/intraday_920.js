@@ -685,6 +685,151 @@ class Intraday920Tracker {
     }
 
     /**
+     * Check for entry signals in the strategy
+     */
+    async checkEntrySignals() {
+        if (!this.strategyData) return;
+
+        const highStrike = this.strategyData.high_strike || {};
+        const lowStrike = this.strategyData.low_strike || {};
+
+        try {
+            // Check High Strike signals (CE and PE entry conditions)
+            if (highStrike.success && highStrike.ce_token && highStrike.pe_token) {
+                const highSignals = await this.fetchEntrySignals(
+                    highStrike.ce_token,
+                    highStrike.pe_token,
+                    highStrike.ce_high,
+                    highStrike.pe_high,
+                    'High Strike'
+                );
+                
+                if (highSignals.success) {
+                    this.updateSignalDisplay(highSignals, 'high');
+                }
+            }
+
+            // Check Low Strike signals (CE and PE entry conditions)
+            if (lowStrike.success && lowStrike.ce_token && lowStrike.pe_token) {
+                const lowSignals = await this.fetchEntrySignals(
+                    lowStrike.ce_token,
+                    lowStrike.pe_token,
+                    lowStrike.ce_high,
+                    lowStrike.pe_high,
+                    'Low Strike'
+                );
+                
+                if (lowSignals.success) {
+                    this.updateSignalDisplay(lowSignals, 'low');
+                }
+            }
+
+        } catch (e) {
+            console.error('[checkEntrySignals] Error:', e);
+            // Don't add signal here to avoid spamming the UI
+        }
+    }
+
+    /**
+     * Fetch entry signals from the backend API
+     */
+    async fetchEntrySignals(ceToken, peToken, ceHigh, peHigh, label) {
+        try {
+            const payload = {
+                symbol: this.symbol,
+                ce_token: ceToken,
+                pe_token: peToken,
+                ce_high: ceHigh,
+                pe_high: peHigh
+            };
+
+            if (this.selectedDate) {
+                const dateStr = this.selectedDate.toISOString().split('T')[0];
+                payload.date = dateStr;
+            }
+
+            const response = await fetch(`${this.apiBaseUrl}/intraday-920/entry-signals`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                credentials: 'include',
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const result = await response.json();
+            
+            if (!result.success) {
+                console.warn(`[fetchEntrySignals] API returned failure for ${label}`);
+                return { success: false };
+            }
+
+            return {
+                success: true,
+                ce_signal: result.ce_signal || {},
+                pe_signal: result.pe_signal || {},
+                label: label
+            };
+
+        } catch (e) {
+            console.error(`[fetchEntrySignals] Error fetching signals for ${label}:`, e);
+            return { success: false };
+        }
+    }
+
+    /**
+     * Update signal display in the UI
+     */
+    updateSignalDisplay(signals, strikeType) {
+        const ceSignal = signals.ce_signal || {};
+        const peSignal = signals.pe_signal || {};
+
+        // Update CE signal
+        const ceEl = document.getElementById(`${strikeType}CeSignal`);
+        if (ceEl) {
+            if (ceSignal.has_signal) {
+                ceEl.innerHTML = `
+                    <div class="signal-active">
+                        <div class="signal-header">🟢 CE Entry Signal</div>
+                        <div class="signal-details">
+                            <div>Entry Price: <strong>${this.formatPrice(ceSignal.entry_price)}</strong></div>
+                            <div>SL: <strong>${this.formatPrice(ceSignal.sl)}</strong></div>
+                            <div>Target: <strong>${this.formatPrice(ceSignal.target)}</strong></div>
+                            <div class="signal-reason">${ceSignal.reason || ''}</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                ceEl.innerHTML = `<div class="signal-inactive">⚪ No CE Signal</div>`;
+            }
+        }
+
+        // Update PE signal
+        const peEl = document.getElementById(`${strikeType}PeSignal`);
+        if (peEl) {
+            if (peSignal.has_signal) {
+                peEl.innerHTML = `
+                    <div class="signal-active">
+                        <div class="signal-header">🟢 PE Entry Signal</div>
+                        <div class="signal-details">
+                            <div>Entry Price: <strong>${this.formatPrice(peSignal.entry_price)}</strong></div>
+                            <div>SL: <strong>${this.formatPrice(peSignal.sl)}</strong></div>
+                            <div>Target: <strong>${this.formatPrice(peSignal.target)}</strong></div>
+                            <div class="signal-reason">${peSignal.reason || ''}</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                peEl.innerHTML = `<div class="signal-inactive">⚪ No PE Signal</div>`;
+            }
+        }
+    }
+
+    /**
      * Start auto-update polling
      * Only refreshes chart data, NOT the full strategy data
      */
@@ -714,6 +859,9 @@ class Intraday920Tracker {
             // Pass isPolling=true to indicate this is a polling update (no reference lines)
             if (this.strategyData) {
                 this.loadChartsData(true);
+                
+                // Also check for entry signals during polling
+                this.checkEntrySignals();
             }
             this.updateCount++;
         }, this.refreshDelay);

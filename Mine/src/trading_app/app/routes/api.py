@@ -1688,6 +1688,122 @@ def intraday_920_candles() -> EndpointResponse:
         }), 500
 
 
+@api_bp.route('/intraday-920/entry-signals', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+def get_intraday_920_entry_signals() -> EndpointResponse:
+    """
+    Check for entry signals in Intraday 9:20 strategy.
+    
+    POST Payload:
+        {
+            "symbol": "NIFTY",
+            "ce_token": 12345678,
+            "pe_token": 87654321,
+            "ce_high": 350.5,      # First 5-min high of CE
+            "pe_high": 300.25,     # First 5-min high of PE
+            "date": "2026-01-12"   # Optional: specific date, defaults to current date
+        }
+    
+    Returns:
+        {
+            "success": true,
+            "ce_signal": {
+                "has_signal": true,
+                "entry_price": 352.50,
+                "entry_high": 300.25,     # PE High (reference)
+                "sl": 290.25,
+                "target": 362.50,
+                "side": "CE",
+                "reason": "Low crossed below PE High and closed above"
+            },
+            "pe_signal": {
+                "has_signal": false,
+                "reason": "No entry condition met"
+            },
+            "timestamp": "2026-01-12T14:35:00"
+        }
+    """
+    try:
+        auth_error = check_auth()
+        if auth_error:
+            return auth_error
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Request body must contain JSON'
+            }), 400
+        
+        # Extract parameters
+        symbol = data.get('symbol', 'NIFTY').upper()
+        ce_token = data.get('ce_token')
+        pe_token = data.get('pe_token')
+        ce_high = data.get('ce_high')
+        pe_high = data.get('pe_high')
+        date_str = data.get('date')
+        
+        # Validate required fields
+        if not all([ce_token, pe_token, ce_high, pe_high]):
+            return jsonify({
+                'success': False,
+                'error': 'ce_token, pe_token, ce_high, and pe_high are required'
+            }), 400
+        
+        # Parse date if provided
+        target_date = None
+        if date_str:
+            try:
+                target_date = datetime.strptime(date_str, '%Y-%m-%d')
+            except ValueError:
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid date format. Use YYYY-MM-DD'
+                }), 400
+        
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to initialize Kite connection'
+            }), 500
+        
+        from trading_app.app.intraday_option.intraday_9_20 import Intraday920Strategy
+        strategy = Intraday920Strategy(kite)
+        
+        # Check entry signals
+        signals = strategy.check_entry_signal(
+            ce_token=ce_token,
+            pe_token=pe_token,
+            ce_high=ce_high,
+            pe_high=pe_high,
+            symbol=symbol,
+            target_date=target_date
+        )
+        
+        if not signals.get('success'):
+            return jsonify({
+                'success': False,
+                'error': signals.get('error', 'Failed to check entry signals')
+            }), 400
+        
+        return jsonify({
+            'success': True,
+            'ce_signal': signals.get('ce_signal', {}),
+            'pe_signal': signals.get('pe_signal', {}),
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in intraday-920 entry-signals endpoint: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 @api_bp.route('/debug/token-status', methods=['GET'])
 def debug_token_status() -> EndpointResponse:
     """Debug endpoint to check token validity.
