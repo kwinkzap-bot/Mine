@@ -877,7 +877,7 @@ class Intraday920Tracker {
 
     /**
      * Run backtest analysis on the selected data
-     * Analyzes entry signals and exit conditions for all strikes
+     * Analyzes entry signals and exit conditions for all 5-minute candles from 9:20 to 3:20
      */
     async runBacktest() {
         try {
@@ -888,7 +888,7 @@ class Intraday920Tracker {
 
             const backtestBtn = document.getElementById('backtestBtn');
             backtestBtn.disabled = true;
-            backtestBtn.textContent = '⏳ Analyzing...';
+            backtestBtn.textContent = '⏳ Analyzing full day...';
 
             const highStrike = this.strategyData.high_strike || {};
             const lowStrike = this.strategyData.low_strike || {};
@@ -900,39 +900,39 @@ class Intraday920Tracker {
                 lowPe: null
             };
 
-            // Analyze High Strike (both CE and PE in one call)
+            // Analyze High Strike (full day backtest)
             if (highStrike.success && highStrike.ce_token && highStrike.pe_token) {
-                const signals = await this.fetchEntrySignals(
+                const analysis = await this.runFullDayBacktest(
                     highStrike.ce_token,
                     highStrike.pe_token,
                     highStrike.ce_high,
                     highStrike.pe_high,
                     'High Strike'
                 );
-                if (signals.success) {
-                    backtestResults.highCe = signals.ce_signal;
-                    backtestResults.highPe = signals.pe_signal;
+                if (analysis.success) {
+                    backtestResults.highCe = analysis.ce_analysis;
+                    backtestResults.highPe = analysis.pe_analysis;
                 }
             }
 
-            // Analyze Low Strike (both CE and PE in one call)
+            // Analyze Low Strike (full day backtest)
             if (lowStrike.success && lowStrike.ce_token && lowStrike.pe_token) {
-                const signals = await this.fetchEntrySignals(
+                const analysis = await this.runFullDayBacktest(
                     lowStrike.ce_token,
                     lowStrike.pe_token,
                     lowStrike.ce_high,
                     lowStrike.pe_high,
                     'Low Strike'
                 );
-                if (signals.success) {
-                    backtestResults.lowCe = signals.ce_signal;
-                    backtestResults.lowPe = signals.pe_signal;
+                if (analysis.success) {
+                    backtestResults.lowCe = analysis.ce_analysis;
+                    backtestResults.lowPe = analysis.pe_analysis;
                 }
             }
 
             // Display backtest results
             this.displayBacktestResults(backtestResults);
-            this.addSignal('✅ Backtest analysis completed', 'SUCCESS');
+            this.addSignal('✅ Full day backtest analysis completed', 'SUCCESS');
 
             backtestBtn.disabled = false;
             backtestBtn.textContent = '📊 Backtest';
@@ -944,6 +944,57 @@ class Intraday920Tracker {
             const backtestBtn = document.getElementById('backtestBtn');
             backtestBtn.disabled = false;
             backtestBtn.textContent = '📊 Backtest';
+        }
+    }
+
+    /**
+     * Run full day backtest (9:20 to 3:20) for entry and exit analysis
+     */
+    async runFullDayBacktest(ceToken, peToken, ceHigh, peHigh, label) {
+        try {
+            const payload = {
+                symbol: this.symbol,
+                ce_token: ceToken,
+                pe_token: peToken,
+                ce_high: ceHigh,
+                pe_high: peHigh
+            };
+
+            if (this.selectedDate) {
+                const dateStr = this.selectedDate.toISOString().split('T')[0];
+                payload.date = dateStr;
+            }
+
+            const response = await fetch(`${this.apiBaseUrl}/intraday-920/backtest-full-day`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                credentials: 'include',
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const result = await response.json();
+            
+            if (!result.success) {
+                console.warn(`[runFullDayBacktest] API returned failure for ${label}`);
+                return { success: false };
+            }
+
+            return {
+                success: true,
+                ce_analysis: result.ce_analysis || {},
+                pe_analysis: result.pe_analysis || {},
+                label: label
+            };
+
+        } catch (e) {
+            console.error(`[runFullDayBacktest] Error:`, e);
+            return { success: false };
         }
     }
 
@@ -988,49 +1039,103 @@ class Intraday920Tracker {
     /**
      * Update individual backtest display section
      * Hides section if no entry signal exists
+     * Displays detailed entry/exit analysis
      */
-    updateBacktestDisplay(elementId, signal) {
+    updateBacktestDisplay(elementId, analysis) {
         const element = document.getElementById(elementId);
         if (!element) return;
 
         const section = element.closest('.backtest-section');
         if (!section) return;
 
-        // Hide section if no signal
-        if (!signal || !signal.has_signal) {
+        // Hide section if no entry
+        if (!analysis || !analysis.has_entry) {
             section.style.display = 'none';
             return;
         }
 
-        // Show section if signal exists
+        // Show section if entry exists
         section.style.display = 'block';
 
-        // Update values
-        const rows = element.querySelectorAll('.data-row');
-        const dataMap = {
-            'Entry:': signal.entry_price,
-            'SL:': signal.sl,
-            'Target:': signal.target,
-            'P&L:': this.calculatePnL(signal)
-        };
+        // Create detailed HTML for full day analysis
+        let html = `
+            <div class="entry-exit-details">
+                <div class="entry-block">
+                    <div class="block-title">📍 ENTRY</div>
+                    <div class="detail-row">
+                        <span class="label">Time:</span>
+                        <span class="value">${this.formatTime(analysis.entry_time)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Price:</span>
+                        <span class="value">${this.formatPrice(analysis.entry_price)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">SL:</span>
+                        <span class="value">${this.formatPrice(analysis.sl)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Target:</span>
+                        <span class="value">${this.formatPrice(analysis.target)}</span>
+                    </div>
+                </div>
+        `;
 
-        rows.forEach(row => {
-            const label = row.querySelector('.label');
-            const valueSpan = row.querySelector('.value');
-            if (label && valueSpan) {
-                const labelText = label.textContent;
-                if (dataMap[labelText] !== undefined) {
-                    const value = dataMap[labelText];
-                    if (labelText === 'P&L:') {
-                        valueSpan.textContent = value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2);
-                        valueSpan.className = value >= 0 ? 'value positive' : 'value negative';
-                    } else {
-                        valueSpan.textContent = this.formatPrice(value);
-                    }
-                }
-            }
-        });
+        // Add exit block if exit exists
+        if (analysis.exit_time) {
+            const pnlClass = analysis.pnl >= 0 ? 'positive' : 'negative';
+            html += `
+                <div class="exit-block">
+                    <div class="block-title">🎯 EXIT - ${analysis.exit_reason}</div>
+                    <div class="detail-row">
+                        <span class="label">Time:</span>
+                        <span class="value">${this.formatTime(analysis.exit_time)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">Price:</span>
+                        <span class="value">${this.formatPrice(analysis.exit_price)}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="label">P&L:</span>
+                        <span class="value ${pnlClass}">${analysis.pnl >= 0 ? '+' : ''}${this.formatPrice(Math.abs(analysis.pnl))}</span>
+                    </div>
+                </div>
+            `;
+        } else {
+            html += `
+                <div class="no-exit-block">
+                    <div class="block-title">❌ NO EXIT</div>
+                    <div class="detail-row">
+                        <span class="label">Reason:</span>
+                        <span class="value">${analysis.exit_reason || 'No exit by EOD'}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        html += `</div>`;
+        
+        element.innerHTML = html;
     }
+
+    /**
+     * Format time from ISO string or timestamp
+     */
+    formatTime(timeString) {
+        if (!timeString) return '--';
+        try {
+            if (typeof timeString === 'number') {
+                const date = new Date(timeString * 1000);
+                return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+            } else {
+                const date = new Date(timeString);
+                return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+            }
+        } catch (e) {
+            return timeString.toString();
+        }
+    }
+
 
     /**
      * Calculate P&L from entry and SL

@@ -1804,6 +1804,126 @@ def get_intraday_920_entry_signals() -> EndpointResponse:
         }), 500
 
 
+@api_bp.route('/intraday-920/backtest-full-day', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+def backtest_intraday_920_full_day() -> EndpointResponse:
+    """
+    Run comprehensive backtest for entire trading day (9:20 to 3:20).
+    Checks all 5-minute candles for entry and exit conditions.
+    
+    POST Payload:
+        {
+            "symbol": "NIFTY",
+            "ce_token": 12345678,
+            "pe_token": 87654321,
+            "ce_high": 350.5,
+            "pe_high": 300.25,
+            "date": "2026-01-12"   # Optional
+        }
+    
+    Returns:
+        {
+            "success": true,
+            "ce_analysis": {
+                "side": "CE",
+                "has_entry": true,
+                "entry_time": "2026-01-12T09:25:00",
+                "entry_price": 352.50,
+                "entry_high": 300.25,
+                "sl": 280.25,
+                "target": 362.50,
+                "exit_time": "2026-01-12T10:30:00",
+                "exit_price": 362.50,
+                "exit_reason": "Target Hit",
+                "pnl": 72.25,
+                "candle_count": 34
+            },
+            "pe_analysis": { ... }
+        }
+    """
+    try:
+        auth_error = check_auth()
+        if auth_error:
+            return auth_error
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Request body must contain JSON'
+            }), 400
+        
+        # Extract parameters
+        symbol = data.get('symbol', 'NIFTY').upper()
+        ce_token = data.get('ce_token')
+        pe_token = data.get('pe_token')
+        ce_high = data.get('ce_high')
+        pe_high = data.get('pe_high')
+        date_str = data.get('date')
+        
+        # Validate required fields
+        if not all([ce_token, pe_token, ce_high, pe_high]):
+            return jsonify({
+                'success': False,
+                'error': 'ce_token, pe_token, ce_high, and pe_high are required'
+            }), 400
+        
+        # Parse date if provided
+        target_date = None
+        if date_str:
+            try:
+                target_date = datetime.strptime(date_str, '%Y-%m-%d')
+            except ValueError:
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid date format. Use YYYY-MM-DD'
+                }), 400
+        
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to initialize Kite connection'
+            }), 500
+        
+        from trading_app.app.intraday_option.intraday_9_20 import Intraday920Strategy
+        strategy = Intraday920Strategy(kite)
+        
+        # Run full day backtest
+        results = strategy.backtest_full_day(
+            ce_token=ce_token,
+            pe_token=pe_token,
+            ce_high=ce_high,
+            pe_high=pe_high,
+            symbol=symbol,
+            target_date=target_date
+        )
+        
+        if not results.get('success'):
+            return jsonify({
+                'success': False,
+                'error': results.get('error', 'Backtest failed')
+            }), 400
+        
+        return jsonify({
+            'success': True,
+            'ce_analysis': results.get('ce_analysis', {}),
+            'pe_analysis': results.get('pe_analysis', {}),
+            'symbol': results.get('symbol'),
+            'date': results.get('date'),
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in backtest-full-day endpoint: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+
 @api_bp.route('/debug/token-status', methods=['GET'])
 def debug_token_status() -> EndpointResponse:
     """Debug endpoint to check token validity.

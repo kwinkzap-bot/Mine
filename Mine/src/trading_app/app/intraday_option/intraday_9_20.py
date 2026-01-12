@@ -632,3 +632,190 @@ class Intraday920Strategy:
         except Exception as e:
             logger.warning(f"Error fetching latest candle for token {token}: {str(e)}")
             return []
+    def backtest_full_day(self, ce_token: int, pe_token: int, ce_high: float, pe_high: float,
+                         symbol: str = 'NIFTY', target_date: Optional[datetime] = None) -> Dict[str, Any]:
+        """
+        Run comprehensive backtest checking all 5-minute candles from 9:20 to 3:20.
+        
+        Identifies:
+        - Entry point (when low < ref_high AND close > ref_high)
+        - Exit point (when hits SL or target)
+        - Exit reason (SL hit, Target hit, or no exit)
+        
+        Args:
+            ce_token: CE option token
+            pe_token: PE option token
+            ce_high: CE first 5-min high
+            pe_high: PE first 5-min high
+            symbol: Trading symbol
+            target_date: Date to backtest
+            
+        Returns:
+            Detailed backtest results for both CE and PE
+        """
+        try:
+            if target_date is None:
+                target_date = datetime.now()
+            
+            # Fetch all candles from 9:20 to 3:20 for both CE and PE
+            ce_candles = self._get_all_trading_candles(ce_token, target_date)
+            pe_candles = self._get_all_trading_candles(pe_token, target_date)
+            
+            logger.info(f"Backtest: Got {len(ce_candles)} CE candles and {len(pe_candles)} PE candles")
+            
+            # Analyze CE side (entry condition: low < pe_high AND close > pe_high)
+            ce_result = self._analyze_entry_exit(
+                ce_candles, pe_high, 'CE',
+                ce_high, pe_high, symbol
+            )
+            
+            # Analyze PE side (entry condition: low < ce_high AND close > ce_high)
+            pe_result = self._analyze_entry_exit(
+                pe_candles, ce_high, 'PE',
+                ce_high, pe_high, symbol
+            )
+            
+            return {
+                'success': True,
+                'ce_analysis': ce_result,
+                'pe_analysis': pe_result,
+                'symbol': symbol,
+                'date': target_date.strftime('%Y-%m-%d'),
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in backtest_full_day: {str(e)}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    def _get_all_trading_candles(self, token: int, target_date: datetime) -> List[Dict]:
+        """
+        Fetch all 5-minute candles from 9:20 AM to 3:20 PM.
+        
+        Args:
+            token: Instrument token
+            target_date: Date to fetch candles from
+            
+        Returns:
+            List of candles sorted by time
+        """
+        try:
+            # Market hours: 9:20 AM to 3:20 PM
+            start_time = target_date.replace(hour=9, minute=20, second=0, microsecond=0)
+            end_time = target_date.replace(hour=15, minute=20, second=0, microsecond=0)
+            
+            candles = self.data_service.get_candlestick_data(
+                token,
+                interval='5minute',
+                from_date=start_time,
+                to_date=end_time
+            )
+            
+            if not candles:
+                logger.warning(f"No candles found for token {token} from {start_time} to {end_time}")
+                return []
+            
+            return sorted(candles, key=lambda x: x.get('time', x.get('date', 0)))
+            
+        except Exception as e:
+            logger.error(f"Error fetching trading candles for token {token}: {str(e)}")
+            return []
+
+    def _analyze_entry_exit(self, candles: List[Dict], reference_high: float, side: str,
+                           ce_high: float, pe_high: float, symbol: str) -> Dict[str, Any]:
+        """
+        Analyze candles to find entry and exit points.
+        
+        Args:
+            candles: List of 5-minute candles
+            reference_high: Reference high (PE high for CE, CE high for PE)
+            side: 'CE' or 'PE'
+            ce_high: CE first 5-min high
+            pe_high: PE first 5-min high
+            symbol: Trading symbol
+            
+        Returns:
+            Entry and exit analysis
+        """
+        result = {
+            'side': side,
+            'has_entry': False,
+            'entry_time': None,
+            'entry_price': None,
+            'entry_high': reference_high,
+            'sl': None,
+            'target': None,
+            'exit_time': None,
+            'exit_price': None,
+            'exit_reason': None,
+            'pnl': None,
+            'candle_count': len(candles)
+        }
+        
+        if not candles:
+            result['error'] = 'No candles available'
+            return result
+        
+        # Search for entry point
+        entry_candle_idx = None
+        for idx, candle in enumerate(candles):
+            candle_low = candle.get('low', 0)
+            candle_close = candle.get('close', 0)
+            
+            # Entry condition: low < ref_high AND close > ref_high
+            if candle_low < reference_high and candle_close > reference_high:
+                entry_candle_idx = idx
+                result['has_entry'] = True
+                result['entry_time'] = candle.get('time', candle.get('date'))
+                result['entry_price'] = candle_close
+                
+                # Calculate SL and Target
+                sl_data = self.calculate_sl_for_entry(candle_close, reference_high)
+                result['sl'] = sl_data.get('sl')
+                result['target'] = sl_data.get('target')
+                
+                logger.info(f"{side} Entry at {result['entry_time']}: Price {candle_close}, SL {result['sl']}, Target {result['target']}")
+                break
+        
+        # If no entry found, return
+        if not result['has_entry']:
+            result['reason'] = f'No entry condition met (low < {reference_high})'
+            return result
+        
+        # Search for exit point (from entry candle onwards)
+        if entry_candle_idx is not None:
+            for idx in range(entry_candle_idx + 1, len(candles)):
+                candle = candles[idx]
+                candle_high = candle.get('high', 0)
+                candle_low = candle.get('low', 0)
+                candle_close = candle.get('close', 0)
+                
+                # Check if target is hit
+                if candle_high >= result['target']:
+                    result['exit_time'] = candle.get('time', candle.get('date'))
+                    result['exit_price'] = result['target']
+                    result['exit_reason'] = 'Target Hit'
+                    result['pnl'] = result['entry_price'] - result['sl']
+                    logger.info(f"{side} Exit at {result['exit_time']}: Target hit, PnL {result['pnl']}")
+                    break
+                
+                # Check if SL is hit
+                elif candle_low <= result['sl']:
+                    result['exit_time'] = candle.get('time', candle.get('date'))
+                    result['exit_price'] = result['sl']
+                    result['exit_reason'] = 'SL Hit'
+                    result['pnl'] = -(result['entry_price'] - result['sl'])
+                    logger.info(f"{side} Exit at {result['exit_time']}: SL hit, PnL {result['pnl']}")
+                    break
+        
+        # If no exit found by end of day
+        if not result['exit_time']:
+            last_candle = candles[-1] if candles else {}
+            result['exit_reason'] = 'No Exit'
+            result['pnl'] = last_candle.get('close', 0) - result['entry_price']
+            logger.info(f"{side} No exit by EOD, Last price {last_candle.get('close', 0)}, PnL {result['pnl']}")
+        
+        return result
