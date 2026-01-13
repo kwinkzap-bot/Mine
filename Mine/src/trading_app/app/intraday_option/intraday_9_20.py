@@ -806,6 +806,7 @@ class Intraday920Strategy:
             
             # If day opened above ref high, first check if this candle closes below ref high
             if requires_close_below and not has_closed_below:
+                logger.info(f"{side} Candle {idx}: Waiting for close < {reference_high}. Current close: {candle_close}")
                 if candle_close < reference_high:
                     has_closed_below = True
                     logger.info(f"{side} Candle {idx} closed below {reference_high}, entry condition now valid")
@@ -813,9 +814,12 @@ class Intraday920Strategy:
             
             # Entry condition: low < ref_high AND close > (ref_high + 5 points)
             entry_threshold = reference_high + 5
+            logger.info(f"{side} Candle {idx}: Low={candle_low:.2f}, Close={candle_close:.2f}, Threshold={entry_threshold:.2f}, Meets entry? {candle_low < reference_high and candle_close > entry_threshold}")
+            
             if candle_low < reference_high and candle_close > entry_threshold:
                 # If we required close below, verify it happened
                 if requires_close_below and not has_closed_below:
+                    logger.info(f"{side} Candle {idx}: Close below needed, skipping")
                     continue  # Haven't seen close below yet
                 
                 entry_candle_idx = idx
