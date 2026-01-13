@@ -1874,11 +1874,14 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
         if date_str:
             try:
                 target_date = datetime.strptime(date_str, '%Y-%m-%d')
+                logger.info(f"Backtest requested for date: {target_date.date()}")
             except ValueError:
                 return jsonify({
                     'success': False,
                     'error': 'Invalid date format. Use YYYY-MM-DD'
                 }), 400
+        else:
+            logger.info("Backtest requested for current date")
         
         kite = get_kite()
         if not kite:

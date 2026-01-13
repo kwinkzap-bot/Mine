@@ -648,20 +648,27 @@ class Intraday920Strategy:
             ce_high: CE first 5-min high
             pe_high: PE first 5-min high
             symbol: Trading symbol
-            target_date: Date to backtest
+            target_date: Date to backtest (datetime object or None for today)
             
         Returns:
             Detailed backtest results for both CE and PE
         """
         try:
+            # Determine date to use
             if target_date is None:
-                target_date = datetime.now()
+                # No date selected - use current date
+                target_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                logger.info(f"Backtest: No date selected, using current date: {target_date.date()}")
+            else:
+                # Date was selected - ensure it's at midnight for consistency
+                target_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                logger.info(f"Backtest: Using selected date: {target_date.date()}")
             
             # Fetch all candles from 9:20 to 3:20 for both CE and PE
             ce_candles = self._get_all_trading_candles(ce_token, target_date)
             pe_candles = self._get_all_trading_candles(pe_token, target_date)
             
-            logger.info(f"Backtest: Got {len(ce_candles)} CE candles and {len(pe_candles)} PE candles")
+            logger.info(f"Backtest ({target_date.date()}): Got {len(ce_candles)} CE candles and {len(pe_candles)} PE candles")
             
             # Analyze CE side (entry condition: low < pe_high AND close > pe_high)
             ce_result = self._analyze_entry_exit(
