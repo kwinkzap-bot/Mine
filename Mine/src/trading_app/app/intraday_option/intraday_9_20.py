@@ -789,6 +789,11 @@ class Intraday920Strategy:
         if not candles:
             return result
         
+        # Log first candle for debugging
+        if candles:
+            first_candle = candles[0]
+            logger.info(f"{side} First candle - Time: {first_candle.get('time', 'N/A')}, Low: {first_candle.get('low')}, Close: {first_candle.get('close')}")
+        
         # Search for entry point
         entry_candle_idx = None
         for idx, candle in enumerate(candles):
@@ -799,8 +804,9 @@ class Intraday920Strategy:
             if candle_low < reference_high and candle_close > reference_high:
                 entry_candle_idx = idx
                 result['has_entry'] = True
-                # Get time as Unix timestamp (already has IST offset from Kite_data_fetch_services)
-                result['entry_time'] = candle.get('time', candle.get('date'))
+                # Get time as Unix timestamp and adjust to candle close time
+                raw_entry_time = candle.get('time', candle.get('date'))
+                result['entry_time'] = self._adjust_candle_time_to_close(raw_entry_time, 5)
                 result['entry_price'] = candle_close
                 
                 # Calculate SL and Target
@@ -826,7 +832,8 @@ class Intraday920Strategy:
                 
                 # Check if target is hit
                 if candle_high >= result['target']:
-                    result['exit_time'] = candle.get('time', candle.get('date'))
+                    raw_exit_time = candle.get('time', candle.get('date'))
+                    result['exit_time'] = self._adjust_candle_time_to_close(raw_exit_time, 5)
                     result['exit_price'] = result['target']
                     result['exit_reason'] = 'Target Hit'
                     result['pnl'] = result['entry_price'] - result['sl']
@@ -835,7 +842,8 @@ class Intraday920Strategy:
                 
                 # Check if SL is hit
                 elif candle_low <= result['sl']:
-                    result['exit_time'] = candle.get('time', candle.get('date'))
+                    raw_exit_time = candle.get('time', candle.get('date'))
+                    result['exit_time'] = self._adjust_candle_time_to_close(raw_exit_time, 5)
                     result['exit_price'] = result['sl']
                     result['exit_reason'] = 'SL Hit'
                     result['pnl'] = -(result['entry_price'] - result['sl'])
@@ -851,7 +859,21 @@ class Intraday920Strategy:
         
         return result
 
-    def _remove_ist_offset_from_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+    def _adjust_candle_time_to_close(self, candle_time_timestamp: int, interval_minutes: int = 5) -> int:
+        """
+        Adjust candle timestamp from open time to close time.
+        
+        Kite returns timestamps as candle open time. For a 5-minute candle that opens at 9:15,
+        the actual close time is 9:20. This method adjusts the timestamp to represent close time.
+        
+        Args:
+            candle_time_timestamp: Unix timestamp of candle open time (in seconds)
+            interval_minutes: Candle interval (default 5 minutes)
+            
+        Returns:
+            Adjusted Unix timestamp representing candle close time
+        """
+        return candle_time_timestamp + (interval_minutes * 60)
         """
         Remove the IST offset (5.5 hours = 19800 seconds) from entry/exit timestamps.
         
