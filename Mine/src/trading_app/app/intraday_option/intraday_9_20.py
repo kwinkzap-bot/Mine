@@ -721,7 +721,7 @@ class Intraday920Strategy:
 
     def _get_all_trading_candles(self, token: int, target_date: datetime) -> List[Dict]:
         """
-        Fetch all 5-minute candles from 9:20 AM to 3:20 PM.
+        Fetch all 5-minute candles from 9:15 AM to 3:20 PM.
         
         Args:
             token: Instrument token
@@ -731,8 +731,8 @@ class Intraday920Strategy:
             List of candles sorted by time
         """
         try:
-            # Market hours: 9:20 AM to 3:20 PM
-            start_time = target_date.replace(hour=9, minute=20, second=0, microsecond=0)
+            # Market hours: 9:15 AM to 3:20 PM (includes first 5-min candle 9:15-9:20)
+            start_time = target_date.replace(hour=9, minute=15, second=0, microsecond=0)
             end_time = target_date.replace(hour=15, minute=20, second=0, microsecond=0)
             
             candles = self.data_service.get_candlestick_data(
