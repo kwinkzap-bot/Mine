@@ -542,8 +542,8 @@ class Intraday920Strategy:
                 
                 logger.info(f"CE Latest Candle - Low: {ce_low}, Close: {ce_close}, PE High: {pe_high}")
                 
-                if ce_low < pe_high and ce_close > pe_high:
-                    # CE Entry Signal - Price crossed above PE High
+                if ce_low < pe_high and ce_close > (pe_high + 5):
+                    # CE Entry Signal - Price crossed above PE High + 5 points
                     sl_data = self.calculate_sl_for_entry(ce_close, pe_high)
                     if sl_data.get('success'):
                         ce_signal = {
@@ -553,7 +553,7 @@ class Intraday920Strategy:
                             'entry_high': pe_high,
                             'sl': sl_data['sl'],
                             'target': sl_data['target'],
-                            'reason': f'Low {ce_low:.2f} < PE High {pe_high:.2f}, Close {ce_close:.2f} > PE High'
+                            'reason': f'Low {ce_low:.2f} < PE High {pe_high:.2f}, Close {ce_close:.2f} > PE High + 5'
                         }
                         logger.info(f"CE ENTRY SIGNAL: {ce_signal}")
             
@@ -565,8 +565,8 @@ class Intraday920Strategy:
                 
                 logger.info(f"PE Latest Candle - Low: {pe_low}, Close: {pe_close}, CE High: {ce_high}")
                 
-                if pe_low < ce_high and pe_close > ce_high:
-                    # PE Entry Signal - Price crossed above CE High
+                if pe_low < ce_high and pe_close > (ce_high + 5):
+                    # PE Entry Signal - Price crossed above CE High + 5 points
                     sl_data = self.calculate_sl_for_entry(pe_close, ce_high)
                     if sl_data.get('success'):
                         pe_signal = {
@@ -576,7 +576,7 @@ class Intraday920Strategy:
                             'entry_high': ce_high,
                             'sl': sl_data['sl'],
                             'target': sl_data['target'],
-                            'reason': f'Low {pe_low:.2f} < CE High {ce_high:.2f}, Close {pe_close:.2f} > CE High'
+                            'reason': f'Low {pe_low:.2f} < CE High {ce_high:.2f}, Close {pe_close:.2f} > CE High + 5'
                         }
                         logger.info(f"PE ENTRY SIGNAL: {pe_signal}")
             
@@ -797,8 +797,9 @@ class Intraday920Strategy:
             candle_low = candle.get('low', 0)
             candle_close = candle.get('close', 0)
             
-            # Entry condition: low < ref_high AND close > ref_high
-            if candle_low < reference_high and candle_close > reference_high:
+            # Entry condition: low < ref_high AND close > (ref_high + 5 points)
+            entry_threshold = reference_high + 5
+            if candle_low < reference_high and candle_close > entry_threshold:
                 entry_candle_idx = idx
                 result['has_entry'] = True
                 # Get time as Unix timestamp
@@ -822,7 +823,7 @@ class Intraday920Strategy:
         
         # If no entry found, return
         if not result['has_entry']:
-            result['reason'] = f'No entry condition met (low < {reference_high})'
+            result['reason'] = f'No entry condition met (low < {reference_high}, close > {reference_high + 5})'
             return result
         
         # Search for exit point (from entry candle onwards)
