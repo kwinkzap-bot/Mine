@@ -698,11 +698,8 @@ class Intraday920Strategy:
                 ce_high, pe_high, symbol
             )
             
-            # Remove IST offset from timestamps before returning
-            # Kite_data_fetch_services adds 5.5 hour offset for charts,
-            # but frontend formatTime() needs raw UTC timestamps for proper IST conversion
-            ce_result = self._remove_ist_offset_from_result(ce_result)
-            pe_result = self._remove_ist_offset_from_result(pe_result)
+            # Results already have correct timestamps (UTC with close time adjustment)
+            # No need to remove offset - we handle it inline in _analyze_entry_exit
             
             return {
                 'success': True,
@@ -804,9 +801,15 @@ class Intraday920Strategy:
             if candle_low < reference_high and candle_close > reference_high:
                 entry_candle_idx = idx
                 result['has_entry'] = True
-                # Get time as Unix timestamp and adjust to candle close time
+                # Get time as Unix timestamp
+                # Kite_data_fetch_services adds IST offset for charts, but we need to:
+                # 1. Remove the offset to get true UTC time
+                # 2. Add 5 minutes to convert open time to close time
                 raw_entry_time = candle.get('time', candle.get('date'))
-                result['entry_time'] = self._adjust_candle_time_to_close(raw_entry_time, 5)
+                ist_offset_seconds = int(5.5 * 3600)  # 19800 seconds
+                true_utc_time = raw_entry_time - ist_offset_seconds  # Remove offset
+                close_time = true_utc_time + 300  # Add 5 minutes for close time
+                result['entry_time'] = close_time
                 result['entry_price'] = candle_close
                 
                 # Calculate SL and Target
@@ -833,7 +836,10 @@ class Intraday920Strategy:
                 # Check if target is hit
                 if candle_high >= result['target']:
                     raw_exit_time = candle.get('time', candle.get('date'))
-                    result['exit_time'] = self._adjust_candle_time_to_close(raw_exit_time, 5)
+                    ist_offset_seconds = int(5.5 * 3600)
+                    true_utc_time = raw_exit_time - ist_offset_seconds
+                    close_time = true_utc_time + 300
+                    result['exit_time'] = close_time
                     result['exit_price'] = result['target']
                     result['exit_reason'] = 'Target Hit'
                     result['pnl'] = result['entry_price'] - result['sl']
@@ -843,7 +849,10 @@ class Intraday920Strategy:
                 # Check if SL is hit
                 elif candle_low <= result['sl']:
                     raw_exit_time = candle.get('time', candle.get('date'))
-                    result['exit_time'] = self._adjust_candle_time_to_close(raw_exit_time, 5)
+                    ist_offset_seconds = int(5.5 * 3600)
+                    true_utc_time = raw_exit_time - ist_offset_seconds
+                    close_time = true_utc_time + 300
+                    result['exit_time'] = close_time
                     result['exit_price'] = result['sl']
                     result['exit_reason'] = 'SL Hit'
                     result['pnl'] = -(result['entry_price'] - result['sl'])
@@ -856,44 +865,5 @@ class Intraday920Strategy:
             result['exit_reason'] = 'No Exit'
             result['pnl'] = last_candle.get('close', 0) - result['entry_price']
             logger.info(f"{side} No exit by EOD, Last price {last_candle.get('close', 0)}, PnL {result['pnl']}")
-        
-        return result
-
-    def _adjust_candle_time_to_close(self, candle_time_timestamp: int, interval_minutes: int = 5) -> int:
-        """
-        Adjust candle timestamp from open time to close time.
-        
-        Kite returns timestamps as candle open time. For a 5-minute candle that opens at 9:15,
-        the actual close time is 9:20. This method adjusts the timestamp to represent close time.
-        
-        Args:
-            candle_time_timestamp: Unix timestamp of candle open time (in seconds)
-            interval_minutes: Candle interval (default 5 minutes)
-            
-        Returns:
-            Adjusted Unix timestamp representing candle close time
-        """
-        return candle_time_timestamp + (interval_minutes * 60)
-
-    def _remove_ist_offset_from_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Remove the IST offset (5.5 hours = 19800 seconds) from entry/exit timestamps.
-        
-        Kite_data_fetch_services adds IST offset for chart display, but backtest API
-        needs raw UTC timestamps so frontend can properly convert to IST.
-        
-        Args:
-            result: Analysis result with potentially offset timestamps
-            
-        Returns:
-            Result with IST offset removed from timestamps
-        """
-        ist_offset_seconds = int(5.5 * 3600)  # 19800 seconds
-        
-        if result.get('entry_time') and isinstance(result['entry_time'], int):
-            result['entry_time'] = result['entry_time'] - ist_offset_seconds
-            
-        if result.get('exit_time') and isinstance(result['exit_time'], int):
-            result['exit_time'] = result['exit_time'] - ist_offset_seconds
         
         return result
