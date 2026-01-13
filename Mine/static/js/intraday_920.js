@@ -133,14 +133,16 @@ class Intraday920Tracker {
      */
     clearCharts() {
         try {
-            console.log('[Charts] Clearing all chart data');
+            console.log('[Charts] Clearing all chart data and reference lines');
             
-            // Reset the chart series data
+            // Reset the chart series data with refresh flag to clear price lines
             const chartKeys = ['highCe', 'highPe', 'lowCe', 'lowPe'];
             
             chartKeys.forEach((key) => {
                 if (this.charts[key]) {
-                    this.charts[key].update([], {}); // Clear data and reference lines
+                    // Pass refresh=true to clear all existing price lines
+                    // Pass null for referenceLines to ensure lines are removed
+                    this.charts[key].update([], null, true);
                 }
             });
             
