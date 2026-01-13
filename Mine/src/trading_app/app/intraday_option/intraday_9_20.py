@@ -874,6 +874,8 @@ class Intraday920Strategy:
             Adjusted Unix timestamp representing candle close time
         """
         return candle_time_timestamp + (interval_minutes * 60)
+
+    def _remove_ist_offset_from_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """
         Remove the IST offset (5.5 hours = 19800 seconds) from entry/exit timestamps.
         
