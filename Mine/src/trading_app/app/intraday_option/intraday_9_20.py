@@ -668,7 +668,23 @@ class Intraday920Strategy:
             ce_candles = self._get_all_trading_candles(ce_token, target_date)
             pe_candles = self._get_all_trading_candles(pe_token, target_date)
             
-            logger.info(f"Backtest ({target_date.date()}): Got {len(ce_candles)} CE candles and {len(pe_candles)} PE candles")
+            # If no candles found, fall back to previous trading days
+            actual_date = target_date
+            fallback_count = 0
+            max_fallback_days = 10
+            
+            while (not ce_candles or not pe_candles) and fallback_count < max_fallback_days:
+                actual_date = actual_date - timedelta(days=1)
+                # Skip weekends (Saturday=5, Sunday=6)
+                if actual_date.weekday() >= 5:
+                    continue
+                ce_candles = self._get_all_trading_candles(ce_token, actual_date)
+                pe_candles = self._get_all_trading_candles(pe_token, actual_date)
+                fallback_count += 1
+                if ce_candles or pe_candles:
+                    logger.info(f"Backtest: Fallback successful. Using {actual_date.date()} instead of {target_date.date()}")
+            
+            logger.info(f"Backtest ({actual_date.date()}): Got {len(ce_candles)} CE candles and {len(pe_candles)} PE candles")
             
             # Analyze CE side (entry condition: low < pe_high AND close > pe_high)
             ce_result = self._analyze_entry_exit(
@@ -693,7 +709,9 @@ class Intraday920Strategy:
                 'ce_analysis': ce_result,
                 'pe_analysis': pe_result,
                 'symbol': symbol,
-                'date': target_date.strftime('%Y-%m-%d'),
+                'requested_date': target_date.strftime('%Y-%m-%d'),
+                'actual_date': actual_date.strftime('%Y-%m-%d'),
+                'used_fallback': actual_date != target_date,
                 'timestamp': datetime.now().isoformat()
             }
             
