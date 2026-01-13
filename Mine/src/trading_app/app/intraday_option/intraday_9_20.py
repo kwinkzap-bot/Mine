@@ -789,7 +789,14 @@ class Intraday920Strategy:
         # Log first candle for debugging
         if candles:
             first_candle = candles[0]
-            logger.info(f"{side} First candle - Time: {first_candle.get('time', 'N/A')}, Low: {first_candle.get('low')}, Close: {first_candle.get('close')}")
+            day_open = first_candle.get('close', 0)  # First candle close = day open
+            logger.info(f"{side} First candle - Time: {first_candle.get('time', 'N/A')}, Low: {first_candle.get('low')}, Close: {day_open}")
+            logger.info(f"{side} Day open: {day_open}, Reference high: {reference_high}, Open above ref: {day_open > reference_high}")
+        
+        # Determine entry requirement based on day open vs reference high
+        day_open = candles[0].get('close', 0) if candles else 0
+        requires_close_below = day_open > reference_high  # If day opened above ref high, need a close below first
+        has_closed_below = False  # Track if we've seen a close below reference high
         
         # Search for entry point
         entry_candle_idx = None
@@ -797,9 +804,20 @@ class Intraday920Strategy:
             candle_low = candle.get('low', 0)
             candle_close = candle.get('close', 0)
             
+            # If day opened above ref high, first check if this candle closes below ref high
+            if requires_close_below and not has_closed_below:
+                if candle_close < reference_high:
+                    has_closed_below = True
+                    logger.info(f"{side} Candle {idx} closed below {reference_high}, entry condition now valid")
+                continue  # Skip entry check in this candle, need next candles
+            
             # Entry condition: low < ref_high AND close > (ref_high + 5 points)
             entry_threshold = reference_high + 5
             if candle_low < reference_high and candle_close > entry_threshold:
+                # If we required close below, verify it happened
+                if requires_close_below and not has_closed_below:
+                    continue  # Haven't seen close below yet
+                
                 entry_candle_idx = idx
                 result['has_entry'] = True
                 # Get time as Unix timestamp
@@ -818,12 +836,18 @@ class Intraday920Strategy:
                 result['sl'] = sl_data.get('sl')
                 result['target'] = sl_data.get('target')
                 
-                logger.info(f"{side} Entry at {result['entry_time']}: Price {candle_close}, SL {result['sl']}, Target {result['target']}")
+                entry_reason = "Entry"
+                if requires_close_below:
+                    entry_reason += " (after close below ref high)"
+                logger.info(f"{side} {entry_reason} at {result['entry_time']}: Price {candle_close}, SL {result['sl']}, Target {result['target']}")
                 break
         
         # If no entry found, return
         if not result['has_entry']:
-            result['reason'] = f'No entry condition met (low < {reference_high}, close > {reference_high + 5})'
+            if requires_close_below and not has_closed_below:
+                result['reason'] = f'Waiting for close below {reference_high} (day opened above)'
+            else:
+                result['reason'] = f'No entry condition met (low < {reference_high}, close > {reference_high + 5})'
             return result
         
         # Search for exit point (from entry candle onwards)
