@@ -86,48 +86,71 @@ class IntradayOptionTrader:
             pdh = 0
             pdl = 0
             
-            # Fetch previous day's actual high and low from daily candlesticks
+            # Fetch high and low from daily candlesticks
+            # First try today's data, if not available fall back to previous day
             try:
                 symbol_token = self.data_service.get_symbol_token(symbol, exchange='NSE')
                 if symbol_token:
-                    logger.info(f"Fetching previous day OHLC for {symbol} (token: {symbol_token})")
-                    
-                    # Get daily candlesticks for previous day
                     from datetime import datetime as dt, timedelta
                     today_ist = datetime.now(IST).date()
                     
-                    # Determine previous trading day
-                    prev_trading_date = today_ist - timedelta(days=1)
-                    weekday = prev_trading_date.weekday()
+                    # STEP 1: Try to fetch TODAY's daily OHLC first
+                    logger.info(f"Attempting to fetch TODAY's OHLC for {symbol} (token: {symbol_token})")
                     
-                    # Skip weekends
-                    if weekday == 6:  # Sunday
-                        prev_trading_date = today_ist - timedelta(days=2)  # Friday
-                    elif weekday == 5:  # Saturday
-                        prev_trading_date = today_ist - timedelta(days=1)  # Friday
+                    from_date_today = dt.combine(today_ist, dt.min.time())
+                    to_date_today = dt.combine(today_ist, dt.max.time())
                     
-                    # Fetch daily OHLC
-                    from_date = dt.combine(prev_trading_date - timedelta(days=1), dt.min.time())
-                    to_date = dt.combine(prev_trading_date, dt.max.time())
-                    
-                    daily_candles = self.data_service.get_candlestick_data(
+                    daily_candles_today = self.data_service.get_candlestick_data(
                         symbol_token,
                         interval='day',
-                        from_date=from_date,
-                        to_date=to_date
+                        from_date=from_date_today,
+                        to_date=to_date_today
                     )
                     
-                    if daily_candles and len(daily_candles) > 0:
-                        # Get the most recent daily candle (previous day's data)
-                        prev_day_candle = daily_candles[-1]
-                        pdh = prev_day_candle.get('high', 0)
-                        pdl = prev_day_candle.get('low', 0)
-                        pdc = prev_day_candle.get('close', pdc)
-                        logger.info(f"Previous day OHLC for {symbol}: H={pdh}, L={pdl}, C={pdc}")
+                    if daily_candles_today and len(daily_candles_today) > 0:
+                        # Found today's data
+                        today_candle = daily_candles_today[-1]
+                        pdh = today_candle.get('high', 0)
+                        pdl = today_candle.get('low', 0)
+                        pdc = today_candle.get('close', pdc)
+                        logger.info(f"✓ Using TODAY's OHLC for {symbol}: H={pdh}, L={pdl}, C={pdc}")
                     else:
-                        logger.warning(f"No daily candles found for {symbol}")
-                        pdh = current_price
-                        pdl = current_price
+                        # STEP 2: If today's data not available, fall back to previous trading day
+                        logger.info(f"No today's data found, falling back to PREVIOUS DAY's OHLC for {symbol}")
+                        
+                        # Determine previous trading day
+                        prev_trading_date = today_ist - timedelta(days=1)
+                        weekday = prev_trading_date.weekday()
+                        
+                        # Skip weekends
+                        if weekday == 6:  # Sunday
+                            prev_trading_date = today_ist - timedelta(days=2)  # Friday
+                        elif weekday == 5:  # Saturday
+                            prev_trading_date = today_ist - timedelta(days=1)  # Friday
+                        
+                        # Fetch previous day's daily OHLC
+                        from_date_prev = dt.combine(prev_trading_date - timedelta(days=1), dt.min.time())
+                        to_date_prev = dt.combine(prev_trading_date, dt.max.time())
+                        
+                        daily_candles_prev = self.data_service.get_candlestick_data(
+                            symbol_token,
+                            interval='day',
+                            from_date=from_date_prev,
+                            to_date=to_date_prev
+                        )
+                        
+                        if daily_candles_prev and len(daily_candles_prev) > 0:
+                            # Get the most recent daily candle (previous day's data)
+                            prev_day_candle = daily_candles_prev[-1]
+                            pdh = prev_day_candle.get('high', 0)
+                            pdl = prev_day_candle.get('low', 0)
+                            pdc = prev_day_candle.get('close', pdc)
+                            logger.info(f"✓ Using PREVIOUS DAY's OHLC for {symbol}: H={pdh}, L={pdl}, C={pdc}")
+                        else:
+                            logger.warning(f"No daily candles found for {symbol} (today or previous day)")
+                            pdh = current_price
+                            pdl = current_price
+```
                 else:
                     logger.warning(f"Could not get symbol token for {symbol}")
                     pdh = current_price
