@@ -513,19 +513,19 @@
 
 .header-middle {
     flex: 1 1 auto;
-    min-width: 180px;
+    min-width: auto;
+}
+
+.header-right {
+    flex: 0 0 auto;
     display: flex;
     gap: 10px;
     align-items: center;
 }
 
-.header-right {
-    flex: 0 0 auto;
-}
-
 .date-picker-wrapper {
     display: flex;
-    flex-direction: row-reverse;
+    flex-direction: row;
     gap: 2px;
 }
 
