@@ -182,7 +182,13 @@ class OptionsChartService:
         return instruments
 
     def _get_symbol_expiry_instruments(self, instruments: List[Dict[str, Any]], symbol: str) -> List[Dict[str, Any]]:
-        """Get all instruments for a symbol with current expiry."""
+        """Get all instruments for a symbol with current/next expiry.
+        
+        Automatically selects the nearest future expiry date to handle expired options.
+        This ensures we always get the active trading expiry even after expiry days.
+        """
+        from datetime import datetime
+        
         symbol_upper = symbol.upper()
         
         # Filter to symbol and option types
@@ -194,12 +200,38 @@ class OptionsChartService:
         if not symbol_instruments:
             return []
         
-        # Get current expiry
+        # Get all unique expiries and sort them
         expiries = sorted(list(set(inst['expiry'] for inst in symbol_instruments)))
-        current_expiry = expiries[0] if expiries else None
         
-        if not current_expiry:
+        if not expiries:
             return []
+        
+        # Get the nearest future expiry (current or next)
+        # Convert expiry strings to datetime for comparison
+        today = datetime.now().date()
+        valid_expiries = []
+        
+        for expiry_str in expiries:
+            try:
+                # Expiry format is typically YYYY-MM-DD
+                expiry_date = datetime.strptime(expiry_str, '%Y-%m-%d').date()
+                # Only consider expiries that are today or in the future
+                if expiry_date >= today:
+                    valid_expiries.append((expiry_date, expiry_str))
+            except ValueError:
+                # If parsing fails, still include it as fallback
+                valid_expiries.append((None, expiry_str))
+        
+        # If we have future expiries, use the nearest one
+        if valid_expiries:
+            # Sort by date (None values go to end)
+            valid_expiries.sort(key=lambda x: x[0] if x[0] else datetime.max.date())
+            current_expiry = valid_expiries[0][1]
+        else:
+            # Fallback to first (earliest) expiry if all are in the past
+            current_expiry = expiries[0]
+        
+        logging.info(f"Selected expiry {current_expiry} for {symbol_upper} (available: {expiries})")
         
         # Filter by current expiry
         return [
@@ -379,8 +411,13 @@ class OptionsChartService:
             raise
     
     def get_tokens_for_strikes(self, symbol: str, ce_strike: float, pe_strike: float) -> Tuple[Optional[int], Optional[int]]:
-        """Get CE and PE instrument tokens for given strike prices."""
+        """Get CE and PE instrument tokens for given strike prices.
+        
+        Automatically selects the current/next expiry to handle expired options.
+        """
         try:
+            from datetime import datetime
+            
             instruments = self.kite_service.kite.instruments("NFO")
             
             symbol_instruments = [
@@ -392,7 +429,25 @@ class OptionsChartService:
             if not expiries:
                 return None, None
             
-            current_expiry = expiries[0]
+            # Get the nearest future expiry (current or next)
+            today = datetime.now().date()
+            valid_expiries = []
+            
+            for expiry_str in expiries:
+                try:
+                    expiry_date = datetime.strptime(expiry_str, '%Y-%m-%d').date()
+                    if expiry_date >= today:
+                        valid_expiries.append((expiry_date, expiry_str))
+                except ValueError:
+                    valid_expiries.append((None, expiry_str))
+            
+            if valid_expiries:
+                valid_expiries.sort(key=lambda x: x[0] if x[0] else datetime.max.date())
+                current_expiry = valid_expiries[0][1]
+            else:
+                current_expiry = expiries[0]
+            
+            logging.info(f"get_tokens_for_strikes: Selected expiry {current_expiry} for {symbol} (available: {expiries})")
             
             ce_token = None
             pe_token = None

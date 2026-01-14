@@ -464,9 +464,9 @@ class Intraday920Strategy:
             else:
                 sl = reference_high - 20
             
-            # Target is 1:1 (profit = entry_price - sl)
+            # Target is 1:2 (profit = 2 * (entry_price - sl))
             profit = entry_price - sl
-            target = entry_price + profit
+            target = entry_price + (2 * profit)
             
             logger.info(f"Entry: {entry_price}, Ref High: {reference_high}, Price Diff: {price_diff:.2f}")
             logger.info(f"SL: {sl}, Target: {target}, Profit: {profit}")

@@ -104,13 +104,13 @@ class TokenManager:
         """
         # First, check environment variable (highest priority - set after socket flush)
         env_token = os.getenv('ACCESS_TOKEN')
-        if env_token:
+        if env_token and self._is_token_valid(env_token):
             logger.debug("Using access token from environment variable")
             return env_token
         
         # Second, check persistent cache
         cached = self.load_token()
-        if cached.get('access_token'):
+        if cached.get('access_token') and self._is_token_valid(cached['access_token']):
             logger.debug("Using access token from cache")
             # Restore to environment for future use
             os.environ['ACCESS_TOKEN'] = cached['access_token']
@@ -118,6 +118,30 @@ class TokenManager:
         
         logger.warning("No valid access token available")
         return None
+    
+    def _is_token_valid(self, token: str) -> bool:
+        """Validate token format and basic checks.
+        
+        Args:
+            token: Token string to validate
+            
+        Returns:
+            True if token appears valid, False otherwise
+        """
+        if not token:
+            return False
+        
+        # Check minimum length (typical Zerodha token is a string)
+        if len(token) < 5:
+            logger.warning(f"Token too short (length: {len(token)})")
+            return False
+        
+        # Check for common invalid patterns
+        if token.lower() == 'none' or token == '':
+            logger.warning("Token is None or empty string")
+            return False
+        
+        return True
 
 
 # Global instance

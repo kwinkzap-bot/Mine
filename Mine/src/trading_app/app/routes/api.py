@@ -166,6 +166,40 @@ def health() -> EndpointResponse:
     return jsonify({'status': 'healthy'}), 200
 
 
+@api_bp.route('/token-status', methods=['GET'])
+def token_status() -> EndpointResponse:
+    """Check current token status and validity.
+    
+    Returns token availability from all sources without exposing the full token.
+    """
+    import os
+    from trading_app.app.utils.token_manager import get_access_token
+    
+    session_token = session.get('access_token')
+    env_token = os.getenv('ACCESS_TOKEN')
+    cached_token = get_access_token()
+    
+    return jsonify({
+        'status': 'ok',
+        'token_sources': {
+            'session': {
+                'available': bool(session_token),
+                'length': len(session_token) if session_token else 0
+            },
+            'environment': {
+                'available': bool(env_token),
+                'length': len(env_token) if env_token else 0
+            },
+            'cache': {
+                'available': bool(cached_token),
+                'length': len(cached_token) if cached_token else 0
+            }
+        },
+        'kite_available': get_kite() is not None,
+        'message': 'Token is available from all sources' if (session_token or env_token or cached_token) else 'No token found - login required'
+    }), 200
+
+
 @api_bp.route('/underlying-price', methods=['GET'])
 def get_underlying_price() -> EndpointResponse:
     """Get the underlying price (LTP and Previous Close) of a symbol."""
@@ -481,13 +515,31 @@ def get_options_chart_data() -> EndpointResponse:
     except Exception as e:
         logger.error(f"Error fetching chart data: {e}", exc_info=True)
         error_str = str(e).lower()
-        if 'access_token' in error_str or 'unauthorized' in error_str:
+        
+        # Handle token-related errors
+        if any(x in error_str for x in ['access_token', 'unauthorized', '401', 'invalid token']):
+            logger.warning(f"Token validation error: {e}")
             return jsonify({
                 'success': False,
-                'error': 'Authentication failed. Please login again.',
-                'auth_error': True
+                'error': 'Invalid or expired access token. Please login again.',
+                'auth_error': True,
+                'details': 'Your session may have expired. Please refresh and try again.'
             }), 401
-        return jsonify({'success': False, 'error': str(e)}), 500
+        
+        # Handle 403 Forbidden (access denied)
+        if any(x in error_str for x in ['access denied', '403', 'forbidden']):
+            logger.warning(f"Access denied error: {e}")
+            return jsonify({
+                'success': False,
+                'error': 'Access denied. Token may have expired. Please login again.',
+                'auth_error': True
+            }), 403
+        
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'error_type': type(e).__name__
+        }), 500
 
 @api_bp.route('/options-pdh-pdl', methods=['POST'])
 @csrf.exempt

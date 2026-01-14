@@ -1057,28 +1057,83 @@ class Intraday920Tracker {
         const element = document.getElementById(elementId);
         if (!element) return;
 
-        // Hide if no entry
+        // Hide element if no entry
         if (!analysis || !analysis.has_entry) {
-            element.innerHTML = '';
+            element.style.display = 'none';
             return;
         }
+
+        // Show element if there's entry
+        element.style.display = 'flex';
 
         // Determine strike type from element ID
         const strikeType = elementId.includes('highCe') ? 'HIGH CE' : 
                           elementId.includes('highPe') ? 'HIGH PE' :
                           elementId.includes('lowCe') ? 'LOW CE' : 'LOW PE';
 
-        // Create simple single-line format
+        // Create comprehensive backtest data display
         let html = `<div class="backtest-item-content">`;
-        html += `<span class="strike-label">${strikeType}</span>`;
-        html += `<span class="entry-info">Entry: ${this.formatPrice(analysis.entry_price)} @ ${this.formatTime(analysis.entry_time)}</span>`;
         
+        // Header with strike type
+        html += `<div class="backtest-header">
+                    <span class="strike-label">${strikeType}</span>
+                    <span class="entry-high">Ref: ${this.formatPrice(analysis.entry_high)}</span>
+                </div>`;
+        
+        // Entry Section
+        html += `<div class="backtest-section">
+                    <div class="section-title">📍 Entry</div>
+                    <div class="data-row">
+                        <span class="data-label">Price:</span>
+                        <span class="data-value">${this.formatPrice(analysis.entry_price)}</span>
+                    </div>
+                    <div class="data-row">
+                        <span class="data-label">Time:</span>
+                        <span class="data-value">${this.formatTime(analysis.entry_time)}</span>
+                    </div>
+                </div>`;
+        
+        // SL & Target Section
+        html += `<div class="backtest-section">
+                    <div class="section-title">🎯 Levels</div>
+                    <div class="data-row">
+                        <span class="data-label">SL:</span>
+                        <span class="data-value">${this.formatPrice(analysis.sl)}</span>
+                    </div>
+                    <div class="data-row">
+                        <span class="data-label">Target:</span>
+                        <span class="data-value">${this.formatPrice(analysis.target)}</span>
+                    </div>
+                </div>`;
+        
+        // Exit Section
+        html += `<div class="backtest-section">
+                    <div class="section-title">🚪 Exit</div>`;
         if (analysis.exit_time) {
             const exitClass = analysis.pnl >= 0 ? 'positive' : 'negative';
-            html += `<span class="exit-info ${exitClass}">Exit: ${this.formatPrice(analysis.exit_price)} (${analysis.exit_reason}) P&L: ${analysis.pnl >= 0 ? '+' : ''}${this.formatPrice(Math.abs(analysis.pnl))}</span>`;
+            html += `<div class="data-row">
+                        <span class="data-label">Price:</span>
+                        <span class="data-value">${this.formatPrice(analysis.exit_price)}</span>
+                    </div>
+                    <div class="data-row">
+                        <span class="data-label">Time:</span>
+                        <span class="data-value">${this.formatTime(analysis.exit_time)}</span>
+                    </div>
+                    <div class="data-row">
+                        <span class="data-label">Reason:</span>
+                        <span class="data-value">${analysis.exit_reason}</span>
+                    </div>
+                    <div class="data-row">
+                        <span class="data-label">P&L:</span>
+                        <span class="data-value ${exitClass}">${analysis.pnl >= 0 ? '+' : ''}${this.formatPrice(analysis.pnl)}</span>
+                    </div>`;
         } else {
-            html += `<span class="exit-info">No Exit</span>`;
+            html += `<div class="data-row">
+                        <span class="data-label">Status:</span>
+                        <span class="data-value">No Exit</span>
+                    </div>`;
         }
+        html += `</div>`;
         
         html += `</div>`;
         element.innerHTML = html;

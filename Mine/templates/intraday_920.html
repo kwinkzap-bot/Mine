@@ -62,6 +62,20 @@
             </div>
         </div>
 
+        <!-- Backtest Results Section (Unified) -->
+        <div id="backtestResults" class="backtest-results hidden">
+            <div class="backtest-results-header">
+                📊 Backtest Results
+                <button id="closeBacktestBtn" class="close-btn" title="Close backtest results">✕</button>
+            </div>
+            <div class="backtest-content">
+                <div class="backtest-item" id="highCeBacktest"></div>
+                <div class="backtest-item" id="highPeBacktest"></div>
+                <div class="backtest-item" id="lowCeBacktest"></div>
+                <div class="backtest-item" id="lowPeBacktest"></div>
+            </div>
+        </div>
+
         <!-- Charts Section -->
         <div class="charts-container">
             <!-- High Strike Charts -->
@@ -77,20 +91,6 @@
                     </div>
                     <div class="header-right">
                         <button id="backtestBtn" class="backtest-btn">📊 Backtest</button>
-                    </div>
-                </div>
-                
-                <!-- Backtest Results Section -->
-                <div id="backtestResults" class="backtest-results hidden">
-                    <div class="backtest-results-header">
-                        📊 Backtest Results
-                        <button id="closeBacktestBtn" class="close-btn" title="Close backtest results">✕</button>
-                    </div>
-                    <div class="backtest-content">
-                        <div class="backtest-item" id="highCeBacktest"></div>
-                        <div class="backtest-item" id="highPeBacktest"></div>
-                        <div class="backtest-item" id="lowCeBacktest"></div>
-                        <div class="backtest-item" id="lowPeBacktest"></div>
                     </div>
                 </div>
                 <div class="chart-grid">

@@ -491,15 +491,40 @@ class KiteDataFetchService:
                 logger.warning(f"No instruments found for {symbol}")
                 return []
             
-            # STEP 3: Get current expiry (nearest expiry date)
+            # STEP 3: Get current expiry (nearest future expiry date)
             expiries = sorted(list(set(inst.get('expiry') for inst in symbol_options if inst.get('expiry'))))
             if not expiries:
                 logger.warning(f"No expiries found for {symbol}")
                 return []
             
-            current_expiry = expiries[0]
+            # Automatically select the nearest future expiry to handle expired options
+            from datetime import datetime
+            today = datetime.now().date()
+            valid_expiries = []
+            
+            for exp in expiries:
+                try:
+                    # Convert to date if it's a datetime object
+                    if hasattr(exp, 'date'):
+                        exp_date = exp.date()
+                    else:
+                        exp_date = datetime.strptime(str(exp), '%Y-%m-%d').date()
+                    
+                    # Only consider expiries that are today or in the future
+                    if exp_date >= today:
+                        valid_expiries.append((exp_date, exp))
+                except ValueError:
+                    valid_expiries.append((None, exp))
+            
+            # Select the nearest future expiry, or fallback to earliest if all are in the past
+            if valid_expiries:
+                valid_expiries.sort(key=lambda x: x[0] if x[0] else datetime.max.date())
+                current_expiry = valid_expiries[0][1]
+            else:
+                current_expiry = expiries[0]
+            
             expiry_str = current_expiry.strftime('%Y-%m-%d') if hasattr(current_expiry, 'strftime') else str(current_expiry)
-            logger.info(f"Using current expiry: {expiry_str}")
+            logger.info(f"get_available_strikes: Selected current expiry {expiry_str} for {symbol} (available: {[e.strftime('%Y-%m-%d') if hasattr(e, 'strftime') else str(e) for e in expiries]})")
             
             # STEP 4: Filter instruments by current expiry
             expiry_instruments = [
