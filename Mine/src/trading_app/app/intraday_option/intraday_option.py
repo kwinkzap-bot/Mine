@@ -255,10 +255,28 @@ class IntradayOptionTrader:
                         ce_high = max([c.get('high', 0) for c in ce_candles], default=0)
                         ce_low = min([c.get('low', 0) for c in ce_candles], default=0)
                         ce_intraday_hl = {'high': ce_high, 'low': ce_low}
-                        logger.info(f"CE {ce_strike}: H={ce_high}, L={ce_low}, Candles={len(ce_candles)}")
+                        logger.info(f"✓ CE {ce_strike}: H={ce_high}, L={ce_low}, Candles={len(ce_candles)} (TODAY)")
                     else:
-                        logger.warning(f"No CE candles found for {ce_strike} on {intraday_date.date()}")
-                        ce_intraday_hl = {'high': 0, 'low': 0}
+                        # FALLBACK: Try previous day if today's data not available
+                        logger.warning(f"No CE candles found for {ce_strike} on TODAY, trying PREVIOUS DAY")
+                        prev_from_time = previous_trading_day.replace(hour=9, minute=15, second=0, microsecond=0)
+                        prev_to_time = previous_trading_day.replace(hour=15, minute=30, second=0, microsecond=0)
+                        
+                        ce_candles_prev = self.data_service.get_candlestick_data(
+                            ce_token,
+                            interval='5minute',
+                            from_date=prev_from_time,
+                            to_date=prev_to_time
+                        )
+                        
+                        if ce_candles_prev:
+                            ce_high = max([c.get('high', 0) for c in ce_candles_prev], default=0)
+                            ce_low = min([c.get('low', 0) for c in ce_candles_prev], default=0)
+                            ce_intraday_hl = {'high': ce_high, 'low': ce_low}
+                            logger.info(f"✓ CE {ce_strike}: H={ce_high}, L={ce_low}, Candles={len(ce_candles_prev)} (PREVIOUS DAY)")
+                        else:
+                            logger.warning(f"No CE candles found for {ce_strike} on previous day either")
+                            ce_intraday_hl = {'high': 0, 'low': 0}
                 else:
                     logger.warning(f"CE token not found for strike {ce_strike}")
                 
@@ -278,10 +296,28 @@ class IntradayOptionTrader:
                         pe_high = max([c.get('high', 0) for c in pe_candles], default=0)
                         pe_low = min([c.get('low', 0) for c in pe_candles], default=0)
                         pe_intraday_hl = {'high': pe_high, 'low': pe_low}
-                        logger.info(f"PE {pe_strike}: H={pe_high}, L={pe_low}, Candles={len(pe_candles)}")
+                        logger.info(f"✓ PE {pe_strike}: H={pe_high}, L={pe_low}, Candles={len(pe_candles)} (TODAY)")
                     else:
-                        logger.warning(f"No PE candles found for {pe_strike} on {intraday_date.date()}")
-                        pe_intraday_hl = {'high': 0, 'low': 0}
+                        # FALLBACK: Try previous day if today's data not available
+                        logger.warning(f"No PE candles found for {pe_strike} on TODAY, trying PREVIOUS DAY")
+                        prev_from_time = previous_trading_day.replace(hour=9, minute=15, second=0, microsecond=0)
+                        prev_to_time = previous_trading_day.replace(hour=15, minute=30, second=0, microsecond=0)
+                        
+                        pe_candles_prev = self.data_service.get_candlestick_data(
+                            pe_token,
+                            interval='5minute',
+                            from_date=prev_from_time,
+                            to_date=prev_to_time
+                        )
+                        
+                        if pe_candles_prev:
+                            pe_high = max([c.get('high', 0) for c in pe_candles_prev], default=0)
+                            pe_low = min([c.get('low', 0) for c in pe_candles_prev], default=0)
+                            pe_intraday_hl = {'high': pe_high, 'low': pe_low}
+                            logger.info(f"✓ PE {pe_strike}: H={pe_high}, L={pe_low}, Candles={len(pe_candles_prev)} (PREVIOUS DAY)")
+                        else:
+                            logger.warning(f"No PE candles found for {pe_strike} on previous day either")
+                            pe_intraday_hl = {'high': 0, 'low': 0}
                 else:
                     logger.warning(f"PE token not found for strike {pe_strike}")
 
