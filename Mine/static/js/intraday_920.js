@@ -969,6 +969,10 @@ class Intraday920Tracker {
             const cePriceKey = label.includes('High') ? 'high_strike' : 'low_strike';
             const strikeData = this.strategyData[cePriceKey] || {};
             
+            // Get selected risk/reward ratio
+            const ratioSelect = document.getElementById('riskRewardRatio');
+            const selectedRatio = ratioSelect ? ratioSelect.value : '1:2-trail';
+            
             const payload = {
                 symbol: this.symbol,
                 ce_token: ceToken,
@@ -976,7 +980,8 @@ class Intraday920Tracker {
                 ce_high: ceHigh,
                 pe_high: peHigh,
                 ce_strike_price: strikeData.ce_strike || null,
-                pe_strike_price: strikeData.pe_strike || null
+                pe_strike_price: strikeData.pe_strike || null,
+                risk_reward_ratio: selectedRatio
             };
 
             if (this.selectedDate) {

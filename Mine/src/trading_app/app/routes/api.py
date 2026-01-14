@@ -1934,6 +1934,7 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
         ce_strike_price = data.get('ce_strike_price')
         pe_strike_price = data.get('pe_strike_price')
         date_str = data.get('date')
+        risk_reward_ratio = data.get('risk_reward_ratio', '1:2-trail')  # Default to 1:2 with trail SL
         
         # Validate required fields
         if not all([ce_token, pe_token, ce_high, pe_high]):
@@ -1966,14 +1967,15 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
         from trading_app.app.intraday_option.intraday_9_20 import Intraday920Strategy
         strategy = Intraday920Strategy(kite)
         
-        # Run full day backtest
+        # Run full day backtest with selected risk/reward ratio
         results = strategy.backtest_full_day(
             ce_token=ce_token,
             pe_token=pe_token,
             ce_high=ce_high,
             pe_high=pe_high,
             symbol=symbol,
-            target_date=target_date
+            target_date=target_date,
+            risk_reward_ratio=risk_reward_ratio
         )
         
         if not results.get('success'):

@@ -440,7 +440,7 @@ class Intraday920Strategy:
                 'success': False
             }
 
-    def calculate_sl_for_entry(self, entry_price: float, reference_high: float) -> Dict[str, Any]:
+    def calculate_sl_for_entry(self, entry_price: float, reference_high: float, ratio: str = '1:2') -> Dict[str, Any]:
         """
         Calculate stop loss based on entry price and reference high.
         
@@ -448,9 +448,15 @@ class Intraday920Strategy:
         - If (Entry Price - Reference High) > 10 points: SL = Reference High - 10
         - If (Entry Price - Reference High) <= 10 points: SL = Reference High - 20
         
+        Ratio Logic:
+        - '1:2': Target = Entry + 2 * (Entry - SL)  [1:2 ratio]
+        - '1:3': Target = Entry + 3 * (Entry - SL)  [1:3 ratio]
+        - '1:2-trail': Target = Entry + 2 * (Entry - SL), with trailing SL after target
+        
         Args:
             entry_price: Price at which entry occurred
             reference_high: Reference high (PE high for CE entry, CE high for PE entry)
+            ratio: Risk/reward ratio ('1:2', '1:3', or '1:2-trail')
             
         Returns:
             Dictionary with SL, target, and entry details
@@ -464,12 +470,17 @@ class Intraday920Strategy:
             else:
                 sl = reference_high - 20
             
-            # Target is 1:2 (profit = 2 * (entry_price - sl))
+            # Determine target based on selected ratio
             profit = entry_price - sl
-            target = entry_price + (2 * profit)
+            if ratio == '1:3':
+                # 1:3 ratio: profit is 3x the risk
+                target = entry_price + (3 * profit)
+            else:
+                # Default to 1:2 ratio (both '1:2' and '1:2-trail' use 1:2)
+                target = entry_price + (2 * profit)
             
             logger.info(f"Entry: {entry_price}, Ref High: {reference_high}, Price Diff: {price_diff:.2f}")
-            logger.info(f"SL: {sl}, Target: {target}, Profit: {profit}")
+            logger.info(f"SL: {sl}, Target: {target}, Profit: {profit}, Ratio: {ratio}")
             
             return {
                 'entry_price': round(entry_price, 2),
@@ -477,6 +488,7 @@ class Intraday920Strategy:
                 'sl': round(sl, 2),
                 'target': round(target, 2),
                 'profit_points': round(profit, 2),
+                'ratio': ratio,
                 'success': True
             }
             
@@ -633,7 +645,8 @@ class Intraday920Strategy:
             logger.warning(f"Error fetching latest candle for token {token}: {str(e)}")
             return []
     def backtest_full_day(self, ce_token: int, pe_token: int, ce_high: float, pe_high: float,
-                         symbol: str = 'NIFTY', target_date: Optional[datetime] = None) -> Dict[str, Any]:
+                         symbol: str = 'NIFTY', target_date: Optional[datetime] = None,
+                         risk_reward_ratio: str = '1:2-trail') -> Dict[str, Any]:
         """
         Run comprehensive backtest checking all 5-minute candles from 9:20 to 3:20.
         
@@ -695,13 +708,13 @@ class Intraday920Strategy:
             # Analyze CE side (entry condition: low < pe_high AND close > pe_high)
             ce_result = self._analyze_entry_exit(
                 ce_candles, pe_high, 'CE',
-                ce_high, pe_high, symbol
+                ce_high, pe_high, symbol, risk_reward_ratio
             )
             
             # Analyze PE side (entry condition: low < ce_high AND close > ce_high)
             pe_result = self._analyze_entry_exit(
                 pe_candles, ce_high, 'PE',
-                ce_high, pe_high, symbol
+                ce_high, pe_high, symbol, risk_reward_ratio
             )
             
             # Results already have correct timestamps (UTC with close time adjustment)
@@ -759,7 +772,7 @@ class Intraday920Strategy:
             return []
 
     def _analyze_entry_exit(self, candles: List[Dict], reference_high: float, side: str,
-                           ce_high: float, pe_high: float, symbol: str) -> Dict[str, Any]:
+                           ce_high: float, pe_high: float, symbol: str, risk_reward_ratio: str = '1:2-trail') -> Dict[str, Any]:
         """
         Analyze candles to find entry and exit points.
         
@@ -770,6 +783,7 @@ class Intraday920Strategy:
             ce_high: CE first 5-min high
             pe_high: PE first 5-min high
             symbol: Trading symbol
+            risk_reward_ratio: Risk/reward ratio ('1:2', '1:3', or '1:2-trail')
             
         Returns:
             Entry and exit analysis
@@ -846,8 +860,10 @@ class Intraday920Strategy:
                 result['entry_time'] = close_time
                 result['entry_price'] = candle_close
                 
-                # Calculate SL and Target
-                sl_data = self.calculate_sl_for_entry(candle_close, reference_high)
+                # Calculate SL and Target based on selected ratio
+                # Extract ratio type: '1:2', '1:3', or '1:2-trail'
+                ratio_type = '1:2' if risk_reward_ratio in ['1:2', '1:2-trail'] else '1:3'
+                sl_data = self.calculate_sl_for_entry(candle_close, reference_high, ratio=ratio_type)
                 result['sl'] = sl_data.get('sl')
                 result['target'] = sl_data.get('target')
                 
@@ -874,6 +890,7 @@ class Intraday920Strategy:
             sl_distance = result['entry_price'] - initial_sl  # Distance between entry and SL
             target_hit = False  # Track if target was hit for trailing SL
             trailed_sl = initial_sl  # Current trailed SL value
+            use_trailing_sl = (risk_reward_ratio == '1:2-trail')  # Only use trailing SL for '1:2-trail' mode
             
             for idx in range(entry_candle_idx + 1, len(candles)):
                 candle = candles[idx]
@@ -885,8 +902,8 @@ class Intraday920Strategy:
                 # Check if it's the last candle (3:20 PM) - auto-exit if still open
                 is_last_candle = (idx == len(candles) - 1)
                 
-                # If target was hit, implement trailing stop loss
-                if target_hit:
+                # If target was hit and using trailing SL mode, implement trailing stop loss
+                if target_hit and use_trailing_sl:
                     # Calculate how much price has moved above entry since target was hit
                     price_above_entry = candle_high - result['entry_price']
                     
