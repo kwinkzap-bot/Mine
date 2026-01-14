@@ -888,7 +888,7 @@ class Intraday920Strategy:
             initial_sl = result['sl']
             initial_target = result['target']
             sl_distance = result['entry_price'] - initial_sl  # Distance between entry and SL
-            target_hit = False  # Track if target was hit for trailing SL
+            target_hit = False  # Track if target was hit for trailing SL (only for trailing mode)
             trailed_sl = initial_sl  # Current trailed SL value
             use_trailing_sl = (risk_reward_ratio == '1:2-trail')  # Only use trailing SL for '1:2-trail' mode
             
@@ -902,34 +902,22 @@ class Intraday920Strategy:
                 # Check if it's the last candle (3:20 PM) - auto-exit if still open
                 is_last_candle = (idx == len(candles) - 1)
                 
-                # If target was hit and using trailing SL mode, implement trailing stop loss
-                if target_hit and use_trailing_sl:
-                    # Calculate how much price has moved above entry since target was hit
-                    price_above_entry = candle_high - result['entry_price']
-                    
-                    # Trail SL by sl_distance for every sl_distance movement above entry
-                    if price_above_entry > 0:
-                        num_trails = int(price_above_entry / sl_distance)
-                        new_trailed_sl = result['entry_price'] + (num_trails * sl_distance)
-                        
-                        if new_trailed_sl > trailed_sl:
-                            trailed_sl = new_trailed_sl
-                            logger.info(f"{side} Trailing SL updated: {trailed_sl} (price high: {candle_high})")
-                    
-                    # Check if trailed SL is hit
-                    if candle_low <= trailed_sl:
+                # For non-trailing modes (1:2 and 1:3), check target and SL first
+                if not use_trailing_sl:
+                    # Check if target is hit (exit at target price for non-trailing modes)
+                    if candle_high >= initial_target:
                         raw_exit_time = candle_time
                         ist_offset_seconds = int(5.5 * 3600)
                         true_utc_time = raw_exit_time - ist_offset_seconds
                         close_time = true_utc_time + 300
                         result['exit_time'] = close_time
-                        result['exit_price'] = trailed_sl
-                        result['exit_reason'] = f'Trailed SL Hit ({trailed_sl})'
-                        result['pnl'] = trailed_sl - result['entry_price']
-                        logger.info(f"{side} Exit at {result['exit_time']}: Trailed SL hit at {trailed_sl}, PnL {result['pnl']}")
+                        result['exit_price'] = initial_target
+                        result['exit_reason'] = 'Target Hit'
+                        result['pnl'] = initial_target - result['entry_price']
+                        logger.info(f"{side} Exit at {result['exit_time']}: Target hit at {initial_target}, PnL {result['pnl']}")
                         break
-                else:
-                    # Original SL check (before target is hit)
+                    
+                    # Check if SL is hit (for non-trailing modes)
                     if candle_low <= initial_sl:
                         raw_exit_time = candle_time
                         ist_offset_seconds = int(5.5 * 3600)
@@ -941,26 +929,58 @@ class Intraday920Strategy:
                         result['pnl'] = -(result['entry_price'] - initial_sl)
                         logger.info(f"{side} Exit at {result['exit_time']}: SL hit, PnL {result['pnl']}")
                         break
-                
-                # Check if target is hit (before checking SL, so target takes priority)
-                if candle_high >= initial_target and not target_hit:
-                    target_hit = True
-                    trailed_sl = result['entry_price']  # Move SL to entry price when target hit
-                    logger.info(f"{side} Target hit at {candle_high}, trailing SL activated at {result['entry_price']}")
-                    continue  # Don't exit yet, continue to look for trailing SL exit or better prices
+                else:
+                    # For trailing mode (1:2-trail), implement trailing SL after target is hit
+                    
+                    # If target was hit, implement trailing stop loss
+                    if target_hit:
+                        # Calculate how much price has moved above entry since target was hit
+                        price_above_entry = candle_high - result['entry_price']
+                        
+                        # Trail SL by sl_distance for every sl_distance movement above entry
+                        if price_above_entry > 0:
+                            num_trails = int(price_above_entry / sl_distance)
+                            new_trailed_sl = result['entry_price'] + (num_trails * sl_distance)
+                            
+                            if new_trailed_sl > trailed_sl:
+                                trailed_sl = new_trailed_sl
+                                logger.info(f"{side} Trailing SL updated: {trailed_sl} (price high: {candle_high})")
+                        
+                        # Check if trailed SL is hit
+                        if candle_low <= trailed_sl:
+                            raw_exit_time = candle_time
+                            ist_offset_seconds = int(5.5 * 3600)
+                            true_utc_time = raw_exit_time - ist_offset_seconds
+                            close_time = true_utc_time + 300
+                            result['exit_time'] = close_time
+                            result['exit_price'] = trailed_sl
+                            result['exit_reason'] = f'Trailed SL Hit ({trailed_sl})'
+                            result['pnl'] = trailed_sl - result['entry_price']
+                            logger.info(f"{side} Exit at {result['exit_time']}: Trailed SL hit at {trailed_sl}, PnL {result['pnl']}")
+                            break
+                    else:
+                        # Before target is hit, check for SL hit in trailing mode
+                        if candle_low <= initial_sl:
+                            raw_exit_time = candle_time
+                            ist_offset_seconds = int(5.5 * 3600)
+                            true_utc_time = raw_exit_time - ist_offset_seconds
+                            close_time = true_utc_time + 300
+                            result['exit_time'] = close_time
+                            result['exit_price'] = initial_sl
+                            result['exit_reason'] = 'SL Hit'
+                            result['pnl'] = -(result['entry_price'] - initial_sl)
+                            logger.info(f"{side} Exit at {result['exit_time']}: SL hit, PnL {result['pnl']}")
+                            break
+                        
+                        # Check if target is hit (activate trailing SL for trailing mode)
+                        if candle_high >= initial_target:
+                            target_hit = True
+                            trailed_sl = result['entry_price']  # Move SL to entry price when target hit
+                            logger.info(f"{side} Target hit at {candle_high}, trailing SL activated at {result['entry_price']}")
+                            continue  # Don't exit yet, continue to look for trailing SL exit or better prices
                 
                 # Check if it's the last candle (3:20 PM) - exit at market close
                 if is_last_candle:
-                    raw_exit_time = candle_time
-                    ist_offset_seconds = int(5.5 * 3600)
-                    true_utc_time = raw_exit_time - ist_offset_seconds
-                    close_time = true_utc_time + 300
-                    result['exit_time'] = close_time
-                    result['exit_price'] = candle_close
-                    result['exit_reason'] = 'Market Close (3:20 PM)'
-                    result['pnl'] = candle_close - result['entry_price']
-                    logger.info(f"{side} Exit at {result['exit_time']}: Market close at 3:20 PM, Price {candle_close}, PnL {result['pnl']}")
-                    break
                     raw_exit_time = candle_time
                     ist_offset_seconds = int(5.5 * 3600)
                     true_utc_time = raw_exit_time - ist_offset_seconds
