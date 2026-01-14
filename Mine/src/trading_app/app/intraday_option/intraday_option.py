@@ -77,13 +77,66 @@ class IntradayOptionTrader:
             
             logger.info(f"Quote data for {symbol}: last_price={current_price}, high={day_high}, low={day_low}")
             
-            # Try to get PDC and PDH/PDL from OHLC data (previous day values)
+            # Try to get PDC from OHLC data (previous day close)
             ohlc = quote_data.get('ohlc', {})
             pdc = ohlc.get('close', current_price)  # Previous Day Close
-            pdh = ohlc.get('high', current_price)   # Previous Day High  
-            pdl = ohlc.get('low', current_price)    # Previous Day Low
+            logger.info(f"PDC from OHLC: {pdc}")
             
-            logger.info(f"OHLC data for {symbol}: PDH={pdh}, PDL={pdl}, PDC={pdc}")
+            # Initialize PDH and PDL as 0 - will be fetched from candlesticks
+            pdh = 0
+            pdl = 0
+            
+            # Fetch previous day's actual high and low from daily candlesticks
+            try:
+                symbol_token = self.data_service.get_symbol_token(symbol, exchange='NSE')
+                if symbol_token:
+                    logger.info(f"Fetching previous day OHLC for {symbol} (token: {symbol_token})")
+                    
+                    # Get daily candlesticks for previous day
+                    from datetime import datetime as dt, timedelta
+                    today_ist = datetime.now(IST).date()
+                    
+                    # Determine previous trading day
+                    prev_trading_date = today_ist - timedelta(days=1)
+                    weekday = prev_trading_date.weekday()
+                    
+                    # Skip weekends
+                    if weekday == 6:  # Sunday
+                        prev_trading_date = today_ist - timedelta(days=2)  # Friday
+                    elif weekday == 5:  # Saturday
+                        prev_trading_date = today_ist - timedelta(days=1)  # Friday
+                    
+                    # Fetch daily OHLC
+                    from_date = dt.combine(prev_trading_date - timedelta(days=1), dt.min.time())
+                    to_date = dt.combine(prev_trading_date, dt.max.time())
+                    
+                    daily_candles = self.data_service.get_candlestick_data(
+                        symbol_token,
+                        interval='day',
+                        from_date=from_date,
+                        to_date=to_date
+                    )
+                    
+                    if daily_candles and len(daily_candles) > 0:
+                        # Get the most recent daily candle (previous day's data)
+                        prev_day_candle = daily_candles[-1]
+                        pdh = prev_day_candle.get('high', 0)
+                        pdl = prev_day_candle.get('low', 0)
+                        pdc = prev_day_candle.get('close', pdc)
+                        logger.info(f"Previous day OHLC for {symbol}: H={pdh}, L={pdl}, C={pdc}")
+                    else:
+                        logger.warning(f"No daily candles found for {symbol}")
+                        pdh = current_price
+                        pdl = current_price
+                else:
+                    logger.warning(f"Could not get symbol token for {symbol}")
+                    pdh = current_price
+                    pdl = current_price
+                    
+            except Exception as e:
+                logger.warning(f"Could not fetch previous day OHLC for {symbol}: {str(e)}")
+                pdh = current_price
+                pdl = current_price
             
             # If high/low are still equal to current_price (likely not set), fetch from candlesticks
             if day_high == current_price and day_low == current_price and current_price > 0:
@@ -124,23 +177,30 @@ class IntradayOptionTrader:
             
             # Determine last trading day (skip weekends) - using IST timezone
             now_ist = datetime.now(IST)
-            last_trading_day = now_ist
             
             # Check if today is weekend in IST (Monday=0, Sunday=6)
-            weekday = last_trading_day.weekday()
+            weekday = now_ist.weekday()
             logger.info(f"Current IST date: {now_ist.date()}, Weekday: {weekday} (0=Mon, 6=Sun)")
             
-            if weekday == 6:  # Sunday
-                last_trading_day = now_ist - timedelta(days=2)  # Go back to Friday
-                logger.info(f"Today is Sunday (IST), using Friday: {last_trading_day.date()}")
-            elif weekday == 5:  # Saturday
-                last_trading_day = now_ist - timedelta(days=1)  # Go back to Friday
-                logger.info(f"Today is Saturday (IST), using Friday: {last_trading_day.date()}")
-            elif weekday == 0:  # Monday
-                last_trading_day = now_ist - timedelta(days=3)  # Go back to Friday
-                logger.info(f"Today is Monday (IST), using Friday: {last_trading_day.date()}")
+            # For intraday data, ALWAYS use today's date (market open at 9:15 AM)
+            # The get_candlestick_data will return available candles from today
+            intraday_date = now_ist
+            logger.info(f"Fetching intraday candles for today: {intraday_date.date()}")
+            
+            # For previous day close (PDC) and similar, use previous trading day
+            previous_trading_day = now_ist
+            if weekday == 0:  # Monday
+                previous_trading_day = now_ist - timedelta(days=3)  # Go back to Friday
+                logger.info(f"Today is Monday (IST), previous trading day is Friday: {previous_trading_day.date()}")
+            elif weekday == 6:  # Sunday (shouldn't happen during market hours but handle it)
+                previous_trading_day = now_ist - timedelta(days=2)  # Go back to Friday
+                logger.info(f"Today is Sunday (IST), previous trading day is Friday: {previous_trading_day.date()}")
+            elif weekday == 5:  # Saturday (shouldn't happen during market hours but handle it)
+                previous_trading_day = now_ist - timedelta(days=1)  # Go back to Friday
+                logger.info(f"Today is Saturday (IST), previous trading day is Friday: {previous_trading_day.date()}")
             else:
-                logger.info(f"Today is weekday (IST), using: {last_trading_day.date()}")
+                previous_trading_day = now_ist - timedelta(days=1)  # Go back to yesterday
+                logger.info(f"Today is weekday (IST), previous trading day is: {previous_trading_day.date()}")
             
             # Initialize H/L values BEFORE try block
             ce_intraday_hl = {'high': 0, 'low': 0}
@@ -158,9 +218,9 @@ class IntradayOptionTrader:
                 logger.info(f"Symbols - CE: {ce_symbol}, PE: {pe_symbol}")
                 
                 if ce_token:
-                    logger.info(f"Fetching CE candles for token {ce_token} from {last_trading_day.date()}")
-                    from_time = last_trading_day.replace(hour=9, minute=15, second=0, microsecond=0)
-                    to_time = last_trading_day.replace(hour=15, minute=30, second=0, microsecond=0)
+                    logger.info(f"Fetching CE candles for token {ce_token} from TODAY {intraday_date.date()}")
+                    from_time = intraday_date.replace(hour=9, minute=15, second=0, microsecond=0)
+                    to_time = intraday_date.replace(hour=15, minute=30, second=0, microsecond=0)
                     
                     ce_candles = self.data_service.get_candlestick_data(
                         ce_token,
@@ -175,15 +235,15 @@ class IntradayOptionTrader:
                         ce_intraday_hl = {'high': ce_high, 'low': ce_low}
                         logger.info(f"CE {ce_strike}: H={ce_high}, L={ce_low}, Candles={len(ce_candles)}")
                     else:
-                        logger.warning(f"No CE candles found for {ce_strike} on {last_trading_day.date()}")
+                        logger.warning(f"No CE candles found for {ce_strike} on {intraday_date.date()}")
                         ce_intraday_hl = {'high': 0, 'low': 0}
                 else:
                     logger.warning(f"CE token not found for strike {ce_strike}")
                 
                 if pe_token:
-                    logger.info(f"Fetching PE candles for token {pe_token} from {last_trading_day.date()}")
-                    from_time = last_trading_day.replace(hour=9, minute=15, second=0, microsecond=0)
-                    to_time = last_trading_day.replace(hour=15, minute=30, second=0, microsecond=0)
+                    logger.info(f"Fetching PE candles for token {pe_token} from TODAY {intraday_date.date()}")
+                    from_time = intraday_date.replace(hour=9, minute=15, second=0, microsecond=0)
+                    to_time = intraday_date.replace(hour=15, minute=30, second=0, microsecond=0)
                     
                     pe_candles = self.data_service.get_candlestick_data(
                         pe_token,
@@ -198,7 +258,7 @@ class IntradayOptionTrader:
                         pe_intraday_hl = {'high': pe_high, 'low': pe_low}
                         logger.info(f"PE {pe_strike}: H={pe_high}, L={pe_low}, Candles={len(pe_candles)}")
                     else:
-                        logger.warning(f"No PE candles found for {pe_strike} on {last_trading_day.date()}")
+                        logger.warning(f"No PE candles found for {pe_strike} on {intraday_date.date()}")
                         pe_intraday_hl = {'high': 0, 'low': 0}
                 else:
                     logger.warning(f"PE token not found for strike {pe_strike}")
