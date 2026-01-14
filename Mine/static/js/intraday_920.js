@@ -965,12 +965,18 @@ class Intraday920Tracker {
      */
     async runFullDayBacktest(ceToken, peToken, ceHigh, peHigh, label) {
         try {
+            // Get strike prices from strategy data
+            const cePriceKey = label.includes('High') ? 'high_strike' : 'low_strike';
+            const strikeData = this.strategyData[cePriceKey] || {};
+            
             const payload = {
                 symbol: this.symbol,
                 ce_token: ceToken,
                 pe_token: peToken,
                 ce_high: ceHigh,
-                pe_high: peHigh
+                pe_high: peHigh,
+                ce_strike_price: strikeData.ce_strike || null,
+                pe_strike_price: strikeData.pe_strike || null
             };
 
             if (this.selectedDate) {
@@ -1105,13 +1111,25 @@ class Intraday920Tracker {
         // Create compact backtest display with horizontal layout
         let html = `<div class="backtest-item-content">`;
         
-        // Header with strike type
+        // Header with strike type, SL, and Target
         html += `<div class="backtest-header">
-                    <span class="strike-label">${strikeType}</span>
-                    <span class="entry-high">📌 ${this.formatPrice(analysis.entry_high)}</span>
+                    <span class="strike-label">
+                        ${strikeType}
+                    </span>
+                    <div class="header-metrics">
+                        <span class="metric-item sl-metric">
+                            <span class="metric-label">SL:</span>
+                            <span class="metric-value sl-color">${this.formatPrice(analysis.sl)}</span>
+                        </span>
+                        <span class="metric-item target-metric">
+                            <span class="metric-label">Target:</span>
+                            <span class="metric-value target-color">${this.formatPrice(analysis.target)}</span>
+                        </span>
+                    </div>
+                    <span class="entry-high">📌 ${this.formatPrice(analysis.strike_price)}</span>
                 </div>`;
         
-        // Compact horizontal layout
+        // Compact horizontal layout - Entry and Exit only
         html += `<div class="backtest-compact-row">`;
         
         // Entry - Compact format
@@ -1119,18 +1137,6 @@ class Intraday920Tracker {
                     <div class="compact-label">Entry</div>
                     <div class="compact-price">${this.formatPrice(analysis.entry_price)}</div>
                     <div class="compact-time">${this.formatTime(analysis.entry_time)}</div>
-                </div>`;
-        
-        // SL - Single value
-        html += `<div class="compact-item divider">
-                    <div class="compact-label">SL</div>
-                    <div class="compact-price sl-color">${this.formatPrice(analysis.sl)}</div>
-                </div>`;
-        
-        // Target - Single value
-        html += `<div class="compact-item divider">
-                    <div class="compact-label">Target</div>
-                    <div class="compact-price target-color">${this.formatPrice(analysis.target)}</div>
                 </div>`;
         
         // Exit - Compact format

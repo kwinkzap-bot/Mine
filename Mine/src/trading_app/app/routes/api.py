@@ -1884,6 +1884,8 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
             "pe_token": 87654321,           # PE option token
             "ce_high": 24500.50,            # NIFTY's Previous Day High (PDH) - IMPORTANT!
             "pe_high": 24500.50,            # NIFTY's Previous Day High (PDH) - IMPORTANT!
+            "ce_strike_price": 25100,       # Optional - CE strike price
+            "pe_strike_price": 25000,       # Optional - PE strike price
             "date": "2026-01-12"            # Optional - date to backtest
         }
     
@@ -1899,6 +1901,7 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
                 "entry_time": "2026-01-12T09:25:00",
                 "entry_price": 352.50,
                 "entry_high": 24500.50,     # Reference level (NIFTY PDH)
+                "strike_price": 25100,      # CE strike price from request
                 "sl": 280.25,
                 "target": 362.50,
                 "exit_time": "2026-01-12T10:30:00",
@@ -1928,6 +1931,8 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
         pe_token = data.get('pe_token')
         ce_high = data.get('ce_high')
         pe_high = data.get('pe_high')
+        ce_strike_price = data.get('ce_strike_price')
+        pe_strike_price = data.get('pe_strike_price')
         date_str = data.get('date')
         
         # Validate required fields
@@ -1977,10 +1982,19 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
                 'error': results.get('error', 'Backtest failed')
             }), 400
         
+        # Add strike prices to results if provided
+        ce_analysis = results.get('ce_analysis', {})
+        pe_analysis = results.get('pe_analysis', {})
+        
+        if ce_strike_price:
+            ce_analysis['strike_price'] = ce_strike_price
+        if pe_strike_price:
+            pe_analysis['strike_price'] = pe_strike_price
+        
         return jsonify({
             'success': True,
-            'ce_analysis': results.get('ce_analysis', {}),
-            'pe_analysis': results.get('pe_analysis', {}),
+            'ce_analysis': ce_analysis,
+            'pe_analysis': pe_analysis,
             'symbol': results.get('symbol'),
             'date': results.get('date'),
             'timestamp': datetime.now().isoformat(),

@@ -874,10 +874,14 @@ class Intraday920Strategy:
                 candle_high = candle.get('high', 0)
                 candle_low = candle.get('low', 0)
                 candle_close = candle.get('close', 0)
+                candle_time = candle.get('time', candle.get('date'))
+                
+                # Check if it's the last candle (3:20 PM) - auto-exit if still open
+                is_last_candle = (idx == len(candles) - 1)
                 
                 # Check if target is hit
                 if candle_high >= result['target']:
-                    raw_exit_time = candle.get('time', candle.get('date'))
+                    raw_exit_time = candle_time
                     ist_offset_seconds = int(5.5 * 3600)
                     true_utc_time = raw_exit_time - ist_offset_seconds
                     close_time = true_utc_time + 300
@@ -890,7 +894,7 @@ class Intraday920Strategy:
                 
                 # Check if SL is hit
                 elif candle_low <= result['sl']:
-                    raw_exit_time = candle.get('time', candle.get('date'))
+                    raw_exit_time = candle_time
                     ist_offset_seconds = int(5.5 * 3600)
                     true_utc_time = raw_exit_time - ist_offset_seconds
                     close_time = true_utc_time + 300
@@ -900,12 +904,26 @@ class Intraday920Strategy:
                     result['pnl'] = -(result['entry_price'] - result['sl'])
                     logger.info(f"{side} Exit at {result['exit_time']}: SL hit, PnL {result['pnl']}")
                     break
+                
+                # Check if it's the last candle (3:20 PM) - exit at market close
+                elif is_last_candle:
+                    raw_exit_time = candle_time
+                    ist_offset_seconds = int(5.5 * 3600)
+                    true_utc_time = raw_exit_time - ist_offset_seconds
+                    close_time = true_utc_time + 300
+                    result['exit_time'] = close_time
+                    result['exit_price'] = candle_close
+                    result['exit_reason'] = 'Market Close (3:20 PM)'
+                    result['pnl'] = candle_close - result['entry_price']
+                    logger.info(f"{side} Exit at {result['exit_time']}: Market close at 3:20 PM, Price {candle_close}, PnL {result['pnl']}")
+                    break
         
-        # If no exit found by end of day
-        if not result['exit_time']:
+        # If no exit found by end of day (shouldn't happen now with 3:20 PM exit)
+        if not result['exit_time'] and result['has_entry']:
             last_candle = candles[-1] if candles else {}
             result['exit_reason'] = 'No Exit'
-            result['pnl'] = last_candle.get('close', 0) - result['entry_price']
-            logger.info(f"{side} No exit by EOD, Last price {last_candle.get('close', 0)}, PnL {result['pnl']}")
+            result['exit_price'] = last_candle.get('close', 0)
+            result['pnl'] = result['exit_price'] - result['entry_price']
+            logger.warning(f"{side} Trade still open at end of day - should have exited at 3:20 PM")
         
         return result
