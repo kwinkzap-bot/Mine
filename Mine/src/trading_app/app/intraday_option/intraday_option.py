@@ -150,7 +150,6 @@ class IntradayOptionTrader:
                             logger.warning(f"No daily candles found for {symbol} (today or previous day)")
                             pdh = current_price
                             pdl = current_price
-```
                 else:
                     logger.warning(f"Could not get symbol token for {symbol}")
                     pdh = current_price
