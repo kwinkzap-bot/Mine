@@ -321,12 +321,23 @@ def get_fo_stocks() -> EndpointResponse:
 def get_options_init() -> EndpointResponse:
     """
     FAST endpoint - returns strikes immediately using cached NFO instruments and disk cache.
-    Query params: symbol, price_source, date (optional)
+    
+    Query params:
+        symbol (required): Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
+        price_source (optional): 'previous_close' (default) or 'ltp'
+        date (optional): Date in YYYY-MM-DD format to get previous day close for that date.
+                        If not provided, uses current date's previous close.
+                        Example: ?symbol=NIFTY&date=2026-01-12 → Returns 2026-01-11 close
     
     Performance optimizations:
     - Uses disk-cached NFO instruments (8-10s on first call, <500ms on cache hit)
     - Skips PDH/PDL and LTP on initial load (can be fetched separately)
     - Returns immediately with strikes for fast UI initialization
+    
+    Example URLs:
+    - /api/options-init?symbol=NIFTY → Uses today's previous close
+    - /api/options-init?symbol=NIFTY&date=2026-01-12 → Uses 11 Jan close (previous day to 12 Jan)
+    - /api/options-init?symbol=NIFTY&price_source=ltp → Uses current LTP
     """
     import time as time_module
     start_time = time_module.time()
@@ -370,7 +381,7 @@ def get_options_init() -> EndpointResponse:
         requested_price = base_price or 0.0
         requested_source_label = ' (Close)' if price_source == 'previous_close' else ' (LTP)'
         
-        date_label = f" for {target_date}" if target_date else ""
+        date_label = f" for {target_date}" if target_date else " (current date)"
         logger.info(f"[options-init] {symbol}{date_label}: price_source={price_source}, base_price={base_price}, requested_price={requested_price}, label={requested_source_label}")
         
         total_time = time_module.time() - start_time
@@ -1864,15 +1875,20 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
     Run comprehensive backtest for entire trading day (9:20 to 3:20).
     Checks all 5-minute candles for entry and exit conditions.
     
+    Strategy: Entry when low < PDH AND close > (PDH + 5 points)
+    
     POST Payload:
         {
             "symbol": "NIFTY",
-            "ce_token": 12345678,
-            "pe_token": 87654321,
-            "ce_high": 350.5,
-            "pe_high": 300.25,
-            "date": "2026-01-12"   # Optional
+            "ce_token": 12345678,           # CE option token
+            "pe_token": 87654321,           # PE option token
+            "ce_high": 24500.50,            # NIFTY's Previous Day High (PDH) - IMPORTANT!
+            "pe_high": 24500.50,            # NIFTY's Previous Day High (PDH) - IMPORTANT!
+            "date": "2026-01-12"            # Optional - date to backtest
         }
+    
+    IMPORTANT: ce_high and pe_high MUST be NIFTY's PDH (Previous Day High), not option strike highs.
+    Both CE and PE sides use the SAME reference level (NIFTY's PDH) for entry detection.
     
     Returns:
         {
@@ -1882,7 +1898,7 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
                 "has_entry": true,
                 "entry_time": "2026-01-12T09:25:00",
                 "entry_price": 352.50,
-                "entry_high": 300.25,
+                "entry_high": 24500.50,     # Reference level (NIFTY PDH)
                 "sl": 280.25,
                 "target": 362.50,
                 "exit_time": "2026-01-12T10:30:00",

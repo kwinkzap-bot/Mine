@@ -637,21 +637,27 @@ class Intraday920Strategy:
         """
         Run comprehensive backtest checking all 5-minute candles from 9:20 to 3:20.
         
+        IMPORTANT: ce_high and pe_high parameters represent NIFTY's PDH (Previous Day High)
+        for BOTH CE and PE sides. This is the reference level that the strategy trades around.
+        Entry condition: low < pdh AND close > (pdh + 5 points)
+        
         Identifies:
-        - Entry point (when low < ref_high AND close > ref_high)
+        - Entry point (when low < pdh AND close > pdh + 5)
         - Exit point (when hits SL or target)
         - Exit reason (SL hit, Target hit, or no exit)
         
         Args:
             ce_token: CE option token
             pe_token: PE option token
-            ce_high: CE first 5-min high
-            pe_high: PE first 5-min high
-            symbol: Trading symbol
+            ce_high: NIFTY's Previous Day High (PDH) - reference level for entry
+            pe_high: NIFTY's Previous Day High (PDH) - reference level for entry
+            symbol: Trading symbol (NIFTY)
             target_date: Date to backtest (datetime object or None for today)
             
         Returns:
             Detailed backtest results for both CE and PE
+            
+        NOTE: Both CE and PE use the SAME reference level (NIFTY's PDH), not their own strikes' PDH
         """
         try:
             # Determine date to use
@@ -804,8 +810,13 @@ class Intraday920Strategy:
             candle_low = candle.get('low', 0)
             candle_close = candle.get('close', 0)
             
+            # EXCEPTION: First candle (idx=0) is exempt from close-below requirement
+            # The first candle IS the day_open baseline - we can't require it to close below itself
+            is_first_candle = (idx == 0)
+            
             # If day opened above ref high, first check if this candle closes below ref high
-            if requires_close_below and not has_closed_below:
+            # EXCEPT for the first candle - it's exempt from this requirement
+            if requires_close_below and not has_closed_below and not is_first_candle:
                 logger.info(f"{side} Candle {idx}: Waiting for close < {reference_high}. Current close: {candle_close}")
                 if candle_close < reference_high:
                     has_closed_below = True
@@ -817,8 +828,8 @@ class Intraday920Strategy:
             logger.info(f"{side} Candle {idx}: Low={candle_low:.2f}, Close={candle_close:.2f}, Threshold={entry_threshold:.2f}, Meets entry? {candle_low < reference_high and candle_close > entry_threshold}")
             
             if candle_low < reference_high and candle_close > entry_threshold:
-                # If we required close below, verify it happened
-                if requires_close_below and not has_closed_below:
+                # If we required close below, verify it happened (EXCEPT for first candle which is exempt)
+                if requires_close_below and not has_closed_below and not is_first_candle:
                     logger.info(f"{side} Candle {idx}: Close below needed, skipping")
                     continue  # Haven't seen close below yet
                 
@@ -841,7 +852,9 @@ class Intraday920Strategy:
                 result['target'] = sl_data.get('target')
                 
                 entry_reason = "Entry"
-                if requires_close_below:
+                if is_first_candle:
+                    entry_reason += " (first candle)"
+                elif requires_close_below:
                     entry_reason += " (after close below ref high)"
                 logger.info(f"{side} {entry_reason} at {result['entry_time']}: Price {candle_close}, SL {result['sl']}, Target {result['target']}")
                 break
@@ -871,7 +884,7 @@ class Intraday920Strategy:
                     result['exit_time'] = close_time
                     result['exit_price'] = result['target']
                     result['exit_reason'] = 'Target Hit'
-                    result['pnl'] = result['entry_price'] - result['sl']
+                    result['pnl'] = result['target'] - result['entry_price']
                     logger.info(f"{side} Exit at {result['exit_time']}: Target hit, PnL {result['pnl']}")
                     break
                 

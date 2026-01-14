@@ -1033,8 +1033,39 @@ class Intraday920Tracker {
             return;
         }
 
+        // Calculate total P&L
+        let totalPnL = 0;
+        let pnlCount = 0;
+        
+        if (results.highCe && results.highCe.has_entry && results.highCe.exit_time) {
+            totalPnL += results.highCe.pnl || 0;
+            pnlCount++;
+        }
+        if (results.highPe && results.highPe.has_entry && results.highPe.exit_time) {
+            totalPnL += results.highPe.pnl || 0;
+            pnlCount++;
+        }
+        if (results.lowCe && results.lowCe.has_entry && results.lowCe.exit_time) {
+            totalPnL += results.lowCe.pnl || 0;
+            pnlCount++;
+        }
+        if (results.lowPe && results.lowPe.has_entry && results.lowPe.exit_time) {
+            totalPnL += results.lowPe.pnl || 0;
+            pnlCount++;
+        }
+
         // Show results container only if signals exist
         resultsContainer.classList.remove('hidden');
+
+        // Update header with total P&L
+        const headerElement = resultsContainer.querySelector('.backtest-results-header');
+        if (headerElement) {
+            const pnlClass = totalPnL >= 0 ? 'positive' : 'negative';
+            const existingPnl = headerElement.querySelector('.total-pnl');
+            if (existingPnl) {
+                existingPnl.innerHTML = `<span class="pnl-label">Total P&L:</span><span class="pnl-value ${pnlClass}">${totalPnL >= 0 ? '+' : ''}${this.formatPrice(totalPnL)}</span>`;
+            }
+        }
 
         // Update High CE
         this.updateBacktestDisplay('highCeBacktest', results.highCe);
@@ -1071,70 +1102,52 @@ class Intraday920Tracker {
                           elementId.includes('highPe') ? 'HIGH PE' :
                           elementId.includes('lowCe') ? 'LOW CE' : 'LOW PE';
 
-        // Create comprehensive backtest data display
+        // Create compact backtest display with horizontal layout
         let html = `<div class="backtest-item-content">`;
         
         // Header with strike type
         html += `<div class="backtest-header">
                     <span class="strike-label">${strikeType}</span>
-                    <span class="entry-high">Ref: ${this.formatPrice(analysis.entry_high)}</span>
+                    <span class="entry-high">📌 ${this.formatPrice(analysis.entry_high)}</span>
                 </div>`;
         
-        // Entry Section
-        html += `<div class="backtest-section">
-                    <div class="section-title">📍 Entry</div>
-                    <div class="data-row">
-                        <span class="data-label">Price:</span>
-                        <span class="data-value">${this.formatPrice(analysis.entry_price)}</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">Time:</span>
-                        <span class="data-value">${this.formatTime(analysis.entry_time)}</span>
-                    </div>
+        // Compact horizontal layout
+        html += `<div class="backtest-compact-row">`;
+        
+        // Entry - Compact format
+        html += `<div class="compact-item">
+                    <div class="compact-label">Entry</div>
+                    <div class="compact-price">${this.formatPrice(analysis.entry_price)}</div>
+                    <div class="compact-time">${this.formatTime(analysis.entry_time)}</div>
                 </div>`;
         
-        // SL & Target Section
-        html += `<div class="backtest-section">
-                    <div class="section-title">🎯 Levels</div>
-                    <div class="data-row">
-                        <span class="data-label">SL:</span>
-                        <span class="data-value">${this.formatPrice(analysis.sl)}</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">Target:</span>
-                        <span class="data-value">${this.formatPrice(analysis.target)}</span>
-                    </div>
+        // SL - Single value
+        html += `<div class="compact-item divider">
+                    <div class="compact-label">SL</div>
+                    <div class="compact-price sl-color">${this.formatPrice(analysis.sl)}</div>
                 </div>`;
         
-        // Exit Section
-        html += `<div class="backtest-section">
-                    <div class="section-title">🚪 Exit</div>`;
+        // Target - Single value
+        html += `<div class="compact-item divider">
+                    <div class="compact-label">Target</div>
+                    <div class="compact-price target-color">${this.formatPrice(analysis.target)}</div>
+                </div>`;
+        
+        // Exit - Compact format
+        html += `<div class="compact-item">`;
         if (analysis.exit_time) {
             const exitClass = analysis.pnl >= 0 ? 'positive' : 'negative';
-            html += `<div class="data-row">
-                        <span class="data-label">Price:</span>
-                        <span class="data-value">${this.formatPrice(analysis.exit_price)}</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">Time:</span>
-                        <span class="data-value">${this.formatTime(analysis.exit_time)}</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">Reason:</span>
-                        <span class="data-value">${analysis.exit_reason}</span>
-                    </div>
-                    <div class="data-row">
-                        <span class="data-label">P&L:</span>
-                        <span class="data-value ${exitClass}">${analysis.pnl >= 0 ? '+' : ''}${this.formatPrice(analysis.pnl)}</span>
-                    </div>`;
+            html += `<div class="compact-label">Exit</div>
+                    <div class="compact-price">${this.formatPrice(analysis.exit_price)}</div>
+                    <div class="compact-time">${this.formatTime(analysis.exit_time)}</div>
+                    <div class="compact-pnl ${exitClass}">${analysis.pnl >= 0 ? '+' : ''}${this.formatPrice(analysis.pnl)}</div>`;
         } else {
-            html += `<div class="data-row">
-                        <span class="data-label">Status:</span>
-                        <span class="data-value">No Exit</span>
-                    </div>`;
+            html += `<div class="compact-label">Exit</div>
+                    <div class="compact-empty">No Exit</div>`;
         }
         html += `</div>`;
         
+        html += `</div>`;
         html += `</div>`;
         element.innerHTML = html;
     }
