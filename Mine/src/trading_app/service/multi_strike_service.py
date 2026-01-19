@@ -274,13 +274,13 @@ class MultiStrikeService:
         }
         return symbol_map.get(symbol)
     
-    def _fetch_5min_chart_data(self, token: int, days_back: int = 5) -> List[Dict[str, Any]]:
+    def _fetch_5min_chart_data(self, token: int, days_back: int = 60) -> List[Dict[str, Any]]:
         """
         Fetch 5-minute OHLC data for a token.
         
         Args:
             token: Instrument token
-            days_back: Number of days back to fetch (default 5 = last 5 trading days)
+            days_back: Number of days back to fetch (default 60 = last 60 trading days)
         
         Returns:
             List of OHLC candles

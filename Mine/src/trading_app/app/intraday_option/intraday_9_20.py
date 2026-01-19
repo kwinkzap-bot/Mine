@@ -554,7 +554,7 @@ class Intraday920Strategy:
                 
                 logger.info(f"CE Latest Candle - Low: {ce_low}, Close: {ce_close}, PE High: {pe_high}")
                 
-                if ce_low < pe_high and ce_close > (pe_high + 5):
+                if ce_low < pe_high and ce_close > (pe_high + 5) and (ce_close - pe_high) < 20:
                     # CE Entry Signal - Price crossed above PE High + 5 points
                     sl_data = self.calculate_sl_for_entry(ce_close, pe_high)
                     if sl_data.get('success'):
@@ -577,7 +577,7 @@ class Intraday920Strategy:
                 
                 logger.info(f"PE Latest Candle - Low: {pe_low}, Close: {pe_close}, CE High: {ce_high}")
                 
-                if pe_low < ce_high and pe_close > (ce_high + 5):
+                if pe_low < ce_high and pe_close > (ce_high + 5) and (pe_close - ce_high) < 20:
                     # PE Entry Signal - Price crossed above CE High + 5 points
                     sl_data = self.calculate_sl_for_entry(pe_close, ce_high)
                     if sl_data.get('success'):
@@ -839,9 +839,16 @@ class Intraday920Strategy:
             
             # Entry condition: low < ref_high AND close > (ref_high + 5 points)
             entry_threshold = reference_high + 5
-            logger.info(f"{side} Candle {idx}: Low={candle_low:.2f}, Close={candle_close:.2f}, Threshold={entry_threshold:.2f}, Meets entry? {candle_low < reference_high and candle_close > entry_threshold}")
+            # Check if close is within 20 points of reference_high
+            close_ref_diff = abs(candle_close - reference_high)
+            logger.info(f"{side} Candle {idx}: Low={candle_low:.2f}, Close={candle_close:.2f}, Threshold={entry_threshold:.2f}, Close-Ref Diff={close_ref_diff:.2f}, Meets entry? {candle_low < reference_high and candle_close > entry_threshold and close_ref_diff < 20}")
             
-            if candle_low < reference_high and candle_close > entry_threshold:
+            if candle_low < reference_high and candle_close > entry_threshold and close_ref_diff < 20:
+                # Check reference_high and close difference constraint (max 20 points)
+                if close_ref_diff >= 20:
+                    logger.info(f"{side} Candle {idx}: Entry rejected - Close-Ref diff: {close_ref_diff:.2f} >= 20 points (max 20 allowed)")
+                    continue
+                
                 # If we required close below, verify it happened (EXCEPT for first candle which is exempt)
                 if requires_close_below and not has_closed_below and not is_first_candle:
                     logger.info(f"{side} Candle {idx}: Close below needed, skipping")

@@ -704,17 +704,17 @@ class OptionsChartService:
             # Calculate date range based on timeframe (avoid excessive API calls)
             to_date = datetime.now()
             if timeframe in ['1minute', 'minute']:
-                from_date = to_date - timedelta(days=5)  # ~7200 candles max
+                from_date = to_date - timedelta(days=30)  # Fetch 30 days of minute data
             elif timeframe in ['5minute', '5minute']:
-                from_date = to_date - timedelta(days=7)  # ~2000 candles max
+                from_date = to_date - timedelta(days=60)  # Fetch 60 days of 5-minute data (~17280 candles)
             elif timeframe in ['day', '1day']:
-                from_date = to_date - timedelta(days=90)  # ~90 daily candles
+                from_date = to_date - timedelta(days=365)  # 1 year of daily candles
             elif timeframe in ['week', '1week']:
-                from_date = to_date - timedelta(days=365)  # ~52 weekly candles
+                from_date = to_date - timedelta(days=730)  # ~2 years of weekly candles
             elif timeframe in ['month', '1month']:
-                from_date = to_date - timedelta(days=1095)  # ~36 monthly candles
+                from_date = to_date - timedelta(days=2190)  # ~6 years of monthly candles
             else:
-                from_date = to_date - timedelta(days=14)  # Default fallback
+                from_date = to_date - timedelta(days=90)  # Default fallback to 90 days
             
             # Fetch CE and PE data in parallel
             with ThreadPoolExecutor(max_workers=2, thread_name_prefix="chart_data") as executor:
