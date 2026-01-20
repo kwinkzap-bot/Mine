@@ -1113,6 +1113,10 @@ class Intraday920Tracker {
                           elementId.includes('highPe') ? 'HIGH PE' :
                           elementId.includes('lowCe') ? 'LOW CE' : 'LOW PE';
 
+        // Calculate SL and Target points
+        const slPoints = Math.abs(analysis.entry_price - analysis.sl);
+        const targetPoints = Math.abs(analysis.target - analysis.entry_price);
+
         // Create compact backtest display with horizontal layout
         let html = `<div class="backtest-item-content">`;
         
@@ -1124,11 +1128,11 @@ class Intraday920Tracker {
                     <div class="header-metrics">
                         <span class="metric-item sl-metric">
                             <span class="metric-label">SL:</span>
-                            <span class="metric-value sl-color">${this.formatPrice(analysis.sl)}</span>
+                            <span class="metric-value sl-color">${this.formatPrice(analysis.sl)} (${slPoints.toFixed(2)}pts)</span>
                         </span>
                         <span class="metric-item target-metric">
                             <span class="metric-label">Target:</span>
-                            <span class="metric-value target-color">${this.formatPrice(analysis.target)}</span>
+                            <span class="metric-value target-color">${this.formatPrice(analysis.target)} (${targetPoints.toFixed(2)}pts)</span>
                         </span>
                     </div>
                     <span class="entry-high">📌 ${this.formatPrice(analysis.strike_price)}</span>

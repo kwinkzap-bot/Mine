@@ -718,7 +718,6 @@
     padding-bottom: 6px;
     border-bottom: 1px solid var(--border);
     margin-bottom: 6px;
-    gap: 8px;
     flex-wrap: wrap;
 }
 
