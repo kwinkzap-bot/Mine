@@ -1128,11 +1128,11 @@ class Intraday920Tracker {
                     <div class="header-metrics">
                         <span class="metric-item sl-metric">
                             <span class="metric-label">SL:</span>
-                            <span class="metric-value sl-color">${this.formatPrice(analysis.sl)} (${slPoints.toFixed(2)}pts)</span>
+                            <span class="metric-value sl-color">${this.formatPrice(analysis.sl)} (${slPoints.toFixed(2)})</span>
                         </span>
                         <span class="metric-item target-metric">
                             <span class="metric-label">Target:</span>
-                            <span class="metric-value target-color">${this.formatPrice(analysis.target)} (${targetPoints.toFixed(2)}pts)</span>
+                            <span class="metric-value target-color">${this.formatPrice(analysis.target)} (${targetPoints.toFixed(2)})</span>
                         </span>
                     </div>
                     <span class="entry-high">📌 ${this.formatPrice(analysis.strike_price)}</span>

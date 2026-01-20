@@ -956,6 +956,12 @@ class Intraday920Strategy:
                             if new_trailed_sl > trailed_sl:
                                 trailed_sl = new_trailed_sl
                                 logger.info(f"{side} Trailing SL updated: {trailed_sl} (price high: {candle_high})")
+                        else:
+                            # MISSING FIX: If price pulls back below entry after target hit, 
+                            # ensure SL stays at least at entry_price (lock in the gain)
+                            if trailed_sl < result['entry_price']:
+                                trailed_sl = result['entry_price']
+                                logger.info(f"{side} SL locked at entry: {result['entry_price']} (price pulled back to {candle_high})")
                         
                         # Check if trailed SL is hit
                         if candle_low <= trailed_sl:
