@@ -191,11 +191,15 @@ class Intraday920Strategy:
             pe_low = 0
             
             try:
-                strike_data = self.data_service.get_strike_tokens(symbol, ce_strike, pe_strike)
-                ce_token = strike_data.get('ce_token')
-                pe_token = strike_data.get('pe_token')
+                # Get tokens for CE strike (returns CE option for ce_strike)
+                ce_strike_data = self.data_service.get_strike_tokens(symbol, ce_strike)
+                ce_token = ce_strike_data.get('ce_token')
                 
-                logger.info(f"Got tokens - CE Token: {ce_token}, PE Token: {pe_token}")
+                # Get tokens for PE strike (returns PE option for pe_strike)
+                pe_strike_data = self.data_service.get_strike_tokens(symbol, pe_strike)
+                pe_token = pe_strike_data.get('pe_token')
+                
+                logger.info(f"Got tokens - CE strike {ce_strike}: {ce_token}, PE strike {pe_strike}: {pe_token}")
                 
                 # Only fetch candles if explicitly requested (skip during initial load for speed)
                 if fetch_candles:
