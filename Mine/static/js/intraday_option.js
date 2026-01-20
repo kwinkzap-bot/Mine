@@ -568,9 +568,7 @@ class IntradayOptionTracker {
             border-radius: 8px;
             padding: 20px;
             z-index: 10000;
-            max-height: 80vh;
             overflow-y: auto;
-            min-width: 400px;
             color: #e2e8f0;
             box-shadow: 0 0 50px rgba(0,0,0,0.9);
         `;
@@ -578,7 +576,7 @@ class IntradayOptionTracker {
         let content = `
             <h3 style="margin-top: 0; color: #60a5fa;">Available Strikes for ${symbol}</h3>
             <p>Select a strike to start monitoring:</p>
-            <div style="max-height: 400px; overflow-y: auto;">
+            <div style=" overflow-y: auto;">
         `;
 
         strikes.forEach(strike => {
