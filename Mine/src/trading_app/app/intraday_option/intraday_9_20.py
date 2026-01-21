@@ -650,16 +650,19 @@ class Intraday920Strategy:
             return []
     def backtest_full_day(self, ce_token: int, pe_token: int, ce_high: float, pe_high: float,
                          symbol: str = 'NIFTY', target_date: Optional[datetime] = None,
-                         risk_reward_ratio: str = '1:2-trail') -> Dict[str, Any]:
+                         risk_reward_ratio: str = '1:2-trail', entry_mode: str = 'candle_open') -> Dict[str, Any]:
         """
         Run comprehensive backtest checking all 5-minute candles from 9:20 to 3:20.
         
+        Entry Modes:
+        - "candle_open": Entry when low < PDH AND close > (PDH + 5 points)
+        - "high_cross": Entry when 5min high + 5 crosses (penetrates) the reference level
+        
         IMPORTANT: ce_high and pe_high parameters represent NIFTY's PDH (Previous Day High)
         for BOTH CE and PE sides. This is the reference level that the strategy trades around.
-        Entry condition: low < pdh AND close > (pdh + 5 points)
         
         Identifies:
-        - Entry point (when low < pdh AND close > pdh + 5)
+        - Entry point (based on selected entry_mode)
         - Exit point (when hits SL or target)
         - Exit reason (SL hit, Target hit, or no exit)
         
@@ -670,6 +673,8 @@ class Intraday920Strategy:
             pe_high: NIFTY's Previous Day High (PDH) - reference level for entry
             symbol: Trading symbol (NIFTY)
             target_date: Date to backtest (datetime object or None for today)
+            risk_reward_ratio: Risk/reward ratio ('1:2', '1:3', or '1:2-trail')
+            entry_mode: Entry signal mode ('candle_open' or 'high_cross')
             
         Returns:
             Detailed backtest results for both CE and PE
@@ -707,18 +712,18 @@ class Intraday920Strategy:
                 if ce_candles or pe_candles:
                     logger.info(f"Backtest: Fallback successful. Using {actual_date.date()} instead of {target_date.date()}")
             
-            logger.info(f"Backtest ({actual_date.date()}): Got {len(ce_candles)} CE candles and {len(pe_candles)} PE candles")
+            logger.info(f"Backtest ({actual_date.date()}): Got {len(ce_candles)} CE candles and {len(pe_candles)} PE candles, Entry Mode: {entry_mode}")
             
             # Analyze CE side (entry condition: low < pe_high AND close > pe_high)
             ce_result = self._analyze_entry_exit(
                 ce_candles, pe_high, 'CE',
-                ce_high, pe_high, symbol, risk_reward_ratio
+                ce_high, pe_high, symbol, risk_reward_ratio, entry_mode
             )
             
             # Analyze PE side (entry condition: low < ce_high AND close > ce_high)
             pe_result = self._analyze_entry_exit(
                 pe_candles, ce_high, 'PE',
-                ce_high, pe_high, symbol, risk_reward_ratio
+                ce_high, pe_high, symbol, risk_reward_ratio, entry_mode
             )
             
             # Results already have correct timestamps (UTC with close time adjustment)
@@ -776,9 +781,14 @@ class Intraday920Strategy:
             return []
 
     def _analyze_entry_exit(self, candles: List[Dict], reference_high: float, side: str,
-                           ce_high: float, pe_high: float, symbol: str, risk_reward_ratio: str = '1:2-trail') -> Dict[str, Any]:
+                           ce_high: float, pe_high: float, symbol: str, risk_reward_ratio: str = '1:2-trail',
+                           entry_mode: str = 'candle_open') -> Dict[str, Any]:
         """
         Analyze candles to find entry and exit points.
+        
+        Entry Modes:
+        - "candle_open": Entry when low < reference_high AND close > (reference_high + 5)
+        - "high_cross": Entry when 5-min high + 5 crosses above (penetrates) the reference level
         
         Args:
             candles: List of 5-minute candles
@@ -788,6 +798,7 @@ class Intraday920Strategy:
             pe_high: PE first 5-min high
             symbol: Trading symbol
             risk_reward_ratio: Risk/reward ratio ('1:2', '1:3', or '1:2-trail')
+            entry_mode: Entry signal mode ('candle_open' or 'high_cross')
             
         Returns:
             Entry and exit analysis
@@ -815,84 +826,114 @@ class Intraday920Strategy:
             first_candle = candles[0]
             day_open = first_candle.get('close', 0)  # First candle close = day open
             logger.info(f"{side} First candle - Time: {first_candle.get('time', 'N/A')}, Low: {first_candle.get('low')}, Close: {day_open}")
-            logger.info(f"{side} Day open: {day_open}, Reference high: {reference_high}, Open above ref: {day_open > reference_high}")
+            logger.info(f"{side} Day open: {day_open}, Reference high: {reference_high}, Open above ref: {day_open > reference_high}, Entry Mode: {entry_mode}")
         
-        # Determine entry requirement based on day open vs reference high
-        day_open = candles[0].get('close', 0) if candles else 0
-        requires_close_below = day_open > reference_high  # If day opened above ref high, need a close below first
-        has_closed_below = False  # Track if we've seen a close below reference high
-        
-        # Search for entry point
+        # Search for entry point based on entry_mode
         entry_candle_idx = None
-        for idx, candle in enumerate(candles):
-            candle_low = candle.get('low', 0)
-            candle_close = candle.get('close', 0)
+        
+        if entry_mode == 'candle_open':
+            # CANDLE OPEN MODE: Entry when low < ref_high AND close > (ref_high + 5)
+            day_open = candles[0].get('close', 0) if candles else 0
+            requires_close_below = day_open > reference_high  # If day opened above ref high, need a close below first
+            has_closed_below = False  # Track if we've seen a close below reference high
             
-            # EXCEPTION: First candle (idx=0) is exempt from close-below requirement
-            # The first candle IS the day_open baseline - we can't require it to close below itself
-            is_first_candle = (idx == 0)
-            
-            # If day opened above ref high, first check if this candle closes below ref high
-            # EXCEPT for the first candle - it's exempt from this requirement
-            if requires_close_below and not has_closed_below and not is_first_candle:
-                logger.info(f"{side} Candle {idx}: Waiting for close < {reference_high}. Current close: {candle_close}")
-                if candle_close < reference_high:
-                    has_closed_below = True
-                    logger.info(f"{side} Candle {idx} closed below {reference_high}, entry condition now valid")
-                continue  # Skip entry check in this candle, need next candles
-            
-            # Entry condition: low < ref_high AND close > (ref_high + 5 points)
-            entry_threshold = reference_high + 5
-            # Check if close is within 20 points of reference_high
-            close_ref_diff = abs(candle_close - reference_high)
-            logger.info(f"{side} Candle {idx}: Low={candle_low:.2f}, Close={candle_close:.2f}, Threshold={entry_threshold:.2f}, Close-Ref Diff={close_ref_diff:.2f}, Meets entry? {candle_low < reference_high and candle_close > entry_threshold and close_ref_diff < 20}")
-            
-            if candle_low < reference_high and candle_close > entry_threshold and close_ref_diff < 20:
-                # Check reference_high and close difference constraint (max 20 points)
-                if close_ref_diff >= 20:
-                    logger.info(f"{side} Candle {idx}: Entry rejected - Close-Ref diff: {close_ref_diff:.2f} >= 20 points (max 20 allowed)")
+            for idx, candle in enumerate(candles):
+                candle_low = candle.get('low', 0)
+                candle_close = candle.get('close', 0)
+                
+                # EXCEPTION: First candle (idx=0) is exempt from close-below requirement
+                is_first_candle = (idx == 0)
+                
+                # If day opened above ref high, first check if this candle closes below ref high
+                if requires_close_below and not has_closed_below and not is_first_candle:
+                    logger.info(f"{side} Candle {idx}: Waiting for close < {reference_high}. Current close: {candle_close}")
+                    if candle_close < reference_high:
+                        has_closed_below = True
+                        logger.info(f"{side} Candle {idx} closed below {reference_high}, entry condition now valid")
                     continue
                 
-                # If we required close below, verify it happened (EXCEPT for first candle which is exempt)
-                if requires_close_below and not has_closed_below and not is_first_candle:
-                    logger.info(f"{side} Candle {idx}: Close below needed, skipping")
-                    continue  # Haven't seen close below yet
+                # Entry condition: low < ref_high AND close > (ref_high + 5 points)
+                entry_threshold = reference_high + 5
+                close_ref_diff = abs(candle_close - reference_high)
+                logger.info(f"{side} Candle {idx}: Low={candle_low:.2f}, Close={candle_close:.2f}, Threshold={entry_threshold:.2f}, Close-Ref Diff={close_ref_diff:.2f}")
                 
-                entry_candle_idx = idx
-                result['has_entry'] = True
-                # Get time as Unix timestamp
-                # Kite_data_fetch_services adds IST offset for charts, but we need to:
-                # 1. Remove the offset to get true UTC time
-                # 2. Add 5 minutes to convert open time to close time
-                raw_entry_time = candle.get('time', candle.get('date'))
-                ist_offset_seconds = int(5.5 * 3600)  # 19800 seconds
-                true_utc_time = raw_entry_time - ist_offset_seconds  # Remove offset
-                close_time = true_utc_time + 300  # Add 5 minutes for close time
-                result['entry_time'] = close_time
-                result['entry_price'] = candle_close
+                if candle_low < reference_high and candle_close > entry_threshold and close_ref_diff < 20:
+                    if close_ref_diff >= 20:
+                        logger.info(f"{side} Candle {idx}: Entry rejected - Close-Ref diff: {close_ref_diff:.2f} >= 20 points")
+                        continue
+                    
+                    if requires_close_below and not has_closed_below and not is_first_candle:
+                        logger.info(f"{side} Candle {idx}: Close below needed, skipping")
+                        continue
+                    
+                    entry_candle_idx = idx
+                    result['has_entry'] = True
+                    raw_entry_time = candle.get('time', candle.get('date'))
+                    ist_offset_seconds = int(5.5 * 3600)
+                    true_utc_time = raw_entry_time - ist_offset_seconds
+                    close_time = true_utc_time + 300
+                    result['entry_time'] = close_time
+                    result['entry_price'] = candle_close
+                    
+                    ratio_type = '1:2' if risk_reward_ratio in ['1:2', '1:2-trail'] else '1:3'
+                    sl_data = self.calculate_sl_for_entry(candle_close, reference_high, ratio=ratio_type)
+                    result['sl'] = sl_data.get('sl')
+                    result['target'] = sl_data.get('target')
+                    
+                    entry_reason = "Entry (Candle Open)"
+                    if is_first_candle:
+                        entry_reason += " [first candle]"
+                    elif requires_close_below:
+                        entry_reason += " [after close below]"
+                    logger.info(f"{side} {entry_reason} at {result['entry_time']}: Price {candle_close}, SL {result['sl']}, Target {result['target']}")
+                    break
+            
+            if not result['has_entry']:
+                if requires_close_below and not has_closed_below:
+                    result['reason'] = f'Waiting for close below {reference_high} (day opened above)'
+                else:
+                    result['reason'] = f'No entry: low < {reference_high}, close > {reference_high + 5} not met'
+                return result
+        
+        elif entry_mode == 'high_cross':
+            # HIGH CROSS MODE: Entry when 5-min high + 5 crosses above the reference level
+            previous_high_plus_5 = None
+            
+            for idx, candle in enumerate(candles):
+                candle_high = candle.get('high', 0)
+                candle_close = candle.get('close', 0)
+                current_high_plus_5 = candle_high + 5
                 
-                # Calculate SL and Target based on selected ratio
-                # Extract ratio type: '1:2', '1:3', or '1:2-trail'
-                ratio_type = '1:2' if risk_reward_ratio in ['1:2', '1:2-trail'] else '1:3'
-                sl_data = self.calculate_sl_for_entry(candle_close, reference_high, ratio=ratio_type)
-                result['sl'] = sl_data.get('sl')
-                result['target'] = sl_data.get('target')
+                logger.info(f"{side} Candle {idx}: High={candle_high:.2f}, High+5={current_high_plus_5:.2f}, Ref={reference_high:.2f}, Cross? {previous_high_plus_5 is not None and previous_high_plus_5 <= reference_high and current_high_plus_5 > reference_high}")
                 
-                entry_reason = "Entry"
-                if is_first_candle:
-                    entry_reason += " (first candle)"
-                elif requires_close_below:
-                    entry_reason += " (after close below ref high)"
-                logger.info(f"{side} {entry_reason} at {result['entry_time']}: Price {candle_close}, SL {result['sl']}, Target {result['target']}")
-                break
+                # Check if high + 5 crosses above reference level
+                if previous_high_plus_5 is not None and previous_high_plus_5 <= reference_high and current_high_plus_5 > reference_high:
+                    # Entry signal: high + 5 crossed above reference level
+                    entry_candle_idx = idx
+                    result['has_entry'] = True
+                    raw_entry_time = candle.get('time', candle.get('date'))
+                    ist_offset_seconds = int(5.5 * 3600)
+                    true_utc_time = raw_entry_time - ist_offset_seconds
+                    close_time = true_utc_time + 300
+                    result['entry_time'] = close_time
+                    result['entry_price'] = candle_close  # Entry at current candle close
+                    
+                    ratio_type = '1:2' if risk_reward_ratio in ['1:2', '1:2-trail'] else '1:3'
+                    sl_data = self.calculate_sl_for_entry(candle_close, reference_high, ratio=ratio_type)
+                    result['sl'] = sl_data.get('sl')
+                    result['target'] = sl_data.get('target')
+                    
+                    logger.info(f"{side} Entry (High Cross) at candle {idx}: High {candle_high} + 5 > {reference_high}, Price {candle_close}, SL {result['sl']}, Target {result['target']}")
+                    break
+                
+                previous_high_plus_5 = current_high_plus_5
+            
+            if not result['has_entry']:
+                result['reason'] = f'No entry: High + 5 never crossed above {reference_high}'
+                return result
         
         # If no entry found, return
         if not result['has_entry']:
-            if requires_close_below and not has_closed_below:
-                result['reason'] = f'Waiting for close below {reference_high} (day opened above)'
-            else:
-                result['reason'] = f'No entry condition met (low < {reference_high}, close > {reference_high + 5})'
-            return result
         
         # Search for exit point (from entry candle onwards)
         if entry_candle_idx is not None:

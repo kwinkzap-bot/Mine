@@ -973,6 +973,10 @@ class Intraday920Tracker {
             const ratioSelect = document.getElementById('riskRewardRatio');
             const selectedRatio = ratioSelect ? ratioSelect.value : '1:2-trail';
             
+            // Get selected entry mode
+            const entryModeSelect = document.getElementById('entryMode');
+            const selectedEntryMode = entryModeSelect ? entryModeSelect.value : 'candle_open';
+            
             const payload = {
                 symbol: this.symbol,
                 ce_token: ceToken,
@@ -981,7 +985,8 @@ class Intraday920Tracker {
                 pe_high: peHigh,
                 ce_strike_price: strikeData.ce_strike || null,
                 pe_strike_price: strikeData.pe_strike || null,
-                risk_reward_ratio: selectedRatio
+                risk_reward_ratio: selectedRatio,
+                entry_mode: selectedEntryMode
             };
 
             if (this.selectedDate) {

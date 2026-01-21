@@ -1875,41 +1875,28 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
     Run comprehensive backtest for entire trading day (9:20 to 3:20).
     Checks all 5-minute candles for entry and exit conditions.
     
-    Strategy: Entry when low < PDH AND close > (PDH + 5 points)
+    Entry Modes:
+    - "candle_open": Entry when low < PDH AND close > (PDH + 5 points)
+    - "high_cross": Entry when 5min high + 5 crosses (penetrates) the reference level
     
     POST Payload:
         {
             "symbol": "NIFTY",
             "ce_token": 12345678,           # CE option token
             "pe_token": 87654321,           # PE option token
-            "ce_high": 24500.50,            # NIFTY's Previous Day High (PDH) - IMPORTANT!
-            "pe_high": 24500.50,            # NIFTY's Previous Day High (PDH) - IMPORTANT!
+            "ce_high": 24500.50,            # NIFTY's Previous Day High (PDH)
+            "pe_high": 24500.50,            # NIFTY's Previous Day High (PDH)
             "ce_strike_price": 25100,       # Optional - CE strike price
             "pe_strike_price": 25000,       # Optional - PE strike price
-            "date": "2026-01-12"            # Optional - date to backtest
+            "date": "2026-01-12",           # Optional - date to backtest
+            "risk_reward_ratio": "1:2-trail", # Optional - default "1:2-trail"
+            "entry_mode": "candle_open"     # Optional - "candle_open" or "high_cross", default "candle_open"
         }
-    
-    IMPORTANT: ce_high and pe_high MUST be NIFTY's PDH (Previous Day High), not option strike highs.
-    Both CE and PE sides use the SAME reference level (NIFTY's PDH) for entry detection.
     
     Returns:
         {
             "success": true,
-            "ce_analysis": {
-                "side": "CE",
-                "has_entry": true,
-                "entry_time": "2026-01-12T09:25:00",
-                "entry_price": 352.50,
-                "entry_high": 24500.50,     # Reference level (NIFTY PDH)
-                "strike_price": 25100,      # CE strike price from request
-                "sl": 280.25,
-                "target": 362.50,
-                "exit_time": "2026-01-12T10:30:00",
-                "exit_price": 362.50,
-                "exit_reason": "Target Hit",
-                "pnl": 72.25,
-                "candle_count": 34
-            },
+            "ce_analysis": { ... },
             "pe_analysis": { ... }
         }
     """
@@ -1935,6 +1922,14 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
         pe_strike_price = data.get('pe_strike_price')
         date_str = data.get('date')
         risk_reward_ratio = data.get('risk_reward_ratio', '1:2-trail')  # Default to 1:2 with trail SL
+        entry_mode = data.get('entry_mode', 'candle_open')  # Default to candle_open
+        
+        # Validate entry_mode
+        if entry_mode not in ['candle_open', 'high_cross']:
+            return jsonify({
+                'success': False,
+                'error': 'entry_mode must be "candle_open" or "high_cross"'
+            }), 400
         
         # Validate required fields
         if not all([ce_token, pe_token, ce_high, pe_high]):
@@ -1967,7 +1962,7 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
         from trading_app.app.intraday_option.intraday_9_20 import Intraday920Strategy
         strategy = Intraday920Strategy(kite)
         
-        # Run full day backtest with selected risk/reward ratio
+        # Run full day backtest with selected risk/reward ratio and entry mode
         results = strategy.backtest_full_day(
             ce_token=ce_token,
             pe_token=pe_token,
@@ -1975,7 +1970,8 @@ def backtest_intraday_920_full_day() -> EndpointResponse:
             pe_high=pe_high,
             symbol=symbol,
             target_date=target_date,
-            risk_reward_ratio=risk_reward_ratio
+            risk_reward_ratio=risk_reward_ratio,
+            entry_mode=entry_mode
         )
         
         if not results.get('success'):
