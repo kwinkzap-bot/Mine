@@ -932,9 +932,6 @@ class Intraday920Strategy:
                 result['reason'] = f'No entry: High + 5 never crossed above {reference_high}'
                 return result
         
-        # If no entry found, return
-        if not result['has_entry']:
-        
         # Search for exit point (from entry candle onwards)
         if entry_candle_idx is not None:
             initial_sl = result['sl']
