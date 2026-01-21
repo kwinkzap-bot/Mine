@@ -897,18 +897,46 @@ class Intraday920Strategy:
         
         elif entry_mode == 'high_cross':
             # HIGH CROSS MODE: Entry when 5-min high + 5 crosses above the reference level
+            # WITH ALL existing Candle Open validations applied
+            
+            day_open = candles[0].get('close', 0) if candles else 0
+            requires_close_below = day_open > reference_high  # If day opened above ref high, need a close below first
+            has_closed_below = False  # Track if we've seen a close below reference high
             previous_high_plus_5 = None
             
             for idx, candle in enumerate(candles):
                 candle_high = candle.get('high', 0)
                 candle_close = candle.get('close', 0)
+                candle_low = candle.get('low', 0)
+                is_first_candle = (idx == 0)
                 current_high_plus_5 = candle_high + 5
                 
-                logger.info(f"{side} Candle {idx}: High={candle_high:.2f}, High+5={current_high_plus_5:.2f}, Ref={reference_high:.2f}, Cross? {previous_high_plus_5 is not None and previous_high_plus_5 <= reference_high and current_high_plus_5 > reference_high}")
+                # If day opened above ref high, first check if this candle closes below ref high
+                if requires_close_below and not has_closed_below and not is_first_candle:
+                    logger.info(f"{side} Candle {idx}: Waiting for close < {reference_high}. Current close: {candle_close}")
+                    if candle_close < reference_high:
+                        has_closed_below = True
+                        logger.info(f"{side} Candle {idx} closed below {reference_high}, entry condition now valid")
+                    previous_high_plus_5 = current_high_plus_5
+                    continue
                 
-                # Check if high + 5 crosses above reference level
-                if previous_high_plus_5 is not None and previous_high_plus_5 <= reference_high and current_high_plus_5 > reference_high:
-                    # Entry signal: high + 5 crossed above reference level
+                # Check ALL conditions for High Cross entry:
+                # 1. High + 5 must cross above reference level
+                # 2. Close must be within 20 points of reference_high
+                # 3. Low < reference_high (price touched/crossed the level)
+                entry_threshold = reference_high + 5
+                close_ref_diff = abs(candle_close - reference_high)
+                high_crossed = previous_high_plus_5 is not None and previous_high_plus_5 <= reference_high and current_high_plus_5 > reference_high
+                
+                logger.info(f"{side} Candle {idx}: High={candle_high:.2f}, High+5={current_high_plus_5:.2f}, Ref={reference_high:.2f}, Low={candle_low:.2f}, Close={candle_close:.2f}")
+                logger.info(f"{side}   Cross={high_crossed}, CloseRefDiff={close_ref_diff:.2f}, LowCheck={candle_low < reference_high}")
+                
+                # Entry signal: ALL conditions met
+                if (high_crossed and 
+                    candle_low < reference_high and 
+                    candle_close > entry_threshold and 
+                    close_ref_diff < 20):
+                    
                     entry_candle_idx = idx
                     result['has_entry'] = True
                     raw_entry_time = candle.get('time', candle.get('date'))
@@ -923,7 +951,12 @@ class Intraday920Strategy:
                     result['sl'] = sl_data.get('sl')
                     result['target'] = sl_data.get('target')
                     
-                    logger.info(f"{side} Entry (High Cross) at candle {idx}: High {candle_high} + 5 > {reference_high}, Price {candle_close}, SL {result['sl']}, Target {result['target']}")
+                    entry_reason = "Entry (High Cross)"
+                    if is_first_candle:
+                        entry_reason += " [first candle]"
+                    elif requires_close_below:
+                        entry_reason += " [after close below]"
+                    logger.info(f"{side} {entry_reason} at candle {idx}: High {candle_high} + 5 crossed > {reference_high}, Price {candle_close}, SL {result['sl']}, Target {result['target']}")
                     break
                 
                 previous_high_plus_5 = current_high_plus_5
