@@ -724,10 +724,6 @@ class Intraday920Tracker {
                     highStrike.pe_high,
                     'High Strike'
                 );
-                
-                if (highSignals.success) {
-                    this.updateSignalDisplay(highSignals, 'high');
-                }
             }
 
             // Check Low Strike signals (CE and PE entry conditions)
@@ -739,10 +735,6 @@ class Intraday920Tracker {
                     lowStrike.pe_high,
                     'Low Strike'
                 );
-                
-                if (lowSignals.success) {
-                    this.updateSignalDisplay(lowSignals, 'low');
-                }
             }
 
         } catch (e) {
@@ -802,53 +794,7 @@ class Intraday920Tracker {
         }
     }
 
-    /**
-     * Update signal display in the UI
-     */
-    updateSignalDisplay(signals, strikeType) {
-        const ceSignal = signals.ce_signal || {};
-        const peSignal = signals.pe_signal || {};
 
-        // Update CE signal
-        const ceEl = document.getElementById(`${strikeType}CeSignal`);
-        if (ceEl) {
-            if (ceSignal.has_signal) {
-                ceEl.innerHTML = `
-                    <div class="signal-active">
-                        <div class="signal-header">🟢 CE Entry Signal</div>
-                        <div class="signal-details">
-                            <div>Entry Price: <strong>${this.formatPrice(ceSignal.entry_price)}</strong></div>
-                            <div>SL: <strong>${this.formatPrice(ceSignal.sl)}</strong></div>
-                            <div>Target: <strong>${this.formatPrice(ceSignal.target)}</strong></div>
-                            <div class="signal-reason">${ceSignal.reason || ''}</div>
-                        </div>
-                    </div>
-                `;
-            } else {
-                ceEl.innerHTML = `<div class="signal-inactive">⚪ No CE Signal</div>`;
-            }
-        }
-
-        // Update PE signal
-        const peEl = document.getElementById(`${strikeType}PeSignal`);
-        if (peEl) {
-            if (peSignal.has_signal) {
-                peEl.innerHTML = `
-                    <div class="signal-active">
-                        <div class="signal-header">🟢 PE Entry Signal</div>
-                        <div class="signal-details">
-                            <div>Entry Price: <strong>${this.formatPrice(peSignal.entry_price)}</strong></div>
-                            <div>SL: <strong>${this.formatPrice(peSignal.sl)}</strong></div>
-                            <div>Target: <strong>${this.formatPrice(peSignal.target)}</strong></div>
-                            <div class="signal-reason">${peSignal.reason || ''}</div>
-                        </div>
-                    </div>
-                `;
-            } else {
-                peEl.innerHTML = `<div class="signal-inactive">⚪ No PE Signal</div>`;
-            }
-        }
-    }
 
     /**
      * Start auto-update polling
