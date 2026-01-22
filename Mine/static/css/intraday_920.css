@@ -705,7 +705,7 @@
 
 .backtest-content {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    grid-template-columns: repeat(2, 1fr);
     gap: 8px;
     align-items: stretch;
     grid-auto-rows: 1fr;
@@ -937,10 +937,6 @@
 }
 
 @media (max-width: 1024px) {
-    .strike-header {
-        flex-wrap: wrap;
-    }
-    
     .backtest-content {
         flex-wrap: wrap;
     }
