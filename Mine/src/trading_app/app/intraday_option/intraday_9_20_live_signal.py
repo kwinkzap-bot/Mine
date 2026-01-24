@@ -8,10 +8,57 @@ from typing import Dict, List, Any, Optional
 import logging
 import threading
 import time as time_module
+import os
 from .intraday_9_20 import Intraday920Strategy
 from ..service.kite_service import KiteService
 
 logger = logging.getLogger(__name__)
+
+# Order Placement Logger - dedicated file for order tracking
+ORDER_LOG_FILE = os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'order_placement.log')
+
+
+def log_order_placement(order_data: Dict[str, Any]) -> None:
+    """
+    Log order placement details to dedicated order placement log file.
+    
+    Args:
+        order_data: Dictionary containing order details
+    """
+    try:
+        os.makedirs(os.path.dirname(ORDER_LOG_FILE), exist_ok=True)
+        
+        with open(ORDER_LOG_FILE, 'a') as f:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            
+            log_entry = (
+                f"{'='*100}\n"
+                f"[{timestamp}] ORDER PLACEMENT LOG\n"
+                f"{'='*100}\n"
+                f"Timestamp: {timestamp}\n"
+                f"Symbol: {order_data.get('symbol', 'N/A')}\n"
+                f"Side: {order_data.get('side', 'N/A')}\n"
+                f"Strike: {order_data.get('strike', 'N/A')}\n"
+                f"Entry Price: {order_data.get('entry_price', 'N/A')}\n"
+                f"Order Type: {order_data.get('order_type', 'N/A')}\n"
+                f"Mode: {order_data.get('mode', 'N/A')}\n"
+                f"Status: {order_data.get('status', 'N/A')}\n"
+                f"Order ID: {order_data.get('order_id', 'N/A')}\n"
+                f"SL: {order_data.get('sl', 'N/A')}\n"
+                f"Target: {order_data.get('target', 'N/A')}\n"
+            )
+            
+            if order_data.get('error'):
+                log_entry += f"Error: {order_data.get('error')}\n"
+            
+            if order_data.get('details'):
+                log_entry += f"Details: {order_data.get('details')}\n"
+            
+            log_entry += f"{'='*100}\n\n"
+            
+            f.write(log_entry)
+    except Exception as e:
+        logger.error(f"Failed to write order placement log: {e}")
 
 
 class Intraday920LiveSignal:
@@ -246,6 +293,8 @@ class Intraday920LiveSignal:
         2. Fetches current market price
         3. Places market order on Zerodha Kite
         
+        Logs order placement to dedicated order_placement.log file.
+        
         Args:
             side: 'CE' or 'PE'
             token: Option token
@@ -260,6 +309,21 @@ class Intraday920LiveSignal:
         if not self.live_trading:
             demo_msg = f"DEMO: BUY {side} {strike} @ {entry_price:.2f}"
             logger.info(demo_msg)
+            
+            # Log DEMO order placement
+            log_order_placement({
+                'symbol': self.symbol,
+                'side': f'BUY {side}',
+                'strike': strike,
+                'entry_price': f"{entry_price:.2f}",
+                'order_type': 'MARKET',
+                'mode': 'DEMO',
+                'status': 'SUCCESS',
+                'order_id': 'DEMO_ORDER',
+                'sl': 'N/A',
+                'target': 'N/A'
+            })
+            
             return "DEMO_ORDER"
         
         try:
@@ -272,13 +336,61 @@ class Intraday920LiveSignal:
             
             if result['success']:
                 logger.info(f"✅ BUY Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {entry_price:.2f}")
+                
+                # Log successful live order placement
+                log_order_placement({
+                    'symbol': self.symbol,
+                    'side': f'BUY {side}',
+                    'strike': strike,
+                    'entry_price': f"{entry_price:.2f}",
+                    'order_type': 'MARKET',
+                    'mode': 'LIVE',
+                    'status': 'SUCCESS',
+                    'order_id': result['order_id'],
+                    'sl': 'N/A',
+                    'target': 'N/A',
+                    'details': f"Order placed successfully on Zerodha"
+                })
+                
                 return result['order_id']
             else:
                 logger.error(f"❌ BUY Order failed: {result['error']}")
+                
+                # Log failed live order placement
+                log_order_placement({
+                    'symbol': self.symbol,
+                    'side': f'BUY {side}',
+                    'strike': strike,
+                    'entry_price': f"{entry_price:.2f}",
+                    'order_type': 'MARKET',
+                    'mode': 'LIVE',
+                    'status': 'FAILED',
+                    'order_id': 'N/A',
+                    'sl': 'N/A',
+                    'target': 'N/A',
+                    'error': result['error']
+                })
+                
                 return None
                 
         except Exception as e:
             logger.error(f"Error placing BUY order for {side} {strike}: {e}", exc_info=True)
+            
+            # Log exception during order placement
+            log_order_placement({
+                'symbol': self.symbol,
+                'side': f'BUY {side}',
+                'strike': strike,
+                'entry_price': f"{entry_price:.2f}",
+                'order_type': 'MARKET',
+                'mode': 'LIVE',
+                'status': 'EXCEPTION',
+                'order_id': 'N/A',
+                'sl': 'N/A',
+                'target': 'N/A',
+                'error': str(e)
+            })
+            
             return None
     
     def place_sell_order(self, side: str, strike: int, exit_price: float, exit_reason: str = "Manual Exit") -> Optional[str]:
@@ -289,6 +401,8 @@ class Intraday920LiveSignal:
         1. Looks up the option trading symbol
         2. Fetches current market price
         3. Places market order on Zerodha Kite
+        
+        Logs order placement to dedicated order_placement.log file.
         
         Args:
             side: 'CE' or 'PE'
@@ -304,6 +418,22 @@ class Intraday920LiveSignal:
         if not self.live_trading:
             demo_msg = f"DEMO: SELL {side} {strike} @ {exit_price:.2f} | {exit_reason}"
             logger.info(demo_msg)
+            
+            # Log DEMO sell order placement
+            log_order_placement({
+                'symbol': self.symbol,
+                'side': f'SELL {side}',
+                'strike': strike,
+                'entry_price': f"{exit_price:.2f}",
+                'order_type': 'MARKET',
+                'mode': 'DEMO',
+                'status': 'SUCCESS',
+                'order_id': 'DEMO_ORDER',
+                'sl': 'N/A',
+                'target': 'N/A',
+                'details': f"Exit Reason: {exit_reason}"
+            })
+            
             return "DEMO_ORDER"
         
         try:
@@ -316,11 +446,64 @@ class Intraday920LiveSignal:
             
             if result['success']:
                 logger.info(f"✅ SELL Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {exit_price:.2f} | {exit_reason}")
+                
+                # Log successful live sell order placement
+                log_order_placement({
+                    'symbol': self.symbol,
+                    'side': f'SELL {side}',
+                    'strike': strike,
+                    'entry_price': f"{exit_price:.2f}",
+                    'order_type': 'MARKET',
+                    'mode': 'LIVE',
+                    'status': 'SUCCESS',
+                    'order_id': result['order_id'],
+                    'sl': 'N/A',
+                    'target': 'N/A',
+                    'details': f"Exit Reason: {exit_reason}"
+                })
+                
                 return result['order_id']
             else:
                 logger.error(f"❌ SELL Order failed: {result['error']} ({exit_reason})")
+                
+                # Log failed live sell order placement
+                log_order_placement({
+                    'symbol': self.symbol,
+                    'side': f'SELL {side}',
+                    'strike': strike,
+                    'entry_price': f"{exit_price:.2f}",
+                    'order_type': 'MARKET',
+                    'mode': 'LIVE',
+                    'status': 'FAILED',
+                    'order_id': 'N/A',
+                    'sl': 'N/A',
+                    'target': 'N/A',
+                    'error': result['error'],
+                    'details': f"Exit Reason: {exit_reason}"
+                })
+                
                 return None
                 
+        except Exception as e:
+            logger.error(f"Error placing SELL order for {side} {strike}: {e}", exc_info=True)
+            
+            # Log exception during sell order placement
+            log_order_placement({
+                'symbol': self.symbol,
+                'side': f'SELL {side}',
+                'strike': strike,
+                'entry_price': f"{exit_price:.2f}",
+                'order_type': 'MARKET',
+                'mode': 'LIVE',
+                'status': 'EXCEPTION',
+                'order_id': 'N/A',
+                'sl': 'N/A',
+                'target': 'N/A',
+                'error': str(e),
+                'details': f"Exit Reason: {exit_reason}"
+            })
+            
+            return None
         except Exception as e:
             logger.error(f"Error placing SELL order for {side} {strike}: {e}", exc_info=True)
             return None
