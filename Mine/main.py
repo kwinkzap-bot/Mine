@@ -29,8 +29,8 @@ def start_intraday_9_20_monitoring():
             logger.warning("⚠️  Kite connection not available - skipping Intraday 9:20 monitoring")
             return
         
-        # Create monitors for each symbol
-        symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+        # Create monitors for NIFTY only
+        symbols = ['NIFTY']
         
         for symbol in symbols:
             try:
