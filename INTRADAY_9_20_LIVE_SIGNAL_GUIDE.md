@@ -18,7 +18,8 @@
 
 The **Intraday 9:20 Live Signal Monitoring System** (`intraday_9_20_live_signal.py`) is a real-time trading signal detection and automated order placement system that:
 
-- **Monitors every 30 seconds** during market hours
+- **Monitors entry signals every 5 minutes** at 5-minute marks (9:15, 9:20, 9:25, ..., 3:15, 3:20)
+- **Monitors SL/Target every 30 seconds** for responsive exit detection
 - **Market hours**: 9:15 AM - 3:30 PM IST (Monday-Friday only)
 - **Detects entry signals** for CE (Call) and PE (Put) options using `strategy.check_entry_signal()`
 - **Automatically places orders** on Zerodha Kite when signals detected
@@ -220,118 +221,187 @@ Live signal monitoring started for NIFTY
 ### **Phase 3: Main Monitoring Loop** (MOST IMPORTANT)
 
 ```python
-# Location: intraday_9_20_live_signal.py, lines ~260-350
-# This runs in background, every 30 seconds
-# Uses reused methods from strategy and kite_service
+# Location: intraday_9_20_live_signal.py, lines ~525-615
+# Runs in background thread with TWO-TIER monitoring:
+# 1. Entry signals: Every 5 minutes (9:15, 9:20, 9:25, ...)
+# 2. SL/Target checks: Every 30 seconds
 
 def _monitor_loop(self):
     """
-    Main monitoring loop - runs in background thread.
-    Uses strategy.check_entry_signal() to detect entries.
-    Uses kite_service.place_option_order() to place orders.
+    Main monitoring loop - two-tier monitoring strategy.
+    
+    ENTRY SIGNALS: Checked only at 5-minute marks
+    SL/TARGET MONITORING: Checked every 30 seconds
     """
 ```
 
 **Execution Timeline:**
 
 ```
-TIME: 9:15:00 - 9:15:29
-└─ Loop starts
-   └─ Check should_check_now()
-      └─ current_second = 15
-      └─ Return False (not 0 or 30)
-   └─ Sleep 1 second
-   └─ Loop back
-
-TIME: 9:15:30 ✓ FIRST CHECK
+TIME: 9:15:00 ✓ FIRST ENTRY CHECK (5-minute mark)
 └─ Loop iteration
-   ├─ Check should_check_now()
-   │  └─ current_second = 30 ✓
+   ├─ Check should_check_entry_signal()
+   │  └─ minute=15, second=0 → minute % 5 == 0 ✓
    │  └─ Return True
    │
-   ├─ Check is_market_hours()
-   │  ├─ Current time: 9:15:30 IST
-   │  ├─ Between 9:15:00 and 15:30:00? YES ✓
-   │  └─ Return True
+   ├─ Check is_market_hours() → True (9:15 AM)
    │
-   ├─ Fetch live data
-   │  ├─ Call strategy.get_intraday_920_data('NIFTY')
+   ├─ Fetch live data for NIFTY
    │  ├─ Get current prices
    │  ├─ Get first 5-min candle high/low
    │  ├─ Calculate CE/PE strikes
    │  └─ Return strike data with tokens
    │
-   ├─ Extract strike information
-   │  ├─ high_strike data (CE/PE tokens, high/low)
-   │  └─ low_strike data (CE/PE tokens, high/low)
-   │
-   ├─ Check HIGH STRIKE signals
+   ├─ Check HIGH STRIKE entry signals
    │  ├─ Call check_entry_signal_live()
    │  │  ├─ Fetch latest 5-min candles for CE/PE
-   │  │  ├─ Analyze CE entry (vs PE high reference)
-   │  │  ├─ Analyze PE entry (vs CE high reference)
-   │  │  └─ Return signals dict
+   │  │  ├─ Analyze CE entry conditions
+   │  │  └─ Analyze PE entry conditions
    │  │
-   │  ├─ If signal found:
-   │  │  ├─ Update active trades
-   │  │  │  ├─ Add CE trade if CE signal
-   │  │  │  └─ Add PE trade if PE signal
-   │  │  │
-   │  │  ├─ Log signal
-   │  │  │  └─ Add to today_signals list
-   │  │  │
-   │  │  └─ Log message
-   │  │     └─ "📊 HIGH STRIKE CE SIGNAL: 245.50"
+   │  └─ If signal found:
+   │     ├─ Place buy order (DEMO or LIVE)
+   │     ├─ Create trade record
+   │     └─ Log signal
    │
-   ├─ Check LOW STRIKE signals
-   │  └─ (Same process as HIGH STRIKE)
+   ├─ Check LOW STRIKE entry signals (same as HIGH)
    │
-   └─ Sleep 30 seconds
-      └─ Wait until next 30-second mark
+   └─ Continue monitoring
 
-TIME: 9:16:00 ✓ SECOND CHECK
-└─ (Process repeats)
+TIME: 9:15:30 ✓ FIRST SL/TARGET CHECK (30-second mark)
+└─ Loop iteration
+   ├─ Check should_check_entry_signal()
+   │  └─ minute=15, second=30 → second != 0 ✗
+   │  └─ Return False (SKIP entry signal check)
+   │
+   ├─ Check should_check_now()
+   │  └─ second=30 ✓
+   │  └─ Return True
+   │
+   └─ Monitor active trades
+      └─ Check SL/Target hits for open trades
 
-TIME: 9:16:30 ✓ THIRD CHECK
-└─ (Process repeats)
+TIME: 9:16:00 ✓ SECOND SL/TARGET CHECK (30-second mark)
+└─ Loop iteration
+   ├─ Check should_check_entry_signal()
+   │  └─ minute=16, second=0 → minute % 5 != 0 ✗
+   │  └─ Return False (SKIP entry signal check)
+   │
+   ├─ Check should_check_now()
+   │  └─ second=0 ✓
+   │  └─ Return True
+   │
+   └─ Monitor active trades
 
-[Continues every 30 seconds until 3:30 PM]
+TIME: 9:16:30 ✓ SL/TARGET CHECK (30-second mark)
+└─ Loop iteration
+   ├─ Check should_check_entry_signal()
+   │  └─ minute=16, second=30 → second != 0 ✗
+   │  └─ Return False (SKIP entry signal check)
+   │
+   ├─ Check should_check_now()
+   │  └─ second=30 ✓
+   │  └─ Return True
+   │
+   └─ Monitor active trades
 
-TIME: 3:24:30 ✓ LAST CHECK
-└─ (Process repeats)
+TIME: 9:20:00 ✓ SECOND ENTRY CHECK (5-minute mark)
+└─ Loop iteration
+   ├─ Check should_check_entry_signal()
+   │  └─ minute=20, second=0 → minute % 5 == 0 ✓
+   │  └─ Return True
+   │
+   ├─ Fetch live data and check entry signals
+   ├─ Place any new orders
+   │
+   └─ Continue monitoring
 
-TIME: 3:25:00 - 3:30:00
-└─ Loop continues checking
-   └─ is_market_hours() returns False
-   └─ Sleep 1 second
-   └─ Loop back
-   └─ Continues until stop_monitoring() called or app closes
+[Pattern repeats...]
+
+TIME: 9:20:30 ✓ SL/TARGET CHECK (30-second mark)
+TIME: 9:21:00 ✓ SL/TARGET CHECK (30-second mark)
+...
+TIME: 12:10:00 ✓ ENTRY CHECK (next 5-minute mark: 12:10)
+...
+TIME: 3:20:00 ✓ LAST ENTRY CHECK (3:20 PM = 15:20)
+TIME: 3:20:30 ✓ LAST SL/TARGET CHECK
+TIME: 3:21:00+ → Outside market hours (closes at 3:30 PM)
 ```
+
+**Key Points:**
+
+1. **Entry Checks Only at 5-Minute Marks**:
+   - 9:15, 9:20, 9:25, 9:30, 9:35, ..., 3:10, 3:15, 3:20
+   - Between these times: Entry signal checking SKIPPED
+   - Reduces API calls by ~83% (1 check every 5 min vs every 30 sec)
+
+2. **SL/Target Monitored Every 30 Seconds**:
+   - At 0 and 30 second marks: Check for exits
+   - Ensures quick response to SL hits and target achievement
+   - Active trades continuously monitored for price movements
+
+3. **Benefits of Two-Tier Approach**:
+   - ✅ Entry signals aligned with market structure (5-min candles)
+   - ✅ Exit monitoring responsive (30-second intervals)
+   - ✅ Lower API usage (fewer data fetches)
+   - ✅ More precise entry detection (full 5-min candle analysis)
 
 ---
 
 ## Monitoring Loop Details
 
+### **Two-Tier Monitoring Strategy**
+
+The monitoring system now uses a dual-interval approach:
+
+**1. ENTRY SIGNALS** - 5-Minute Interval Checks
+- Checked only at 5-minute marks (9:15, 9:20, 9:25, 9:30, ..., 3:10, 3:15, 3:20)
+- Less frequent checks reduce API calls and processing overhead
+- Full data fetch and entry condition analysis at each 5-minute mark
+- Example times: 9:15:00, 9:20:00, 9:25:00, 12:10:00, 12:15:00, 3:15:00, 3:20:00
+
+**2. SL/TARGET MONITORING** - 30-Second Interval Checks
+- Checked every 30 seconds (at 0 and 30 second marks)
+- Continuous monitoring of active trades for stop loss and target hits
+- More frequent checks ensure quick exit detection
+- Responsive to price movements for exit orders
+
 ### **Check Interval Logic**
 
 ```python
+def should_check_entry_signal(self) -> bool:
+    """
+    Determine if we should check for ENTRY signals now.
+    Returns True only at 5-minute marks (9:15, 9:20, 9:25, ..., 3:15, 3:20).
+    """
+    now = datetime.now()
+    return now.minute % 5 == 0 and now.second == 0
+
 def should_check_now(self) -> bool:
     """
-    Determine if we should check for signals now.
-    Returns True only at 0 or 30 second marks.
+    Determine if we should check for SL/TARGET now.
+    Returns True only at 0 or 30 second marks (every 30 seconds).
     """
     current_second = datetime.now().second
     return current_second == 0 or current_second == 30
 ```
 
-**Examples:**
+**5-Minute Mark Examples:**
 ```
-9:15:29 → second=29 → False → Sleep 1s
-9:15:30 → second=30 → True  → CHECK ✓
-9:15:31 → second=31 → False → Sleep 1s
-...
-9:16:00 → second=0  → True  → CHECK ✓
-9:16:01 → second=1  → False → Sleep 1s
+✓ 9:15:00 (minute=15, second=0) → minute % 5 == 0 ✓
+✓ 9:20:00 (minute=20, second=0) → minute % 5 == 0 ✓
+✓ 9:25:00 (minute=25, second=0) → minute % 5 == 0 ✓
+✓ 9:30:00 (minute=30, second=0) → minute % 5 == 0 ✓
+✗ 9:22:00 (minute=22, second=0) → minute % 5 != 0 ✗
+✗ 9:15:30 (minute=15, second=30) → second != 0 ✗
+```
+
+**30-Second Check Examples:**
+```
+✓ 9:15:00 (second=0) → second == 0 ✓
+✓ 9:15:30 (second=30) → second == 30 ✓
+✓ 9:15:60/9:16:00 (second=0) → second == 0 ✓
+✗ 9:15:15 (second=15) → second != 0 and != 30 ✗
+✗ 9:15:45 (second=45) → second != 0 and != 30 ✗
 ```
 
 ### **Market Hours Validation**
@@ -353,10 +423,8 @@ def is_market_hours(self, check_time=None) -> bool:
 ```
 9:14:59 → False (before market open)
 9:15:00 → True  ✓
-9:15:30 → True  ✓
-12:00:00 → True ✓
-15:29:59 → True ✓
-15:30:00 → True ✓
+9:15:00 to 15:30:00 → True  ✓
+15:30:00 → True  ✓
 15:30:01 → False (after market close)
 ```
 
