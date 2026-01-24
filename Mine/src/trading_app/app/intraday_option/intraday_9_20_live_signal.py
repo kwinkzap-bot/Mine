@@ -117,97 +117,49 @@ class Intraday920LiveSignal:
     def check_entry_signal_live(self, ce_token: int, pe_token: int, 
                                ce_high: float, pe_high: float) -> Dict[str, Any]:
         """
-        Check for live entry signals (similar to backtest but for current candle).
+        Check for live entry signals using the strategy's check_entry_signal method.
+        
+        Reuses entry detection and SL/Target calculation logic from Intraday920Strategy.
         
         Args:
             ce_token: CE option token
             pe_token: PE option token
-            ce_high: Reference high for CE
-            pe_high: Reference high for PE
+            ce_high: Reference high for CE entry (CE first 5-min high)
+            pe_high: Reference high for PE entry (PE first 5-min high)
             
         Returns:
-            Dictionary with entry signals
+            Dictionary with entry signals from strategy.check_entry_signal()
         """
         try:
-            # Get latest 5-minute candle data
-            ce_candles = self.strategy._get_latest_5min_candle(ce_token)
-            pe_candles = self.strategy._get_latest_5min_candle(pe_token)
+            # Use strategy's check_entry_signal method which:
+            # 1. Fetches latest 5-min candles for both CE and PE
+            # 2. Analyzes entry conditions for each side
+            # 3. Calculates SL and Target using calculate_sl_for_entry
+            # 4. Returns formatted signal data
             
-            # Analyze CE entry
-            ce_signal = self._analyze_live_entry(ce_candles, pe_high, 'CE')
+            signals = self.strategy.check_entry_signal(
+                ce_token=ce_token,
+                pe_token=pe_token,
+                ce_high=ce_high,
+                pe_high=pe_high,
+                symbol=self.symbol
+            )
             
-            # Analyze PE entry
-            pe_signal = self._analyze_live_entry(pe_candles, ce_high, 'PE')
-            
-            return {
-                'timestamp': datetime.now().isoformat(),
-                'ce_signal': ce_signal,
-                'pe_signal': pe_signal,
-                'success': True
-            }
+            return signals
             
         except Exception as e:
             logger.error(f"Error checking entry signals: {str(e)}")
-            return {'success': False, 'error': str(e)}
-    
-    def _analyze_live_entry(self, candles: List[Dict], reference_high: float, side: str) -> Dict[str, Any]:
-        """
-        Analyze live entry for a single side (CE or PE).
-        
-        Args:
-            candles: Latest candle data
-            reference_high: Reference level for entry
-            side: 'CE' or 'PE'
-            
-        Returns:
-            Entry signal data
-        """
-        result = {
-            'side': side,
-            'has_signal': False,
-            'entry_price': None,
-            'sl': None,
-            'target': None,
-            'signal_time': datetime.now().isoformat()
-        }
-        
-        if not candles or len(candles) == 0:
-            result['reason'] = 'No candle data available'
-            return result
-        
-        # Get latest candle
-        latest_candle = candles[-1]
-        candle_low = latest_candle.get('low', 0)
-        candle_close = latest_candle.get('close', 0)
-        
-        # Entry condition: low < ref_high AND close > (ref_high + 5)
-        entry_threshold = reference_high + 5
-        close_ref_diff = abs(candle_close - reference_high)
-        
-        if (candle_low < reference_high and 
-            candle_close > entry_threshold and 
-            close_ref_diff < 20):
-            
-            result['has_signal'] = True
-            result['entry_price'] = candle_close
-            
-            # Calculate SL and Target
-            sl_data = self.strategy.calculate_sl_for_entry(
-                candle_close, reference_high, ratio='1:2'
-            )
-            result['sl'] = sl_data.get('sl')
-            result['target'] = sl_data.get('target')
-            result['pnl_ratio'] = '1:2'
-            
-            logger.info(f"{side} LIVE ENTRY SIGNAL: Price {candle_close}, SL {result['sl']}, Target {result['target']}")
-        else:
-            result['reason'] = f'Entry conditions not met: low={candle_low:.2f}, close={candle_close:.2f}, ref={reference_high:.2f}'
-        
-        return result
+            return {'success': False, 'error': str(e), 'timestamp': datetime.now().isoformat()}
     
     def update_active_trades(self, signals: Dict[str, Any]) -> None:
         """
-        Update active trade state with new signals.
+        Update active trade state with new signals from strategy.check_entry_signal().
+        
+        Uses signal data returned by the strategy which includes:
+        - has_signal: Whether entry conditions were met
+        - entry_price: Entry price at signal
+        - sl: Stop loss calculated by strategy.calculate_sl_for_entry()
+        - target: Target calculated by strategy.calculate_sl_for_entry()
         
         Args:
             signals: Entry signals from check_entry_signal_live()
@@ -219,23 +171,25 @@ class Intraday920LiveSignal:
         if ce_signal.get('has_signal') and 'CE' not in self.active_trades:
             self.active_trades['CE'] = {
                 'entry_price': ce_signal.get('entry_price'),
+                'entry_high': ce_signal.get('entry_high'),  # Reference high used for entry
                 'sl': ce_signal.get('sl'),
                 'target': ce_signal.get('target'),
                 'entry_time': datetime.now().isoformat(),
                 'status': 'OPEN'
             }
-            logger.info(f"🟢 CE trade opened at {ce_signal.get('entry_price')}")
+            logger.info(f"🟢 CE trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')})")
         
         # Track PE entry
         if pe_signal.get('has_signal') and 'PE' not in self.active_trades:
             self.active_trades['PE'] = {
                 'entry_price': pe_signal.get('entry_price'),
+                'entry_high': pe_signal.get('entry_high'),  # Reference high used for entry
                 'sl': pe_signal.get('sl'),
                 'target': pe_signal.get('target'),
                 'entry_time': datetime.now().isoformat(),
                 'status': 'OPEN'
             }
-            logger.info(f"🟢 PE trade opened at {pe_signal.get('entry_price')}")
+            logger.info(f"🟢 PE trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')})")
     
     def log_signal(self, signals: Dict[str, Any]) -> None:
         """
@@ -259,6 +213,8 @@ class Intraday920LiveSignal:
         """
         Main monitoring loop - runs in background thread.
         Checks every 30 seconds during market hours.
+        
+        Uses strategy.check_entry_signal() to detect entry signals.
         """
         logger.info(f"Starting live signal monitoring for {self.symbol}")
         
@@ -293,7 +249,7 @@ class Intraday920LiveSignal:
                     time_module.sleep(self.MONITORING_INTERVAL)
                     continue
                 
-                # Check signals for high strike
+                # Check signals for high strike using strategy's check_entry_signal method
                 high_signals = self.check_entry_signal_live(
                     high_strike.get('ce_token'),
                     high_strike.get('pe_token'),
@@ -309,12 +265,12 @@ class Intraday920LiveSignal:
                     pe_sig = high_signals.get('pe_signal', {})
                     
                     if ce_sig.get('has_signal'):
-                        logger.info(f"📊 HIGH STRIKE CE SIGNAL: {ce_sig.get('entry_price')}")
+                        logger.info(f"📊 HIGH STRIKE CE SIGNAL: Entry {ce_sig.get('entry_price')}, SL {ce_sig.get('sl')}, Target {ce_sig.get('target')}")
                     
                     if pe_sig.get('has_signal'):
-                        logger.info(f"📊 HIGH STRIKE PE SIGNAL: {pe_sig.get('entry_price')}")
+                        logger.info(f"📊 HIGH STRIKE PE SIGNAL: Entry {pe_sig.get('entry_price')}, SL {pe_sig.get('sl')}, Target {pe_sig.get('target')}")
                 
-                # Check signals for low strike
+                # Check signals for low strike using strategy's check_entry_signal method
                 low_signals = self.check_entry_signal_live(
                     low_strike.get('ce_token'),
                     low_strike.get('pe_token'),
@@ -330,10 +286,10 @@ class Intraday920LiveSignal:
                     pe_sig = low_signals.get('pe_signal', {})
                     
                     if ce_sig.get('has_signal'):
-                        logger.info(f"📊 LOW STRIKE CE SIGNAL: {ce_sig.get('entry_price')}")
+                        logger.info(f"📊 LOW STRIKE CE SIGNAL: Entry {ce_sig.get('entry_price')}, SL {ce_sig.get('sl')}, Target {ce_sig.get('target')}")
                     
                     if pe_sig.get('has_signal'):
-                        logger.info(f"📊 LOW STRIKE PE SIGNAL: {pe_sig.get('entry_price')}")
+                        logger.info(f"📊 LOW STRIKE PE SIGNAL: Entry {pe_sig.get('entry_price')}, SL {pe_sig.get('sl')}, Target {pe_sig.get('target')}")
                 
                 # Wait for next interval
                 time_module.sleep(self.MONITORING_INTERVAL)
