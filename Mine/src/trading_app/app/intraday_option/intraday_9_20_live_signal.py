@@ -9,6 +9,7 @@ import logging
 import threading
 import time as time_module
 from .intraday_9_20 import Intraday920Strategy
+from ..service.kite_service import KiteService
 
 logger = logging.getLogger(__name__)
 
@@ -29,25 +30,30 @@ class Intraday920LiveSignal:
     MARKET_CLOSE = time(15, 30, 0)    # 3:30 PM
     MONITORING_INTERVAL = 30  # seconds
     
-    def __init__(self, kite_instance, symbol: str = 'NIFTY'):
+    def __init__(self, kite_instance, symbol: str = 'NIFTY', live_trading: bool = False):
         """
         Initialize live signal monitor.
         
         Args:
             kite_instance: KiteConnect instance
             symbol: Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
+            live_trading: Whether to place real orders (default: False for demo mode)
         """
         self.kite = kite_instance
         self.symbol = symbol
         self.strategy = Intraday920Strategy(kite_instance)
+        self.kite_service = KiteService(kite_instance=kite_instance)
         
         # Monitoring state
         self.is_monitoring = False
         self.monitor_thread = None
-        self.active_trades = {}  # Track active trades: {side: {entry_info}}
+        self.active_trades = {}  # Track active trades: {side: {entry_info, order_id}}
         self.today_signals = []  # All signals generated today
         
-        logger.info(f"Intraday 9:20 Live Signal Monitor initialized for {symbol}")
+        # Trading configuration
+        self.live_trading = live_trading  # False=demo mode, True=live orders
+        
+        logger.info(f"Intraday 9:20 Live Signal Monitor initialized for {symbol} (live_trading={live_trading})")
     
     def is_market_hours(self, check_time: Optional[datetime] = None) -> bool:
         """
@@ -151,9 +157,10 @@ class Intraday920LiveSignal:
             logger.error(f"Error checking entry signals: {str(e)}")
             return {'success': False, 'error': str(e), 'timestamp': datetime.now().isoformat()}
     
-    def update_active_trades(self, signals: Dict[str, Any]) -> None:
+    def update_active_trades(self, signals: Dict[str, Any], strike_data: Dict[str, Any] = None) -> None:
         """
         Update active trade state with new signals from strategy.check_entry_signal().
+        Places buy orders when entry signals are detected.
         
         Uses signal data returned by the strategy which includes:
         - has_signal: Whether entry conditions were met
@@ -163,33 +170,54 @@ class Intraday920LiveSignal:
         
         Args:
             signals: Entry signals from check_entry_signal_live()
+            strike_data: Optional strike data for order placement {ce_token, pe_token, ce_high, pe_high}
         """
         ce_signal = signals.get('ce_signal', {})
         pe_signal = signals.get('pe_signal', {})
         
-        # Track CE entry
+        # Track CE entry and place buy order
         if ce_signal.get('has_signal') and 'CE' not in self.active_trades:
+            order_id = None
+            if strike_data:
+                order_id = self.place_buy_order(
+                    side='CE',
+                    token=strike_data.get('ce_token'),
+                    strike=int(strike_data.get('ce_high')),
+                    entry_price=ce_signal.get('entry_price')
+                )
+            
             self.active_trades['CE'] = {
                 'entry_price': ce_signal.get('entry_price'),
                 'entry_high': ce_signal.get('entry_high'),  # Reference high used for entry
                 'sl': ce_signal.get('sl'),
                 'target': ce_signal.get('target'),
                 'entry_time': datetime.now().isoformat(),
+                'order_id': order_id,
                 'status': 'OPEN'
             }
-            logger.info(f"🟢 CE trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')})")
+            logger.info(f"🟢 CE trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
         
-        # Track PE entry
+        # Track PE entry and place buy order
         if pe_signal.get('has_signal') and 'PE' not in self.active_trades:
+            order_id = None
+            if strike_data:
+                order_id = self.place_buy_order(
+                    side='PE',
+                    token=strike_data.get('pe_token'),
+                    strike=int(strike_data.get('pe_high')),
+                    entry_price=pe_signal.get('entry_price')
+                )
+            
             self.active_trades['PE'] = {
                 'entry_price': pe_signal.get('entry_price'),
                 'entry_high': pe_signal.get('entry_high'),  # Reference high used for entry
                 'sl': pe_signal.get('sl'),
                 'target': pe_signal.get('target'),
                 'entry_time': datetime.now().isoformat(),
+                'order_id': order_id,
                 'status': 'OPEN'
             }
-            logger.info(f"🟢 PE trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')})")
+            logger.info(f"🟢 PE trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
     
     def log_signal(self, signals: Dict[str, Any]) -> None:
         """
@@ -208,6 +236,94 @@ class Intraday920LiveSignal:
         # Keep only last 100 signals in memory
         if len(self.today_signals) > 100:
             self.today_signals.pop(0)
+    
+    def place_buy_order(self, side: str, token: int, strike: int, entry_price: float) -> Optional[str]:
+        """
+        Place a buy order for CE or PE option when entry signal detected.
+        
+        Reuses KiteService.place_option_order() which:
+        1. Looks up the option trading symbol
+        2. Fetches current market price
+        3. Places market order on Zerodha Kite
+        
+        Args:
+            side: 'CE' or 'PE'
+            token: Option token
+            strike: Strike price
+            entry_price: Entry price from signal
+            
+        Returns:
+            Order ID or None if failed
+        """
+        logger.info(f"place_buy_order called: {side} {strike} @ {entry_price:.2f} (live_trading={self.live_trading})")
+        
+        if not self.live_trading:
+            demo_msg = f"DEMO: BUY {side} {strike} @ {entry_price:.2f}"
+            logger.info(demo_msg)
+            return "DEMO_ORDER"
+        
+        try:
+            result = self.kite_service.place_option_order(
+                symbol=self.symbol,
+                strike=strike,
+                option_type=side,
+                transaction_type=self.kite.TRANSACTION_TYPE_BUY
+            )
+            
+            if result['success']:
+                logger.info(f"✅ BUY Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {entry_price:.2f}")
+                return result['order_id']
+            else:
+                logger.error(f"❌ BUY Order failed: {result['error']}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error placing BUY order for {side} {strike}: {e}", exc_info=True)
+            return None
+    
+    def place_sell_order(self, side: str, strike: int, exit_price: float, exit_reason: str = "Manual Exit") -> Optional[str]:
+        """
+        Place a sell order for CE or PE option to exit trade.
+        
+        Reuses KiteService.place_option_order() which:
+        1. Looks up the option trading symbol
+        2. Fetches current market price
+        3. Places market order on Zerodha Kite
+        
+        Args:
+            side: 'CE' or 'PE'
+            strike: Strike price
+            exit_price: Exit price
+            exit_reason: Reason for exit (Target Hit, SL Hit, Manual, etc.)
+            
+        Returns:
+            Order ID or None if failed
+        """
+        logger.info(f"place_sell_order called: {side} {strike} @ {exit_price:.2f} | Reason: {exit_reason} (live_trading={self.live_trading})")
+        
+        if not self.live_trading:
+            demo_msg = f"DEMO: SELL {side} {strike} @ {exit_price:.2f} | {exit_reason}"
+            logger.info(demo_msg)
+            return "DEMO_ORDER"
+        
+        try:
+            result = self.kite_service.place_option_order(
+                symbol=self.symbol,
+                strike=strike,
+                option_type=side,
+                transaction_type=self.kite.TRANSACTION_TYPE_SELL
+            )
+            
+            if result['success']:
+                logger.info(f"✅ SELL Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {exit_price:.2f} | {exit_reason}")
+                return result['order_id']
+            else:
+                logger.error(f"❌ SELL Order failed: {result['error']} ({exit_reason})")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error placing SELL order for {side} {strike}: {e}", exc_info=True)
+            return None
     
     def _monitor_loop(self) -> None:
         """
@@ -258,17 +374,18 @@ class Intraday920LiveSignal:
                 )
                 
                 if high_signals.get('success'):
-                    self.update_active_trades(high_signals)
+                    # Pass strike data to place orders automatically
+                    self.update_active_trades(high_signals, strike_data=high_strike)
                     self.log_signal(high_signals)
                     
                     ce_sig = high_signals.get('ce_signal', {})
                     pe_sig = high_signals.get('pe_signal', {})
                     
                     if ce_sig.get('has_signal'):
-                        logger.info(f"📊 HIGH STRIKE CE SIGNAL: Entry {ce_sig.get('entry_price')}, SL {ce_sig.get('sl')}, Target {ce_sig.get('target')}")
+                        logger.info(f"📊 HIGH STRIKE CE SIGNAL: Entry {ce_sig.get('entry_price')}, SL {ce_sig.get('sl')}, Target {ce_sig.get('target')} | ✅ Order placed")
                     
                     if pe_sig.get('has_signal'):
-                        logger.info(f"📊 HIGH STRIKE PE SIGNAL: Entry {pe_sig.get('entry_price')}, SL {pe_sig.get('sl')}, Target {pe_sig.get('target')}")
+                        logger.info(f"📊 HIGH STRIKE PE SIGNAL: Entry {pe_sig.get('entry_price')}, SL {pe_sig.get('sl')}, Target {pe_sig.get('target')} | ✅ Order placed")
                 
                 # Check signals for low strike using strategy's check_entry_signal method
                 low_signals = self.check_entry_signal_live(
@@ -279,17 +396,18 @@ class Intraday920LiveSignal:
                 )
                 
                 if low_signals.get('success'):
-                    self.update_active_trades(low_signals)
+                    # Pass strike data to place orders automatically
+                    self.update_active_trades(low_signals, strike_data=low_strike)
                     self.log_signal(low_signals)
                     
                     ce_sig = low_signals.get('ce_signal', {})
                     pe_sig = low_signals.get('pe_signal', {})
                     
                     if ce_sig.get('has_signal'):
-                        logger.info(f"📊 LOW STRIKE CE SIGNAL: Entry {ce_sig.get('entry_price')}, SL {ce_sig.get('sl')}, Target {ce_sig.get('target')}")
+                        logger.info(f"📊 LOW STRIKE CE SIGNAL: Entry {ce_sig.get('entry_price')}, SL {ce_sig.get('sl')}, Target {ce_sig.get('target')} | ✅ Order placed")
                     
                     if pe_sig.get('has_signal'):
-                        logger.info(f"📊 LOW STRIKE PE SIGNAL: Entry {pe_sig.get('entry_price')}, SL {pe_sig.get('sl')}, Target {pe_sig.get('target')}")
+                        logger.info(f"📊 LOW STRIKE PE SIGNAL: Entry {pe_sig.get('entry_price')}, SL {pe_sig.get('sl')}, Target {pe_sig.get('target')} | ✅ Order placed")
                 
                 # Wait for next interval
                 time_module.sleep(self.MONITORING_INTERVAL)
