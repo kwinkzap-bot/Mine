@@ -10,7 +10,7 @@ import threading
 import time as time_module
 import os
 from .intraday_9_20 import Intraday920Strategy
-from ..service.kite_service import KiteService
+from ...service.kite_service import KiteService
 
 logger = logging.getLogger(__name__)
 
