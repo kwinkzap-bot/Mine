@@ -62,8 +62,8 @@ def start_intraday_9_20_monitoring():
         logger.warning("Kite connection not available")
         return
     
-    # Step 3: Create monitors for each symbol
-    symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+    # Step 3: Create monitors for NIFTY only
+    symbols = ['NIFTY']
     
     # Step 4: For each symbol:
     for symbol in symbols:
@@ -82,9 +82,7 @@ def start_intraday_9_20_monitoring():
 ```
 🚀 Starting Intraday 9:20 Live Signal Monitoring...
 ✅ Live monitoring started for NIFTY
-✅ Live monitoring started for BANKNIFTY
-✅ Live monitoring started for FINNIFTY
-✅ Intraday 9:20 Live Signal Monitoring active for: NIFTY, BANKNIFTY, FINNIFTY
+✅ Intraday 9:20 Live Signal Monitoring active for: NIFTY
 ```
 
 ---
@@ -857,7 +855,7 @@ monitor = Intraday920LiveSignal(kite_instance, symbol='NIFTY')
 
 **Parameters:**
 - `kite_instance`: KiteConnect object for market data
-- `symbol`: Trading symbol ('NIFTY', 'BANKNIFTY', 'FINNIFTY')
+- `symbol`: Trading symbol ('NIFTY')
 
 ---
 

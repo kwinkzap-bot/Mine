@@ -1,5 +1,7 @@
 kiteconnect==5.0.1
+pyotp
 python-dotenv==1.0.0
+flask==3.0.0
 flask==3.0.0
 flask-limiter==3.5.0
 flask-wtf==1.2.1

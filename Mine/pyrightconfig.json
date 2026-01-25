@@ -1,7 +1,8 @@
 {
   "pythonVersion": "3.9",
-  "include": ["src"],
+  "include": ["src", "Mine"],
   "exclude": ["**/node_modules", "**/__pycache__", "tests"],
   "typeCheckingMode": "standard",
-  "extraPaths": ["src"]
+  "extraPaths": ["src"],
+  "pythonPath": "."
 }

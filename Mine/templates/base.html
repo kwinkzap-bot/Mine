@@ -25,8 +25,9 @@
                 <button class="nav-link-login" id="loginToggle">🔑</button>
                 <div class="dropdown-menu" id="dropdownMenu">
                     <a href="/auth/login" class="dropdown-item">Login to Zerodha</a>
-                    <a href="/auth/login/dhan" class="dropdown-item">Login to Dhan</a>
-                    <a href="/auth/login/kotak" class="dropdown-item">Login to Kotak Neo</a>
+                    <a href="#" class="dropdown-item" onclick="event.preventDefault(); showDhanLoginModal();">Login to Dhan</a>
+                    <a href="#" class="dropdown-item" onclick="event.preventDefault(); showFyersLoginModal();">Login to Fyers</a>
+                    <a href="#" class="dropdown-item" onclick="event.preventDefault(); showKotakLoginModal();">Login to Kotak Neo</a>
                 </div>
             </div>
         </div>
