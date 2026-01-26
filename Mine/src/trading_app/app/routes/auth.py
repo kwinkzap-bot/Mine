@@ -1,13 +1,72 @@
 """Authentication routes."""
-from flask import Blueprint, redirect, request, session, url_for, jsonify
+from flask import Blueprint, redirect, request, session, url_for, jsonify, render_template
 from kiteconnect import KiteConnect
 import os
 from typing import Optional
 from trading_app.app.utils.logger import logger
 from trading_app.app.config import current_config
 from trading_app.app.utils.token_manager import save_access_token, clear_access_token
+from trading_app.app.utils.user_auth import (
+    verify_user, is_user_authenticated, login_user, logout_user
+)
 
 auth_bp = Blueprint('auth', __name__)
+
+@auth_bp.route('/user-login', methods=['GET', 'POST'])
+def user_login():
+    """
+    User login page with username/password authentication.
+    This is separate from broker API authentication.
+    """
+    if request.method == 'GET':
+        # If already logged in, redirect to home
+        if is_user_authenticated():
+            return redirect(url_for('pages.index'))
+        
+        # Render login page
+        return render_template('login.html')
+    
+    # POST request - process login
+    try:
+        data = request.get_json() or {}
+        username = data.get('username', '').strip()
+        password = data.get('password', '')
+        
+        if not username or not password:
+            return jsonify({
+                'success': False,
+                'error': 'Please provide both username and password'
+            }), 400
+        
+        # Verify credentials
+        if verify_user(username, password):
+            login_user(username)
+            logger.info(f"✅ User '{username}' logged in successfully")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Login successful',
+                'redirect': url_for('pages.index')
+            })
+        else:
+            logger.warning(f"❌ Failed login attempt for username: {username}")
+            return jsonify({
+                'success': False,
+                'error': 'Invalid username or password'
+            }), 401
+            
+    except Exception as e:
+        logger.error(f"Error during user login: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Login failed. Please try again.'
+        }), 500
+
+@auth_bp.route('/user-logout')
+def user_logout():
+    """Log out the current user."""
+    logout_user()
+    return redirect(url_for('auth.user_login'))
 
 @auth_bp.route('/login')
 def login():

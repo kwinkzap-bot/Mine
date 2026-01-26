@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-    <link rel="icon" type="image/png" href="{{ url_for('static', filename='trading.png') }}">
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='trading.png') }}">   
     <link rel="stylesheet" href="{{ url_for('static', filename='css/notifications.css') }}">
     <title>{% block title %}Stock Scanner{% endblock %}</title>
     {% block head %}{% endblock %}
@@ -23,11 +23,23 @@
             <a href="/intraday-920" class="nav-link {% if request.path == '/intraday-920' %}active{% endif %}">⏰ Intraday 9:20</a>
             <div class="login-dropdown">
                 <button class="nav-link-login" id="loginToggle">🔑</button>
+                {% if session.username %}
+                <a href="/auth/user-logout" class="nav-link-logout" id="logoutButton" title="Logout">⏻</a>
+                {% endif %}
                 <div class="dropdown-menu" id="dropdownMenu">
+                    <div style="padding: 8px 12px; font-weight: bold; border-bottom: 1px solid #ddd; color: #666; font-size: 12px;">
+                        {% if session.username %}
+                        Logged in as: {{ session.username }}
+                        {% else %}
+                        Not logged in
+                        {% endif %}
+                    </div>
                     <a href="/auth/login" class="dropdown-item">Login to Zerodha</a>
                     <a href="#" class="dropdown-item" onclick="event.preventDefault(); showDhanLoginModal();">Login to Dhan</a>
                     <a href="#" class="dropdown-item" onclick="event.preventDefault(); showFyersLoginModal();">Login to Fyers</a>
                     <a href="#" class="dropdown-item" onclick="event.preventDefault(); showKotakLoginModal();">Login to Kotak Neo</a>
+                    <div style="border-top: 1px solid #ddd; margin-top: 4px; padding-top: 4px;"></div>
+                    <a href="/auth/user-logout" class="dropdown-item" style="color: #dc3545;">⏻ Logout</a>
                 </div>
             </div>
         </div>

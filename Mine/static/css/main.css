@@ -29,7 +29,7 @@ body {
     align-items: center;
 }
 
-.nav-link, .nav-link-login {
+.nav-link, .nav-link-login, .nav-link-logout {
     margin-right: 15px;
     text-decoration: none;
     color: #666;
@@ -44,8 +44,21 @@ body {
     border: none;
     cursor: pointer;
 }
+.nav-link-logout {
+    color: #dc3545;
+    margin-left: auto;
+    margin-right: 10px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+}
 .nav-link:hover, .nav-link-login:hover {
     color: #000;
+}
+.nav-link-logout:hover {
+    color: #c82333;
+    transform: scale(1.1);
 }
 
 /* Login Dropdown */

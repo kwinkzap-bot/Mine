@@ -7,6 +7,7 @@ import os
 
 from trading_app.app.utils.logger import logger
 from trading_app.app.extensions import csrf, limiter
+from trading_app.app.utils.user_auth import require_user_auth
 
 
 api_bp = Blueprint('api', __name__)
@@ -14,6 +15,19 @@ api_bp = Blueprint('api', __name__)
 # Type alias for API responses
 # Flask's jsonify returns Response, optionally with status code tuple
 EndpointResponse = Union[Response, tuple[Response, int]]
+
+# Apply user authentication to all API routes
+@api_bp.before_request
+def check_user_authentication():
+    """Require user authentication for all API routes."""
+    from trading_app.app.utils.user_auth import is_user_authenticated
+    
+    if not is_user_authenticated():
+        return jsonify({
+            'success': False,
+            'error': 'User authentication required. Please login first.',
+            'auth_required': True
+        }), 401
 
 
 def get_kite() -> Optional[Any]:
