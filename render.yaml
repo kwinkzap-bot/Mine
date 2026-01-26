@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: trading-app
+    env: python
+    buildCommand: cd Mine && pip install -r requirements.txt
+    startCommand: cd Mine && gunicorn wsgi:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.4
