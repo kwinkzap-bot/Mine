@@ -869,6 +869,9 @@ class Intraday920Strategy:
                     entry_candle_idx = idx
                     result['has_entry'] = True
                     raw_entry_time = candle.get('time', candle.get('date'))
+                    if raw_entry_time is None:
+                        logger.error(f"{side} Entry time is None for candle {idx}")
+                        continue
                     ist_offset_seconds = int(5.5 * 3600)
                     true_utc_time = raw_entry_time - ist_offset_seconds
                     close_time = true_utc_time + 300
@@ -940,6 +943,9 @@ class Intraday920Strategy:
                     entry_candle_idx = idx
                     result['has_entry'] = True
                     raw_entry_time = candle.get('time', candle.get('date'))
+                    if raw_entry_time is None:
+                        logger.error(f"{side} Entry time is None for candle {idx}")
+                        continue
                     ist_offset_seconds = int(5.5 * 3600)
                     true_utc_time = raw_entry_time - ist_offset_seconds
                     close_time = true_utc_time + 300
@@ -989,6 +995,9 @@ class Intraday920Strategy:
                     # Check if target is hit (exit at target price for non-trailing modes)
                     if candle_high >= initial_target:
                         raw_exit_time = candle_time
+                        if raw_exit_time is None:
+                            logger.error(f"{side} Exit time is None for candle {idx}")
+                            continue
                         ist_offset_seconds = int(5.5 * 3600)
                         true_utc_time = raw_exit_time - ist_offset_seconds
                         close_time = true_utc_time + 300
@@ -1002,6 +1011,9 @@ class Intraday920Strategy:
                     # Check if SL is hit (for non-trailing modes)
                     if candle_low <= initial_sl:
                         raw_exit_time = candle_time
+                        if raw_exit_time is None:
+                            logger.error(f"{side} Exit time is None for candle {idx}")
+                            continue
                         ist_offset_seconds = int(5.5 * 3600)
                         true_utc_time = raw_exit_time - ist_offset_seconds
                         close_time = true_utc_time + 300
@@ -1037,6 +1049,9 @@ class Intraday920Strategy:
                         # Check if trailed SL is hit
                         if candle_low <= trailed_sl:
                             raw_exit_time = candle_time
+                            if raw_exit_time is None:
+                                logger.error(f"{side} Exit time is None for candle {idx}")
+                                continue
                             ist_offset_seconds = int(5.5 * 3600)
                             true_utc_time = raw_exit_time - ist_offset_seconds
                             close_time = true_utc_time + 300
@@ -1050,6 +1065,9 @@ class Intraday920Strategy:
                         # Before target is hit, check for SL hit in trailing mode
                         if candle_low <= initial_sl:
                             raw_exit_time = candle_time
+                            if raw_exit_time is None:
+                                logger.error(f"{side} Exit time is None for candle {idx}")
+                                continue
                             ist_offset_seconds = int(5.5 * 3600)
                             true_utc_time = raw_exit_time - ist_offset_seconds
                             close_time = true_utc_time + 300
@@ -1070,6 +1088,9 @@ class Intraday920Strategy:
                 # Check if it's the last candle (3:20 PM) - exit at market close
                 if is_last_candle:
                     raw_exit_time = candle_time
+                    if raw_exit_time is None:
+                        logger.error(f"{side} Exit time is None for last candle {idx}")
+                        continue
                     ist_offset_seconds = int(5.5 * 3600)
                     true_utc_time = raw_exit_time - ist_offset_seconds
                     close_time = true_utc_time + 300

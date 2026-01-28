@@ -492,7 +492,7 @@ class KiteDataFetchService:
                 return []
             
             # STEP 3: Get current expiry (nearest future expiry date)
-            expiries = sorted(list(set(inst.get('expiry') for inst in symbol_options if inst.get('expiry'))))
+            expiries = sorted([exp for exp in set(inst.get('expiry') for inst in symbol_options if inst.get('expiry')) if exp is not None])
             if not expiries:
                 logger.warning(f"No expiries found for {symbol}")
                 return []
@@ -700,7 +700,7 @@ class KiteDataFetchService:
             data = quotes.get(token, {})
             logger.debug(f"Quote data for token {token}: {data}")
             
-            if data and data.get('last_price') and data.get('last_price') > 0:
+            if data and data.get('last_price') and float(data.get('last_price', 0)) > 0:
                 logger.info(f"✓ Successfully fetched {symbol} price: {data.get('last_price')}")
                 logger.debug(f"Full quote data: LTP={data.get('last_price')}, Bid={data.get('bid')}, Ask={data.get('ask')}, Volume={data.get('volume')}")
                 return data
