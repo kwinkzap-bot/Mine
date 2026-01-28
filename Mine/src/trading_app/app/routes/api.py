@@ -1009,7 +1009,7 @@ def place_live_order() -> EndpointResponse:
             return jsonify({'success': False, 'error': 'Failed to initialize Kite API'}), 401
         
         # Use KiteService to place the order
-        from trading_app.service.kite_service import KiteService
+        from trading_app.service.kite_order_services import KiteService
         kite_service = KiteService(kite_instance=kite)
         
         result = kite_service.place_option_order(
@@ -1765,122 +1765,6 @@ def intraday_920_candles() -> EndpointResponse:
         }), 500
 
 
-@api_bp.route('/intraday-920/entry-signals', methods=['POST'])
-@csrf.exempt
-@limiter.exempt
-def get_intraday_920_entry_signals() -> EndpointResponse:
-    """
-    Check for entry signals in Intraday 9:20 strategy.
-    
-    POST Payload:
-        {
-            "symbol": "NIFTY",
-            "ce_token": 12345678,
-            "pe_token": 87654321,
-            "ce_high": 350.5,      # First 5-min high of CE
-            "pe_high": 300.25,     # First 5-min high of PE
-            "date": "2026-01-12"   # Optional: specific date, defaults to current date
-        }
-    
-    Returns:
-        {
-            "success": true,
-            "ce_signal": {
-                "has_signal": true,
-                "entry_price": 352.50,
-                "entry_high": 300.25,     # PE High (reference)
-                "sl": 290.25,
-                "target": 362.50,
-                "side": "CE",
-                "reason": "Low crossed below PE High and closed above"
-            },
-            "pe_signal": {
-                "has_signal": false,
-                "reason": "No entry condition met"
-            },
-            "timestamp": "2026-01-12T14:35:00"
-        }
-    """
-    try:
-        auth_error = check_auth()
-        if auth_error:
-            return auth_error
-        
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'Request body must contain JSON'
-            }), 400
-        
-        # Extract parameters
-        symbol = data.get('symbol', 'NIFTY').upper()
-        ce_token = data.get('ce_token')
-        pe_token = data.get('pe_token')
-        ce_high = data.get('ce_high')
-        pe_high = data.get('pe_high')
-        date_str = data.get('date')
-        
-        # Validate required fields
-        if not all([ce_token, pe_token, ce_high, pe_high]):
-            return jsonify({
-                'success': False,
-                'error': 'ce_token, pe_token, ce_high, and pe_high are required'
-            }), 400
-        
-        # Parse date if provided
-        target_date = None
-        if date_str:
-            try:
-                target_date = datetime.strptime(date_str, '%Y-%m-%d')
-            except ValueError:
-                return jsonify({
-                    'success': False,
-                    'error': 'Invalid date format. Use YYYY-MM-DD'
-                }), 400
-        
-        kite = get_kite()
-        if not kite:
-            return jsonify({
-                'success': False,
-                'error': 'Failed to initialize Kite connection'
-            }), 500
-        
-        from trading_app.app.intraday_option.intraday_9_20 import Intraday920Strategy
-        strategy = Intraday920Strategy(kite)
-        
-        # Check entry signals
-        signals = strategy.check_entry_signal(
-            ce_token=ce_token,
-            pe_token=pe_token,
-            ce_high=ce_high,
-            pe_high=pe_high,
-            symbol=symbol,
-            target_date=target_date
-        )
-        
-        if not signals.get('success'):
-            return jsonify({
-                'success': False,
-                'error': signals.get('error', 'Failed to check entry signals')
-            }), 400
-        
-        return jsonify({
-            'success': True,
-            'ce_signal': signals.get('ce_signal', {}),
-            'pe_signal': signals.get('pe_signal', {}),
-            'timestamp': datetime.now().isoformat()
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Error in intraday-920 entry-signals endpoint: {str(e)}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'timestamp': datetime.now().isoformat()
-        }), 500
-
-
 @api_bp.route('/intraday-920/backtest-full-day', methods=['POST'])
 @csrf.exempt
 @limiter.exempt
@@ -2097,6 +1981,90 @@ def debug_token_status() -> EndpointResponse:
             'success': False,
             'error': 'Internal error during token check',
             'details': str(e)
+        }), 500
+
+
+@api_bp.route('/intraday-920/place-order', methods=['POST'])
+def place_intraday_920_order() -> EndpointResponse:
+    """Place an option order for Intraday 9:20 strategy.
+    
+    Request JSON:
+        symbol: str - Trading symbol (NIFTY, BANKNIFTY, etc.)
+        strike: int - Strike price
+        option_type: str - 'CE' or 'PE'
+        action: str - 'BUY' or 'SELL'
+        quantity: int (optional) - Order quantity (default: lot size)
+    
+    Returns:
+        JSON response with order details
+    """
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['symbol', 'strike', 'option_type', 'action']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({
+                    'success': False,
+                    'error': f'Missing required field: {field}'
+                }), 400
+        
+        symbol = data['symbol']
+        strike = int(data['strike'])
+        option_type = data['option_type'].upper()
+        action = data['action'].upper()
+        quantity = data.get('quantity')
+        
+        # Validate option_type
+        if option_type not in ['CE', 'PE']:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid option_type. Must be CE or PE'
+            }), 400
+        
+        # Validate action
+        if action not in ['BUY', 'SELL']:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid action. Must be BUY or SELL'
+            }), 400
+        
+        # Get Kite instance
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'Kite connection not available. Please login.'
+            }), 401
+        
+        # Place order using KiteService
+        from trading_app.service.kite_order_services import KiteService
+        kite_service = KiteService(kite_instance=kite)
+        
+        # Map action to transaction type
+        transaction_type = kite.TRANSACTION_TYPE_BUY if action == 'BUY' else kite.TRANSACTION_TYPE_SELL
+        
+        result = kite_service.place_option_order(
+            symbol=symbol,
+            strike=strike,
+            option_type=option_type,
+            transaction_type=transaction_type,
+            quantity=quantity
+        )
+        
+        if result['success']:
+            logger.info(f"Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
+            return jsonify(result), 200
+        else:
+            logger.warning(f"Order placement failed: {result.get('error')}")
+            return jsonify(result), 400
+    
+    except Exception as e:
+        logger.error(f"Error placing intraday 920 order: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f'Error placing order: {str(e)}'
         }), 500
 
 

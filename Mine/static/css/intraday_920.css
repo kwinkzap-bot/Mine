@@ -965,3 +965,65 @@
         font-size: 12px;
     }
 }
+
+/* Order Buttons Styling */
+.chart-header h3 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+}
+
+.order-icons {
+    margin-left: auto;
+    display: inline-flex;
+    gap: 6px;
+}
+
+.order-btn {
+    font-size: 11px;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.order-btn:hover {
+    transform: translateY(-1px);
+}
+
+.order-btn:active {
+    transform: translateY(0);
+}
+
+.order-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.buy-btn {
+    background: transparent;
+    color: #10b981;
+    font-size: 20px;
+}
+
+.buy-btn:hover:not(:disabled) {
+    transform: scale(1.2);
+    filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.6));
+}
+
+.sell-btn {
+    background: transparent;
+    color: #ef4444;
+    font-size: 20px;
+}
+
+.sell-btn:hover:not(:disabled) {
+    transform: scale(1.2);
+    filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.6));
+}

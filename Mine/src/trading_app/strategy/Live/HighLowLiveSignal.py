@@ -100,7 +100,7 @@ class HighLowLiveSignal:
         self.signal_detector = HighLowSignal()
         
         # Initialize KiteService for order placement
-        from trading_app.service.kite_service import KiteService
+        from trading_app.service.kite_order_services import KiteService
         self.kite_service = KiteService(kite_instance=self.kite)
         
         # Cache

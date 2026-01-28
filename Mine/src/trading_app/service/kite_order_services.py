@@ -382,27 +382,38 @@ class KiteService:
         try:
             instruments = self.kite.instruments(exchange)
             
+            # Look for any option instrument with the given symbol to get lot size
+            # All options for the same underlying have the same lot size
             for inst in instruments:
-                if inst.get('name') == symbol and inst.get('instrument_type') in ['OPTIDX', 'OPTSTK']:
+                # Check if this is an option for our symbol
+                if (inst.get('name') == symbol and 
+                    inst.get('instrument_type') in ['CE', 'PE', 'OPTIDX', 'OPTSTK']):
                     lot_size = inst.get('lot_size')
                     if lot_size and lot_size > 0:
-                        logging.debug(f"Lot size for {symbol}: {lot_size}")
+                        logging.info(f"✓ Lot size for {symbol}: {lot_size} (from instruments)")
                         return int(lot_size)
             
-            # Default lot sizes if not found in instruments
+            # If not found in loaded instruments, try using hardcoded fallback
+            logging.warning(f"⚠️  Lot size not found in instruments for {symbol}, using fallback")
+            
+            # Default lot sizes (as of Jan 2026) - fallback only
             default_lots = {
-                'NIFTY': 75,
+                'NIFTY': 65,
                 'BANKNIFTY': 25,
-                'FINNIFTY': 40
+                'FINNIFTY': 40,
+                'MIDCPNIFTY': 50,
+                'SENSEX': 10,
+                'BANKEX': 15
             }
             
             lot_size = default_lots.get(symbol, 1)
-            logging.warning(f"Using default lot size {lot_size} for {symbol}")
+            logging.warning(f"Using fallback lot size {lot_size} for {symbol}")
             return lot_size
             
         except Exception as e:
             logging.error(f"Error getting lot size for {symbol}: {e}")
-            return 1  # Fallback to 1 if error
+            # Emergency fallback
+            return {'NIFTY': 65, 'BANKNIFTY': 25, 'FINNIFTY': 40}.get(symbol, 1)
     
     def get_option_symbol(self, symbol: str, strike: int, option_type: str, exchange: str = 'NFO') -> Optional[str]:
         """Get the trading symbol for an option.

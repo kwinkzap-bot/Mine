@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 import time
 import random
-from trading_app.service.kite_service import KiteService
+from trading_app.service.kite_order_services import KiteService
 from typing import Tuple, Dict, Any, List, Optional, Union
 import pytz
 from concurrent.futures import ThreadPoolExecutor

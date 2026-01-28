@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Tuple, Optional
-from trading_app.service.kite_service import KiteService
+from trading_app.service.kite_order_services import KiteService
 
 logger = logging.getLogger(__name__)
 

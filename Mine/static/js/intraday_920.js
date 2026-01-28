@@ -200,8 +200,111 @@ class Intraday920Tracker {
             });
         }
 
+        // Handle order button clicks
+        this.attachOrderButtonListeners();
+
         // Load data on page load (initial only)
         this.loadData();
+    }
+
+    /**
+     * Attach event listeners to all order buttons
+     */
+    attachOrderButtonListeners() {
+        const orderButtons = document.querySelectorAll('.order-btn');
+        orderButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const side = btn.getAttribute('data-side');
+                const strikeType = btn.getAttribute('data-strike-type');
+                const action = btn.getAttribute('data-action');
+                this.placeOrder(side, strikeType, action, btn);
+            });
+        });
+    }
+
+    /**
+     * Place an option order
+     */
+    async placeOrder(side, strikeType, action, buttonElement) {
+        if (!this.strategyData) {
+            showNotification('No strategy data available', 'error');
+            return;
+        }
+
+        // Disable button during order placement
+        buttonElement.disabled = true;
+        const originalText = buttonElement.innerHTML;
+        buttonElement.innerHTML = '⏳ ...';
+
+        try {
+            // Get strike data based on side and strikeType
+            const strikeData = strikeType === 'high' 
+                ? this.strategyData.high_strike 
+                : this.strategyData.low_strike;
+
+            if (!strikeData || !strikeData.success) {
+                showNotification(`No ${strikeType} strike data available`, 'error');
+                return;
+            }
+
+            // Get strike price based on side
+            const strike = side === 'CE' 
+                ? strikeData.ce_strike 
+                : strikeData.pe_strike;
+
+            if (!strike) {
+                showNotification(`No ${side} strike found for ${strikeType}`, 'error');
+                return;
+            }
+
+            console.log(`[Order] Placing ${action} order: ${side} ${strike} (${strikeType})`);
+
+            // Make API call to place order
+            const response = await fetch('/api/intraday-920/place-order', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': this.getCsrfToken()
+                },
+                body: JSON.stringify({
+                    symbol: this.symbol,
+                    strike: strike,
+                    option_type: side,
+                    action: action
+                })
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                const orderMsg = `${action} order placed: ${side} ${strike} - Order ID: ${result.order_id}`;
+                showNotification(orderMsg, 'success');
+                this.addSignal(orderMsg, 'SUCCESS');
+                console.log('[Order] Success:', result);
+            } else {
+                showNotification(`Order failed: ${result.error}`, 'error');
+                this.addSignal(`Order failed: ${result.error}`, 'ERROR');
+                console.error('[Order] Failed:', result);
+            }
+
+        } catch (error) {
+            console.error('[Order] Error:', error);
+            showNotification(`Order error: ${error.message}`, 'error');
+            this.addSignal(`Order error: ${error.message}`, 'ERROR');
+        } finally {
+            // Re-enable button
+            buttonElement.disabled = false;
+            buttonElement.innerHTML = originalText;
+        }
+    }
+
+    /**
+     * Get CSRF token from meta tag
+     */
+    getCsrfToken() {
+        const metaTag = document.querySelector('meta[name="csrf-token"]');
+        return metaTag ? metaTag.getAttribute('content') : '';
     }
 
     /**
@@ -826,9 +929,6 @@ class Intraday920Tracker {
             // Pass isPolling=true to indicate this is a polling update (no reference lines)
             if (this.strategyData) {
                 this.loadChartsData(true);
-                
-                // Also check for entry signals during polling
-                this.checkEntrySignals();
             }
             this.updateCount++;
         }, this.refreshDelay);
