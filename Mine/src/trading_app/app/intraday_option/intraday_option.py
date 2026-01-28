@@ -91,7 +91,7 @@ class IntradayOptionTrader:
             try:
                 symbol_token = self.data_service.get_symbol_token(symbol, exchange='NSE')
                 if symbol_token:
-                    from datetime import datetime as dt, timedelta
+                    from datetime import datetime as dt
                     today_ist = datetime.now(IST).date()
                     
                     # STEP 1: Try to fetch TODAY's daily OHLC first
@@ -166,7 +166,7 @@ class IntradayOptionTrader:
                 try:
                     symbol_token = self.data_service.get_symbol_token(symbol, exchange='NSE')
                     if symbol_token:
-                        from datetime import datetime as dt, timedelta
+                        from datetime import datetime as dt
                         to_date = dt.now()
                         from_date = to_date - timedelta(hours=8)  # Get intraday candles from market open
                         

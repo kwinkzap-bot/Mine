@@ -18,7 +18,7 @@ from trading_app.app.utils.logger import logger
 from .HighLowSignal import HighLowSignal
 
 # Import excel logger
-from trading_app.utils.excel_logger import excel_logger
+from utils.excel_logger import excel_logger
 
 load_dotenv()
 
@@ -398,17 +398,25 @@ class HighLowLiveSignal:
             Tuple of (signal_found, entry_dict)
         """
         if option_type == 'CE':
-            return self.signal_detector.check_ce_buy_conditions(
-                ce_data, pe_data, 
-                self.ce_prev_high, self.ce_prev_low, 
-                self.pe_prev_high, self.pe_prev_low
-            )
+            # Ensure all prev values are not None before calling
+            if (self.ce_prev_high is not None and self.ce_prev_low is not None and 
+                self.pe_prev_high is not None and self.pe_prev_low is not None):
+                return self.signal_detector.check_ce_buy_conditions(
+                    ce_data, pe_data, 
+                    self.ce_prev_high, self.ce_prev_low, 
+                    self.pe_prev_high, self.pe_prev_low
+                )
+            return False, {}
         else:  # PE
-            return self.signal_detector.check_pe_buy_conditions(
-                pe_data, ce_data, 
-                self.pe_prev_high, self.pe_prev_low, 
-                self.ce_prev_high, self.ce_prev_low
-            )
+            # Ensure all prev values are not None before calling
+            if (self.pe_prev_high is not None and self.pe_prev_low is not None and 
+                self.ce_prev_high is not None and self.ce_prev_low is not None):
+                return self.signal_detector.check_pe_buy_conditions(
+                    pe_data, ce_data, 
+                    self.pe_prev_high, self.pe_prev_low, 
+                    self.ce_prev_high, self.ce_prev_low
+                )
+            return False, {}
     
     def check_signals(self) -> None:
         """Check for trading signals every 5 minutes.

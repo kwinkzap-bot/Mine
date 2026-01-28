@@ -145,10 +145,12 @@ class KiteService:
             # Fetch quote which contains previous close
             quote_data = self.kite.quote([instrument_key])
             if quote_data and isinstance(quote_data, dict) and instrument_key in quote_data:
-                ohlc = quote_data[instrument_key].get('ohlc', {})
-                pdc = ohlc.get('close')
-                if pdc:
-                    return float(pdc)
+                quote_item = quote_data[instrument_key]
+                if isinstance(quote_item, dict):
+                    ohlc = quote_item.get('ohlc', {})
+                    pdc = ohlc.get('close')
+                    if pdc:
+                        return float(pdc)
             
             logging.warning(f"Could not fetch previous close for {symbol}")
             return None
@@ -360,7 +362,13 @@ class KiteService:
                 df = pd.DataFrame(data)
                 # FIX: Ensure 'date' column is a timezone-naive datetime for consistency
                 if 'date' in df.columns:
-                     df['date'] = pd.to_datetime(df['date']).dt.tz_localize(None)
+                     try:
+                         df['date'] = pd.to_datetime(df['date'])
+                         # Use type: ignore to suppress false positive from Pylance
+                         if hasattr(df['date'], 'dt'):
+                             df['date'] = df['date'].dt.tz_localize(None)  # type: ignore
+                     except Exception:
+                         pass  # Keep original date format if conversion fails
                 return df
             return None
         except Exception as e:
@@ -583,9 +591,16 @@ class KiteService:
             try:
                 instrument_key = f'NFO:{tradingsymbol}'
                 quote = self.kite.quote(instrument_key)
-                price = quote[instrument_key].get('last_price')
-                if not price:
-                    price = quote[instrument_key].get('close')
+                if isinstance(quote, dict) and instrument_key in quote:
+                    quote_item = quote[instrument_key]
+                    if isinstance(quote_item, dict):
+                        price = quote_item.get('last_price')
+                        if not price:
+                            price = quote_item.get('close')
+                    else:
+                        price = None
+                else:
+                    price = None
             except Exception as e:
                 logging.warning(f"Could not fetch price for {tradingsymbol}: {e}")
                 return {

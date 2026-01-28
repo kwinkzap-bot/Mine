@@ -147,6 +147,7 @@ class KotakOrderService:
                 "totp": totp_str
             }
             
+            login_response = None
             try:
                 login_response = requests.post(login_url, headers=login_headers, json=login_payload, timeout=30)
                 login_data = login_response.json()
@@ -198,7 +199,7 @@ class KotakOrderService:
             except ValueError as json_error:
                 self.last_error = f"TOTP Login response is not valid JSON: {str(json_error)}"
                 logging.error(f"[authenticate] {self.last_error}")
-                logging.error(f"[authenticate] Response text: {login_response.text if 'login_response' in locals() else 'N/A'}")
+                logging.error(f"[authenticate] Response text: {login_response.text if login_response else 'N/A'}")
                 return False
             except Exception as login_error:
                 self.last_error = f"TOTP Login failed: {str(login_error)}"

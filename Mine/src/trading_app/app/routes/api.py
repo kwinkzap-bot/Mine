@@ -718,8 +718,8 @@ def get_cpr_filter_results() -> EndpointResponse:
         logger.info(
             "CPR filter completed. "
             f"Found {len(signals)} primary signals, "
-            f"{len(weekly_cross.get('crossed_above', []))} crossed above weekly CPR, "
-            f"{len(weekly_cross.get('crossed_below', []))} crossed below weekly CPR."
+            f"{len(weekly_cross.get('crossed_above', [])) if isinstance(weekly_cross, dict) else 0} crossed above weekly CPR, "
+            f"{len(weekly_cross.get('crossed_below', [])) if isinstance(weekly_cross, dict) else 0} crossed below weekly CPR."
         )
         return jsonify({'success': True, 'data': signals, 'weekly_cross': weekly_cross})
     except Exception as e:
@@ -775,7 +775,7 @@ def get_instrument_token() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
     try:
-        from trading_app.service.kite_service import KiteService
+        from trading_app.service.kite_order_services import KiteService
         
         symbol = request.args.get('symbol', '').upper()
         symbol_type = request.args.get('type', 'fno').lower()
@@ -1651,68 +1651,6 @@ def get_intraday_920_symbol_payload() -> EndpointResponse:
         }), 500
 
 
-@api_bp.route('/intraday-920/chart-data', methods=['POST'])
-@csrf.exempt
-@limiter.exempt
-def get_intraday_920_chart_data() -> EndpointResponse:
-    """
-    Get chart data for Intraday 9:20 strategy strikes
-    
-    POST Payload:
-        {
-            "ce_token": 12345678,
-            "pe_token": 87654321,
-            "timeframe": "5minute"
-        }
-        
-    Returns:
-        JSON with CE and PE chart data
-    """
-    try:
-        auth_error = check_auth()
-        if auth_error:
-            return auth_error
-        
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': 'Request body must contain JSON'
-            }), 400
-        
-        ce_token = data.get('ce_token')
-        pe_token = data.get('pe_token')
-        timeframe = data.get('timeframe', '5minute')
-        
-        if not ce_token or not pe_token:
-            return jsonify({
-                'success': False,
-                'error': 'ce_token and pe_token are required'
-            }), 400
-        
-        kite = get_kite()
-        if not kite:
-            return jsonify({
-                'success': False,
-                'error': 'Failed to initialize Kite connection'
-            }), 500
-        
-        from trading_app.app.intraday_920.intraday_920 import Intraday920Trader
-        trader = Intraday920Trader(kite)
-        
-        chart_data = trader.get_chart_data(ce_token, pe_token, timeframe)
-        
-        return jsonify({
-            'success': not chart_data.get('error'),
-            'data': chart_data
-        })
-        
-    except Exception as e:
-        logger.error(f"Error in intraday-920 chart_data endpoint: {str(e)}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
 
 
 @api_bp.route('/intraday-920/candles', methods=['GET'])
@@ -1945,9 +1883,9 @@ def debug_token_status() -> EndpointResponse:
             return jsonify({
                 'success': True,
                 'token_status': 'VALID',
-                'user_name': profile.get('user_name', 'Unknown'),
-                'user_shortname': profile.get('user_shortname', 'Unknown'),
-                'broker': profile.get('broker', 'Unknown'),
+                'user_name': profile.get('user_name', 'Unknown') if isinstance(profile, dict) else 'Unknown',
+                'user_shortname': profile.get('user_shortname', 'Unknown') if isinstance(profile, dict) else 'Unknown',
+                'broker': profile.get('broker', 'Unknown') if isinstance(profile, dict) else 'Unknown',
                 'access_token': f"{access_token[:20]}...{access_token[-5:]}"
             }), 200
             

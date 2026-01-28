@@ -311,8 +311,9 @@ class OptionsChartService:
             else:
                 return None, None, None, None
         
-        # Calculate default strikes
-        default_ce_strike, default_pe_strike = self._calculate_default_strikes(base_price, symbol)
+        # Calculate default strikes (base_price is guaranteed to be non-None here)
+        if base_price is not None:
+            default_ce_strike, default_pe_strike = self._calculate_default_strikes(base_price, symbol)
         
         # Try exact match first
         for s in strikes:

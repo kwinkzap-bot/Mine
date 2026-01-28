@@ -116,19 +116,27 @@ class MultiStrikeService:
                         
                         # Try fetching by integer token first, then by string
                         if ce_token_int in quote_data:
-                            ce_price = quote_data[ce_token_int].get('last_price', 0.0)
+                            ce_item = quote_data[ce_token_int]
+                            if isinstance(ce_item, dict):
+                                ce_price = ce_item.get('last_price', 0.0)
                             logger.debug(f"CE found by int token {ce_token_int}: {ce_price}")
                         elif str(ce_token_int) in quote_data:
-                            ce_price = quote_data[str(ce_token_int)].get('last_price', 0.0)
+                            ce_item = quote_data[str(ce_token_int)]
+                            if isinstance(ce_item, dict):
+                                ce_price = ce_item.get('last_price', 0.0)
                             logger.debug(f"CE found by str token {ce_token_int}: {ce_price}")
                         else:
                             logger.debug(f"CE token not found in quote_data: {ce_token_int}. Available keys: {list(quote_data.keys())}")
                         
                         if pe_token_int in quote_data:
-                            pe_price = quote_data[pe_token_int].get('last_price', 0.0)
+                            pe_item = quote_data[pe_token_int]
+                            if isinstance(pe_item, dict):
+                                pe_price = pe_item.get('last_price', 0.0)
                             logger.debug(f"PE found by int token {pe_token_int}: {pe_price}")
                         elif str(pe_token_int) in quote_data:
-                            pe_price = quote_data[str(pe_token_int)].get('last_price', 0.0)
+                            pe_item = quote_data[str(pe_token_int)]
+                            if isinstance(pe_item, dict):
+                                pe_price = pe_item.get('last_price', 0.0)
                             logger.debug(f"PE found by str token {pe_token_int}: {pe_price}")
                         else:
                             logger.debug(f"PE token not found in quote_data: {pe_token_int}. Available keys: {list(quote_data.keys())}")
@@ -170,9 +178,11 @@ class MultiStrikeService:
                 if instrument_key:
                     quote_result = self.kite_service.kite.quote([instrument_key])
                     if instrument_key in quote_result:
-                        ohlc = quote_result[instrument_key].get('ohlc', {})
-                        pdh = ohlc.get('high', pdh)
-                        pdl = ohlc.get('low', pdl)
+                        quote_item = quote_result[instrument_key]
+                        if isinstance(quote_item, dict):
+                            ohlc = quote_item.get('ohlc', {})
+                            pdh = ohlc.get('high', pdh)
+                            pdl = ohlc.get('low', pdl)
             except Exception as e:
                 logger.warning(f"Error fetching PDH/PDL: {e}")
             

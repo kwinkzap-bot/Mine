@@ -83,8 +83,9 @@ class HighLowSignal:
         ce_open = ce_data['open'].iloc[0]  # Day's opening price for CE
         
         for i in range(1, min_len):
-            current_time = pd.Timestamp(ce_data.index[i]).time()
-            candle_time = pd.Timestamp(ce_data.index[i])
+            timestamp = ce_data.index[i]  # type: ignore
+            current_time = pd.Timestamp(timestamp).time()  # type: ignore
+            candle_time = pd.Timestamp(timestamp)  # type: ignore
             
             # Check if within valid entry time (9:15 AM to 3:20 PM IST)
             if not self.is_valid_entry_time(current_time):
@@ -211,8 +212,9 @@ class HighLowSignal:
         pe_open = pe_data['open'].iloc[0]  # Day's opening price for PE
         
         for i in range(1, min_len):
-            current_time = pd.Timestamp(pe_data.index[i]).time()
-            candle_time = pd.Timestamp(pe_data.index[i])
+            timestamp = pe_data.index[i]  # type: ignore
+            current_time = pd.Timestamp(timestamp).time()  # type: ignore
+            candle_time = pd.Timestamp(timestamp)  # type: ignore
             
             # Check if within valid entry time (9:15 AM to 3:20 PM IST)
             if not self.is_valid_entry_time(current_time):
@@ -345,7 +347,8 @@ class HighLowSignal:
         
         # Iterate through candles after entry
         for i in range(entry_idx + 1, len(option_data)):
-            candle_time = pd.Timestamp(option_data.index[i])
+            timestamp = option_data.index[i]  # type: ignore
+            candle_time = pd.Timestamp(timestamp)  # type: ignore
             current_time = candle_time.time()
             candle_high = option_data['high'].iloc[i]
             candle_low = option_data['low'].iloc[i]
