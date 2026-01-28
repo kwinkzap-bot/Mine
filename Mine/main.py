@@ -20,14 +20,21 @@ def start_intraday_9_20_monitoring():
     """Initialize and start the Intraday 9:20 live signal monitoring."""
     try:
         from trading_app.app.intraday_option.intraday_9_20_live_signal import Intraday920LiveSignal
-        from trading_app.app.utils.token_manager import get_kite
+        from trading_app.app.utils.token_manager import get_access_token
+        from kiteconnect import KiteConnect
         
         logger.info("🚀 Starting Intraday 9:20 Live Signal Monitoring...")
         
-        kite = get_kite()
-        if not kite:
-            logger.warning("⚠️  Kite connection not available - skipping Intraday 9:20 monitoring")
+        # Get access token and create Kite instance
+        access_token = get_access_token()
+        api_key = os.getenv('API_KEY')
+        
+        if not access_token or not api_key:
+            logger.warning("⚠️  Kite connection not available - missing credentials")
             return
+        
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
         
         # Create monitors for NIFTY only
         symbols = ['NIFTY']

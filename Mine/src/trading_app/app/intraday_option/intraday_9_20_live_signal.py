@@ -155,10 +155,11 @@ class Intraday920LiveSignal:
         SL/Target checks happen every 30 seconds.
         
         Returns:
-            True if minute is divisible by 5 and second is 0
+            True if minute is divisible by 5 and second is between 0-10 (10 second window)
         """
         now = datetime.now()
-        return now.minute % 5 == 0 and now.second == 0
+        # Allow 10-second window at start of each 5-minute interval
+        return now.minute % 5 == 0 and now.second <= 10
     
     async def fetch_live_data(self) -> Dict[str, Any]:
         """
@@ -218,7 +219,7 @@ class Intraday920LiveSignal:
             logger.error(f"Error checking entry signals: {str(e)}")
             return {'success': False, 'error': str(e), 'timestamp': datetime.now().isoformat()}
     
-    def update_active_trades(self, signals: Dict[str, Any], strike_data: Dict[str, Any] = None) -> None:
+    def update_active_trades(self, signals: Dict[str, Any], strike_data: Optional[Dict[str, Any]] = None) -> None:
         """
         Update active trade state with new signals from strategy.check_entry_signal().
         Places buy orders when entry signals are detected.
@@ -242,8 +243,8 @@ class Intraday920LiveSignal:
             if strike_data:
                 order_id = self.place_buy_order(
                     side='CE',
-                    token=strike_data.get('ce_token'),
-                    strike=int(strike_data.get('ce_high')),
+                    token=strike_data.get('ce_token'),  # type: ignore
+                    strike=int(strike_data.get('ce_high')),  # type: ignore
                     entry_price=ce_signal.get('entry_price')
                 )
             
@@ -254,6 +255,8 @@ class Intraday920LiveSignal:
                 'target': ce_signal.get('target'),
                 'entry_time': datetime.now().isoformat(),
                 'order_id': order_id,
+                'token': strike_data.get('ce_token') if strike_data else None,  # type: ignore
+                'strike': int(strike_data.get('ce_high')) if strike_data and strike_data.get('ce_high') else None,  # type: ignore
                 'status': 'OPEN'
             }
             logger.info(f"🟢 CE trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
@@ -264,8 +267,8 @@ class Intraday920LiveSignal:
             if strike_data:
                 order_id = self.place_buy_order(
                     side='PE',
-                    token=strike_data.get('pe_token'),
-                    strike=int(strike_data.get('pe_high')),
+                    token=strike_data.get('pe_token'),  # type: ignore
+                    strike=int(strike_data.get('pe_high')),  # type: ignore
                     entry_price=pe_signal.get('entry_price')
                 )
             
@@ -276,6 +279,8 @@ class Intraday920LiveSignal:
                 'target': pe_signal.get('target'),
                 'entry_time': datetime.now().isoformat(),
                 'order_id': order_id,
+                'token': strike_data.get('pe_token') if strike_data else None,  # type: ignore
+                'strike': int(strike_data.get('pe_high')) if strike_data and strike_data.get('pe_high') else None,  # type: ignore
                 'status': 'OPEN'
             }
             logger.info(f"🟢 PE trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
@@ -407,6 +412,96 @@ class Intraday920LiveSignal:
             
             return None
     
+    def get_current_price(self, token: int) -> Optional[float]:
+        """
+        Fetch current LTP (Last Traded Price) for a given token.
+        
+        Args:
+            token: Instrument token
+            
+        Returns:
+            Current price or None if failed
+        """
+        try:
+            quote = self.kite.quote([f"NFO:{token}"])
+            if quote and f"NFO:{token}" in quote:
+                ltp = quote[f"NFO:{token}"].get('last_price')
+                return ltp
+        except Exception as e:
+            logger.error(f"Error fetching current price for token {token}: {e}")
+            return None
+    
+    def check_sl_target_for_active_trades(self) -> None:
+        """
+        Monitor active trades and check if SL or Target has been hit.
+        Automatically places SELL orders when conditions are met.
+        """
+        trades_to_close = []
+        
+        for side, trade in list(self.active_trades.items()):
+            if trade.get('status') != 'OPEN':
+                continue
+            
+            token = trade.get('token')
+            strike = trade.get('strike')
+            
+            if not token or not strike:
+                logger.warning(f"{side} trade missing token or strike info")
+                continue
+            
+            # Fetch current price
+            current_price = self.get_current_price(token)
+            
+            if current_price is None:
+                logger.warning(f"Failed to fetch current price for {side} {strike}")
+                continue
+            
+            entry_price = trade.get('entry_price', 0)
+            sl = trade.get('sl', 0)
+            target = trade.get('target', 0)
+            
+            # Check if SL hit (price dropped below/equal to SL)
+            if current_price <= sl:
+                logger.info(f"🔴 SL HIT for {side}: Current {current_price:.2f} <= SL {sl:.2f}")
+                
+                # Place sell order
+                order_id = self.place_sell_order(
+                    side=side,
+                    strike=strike,
+                    exit_price=current_price,
+                    exit_reason="SL Hit"
+                )
+                
+                # Close trade
+                self.close_trade(side, current_price, "SL Hit")
+                trades_to_close.append(side)
+                
+            # Check if Target hit (price reached/exceeded target)
+            elif current_price >= target:
+                logger.info(f"🟢 TARGET HIT for {side}: Current {current_price:.2f} >= Target {target:.2f}")
+                
+                # Place sell order
+                order_id = self.place_sell_order(
+                    side=side,
+                    strike=strike,
+                    exit_price=current_price,
+                    exit_reason="Target Hit"
+                )
+                
+                # Close trade
+                self.close_trade(side, current_price, "Target Hit")
+                trades_to_close.append(side)
+            else:
+                # Log current status
+                pnl = current_price - entry_price
+                pnl_pct = (pnl / entry_price * 100) if entry_price else 0
+                logger.debug(f"📊 {side} Trade Status: Entry {entry_price:.2f}, Current {current_price:.2f}, SL {sl:.2f}, Target {target:.2f} | PnL: {pnl:.2f} ({pnl_pct:.2f}%)")
+        
+        # Remove closed trades from active trades
+        for side in trades_to_close:
+            if side in self.active_trades:
+                del self.active_trades[side]
+    
     def place_sell_order(self, side: str, strike: int, exit_price: float, exit_reason: str = "Manual Exit") -> Optional[str]:
         """
         Place a sell order for CE or PE option to exit trade.
@@ -518,9 +613,6 @@ class Intraday920LiveSignal:
             })
             
             return None
-        except Exception as e:
-            logger.error(f"Error placing SELL order for {side} {strike}: {e}", exc_info=True)
-            return None
     
     def _monitor_loop(self) -> None:
         """
@@ -545,7 +637,7 @@ class Intraday920LiveSignal:
                 
                 # ====== ENTRY SIGNAL CHECK (5-minute marks only) ======
                 if self.should_check_entry_signal():
-                    logger.debug(f"[5-min Check] Checking entry signals for {self.symbol}")
+                    logger.info(f"[5-min Check] Checking entry signals for {self.symbol} at {datetime.now().strftime('%H:%M:%S')}")
                     
                     # Fetch live data
                     live_data = self.strategy.get_intraday_920_data(self.symbol)
@@ -554,6 +646,9 @@ class Intraday920LiveSignal:
                         # Extract strike info
                         high_strike = live_data.get('high_strike', {})
                         low_strike = live_data.get('low_strike', {})
+                        
+                        logger.info(f"High Strike - CE Token: {high_strike.get('ce_token')}, PE Token: {high_strike.get('pe_token')}, CE High: {high_strike.get('ce_high')}, PE High: {high_strike.get('pe_high')}")
+                        logger.info(f"Low Strike - CE Token: {low_strike.get('ce_token')}, PE Token: {low_strike.get('pe_token')}, CE High: {low_strike.get('ce_high')}, PE High: {low_strike.get('pe_high')}")
                         
                         if high_strike.get('success') and low_strike.get('success'):
                             # Check signals for high strike
@@ -565,8 +660,20 @@ class Intraday920LiveSignal:
                             )
                             
                             if high_signals.get('success'):
-                                self.update_active_trades(high_signals, strike_data=high_strike)
-                                self.log_signal(high_signals)
+                                ce_sig = high_signals.get('ce_signal', {})
+                                pe_sig = high_signals.get('pe_signal', {})
+                                
+                                # Log what was received
+                                logger.info(f"HIGH STRIKE Signals - CE has_signal: {ce_sig.get('has_signal')}, PE has_signal: {pe_sig.get('has_signal')}")
+                                if not ce_sig.get('has_signal'):
+                                    logger.info(f"CE No Signal Reason: {ce_sig.get('reason', 'Unknown')}")
+                                if not pe_sig.get('has_signal'):
+                                    logger.info(f"PE No Signal Reason: {pe_sig.get('reason', 'Unknown')}")
+                                
+                                # Only update trades if there are actual signals
+                                if ce_sig.get('has_signal') or pe_sig.get('has_signal'):
+                                    self.update_active_trades(high_signals, strike_data=high_strike)
+                                    self.log_signal(high_signals)
                                 
                                 ce_sig = high_signals.get('ce_signal', {})
                                 pe_sig = high_signals.get('pe_signal', {})
@@ -586,8 +693,20 @@ class Intraday920LiveSignal:
                             )
                             
                             if low_signals.get('success'):
-                                self.update_active_trades(low_signals, strike_data=low_strike)
-                                self.log_signal(low_signals)
+                                ce_sig = low_signals.get('ce_signal', {})
+                                pe_sig = low_signals.get('pe_signal', {})
+                                
+                                # Log what was received
+                                logger.info(f"LOW STRIKE Signals - CE has_signal: {ce_sig.get('has_signal')}, PE has_signal: {pe_sig.get('has_signal')}")
+                                if not ce_sig.get('has_signal'):
+                                    logger.info(f"CE No Signal Reason: {ce_sig.get('reason', 'Unknown')}")
+                                if not pe_sig.get('has_signal'):
+                                    logger.info(f"PE No Signal Reason: {pe_sig.get('reason', 'Unknown')}")
+                                
+                                # Only update trades if there are actual signals
+                                if ce_sig.get('has_signal') or pe_sig.get('has_signal'):
+                                    self.update_active_trades(low_signals, strike_data=low_strike)
+                                    self.log_signal(low_signals)
                                 
                                 ce_sig = low_signals.get('ce_signal', {})
                                 pe_sig = low_signals.get('pe_signal', {})
@@ -603,7 +722,13 @@ class Intraday920LiveSignal:
                 # ====== SL/TARGET CHECK (30-second intervals) ======
                 if self.should_check_now():
                     logger.debug(f"[30-sec Check] Monitoring SL/Target for {self.symbol}")
-                    # Active trade monitoring for SL/Target will be implemented here
+                    
+                    # Check active trades for SL/Target hits
+                    if self.active_trades:
+                        logger.debug(f"Active trades to monitor: {list(self.active_trades.keys())}")
+                        self.check_sl_target_for_active_trades()
+                    else:
+                        logger.debug("No active trades to monitor")
                 
                 # Sleep 1 second and check again
                 time_module.sleep(1)
