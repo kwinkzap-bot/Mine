@@ -1,14 +1,18 @@
 """Excel logging utility for live signal monitoring."""
 import os
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 import logging
 
 logger = logging.getLogger(__name__)
 
-try:
+if TYPE_CHECKING:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+try:
+    import openpyxl  # type: ignore[import]
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side  # type: ignore[import]
     EXCEL_AVAILABLE = True
 except ImportError:
     EXCEL_AVAILABLE = False
