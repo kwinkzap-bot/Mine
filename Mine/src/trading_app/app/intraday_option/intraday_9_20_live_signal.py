@@ -793,7 +793,8 @@ class Intraday920LiveSignal:
                 
                 # ====== ENTRY SIGNAL CHECK (5-minute marks only) ======
                 if self.should_check_entry_signal():
-                    check_timestamp = datetime.now()
+                    # Use normalized 5-minute interval time set by should_check_entry_signal
+                    check_timestamp = self.last_entry_check_time or datetime.now()
                     logger.info(f"[5-min Check] Checking entry signals for {self.symbol} at {check_timestamp.strftime('%H:%M:%S')}")
                     
                     # Fetch live data

@@ -206,6 +206,18 @@ class ExcelLogger:
             timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
             time_str = timestamp.strftime('%H:%M:%S')
             market_hour = timestamp.strftime('%H:%M')
+
+            # Skip duplicate logs with the same timestamp (prevents repeated rows)
+            if ws.max_row >= 2:
+                # Check recent rows to avoid repeated entries from multiple loops
+                recent_start = max(2, ws.max_row - 20)
+                for row_idx in range(ws.max_row, recent_start - 1, -1):
+                    row_timestamp_value = ws.cell(row=row_idx, column=1).value
+                    if isinstance(row_timestamp_value, datetime):
+                        row_timestamp_value = row_timestamp_value.strftime('%Y-%m-%d %H:%M:%S')
+                    if str(row_timestamp_value) == timestamp_str:
+                        logger.info(f"⏭️  Duplicate signal check skipped at {timestamp_str}")
+                        return False
             
             # Prepare row
             row_data = [
