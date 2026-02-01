@@ -2,7 +2,10 @@
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import logging
+import os
 from .Kite_data_fetch_services import KiteDataFetchService
+from kiteconnect.exceptions import TokenException
+from trading_app.app.utils.token_manager import get_access_token, save_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,61 @@ class Intraday920Strategy:
         """
         self.kite = kite_instance
         self.data_service = KiteDataFetchService(kite_instance)
+
+
+    def _refresh_kite_access_token(self) -> bool:
+        """Refresh Kite access token and update clients.
+
+        Flow:
+        1) Use cached/env access token if available.
+        2) If missing/invalid, attempt to generate a new access token
+           using REQUEST_TOKEN + API_SECRET (if present).
+        """
+        try:
+            new_token = get_access_token()
+            if new_token:
+                self.kite.set_access_token(new_token)
+                # Keep data service in sync
+                self.data_service.kite = self.kite
+                logger.info("Kite access token refreshed from cache/env")
+                return True
+
+            # Attempt to generate a new access token if request token is available
+            try:
+                from dotenv import load_dotenv  # type: ignore
+                from kiteconnect import KiteConnect  # type: ignore
+            except Exception:
+                logger.warning("python-dotenv or kiteconnect not available for auto token refresh")
+                return False
+
+            load_dotenv()
+            api_key = os.getenv("API_KEY")
+            api_secret = os.getenv("API_SECRET")
+            request_token = os.getenv("REQUEST_TOKEN")
+
+            if not api_key or not api_secret or not request_token:
+                logger.warning("REQUEST_TOKEN/API_SECRET not available for auto token refresh")
+                return False
+
+            kite = KiteConnect(api_key=api_key)
+            session = kite.generate_session(request_token, api_secret)
+            access_token = session.get("access_token")
+
+            if not access_token:
+                logger.warning("Failed to generate access token from request token")
+                return False
+
+            os.environ["ACCESS_TOKEN"] = access_token
+            save_access_token(access_token, request_token)
+
+            self.kite.set_access_token(access_token)
+            self.data_service.kite = self.kite
+            logger.info("Kite access token refreshed via request token")
+            return True
+
+        except Exception as e:
+            logger.warning(f"Failed to refresh Kite access token: {e}")
+            return False
 
     def get_first_5min_high_low(self, symbol: str, target_date: Optional[datetime] = None) -> Dict[str, Any]:
         """
@@ -323,7 +381,14 @@ class Intraday920Strategy:
                 }
             
             # Fetch current quote data from Kite
-            quote = self.kite.quote([instrument_key])
+            try:
+                quote = self.kite.quote([instrument_key])
+            except TokenException:
+                logger.warning("Access token invalid. Attempting refresh and retry...")
+                if self._refresh_kite_access_token():
+                    quote = self.kite.quote([instrument_key])
+                else:
+                    raise
             quote_data = quote.get(instrument_key, {})
             
             if not quote_data:
@@ -625,22 +690,23 @@ class Intraday920Strategy:
         try:
             if target_date is None:
                 target_date = datetime.now()
+
+            # Use the last completed 5-minute candle
+            end_time = target_date.replace(second=0, microsecond=0)
+            end_minute = (end_time.minute // 5) * 5
+            end_time = end_time.replace(minute=end_minute)
+
+            # If we're exactly on the boundary, use the candle that just closed
+            # Otherwise, still use the last fully closed candle
+            start_time = end_time - timedelta(minutes=5)
             
-            # Get candles from current 5-min slot
-            from_time = target_date.replace(second=0, microsecond=0)
-            # Round down to nearest 5-minute interval
-            minute = (from_time.minute // 5) * 5
-            from_time = from_time.replace(minute=minute)
-            
-            to_time = from_time + timedelta(minutes=5)
-            
-            logger.info(f"Fetching candles from {from_time} to {to_time} for token {token}")
+            logger.info(f"Fetching candles from {start_time} to {end_time} for token {token}")
             
             candles = self.data_service.get_candlestick_data(
                 token,
                 interval='5minute',
-                from_date=from_time,
-                to_date=to_time
+                from_date=start_time,
+                to_date=end_time
             )
             
             return candles if candles else []

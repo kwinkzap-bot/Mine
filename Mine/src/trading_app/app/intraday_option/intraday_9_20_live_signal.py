@@ -10,6 +10,7 @@ import threading
 import time as time_module
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from .intraday_9_20 import Intraday920Strategy
 from ...service.kite_order_services import KiteService
 
@@ -96,7 +97,7 @@ class Intraday920LiveSignal:
     # Market hours (IST)
     MARKET_OPEN = time(9, 15, 0)      # 9:15 AM
     MARKET_CLOSE = time(15, 20, 0)    # 3:20 PM (market closes at 3:30 but last candle is 3:20)
-    MONITORING_INTERVAL = 30  # seconds
+    MONITORING_INTERVAL = 3  # seconds
     
     def __init__(self, kite_instance, symbol: str = 'NIFTY', live_trading: bool = True):
         """
@@ -161,13 +162,13 @@ class Intraday920LiveSignal:
     
     def should_check_now(self) -> bool:
         """
-        Determine if we should check for SL/TARGET now based on 30-second intervals.
+        Determine if we should check for SL/TARGET now based on 3-second intervals.
         
         Returns:
-            True if current second is 0 or 30, False otherwise
+            True if current second is divisible by 3, False otherwise
         """
         current_second = datetime.now().second
-        return current_second == 0 or current_second == 30
+        return current_second % self.MONITORING_INTERVAL == 0
     
     def should_check_entry_signal(self) -> bool:
         """
@@ -219,6 +220,39 @@ class Intraday920LiveSignal:
         except Exception as e:
             logger.error(f"Error fetching live data for {self.symbol}: {str(e)}")
             return {'success': False, 'error': str(e)}
+
+    def _fetch_live_data_with_refresh(self) -> Dict[str, Any]:
+        """Fetch live data and retry once after access-token refresh if needed."""
+        live_data = self.strategy.get_intraday_920_data(self.symbol)
+        if live_data.get('success'):
+            return live_data
+
+        error_msg = str(live_data.get('error', ''))
+        if 'Incorrect `api_key` or `access_token`' in error_msg:
+            logger.warning("Access token invalid during live fetch. Attempting refresh and retry...")
+            refresh_ok = False
+            try:
+                refresh_ok = self.strategy._refresh_kite_access_token()  # type: ignore[attr-defined]
+            except Exception as e:
+                logger.warning(f"Token refresh failed: {e}")
+
+            if refresh_ok:
+                live_data = self.strategy.get_intraday_920_data(self.symbol)
+
+        return live_data
+
+    def _fetch_live_data_with_timeout(self, timeout_seconds: int = 10) -> Dict[str, Any]:
+        """Fetch live data with a timeout to avoid blocking the 5-min log cycle."""
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(self._fetch_live_data_with_refresh)
+            try:
+                return future.result(timeout=timeout_seconds)
+            except FuturesTimeoutError:
+                logger.warning(f"Live data fetch timed out after {timeout_seconds}s")
+                return {
+                    'success': False,
+                    'error': f'Live data fetch timed out after {timeout_seconds}s'
+                }
     
     def check_entry_signal_live(self, ce_token: int, pe_token: int, 
                                ce_high: float, pe_high: float) -> Dict[str, Any]:
@@ -776,7 +810,7 @@ class Intraday920LiveSignal:
         
         Two-tier monitoring:
         1. ENTRY SIGNALS: Checked only at 5-minute marks (9:15, 9:20, 9:25, ..., 3:15, 3:20)
-        2. SL/TARGET MONITORING: Checked every 30 seconds (0 or 30 second mark)
+        2. SL/TARGET MONITORING: Checked every 3 seconds
         
         Uses strategy.check_entry_signal() to detect entry signals.
         """
@@ -797,8 +831,8 @@ class Intraday920LiveSignal:
                     check_timestamp = self.last_entry_check_time or datetime.now()
                     logger.info(f"[5-min Check] Checking entry signals for {self.symbol} at {check_timestamp.strftime('%H:%M:%S')}")
                     
-                    # Fetch live data
-                    live_data = self.strategy.get_intraday_920_data(self.symbol)
+                    # Fetch live data (timeout-protected)
+                    live_data = self._fetch_live_data_with_timeout()
                     
                     if live_data.get('success'):
                         # Extract strike info
@@ -910,7 +944,7 @@ class Intraday920LiveSignal:
                                     if pe_sig.get('has_signal'):
                                         logger.info(f"📊 LOW STRIKE PE SIGNAL: Entry {pe_sig.get('entry_price')}, SL {pe_sig.get('sl')}, Target {pe_sig.get('target')} | ✅ Order placed")
                         
-                        # LOG EVERY 5-MINUTE CHECK TO EXCEL (regardless of signal)
+                        # LOG EVERY 5-MINUTE CHECK TO EXCEL (both High + Low strike)
                         excel_logger.log_signal_check(
                             timestamp=check_timestamp,
                             ce_prev_high=ce_high_val,
@@ -925,7 +959,27 @@ class Intraday920LiveSignal:
                             pe_sl=pe_sl,
                             ce_target=ce_target,
                             pe_target=pe_target,
-                            notes=f"High Strike Check" if high_strike.get('success') else "Strike data unavailable"
+                            notes="High Strike Check" if high_strike.get('success') else "High Strike data unavailable"
+                        )
+
+                        # Low strike log (even if no signals)
+                        low_ce_high = low_strike.get('ce_high')
+                        low_pe_high = low_strike.get('pe_high')
+                        excel_logger.log_signal_check(
+                            timestamp=check_timestamp,
+                            ce_prev_high=low_ce_high,
+                            ce_prev_low=None,  # Not tracked currently
+                            pe_prev_high=low_pe_high,
+                            pe_prev_low=None,  # Not tracked currently
+                            ce_signal=has_ce_signal,
+                            pe_signal=has_pe_signal,
+                            ce_entry_price=ce_entry_price,
+                            pe_entry_price=pe_entry_price,
+                            ce_sl=ce_sl,
+                            pe_sl=pe_sl,
+                            ce_target=ce_target,
+                            pe_target=pe_target,
+                            notes="Low Strike Check" if low_strike.get('success') else "Low Strike data unavailable"
                         )
                         
                     else:

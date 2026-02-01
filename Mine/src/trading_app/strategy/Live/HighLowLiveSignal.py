@@ -18,7 +18,10 @@ from trading_app.app.utils.logger import logger
 from .HighLowSignal import HighLowSignal
 
 # Import excel logger
-from utils.excel_logger import excel_logger
+from utils.excel_logger import ExcelLogger
+
+# Use a separate log file to avoid mixing with Intraday 9:20 logs
+excel_logger = ExcelLogger(file_path="/Users/kavinkumar/Mine/Mine/signal_logs_highlow.xlsx")
 
 load_dotenv()
 

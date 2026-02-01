@@ -24,16 +24,16 @@ class ExcelLogger:
     
     EXCEL_FILE = "/Users/kavinkumar/Mine/Mine/signal_logs.xlsx"
     
-    def __init__(self):
+    def __init__(self, file_path: Optional[str] = None):
         self.available = EXCEL_AVAILABLE
-        self.file_path = self.EXCEL_FILE
+        self.file_path = file_path or self.EXCEL_FILE
         if not self.available:
             logger.warning("Excel logging disabled - install openpyxl: pip install openpyxl")
         
     def _get_or_create_workbook(self):
         """Get existing workbook or create new one."""
-        if os.path.exists(self.EXCEL_FILE):
-            return openpyxl.load_workbook(self.EXCEL_FILE)
+        if os.path.exists(self.file_path):
+            return openpyxl.load_workbook(self.file_path)
         else:
             wb = openpyxl.Workbook()
             # Remove default sheet
@@ -207,7 +207,7 @@ class ExcelLogger:
             time_str = timestamp.strftime('%H:%M:%S')
             market_hour = timestamp.strftime('%H:%M')
 
-            # Skip duplicate logs with the same timestamp (prevents repeated rows)
+            # Skip duplicate logs with the same timestamp + notes (prevents repeated rows)
             if ws.max_row >= 2:
                 # Check recent rows to avoid repeated entries from multiple loops
                 recent_start = max(2, ws.max_row - 20)
@@ -216,8 +216,10 @@ class ExcelLogger:
                     if isinstance(row_timestamp_value, datetime):
                         row_timestamp_value = row_timestamp_value.strftime('%Y-%m-%d %H:%M:%S')
                     if str(row_timestamp_value) == timestamp_str:
-                        logger.info(f"⏭️  Duplicate signal check skipped at {timestamp_str}")
-                        return False
+                        row_notes = ws.cell(row=row_idx, column=16).value
+                        if (row_notes or "") == (notes or ""):
+                            logger.info(f"⏭️  Duplicate signal check skipped at {timestamp_str} ({notes})")
+                            return False
             
             # Prepare row
             row_data = [
@@ -261,8 +263,8 @@ class ExcelLogger:
                     if "YES" in str(cell.value):
                         cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
             
-            wb.save(self.EXCEL_FILE)
-            logger.info(f"✅ Signal check logged to Excel: {self.EXCEL_FILE}")
+            wb.save(self.file_path)
+            logger.info(f"✅ Signal check logged to Excel: {self.file_path}")
             return True
             
         except Exception as e:
@@ -352,7 +354,7 @@ class ExcelLogger:
                 if cell.column == 10:  # Status
                     cell.fill = PatternFill(start_color=status_color, end_color=status_color, fill_type='solid')
             
-            wb.save(self.EXCEL_FILE)
+            wb.save(self.file_path)
             logger.info(f"✅ Trade logged to Excel: {order_type} {option_type} {strike}")
             return True
             
