@@ -18,6 +18,8 @@ class KiteService:
         self.instruments: Optional[List[Dict[str, Any]]] = None
         self._instrument_tokens_by_symbol: Dict[str, int] = {}
         self._instrument_tokens_by_name: Dict[str, int] = {}
+        self._nfo_instruments_cache: Optional[List[Dict[str, Any]]] = None
+        self._nfo_option_symbol_cache: Dict[str, str] = {}  # Cache for option symbol lookups
         if self.instruments is None:
             self._load_instruments()
     
@@ -28,9 +30,10 @@ class KiteService:
             nse_instruments = self.kite.instruments('NSE')
             logging.info(f"[_load_instruments] Loaded {len(nse_instruments) if nse_instruments else 0} NSE instruments")
             
-            # Load NFO instruments (for futures and options)
+            # Load NFO instruments (for futures and options) - also cache separately for option lookups
             nfo_instruments = self.kite.instruments('NFO')
             logging.info(f"[_load_instruments] Loaded {len(nfo_instruments) if nfo_instruments else 0} NFO instruments")
+            self._nfo_instruments_cache = nfo_instruments  # Cache for fast option symbol lookups
             
             # Combine both
             all_instruments = (nse_instruments or []) + (nfo_instruments or [])
@@ -380,6 +383,8 @@ class KiteService:
     def get_lot_size(self, symbol: str, exchange: str = 'NFO') -> int:
         """Get the lot size (quantity multiplier) for a symbol.
         
+        Uses cached NFO instruments for fast lookup instead of fetching from API.
+        
         Args:
             symbol: Underlying symbol (NIFTY, BANKNIFTY, FINNIFTY, etc.)
             exchange: Exchange (default: 'NFO')
@@ -388,7 +393,14 @@ class KiteService:
             Lot size (default: 1 if not found)
         """
         try:
-            instruments = self.kite.instruments(exchange)
+            # Use cached NFO instruments instead of fetching from API
+            instruments = self._nfo_instruments_cache
+            
+            # If cache is empty, load it once
+            if not instruments:
+                logging.warning("NFO instruments cache empty in get_lot_size, loading...")
+                instruments = self.kite.instruments(exchange)
+                self._nfo_instruments_cache = instruments
             
             # Look for any option instrument with the given symbol to get lot size
             # All options for the same underlying have the same lot size
@@ -426,6 +438,8 @@ class KiteService:
     def get_option_symbol(self, symbol: str, strike: int, option_type: str, exchange: str = 'NFO') -> Optional[str]:
         """Get the trading symbol for an option.
         
+        Uses cached NFO instruments for fast lookup instead of fetching from API.
+        
         Args:
             symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
             strike: Strike price
@@ -436,7 +450,21 @@ class KiteService:
             Trading symbol or None if not found
         """
         try:
-            nfo_instruments = self.kite.instruments(exchange)
+            # Create cache key for this lookup
+            cache_key = f"{symbol}_{strike}_{option_type}"
+            
+            # Check if already cached
+            if cache_key in self._nfo_option_symbol_cache:
+                return self._nfo_option_symbol_cache[cache_key]
+            
+            # Use cached NFO instruments instead of fetching from API (saves ~10-15 seconds)
+            nfo_instruments = self._nfo_instruments_cache
+            
+            # If cache is empty, load it once
+            if not nfo_instruments:
+                logging.warning("NFO instruments cache empty, loading...")
+                nfo_instruments = self.kite.instruments(exchange)
+                self._nfo_instruments_cache = nfo_instruments
             
             matching_instruments = []
             for inst in nfo_instruments:
@@ -459,6 +487,8 @@ class KiteService:
                 # Sort by expiry and get the nearest
                 matching_instruments.sort(key=lambda x: x['expiry'])
                 tradingsymbol = matching_instruments[0]['tradingsymbol']
+                # Cache the result for future lookups
+                self._nfo_option_symbol_cache[cache_key] = tradingsymbol
                 logging.debug(f"Found option symbol: {tradingsymbol} for {symbol} {option_type} {strike}")
                 return tradingsymbol
             
@@ -561,6 +591,7 @@ class KiteService:
         """Place an order for an option contract.
         
         Convenience method that combines option symbol lookup and order placement.
+        Uses parallel operations to get lot size and option symbol simultaneously.
         
         Args:
             symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
@@ -573,11 +604,19 @@ class KiteService:
             Dict with success status and order details
         """
         try:
-            # Use dynamic lot size if quantity not provided
+            # Parallel operation: Get lot size and option symbol at the same time
+            from concurrent.futures import ThreadPoolExecutor
+            
             if quantity is None:
-                quantity = self.get_lot_size(symbol)
-            # Get the option trading symbol
-            tradingsymbol = self.get_option_symbol(symbol, strike, option_type)
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    lot_size_future = executor.submit(self.get_lot_size, symbol)
+                    tradingsymbol_future = executor.submit(self.get_option_symbol, symbol, strike, option_type)
+                    
+                    quantity = lot_size_future.result()
+                    tradingsymbol = tradingsymbol_future.result()
+            else:
+                tradingsymbol = self.get_option_symbol(symbol, strike, option_type)
+            
             if not tradingsymbol:
                 return {
                     'success': False,
