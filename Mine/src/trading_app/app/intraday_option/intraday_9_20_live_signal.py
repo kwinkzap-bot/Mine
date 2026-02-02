@@ -55,32 +55,67 @@ def log_order_placement(order_data: Dict[str, Any]) -> None:
         
         notes_str = " | ".join(notes) if notes else ""
         
-        # Extract option type from symbol (CE or PE)
-        symbol = order_data.get('symbol', '')
-        option_type = 'CE' if 'CE' in symbol else ('PE' if 'PE' in symbol else 'N/A')
+        # Extract option type from side (side contains 'BUY CE', 'SELL PE', etc.)
+        option_type = 'N/A'
+        if 'CE' in str(side):
+            option_type = 'CE'
+        elif 'PE' in str(side):
+            option_type = 'PE'
         
-        # Log to Excel
+        # Get strike as integer
+        strike_val = order_data.get('strike', 0)
+        try:
+            strike = int(strike_val) if strike_val else 0
+        except (ValueError, TypeError):
+            strike = 0
+        
+        # Get entry price as float
+        entry_price_val = order_data.get('entry_price', 0)
+        try:
+            if isinstance(entry_price_val, str):
+                entry_price = float(entry_price_val)
+            else:
+                entry_price = float(entry_price_val) if entry_price_val else 0.0
+        except (ValueError, TypeError):
+            entry_price = 0.0
+        
+        # Get target and SL, handle 'N/A' strings
         target_val = order_data.get('target')
         sl_val = order_data.get('sl')
         
+        target_price = None
+        if target_val not in ['N/A', None, '']:
+            try:
+                target_price = float(target_val) if isinstance(target_val, (int, float, str)) else None
+            except (ValueError, TypeError):
+                target_price = None
+        
+        sl_price = None
+        if sl_val not in ['N/A', None, '']:
+            try:
+                sl_price = float(sl_val) if isinstance(sl_val, (int, float, str)) else None
+            except (ValueError, TypeError):
+                sl_price = None
+        
+        # Log to Excel
         excel_logger.log_trade(
             order_type=side,
             option_type=option_type,
-            strike=order_data.get('strike', 0),
-            entry_price=float(order_data.get('entry_price', 0)),
-            current_price=float(order_data.get('entry_price', 0)),  # Same as entry on placement
-            target=float(target_val) if target_val not in ['N/A', None] and target_val != '' else None,  # type: ignore
-            stop_loss=float(sl_val) if sl_val not in ['N/A', None] and sl_val != '' else None,  # type: ignore
+            strike=strike,
+            entry_price=entry_price,
+            current_price=entry_price,  # Same as entry on placement
+            target=target_price,
+            stop_loss=sl_price,
             pnl=None,  # No P&L on order placement
             status=excel_status,
             order_id=order_data.get('order_id'),
             notes=notes_str
         )
         
-        logger.info(f"✅ Order logged to Excel: {side} {symbol}")
+        logger.info(f"✅ Order logged to Excel: {side}")
         
     except Exception as e:
-        logger.error(f"Failed to write order placement log: {e}")
+        logger.error(f"Failed to write order placement log: {e}", exc_info=True)
 
 
 class Intraday920LiveSignal:
@@ -275,18 +310,18 @@ class Intraday920LiveSignal:
         with ThreadPoolExecutor(max_workers=2) as executor:
             high_future = executor.submit(
                 self.check_entry_signal_live,
-                high_strike.get('ce_token'),
-                high_strike.get('pe_token'),
-                high_strike.get('ce_high'),
-                high_strike.get('pe_high')
+                int(high_strike.get('ce_token', 0)),
+                int(high_strike.get('pe_token', 0)),
+                float(high_strike.get('ce_high', 0)),
+                float(high_strike.get('pe_high', 0))
             )
             
             low_future = executor.submit(
                 self.check_entry_signal_live,
-                low_strike.get('ce_token'),
-                low_strike.get('pe_token'),
-                low_strike.get('ce_high'),
-                low_strike.get('pe_high')
+                int(low_strike.get('ce_token', 0)),
+                int(low_strike.get('pe_token', 0)),
+                float(low_strike.get('ce_high', 0)),
+                float(low_strike.get('pe_high', 0))
             )
             
             try:
@@ -357,9 +392,14 @@ class Intraday920LiveSignal:
             self.log_signal(signals)
         
         return result
+    
+    def update_active_trades(self, signals: Dict[str, Any], strike_data: Optional[Dict[str, Any]] = None) -> None:
         """
         Update active trade state with new signals from strategy.check_entry_signal().
         Places buy orders when entry signals are detected.
+        
+        IMPORTANT: Allows multiple sequential entries per side (e.g., 10:15 CE entry, exit at 11:45, then 11:00 CE entry).
+        New entries will replace the existing trade on that side only if the previous trade has been closed.
         
         Uses signal data returned by the strategy which includes:
         - has_signal: Whether entry conditions were met
@@ -378,60 +418,92 @@ class Intraday920LiveSignal:
         
         with self.active_trades_lock:
             # Track CE entry and place buy order
-            if ce_signal.get('has_signal') and 'CE' not in self.active_trades:
-                order_id = None
-                if strike_data:
-                    order_id = self.place_buy_order(
-                        side='CE',
-                        token=strike_data.get('ce_token'),  # type: ignore
-                        strike=int(strike_data.get('ce_high')),  # type: ignore
-                        entry_price=ce_signal.get('entry_price')
-                    )
-                
-                self.active_trades['CE'] = {
-                    'entry_price': ce_signal.get('entry_price'),
-                    'entry_high': ce_signal.get('entry_high'),  # Reference high used for entry
-                    'sl': ce_signal.get('sl'),
-                    'target': ce_signal.get('target'),
-                    'entry_time': datetime.now().isoformat(),
-                    'order_id': order_id,
-                    'token': strike_data.get('ce_token') if strike_data else None,  # type: ignore
-                    'strike': int(strike_data.get('ce_high')) if strike_data and strike_data.get('ce_high') else None,  # type: ignore
-                    'status': 'OPEN',
-                    # Trailing SL state
-                    'target_hit': False,  # Track if target was hit
-                    'trailed_sl': ce_signal.get('sl'),  # Current trailed SL (starts at initial SL)
-                    'sl_distance': ce_signal.get('entry_price') - ce_signal.get('sl')  # Distance between entry and SL
-                }
-                logger.info(f"🟢 CE trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
+            # Allow new CE entry ONLY if:
+            # 1. Signal exists AND (no CE trade exists OR existing CE trade is already closed)
+            if ce_signal.get('has_signal'):
+                if 'CE' not in self.active_trades or self.active_trades['CE'].get('status') == 'CLOSED':
+                    order_id = None
+                    ce_strike = None
+                    if strike_data:
+                        # Get actual CE strike price (not the candle high)
+                        ce_strike_val = strike_data.get('ce_strike')
+                        if ce_strike_val:
+                            ce_strike = int(ce_strike_val)
+                        else:
+                            ce_high_val = strike_data.get('ce_high')
+                            if ce_high_val:
+                                ce_strike = int(ce_high_val)
+                        
+                        if ce_strike:
+                            order_id = self.place_buy_order(
+                                side='CE',
+                                token=strike_data.get('ce_token'),  # type: ignore
+                                strike=ce_strike,
+                                entry_price=ce_signal.get('entry_price')
+                            )
+                    
+                    self.active_trades['CE'] = {
+                        'entry_price': ce_signal.get('entry_price'),
+                        'entry_high': ce_signal.get('entry_high'),  # Reference high used for entry
+                        'sl': ce_signal.get('sl'),
+                        'target': ce_signal.get('target'),
+                        'entry_time': datetime.now().isoformat(),
+                        'order_id': order_id,
+                        'token': strike_data.get('ce_token') if strike_data else None,  # type: ignore
+                        'strike': ce_strike if strike_data else None,
+                        'status': 'OPEN',
+                        # Trailing SL state
+                        'target_hit': False,  # Track if target was hit
+                        'trailed_sl': ce_signal.get('sl'),  # Current trailed SL (starts at initial SL)
+                        'sl_distance': ce_signal.get('entry_price') - ce_signal.get('sl')  # Distance between entry and SL
+                    }
+                    logger.info(f"🟢 CE trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
+                else:
+                    logger.info(f"⏭️  CE signal detected but trade already OPEN - skipping to allow sequential entries (close existing trade first)")
             
             # Track PE entry and place buy order
-            if pe_signal.get('has_signal') and 'PE' not in self.active_trades:
-                order_id = None
-                if strike_data:
-                    order_id = self.place_buy_order(
-                        side='PE',
-                        token=strike_data.get('pe_token'),  # type: ignore
-                        strike=int(strike_data.get('pe_high')),  # type: ignore
-                        entry_price=pe_signal.get('entry_price')
-                    )
-                
-                self.active_trades['PE'] = {
-                    'entry_price': pe_signal.get('entry_price'),
-                    'entry_high': pe_signal.get('entry_high'),  # Reference high used for entry
-                    'sl': pe_signal.get('sl'),
-                    'target': pe_signal.get('target'),
-                    'entry_time': datetime.now().isoformat(),
-                    'order_id': order_id,
-                    'token': strike_data.get('pe_token') if strike_data else None,  # type: ignore
-                    'strike': int(strike_data.get('pe_high')) if strike_data and strike_data.get('pe_high') else None,  # type: ignore
-                    'status': 'OPEN',
-                    # Trailing SL state
-                    'target_hit': False,  # Track if target was hit
-                    'trailed_sl': pe_signal.get('sl'),  # Current trailed SL (starts at initial SL)
-                    'sl_distance': pe_signal.get('entry_price') - pe_signal.get('sl')  # Distance between entry and SL
-                }
-                logger.info(f"🟢 PE trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
+            # Allow new PE entry ONLY if:
+            # 1. Signal exists AND (no PE trade exists OR existing PE trade is already closed)
+            if pe_signal.get('has_signal'):
+                if 'PE' not in self.active_trades or self.active_trades['PE'].get('status') == 'CLOSED':
+                    order_id = None
+                    pe_strike = None
+                    if strike_data:
+                        # Get actual PE strike price (not the candle high)
+                        pe_strike_val = strike_data.get('pe_strike')
+                        if pe_strike_val:
+                            pe_strike = int(pe_strike_val)
+                        else:
+                            pe_high_val = strike_data.get('pe_high')
+                            if pe_high_val:
+                                pe_strike = int(pe_high_val)
+                        
+                        if pe_strike:
+                            order_id = self.place_buy_order(
+                                side='PE',
+                                token=strike_data.get('pe_token'),  # type: ignore
+                                strike=pe_strike,
+                                entry_price=pe_signal.get('entry_price')
+                            )
+                    
+                    self.active_trades['PE'] = {
+                        'entry_price': pe_signal.get('entry_price'),
+                        'entry_high': pe_signal.get('entry_high'),  # Reference high used for entry
+                        'sl': pe_signal.get('sl'),
+                        'target': pe_signal.get('target'),
+                        'entry_time': datetime.now().isoformat(),
+                        'order_id': order_id,
+                        'token': strike_data.get('pe_token') if strike_data else None,  # type: ignore
+                        'strike': pe_strike if strike_data else None,
+                        'status': 'OPEN',
+                        # Trailing SL state
+                        'target_hit': False,  # Track if target was hit
+                        'trailed_sl': pe_signal.get('sl'),  # Current trailed SL (starts at initial SL)
+                        'sl_distance': pe_signal.get('entry_price') - pe_signal.get('sl')  # Distance between entry and SL
+                    }
+                    logger.info(f"🟢 PE trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
+                else:
+                    logger.info(f"⏭️  PE signal detected but trade already OPEN - skipping to allow sequential entries (close existing trade first)")
     
     def log_signal(self, signals: Dict[str, Any]) -> None:
         """
@@ -830,11 +902,12 @@ class Intraday920LiveSignal:
                         pnl_pct = (pnl / entry_price * 100) if entry_price else 0
                         logger.debug(f"📊 {side} Trade Status: Entry {entry_price:.2f}, Current {current_price:.2f}, SL {initial_sl:.2f}, Target {target:.2f} | PnL: {pnl:.2f} ({pnl_pct:.2f}%)")
         
-        # Remove closed trades from active trades
+        # Mark closed trades as CLOSED (don't delete - allows next entry to detect status)
         with self.active_trades_lock:
             for side in trades_to_close:
                 if side in self.active_trades:
-                    del self.active_trades[side]
+                    self.active_trades[side]['status'] = 'CLOSED'
+                    logger.info(f"📋 {side} trade marked as CLOSED - allowing new entry on next signal")
     
     def place_sell_order(self, side: str, strike: int, exit_price: float, exit_reason: str = "Manual Exit") -> Optional[str]:
         """
