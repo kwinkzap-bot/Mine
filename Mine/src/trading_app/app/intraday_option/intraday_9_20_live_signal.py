@@ -117,12 +117,17 @@ class Intraday920LiveSignal:
         self.is_monitoring = False
         self.monitor_thread = None
         self.active_trades = {}  # Track active trades: {side: {entry_info, order_id, target_hit, trailed_sl}}
+        self.active_trades_lock = threading.Lock()  # Thread safety for active_trades
         self.today_signals = []  # All signals generated today
         self.last_entry_check_time = None  # Track last entry signal check to prevent duplicates
         
         # Trading configuration
         self.live_trading = live_trading  # False=demo mode, True=live orders
         self.risk_reward_ratio = '1:2-trail'  # Use 1:2 with trailing SL
+        
+        # Configuration constants
+        self.LIVE_DATA_FETCH_TIMEOUT = 10  # seconds
+        self.PRICE_FETCH_BATCH_SIZE = 10  # max tokens per quote call
         
         logger.info(f"Intraday 9:20 Live Signal Monitor initialized for {symbol} (live_trading={live_trading}, ratio={self.risk_reward_ratio})")
     
@@ -254,6 +259,198 @@ class Intraday920LiveSignal:
                     'error': f'Live data fetch timed out after {timeout_seconds}s'
                 }
     
+    def check_entry_signals_parallel(self, high_strike: Dict[str, Any], low_strike: Dict[str, Any]) -> tuple:
+        """
+        Check entry signals for both high and low strikes in PARALLEL for efficiency.
+        
+        Parallel execution reduces wait time when checking multiple strikes.
+        
+        Args:
+            high_strike: High strike data
+            low_strike: Low strike data
+            
+        Returns:
+            Tuple of (high_signals, low_signals)
+        """
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            high_future = executor.submit(
+                self.check_entry_signal_live,
+                high_strike.get('ce_token'),
+                high_strike.get('pe_token'),
+                high_strike.get('ce_high'),
+                high_strike.get('pe_high')
+            )
+            
+            low_future = executor.submit(
+                self.check_entry_signal_live,
+                low_strike.get('ce_token'),
+                low_strike.get('pe_token'),
+                low_strike.get('ce_high'),
+                low_strike.get('pe_high')
+            )
+            
+            try:
+                high_signals = high_future.result(timeout=self.LIVE_DATA_FETCH_TIMEOUT)
+                low_signals = low_future.result(timeout=self.LIVE_DATA_FETCH_TIMEOUT)
+            except FuturesTimeoutError:
+                logger.warning("Signal check timed out")
+                high_signals = {'success': False, 'error': 'Timeout'}
+                low_signals = {'success': False, 'error': 'Timeout'}
+            
+            return high_signals, low_signals
+    
+    def _process_strike_signals(self, signals: Dict[str, Any], strike_data: Dict[str, Any], 
+                               strike_name: str) -> Dict[str, Any]:
+        """
+        Process entry signals from a single strike (DRY pattern).
+        
+        Args:
+            signals: Signal data from check_entry_signal_live()
+            strike_data: Strike data for order placement
+            strike_name: Name for logging ("HIGH STRIKE" or "LOW STRIKE")
+            
+        Returns:
+            Dictionary with signal processing results
+        """
+        result = {
+            'has_ce_signal': False,
+            'has_pe_signal': False,
+            'ce_entry_price': None,
+            'ce_sl': None,
+            'ce_target': None,
+            'pe_entry_price': None,
+            'pe_sl': None,
+            'pe_target': None,
+            'ce_high_val': strike_data.get('ce_high'),
+            'pe_high_val': strike_data.get('pe_high')
+        }
+        
+        if not signals.get('success'):
+            return result
+        
+        ce_sig = signals.get('ce_signal', {})
+        pe_sig = signals.get('pe_signal', {})
+        
+        logger.info(f"{strike_name} Signals - CE has_signal: {ce_sig.get('has_signal')}, PE has_signal: {pe_sig.get('has_signal')}")
+        
+        if ce_sig.get('has_signal'):
+            result['has_ce_signal'] = True
+            result['ce_entry_price'] = ce_sig.get('entry_price')
+            result['ce_sl'] = ce_sig.get('sl')
+            result['ce_target'] = ce_sig.get('target')
+            logger.info(f"📊 {strike_name} CE SIGNAL: Entry {ce_sig.get('entry_price')}, SL {ce_sig.get('sl')}, Target {ce_sig.get('target')}")
+        else:
+            logger.info(f"CE No Signal Reason: {ce_sig.get('reason', 'Unknown')}")
+        
+        if pe_sig.get('has_signal'):
+            result['has_pe_signal'] = True
+            result['pe_entry_price'] = pe_sig.get('entry_price')
+            result['pe_sl'] = pe_sig.get('sl')
+            result['pe_target'] = pe_sig.get('target')
+            logger.info(f"📊 {strike_name} PE SIGNAL: Entry {pe_sig.get('entry_price')}, SL {pe_sig.get('sl')}, Target {pe_sig.get('target')}")
+        else:
+            logger.info(f"PE No Signal Reason: {pe_sig.get('reason', 'Unknown')}")
+        
+        # Update trades if there are signals
+        if result['has_ce_signal'] or result['has_pe_signal']:
+            self.update_active_trades(signals, strike_data=strike_data)
+            self.log_signal(signals)
+        
+        return result
+        """
+        Update active trade state with new signals from strategy.check_entry_signal().
+        Places buy orders when entry signals are detected.
+        
+        Uses signal data returned by the strategy which includes:
+        - has_signal: Whether entry conditions were met
+        - entry_price: Entry price at signal
+        - sl: Stop loss calculated by strategy.calculate_sl_for_entry()
+        - target: Target calculated by strategy.calculate_sl_for_entry()
+        
+        Thread-safe access to active_trades dictionary.
+        
+        Args:
+            signals: Entry signals from check_entry_signal_live()
+            strike_data: Optional strike data for order placement {ce_token, pe_token, ce_high, pe_high}
+        """
+        ce_signal = signals.get('ce_signal', {})
+        pe_signal = signals.get('pe_signal', {})
+        
+        with self.active_trades_lock:
+            # Track CE entry and place buy order
+            if ce_signal.get('has_signal') and 'CE' not in self.active_trades:
+                order_id = None
+                if strike_data:
+                    order_id = self.place_buy_order(
+                        side='CE',
+                        token=strike_data.get('ce_token'),  # type: ignore
+                        strike=int(strike_data.get('ce_high')),  # type: ignore
+                        entry_price=ce_signal.get('entry_price')
+                    )
+                
+                self.active_trades['CE'] = {
+                    'entry_price': ce_signal.get('entry_price'),
+                    'entry_high': ce_signal.get('entry_high'),  # Reference high used for entry
+                    'sl': ce_signal.get('sl'),
+                    'target': ce_signal.get('target'),
+                    'entry_time': datetime.now().isoformat(),
+                    'order_id': order_id,
+                    'token': strike_data.get('ce_token') if strike_data else None,  # type: ignore
+                    'strike': int(strike_data.get('ce_high')) if strike_data and strike_data.get('ce_high') else None,  # type: ignore
+                    'status': 'OPEN',
+                    # Trailing SL state
+                    'target_hit': False,  # Track if target was hit
+                    'trailed_sl': ce_signal.get('sl'),  # Current trailed SL (starts at initial SL)
+                    'sl_distance': ce_signal.get('entry_price') - ce_signal.get('sl')  # Distance between entry and SL
+                }
+                logger.info(f"🟢 CE trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
+            
+            # Track PE entry and place buy order
+            if pe_signal.get('has_signal') and 'PE' not in self.active_trades:
+                order_id = None
+                if strike_data:
+                    order_id = self.place_buy_order(
+                        side='PE',
+                        token=strike_data.get('pe_token'),  # type: ignore
+                        strike=int(strike_data.get('pe_high')),  # type: ignore
+                        entry_price=pe_signal.get('entry_price')
+                    )
+                
+                self.active_trades['PE'] = {
+                    'entry_price': pe_signal.get('entry_price'),
+                    'entry_high': pe_signal.get('entry_high'),  # Reference high used for entry
+                    'sl': pe_signal.get('sl'),
+                    'target': pe_signal.get('target'),
+                    'entry_time': datetime.now().isoformat(),
+                    'order_id': order_id,
+                    'token': strike_data.get('pe_token') if strike_data else None,  # type: ignore
+                    'strike': int(strike_data.get('pe_high')) if strike_data and strike_data.get('pe_high') else None,  # type: ignore
+                    'status': 'OPEN',
+                    # Trailing SL state
+                    'target_hit': False,  # Track if target was hit
+                    'trailed_sl': pe_signal.get('sl'),  # Current trailed SL (starts at initial SL)
+                    'sl_distance': pe_signal.get('entry_price') - pe_signal.get('sl')  # Distance between entry and SL
+                }
+                logger.info(f"🟢 PE trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
+    
+    def log_signal(self, signals: Dict[str, Any]) -> None:
+        """
+        Log signal information for tracking.
+        
+        Args:
+            signals: Entry signals
+        """
+        signal_entry = {
+            'timestamp': signals.get('timestamp'),
+            'ce_signal': signals.get('ce_signal'),
+            'pe_signal': signals.get('pe_signal')
+        }
+        self.today_signals.append(signal_entry)
+        
+        # Keep only last 100 signals in memory
+        if len(self.today_signals) > 100:
+            self.today_signals.pop(0)
+    
     def check_entry_signal_live(self, ce_token: int, pe_token: int, 
                                ce_high: float, pe_high: float) -> Dict[str, Any]:
         """
@@ -290,98 +487,6 @@ class Intraday920LiveSignal:
         except Exception as e:
             logger.error(f"Error checking entry signals: {str(e)}")
             return {'success': False, 'error': str(e), 'timestamp': datetime.now().isoformat()}
-    
-    def update_active_trades(self, signals: Dict[str, Any], strike_data: Optional[Dict[str, Any]] = None) -> None:
-        """
-        Update active trade state with new signals from strategy.check_entry_signal().
-        Places buy orders when entry signals are detected.
-        
-        Uses signal data returned by the strategy which includes:
-        - has_signal: Whether entry conditions were met
-        - entry_price: Entry price at signal
-        - sl: Stop loss calculated by strategy.calculate_sl_for_entry()
-        - target: Target calculated by strategy.calculate_sl_for_entry()
-        
-        Args:
-            signals: Entry signals from check_entry_signal_live()
-            strike_data: Optional strike data for order placement {ce_token, pe_token, ce_high, pe_high}
-        """
-        ce_signal = signals.get('ce_signal', {})
-        pe_signal = signals.get('pe_signal', {})
-        
-        # Track CE entry and place buy order
-        if ce_signal.get('has_signal') and 'CE' not in self.active_trades:
-            order_id = None
-            if strike_data:
-                order_id = self.place_buy_order(
-                    side='CE',
-                    token=strike_data.get('ce_token'),  # type: ignore
-                    strike=int(strike_data.get('ce_high')),  # type: ignore
-                    entry_price=ce_signal.get('entry_price')
-                )
-            
-            self.active_trades['CE'] = {
-                'entry_price': ce_signal.get('entry_price'),
-                'entry_high': ce_signal.get('entry_high'),  # Reference high used for entry
-                'sl': ce_signal.get('sl'),
-                'target': ce_signal.get('target'),
-                'entry_time': datetime.now().isoformat(),
-                'order_id': order_id,
-                'token': strike_data.get('ce_token') if strike_data else None,  # type: ignore
-                'strike': int(strike_data.get('ce_high')) if strike_data and strike_data.get('ce_high') else None,  # type: ignore
-                'status': 'OPEN',
-                # Trailing SL state
-                'target_hit': False,  # Track if target was hit
-                'trailed_sl': ce_signal.get('sl'),  # Current trailed SL (starts at initial SL)
-                'sl_distance': ce_signal.get('entry_price') - ce_signal.get('sl')  # Distance between entry and SL
-            }
-            logger.info(f"🟢 CE trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
-        
-        # Track PE entry and place buy order
-        if pe_signal.get('has_signal') and 'PE' not in self.active_trades:
-            order_id = None
-            if strike_data:
-                order_id = self.place_buy_order(
-                    side='PE',
-                    token=strike_data.get('pe_token'),  # type: ignore
-                    strike=int(strike_data.get('pe_high')),  # type: ignore
-                    entry_price=pe_signal.get('entry_price')
-                )
-            
-            self.active_trades['PE'] = {
-                'entry_price': pe_signal.get('entry_price'),
-                'entry_high': pe_signal.get('entry_high'),  # Reference high used for entry
-                'sl': pe_signal.get('sl'),
-                'target': pe_signal.get('target'),
-                'entry_time': datetime.now().isoformat(),
-                'order_id': order_id,
-                'token': strike_data.get('pe_token') if strike_data else None,  # type: ignore
-                'strike': int(strike_data.get('pe_high')) if strike_data and strike_data.get('pe_high') else None,  # type: ignore
-                'status': 'OPEN',
-                # Trailing SL state
-                'target_hit': False,  # Track if target was hit
-                'trailed_sl': pe_signal.get('sl'),  # Current trailed SL (starts at initial SL)
-                'sl_distance': pe_signal.get('entry_price') - pe_signal.get('sl')  # Distance between entry and SL
-            }
-            logger.info(f"🟢 PE trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
-    
-    def log_signal(self, signals: Dict[str, Any]) -> None:
-        """
-        Log signal information for tracking.
-        
-        Args:
-            signals: Entry signals
-        """
-        signal_entry = {
-            'timestamp': signals.get('timestamp'),
-            'ce_signal': signals.get('ce_signal'),
-            'pe_signal': signals.get('pe_signal')
-        }
-        self.today_signals.append(signal_entry)
-        
-        # Keep only last 100 signals in memory
-        if len(self.today_signals) > 100:
-            self.today_signals.pop(0)
     
     def place_buy_order(self, side: str, token: int, strike: int, entry_price: float) -> Optional[str]:
         """
@@ -492,6 +597,40 @@ class Intraday920LiveSignal:
             
             return None
     
+    def get_current_prices(self, tokens: List[int]) -> Dict[int, Optional[float]]:
+        """
+        Fetch multiple current prices (LTP) in single API call for efficiency.
+        
+        Batch fetching reduces API overhead when monitoring multiple tokens.
+        
+        Args:
+            tokens: List of instrument tokens to fetch
+            
+        Returns:
+            Dictionary mapping token -> price
+        """
+        try:
+            if not tokens:
+                return {}
+            
+            # Batch tokens in chunks if necessary
+            quote_keys = [f"NFO:{token}" for token in tokens]
+            quotes = self.kite.quote(quote_keys)
+            
+            result = {}
+            for key, quote_data in quotes.items():
+                try:
+                    token = int(key.split(':')[1])
+                    result[token] = quote_data.get('last_price')
+                except (ValueError, KeyError):
+                    pass
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error fetching batch prices for {len(tokens)} tokens: {e}")
+            return {}
+    
     def get_current_price(self, token: int) -> Optional[float]:
         """
         Fetch current LTP (Last Traded Price) for a given token.
@@ -502,14 +641,8 @@ class Intraday920LiveSignal:
         Returns:
             Current price or None if failed
         """
-        try:
-            quote = self.kite.quote([f"NFO:{token}"])
-            if quote and f"NFO:{token}" in quote:
-                ltp = quote[f"NFO:{token}"].get('last_price')
-                return ltp
-        except Exception as e:
-            logger.error(f"Error fetching current price for token {token}: {e}")
-            return None
+        prices = self.get_current_prices([token])
+        return prices.get(token)
     
     def check_sl_target_for_active_trades(self) -> None:
         """
@@ -522,175 +655,186 @@ class Intraday920LiveSignal:
         4. Exit when trailed SL is hit
         
         Automatically places SELL orders when conditions are met.
+        Uses batch price fetching for efficiency when monitoring multiple trades.
         """
+        if not self.active_trades:
+            return
+        
+        # Fetch all prices at once (efficient batch operation)
+        tokens = [t.get('token') for t in self.active_trades.values() if t.get('token')]
+        prices = self.get_current_prices(tokens) if tokens else {}
+        
         trades_to_close = []
         
-        for side, trade in list(self.active_trades.items()):
-            if trade.get('status') != 'OPEN':
-                continue
-            
-            token = trade.get('token')
-            strike = trade.get('strike')
-            
-            if not token or not strike:
-                logger.warning(f"{side} trade missing token or strike info")
-                continue
-            
-            # Fetch current price
-            current_price = self.get_current_price(token)
-            
-            if current_price is None:
-                logger.warning(f"Failed to fetch current price for {side} {strike}")
-                continue
-            
-            entry_price = trade.get('entry_price', 0)
-            initial_sl = trade.get('sl', 0)
-            target = trade.get('target', 0)
-            target_hit = trade.get('target_hit', False)
-            trailed_sl = trade.get('trailed_sl', initial_sl)
-            sl_distance = trade.get('sl_distance', entry_price - initial_sl)
-            
-            # === 1:2 WITH TRAILING SL LOGIC ===
-            if target_hit:
-                # Target already hit - implement trailing SL
+        with self.active_trades_lock:
+            for side, trade in list(self.active_trades.items()):
+                if trade.get('status') != 'OPEN':
+                    continue
                 
-                # Calculate how much price has moved above entry
-                price_above_entry = current_price - entry_price
+                token = trade.get('token')
+                strike = trade.get('strike')
                 
-                # Trail SL by sl_distance for every sl_distance movement above entry
-                if price_above_entry > 0:
-                    num_trails = int(price_above_entry / sl_distance)
-                    new_trailed_sl = entry_price + (num_trails * sl_distance)
+                if not token or not strike or token not in prices:
+                    if token and token not in prices:
+                        logger.warning(f"Failed to fetch price for {side} {strike}")
+                    continue
+                
+                # Get current price from batch fetch results
+                current_price = prices[token]
+                
+                if current_price is None:
+                    logger.warning(f"No price available for {side} {strike}")
+                    continue
+                
+                entry_price = trade.get('entry_price', 0)
+                initial_sl = trade.get('sl', 0)
+                target = trade.get('target', 0)
+                target_hit = trade.get('target_hit', False)
+                trailed_sl = trade.get('trailed_sl', initial_sl)
+                sl_distance = trade.get('sl_distance', entry_price - initial_sl)
+                
+                # === 1:2 WITH TRAILING SL LOGIC ===
+                if target_hit:
+                    # Target already hit - implement trailing SL
                     
-                    if new_trailed_sl > trailed_sl:
-                        old_sl = trailed_sl
-                        trailed_sl = new_trailed_sl
-                        trade['trailed_sl'] = trailed_sl
-                        logger.info(f"📈 {side} Trailing SL updated: {trailed_sl:.2f} (price: {current_price:.2f}, entry: {entry_price:.2f})")
+                    # Calculate how much price has moved above entry
+                    price_above_entry = current_price - entry_price
+                    
+                    # Trail SL by sl_distance for every sl_distance movement above entry
+                    if price_above_entry > 0:
+                        num_trails = int(price_above_entry / sl_distance)
+                        new_trailed_sl = entry_price + (num_trails * sl_distance)
+                        
+                        if new_trailed_sl > trailed_sl:
+                            old_sl = trailed_sl
+                            trailed_sl = new_trailed_sl
+                            trade['trailed_sl'] = trailed_sl
+                            logger.info(f"📈 {side} Trailing SL updated: {trailed_sl:.2f} (price: {current_price:.2f}, entry: {entry_price:.2f})")
+                            
+                            # Log to Excel
+                            profit = current_price - entry_price
+                            excel_logger.log_trailing_sl_update(
+                                option_type=side,
+                                strike=strike,
+                                old_sl=old_sl,
+                                new_sl=trailed_sl,
+                                current_price=current_price,
+                                profit=profit
+                            )
+                    else:
+                        # Price pulled back below entry - ensure SL stays at entry (lock in gain)
+                        if trailed_sl < entry_price:
+                            trailed_sl = entry_price
+                            trade['trailed_sl'] = trailed_sl
+                            logger.info(f"🔒 {side} SL locked at entry: {entry_price:.2f} (price pulled back to {current_price:.2f})")
+                    
+                    # Check if trailed SL is hit
+                    if current_price <= trailed_sl:
+                        logger.info(f"🔴 TRAILED SL HIT for {side}: Current {current_price:.2f} <= Trailed SL {trailed_sl:.2f}")
                         
                         # Log to Excel
-                        profit = current_price - entry_price
-                        excel_logger.log_trailing_sl_update(
+                        pnl = current_price - entry_price
+                        excel_logger.log_trade(
+                            order_type='SELL',
                             option_type=side,
                             strike=strike,
-                            old_sl=old_sl,
-                            new_sl=trailed_sl,
+                            entry_price=entry_price,
                             current_price=current_price,
-                            profit=profit
+                            target=target,
+                            stop_loss=trailed_sl,
+                            pnl=pnl,
+                            status='TRAILED_SL_HIT',
+                            notes=f"Trailed SL Hit at {trailed_sl:.2f} | Entry: {entry_price:.2f} | P&L: {pnl:+.2f}"
                         )
+                        
+                        # Place sell order
+                        order_id = self.place_sell_order(
+                            side=side,
+                            strike=strike,
+                            exit_price=current_price,
+                            exit_reason=f"Trailed SL Hit ({trailed_sl:.2f})"
+                        )
+                        
+                        # Close trade
+                        self.close_trade(side, current_price, f"Trailed SL Hit ({trailed_sl:.2f})")
+                        trades_to_close.append(side)
+                    else:
+                        # Still in trade - log status
+                        pnl = current_price - entry_price
+                        pnl_pct = (pnl / entry_price * 100) if entry_price else 0
+                        logger.debug(f"📊 {side} Trade (Target Hit): Entry {entry_price:.2f}, Current {current_price:.2f}, Trailed SL {trailed_sl:.2f} | PnL: {pnl:.2f} ({pnl_pct:.2f}%)")
+                        
                 else:
-                    # Price pulled back below entry - ensure SL stays at entry (lock in gain)
-                    if trailed_sl < entry_price:
-                        trailed_sl = entry_price
-                        trade['trailed_sl'] = trailed_sl
-                        logger.info(f"🔒 {side} SL locked at entry: {entry_price:.2f} (price pulled back to {current_price:.2f})")
-                
-                # Check if trailed SL is hit
-                if current_price <= trailed_sl:
-                    logger.info(f"🔴 TRAILED SL HIT for {side}: Current {current_price:.2f} <= Trailed SL {trailed_sl:.2f}")
+                    # Target not yet hit - check for initial SL or target hit
                     
-                    # Log to Excel
-                    pnl = current_price - entry_price
-                    excel_logger.log_trade(
-                        order_type='SELL',
-                        option_type=side,
-                        strike=strike,
-                        entry_price=entry_price,
-                        current_price=current_price,
-                        target=target,
-                        stop_loss=trailed_sl,
-                        pnl=pnl,
-                        status='TRAILED_SL_HIT',
-                        notes=f"Trailed SL Hit at {trailed_sl:.2f} | Entry: {entry_price:.2f} | P&L: {pnl:+.2f}"
-                    )
-                    
-                    # Place sell order
-                    order_id = self.place_sell_order(
-                        side=side,
-                        strike=strike,
-                        exit_price=current_price,
-                        exit_reason=f"Trailed SL Hit ({trailed_sl:.2f})"
-                    )
-                    
-                    # Close trade
-                    self.close_trade(side, current_price, f"Trailed SL Hit ({trailed_sl:.2f})")
-                    trades_to_close.append(side)
-                else:
-                    # Still in trade - log status
-                    pnl = current_price - entry_price
-                    pnl_pct = (pnl / entry_price * 100) if entry_price else 0
-                    logger.debug(f"📊 {side} Trade (Target Hit): Entry {entry_price:.2f}, Current {current_price:.2f}, Trailed SL {trailed_sl:.2f} | PnL: {pnl:.2f} ({pnl_pct:.2f}%)")
-                    
-            else:
-                # Target not yet hit - check for initial SL or target hit
-                
-                # Check if SL hit (before target)
-                if current_price <= initial_sl:
-                    logger.info(f"🔴 SL HIT for {side}: Current {current_price:.2f} <= SL {initial_sl:.2f}")
-                    
-                    # Log to Excel
-                    pnl = current_price - entry_price
-                    excel_logger.log_trade(
-                        order_type='SELL',
-                        option_type=side,
-                        strike=strike,
-                        entry_price=entry_price,
-                        current_price=current_price,
-                        target=target,
-                        stop_loss=initial_sl,
-                        pnl=pnl,
-                        status='SL_HIT',
-                        notes=f"Initial SL Hit at {initial_sl:.2f} | Entry: {entry_price:.2f} | P&L: {pnl:+.2f}"
-                    )
-                    
-                    # Place sell order
-                    order_id = self.place_sell_order(
-                        side=side,
-                        strike=strike,
-                        exit_price=current_price,
-                        exit_reason="SL Hit"
-                    )
-                    
-                    # Close trade
-                    self.close_trade(side, current_price, "SL Hit")
-                    trades_to_close.append(side)
-                    
-                # Check if Target hit (activate trailing SL)
-                elif current_price >= target:
-                    logger.info(f"🎯 TARGET HIT for {side}: Current {current_price:.2f} >= Target {target:.2f}")
-                    logger.info(f"🔄 Trailing SL activated for {side} - SL moved to entry {entry_price:.2f}")
-                    
-                    # Log to Excel
-                    pnl = current_price - entry_price
-                    excel_logger.log_trade(
-                        order_type='UPDATE',
-                        option_type=side,
-                        strike=strike,
-                        entry_price=entry_price,
-                        current_price=current_price,
-                        target=target,
-                        stop_loss=entry_price,  # SL moved to entry
-                        pnl=pnl,
-                        status='TARGET_HIT',
-                        notes=f"Target Hit at {target:.2f} | Trailing SL activated | SL moved to entry {entry_price:.2f} | P&L: {pnl:+.2f}"
-                    )
-                    
-                    # Activate trailing SL - move SL to entry price
-                    trade['target_hit'] = True
-                    trade['trailed_sl'] = entry_price
-                    
-                    # Don't exit yet - continue with trailing SL
-                    
-                else:
-                    # Still waiting for target or SL - log status
-                    pnl = current_price - entry_price
-                    pnl_pct = (pnl / entry_price * 100) if entry_price else 0
-                    logger.debug(f"📊 {side} Trade Status: Entry {entry_price:.2f}, Current {current_price:.2f}, SL {initial_sl:.2f}, Target {target:.2f} | PnL: {pnl:.2f} ({pnl_pct:.2f}%)")
+                    # Check if SL hit (before target)
+                    if current_price <= initial_sl:
+                        logger.info(f"🔴 SL HIT for {side}: Current {current_price:.2f} <= SL {initial_sl:.2f}")
+                        
+                        # Log to Excel
+                        pnl = current_price - entry_price
+                        excel_logger.log_trade(
+                            order_type='SELL',
+                            option_type=side,
+                            strike=strike,
+                            entry_price=entry_price,
+                            current_price=current_price,
+                            target=target,
+                            stop_loss=initial_sl,
+                            pnl=pnl,
+                            status='SL_HIT',
+                            notes=f"Initial SL Hit at {initial_sl:.2f} | Entry: {entry_price:.2f} | P&L: {pnl:+.2f}"
+                        )
+                        
+                        # Place sell order
+                        order_id = self.place_sell_order(
+                            side=side,
+                            strike=strike,
+                            exit_price=current_price,
+                            exit_reason="SL Hit"
+                        )
+                        
+                        # Close trade
+                        self.close_trade(side, current_price, "SL Hit")
+                        trades_to_close.append(side)
+                        
+                    # Check if Target hit (activate trailing SL)
+                    elif current_price >= target:
+                        logger.info(f"🎯 TARGET HIT for {side}: Current {current_price:.2f} >= Target {target:.2f}")
+                        logger.info(f"🔄 Trailing SL activated for {side} - SL moved to entry {entry_price:.2f}")
+                        
+                        # Log to Excel
+                        pnl = current_price - entry_price
+                        excel_logger.log_trade(
+                            order_type='UPDATE',
+                            option_type=side,
+                            strike=strike,
+                            entry_price=entry_price,
+                            current_price=current_price,
+                            target=target,
+                            stop_loss=entry_price,  # SL moved to entry
+                            pnl=pnl,
+                            status='TARGET_HIT',
+                            notes=f"Target Hit at {target:.2f} | Trailing SL activated | SL moved to entry {entry_price:.2f} | P&L: {pnl:+.2f}"
+                        )
+                        
+                        # Activate trailing SL - move SL to entry price
+                        trade['target_hit'] = True
+                        trade['trailed_sl'] = entry_price
+                        
+                        # Don't exit yet - continue with trailing SL
+                        
+                    else:
+                        # Still waiting for target or SL - log status
+                        pnl = current_price - entry_price
+                        pnl_pct = (pnl / entry_price * 100) if entry_price else 0
+                        logger.debug(f"📊 {side} Trade Status: Entry {entry_price:.2f}, Current {current_price:.2f}, SL {initial_sl:.2f}, Target {target:.2f} | PnL: {pnl:.2f} ({pnl_pct:.2f}%)")
         
         # Remove closed trades from active trades
-        for side in trades_to_close:
-            if side in self.active_trades:
-                del self.active_trades[side]
+        with self.active_trades_lock:
+            for side in trades_to_close:
+                if side in self.active_trades:
+                    del self.active_trades[side]
     
     def place_sell_order(self, side: str, strike: int, exit_price: float, exit_reason: str = "Manual Exit") -> Optional[str]:
         """

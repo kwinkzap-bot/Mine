@@ -65,7 +65,8 @@ class Intraday920Strategy:
 
             kite = KiteConnect(api_key=api_key)
             session = kite.generate_session(request_token, api_secret)
-            access_token = session.get("access_token")
+            # session.generate_session returns a dict with access_token
+            access_token = session.get("access_token") if isinstance(session, dict) else None
 
             if not access_token:
                 logger.warning("Failed to generate access token from request token")
