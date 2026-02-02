@@ -387,7 +387,117 @@ class ExcelLogger:
             status='TRAILING_SL',
             notes=notes
         )
-
-
-# Global instance
-excel_logger = ExcelLogger()
+    
+    def log_sl_target_check(self,
+                           timestamp: datetime,
+                           side: str,
+                           strike: int,
+                           current_price: float,
+                           entry_price: float,
+                           initial_sl: float,
+                           target: float,
+                           target_hit: bool = False,
+                           trailed_sl: Optional[float] = None,
+                           check_reason: str = "Monitoring") -> bool:
+        """Log SL/Target check to Signal Checks sheet.
+        
+        Args:
+            timestamp: Timestamp of check
+            side: 'CE' or 'PE'
+            strike: Strike price
+            current_price: Current market price
+            entry_price: Entry price
+            initial_sl: Initial stop loss
+            target: Target price
+            target_hit: Whether target has been hit
+            trailed_sl: Trailed SL if active (None if not trailing yet)
+            check_reason: Reason for logging (e.g., "SL_HIT", "TARGET_HIT", "TRAILING", "Monitoring")
+            
+        Returns:
+            True if logged successfully, False otherwise
+        """
+        if not self.available:
+            return False
+        
+        try:
+            wb = self._get_or_create_workbook()
+            ws = self._create_signal_checks_sheet(wb)
+            
+            # Format data
+            timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            time_str = timestamp.strftime('%H:%M:%S')
+            market_hour = timestamp.strftime('%H:%M')
+            
+            # Calculate PnL and other metrics
+            pnl = current_price - entry_price
+            pnl_pct = (pnl / entry_price * 100) if entry_price else 0
+            
+            # Determine effective SL (trailing or initial)
+            effective_sl = trailed_sl if target_hit and trailed_sl is not None else initial_sl
+            
+            # Notes with check details
+            notes = f"{side} {check_reason} | Strike: {strike} | Price: {current_price:.2f} | Entry: {entry_price:.2f} | SL: {effective_sl:.2f} | Target: {target:.2f} | PnL: {pnl:+.2f} ({pnl_pct:+.2f}%)"
+            
+            if target_hit and trailed_sl is not None:
+                notes += f" | Trailed SL: {trailed_sl:.2f}"
+            
+            # Prepare row - reuse signal check structure
+            row_data = [
+                timestamp_str,
+                time_str,
+                market_hour,
+                strike if side == 'CE' else "",
+                "",
+                strike if side == 'PE' else "",
+                "",
+                "YES" if side == 'CE' and check_reason != "Monitoring" else "",
+                "YES" if side == 'PE' and check_reason != "Monitoring" else "",
+                entry_price if side == 'CE' else "",
+                entry_price if side == 'PE' else "",
+                effective_sl if side == 'CE' else "",
+                effective_sl if side == 'PE' else "",
+                target if side == 'CE' else "",
+                target if side == 'PE' else "",
+                notes
+            ]
+            
+            ws.append(row_data)
+            
+            # Style the row
+            thin_border = Border(
+                left=Side(style='thin'),
+                right=Side(style='thin'),
+                top=Side(style='thin'),
+                bottom=Side(style='thin')
+            )
+            
+            # Color code based on reason
+            if check_reason == "SL_HIT":
+                cell_color = 'FF0000'  # Red
+                font_color = 'FFFFFF'  # White text
+            elif check_reason == "TARGET_HIT":
+                cell_color = '00B050'  # Green
+                font_color = 'FFFFFF'  # White text
+            elif check_reason == "TRAILING":
+                cell_color = 'FFC7CE'  # Light red
+                font_color = '000000'  # Black text
+            else:
+                cell_color = 'E7E6E6'  # Light gray
+                font_color = '000000'  # Black text
+            
+            fill = PatternFill(start_color=cell_color, end_color=cell_color, fill_type='solid')
+            font = Font(color=font_color, size=10)
+            
+            for cell in ws[ws.max_row]:
+                cell.fill = fill
+                cell.font = font
+                cell.border = thin_border
+                if cell.column in [4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]:  # Numeric columns
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+            
+            wb.save(self.file_path)
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error logging SL/Target check: {e}", exc_info=True)
+            return False

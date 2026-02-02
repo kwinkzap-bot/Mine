@@ -803,6 +803,20 @@ class Intraday920LiveSignal:
                             trade['trailed_sl'] = trailed_sl
                             logger.info(f"📈 {side} Trailing SL updated: {trailed_sl:.2f} (price: {current_price:.2f}, entry: {entry_price:.2f})")
                             
+                            # Log to Signal Checks sheet
+                            excel_logger.log_sl_target_check(
+                                timestamp=check_timestamp,
+                                side=side,
+                                strike=strike,
+                                current_price=current_price,
+                                entry_price=entry_price,
+                                initial_sl=initial_sl,
+                                target=target,
+                                target_hit=True,
+                                trailed_sl=trailed_sl,
+                                check_reason="TRAILING"
+                            )
+                            
                             # Log to Excel
                             profit = current_price - entry_price
                             excel_logger.log_trailing_sl_update(
@@ -823,6 +837,20 @@ class Intraday920LiveSignal:
                     # Check if trailed SL is hit
                     if current_price <= trailed_sl:
                         logger.info(f"🔴 TRAILED SL HIT for {side}: Current {current_price:.2f} <= Trailed SL {trailed_sl:.2f}")
+                        
+                        # Log to Signal Checks sheet
+                        excel_logger.log_sl_target_check(
+                            timestamp=check_timestamp,
+                            side=side,
+                            strike=strike,
+                            current_price=current_price,
+                            entry_price=entry_price,
+                            initial_sl=initial_sl,
+                            target=target,
+                            target_hit=True,
+                            trailed_sl=trailed_sl,
+                            check_reason="SL_HIT"
+                        )
                         
                         # Log to Excel
                         pnl = current_price - entry_price
@@ -863,6 +891,19 @@ class Intraday920LiveSignal:
                     if current_price <= initial_sl:
                         logger.info(f"🔴 SL HIT for {side}: Current {current_price:.2f} <= SL {initial_sl:.2f}")
                         
+                        # Log to Signal Checks sheet
+                        excel_logger.log_sl_target_check(
+                            timestamp=check_timestamp,
+                            side=side,
+                            strike=strike,
+                            current_price=current_price,
+                            entry_price=entry_price,
+                            initial_sl=initial_sl,
+                            target=target,
+                            target_hit=False,
+                            check_reason="SL_HIT"
+                        )
+                        
                         # Log to Excel
                         pnl = current_price - entry_price
                         excel_logger.log_trade(
@@ -894,6 +935,19 @@ class Intraday920LiveSignal:
                     elif current_price >= target:
                         logger.info(f"🎯 TARGET HIT for {side}: Current {current_price:.2f} >= Target {target:.2f}")
                         logger.info(f"🔄 Trailing SL activated for {side} - SL moved to entry {entry_price:.2f}")
+                        
+                        # Log to Signal Checks sheet
+                        excel_logger.log_sl_target_check(
+                            timestamp=check_timestamp,
+                            side=side,
+                            strike=strike,
+                            current_price=current_price,
+                            entry_price=entry_price,
+                            initial_sl=initial_sl,
+                            target=target,
+                            target_hit=False,
+                            check_reason="TARGET_HIT"
+                        )
                         
                         # Log to Excel
                         pnl = current_price - entry_price
