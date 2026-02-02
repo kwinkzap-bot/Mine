@@ -1231,7 +1231,10 @@ class Intraday920LiveSignal:
                 # ====== SL/TARGET CHECK (3-second intervals) ======
                 if self.should_check_sl_target_now():
                     check_time = self.last_sl_target_check_time
-                    logger.debug(f"[3-sec Check] Monitoring SL/Target for {self.symbol} at {check_time.strftime('%H:%M:%S.%f')[:-3]}")
+                    if check_time:
+                        logger.debug(f"[3-sec Check] Monitoring SL/Target for {self.symbol} at {check_time.strftime('%H:%M:%S.%f')[:-3]}")
+                    else:
+                        logger.debug(f"[3-sec Check] Monitoring SL/Target for {self.symbol}")
                     
                     # Check active trades for SL/Target hits
                     if self.active_trades:
