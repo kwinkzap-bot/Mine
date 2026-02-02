@@ -155,6 +155,7 @@ class Intraday920LiveSignal:
         self.active_trades_lock = threading.Lock()  # Thread safety for active_trades
         self.today_signals = []  # All signals generated today
         self.last_entry_check_time = None  # Track last entry signal check to prevent duplicates
+        self.last_sl_target_check_time = None  # Track last SL/Target check time (for time-based intervals)
         
         # Trading configuration
         self.live_trading = live_trading  # False=demo mode, True=live orders
@@ -200,15 +201,29 @@ class Intraday920LiveSignal:
         # Monday=0, Sunday=6
         return check_date.weekday() < 5
     
-    def should_check_now(self) -> bool:
+    def should_check_sl_target_now(self) -> bool:
         """
-        Determine if we should check for SL/TARGET now based on 3-second intervals.
+        Determine if we should check for SL/TARGET based on 3-second time intervals.
+        Uses time-delta approach instead of second modulo for better accuracy and reliability.
+        Prevents race conditions from API delays or loop processing time.
         
         Returns:
-            True if current second is divisible by 3, False otherwise
+            True if 3+ seconds have elapsed since last check, False otherwise
         """
-        current_second = datetime.now().second
-        return current_second % self.MONITORING_INTERVAL == 0
+        now = datetime.now()
+        
+        # First check ever - do it now
+        if self.last_sl_target_check_time is None:
+            self.last_sl_target_check_time = now
+            return True
+        
+        # Check if 3+ seconds have elapsed
+        elapsed = (now - self.last_sl_target_check_time).total_seconds()
+        if elapsed >= self.MONITORING_INTERVAL:  # 3 seconds
+            self.last_sl_target_check_time = now
+            return True
+        
+        return False
     
     def should_check_entry_signal(self) -> bool:
         """
@@ -716,7 +731,7 @@ class Intraday920LiveSignal:
         prices = self.get_current_prices([token])
         return prices.get(token)
     
-    def check_sl_target_for_active_trades(self) -> None:
+    def check_sl_target_for_active_trades(self, check_timestamp: Optional[datetime] = None) -> None:
         """
         Monitor active trades and check if SL or Target has been hit.
         Implements 1:2 with Trailing SL logic:
@@ -728,7 +743,12 @@ class Intraday920LiveSignal:
         
         Automatically places SELL orders when conditions are met.
         Uses batch price fetching for efficiency when monitoring multiple trades.
+        
+        Args:
+            check_timestamp: Timestamp when this check was initiated (for accurate logging/Excel tracking)
         """
+        if check_timestamp is None:
+            check_timestamp = datetime.now()
         if not self.active_trades:
             return
         
@@ -1208,14 +1228,15 @@ class Intraday920LiveSignal:
                             notes=f"Failed to fetch data: {live_data.get('error', 'Unknown error')}"
                         )
                 
-                # ====== SL/TARGET CHECK (30-second intervals) ======
-                if self.should_check_now():
-                    logger.debug(f"[30-sec Check] Monitoring SL/Target for {self.symbol}")
+                # ====== SL/TARGET CHECK (3-second intervals) ======
+                if self.should_check_sl_target_now():
+                    check_time = self.last_sl_target_check_time
+                    logger.debug(f"[3-sec Check] Monitoring SL/Target for {self.symbol} at {check_time.strftime('%H:%M:%S.%f')[:-3]}")
                     
                     # Check active trades for SL/Target hits
                     if self.active_trades:
                         logger.debug(f"Active trades to monitor: {list(self.active_trades.keys())}")
-                        self.check_sl_target_for_active_trades()
+                        self.check_sl_target_for_active_trades(check_timestamp=check_time)
                     else:
                         logger.debug("No active trades to monitor")
                 
