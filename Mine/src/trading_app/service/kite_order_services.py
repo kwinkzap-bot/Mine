@@ -20,6 +20,8 @@ class KiteService:
         self._instrument_tokens_by_name: Dict[str, int] = {}
         self._nfo_instruments_cache: Optional[List[Dict[str, Any]]] = None
         self._nfo_option_symbol_cache: Dict[str, str] = {}  # Cache for option symbol lookups
+        self._quote_cache: Dict[str, tuple] = {}  # Cache for quotes: {key: (price, timestamp)}
+        self._quote_cache_ttl = 5  # Quote cache TTL in seconds
         if self.instruments is None:
             self._load_instruments()
     
@@ -586,12 +588,55 @@ class KiteService:
                 'symbol': tradingsymbol
             }
     
+    def get_cached_quote(self, instrument_key: str, use_cache: bool = True) -> Optional[float]:
+        """
+        Fetch quote for an instrument with caching to reduce API calls.
+        
+        Args:
+            instrument_key: Instrument key (e.g., 'NFO:NIFTY23JAN19100CE')
+            use_cache: Whether to use cached price if available
+            
+        Returns:
+            Last price as float, or None if unable to fetch
+        """
+        import time
+        
+        # Check cache if enabled
+        if use_cache and instrument_key in self._quote_cache:
+            price, timestamp = self._quote_cache[instrument_key]
+            if time.time() - timestamp < self._quote_cache_ttl:
+                logging.debug(f"Using cached price for {instrument_key}: {price}")
+                return price
+        
+        try:
+            quote = self.kite.quote(instrument_key)
+            if isinstance(quote, dict) and instrument_key in quote:
+                quote_item = quote[instrument_key]
+                if isinstance(quote_item, dict):
+                    price = quote_item.get('last_price')
+                    if not price:
+                        price = quote_item.get('close')
+                    
+                    if price:
+                        # Cache the price
+                        self._quote_cache[instrument_key] = (price, time.time())
+                        return price
+        except Exception as e:
+            logging.warning(f"Error fetching quote for {instrument_key}: {e}")
+            # Try to return cached price even if expired
+            if instrument_key in self._quote_cache:
+                price, _ = self._quote_cache[instrument_key]
+                logging.warning(f"Using expired cached price for {instrument_key}: {price}")
+                return price
+        
+        return None
+    
     def place_option_order(self, symbol: str, strike: int, option_type: str, 
                           transaction_type: str, quantity: Optional[int] = None) -> Dict[str, Any]:
         """Place an order for an option contract.
         
         Convenience method that combines option symbol lookup and order placement.
-        Uses parallel operations to get lot size and option symbol simultaneously.
+        Uses parallel operations to get lot size, option symbol, and price simultaneously.
         
         Args:
             symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
@@ -604,18 +649,25 @@ class KiteService:
             Dict with success status and order details
         """
         try:
-            # Parallel operation: Get lot size and option symbol at the same time
+            # Parallel operation: Get lot size, option symbol, and price at the same time
             from concurrent.futures import ThreadPoolExecutor
             
-            if quantity is None:
-                with ThreadPoolExecutor(max_workers=2) as executor:
-                    lot_size_future = executor.submit(self.get_lot_size, symbol)
-                    tradingsymbol_future = executor.submit(self.get_option_symbol, symbol, strike, option_type)
-                    
+            def get_tradingsymbol():
+                return self.get_option_symbol(symbol, strike, option_type)
+            
+            def get_price_for_symbol(tradingsymbol: str) -> Optional[float]:
+                """Helper to get price with caching"""
+                instrument_key = f'NFO:{tradingsymbol}'
+                return self.get_cached_quote(instrument_key, use_cache=True)
+            
+            # Get lot size and trading symbol in parallel
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                lot_size_future = executor.submit(self.get_lot_size, symbol) if quantity is None else None
+                tradingsymbol_future = executor.submit(get_tradingsymbol)
+                
+                if lot_size_future:
                     quantity = lot_size_future.result()
-                    tradingsymbol = tradingsymbol_future.result()
-            else:
-                tradingsymbol = self.get_option_symbol(symbol, strike, option_type)
+                tradingsymbol = tradingsymbol_future.result()
             
             if not tradingsymbol:
                 return {
@@ -626,34 +678,19 @@ class KiteService:
                     'option_type': option_type
                 }
             
-            # Get current market price
-            try:
-                instrument_key = f'NFO:{tradingsymbol}'
-                quote = self.kite.quote(instrument_key)
-                if isinstance(quote, dict) and instrument_key in quote:
-                    quote_item = quote[instrument_key]
-                    if isinstance(quote_item, dict):
-                        price = quote_item.get('last_price')
-                        if not price:
-                            price = quote_item.get('close')
-                    else:
-                        price = None
-                else:
-                    price = None
-            except Exception as e:
-                logging.warning(f"Could not fetch price for {tradingsymbol}: {e}")
+            # Get price with caching (fast if cached)
+            price = get_price_for_symbol(tradingsymbol)
+            
+            if not price:
                 return {
                     'success': False,
                     'error': f'Could not determine price for {tradingsymbol}',
                     'symbol': tradingsymbol
                 }
             
-            if not price:
-                return {
-                    'success': False,
-                    'error': f'Invalid price for {tradingsymbol}',
-                    'symbol': tradingsymbol
-                }
+            # Ensure quantity is set
+            if quantity is None:
+                quantity = 1  # Fallback default
             
             # Place the order
             result = self.place_order(
