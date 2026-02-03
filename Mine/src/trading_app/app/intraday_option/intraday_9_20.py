@@ -3,8 +3,9 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import logging
 import os
+import time
 from .Kite_data_fetch_services import KiteDataFetchService
-from kiteconnect.exceptions import TokenException
+from kiteconnect.exceptions import TokenException, NetworkException
 from trading_app.app.utils.token_manager import get_access_token, save_access_token
 
 logger = logging.getLogger(__name__)
@@ -381,15 +382,78 @@ class Intraday920Strategy:
                     'success': False
                 }
             
-            # Fetch current quote data from Kite
-            try:
-                quote = self.kite.quote([instrument_key])
-            except TokenException:
-                logger.warning("Access token invalid. Attempting refresh and retry...")
-                if self._refresh_kite_access_token():
+            # Fetch current quote data from Kite with retry logic
+            quote = None
+            max_retries = 5
+            retry_delay = 3  # seconds (increased for server timeouts)
+            
+            for attempt in range(max_retries):
+                try:
                     quote = self.kite.quote([instrument_key])
-                else:
-                    raise
+                    break  # Success, exit retry loop
+                except TokenException:
+                    logger.warning(f"Access token invalid (attempt {attempt + 1}/{max_retries}). Attempting refresh and retry...")
+                    if self._refresh_kite_access_token():
+                        try:
+                            quote = self.kite.quote([instrument_key])
+                            break
+                        except Exception as e:
+                            logger.warning(f"Quote fetch failed after token refresh: {e}")
+                            if attempt < max_retries - 1:
+                                time.sleep(retry_delay)
+                    else:
+                        return {
+                            'symbol': symbol,
+                            'error': 'Failed to refresh access token',
+                            'timestamp': datetime.now().isoformat(),
+                            'success': False
+                        }
+                except NetworkException as e:
+                    logger.warning(f"Network error fetching quote (attempt {attempt + 1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                    else:
+                        return {
+                            'symbol': symbol,
+                            'error': f'Network error fetching quote after {max_retries} retries: {str(e)}',
+                            'timestamp': datetime.now().isoformat(),
+                            'success': False
+                        }
+                except (ValueError, Exception) as e:
+                    # Catches JSON parsing errors (504, 503 gateway timeouts) and other retriable errors
+                    error_str = str(e).lower()
+                    is_retriable = any(keyword in error_str for keyword in ['504', '503', 'gateway', 'timeout', 'couldn\'t parse', 'json'])
+                    
+                    if is_retriable:
+                        logger.warning(f"Server/Gateway error fetching quote (attempt {attempt + 1}/{max_retries}): {e}")
+                        if attempt < max_retries - 1:
+                            # Use longer delay for server timeouts
+                            delay = retry_delay * (attempt + 1) if "504" in error_str or "503" in error_str else retry_delay
+                            time.sleep(delay)
+                        else:
+                            return {
+                                'symbol': symbol,
+                                'error': f'Server timeout fetching quote after {max_retries} retries: {str(e)}',
+                                'timestamp': datetime.now().isoformat(),
+                                'success': False
+                            }
+                    else:
+                        logger.error(f"Error fetching quote (non-retriable): {e}")
+                        return {
+                            'symbol': symbol,
+                            'error': f'Error fetching quote: {str(e)}',
+                            'timestamp': datetime.now().isoformat(),
+                            'success': False
+                        }
+            
+            if quote is None:
+                return {
+                    'symbol': symbol,
+                    'error': 'Failed to fetch quote data after all retries',
+                    'timestamp': datetime.now().isoformat(),
+                    'success': False
+                }
+            
             quote_data = quote.get(instrument_key, {})
             
             if not quote_data:
