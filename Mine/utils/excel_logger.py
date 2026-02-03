@@ -501,3 +501,8 @@ class ExcelLogger:
         except Exception as e:
             logger.error(f"Error logging SL/Target check: {e}", exc_info=True)
             return False
+
+
+# Global instance
+excel_logger = ExcelLogger()
+
