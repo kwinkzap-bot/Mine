@@ -154,6 +154,8 @@ class Intraday920LiveSignal:
         self.active_trades = {}  # Track active trades: {side: {entry_info, order_id, target_hit, trailed_sl}}
         self.active_trades_lock = threading.Lock()  # Thread safety for active_trades
         self.today_signals = []  # All signals generated today
+        self.daily_entries = {}  # Track entries per side per day: {side: entry_date} to prevent multiple entries per day
+        self.daily_entries_lock = threading.Lock()  # Thread safety for daily_entries
         self.last_entry_check_time = None  # Track last entry signal check to prevent duplicates
         self.last_sl_target_check_time = None  # Track last SL/Target check time (for time-based intervals)
         
@@ -224,6 +226,50 @@ class Intraday920LiveSignal:
             return True
         
         return False
+    
+    def has_entered_today(self, side: str, strike: int) -> bool:
+        """
+        Check if entry has already been made for this side+strike combination today.
+        Prevents multiple entries for the same strike+side per day.
+        e.g., CE_24600, PE_24600 are tracked separately
+        
+        Args:
+            side: 'CE' or 'PE'
+            strike: Strike price (e.g., 24600)
+            
+        Returns:
+            True if already entered today for this strike+side, False otherwise
+        """
+        today = datetime.now().date()
+        entry_key = f"{side}_{strike}"  # e.g., 'CE_24600'
+        with self.daily_entries_lock:
+            if entry_key in self.daily_entries:
+                entry_date = self.daily_entries[entry_key]
+                # entry_date is a date object
+                return entry_date == today
+        return False
+    
+    def mark_entry_today(self, side: str, strike: int) -> None:
+        """
+        Mark that an entry has been made for this side+strike combination today.
+        
+        Args:
+            side: 'CE' or 'PE'
+            strike: Strike price (e.g., 24600)
+        """
+        today = datetime.now().date()
+        entry_key = f"{side}_{strike}"  # e.g., 'CE_24600'
+        with self.daily_entries_lock:
+            self.daily_entries[entry_key] = today
+            logger.info(f"📋 {side} {strike} entry marked for today ({today})")
+    
+    def reset_daily_entries(self) -> None:
+        """
+        Reset daily entries tracking (call at market close or new day).
+        """
+        with self.daily_entries_lock:
+            self.daily_entries = {}
+            logger.info("🔄 Daily entries tracking reset")
     
     def should_check_entry_signal(self) -> bool:
         """
@@ -435,19 +481,24 @@ class Intraday920LiveSignal:
             # Track CE entry and place buy order
             # Allow new CE entry ONLY if:
             # 1. Signal exists AND (no CE trade exists OR existing CE trade is already closed)
+            # 2. AND no entry has been made for this CE STRIKE today (prevent multiple entries per strike per day)
             if ce_signal.get('has_signal'):
-                if 'CE' not in self.active_trades or self.active_trades['CE'].get('status') == 'CLOSED':
-                    order_id = None
-                    ce_strike = None
+                order_id = None
+                ce_strike = None
+                if strike_data:
+                    # Get actual CE strike price (not the candle high)
+                    ce_strike_val = strike_data.get('ce_strike')
+                    if ce_strike_val:
+                        ce_strike = int(ce_strike_val)
+                    else:
+                        ce_high_val = strike_data.get('ce_high')
+                        if ce_high_val:
+                            ce_strike = int(ce_high_val)
+                
+                if ce_strike and self.has_entered_today('CE', ce_strike):
+                    logger.info(f"⛔ CE {ce_strike} entry already made today - skipping to prevent multiple entries per strike per day")
+                elif 'CE' not in self.active_trades or self.active_trades['CE'].get('status') == 'CLOSED':
                     if strike_data:
-                        # Get actual CE strike price (not the candle high)
-                        ce_strike_val = strike_data.get('ce_strike')
-                        if ce_strike_val:
-                            ce_strike = int(ce_strike_val)
-                        else:
-                            ce_high_val = strike_data.get('ce_high')
-                            if ce_high_val:
-                                ce_strike = int(ce_high_val)
                         
                         if ce_strike:
                             order_id = self.place_buy_order(
@@ -457,6 +508,27 @@ class Intraday920LiveSignal:
                                 entry_price=ce_signal.get('entry_price')
                             )
                     
+                    # Place SL order on broker
+                    sl_order_id = None
+                    if self.live_trading and strike_data and ce_strike:
+                        try:
+                            # Get option trading symbol for SL order
+                            option_symbol = self._get_option_symbol(self.symbol, ce_strike, 'CE')
+                            if option_symbol:
+                                sl_result = self.kite_service.place_stoploss_order(
+                                    tradingsymbol=option_symbol,
+                                    trigger_price=ce_signal.get('sl'),
+                                    quantity=75,
+                                    product='NRML'
+                                )
+                                if sl_result['success']:
+                                    sl_order_id = sl_result['order_id']
+                                    logger.info(f"✅ CE SL order placed: {option_symbol} @ {ce_signal.get('sl'):.2f} | SL Order ID: {sl_order_id}")
+                                else:
+                                    logger.error(f"❌ Failed to place CE SL order: {sl_result.get('error')}")
+                        except Exception as e:
+                            logger.error(f"Error placing CE SL order: {e}", exc_info=True)
+                    
                     self.active_trades['CE'] = {
                         'entry_price': ce_signal.get('entry_price'),
                         'entry_high': ce_signal.get('entry_high'),  # Reference high used for entry
@@ -464,6 +536,7 @@ class Intraday920LiveSignal:
                         'target': ce_signal.get('target'),
                         'entry_time': datetime.now().isoformat(),
                         'order_id': order_id,
+                        'sl_order_id': sl_order_id,  # Track SL order ID for modifications
                         'token': strike_data.get('ce_token') if strike_data else None,  # type: ignore
                         'strike': ce_strike if strike_data else None,
                         'status': 'OPEN',
@@ -472,26 +545,34 @@ class Intraday920LiveSignal:
                         'trailed_sl': ce_signal.get('sl'),  # Current trailed SL (starts at initial SL)
                         'sl_distance': ce_signal.get('entry_price') - ce_signal.get('sl')  # Distance between entry and SL
                     }
-                    logger.info(f"🟢 CE trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
+                    # Mark entry for today to prevent multiple entries for this strike
+                    if ce_strike:
+                        self.mark_entry_today('CE', ce_strike)
+                    logger.info(f"🟢 CE {ce_strike} trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'} | SL Order ID: {sl_order_id if sl_order_id else 'N/A'}")
                 else:
                     logger.info(f"⏭️  CE signal detected but trade already OPEN - skipping to allow sequential entries (close existing trade first)")
             
             # Track PE entry and place buy order
             # Allow new PE entry ONLY if:
             # 1. Signal exists AND (no PE trade exists OR existing PE trade is already closed)
+            # 2. AND no entry has been made for this PE STRIKE today (prevent multiple entries per strike per day)
             if pe_signal.get('has_signal'):
-                if 'PE' not in self.active_trades or self.active_trades['PE'].get('status') == 'CLOSED':
-                    order_id = None
-                    pe_strike = None
+                order_id = None
+                pe_strike = None
+                if strike_data:
+                    # Get actual PE strike price (not the candle high)
+                    pe_strike_val = strike_data.get('pe_strike')
+                    if pe_strike_val:
+                        pe_strike = int(pe_strike_val)
+                    else:
+                        pe_high_val = strike_data.get('pe_high')
+                        if pe_high_val:
+                            pe_strike = int(pe_high_val)
+                
+                if pe_strike and self.has_entered_today('PE', pe_strike):
+                    logger.info(f"⛔ PE {pe_strike} entry already made today - skipping to prevent multiple entries per strike per day")
+                elif 'PE' not in self.active_trades or self.active_trades['PE'].get('status') == 'CLOSED':
                     if strike_data:
-                        # Get actual PE strike price (not the candle high)
-                        pe_strike_val = strike_data.get('pe_strike')
-                        if pe_strike_val:
-                            pe_strike = int(pe_strike_val)
-                        else:
-                            pe_high_val = strike_data.get('pe_high')
-                            if pe_high_val:
-                                pe_strike = int(pe_high_val)
                         
                         if pe_strike:
                             order_id = self.place_buy_order(
@@ -501,6 +582,27 @@ class Intraday920LiveSignal:
                                 entry_price=pe_signal.get('entry_price')
                             )
                     
+                    # Place SL order on broker
+                    sl_order_id = None
+                    if self.live_trading and strike_data and pe_strike:
+                        try:
+                            # Get option trading symbol for SL order
+                            option_symbol = self._get_option_symbol(self.symbol, pe_strike, 'PE')
+                            if option_symbol:
+                                sl_result = self.kite_service.place_stoploss_order(
+                                    tradingsymbol=option_symbol,
+                                    trigger_price=pe_signal.get('sl'),
+                                    quantity=75,
+                                    product='NRML'
+                                )
+                                if sl_result['success']:
+                                    sl_order_id = sl_result['order_id']
+                                    logger.info(f"✅ PE SL order placed: {option_symbol} @ {pe_signal.get('sl'):.2f} | SL Order ID: {sl_order_id}")
+                                else:
+                                    logger.error(f"❌ Failed to place PE SL order: {sl_result.get('error')}")
+                        except Exception as e:
+                            logger.error(f"Error placing PE SL order: {e}", exc_info=True)
+                    
                     self.active_trades['PE'] = {
                         'entry_price': pe_signal.get('entry_price'),
                         'entry_high': pe_signal.get('entry_high'),  # Reference high used for entry
@@ -508,6 +610,7 @@ class Intraday920LiveSignal:
                         'target': pe_signal.get('target'),
                         'entry_time': datetime.now().isoformat(),
                         'order_id': order_id,
+                        'sl_order_id': sl_order_id,  # Track SL order ID for modifications
                         'token': strike_data.get('pe_token') if strike_data else None,  # type: ignore
                         'strike': pe_strike if strike_data else None,
                         'status': 'OPEN',
@@ -516,7 +619,10 @@ class Intraday920LiveSignal:
                         'trailed_sl': pe_signal.get('sl'),  # Current trailed SL (starts at initial SL)
                         'sl_distance': pe_signal.get('entry_price') - pe_signal.get('sl')  # Distance between entry and SL
                     }
-                    logger.info(f"🟢 PE trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'}")
+                    # Mark entry for today to prevent multiple entries for this strike
+                    if pe_strike:
+                        self.mark_entry_today('PE', pe_strike)
+                    logger.info(f"🟢 PE {pe_strike} trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'} | SL Order ID: {sl_order_id if sl_order_id else 'N/A'}")
                 else:
                     logger.info(f"⏭️  PE signal detected but trade already OPEN - skipping to allow sequential entries (close existing trade first)")
     
@@ -731,6 +837,44 @@ class Intraday920LiveSignal:
         prices = self.get_current_prices([token])
         return prices.get(token)
     
+    def _get_option_symbol(self, symbol: str, strike: int, option_type: str) -> Optional[str]:
+        """
+        Get the trading symbol for an option contract.
+        e.g., 'NIFTY25D26C25000' for NIFTY, strike 25000, CE, expiry 26-DEC-2025
+        
+        Args:
+            symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
+            strike: Strike price
+            option_type: 'CE' or 'PE'
+            
+        Returns:
+            Trading symbol or None if not found
+        """
+        try:
+            # Use kite_service to look up the option symbol
+            if hasattr(self.kite_service, '_nfo_instruments_cache'):
+                nfo_instruments = self.kite_service._nfo_instruments_cache
+                if nfo_instruments:
+                    for instrument in nfo_instruments:
+                        if (instrument.get('name') == symbol and 
+                            instrument.get('strike') == strike and
+                            instrument.get('instrument_type') == option_type):
+                            return instrument.get('tradingsymbol')
+            
+            # Fallback: construct symbol manually (may not be accurate for all cases)
+            from datetime import datetime
+            today = datetime.now()
+            # Find the current month and year for expiry
+            year = today.strftime('%y')
+            month = today.strftime('%b').upper()
+            trading_symbol = f"{symbol}{year}{month}{strike}{option_type}"
+            logger.debug(f"Option symbol lookup failed, using constructed symbol: {trading_symbol}")
+            return trading_symbol
+            
+        except Exception as e:
+            logger.error(f"Error getting option symbol for {symbol} {strike} {option_type}: {e}")
+            return None
+    
     def check_sl_target_for_active_trades(self, check_timestamp: Optional[datetime] = None) -> None:
         """
         Monitor active trades and check if SL or Target has been hit.
@@ -802,6 +946,21 @@ class Intraday920LiveSignal:
                             trailed_sl = new_trailed_sl
                             trade['trailed_sl'] = trailed_sl
                             logger.info(f"📈 {side} Trailing SL updated: {trailed_sl:.2f} (price: {current_price:.2f}, entry: {entry_price:.2f})")
+                            
+                            # Modify SL order on broker if live trading
+                            sl_order_id = trade.get('sl_order_id')
+                            if self.live_trading and sl_order_id:
+                                try:
+                                    modify_result = self.kite_service.modify_stoploss_order(
+                                        order_id=sl_order_id,
+                                        new_trigger_price=trailed_sl
+                                    )
+                                    if modify_result['success']:
+                                        logger.info(f"✅ {side} SL order modified on broker: {sl_order_id} -> Trigger: {trailed_sl:.2f}")
+                                    else:
+                                        logger.error(f"❌ Failed to modify {side} SL order: {modify_result.get('error')}")
+                                except Exception as e:
+                                    logger.error(f"Error modifying {side} SL order: {e}", exc_info=True)
                             
                             # Log to Signal Checks sheet
                             excel_logger.log_sl_target_check(
@@ -1297,6 +1456,59 @@ class Intraday920LiveSignal:
                     else:
                         logger.debug("No active trades to monitor")
                 
+                # ====== MARKET CLOSE CHECK (3:20 PM) ======
+                # Force exit all trades at market close time
+                current_time = datetime.now().time()
+                if current_time >= time(15, 20, 0):  # 3:20 PM IST
+                    if self.active_trades:
+                        market_close_timestamp = datetime.now()
+                        logger.info(f"🔴 Market close (3:20 PM) - Force closing all active trades")
+                        with self.active_trades_lock:
+                            for side in list(self.active_trades.keys()):
+                                trade = self.active_trades.get(side)
+                                if trade and trade.get('status') == 'OPEN':
+                                    # Get current price for exit
+                                    token = trade.get('token')
+                                    if token:
+                                        current_price = self.get_current_price(token)
+                                    else:
+                                        current_price = trade.get('entry_price')
+                                    
+                                    entry_price = trade.get('entry_price', 0)
+                                    pnl = current_price - entry_price if current_price else 0
+                                    
+                                    logger.info(f"🔴 {side} Force Exit at Market Close: Entry {entry_price:.2f}, Exit {current_price:.2f}, P&L: {pnl:+.2f}")
+                                    
+                                    # Log to Signal Checks sheet
+                                    excel_logger.log_sl_target_check(
+                                        timestamp=market_close_timestamp,
+                                        side=side,
+                                        strike=trade.get('strike'),
+                                        current_price=current_price if current_price else entry_price,
+                                        entry_price=entry_price,
+                                        initial_sl=trade.get('sl'),
+                                        target=trade.get('target'),
+                                        target_hit=trade.get('target_hit'),
+                                        check_reason="MARKET_CLOSE"
+                                    )
+                                    
+                                    # Log to Excel trade sheet
+                                    excel_logger.log_trade(
+                                        order_type='SELL',
+                                        option_type=side,
+                                        strike=trade.get('strike'),
+                                        entry_price=entry_price,
+                                        current_price=current_price if current_price else entry_price,
+                                        target=trade.get('target'),
+                                        stop_loss=trade.get('sl'),
+                                        pnl=pnl,
+                                        status='MARKET_CLOSE',
+                                        notes=f"Forced exit at market close (3:20 PM) | Entry: {entry_price:.2f} | Exit: {current_price:.2f} | P&L: {pnl:+.2f}"
+                                    )
+                                    
+                                    # Close the trade
+                                    self.close_trade(side, current_price if current_price else entry_price, "Market Close (3:20 PM)")
+                
                 # Sleep 1 second and check again
                 time_module.sleep(1)
                 
@@ -1400,4 +1612,5 @@ class Intraday920LiveSignal:
         self.active_trades = {}
         self.today_signals = []
         self.last_entry_check_time = None
+        self.reset_daily_entries()  # Reset daily entry tracking
         logger.info(f"Daily monitoring reset for {self.symbol}")

@@ -719,3 +719,166 @@ class KiteService:
                 'strike': strike,
                 'option_type': option_type
             }
+    
+    def place_stoploss_order(self, tradingsymbol: str, trigger_price: float, 
+                            quantity: int = 75, product: str = 'NRML') -> Dict[str, Any]:
+        """Place a stop loss (sell) order on Zerodha Kite.
+        
+        Creates a sell order with a trigger price that automatically executes
+        when the price drops to the trigger level.
+        
+        Args:
+            tradingsymbol: Trading symbol (e.g., 'NIFTY25D26C25000')
+            trigger_price: SL trigger price
+            quantity: Order quantity (default: 75)
+            product: Product type - NRML (normal/default), MIS (intraday)
+            
+        Returns:
+            Dict with success status, order_id, and details
+        """
+        try:
+            from datetime import time
+            now = datetime.now().time()
+            market_open = time(9, 15)
+            market_close = time(15, 30)
+            
+            if market_open <= now <= market_close:
+                variety = self.kite.VARIETY_REGULAR
+            else:
+                variety = self.kite.VARIETY_AMO
+            
+            product_map = {
+                'MIS': self.kite.PRODUCT_MIS,
+                'CNC': self.kite.PRODUCT_CNC,
+                'NRML': self.kite.PRODUCT_NRML
+            }
+            product_type = product_map.get(product, self.kite.PRODUCT_MIS)
+            
+            logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} x {quantity}")
+            
+            order_id = self.kite.place_order(
+                variety=variety,
+                exchange=self.kite.EXCHANGE_NFO,
+                tradingsymbol=tradingsymbol,
+                transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+                quantity=quantity,
+                product=product_type,
+                order_type=self.kite.ORDER_TYPE_LIMIT,  # Use LIMIT order with trigger price
+                trigger_price=trigger_price,
+                price=trigger_price * 0.99  # Price slightly below trigger for execution
+            )
+            
+            logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ ₹{trigger_price:.2f}")
+            
+            return {
+                'success': True,
+                'order_id': order_id,
+                'symbol': tradingsymbol,
+                'trigger_price': trigger_price,
+                'quantity': quantity,
+                'order_type': 'STOPLOSS'
+            }
+            
+        except Exception as e:
+            logging.error(f"❌ Error placing SL order for {tradingsymbol}: {e}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e),
+                'symbol': tradingsymbol
+            }
+    
+    def modify_stoploss_order(self, order_id: str, new_trigger_price: float, 
+                             quantity: Optional[int] = None) -> Dict[str, Any]:
+        """Modify an existing stop loss order with a new trigger price.
+        
+        Used for trailing SL - updates the trigger price as price moves favorably.
+        
+        Args:
+            order_id: Order ID to modify
+            new_trigger_price: New SL trigger price
+            quantity: Optional quantity update
+            
+        Returns:
+            Dict with success status and details
+        """
+        try:
+            from datetime import time
+            now = datetime.now().time()
+            market_open = time(9, 15)
+            market_close = time(15, 30)
+            
+            if market_open <= now <= market_close:
+                variety = self.kite.VARIETY_REGULAR
+            else:
+                variety = self.kite.VARIETY_AMO
+            
+            logging.info(f"Modifying SL order {order_id} to trigger price: ₹{new_trigger_price:.2f}")
+            
+            params = {
+                'variety': variety,
+                'order_id': order_id,
+                'trigger_price': new_trigger_price,
+                'price': new_trigger_price * 0.99
+            }
+            
+            if quantity:
+                params['quantity'] = quantity
+            
+            result_order_id = self.kite.modify_order(**params)
+            
+            logging.info(f"✅ SL Order modified successfully. Order ID: {result_order_id}")
+            
+            return {
+                'success': True,
+                'order_id': result_order_id,
+                'new_trigger_price': new_trigger_price,
+                'order_type': 'STOPLOSS_MODIFIED'
+            }
+            
+        except Exception as e:
+            logging.error(f"❌ Error modifying SL order {order_id}: {e}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e),
+                'order_id': order_id
+            }
+    
+    def cancel_order(self, order_id: str, variety: str = 'regular') -> Dict[str, Any]:
+        """Cancel an existing order.
+        
+        Args:
+            order_id: Order ID to cancel
+            variety: Order variety (regular, amo, etc.)
+            
+        Returns:
+            Dict with success status and details
+        """
+        try:
+            variety_map = {
+                'regular': self.kite.VARIETY_REGULAR,
+                'amo': self.kite.VARIETY_AMO
+            }
+            variety_const = variety_map.get(variety, self.kite.VARIETY_REGULAR)
+            
+            logging.info(f"Canceling order: {order_id}")
+            
+            result_order_id = self.kite.cancel_order(
+                variety=variety_const,
+                order_id=order_id
+            )
+            
+            logging.info(f"✅ Order canceled successfully. Order ID: {result_order_id}")
+            
+            return {
+                'success': True,
+                'order_id': result_order_id,
+                'action': 'CANCELLED'
+            }
+            
+        except Exception as e:
+            logging.error(f"❌ Error canceling order {order_id}: {e}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e),
+                'order_id': order_id
+            }
