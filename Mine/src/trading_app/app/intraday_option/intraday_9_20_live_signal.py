@@ -498,6 +498,10 @@ class Intraday920LiveSignal:
                 if ce_strike and self.has_entered_today('CE', ce_strike):
                     logger.info(f"⛔ CE {ce_strike} entry already made today - skipping to prevent multiple entries per strike per day")
                 elif 'CE' not in self.active_trades or self.active_trades['CE'].get('status') == 'CLOSED':
+                    # Mark entry IMMEDIATELY to prevent race conditions with multiple signals
+                    if ce_strike:
+                        self.mark_entry_today('CE', ce_strike)
+                    
                     if strike_data:
                         
                         if ce_strike:
@@ -512,20 +516,49 @@ class Intraday920LiveSignal:
                     sl_order_id = None
                     if self.live_trading and strike_data and ce_strike:
                         try:
+                            # Get lot size for this symbol (same as entry order quantity)
+                            entry_quantity = self.kite_service.get_lot_size(self.symbol)
+                            
                             # Get option trading symbol for SL order
                             option_symbol = self._get_option_symbol(self.symbol, ce_strike, 'CE')
                             if option_symbol:
+                                logger.info(f"Placing CE SL order with symbol: {option_symbol}, quantity: {entry_quantity}")
                                 sl_result = self.kite_service.place_stoploss_order(
                                     tradingsymbol=option_symbol,
                                     trigger_price=ce_signal.get('sl'),
-                                    quantity=75,
+                                    quantity=entry_quantity,
                                     product='NRML'
                                 )
                                 if sl_result['success']:
                                     sl_order_id = sl_result['order_id']
                                     logger.info(f"✅ CE SL order placed: {option_symbol} @ {ce_signal.get('sl'):.2f} | SL Order ID: {sl_order_id}")
+                                    # Log SL order to Trade sheet
+                                    excel_logger.log_trade(
+                                        order_type='SL_ORDER',
+                                        option_type='CE',
+                                        strike=ce_strike,
+                                        entry_price=ce_signal.get('sl'),
+                                        target=ce_signal.get('target'),
+                                        stop_loss=ce_signal.get('sl'),
+                                        status='PLACED',
+                                        order_id=sl_order_id,
+                                        notes=f'SL Order Placed | Trigger: {ce_signal.get("sl"):.2f}'
+                                    )
                                 else:
                                     logger.error(f"❌ Failed to place CE SL order: {sl_result.get('error')}")
+                                    # Log failure to Trade sheet
+                                    excel_logger.log_trade(
+                                        order_type='SL_ORDER',
+                                        option_type='CE',
+                                        strike=ce_strike,
+                                        entry_price=ce_signal.get('sl'),
+                                        target=ce_signal.get('target'),
+                                        stop_loss=ce_signal.get('sl'),
+                                        status='FAILED',
+                                        notes=f'SL Order Failed: {sl_result.get("error")}'
+                                    )
+                            else:
+                                logger.warning(f"Could not find option symbol for CE {ce_strike} - SL order not placed. Will monitor internally.")
                         except Exception as e:
                             logger.error(f"Error placing CE SL order: {e}", exc_info=True)
                     
@@ -545,9 +578,7 @@ class Intraday920LiveSignal:
                         'trailed_sl': ce_signal.get('sl'),  # Current trailed SL (starts at initial SL)
                         'sl_distance': ce_signal.get('entry_price') - ce_signal.get('sl')  # Distance between entry and SL
                     }
-                    # Mark entry for today to prevent multiple entries for this strike
-                    if ce_strike:
-                        self.mark_entry_today('CE', ce_strike)
+                    # Entry is already marked above to prevent race conditions
                     logger.info(f"🟢 CE {ce_strike} trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'} | SL Order ID: {sl_order_id if sl_order_id else 'N/A'}")
                 else:
                     logger.info(f"⏭️  CE signal detected but trade already OPEN - skipping to allow sequential entries (close existing trade first)")
@@ -572,6 +603,10 @@ class Intraday920LiveSignal:
                 if pe_strike and self.has_entered_today('PE', pe_strike):
                     logger.info(f"⛔ PE {pe_strike} entry already made today - skipping to prevent multiple entries per strike per day")
                 elif 'PE' not in self.active_trades or self.active_trades['PE'].get('status') == 'CLOSED':
+                    # Mark entry IMMEDIATELY to prevent race conditions with multiple signals
+                    if pe_strike:
+                        self.mark_entry_today('PE', pe_strike)
+                    
                     if strike_data:
                         
                         if pe_strike:
@@ -586,20 +621,49 @@ class Intraday920LiveSignal:
                     sl_order_id = None
                     if self.live_trading and strike_data and pe_strike:
                         try:
+                            # Get lot size for this symbol (same as entry order quantity)
+                            entry_quantity = self.kite_service.get_lot_size(self.symbol)
+                            
                             # Get option trading symbol for SL order
                             option_symbol = self._get_option_symbol(self.symbol, pe_strike, 'PE')
                             if option_symbol:
+                                logger.info(f"Placing PE SL order with symbol: {option_symbol}, quantity: {entry_quantity}")
                                 sl_result = self.kite_service.place_stoploss_order(
                                     tradingsymbol=option_symbol,
                                     trigger_price=pe_signal.get('sl'),
-                                    quantity=75,
+                                    quantity=entry_quantity,
                                     product='NRML'
                                 )
                                 if sl_result['success']:
                                     sl_order_id = sl_result['order_id']
                                     logger.info(f"✅ PE SL order placed: {option_symbol} @ {pe_signal.get('sl'):.2f} | SL Order ID: {sl_order_id}")
+                                    # Log SL order to Trade sheet
+                                    excel_logger.log_trade(
+                                        order_type='SL_ORDER',
+                                        option_type='PE',
+                                        strike=pe_strike,
+                                        entry_price=pe_signal.get('sl'),
+                                        target=pe_signal.get('target'),
+                                        stop_loss=pe_signal.get('sl'),
+                                        status='PLACED',
+                                        order_id=sl_order_id,
+                                        notes=f'SL Order Placed | Trigger: {pe_signal.get("sl"):.2f}'
+                                    )
                                 else:
                                     logger.error(f"❌ Failed to place PE SL order: {sl_result.get('error')}")
+                                    # Log failure to Trade sheet
+                                    excel_logger.log_trade(
+                                        order_type='SL_ORDER',
+                                        option_type='PE',
+                                        strike=pe_strike,
+                                        entry_price=pe_signal.get('sl'),
+                                        target=pe_signal.get('target'),
+                                        stop_loss=pe_signal.get('sl'),
+                                        status='FAILED',
+                                        notes=f'SL Order Failed: {sl_result.get("error")}'
+                                    )
+                            else:
+                                logger.warning(f"Could not find option symbol for PE {pe_strike} - SL order not placed. Will monitor internally.")
                         except Exception as e:
                             logger.error(f"Error placing PE SL order: {e}", exc_info=True)
                     
@@ -619,9 +683,7 @@ class Intraday920LiveSignal:
                         'trailed_sl': pe_signal.get('sl'),  # Current trailed SL (starts at initial SL)
                         'sl_distance': pe_signal.get('entry_price') - pe_signal.get('sl')  # Distance between entry and SL
                     }
-                    # Mark entry for today to prevent multiple entries for this strike
-                    if pe_strike:
-                        self.mark_entry_today('PE', pe_strike)
+                    # Entry is already marked above to prevent race conditions
                     logger.info(f"🟢 PE {pe_strike} trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'} | SL Order ID: {sl_order_id if sl_order_id else 'N/A'}")
                 else:
                     logger.info(f"⏭️  PE signal detected but trade already OPEN - skipping to allow sequential entries (close existing trade first)")
@@ -851,28 +913,36 @@ class Intraday920LiveSignal:
             Trading symbol or None if not found
         """
         try:
+            logger.debug(f"Looking up option symbol for {symbol} {strike} {option_type}")
+            
             # Use kite_service to look up the option symbol
             if hasattr(self.kite_service, '_nfo_instruments_cache'):
                 nfo_instruments = self.kite_service._nfo_instruments_cache
                 if nfo_instruments:
+                    logger.debug(f"Searching in {len(nfo_instruments)} NFO instruments")
                     for instrument in nfo_instruments:
                         if (instrument.get('name') == symbol and 
                             instrument.get('strike') == strike and
                             instrument.get('instrument_type') == option_type):
-                            return instrument.get('tradingsymbol')
+                            trading_symbol = instrument.get('tradingsymbol')
+                            logger.info(f"✅ Found option symbol: {trading_symbol} for {symbol} {strike} {option_type}")
+                            return trading_symbol
+                    logger.warning(f"No match found in NFO cache for {symbol} {strike} {option_type}")
+                else:
+                    logger.warning("NFO instruments cache is empty")
+            else:
+                logger.warning("KiteService does not have _nfo_instruments_cache")
             
-            # Fallback: construct symbol manually (may not be accurate for all cases)
-            from datetime import datetime
-            today = datetime.now()
-            # Find the current month and year for expiry
-            year = today.strftime('%y')
-            month = today.strftime('%b').upper()
-            trading_symbol = f"{symbol}{year}{month}{strike}{option_type}"
-            logger.debug(f"Option symbol lookup failed, using constructed symbol: {trading_symbol}")
-            return trading_symbol
+            # Fallback: Try to get from place_option_order (which may update the cache)
+            logger.info(f"Attempting fallback: querying Kite API for {symbol} {strike} {option_type}")
+            
+            # Use KiteService's existing place_option_order logic which has lookup built-in
+            # For now, return None to force reload or use alternative approach
+            logger.warning(f"Could not find option symbol for {symbol} {strike} {option_type} - SL order will not be placed")
+            return None
             
         except Exception as e:
-            logger.error(f"Error getting option symbol for {symbol} {strike} {option_type}: {e}")
+            logger.error(f"Error getting option symbol for {symbol} {strike} {option_type}: {e}", exc_info=True)
             return None
     
     def check_sl_target_for_active_trades(self, check_timestamp: Optional[datetime] = None) -> None:
@@ -957,6 +1027,20 @@ class Intraday920LiveSignal:
                                     )
                                     if modify_result['success']:
                                         logger.info(f"✅ {side} SL order modified on broker: {sl_order_id} -> Trigger: {trailed_sl:.2f}")
+                                        # Log SL update to Trade sheet
+                                        excel_logger.log_trade(
+                                            order_type='SL_UPDATE',
+                                            option_type=side,
+                                            strike=strike,
+                                            entry_price=entry_price,
+                                            current_price=current_price,
+                                            target=target,
+                                            stop_loss=trailed_sl,
+                                            pnl=current_price - entry_price,
+                                            status='SL_TRAILED',
+                                            order_id=sl_order_id,
+                                            notes=f'SL Trailed from {old_sl:.2f} to {trailed_sl:.2f}'
+                                        )
                                     else:
                                         logger.error(f"❌ Failed to modify {side} SL order: {modify_result.get('error')}")
                                 except Exception as e:

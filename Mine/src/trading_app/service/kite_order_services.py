@@ -502,7 +502,7 @@ class KiteService:
             return None
     
     def place_order(self, tradingsymbol: str, transaction_type: str, price: float, 
-                   quantity: int = 75, product: str = 'NRML', order_type: str = 'MARKET',
+                   quantity: int = 65, product: str = 'NRML', order_type: str = 'MARKET',
                    exchange: str = 'NFO') -> Dict[str, Any]:
         """Place an order in Zerodha Kite.
         
@@ -721,11 +721,11 @@ class KiteService:
             }
     
     def place_stoploss_order(self, tradingsymbol: str, trigger_price: float, 
-                            quantity: int = 75, product: str = 'NRML') -> Dict[str, Any]:
+                            quantity: int, product: str = 'NRML') -> Dict[str, Any]:
         """Place a stop loss (sell) order on Zerodha Kite.
         
         Creates a sell order with a trigger price that automatically executes
-        when the price drops to the trigger level.
+        when the price drops to the trigger level. Uses REGULAR variety with trigger.
         
         Args:
             tradingsymbol: Trading symbol (e.g., 'NIFTY25D26C25000')
@@ -754,8 +754,11 @@ class KiteService:
             }
             product_type = product_map.get(product, self.kite.PRODUCT_MIS)
             
-            logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} x {quantity}")
+            logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} x {quantity} (trigger-based LIMIT order)")
             
+            # Place stop loss order with trigger price
+            # For Zerodha Kite: Use LIMIT order with trigger_price
+            # When price drops to trigger_price, the order executes at the specified price
             order_id = self.kite.place_order(
                 variety=variety,
                 exchange=self.kite.EXCHANGE_NFO,
@@ -763,12 +766,12 @@ class KiteService:
                 transaction_type=self.kite.TRANSACTION_TYPE_SELL,
                 quantity=quantity,
                 product=product_type,
-                order_type=self.kite.ORDER_TYPE_LIMIT,  # Use LIMIT order with trigger price
-                trigger_price=trigger_price,
-                price=trigger_price * 0.99  # Price slightly below trigger for execution
+                order_type=self.kite.ORDER_TYPE_LIMIT,  # LIMIT order with trigger
+                price=trigger_price,  # Execution price (what we want to sell at)
+                trigger_price=trigger_price  # Trigger price (when to activate)
             )
             
-            logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ ₹{trigger_price:.2f}")
+            logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ ₹{trigger_price:.2f} (Trigger)")
             
             return {
                 'success': True,
@@ -814,11 +817,12 @@ class KiteService:
             
             logging.info(f"Modifying SL order {order_id} to trigger price: ₹{new_trigger_price:.2f}")
             
+            # For modifying a LIMIT order with trigger, both price and trigger_price should match
             params = {
                 'variety': variety,
                 'order_id': order_id,
                 'trigger_price': new_trigger_price,
-                'price': new_trigger_price * 0.99
+                'price': new_trigger_price  # Use same price as trigger for SL orders
             }
             
             if quantity:
