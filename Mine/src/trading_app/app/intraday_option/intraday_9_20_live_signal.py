@@ -233,6 +233,10 @@ class Intraday920LiveSignal:
         Prevents multiple entries for the same strike+side per day.
         e.g., CE_24600, PE_24600 are tracked separately
         
+        Checks both:
+        1. In-memory daily_entries (current session)
+        2. Excel Trade sheet (persistent across restarts)
+        
         Args:
             side: 'CE' or 'PE'
             strike: Strike price (e.g., 24600)
@@ -242,11 +246,49 @@ class Intraday920LiveSignal:
         """
         today = datetime.now().date()
         entry_key = f"{side}_{strike}"  # e.g., 'CE_24600'
+        
+        # Check in-memory tracking first
         with self.daily_entries_lock:
             if entry_key in self.daily_entries:
                 entry_date = self.daily_entries[entry_key]
-                # entry_date is a date object
-                return entry_date == today
+                if entry_date == today:
+                    logger.info(f"⛔ {side} {strike} found in daily_entries (in-memory tracking)")
+                    return True
+        
+        # Check Excel Trade sheet for persistent tracking (survives app restarts)
+        try:
+            from openpyxl import load_workbook
+            import os
+            
+            if os.path.exists(excel_logger.file_path):
+                wb = load_workbook(excel_logger.file_path)
+                if 'Trades' in wb.sheetnames:
+                    ws = wb['Trades']
+                    today_str = today.strftime('%Y-%m-%d')
+                    
+                    # Search for entries with matching strike, side, and today's date
+                    for row_idx in range(2, ws.max_row + 1):
+                        row_date = ws.cell(row=row_idx, column=1).value  # Timestamp column
+                        row_order_type = ws.cell(row=row_idx, column=2).value  # Order Type
+                        row_option_type = ws.cell(row=row_idx, column=3).value  # Option Type
+                        row_strike = ws.cell(row=row_idx, column=4).value  # Strike column
+                        
+                        # Check if this row matches our criteria
+                        if row_date and row_option_type and row_strike:
+                            row_date_str = str(row_date)[:10] if row_date else ""
+                            
+                            if (row_date_str == today_str and 
+                                row_option_type == side and 
+                                row_strike == strike and
+                                row_order_type == 'BUY'):
+                                logger.info(f"⛔ {side} {strike} found in Excel Trade sheet for today ({today_str})")
+                                # Mark in memory for faster lookup next time
+                                with self.daily_entries_lock:
+                                    self.daily_entries[entry_key] = today
+                                return True
+        except Exception as e:
+            logger.warning(f"Could not check Excel Trade sheet for duplicates: {e}")
+        
         return False
     
     def mark_entry_today(self, side: str, strike: int) -> None:
