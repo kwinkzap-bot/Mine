@@ -2014,6 +2014,19 @@ def place_intraday_920_order() -> EndpointResponse:
             from trading_app.service.kotak_order_services import KotakOrderService
             kotak_service = KotakOrderService()
             
+            # Check if authenticated - if not, authenticate first
+            if not kotak_service.trading_token or not kotak_service.base_url:
+                logger.info("[Kotak Neo] Not authenticated yet, attempting authentication...")
+                auth_result = kotak_service.authenticate()
+                
+                if not auth_result:
+                    error_msg = kotak_service.last_error or 'Kotak Neo authentication failed'
+                    logger.error(f"[Kotak Neo] Authentication failed: {error_msg}")
+                    return jsonify({
+                        'success': False,
+                        'error': f'Kotak Neo authentication failed: {error_msg}. Please login to Kotak Neo first.'
+                    }), 401
+            
             # Map action to transaction_type for Kotak
             transaction_type = 'BUY' if action == 'BUY' else 'SELL'
             
