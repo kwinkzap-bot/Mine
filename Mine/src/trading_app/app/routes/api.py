@@ -2061,17 +2061,47 @@ def place_intraday_920_order() -> EndpointResponse:
                     'error': 'Dhan credentials not configured. Please authenticate first.'
                 }), 401
             
-            # Get option symbol and lot size
-            option_symbol = dhan_service.get_option_symbol(symbol, strike, option_type)
+            # Get the Kite service to look up option symbol
+            kite = get_kite()
+            if not kite:
+                return jsonify({
+                    'success': False,
+                    'error': 'Kite connection required for Dhan symbol lookup'
+                }), 401
+            
+            from trading_app.service.kite_order_services import KiteService
+            kite_service = KiteService(kite_instance=kite)
+            
+            # Get option symbol using Kite (trading symbol like NIFTY24JAN25000CE)
+            option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+            
+            if not option_symbol:
+                return jsonify({
+                    'success': False,
+                    'error': f'Could not find option symbol for {symbol} {strike} {option_type}'
+                }), 400
+            
+            # Get instrument token from Kite for the option symbol
+            # This token is used as security_id for Dhan
+            from trading_app.app.intraday_option.Kite_data_fetch_services import KiteDataFetchService
+            kite_data_service = KiteDataFetchService(kite)
+            security_id = kite_data_service.get_symbol_token(option_symbol, exchange='NFO')
+            
+            if not security_id:
+                return jsonify({
+                    'success': False,
+                    'error': f'Could not find security ID for {option_symbol}. Please try again.'
+                }), 400
+            
             lot_size = dhan_service.get_lot_size(symbol)
             order_quantity = (quantity or 1) * lot_size
             
             # Map action to transaction type
             transaction_type = 'BUY' if action == 'BUY' else 'SELL'
             
-            # Use place_order with the option symbol
+            # Use place_order with the security ID
             result = dhan_service.place_order(
-                security_id=option_symbol,
+                security_id=str(security_id),
                 transaction_type=transaction_type,
                 quantity=order_quantity,
                 order_type='MARKET',
@@ -2096,17 +2126,38 @@ def place_intraday_920_order() -> EndpointResponse:
                     'error': 'Fyers credentials not configured. Please authenticate first.'
                 }), 401
             
-            # Get option symbol and lot size
-            option_symbol = fyers_service.get_option_symbol(symbol, strike, option_type)
+            # Get the Kite service to look up option symbol
+            kite = get_kite()
+            if not kite:
+                return jsonify({
+                    'success': False,
+                    'error': 'Kite connection required for Fyers symbol lookup'
+                }), 401
+            
+            from trading_app.service.kite_order_services import KiteService
+            kite_service = KiteService(kite_instance=kite)
+            
+            # Get option symbol using Kite (trading symbol like NIFTY24JAN25000CE)
+            option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+            
+            if not option_symbol:
+                return jsonify({
+                    'success': False,
+                    'error': f'Could not find option symbol for {symbol} {strike} {option_type}'
+                }), 400
+            
+            # Convert to Fyers format (e.g., NSE:NIFTY24JAN25000CE)
+            fyers_symbol = f"NSE:{option_symbol}"
+            
             lot_size = fyers_service.get_lot_size(symbol)
             order_quantity = (quantity or 1) * lot_size
             
             # Map action to side (1=BUY, -1=SELL)
             side = 1 if action == 'BUY' else -1
             
-            # Use place_order with the option symbol
+            # Use place_order with the Fyers symbol format
             result = fyers_service.place_order(
-                symbol=option_symbol,
+                symbol=fyers_symbol,
                 side=side,
                 quantity=order_quantity,
                 order_type=2,  # 2=MARKET
