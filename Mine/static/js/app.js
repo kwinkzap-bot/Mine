@@ -530,13 +530,13 @@ window.showFyersLoginModal = function(loginUrl = '/auth/login/fyers') {
     }, 100);
     
     // Setup message listener for OAuth callback
-    window.addEventListener('message', handleFyersOAuthMessage);
+    window.addEventListener('message', window.handleFyersOAuthMessage);
 };
 
 /**
  * Handle message from Fyers OAuth callback window
  */
-function handleFyersOAuthMessage(event) {
+window.handleFyersOAuthMessage = function(event) {
     if (event.data && event.data.type === 'fyers_auth_success') {
         console.log('[Fyers OAuth] Authentication successful:', event.data.message);
         
@@ -558,12 +558,12 @@ function handleFyersOAuthMessage(event) {
             location.reload();
         }, 1500);
     }
-}
+};
 
 /**
  * Initiate Fyers OAuth flow
  */
-async function initiateFyersOAuth() {
+window.initiateFyersOAuth = async function() {
     const statusDiv = document.getElementById('fyersLoginStatus');
     
     // Show loading status
@@ -622,7 +622,7 @@ async function initiateFyersOAuth() {
             statusDiv.textContent = `✗ Error: ${error.message}`;
         }
     }
-}
+};
 
 /**
  * Close the Fyers login modal
@@ -632,7 +632,7 @@ window.closeFyersLoginModal = function() {
     if (modal) {
         modal.remove();
     }
-    window.removeEventListener('message', handleFyersOAuthMessage);
+    window.removeEventListener('message', window.handleFyersOAuthMessage);
 };
 
 /**
