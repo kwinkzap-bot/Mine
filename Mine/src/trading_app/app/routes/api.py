@@ -2014,11 +2014,14 @@ def place_intraday_920_order() -> EndpointResponse:
             from trading_app.service.kotak_order_services import KotakOrderService
             kotak_service = KotakOrderService()
             
+            # Map action to transaction_type for Kotak
+            transaction_type = 'BUY' if action == 'BUY' else 'SELL'
+            
             result = kotak_service.place_option_order(
                 symbol=symbol,
                 strike=strike,
                 option_type=option_type,
-                action=action,
+                transaction_type=transaction_type,
                 quantity=quantity
             )
             
@@ -2033,12 +2036,28 @@ def place_intraday_920_order() -> EndpointResponse:
             from trading_app.service.dhan_order_services import DhanOrderService
             dhan_service = DhanOrderService()
             
-            result = dhan_service.place_option_order(
-                symbol=symbol,
-                strike=strike,
-                option_type=option_type,
-                action=action,
-                quantity=quantity
+            # Check if authenticated
+            if not dhan_service.access_token:
+                return jsonify({
+                    'success': False,
+                    'error': 'Dhan credentials not configured. Please authenticate first.'
+                }), 401
+            
+            # Get option symbol and lot size
+            option_symbol = dhan_service.get_option_symbol(symbol, strike, option_type)
+            lot_size = dhan_service.get_lot_size(symbol)
+            order_quantity = (quantity or 1) * lot_size
+            
+            # Map action to transaction type
+            transaction_type = 'BUY' if action == 'BUY' else 'SELL'
+            
+            # Use place_order with the option symbol
+            result = dhan_service.place_order(
+                security_id=option_symbol,
+                transaction_type=transaction_type,
+                quantity=order_quantity,
+                order_type='MARKET',
+                product_type='INTRADAY'
             )
             
             if result['success']:
@@ -2052,12 +2071,28 @@ def place_intraday_920_order() -> EndpointResponse:
             from trading_app.service.fyers_order_services import FyersOrderService
             fyers_service = FyersOrderService()
             
-            result = fyers_service.place_option_order(
-                symbol=symbol,
-                strike=strike,
-                option_type=option_type,
-                action=action,
-                quantity=quantity
+            # Check if authenticated
+            if not fyers_service.access_token:
+                return jsonify({
+                    'success': False,
+                    'error': 'Fyers credentials not configured. Please authenticate first.'
+                }), 401
+            
+            # Get option symbol and lot size
+            option_symbol = fyers_service.get_option_symbol(symbol, strike, option_type)
+            lot_size = fyers_service.get_lot_size(symbol)
+            order_quantity = (quantity or 1) * lot_size
+            
+            # Map action to side (1=BUY, -1=SELL)
+            side = 1 if action == 'BUY' else -1
+            
+            # Use place_order with the option symbol
+            result = fyers_service.place_order(
+                symbol=option_symbol,
+                side=side,
+                quantity=order_quantity,
+                order_type=2,  # 2=MARKET
+                product_type='INTRADAY'
             )
             
             if result['success']:
@@ -2066,6 +2101,12 @@ def place_intraday_920_order() -> EndpointResponse:
             else:
                 logger.warning(f"Fyers - Order placement failed: {result.get('error')}")
                 return jsonify(result), 400
+        
+        # Should never reach here if validation is correct
+        return jsonify({
+            'success': False,
+            'error': 'Invalid broker selection'
+        }), 400
     
     except Exception as e:
         logger.error(f"Error placing intraday 920 order: {e}", exc_info=True)
