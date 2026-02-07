@@ -566,6 +566,34 @@
     box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
+.broker-selector-wrapper {
+    display: flex;
+    align-items: center;
+}
+
+.broker-selector {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    background: var(--bg-white);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 600;
+}
+
+.broker-selector:hover {
+    border-color: var(--primary);
+    background: var(--bg-light);
+}
+
+.broker-selector:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
 .ratio-selector-wrapper {
     display: flex;
     align-items: center;

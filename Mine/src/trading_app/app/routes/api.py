@@ -1931,6 +1931,7 @@ def place_intraday_920_order() -> EndpointResponse:
         strike: int - Strike price
         option_type: str - 'CE' or 'PE'
         action: str - 'BUY' or 'SELL'
+        broker: str (optional) - 'kite', 'kotak_neo', 'dhan', 'fyers' (default: 'kite')
         quantity: int (optional) - Order quantity (default: lot size)
     
     Returns:
@@ -1952,6 +1953,7 @@ def place_intraday_920_order() -> EndpointResponse:
         strike = int(data['strike'])
         option_type = data['option_type'].upper()
         action = data['action'].upper()
+        broker = data.get('broker', 'kite').lower()
         quantity = data.get('quantity')
         
         # Validate option_type
@@ -1968,35 +1970,102 @@ def place_intraday_920_order() -> EndpointResponse:
                 'error': 'Invalid action. Must be BUY or SELL'
             }), 400
         
-        # Get Kite instance
-        kite = get_kite()
-        if not kite:
+        # Validate broker
+        valid_brokers = ['kite', 'kotak_neo', 'dhan', 'fyers']
+        if broker not in valid_brokers:
             return jsonify({
                 'success': False,
-                'error': 'Kite connection not available. Please login.'
-            }), 401
+                'error': f'Invalid broker. Must be one of: {", ".join(valid_brokers)}'
+            }), 400
         
-        # Place order using KiteService
-        from trading_app.service.kite_order_services import KiteService
-        kite_service = KiteService(kite_instance=kite)
+        # Route to appropriate broker service
+        if broker == 'kite':
+            # Get Kite instance
+            kite = get_kite()
+            if not kite:
+                return jsonify({
+                    'success': False,
+                    'error': 'Kite connection not available. Please login.'
+                }), 401
+            
+            # Place order using KiteService
+            from trading_app.service.kite_order_services import KiteService
+            kite_service = KiteService(kite_instance=kite)
+            
+            # Map action to transaction type
+            transaction_type = kite.TRANSACTION_TYPE_BUY if action == 'BUY' else kite.TRANSACTION_TYPE_SELL
+            
+            result = kite_service.place_option_order(
+                symbol=symbol,
+                strike=strike,
+                option_type=option_type,
+                transaction_type=transaction_type,
+                quantity=quantity
+            )
+            
+            if result['success']:
+                logger.info(f"Kite - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
+                return jsonify(result), 200
+            else:
+                logger.warning(f"Kite - Order placement failed: {result.get('error')}")
+                return jsonify(result), 400
         
-        # Map action to transaction type
-        transaction_type = kite.TRANSACTION_TYPE_BUY if action == 'BUY' else kite.TRANSACTION_TYPE_SELL
+        elif broker == 'kotak_neo':
+            from trading_app.service.kotak_order_services import KotakService
+            kotak_service = KotakService()
+            
+            result = kotak_service.place_option_order(
+                symbol=symbol,
+                strike=strike,
+                option_type=option_type,
+                action=action,
+                quantity=quantity
+            )
+            
+            if result['success']:
+                logger.info(f"Kotak Neo - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
+                return jsonify(result), 200
+            else:
+                logger.warning(f"Kotak Neo - Order placement failed: {result.get('error')}")
+                return jsonify(result), 400
         
-        result = kite_service.place_option_order(
-            symbol=symbol,
-            strike=strike,
-            option_type=option_type,
-            transaction_type=transaction_type,
-            quantity=quantity
-        )
+        elif broker == 'dhan':
+            from trading_app.service.dhan_order_services import DhanService
+            dhan_service = DhanService()
+            
+            result = dhan_service.place_option_order(
+                symbol=symbol,
+                strike=strike,
+                option_type=option_type,
+                action=action,
+                quantity=quantity
+            )
+            
+            if result['success']:
+                logger.info(f"Dhan - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
+                return jsonify(result), 200
+            else:
+                logger.warning(f"Dhan - Order placement failed: {result.get('error')}")
+                return jsonify(result), 400
         
-        if result['success']:
-            logger.info(f"Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
-            return jsonify(result), 200
-        else:
-            logger.warning(f"Order placement failed: {result.get('error')}")
-            return jsonify(result), 400
+        elif broker == 'fyers':
+            from trading_app.service.fyers_order_services import FyersService
+            fyers_service = FyersService()
+            
+            result = fyers_service.place_option_order(
+                symbol=symbol,
+                strike=strike,
+                option_type=option_type,
+                action=action,
+                quantity=quantity
+            )
+            
+            if result['success']:
+                logger.info(f"Fyers - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
+                return jsonify(result), 200
+            else:
+                logger.warning(f"Fyers - Order placement failed: {result.get('error')}")
+                return jsonify(result), 400
     
     except Exception as e:
         logger.error(f"Error placing intraday 920 order: {e}", exc_info=True)

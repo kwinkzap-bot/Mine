@@ -50,6 +50,7 @@ class Intraday920Tracker {
     initElements() {
         this.symbolSelect = document.getElementById('symbolSelect');
         this.timeFrameSelect = document.getElementById('timeFrameSelect');
+        this.brokerSelect = document.getElementById('brokerSelect');
         this.signalsContainer = document.getElementById('signalsContainer');
         this.dataContainer = document.getElementById('dataContainer');
     }
@@ -260,6 +261,9 @@ class Intraday920Tracker {
 
             console.log(`[Order] Placing ${action} order: ${side} ${strike} (${strikeType})`);
 
+            // Get selected broker
+            const broker = this.brokerSelect ? this.brokerSelect.value : 'kite';
+
             // Make API call to place order
             const response = await fetch('/api/intraday-920/place-order', {
                 method: 'POST',
@@ -271,7 +275,8 @@ class Intraday920Tracker {
                     symbol: this.symbol,
                     strike: strike,
                     option_type: side,
-                    action: action
+                    action: action,
+                    broker: broker
                 })
             });
 
