@@ -2065,18 +2065,12 @@ def place_intraday_920_order() -> EndpointResponse:
                     'error': 'Dhan not authenticated. Please login via Settings > Brokers > Dhan first.'
                 }), 401
             
-            # Create Dhan service with credentials
-            dhan_service = DhanOrderService(
-                access_token=dhan_access_token,
-                client_id=dhan_client_id
-            )
-            
-            # Use dhanhq library to get option symbol and security ID
             try:
-                from dhanhq import dhanhq
-                
-                # Initialize dhanhq client with token
-                dhan = dhanhq(dhan_access_token)
+                # Create Dhan service with credentials
+                dhan_service = DhanOrderService(
+                    access_token=dhan_access_token,
+                    client_id=dhan_client_id
+                )
                 
                 # Build option symbol (e.g., NIFTY24JAN25000CE)
                 from datetime import datetime
@@ -2085,10 +2079,8 @@ def place_intraday_920_order() -> EndpointResponse:
                 month = now.strftime('%b').upper()
                 option_symbol = f"{symbol}{year}{month}{strike}{option_type}"
                 
-                logger.info(f"[Dhan] Looking up security ID for {option_symbol}")
+                logger.info(f"[Dhan] Placing order for {option_symbol}")
                 
-                # For now, use the trading symbol as identifier
-                # In production, you'd fetch from Dhan's instrument master
                 lot_size = dhan_service.get_lot_size(symbol)
                 order_quantity = (quantity or 1) * lot_size
                 
@@ -2111,12 +2103,6 @@ def place_intraday_920_order() -> EndpointResponse:
                     logger.warning(f"Dhan - Order placement failed: {result.get('error')}")
                     return jsonify(result), 400
                     
-            except ImportError:
-                logger.error("[Dhan] dhanhq library not installed")
-                return jsonify({
-                    'success': False,
-                    'error': 'Dhan support requires dhanhq library. Please run: pip install dhanhq'
-                }), 400
             except Exception as e:
                 logger.error(f"[Dhan] Error during order placement: {e}", exc_info=True)
                 return jsonify({
@@ -2125,66 +2111,77 @@ def place_intraday_920_order() -> EndpointResponse:
                 }), 400
         
         elif broker == 'fyers':
-            from trading_app.service.fyers_order_services import FyersOrderService
-            
             # Get stored Fyers credentials from environment
+            fyers_app_id = os.getenv('FYERS_APP_ID')
             fyers_access_token = os.getenv('FYERS_ACCESS_TOKEN')
             
             # Check if authenticated
-            if not fyers_access_token:
-                logger.warning("[Fyers] Access token not found - user must login first")
+            if not fyers_app_id or not fyers_access_token:
+                logger.warning("[Fyers] Credentials not found - user must login first")
                 return jsonify({
                     'success': False,
                     'error': 'Fyers not authenticated. Please login via Settings > Brokers > Fyers first.'
                 }), 401
             
-            # Create Fyers service with credentials
-            fyers_service = FyersOrderService(access_token=fyers_access_token)
-            
-            # Get the Kite service to look up option symbol
-            kite = get_kite()
-            if not kite:
+            try:
+                from trading_app.service.fyers_order_services import FyersOrderService
+                
+                # Create Fyers service with credentials
+                fyers_service = FyersOrderService(app_id=fyers_app_id, access_token=fyers_access_token)
+                
+                # Get the Kite service to look up option symbol
+                kite = get_kite()
+                if not kite:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Kite connection required for Fyers symbol lookup'
+                    }), 401
+                
+                from trading_app.service.kite_order_services import KiteService
+                kite_service = KiteService(kite_instance=kite)
+                
+                # Get option symbol using Kite (trading symbol like NIFTY24JAN25000CE)
+                option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+                
+                if not option_symbol:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Could not find option symbol for {symbol} {strike} {option_type}'
+                    }), 400
+                
+                # Convert to Fyers format (e.g., NSE:NIFTY24JAN25000CE)
+                fyers_symbol = f"NSE:{option_symbol}"
+                
+                lot_size = fyers_service.get_lot_size(symbol)
+                order_quantity = (quantity or 1) * lot_size
+                
+                # Map action to side (1=BUY, -1=SELL)
+                side = 1 if action == 'BUY' else -1
+                
+                logger.info(f"[Fyers] Placing order for {fyers_symbol} with side={side}, quantity={order_quantity}")
+                
+                # Use place_order with the Fyers symbol format
+                result = fyers_service.place_order(
+                    symbol=fyers_symbol,
+                    side=side,
+                    quantity=order_quantity,
+                    order_type=2,  # 2=MARKET
+                    product_type='INTRADAY'
+                )
+                
+                if result['success']:
+                    logger.info(f"Fyers - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
+                    return jsonify(result), 200
+                else:
+                    logger.warning(f"Fyers - Order placement failed: {result.get('error')}")
+                    return jsonify(result), 400
+                    
+            except Exception as e:
+                logger.error(f"[Fyers] Error during order placement: {e}", exc_info=True)
                 return jsonify({
                     'success': False,
-                    'error': 'Kite connection required for Fyers symbol lookup'
-                }), 401
-            
-            from trading_app.service.kite_order_services import KiteService
-            kite_service = KiteService(kite_instance=kite)
-            
-            # Get option symbol using Kite (trading symbol like NIFTY24JAN25000CE)
-            option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
-            
-            if not option_symbol:
-                return jsonify({
-                    'success': False,
-                    'error': f'Could not find option symbol for {symbol} {strike} {option_type}'
+                    'error': f'Fyers order error: {str(e)}'
                 }), 400
-            
-            # Convert to Fyers format (e.g., NSE:NIFTY24JAN25000CE)
-            fyers_symbol = f"NSE:{option_symbol}"
-            
-            lot_size = fyers_service.get_lot_size(symbol)
-            order_quantity = (quantity or 1) * lot_size
-            
-            # Map action to side (1=BUY, -1=SELL)
-            side = 1 if action == 'BUY' else -1
-            
-            # Use place_order with the Fyers symbol format
-            result = fyers_service.place_order(
-                symbol=fyers_symbol,
-                side=side,
-                quantity=order_quantity,
-                order_type=2,  # 2=MARKET
-                product_type='INTRADAY'
-            )
-            
-            if result['success']:
-                logger.info(f"Fyers - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
-                return jsonify(result), 200
-            else:
-                logger.warning(f"Fyers - Order placement failed: {result.get('error')}")
-                return jsonify(result), 400
         
         # Should never reach here if validation is correct
         return jsonify({
