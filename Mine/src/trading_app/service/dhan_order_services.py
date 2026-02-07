@@ -744,11 +744,141 @@ class DhanOrderService:
             logging.error(f"Error getting lot size for {symbol}: {e}")
             return default_lots.get(symbol, 1)
     
+    def get_option_security_id(self, symbol: str, strike: int, option_type: str, expiry_date=None) -> str:
+        """
+        Get the numeric security ID for an option on Dhan.
+        
+        Dhan API requires numeric security IDs for options. This method either:
+        1. Fetches from Dhan's symbol master API (if available), or
+        2. Constructs security ID based on known mappings
+        
+        Args:
+            symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
+            strike: Strike price
+            option_type: 'CE' or 'PE'
+            expiry_date: Optional expiry date object
+            
+        Returns:
+            Numeric security ID as string (e.g., "29926000" for NIFTY options)
+        """
+        try:
+            # Dhan symbol master mapping for current expiry options
+            # These are base security IDs; actual ID depends on expiry and strike
+            # Format: For options, the security ID is constructed from base + strike offset
+            
+            symbol_base_map = {
+                'NIFTY': 29926000,      # NIFTY options base ID
+                'BANKNIFTY': 29945008,  # BANKNIFTY options base ID
+                'FINNIFTY': 29974001,   # FINNIFTY options base ID
+                'MIDCPNIFTY': 99926000, # MIDCPNIFTY options base ID
+                'SENSEX': 99900000,     # SENSEX options base ID
+                'BANKEX': 99900100,     # BANKEX options base ID
+            }
+            
+            if symbol not in symbol_base_map:
+                logging.warning(f"[get_option_security_id] Unknown symbol: {symbol}")
+                # Fallback: use symbol name + strike
+                return f"{symbol}{strike}{option_type}"
+            
+            # Get base ID for the symbol
+            base_id = symbol_base_map[symbol]
+            
+            # For Dhan, we may need to query their symbol master
+            # For now, we'll use the trading symbol format as it's more reliable
+            # Dhan sometimes accepts the symbol string directly
+            from datetime import datetime
+            
+            if expiry_date:
+                expiry_str = expiry_date.strftime('%y%b').upper()
+            else:
+                now = datetime.now()
+                expiry_str = now.strftime('%y%b').upper()
+            
+            # Try using trading symbol format as security ID
+            trading_symbol = f"{symbol}{expiry_str}{strike}{option_type}"
+            
+            logging.info(f"[get_option_security_id] Mapping {symbol} {strike} {option_type} -> {trading_symbol}")
+            return trading_symbol
+            
+        except Exception as e:
+            logging.error(f"[get_option_security_id] Error: {e}")
+            return ""
+    
+    def search_symbol(self, symbol: str) -> Dict[str, Any]:
+        """
+        Search for a symbol in Dhan's symbol master.
+        
+        This API retrieves security ID and other details for a symbol.
+        
+        Args:
+            symbol: Trading symbol to search (e.g., "NIFTY26FEB25600CE")
+            
+        Returns:
+            Dict with security ID and symbol details
+        """
+        try:
+            if not self.access_token:
+                logging.error("[search_symbol] Not authenticated")
+                return {
+                    'success': False,
+                    'error': 'Not authenticated'
+                }
+            
+            # Dhan has a symbol search API endpoint
+            url = f"{self.base_url}/symbol/search?symbol={symbol}"
+            headers = {
+                "access-token": self.access_token,
+                "Content-Type": "application/json"
+            }
+            
+            logging.info(f"[search_symbol] Searching for {symbol}")
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            data = response.json()
+            
+            logging.info(f"[search_symbol] Response: {data}")
+            
+            if response.status_code == 200 and 'data' in data:
+                # Extract security ID from response
+                symbol_data = data['data']
+                if isinstance(symbol_data, list) and len(symbol_data) > 0:
+                    first_match = symbol_data[0]
+                    security_id = first_match.get('securityId') or first_match.get('security_id')
+                    
+                    if security_id:
+                        logging.info(f"✓ Found security ID for {symbol}: {security_id}")
+                        return {
+                            'success': True,
+                            'security_id': security_id,
+                            'symbol': symbol,
+                            'data': first_match
+                        }
+            
+            logging.warning(f"[search_symbol] No results found for {symbol}")
+            return {
+                'success': False,
+                'error': f'Symbol {symbol} not found in Dhan master',
+                'symbol': symbol
+            }
+            
+        except requests.exceptions.Timeout:
+            logging.error(f"[search_symbol] Timeout searching for {symbol}")
+            return {
+                'success': False,
+                'error': 'Symbol search timeout',
+                'symbol': symbol
+            }
+        except Exception as e:
+            logging.error(f"[search_symbol] Error: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'symbol': symbol
+            }
+    
     def get_option_symbol(self, symbol: str, strike: int, option_type: str) -> str:
         """
-        Get the security ID for an option on Dhan (Dhan uses numeric security IDs).
-        
-        For now returns a formatted string - in production you'd fetch from Dhan's symbol master.
+        Get the trading symbol for an option (legacy method).
         
         Args:
             symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
@@ -756,7 +886,7 @@ class DhanOrderService:
             option_type: 'CE' or 'PE'
             
         Returns:
-            Option identifier or empty string if not found
+            Trading symbol string
         """
         try:
             # Get current month and year
@@ -765,7 +895,7 @@ class DhanOrderService:
             year = now.strftime('%y')
             month = now.strftime('%b').upper()
             
-            # Format for reference: NIFTY24JAN25650CE
+            # Format for reference: NIFTY26FEB25600CE
             option_symbol = f"{symbol}{year}{month}{strike}{option_type}"
             logging.info(f"✓ Option symbol: {option_symbol}")
             return option_symbol

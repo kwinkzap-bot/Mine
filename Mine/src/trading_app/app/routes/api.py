@@ -2072,14 +2072,25 @@ def place_intraday_920_order() -> EndpointResponse:
                     client_id=dhan_client_id
                 )
                 
-                # Build option symbol (e.g., NIFTY24JAN25000CE)
+                # Build option trading symbol (e.g., NIFTY26FEB25600CE)
                 from datetime import datetime
                 now = datetime.now()
                 year = now.strftime('%y')
                 month = now.strftime('%b').upper()
-                option_symbol = f"{symbol}{year}{month}{strike}{option_type}"
+                trading_symbol = f"{symbol}{year}{month}{strike}{option_type}"
                 
-                logger.info(f"[Dhan] Placing order for {option_symbol}")
+                logger.info(f"[Dhan] Trading symbol: {trading_symbol}, searching for security ID...")
+                
+                # Search for the symbol in Dhan's symbol master to get security ID
+                search_result = dhan_service.search_symbol(trading_symbol)
+                
+                if not search_result['success']:
+                    # Fallback: try using trading symbol directly as security ID
+                    logger.warning(f"[Dhan] Symbol search failed, will try trading symbol as security ID")
+                    security_id = trading_symbol
+                else:
+                    security_id = search_result.get('security_id', trading_symbol)
+                    logger.info(f"[Dhan] Found security ID: {security_id}")
                 
                 lot_size = dhan_service.get_lot_size(symbol)
                 order_quantity = (quantity or 1) * lot_size
@@ -2087,13 +2098,16 @@ def place_intraday_920_order() -> EndpointResponse:
                 # Map action to transaction type
                 transaction_type = 'BUY' if action == 'BUY' else 'SELL'
                 
-                # Place order using the option symbol
+                logger.info(f"[Dhan] Placing {transaction_type} order: symbol={trading_symbol}, security_id={security_id}, qty={order_quantity}")
+                
+                # Place order using the security ID from symbol search
                 result = dhan_service.place_order(
-                    security_id=option_symbol,
+                    security_id=security_id,
                     transaction_type=transaction_type,
                     quantity=order_quantity,
                     order_type='MARKET',
-                    product_type='INTRADAY'
+                    product_type='INTRADAY',
+                    exchange_segment='NSE_FNO'
                 )
                 
                 if result['success']:
