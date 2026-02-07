@@ -2011,8 +2011,8 @@ def place_intraday_920_order() -> EndpointResponse:
                 return jsonify(result), 400
         
         elif broker == 'kotak_neo':
-            from trading_app.service.kotak_order_services import KotakService
-            kotak_service = KotakService()
+            from trading_app.service.kotak_order_services import KotakOrderService
+            kotak_service = KotakOrderService()
             
             result = kotak_service.place_option_order(
                 symbol=symbol,
@@ -2030,8 +2030,8 @@ def place_intraday_920_order() -> EndpointResponse:
                 return jsonify(result), 400
         
         elif broker == 'dhan':
-            from trading_app.service.dhan_order_services import DhanService
-            dhan_service = DhanService()
+            from trading_app.service.dhan_order_services import DhanOrderService
+            dhan_service = DhanOrderService()
             
             result = dhan_service.place_option_order(
                 symbol=symbol,
@@ -2049,8 +2049,8 @@ def place_intraday_920_order() -> EndpointResponse:
                 return jsonify(result), 400
         
         elif broker == 'fyers':
-            from trading_app.service.fyers_order_services import FyersService
-            fyers_service = FyersService()
+            from trading_app.service.fyers_order_services import FyersOrderService
+            fyers_service = FyersOrderService()
             
             result = fyers_service.place_option_order(
                 symbol=symbol,
