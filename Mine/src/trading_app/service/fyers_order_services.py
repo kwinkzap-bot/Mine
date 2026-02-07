@@ -509,6 +509,122 @@ class FyersOrderService:
                 'order_id': order_id
             }
     
+    def place_stoploss_order(self, symbol: str, trigger_price: float, 
+                            quantity: int, product_type: str = 'INTRADAY') -> Dict[str, Any]:
+        """
+        Place a stop loss (sell) order on Fyers platform.
+        
+        Creates a sell order with a trigger price that automatically executes
+        when the price drops to the trigger level.
+        
+        Args:
+            symbol: Trading symbol (e.g., "NSE:NIFTY24JAN21000CE")
+            trigger_price: SL trigger price
+            quantity: Order quantity
+            product_type: 'INTRADAY', 'CNC', 'MARGIN', etc.
+            
+        Returns:
+            Dict with success status, order_id, and details
+        """
+        try:
+            if not self.access_token:
+                return {'success': False, 'error': 'Access token not available'}
+            
+            url = f"{self.base_url}/orders"
+            headers = {
+                "Authorization": self.access_token,
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "symbol": symbol,
+                "qty": quantity,
+                "type": self.ORDER_TYPE_STOP_LOSS,  # 3 = STOP_LOSS
+                "side": self.SIDE_SELL,  # -1 = SELL
+                "productType": product_type,
+                "stopPrice": trigger_price,
+                "validity": "DAY",
+                "disclosedQty": 0,
+                "offlineOrder": False
+            }
+            
+            logging.info(f"[place_stoploss_order] Placing SL order: {symbol} @ {trigger_price:.2f}")
+            
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            data = response.json()
+            
+            if response.status_code == 200 and data.get('s') == 'ok':
+                order_id = data.get('data', {}).get('id')
+                if order_id:
+                    logging.info(f"✅ SL Order placed: {order_id} | {symbol} @ {trigger_price:.2f}")
+                    return {
+                        'success': True,
+                        'order_id': order_id,
+                        'symbol': symbol,
+                        'trigger_price': trigger_price,
+                        'quantity': quantity,
+                        'order_type': 'STOPLOSS'
+                    }
+            
+            error_msg = data.get('message') or 'Order placement failed'
+            logging.error(f"❌ SL Order failed: {error_msg}")
+            return {'success': False, 'error': error_msg, 'symbol': symbol}
+            
+        except Exception as e:
+            logging.error(f"❌ Exception placing SL order: {e}", exc_info=True)
+            return {'success': False, 'error': str(e), 'symbol': symbol}
+    
+    def modify_stoploss_order(self, order_id: str, new_trigger_price: float,
+                             quantity: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Modify an existing stop loss order with a new trigger price.
+        
+        Used for trailing SL - updates the trigger price as price moves favorably.
+        
+        Args:
+            order_id: Order ID to modify
+            new_trigger_price: New SL trigger price
+            quantity: Optional quantity update
+            
+        Returns:
+            Dict with success status and details
+        """
+        try:
+            if not self.access_token:
+                return {'success': False, 'error': 'Access token not available'}
+            
+            url = f"{self.base_url}/orders"
+            headers = {
+                "Authorization": self.access_token,
+                "Content-Type": "application/json"
+            }
+            
+            payload: Dict[str, Any] = {"id": order_id, "stopPrice": new_trigger_price}
+            
+            if quantity is not None:
+                payload["qty"] = quantity
+            
+            logging.info(f"[modify_stoploss_order] Modifying SL order {order_id} to {new_trigger_price:.2f}")
+            
+            response = requests.put(url, headers=headers, json=payload, timeout=30)
+            data = response.json()
+            
+            if response.status_code == 200 and data.get('s') == 'ok':
+                logging.info(f"✅ SL Order modified: {order_id} -> Trigger: {new_trigger_price:.2f}")
+                return {
+                    'success': True,
+                    'order_id': order_id,
+                    'new_trigger_price': new_trigger_price
+                }
+            
+            error_msg = data.get('message') or 'Modification failed'
+            logging.error(f"❌ Modify failed: {error_msg}")
+            return {'success': False, 'error': error_msg, 'order_id': order_id}
+            
+        except Exception as e:
+            logging.error(f"❌ Exception modifying SL order: {e}", exc_info=True)
+            return {'success': False, 'error': str(e), 'order_id': order_id}
+    
     def get_orderbook(self) -> Dict[str, Any]:
         """
         Get all orders for the day.
@@ -688,6 +804,76 @@ class FyersOrderService:
                 'success': False,
                 'error': str(e)
             }
+    
+    def get_lot_size(self, symbol: str) -> int:
+        """
+        Get the lot size (quantity multiplier) for a symbol.
+        
+        Args:
+            symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
+            
+        Returns:
+            Lot size (default: 1 if not found)
+        """
+        # Default lot sizes for Indian options as of Jan 2026
+        default_lots = {
+            'NIFTY': 65,
+            'BANKNIFTY': 25,
+            'FINNIFTY': 40,
+            'MIDCPNIFTY': 50,
+            'SENSEX': 10,
+            'BANKEX': 15
+        }
+        
+        try:
+            lot_size = default_lots.get(symbol, 1)
+            logging.info(f"✓ Lot size for {symbol}: {lot_size}")
+            return lot_size
+            
+        except Exception as e:
+            logging.error(f"Error getting lot size for {symbol}: {e}")
+            return default_lots.get(symbol, 1)
+    
+    def get_option_symbol(self, symbol: str, strike: int, option_type: str) -> str:
+        """
+        Get the trading symbol for an option on Fyers.
+        
+        Fyers uses format: NSE:NIFTY24JAN25650CE
+        
+        Args:
+            symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
+            strike: Strike price
+            option_type: 'CE' or 'PE'
+            
+        Returns:
+            Trading symbol or empty string if not found
+        """
+        try:
+            # Fyers format: NSE:NIFTY24JAN25650CE
+            # For now, use current month - in real implementation you'd fetch from API
+            from datetime import datetime
+            
+            # Get current month and year
+            now = datetime.now()
+            month = now.strftime('%b').upper()
+            year = now.strftime('%y')
+            
+            trading_symbol = f"NSE:{symbol}{year}{month}{strike}{option_type}"
+            logging.info(f"✓ Option symbol: {trading_symbol}")
+            return trading_symbol
+            
+        except Exception as e:
+            logging.error(f"Error getting option symbol: {e}")
+            return ""
+    
+    def verify_credentials(self) -> bool:
+        """
+        Verify that access token is available.
+        
+        Returns:
+            True if credentials are valid, False otherwise
+        """
+        return bool(self.access_token)
     
     def _save_token(self, access_token: str):
         """Save access token to .env file"""

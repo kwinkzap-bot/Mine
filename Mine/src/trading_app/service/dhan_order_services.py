@@ -406,6 +406,135 @@ class DhanOrderService:
                 'order_id': order_id
             }
     
+    def place_stoploss_order(self, security_id: str, trigger_price: float, 
+                            quantity: int, product_type: str = 'INTRADAY',
+                            exchange_segment: str = 'NSE_FNO') -> Dict[str, Any]:
+        """
+        Place a stop loss (sell) order on Dhan platform.
+        
+        Creates a sell order with a trigger price that automatically executes
+        when the price drops to the trigger level.
+        
+        Args:
+            security_id: Exchange standard ID for the scrip
+            trigger_price: SL trigger price
+            quantity: Order quantity
+            product_type: 'INTRADAY', 'CNC', 'MARGIN', etc.
+            exchange_segment: 'NSE_EQ', 'NSE_FNO', 'BSE_EQ', 'BSE_FNO'
+            
+        Returns:
+            Dict with success status, order_id, and details
+        """
+        try:
+            if not self.access_token or not self.client_id:
+                self.last_error = "Missing access_token or client_id"
+                return {'success': False, 'error': self.last_error}
+            
+            order_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            url = f"{self.base_url}/orders"
+            headers = {
+                "access-token": self.access_token,
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "dhanClientId": self.client_id,
+                "transactionType": self.TRANSACTION_SELL,
+                "exchangeSegment": exchange_segment,
+                "productType": product_type,
+                "orderType": self.ORDER_TYPE_STOP_LOSS,
+                "validity": "DAY",
+                "securityId": security_id,
+                "quantity": str(quantity),
+                "price": "",
+                "triggerPrice": str(trigger_price),
+                "disclosedQuantity": "",
+                "afterMarketOrder": False
+            }
+            
+            logging.info(f"[place_stoploss_order] Placing SL order: {security_id} @ {trigger_price:.2f}")
+            
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            data = response.json()
+            
+            if response.status_code == 200 or response.status_code == 201:
+                order_id = data.get('data', {}).get('orderId')
+                if order_id:
+                    logging.info(f"✅ SL Order placed: {order_id} | {security_id} @ {trigger_price:.2f}")
+                    return {
+                        'success': True,
+                        'order_id': order_id,
+                        'symbol': security_id,
+                        'trigger_price': trigger_price,
+                        'quantity': quantity,
+                        'order_type': 'STOPLOSS'
+                    }
+            
+            error_msg = data.get('errorMessage') or data.get('message') or 'Unknown error'
+            logging.error(f"❌ SL Order failed: {error_msg}")
+            return {'success': False, 'error': error_msg, 'symbol': security_id}
+            
+        except Exception as e:
+            logging.error(f"❌ Exception placing SL order: {e}", exc_info=True)
+            return {'success': False, 'error': str(e), 'symbol': security_id}
+    
+    def modify_stoploss_order(self, order_id: str, new_trigger_price: float,
+                             quantity: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Modify an existing stop loss order with a new trigger price.
+        
+        Used for trailing SL - updates the trigger price as price moves favorably.
+        
+        Args:
+            order_id: Order ID to modify
+            new_trigger_price: New SL trigger price
+            quantity: Optional quantity update
+            
+        Returns:
+            Dict with success status and details
+        """
+        try:
+            if not self.access_token or not self.client_id:
+                self.last_error = "Missing access_token or client_id"
+                return {'success': False, 'error': self.last_error}
+            
+            url = f"{self.base_url}/orders/{order_id}"
+            headers = {
+                "access-token": self.access_token,
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "dhanClientId": self.client_id,
+                "orderId": order_id,
+                "triggerPrice": str(new_trigger_price)
+            }
+            
+            if quantity is not None:
+                payload["quantity"] = str(quantity)
+            
+            logging.info(f"[modify_stoploss_order] Modifying SL order {order_id} to {new_trigger_price:.2f}")
+            
+            response = requests.put(url, headers=headers, json=payload, timeout=30)
+            data = response.json()
+            
+            if response.status_code == 200:
+                logging.info(f"✅ SL Order modified: {order_id} -> Trigger: {new_trigger_price:.2f}")
+                return {
+                    'success': True,
+                    'order_id': order_id,
+                    'new_trigger_price': new_trigger_price
+                }
+            
+            error_msg = data.get('errorMessage') or 'Modification failed'
+            logging.error(f"❌ Modify failed: {error_msg}")
+            return {'success': False, 'error': error_msg, 'order_id': order_id}
+            
+        except Exception as e:
+            logging.error(f"❌ Exception modifying SL order: {e}", exc_info=True)
+            return {'success': False, 'error': str(e), 'order_id': order_id}
+    
     def get_order_book(self) -> Dict[str, Any]:
         """
         Get all orders for the day.
@@ -585,6 +714,76 @@ class DhanOrderService:
                 'success': False,
                 'error': str(e)
             }
+    
+    def get_lot_size(self, symbol: str) -> int:
+        """
+        Get the lot size (quantity multiplier) for a symbol.
+        
+        Args:
+            symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
+            
+        Returns:
+            Lot size (default: 1 if not found)
+        """
+        # Default lot sizes for Indian options as of Jan 2026
+        default_lots = {
+            'NIFTY': 65,
+            'BANKNIFTY': 25,
+            'FINNIFTY': 40,
+            'MIDCPNIFTY': 50,
+            'SENSEX': 10,
+            'BANKEX': 15
+        }
+        
+        try:
+            lot_size = default_lots.get(symbol, 1)
+            logging.info(f"✓ Lot size for {symbol}: {lot_size}")
+            return lot_size
+            
+        except Exception as e:
+            logging.error(f"Error getting lot size for {symbol}: {e}")
+            return default_lots.get(symbol, 1)
+    
+    def get_option_symbol(self, symbol: str, strike: int, option_type: str) -> str:
+        """
+        Get the security ID for an option on Dhan (Dhan uses numeric security IDs).
+        
+        For now returns a formatted string - in production you'd fetch from Dhan's symbol master.
+        
+        Args:
+            symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
+            strike: Strike price
+            option_type: 'CE' or 'PE'
+            
+        Returns:
+            Option identifier or empty string if not found
+        """
+        try:
+            # Get current month and year
+            from datetime import datetime
+            now = datetime.now()
+            year = now.strftime('%y')
+            month = now.strftime('%b').upper()
+            
+            # Format for reference: NIFTY24JAN25650CE
+            option_symbol = f"{symbol}{year}{month}{strike}{option_type}"
+            logging.info(f"✓ Option symbol: {option_symbol}")
+            return option_symbol
+            
+        except Exception as e:
+            logging.error(f"Error getting option symbol: {e}")
+            return ""
+    
+    def _get_lot_size_fallback(self) -> Dict[str, int]:
+        """Fallback lot sizes"""
+        return {
+            'NIFTY': 65,
+            'BANKNIFTY': 25,
+            'FINNIFTY': 40,
+            'MIDCPNIFTY': 50,
+            'SENSEX': 10,
+            'BANKEX': 15
+        }
     
     def _save_token(self):
         """Save access token to .env file"""

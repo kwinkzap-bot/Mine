@@ -567,6 +567,136 @@ class KotakOrderService:
                 'error': str(e)
             }
     
+    def place_stoploss_order(self, symbol: str, trigger_price: float, 
+                            quantity: int, product_type: str = 'MIS') -> Dict[str, Any]:
+        """
+        Place a stop loss (sell) order on Kotak Neo platform.
+        
+        Creates a sell order with a trigger price that automatically executes
+        when the price drops to the trigger level.
+        
+        Args:
+            symbol: Trading symbol (e.g., "NIFTY24JAN21000CE")
+            trigger_price: SL trigger price
+            quantity: Order quantity
+            product_type: 'MIS', 'CNC', 'NRML'
+            
+        Returns:
+            Dict with success status, order_id, and details
+        """
+        try:
+            if not self.trading_token or not self.base_url:
+                logging.error("[place_stoploss_order] Not authenticated. Call authenticate() first.")
+                return {
+                    'success': False,
+                    'error': 'Not authenticated - missing trading_token'
+                }
+            
+            url = f"{self.base_url}/orders"
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": self.trading_token
+            }
+            
+            payload = {
+                "symbol": symbol,
+                "quantity": quantity,
+                "orderType": "SL",  # Stop Loss order
+                "transactionType": "SELL",
+                "productType": product_type,
+                "triggerPrice": trigger_price,
+                "validity": "DAY"
+            }
+            
+            logging.info(f"[place_stoploss_order] Placing SL order: {symbol} @ {trigger_price:.2f}")
+            
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            if response.status_code in [200, 201]:
+                # Kotak typically returns order ID in response
+                order_id = data.get('orderId') or data.get('data', {}).get('orderId')
+                if order_id:
+                    logging.info(f"✅ SL Order placed: {order_id} | {symbol} @ {trigger_price:.2f}")
+                    return {
+                        'success': True,
+                        'order_id': order_id,
+                        'symbol': symbol,
+                        'trigger_price': trigger_price,
+                        'quantity': quantity,
+                        'order_type': 'STOPLOSS'
+                    }
+            
+            error_msg = data.get('message') or 'Order placement failed'
+            logging.error(f"❌ SL Order failed: {error_msg}")
+            return {'success': False, 'error': error_msg, 'symbol': symbol}
+            
+        except Exception as e:
+            logging.error(f"❌ Exception placing SL order: {e}", exc_info=True)
+            return {'success': False, 'error': str(e), 'symbol': symbol}
+    
+    def modify_stoploss_order(self, order_id: str, new_trigger_price: float,
+                             quantity: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Modify an existing stop loss order with a new trigger price.
+        
+        Used for trailing SL - updates the trigger price as price moves favorably.
+        
+        Args:
+            order_id: Order ID to modify
+            new_trigger_price: New SL trigger price
+            quantity: Optional quantity update
+            
+        Returns:
+            Dict with success status and details
+        """
+        try:
+            if not self.trading_token or not self.base_url:
+                logging.error("[modify_stoploss_order] Not authenticated. Call authenticate() first.")
+                return {
+                    'success': False,
+                    'error': 'Not authenticated - missing trading_token'
+                }
+            
+            url = f"{self.base_url}/orders/{order_id}"
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": self.trading_token
+            }
+            
+            payload: Dict[str, Any] = {
+                "orderId": order_id,
+                "triggerPrice": new_trigger_price
+            }
+            
+            if quantity is not None:
+                payload["quantity"] = quantity
+            
+            logging.info(f"[modify_stoploss_order] Modifying SL order {order_id} to {new_trigger_price:.2f}")
+            
+            response = requests.put(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            if response.status_code in [200, 201]:
+                logging.info(f"✅ SL Order modified: {order_id} -> Trigger: {new_trigger_price:.2f}")
+                return {
+                    'success': True,
+                    'order_id': order_id,
+                    'new_trigger_price': new_trigger_price
+                }
+            
+            error_msg = data.get('message') or 'Modification failed'
+            logging.error(f"❌ Modify failed: {error_msg}")
+            return {'success': False, 'error': error_msg, 'order_id': order_id}
+            
+        except Exception as e:
+            logging.error(f"❌ Exception modifying SL order: {e}", exc_info=True)
+            return {'success': False, 'error': str(e), 'order_id': order_id}
+    
     def get_order_status(self, order_id: str) -> Dict[str, Any]:
         """
         Get status of an order from Kotak Neo.
@@ -766,3 +896,71 @@ class KotakOrderService:
         except Exception as e:
             logging.warning(f"[_get_option_price] Error fetching price: {e}")
             return None
+    
+    def get_lot_size(self, symbol: str) -> int:
+        """
+        Get the lot size (quantity multiplier) for a symbol.
+        
+        Args:
+            symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
+            
+        Returns:
+            Lot size (default: 1 if not found)
+        """
+        # Default lot sizes for Indian options as of Jan 2026
+        default_lots = {
+            'NIFTY': 65,
+            'BANKNIFTY': 25,
+            'FINNIFTY': 40,
+            'MIDCPNIFTY': 50,
+            'SENSEX': 10,
+            'BANKEX': 15
+        }
+        
+        try:
+            lot_size = default_lots.get(symbol, 1)
+            logging.info(f"✓ Lot size for {symbol}: {lot_size}")
+            return lot_size
+            
+        except Exception as e:
+            logging.error(f"Error getting lot size for {symbol}: {e}")
+            return default_lots.get(symbol, 1)
+    
+    def get_option_symbol(self, symbol: str, strike: int, option_type: str) -> str:
+        """
+        Get the trading symbol for an option on Kotak Neo.
+        
+        Kotak format: NIFTY24JAN25650CE (without exchange prefix)
+        
+        Args:
+            symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
+            strike: Strike price
+            option_type: 'CE' or 'PE'
+            
+        Returns:
+            Trading symbol or empty string if not found
+        """
+        try:
+            # Get current month and year
+            from datetime import datetime
+            now = datetime.now()
+            year = now.strftime('%y')
+            month = now.strftime('%b').upper()
+            
+            # Kotak format: NIFTY24JAN25650CE
+            trading_symbol = f"{symbol}{year}{month}{strike}{option_type}"
+            logging.info(f"✓ Option symbol: {trading_symbol}")
+            return trading_symbol
+            
+        except Exception as e:
+            logging.error(f"Error getting option symbol: {e}")
+            return ""
+    
+    def verify_credentials(self) -> bool:
+        """
+        Verify that access token and authentication are valid.
+        
+        Returns:
+            True if authenticated, False otherwise
+        """
+        return bool(self.trading_token and self.base_url)
