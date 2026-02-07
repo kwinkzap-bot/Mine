@@ -2051,125 +2051,18 @@ def place_intraday_920_order() -> EndpointResponse:
                 return jsonify(result), 400
         
         elif broker == 'dhan':
-            from trading_app.service.dhan_order_services import DhanOrderService
-            dhan_service = DhanOrderService()
-            
-            # Check if authenticated
-            if not dhan_service.access_token:
-                return jsonify({
-                    'success': False,
-                    'error': 'Dhan credentials not configured. Please authenticate first.'
-                }), 401
-            
-            # Get the Kite service to look up option symbol
-            kite = get_kite()
-            if not kite:
-                return jsonify({
-                    'success': False,
-                    'error': 'Kite connection required for Dhan symbol lookup'
-                }), 401
-            
-            from trading_app.service.kite_order_services import KiteService
-            kite_service = KiteService(kite_instance=kite)
-            
-            # Get option symbol using Kite (trading symbol like NIFTY24JAN25000CE)
-            option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
-            
-            if not option_symbol:
-                return jsonify({
-                    'success': False,
-                    'error': f'Could not find option symbol for {symbol} {strike} {option_type}'
-                }), 400
-            
-            # Get instrument token from Kite for the option symbol
-            # This token is used as security_id for Dhan
-            from trading_app.app.intraday_option.Kite_data_fetch_services import KiteDataFetchService
-            kite_data_service = KiteDataFetchService(kite)
-            security_id = kite_data_service.get_symbol_token(option_symbol, exchange='NFO')
-            
-            if not security_id:
-                return jsonify({
-                    'success': False,
-                    'error': f'Could not find security ID for {option_symbol}. Please try again.'
-                }), 400
-            
-            lot_size = dhan_service.get_lot_size(symbol)
-            order_quantity = (quantity or 1) * lot_size
-            
-            # Map action to transaction type
-            transaction_type = 'BUY' if action == 'BUY' else 'SELL'
-            
-            # Use place_order with the security ID
-            result = dhan_service.place_order(
-                security_id=str(security_id),
-                transaction_type=transaction_type,
-                quantity=order_quantity,
-                order_type='MARKET',
-                product_type='INTRADAY'
-            )
-            
-            if result['success']:
-                logger.info(f"Dhan - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
-                return jsonify(result), 200
-            else:
-                logger.warning(f"Dhan - Order placement failed: {result.get('error')}")
-                return jsonify(result), 400
+            logger.warning("[Dhan] Option order placement not yet supported - requires Dhan instrument master")
+            return jsonify({
+                'success': False,
+                'error': 'Dhan option trading is not yet supported. Currently only Kite and Kotak Neo support option orders. Please select a different broker.'
+            }), 400
         
         elif broker == 'fyers':
-            from trading_app.service.fyers_order_services import FyersOrderService
-            fyers_service = FyersOrderService()
-            
-            # Check if authenticated
-            if not fyers_service.access_token:
-                return jsonify({
-                    'success': False,
-                    'error': 'Fyers credentials not configured. Please authenticate first.'
-                }), 401
-            
-            # Get the Kite service to look up option symbol
-            kite = get_kite()
-            if not kite:
-                return jsonify({
-                    'success': False,
-                    'error': 'Kite connection required for Fyers symbol lookup'
-                }), 401
-            
-            from trading_app.service.kite_order_services import KiteService
-            kite_service = KiteService(kite_instance=kite)
-            
-            # Get option symbol using Kite (trading symbol like NIFTY24JAN25000CE)
-            option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
-            
-            if not option_symbol:
-                return jsonify({
-                    'success': False,
-                    'error': f'Could not find option symbol for {symbol} {strike} {option_type}'
-                }), 400
-            
-            # Convert to Fyers format (e.g., NSE:NIFTY24JAN25000CE)
-            fyers_symbol = f"NSE:{option_symbol}"
-            
-            lot_size = fyers_service.get_lot_size(symbol)
-            order_quantity = (quantity or 1) * lot_size
-            
-            # Map action to side (1=BUY, -1=SELL)
-            side = 1 if action == 'BUY' else -1
-            
-            # Use place_order with the Fyers symbol format
-            result = fyers_service.place_order(
-                symbol=fyers_symbol,
-                side=side,
-                quantity=order_quantity,
-                order_type=2,  # 2=MARKET
-                product_type='INTRADAY'
-            )
-            
-            if result['success']:
-                logger.info(f"Fyers - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
-                return jsonify(result), 200
-            else:
-                logger.warning(f"Fyers - Order placement failed: {result.get('error')}")
-                return jsonify(result), 400
+            logger.warning("[Fyers] Option order placement not yet supported - requires Fyers symbol mapping")
+            return jsonify({
+                'success': False,
+                'error': 'Fyers option trading is not yet supported. Currently only Kite and Kotak Neo support option orders. Please select a different broker.'
+            }), 400
         
         # Should never reach here if validation is correct
         return jsonify({
