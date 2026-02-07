@@ -2012,16 +2012,25 @@ def place_intraday_920_order() -> EndpointResponse:
         
         elif broker == 'kotak_neo':
             from trading_app.service.kotak_order_services import KotakOrderService
-            kotak_service = KotakOrderService()
             
-            # Check if authenticated - Kotak requires 2-step auth with TOTP which is time-sensitive
-            # User must login via the Kotak Neo login page first
-            if not kotak_service.trading_token or not kotak_service.base_url:
-                logger.warning("[Kotak Neo] Not authenticated - user must login via Kotak Neo login page first")
+            # Get stored credentials from environment (set during login)
+            trading_token = os.getenv('KOTAK_TRADING_TOKEN')
+            trading_sid = os.getenv('KOTAK_TRADING_SID')
+            base_url = os.getenv('KOTAK_BASE_URL')
+            
+            # Check if authenticated
+            if not trading_token or not base_url:
+                logger.warning("[Kotak Neo] Not authenticated - trading_token or base_url missing")
                 return jsonify({
                     'success': False,
                     'error': 'Kotak Neo not authenticated. Please login via the Kotak Neo login page first (Settings > Brokers > Kotak Neo).'
                 }), 401
+            
+            # Create service with authenticated credentials
+            kotak_service = KotakOrderService(access_token=trading_token)
+            kotak_service.trading_token = trading_token
+            kotak_service.trading_sid = trading_sid
+            kotak_service.base_url = base_url
             
             # Map action to transaction_type for Kotak
             transaction_type = 'BUY' if action == 'BUY' else 'SELL'
