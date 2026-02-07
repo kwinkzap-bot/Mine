@@ -167,7 +167,7 @@ class KotakOrderService:
             
             login_response = None
             try:
-                login_response = requests.post(login_url, headers=login_headers, json=login_payload, timeout=30)
+                login_response = requests.post(login_url, headers=login_headers, json=login_payload, timeout=10)
                 login_data = login_response.json()
                 
                 logging.info(f"[authenticate] Login status code: {login_response.status_code}")
@@ -272,7 +272,7 @@ class KotakOrderService:
             
             validate_response = None
             try:
-                validate_response = requests.post(validate_url, headers=validate_headers, json=validate_payload, timeout=30)
+                validate_response = requests.post(validate_url, headers=validate_headers, json=validate_payload, timeout=10)
                 validate_data = validate_response.json()
                 
                 logging.info(f"[authenticate] Step 2 status code: {validate_response.status_code}")

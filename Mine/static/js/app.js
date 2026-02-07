@@ -216,13 +216,27 @@ window.submitKotakLogin = async function() {
             totp_secret: totpSecret
         };
         
+        // Set a 60-second frontend timeout to prevent indefinite waiting
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+            controller.abort();
+            if (statusDiv) {
+                statusDiv.style.background = '#f8d7da';
+                statusDiv.style.color = '#721c24';
+                statusDiv.textContent = '✗ Request timeout - Kotak API not responding. Try again.';
+            }
+        }, 60000);
+        
         const response = await fetch(window.kotakLoginUrl || '/auth/login/kotak', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(requestBody)
+            body: JSON.stringify(requestBody),
+            signal: controller.signal
         });
+        
+        clearTimeout(timeoutId);
         
         const data = await response.json();
         
@@ -261,11 +275,16 @@ window.submitKotakLogin = async function() {
         if (statusDiv) {
             statusDiv.style.background = '#f8d7da';
             statusDiv.style.color = '#721c24';
-            statusDiv.textContent = `✗ Error: ${error.message}`;
+            if (error.name === 'AbortError') {
+                statusDiv.textContent = '✗ Request timeout - Kotak API not responding. Please try again.';
+            } else {
+                statusDiv.textContent = `✗ Error: ${error.message}`;
+            }
         }
         
         if (typeof showNotification === 'function') {
-            showNotification('Network error during authentication', 'error');
+            const msg = error.name === 'AbortError' ? 'Request timeout - please try again' : 'Network error during authentication';
+            showNotification(msg, 'error');
         }
     }
 };
