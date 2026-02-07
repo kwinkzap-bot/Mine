@@ -175,14 +175,48 @@ class KotakOrderService:
                 
                 if login_response.status_code != 200:
                     # Extract error message from various possible formats
-                    error_msg = (
-                        login_data.get('message') or 
-                        login_data.get('errMsg') or 
-                        login_data.get('error') or
-                        login_data.get('msg') or
-                        f"HTTP {login_response.status_code}"
-                    )
-                    self.last_error = f"Step 1 Login failed: {error_msg}"
+                    error_data = login_data if isinstance(login_data, dict) else {}
+                    
+                    # Check for Kotak-specific error codes in nested structure
+                    error_msg = None
+                    if isinstance(error_data.get('data'), list) and len(error_data['data']) > 0:
+                        # Kotak returns errors in data array: [{'code': '10508', 'message': '...'}]
+                        error_item = error_data['data'][0]
+                        error_code = error_item.get('code', '')
+                        error_msg = error_item.get('message', '')
+                        
+                        # Provide user-friendly messages based on error code
+                        if error_code == '10508':
+                            self.last_error = (
+                                "TOTP not enabled on your Kotak account. "
+                                "Please enable 2-Factor Authentication in Kotak Neo app: "
+                                "Settings → Security → Enable TOTP/Authenticator App"
+                            )
+                        elif error_code == '10509':
+                            self.last_error = (
+                                "Invalid OTP. Please check: "
+                                "1) OTP must be from authenticator app (expires every 30 sec), "
+                                "2) System clock must be synchronized, "
+                                "3) Try with a fresh OTP"
+                            )
+                        elif error_code == '10510':
+                            self.last_error = (
+                                "MPIN authentication failed. Please verify your MPIN is correct "
+                                "(the 6-digit PIN used in Kotak Neo app)"
+                            )
+                        else:
+                            self.last_error = f"Kotak API Error {error_code}: {error_msg}"
+                    else:
+                        # Fallback to standard error extraction
+                        error_msg = (
+                            error_data.get('message') or 
+                            error_data.get('errMsg') or 
+                            error_data.get('error') or
+                            error_data.get('msg') or
+                            f"HTTP {login_response.status_code}"
+                        )
+                        self.last_error = f"Login failed: {error_msg}"
+                    
                     logging.error(f"[authenticate] {self.last_error}")
                     logging.error(f"[authenticate] Full response: {login_response.text}")
                     return False
@@ -279,14 +313,36 @@ class KotakOrderService:
                 logging.info(f"[authenticate] Step 2 response: {validate_data}")
                 
                 if validate_response.status_code != 200:
-                    error_msg = (
-                        validate_data.get('message') or 
-                        validate_data.get('errMsg') or 
-                        validate_data.get('error') or
-                        validate_data.get('msg') or
-                        f"HTTP {validate_response.status_code}"
-                    )
-                    self.last_error = f"Step 2: {error_msg}"
+                    # Extract error message from various possible formats
+                    error_data = validate_data if isinstance(validate_data, dict) else {}
+                    
+                    # Check for Kotak-specific error codes in nested structure
+                    error_msg = None
+                    if isinstance(error_data.get('data'), list) and len(error_data['data']) > 0:
+                        # Kotak returns errors in data array
+                        error_item = error_data['data'][0]
+                        error_code = error_item.get('code', '')
+                        error_msg = error_item.get('message', '')
+                        
+                        if error_code == '10510':
+                            self.last_error = (
+                                "MPIN authentication failed. Please verify: "
+                                "1) MPIN is the 6-digit trading PIN from Kotak Neo app, "
+                                "2) Check if MPIN is correct, "
+                                "3) Try again"
+                            )
+                        else:
+                            self.last_error = f"Step 2 error {error_code}: {error_msg}"
+                    else:
+                        error_msg = (
+                            error_data.get('message') or 
+                            error_data.get('errMsg') or 
+                            error_data.get('error') or
+                            error_data.get('msg') or
+                            f"HTTP {validate_response.status_code}"
+                        )
+                        self.last_error = f"Step 2: {error_msg}"
+                    
                     logging.error(f"[authenticate] {self.last_error}")
                     logging.error(f"[authenticate] Full response: {validate_response.text}")
                     return False
@@ -477,6 +533,55 @@ class KotakOrderService:
         
         logging.info(f"[diagnose] Diagnostic results: {result}")
         return result
+    
+    def get_setup_instructions(self) -> Dict[str, str]:
+        """
+        Get setup instructions for enabling TOTP and getting credentials.
+        
+        Returns:
+            Dict with setup instructions for each credential
+        """
+        return {
+            'TOTP_SETUP': (
+                'To enable TOTP (2-Factor Authentication) on Kotak Neo:\n'
+                '1. Open Kotak Neo app or web\n'
+                '2. Go to Settings → Security → Two-Factor Authentication\n'
+                '3. Click "Enable TOTP" or "Setup Authenticator"\n'
+                '4. Scan QR code with Google Authenticator or Microsoft Authenticator app\n'
+                '5. Save the backup codes in a safe place\n'
+                '6. Enter the 6-digit code from authenticator to confirm\n'
+                '7. You can now use TOTP for API authentication'
+            ),
+            'GET_ACCESS_TOKEN': (
+                'To get your Access Token from Kotak Neo API:\n'
+                '1. Go to https://myapi.kotaksecurities.com/\n'
+                '2. Login with your Kotak account\n'
+                '3. Go to API Settings or Dashboard\n'
+                '4. Find "Access Token" or "API Key"\n'
+                '5. Copy and save it to KOTAK_ACCESS_TOKEN in .env'
+            ),
+            'FIND_UCC': (
+                'To find your UCC (Unique Client Code):\n'
+                '1. Open Kotak Neo app\n'
+                '2. Go to Profile → Account Details\n'
+                '3. Look for "Client Code" or "UCC" (usually 5 characters like XV5PK)\n'
+                '4. Save to KOTAK_UCC in .env'
+            ),
+            'FIND_MOBILE': (
+                'Mobile Number Requirements:\n'
+                '1. Use the phone number registered with Kotak\n'
+                '2. Remove any +91 prefix - use only 10 digits\n'
+                '3. Example: 9876543210 (not +919876543210)\n'
+                '4. Save to KOTAK_MOBILE_NUMBER in .env'
+            ),
+            'FIND_MPIN': (
+                'MPIN (Mobile PIN) Requirements:\n'
+                '1. MPIN is the 6-digit PIN used in Kotak Neo app to authorize trades\n'
+                '2. NOT your login password\n'
+                '3. If you forgot it, reset it in Kotak Neo app: Settings → Security → Reset MPIN\n'
+                '4. Save to KOTAK_MPIN in .env'
+            )
+        }
     
     def place_order(self, tradingsymbol: str, transaction_type: str, price: float,
                    quantity: int, order_type: str = 'MKT', product_type: str = 'MIS',
