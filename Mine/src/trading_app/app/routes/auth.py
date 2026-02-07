@@ -583,290 +583,259 @@ def _update_dhan_env_credentials(access_token: Optional[str] = None,
         return False
 
 
-@auth_bp.route('/login/fyers/callback')
+@auth_bp.route('/login/fyers')
+def fyers_login():
+    """
+    Redirect to Fyers OAuth login (similar to Kite login).
+    Initiates OAuth 2.0 flow with automatic token management.
+    """
+    logger.info("[Fyers Login] Login request received")
+    
+    app_id = os.getenv('FYERS_APP_ID')
+    secret_key = os.getenv('FYERS_SECRET_KEY')
+    
+    if not app_id or not secret_key:
+        logger.error("[Fyers Login] FYERS_APP_ID or FYERS_SECRET_KEY not configured")
+        return jsonify({'error': 'FYERS_APP_ID or FYERS_SECRET_KEY not configured'}), 500
+    
+    try:
+        from trading_app.service.fyers_order_services import FyersOrderService
+        
+        # Initialize Fyers service
+        fyers_service = FyersOrderService(app_id=app_id)
+        
+        # Generate OAuth URL
+        auth_url = fyers_service.generate_auth_code_url()
+        
+        if not auth_url:
+            logger.error("[Fyers Login] Failed to generate OAuth URL")
+            return jsonify({'error': 'Failed to generate OAuth URL'}), 500
+        
+        logger.info(f"[Fyers Login] Redirecting to Fyers OAuth: {auth_url[:50]}...")
+        
+        # Store app_id in session for use in callback
+        session['fyers_app_id'] = app_id
+        session.permanent = True
+        
+        return redirect(auth_url)
+        
+    except Exception as e:
+        logger.error(f"[Fyers Login] Error: {e}", exc_info=True)
+        return jsonify({'error': f'Login failed: {str(e)}'}), 500
+@auth_bp.route('/callback/fyers')
 def fyers_oauth_callback():
     """
-    Handle Fyers OAuth callback.
-    Fyers redirects here after user authorizes.
+    Handle Fyers OAuth callback (similar to Kite callback).
+    Fyers redirects here after user authorizes with auth code.
+    Automatically exchanges code for access token and stores in .env.
     
     Query parameters:
-    - code: Authorization code (use to get access token)
-    - state: State parameter (for security)
+    - code: Authorization code (required)
+    - state: State parameter (for security validation)
     """
     auth_code = request.args.get('code', '').strip()
     state = request.args.get('state', '').strip()
     error = request.args.get('error', '').strip()
     error_description = request.args.get('error_description', '').strip()
     
-    logger.info(f"[Fyers OAuth Callback] Received - code: {auth_code[:10] if auth_code else 'None'}..., state: {state}, error: {error}")
+    logger.info(f"[Fyers Callback] Received OAuth callback - error: {error if error else 'None'}")
     
+    # Handle OAuth errors
     if error:
-        logger.error(f"[Fyers OAuth Callback] Error from Fyers: {error} - {error_description}")
-        return jsonify({
-            'success': False,
-            'error': f'Fyers authorization failed: {error}',
-            'error_description': error_description
-        }), 400
+        logger.error(f"[Fyers Callback] Fyers OAuth error: {error} - {error_description}")
+        return render_template('auth_error.html', 
+                             error=f'Fyers authorization failed: {error}',
+                             error_description=error_description), 400
     
     if not auth_code:
-        logger.error("[Fyers OAuth Callback] No auth code received")
-        return jsonify({
-            'success': False,
-            'error': 'No authorization code received from Fyers'
-        }), 400
+        logger.error("[Fyers Callback] No auth code received")
+        return render_template('auth_error.html', 
+                             error='No authorization code received from Fyers'), 400
     
     try:
         from trading_app.service.fyers_order_services import FyersOrderService
         
-        logger.info("[Fyers OAuth Callback] Exchanging auth code for access token...")
+        logger.info(f"[Fyers Callback] Exchanging auth code for access token...")
         
+        # Initialize Fyers service (will read credentials from env)
         fyers_service = FyersOrderService()
+        
+        # Exchange auth code for access token
         if fyers_service.generate_access_token(auth_code):
-            session['fyers_access_token'] = fyers_service.access_token
+            access_token = fyers_service.access_token
+            
+            # Store in session
+            session['fyers_access_token'] = access_token
             session['fyers_authenticated'] = True
             session.permanent = True
             
-            if fyers_service.access_token:
-                os.environ['FYERS_ACCESS_TOKEN'] = fyers_service.access_token
+            # Store in environment
+            if access_token:
+                os.environ['FYERS_ACCESS_TOKEN'] = access_token
+                
+                # Update .env file (like Kite callback does)
+                _update_fyers_env_credentials(access_token=access_token)
+                
+                logger.info(f"[Fyers Callback] ✅ Authentication successful")
+                logger.info(f"[Fyers Callback] Access token: {access_token[:30]}...")
             
-            _update_fyers_env_credentials(access_token=fyers_service.access_token)
-            
-            logger.info("[Fyers OAuth Callback] ✅ Successfully authenticated")
-            
-            # Show success and redirect
-            return '''
-            <html>
-                <head>
-                    <title>Fyers Authentication Success</title>
-                    <script>
-                        window.opener.postMessage({
-                            type: 'fyers_auth_success',
-                            message: 'Successfully authenticated with Fyers'
-                        }, '*');
-                        setTimeout(() => window.close(), 1500);
-                    </script>
-                </head>
-                <body style="display: flex; align-items: center; justify-content: center; height: 100vh; font-family: Arial;">
-                    <div style="text-align: center;">
-                        <h2 style="color: #28a745;">✓ Authentication Successful!</h2>
-                        <p>You can close this window. Redirecting...</p>
-                    </div>
-                </body>
-            </html>
-            '''
+            # Redirect to home page (like Kite callback)
+            return redirect(url_for('pages.index'))
         else:
             error_msg = fyers_service.last_error or 'Failed to generate access token'
-            logger.error(f"[Fyers OAuth Callback] Token generation failed: {error_msg}")
+            logger.error(f"[Fyers Callback] Token generation failed: {error_msg}")
             
-            return jsonify({
-                'success': False,
-                'error': error_msg
-            }), 401
+            return render_template('auth_error.html', 
+                                 error='Token generation failed',
+                                 error_description=error_msg), 401
             
     except Exception as e:
-        logger.error(f"[Fyers OAuth Callback] Error: {e}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': f'OAuth callback processing failed: {str(e)}'
-        }), 500
+        logger.error(f"[Fyers Callback] Error: {e}", exc_info=True)
+        return render_template('auth_error.html', 
+                             error='OAuth callback processing failed',
+                             error_description=str(e)), 500
 
 
-@auth_bp.route('/login/fyers', methods=['GET', 'POST'])
+@auth_bp.route('/login/fyers')
 def login_fyers():
-    """Authenticate with Fyers using OAuth flow or access token."""
+    """
+    Fyers OAuth login - works exactly like Kite login.
     
-    if request.method == 'GET':
-        # Check if auth_code is in query params (OAuth callback)
-        auth_code = request.args.get('auth_code')
-        
-        if auth_code:
-            # Handle OAuth callback
-            try:
-                from trading_app.service.fyers_order_services import FyersOrderService
-                fyers_service = FyersOrderService()
-                
-                if fyers_service.generate_access_token(auth_code):
-                    session['fyers_access_token'] = fyers_service.access_token
-                    session['fyers_authenticated'] = True
-                    session.permanent = True
-                    
-                    if fyers_service.access_token:
-                        os.environ['FYERS_ACCESS_TOKEN'] = fyers_service.access_token
-                    
-                    return redirect(url_for('pages.index'))
-                else:
-                    return jsonify({
-                        'error': fyers_service.last_error or 'Failed to generate access token',
-                        'success': False
-                    }), 401
-            except Exception as e:
-                logger.error(f"Error in Fyers OAuth callback: {e}", exc_info=True)
-                return jsonify({
-                    'error': f'OAuth callback failed: {str(e)}',
-                    'success': False
-                }), 500
-        else:
-            # Return OAuth URL or manual token entry instructions
-            return jsonify({
-                'requires_oauth': True,
-                'message': 'Fyers uses OAuth authentication',
-                'instructions': [
-                    '1. Generate authorization URL by sending POST with app_id',
-                    '2. Open URL in browser and authorize',
-                    '3. Get auth_code from callback',
-                    '4. POST auth_code to generate access token'
-                ],
-                'alternative': 'Or manually enter access_token from Fyers dashboard'
-            })
+    GET /login/fyers
+        → Redirects to Fyers OAuth authorization page
     
-    # POST request - process authentication
-    logger.info("Fyers login request received")
+    Query parameter (from Fyers callback):
+        code: Authorization code
+    """
+    auth_code = request.args.get('code')
     
-    try:
-        data = request.get_json() or {}
+    if auth_code:
+        # This is the callback from Fyers OAuth
+        logger.info("[Fyers Login] Processing OAuth callback with auth code")
         
-        # Check if this is OAuth initiation or direct token entry
-        access_token = data.get('access_token', '').strip()
-        auth_code = data.get('auth_code', '').strip()
-        
-        from trading_app.service.fyers_order_services import FyersOrderService
-        
-        if access_token:
-            # Direct token authentication
-            logger.info("Attempting Fyers authentication with provided token...")
+        try:
+            from trading_app.service.fyers_order_services import FyersOrderService
             
-            fyers_service = FyersOrderService(access_token=access_token)
-            
-            if fyers_service.verify_token():
-                session['fyers_access_token'] = fyers_service.access_token
-                session['fyers_authenticated'] = True
-                session.permanent = True
-                
-                logger.info("✅ Fyers authentication successful")
-                
-                if fyers_service.access_token:
-                    os.environ['FYERS_ACCESS_TOKEN'] = fyers_service.access_token
-                
-                _update_fyers_env_credentials(access_token=fyers_service.access_token)
-                
-                return jsonify({
-                    'success': True,
-                    'message': 'Successfully authenticated with Fyers',
-                    'authenticated': True
-                })
-            else:
-                error_msg = fyers_service.last_error or 'Verification failed'
-                logger.error(f"Fyers authentication failed: {error_msg}")
-                
-                return jsonify({
-                    'error': f'Authentication failed: {error_msg}',
-                    'success': False,
-                    'help': 'Verify that your access token is valid'
-                }), 401
-        
-        elif auth_code:
-            # OAuth flow - exchange auth_code for access_token
-            logger.info("Exchanging auth_code for access token...")
-            
+            # Exchange auth code for access token
             fyers_service = FyersOrderService()
             
             if fyers_service.generate_access_token(auth_code):
-                session['fyers_access_token'] = fyers_service.access_token
+                access_token = fyers_service.access_token
+                
+                # Store in session (like Kite does)
+                session['fyers_access_token'] = access_token
                 session['fyers_authenticated'] = True
                 session.permanent = True
                 
-                logger.info("✅ Fyers access token generated successfully")
+                # Store in environment
+                if access_token:
+                    os.environ['FYERS_ACCESS_TOKEN'] = access_token
+                    
+                    # Update .env file (like Kite callback does)
+                    _update_fyers_env_credentials(access_token=access_token)
+                    
+                    logger.info(f"[Fyers Login] ✅ Successfully authenticated")
+                    logger.info(f"[Fyers Login] Token stored: {access_token[:30]}...")
                 
-                if fyers_service.access_token:
-                    os.environ['FYERS_ACCESS_TOKEN'] = fyers_service.access_token
-                
-                _update_fyers_env_credentials(access_token=fyers_service.access_token)
-                
-                return jsonify({
-                    'success': True,
-                    'message': 'Successfully authenticated with Fyers',
-                    'authenticated': True
-                })
+                # Redirect to home page (like Kite does)
+                return redirect(url_for('pages.index'))
             else:
-                error_msg = fyers_service.last_error or 'Token generation failed'
-                logger.error(f"Fyers token generation failed: {error_msg}")
+                error_msg = fyers_service.last_error or 'Failed to generate access token'
+                logger.error(f"[Fyers Login] Token generation failed: {error_msg}")
                 
-                return jsonify({
-                    'error': f'Token generation failed: {error_msg}',
-                    'success': False
-                }), 401
+                return render_template('auth_error.html',
+                                     error='Fyers Authentication Failed',
+                                     error_description=error_msg), 401
         
-        else:
-            # Generate OAuth URL
-            logger.info("Generating Fyers OAuth URL...")
+        except Exception as e:
+            logger.error(f"[Fyers Login] Error processing callback: {e}", exc_info=True)
+            return render_template('auth_error.html',
+                                 error='Fyers OAuth Error',
+                                 error_description=str(e)), 500
+    
+    else:
+        # Initial login request - redirect to Fyers OAuth
+        logger.info("[Fyers Login] Initiating Fyers OAuth flow...")
+        
+        try:
+            from trading_app.service.fyers_order_services import FyersOrderService
             
             fyers_service = FyersOrderService()
             auth_url = fyers_service.generate_auth_code_url()
             
             if auth_url:
-                return jsonify({
-                    'success': True,
-                    'auth_url': auth_url,
-                    'message': 'Open this URL in browser to authorize',
-                    'instructions': 'After authorization, you will get auth_code. POST it back to /login/fyers'
-                })
+                logger.info(f"[Fyers Login] Redirecting to Fyers OAuth: {auth_url[:80]}...")
+                # Redirect to Fyers OAuth page (like Kite does)
+                return redirect(auth_url)
             else:
-                return jsonify({
-                    'error': 'Failed to generate OAuth URL. Check APP_ID and SECRET_KEY in .env',
-                    'success': False
-                }), 400
+                logger.error("[Fyers Login] Failed to generate auth URL")
+                error_msg = fyers_service.last_error or 'Missing FYERS_APP_ID or FYERS_SECRET_KEY in .env'
+                return render_template('auth_error.html',
+                                     error='Failed to Initialize Fyers Login',
+                                     error_description=error_msg), 400
         
-    except Exception as e:
-        logger.error(f"Error during Fyers login: {e}", exc_info=True)
-        return jsonify({
-            'error': f'Fyers login failed: {str(e)}',
-            'success': False
-        }), 500
+        except Exception as e:
+            logger.error(f"[Fyers Login] Error initiating OAuth: {e}", exc_info=True)
+            return render_template('auth_error.html',
+                                 error='Fyers Login Error',
+                                 error_description=str(e)), 500
 
 
 def _update_fyers_env_credentials(access_token: Optional[str] = None) -> bool:
-    """Update Fyers credentials in .env file.
+    """Update Fyers credentials in .env file (async/non-blocking).
     
     Args:
         access_token: Fyers access token
         
     Returns:
-        True if successful, False otherwise
+        True if update was queued, False if there was an error
     """
     try:
-        env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+        import threading
         
-        if not os.path.exists(env_file):
-            logger.warning(f"Environment file not found: {env_file}")
-            return False
+        def _async_update():
+            try:
+                env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
+                
+                if not os.path.exists(env_file):
+                    logger.warning(f"Environment file not found: {env_file}")
+                    return
+                
+                with open(env_file, 'r') as f:
+                    lines = f.readlines()
+                
+                updated_lines = []
+                found_token = False
+                
+                for line in lines:
+                    if access_token and line.startswith('FYERS_ACCESS_TOKEN='):
+                        updated_lines.append(f'FYERS_ACCESS_TOKEN={access_token}\n')
+                        found_token = True
+                    else:
+                        updated_lines.append(line)
+                
+                if access_token and not found_token:
+                    updated_lines.append(f'\nFYERS_ACCESS_TOKEN={access_token}\n')
+                
+                with open(env_file, 'w') as f:
+                    f.writelines(updated_lines)
+                
+                logger.info(f"✓ .env file updated with Fyers credentials")
+                if access_token:
+                    logger.info(f"  ACCESS_TOKEN: {access_token[:20]}...")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error updating .env file: {e}", exc_info=True)
         
-        with open(env_file, 'r') as f:
-            lines = f.readlines()
+        # Run update in background thread to avoid blocking HTTP response
+        update_thread = threading.Thread(target=_async_update, daemon=True)
+        update_thread.start()
         
-        updated_lines = []
-        found_token = False
-        
-        for line in lines:
-            if access_token and line.startswith('FYERS_ACCESS_TOKEN='):
-                updated_lines.append(f'FYERS_ACCESS_TOKEN={access_token}\n')
-                found_token = True
-            else:
-                updated_lines.append(line)
-        
-        if access_token and not found_token:
-            updated_lines.append(f'\nFYERS_ACCESS_TOKEN={access_token}\n')
-        
-        with open(env_file, 'w') as f:
-            f.writelines(updated_lines)
-        
-        logger.info(f"✓ .env file updated with Fyers credentials")
-        if access_token:
-            logger.info(f"  ACCESS_TOKEN: {access_token[:20]}...")
-        
+        logger.info("[_update_fyers_env_credentials] Queued .env update in background")
         return True
         
     except Exception as e:
-        logger.error(f"❌ Error updating .env file with Fyers credentials: {e}", exc_info=True)
+        logger.error(f"❌ Error queuing .env update: {e}", exc_info=True)
         return False
 
 

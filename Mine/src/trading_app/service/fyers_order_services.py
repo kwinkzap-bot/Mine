@@ -954,26 +954,40 @@ class FyersOrderService:
         return bool(self.access_token)
     
     def _save_token(self, access_token: str):
-        """Save access token to .env file"""
+        """Save access token to .env file (async/non-blocking)"""
         try:
-            env_path = os.path.join(os.path.dirname(__file__), '../../../.env')
+            import threading
             
-            with open(env_path, 'r') as f:
-                content = f.read()
+            def _async_save():
+                try:
+                    env_path = os.path.join(os.path.dirname(__file__), '../../../.env')
+                    
+                    if not os.path.exists(env_path):
+                        logging.warning(f"[_save_token] .env file not found: {env_path}")
+                        return
+                    
+                    with open(env_path, 'r') as f:
+                        content = f.read()
+                    
+                    if 'FYERS_ACCESS_TOKEN=' in content:
+                        lines = content.split('\n')
+                        for i, line in enumerate(lines):
+                            if line.startswith('FYERS_ACCESS_TOKEN='):
+                                lines[i] = f'FYERS_ACCESS_TOKEN={access_token}'
+                                break
+                        content = '\n'.join(lines)
+                    else:
+                        content += f'\nFYERS_ACCESS_TOKEN={access_token}'
+                    
+                    with open(env_path, 'w') as f:
+                        f.write(content)
+                    
+                    logging.info("[_save_token] ✓ Access token saved to .env")
+                except Exception as e:
+                    logging.warning(f"[_save_token] Failed to save: {e}")
             
-            # Update access token
-            if 'FYERS_ACCESS_TOKEN=' in content:
-                lines = content.split('\n')
-                for i, line in enumerate(lines):
-                    if line.startswith('FYERS_ACCESS_TOKEN='):
-                        lines[i] = f'FYERS_ACCESS_TOKEN={access_token}'
-                content = '\n'.join(lines)
-            else:
-                content += f'\nFYERS_ACCESS_TOKEN={access_token}'
+            save_thread = threading.Thread(target=_async_save, daemon=True)
+            save_thread.start()
             
-            with open(env_path, 'w') as f:
-                f.write(content)
-            
-            logging.info("[_save_token] Saved access token to .env")
         except Exception as e:
-            logging.warning(f"[_save_token] Failed to save: {e}")
+            logging.warning(f"[_save_token] Failed to start save thread: {e}")
