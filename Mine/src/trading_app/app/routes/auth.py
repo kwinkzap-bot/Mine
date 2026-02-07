@@ -583,6 +583,94 @@ def _update_dhan_env_credentials(access_token: Optional[str] = None,
         return False
 
 
+@auth_bp.route('/login/fyers/callback')
+def fyers_oauth_callback():
+    """
+    Handle Fyers OAuth callback.
+    Fyers redirects here after user authorizes.
+    
+    Query parameters:
+    - code: Authorization code (use to get access token)
+    - state: State parameter (for security)
+    """
+    auth_code = request.args.get('code', '').strip()
+    state = request.args.get('state', '').strip()
+    error = request.args.get('error', '').strip()
+    error_description = request.args.get('error_description', '').strip()
+    
+    logger.info(f"[Fyers OAuth Callback] Received - code: {auth_code[:10] if auth_code else 'None'}..., state: {state}, error: {error}")
+    
+    if error:
+        logger.error(f"[Fyers OAuth Callback] Error from Fyers: {error} - {error_description}")
+        return jsonify({
+            'success': False,
+            'error': f'Fyers authorization failed: {error}',
+            'error_description': error_description
+        }), 400
+    
+    if not auth_code:
+        logger.error("[Fyers OAuth Callback] No auth code received")
+        return jsonify({
+            'success': False,
+            'error': 'No authorization code received from Fyers'
+        }), 400
+    
+    try:
+        from trading_app.service.fyers_order_services import FyersOrderService
+        
+        logger.info("[Fyers OAuth Callback] Exchanging auth code for access token...")
+        
+        fyers_service = FyersOrderService()
+        if fyers_service.generate_access_token(auth_code):
+            session['fyers_access_token'] = fyers_service.access_token
+            session['fyers_authenticated'] = True
+            session.permanent = True
+            
+            if fyers_service.access_token:
+                os.environ['FYERS_ACCESS_TOKEN'] = fyers_service.access_token
+            
+            _update_fyers_env_credentials(access_token=fyers_service.access_token)
+            
+            logger.info("[Fyers OAuth Callback] ✅ Successfully authenticated")
+            
+            # Show success and redirect
+            return '''
+            <html>
+                <head>
+                    <title>Fyers Authentication Success</title>
+                    <script>
+                        window.opener.postMessage({
+                            type: 'fyers_auth_success',
+                            message: 'Successfully authenticated with Fyers'
+                        }, '*');
+                        setTimeout(() => window.close(), 1500);
+                    </script>
+                </head>
+                <body style="display: flex; align-items: center; justify-content: center; height: 100vh; font-family: Arial;">
+                    <div style="text-align: center;">
+                        <h2 style="color: #28a745;">✓ Authentication Successful!</h2>
+                        <p>You can close this window. Redirecting...</p>
+                    </div>
+                </body>
+            </html>
+            '''
+        else:
+            error_msg = fyers_service.last_error or 'Failed to generate access token'
+            logger.error(f"[Fyers OAuth Callback] Token generation failed: {error_msg}")
+            
+            return jsonify({
+                'success': False,
+                'error': error_msg
+            }), 401
+            
+    except Exception as e:
+        logger.error(f"[Fyers OAuth Callback] Error: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f'OAuth callback processing failed: {str(e)}'
+        }), 500
+
+
 @auth_bp.route('/login/fyers', methods=['GET', 'POST'])
 def login_fyers():
     """Authenticate with Fyers using OAuth flow or access token."""

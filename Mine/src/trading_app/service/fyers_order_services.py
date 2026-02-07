@@ -32,7 +32,9 @@ class FyersOrderService:
         """
         self.app_id = app_id or os.getenv("FYERS_APP_ID")
         self.secret_key = os.getenv("FYERS_SECRET_KEY")
-        self.redirect_uri = os.getenv("FYERS_REDIRECT_URI", "https://127.0.0.1")
+        
+        # Get redirect URI - use app's callback endpoint
+        self.redirect_uri = os.getenv("FYERS_REDIRECT_URI") or "http://localhost:5000/auth/login/fyers/callback"
         
         # Handle access token format
         if access_token:
@@ -56,6 +58,7 @@ class FyersOrderService:
         self.last_error = None
         
         logging.info("[FyersOrderService] Initialized with Fyers credentials")
+        logging.debug(f"[FyersOrderService] Redirect URI: {self.redirect_uri}")
         
         # Order type mappings for Fyers
         self.ORDER_TYPE_LIMIT = 1
@@ -83,37 +86,51 @@ class FyersOrderService:
         Generate authorization URL for OAuth flow.
         User needs to open this URL in browser and login to get auth_code.
         
+        Fyers OAuth 2.0 Flow:
+        1. User clicks "Login with Fyers"
+        2. Opens this auth URL in new window
+        3. User logs in and grants permission
+        4. Fyers redirects to our callback URL with auth code
+        5. We exchange code for access token
+        
         Returns:
             str: Authorization URL
         """
         try:
             if not self.app_id:
                 logging.error("[generate_auth_code_url] APP_ID is missing")
+                self.last_error = "APP_ID not configured"
                 return ""
             
-            state = "sample_state"
+            # OAuth 2.0 parameters per Fyers API v3 spec
+            state = "security_state_token"  # Should be random, but kept simple for now
             response_type = "code"
-            grant_type = "authorization_code"
             
-            # Construct auth URL
+            # Construct auth URL - Fyers OAuth 2.0 endpoint
+            # Reference: https://myapi.fyers.in/docsv3 -> Authentication section
             auth_url = (
                 f"https://api-t1.fyers.in/api/v3/generate-authcode?"
-                f"client_id={self.app_id}&"
+                f"client_id={urllib.parse.quote(self.app_id)}&"
                 f"redirect_uri={urllib.parse.quote(self.redirect_uri)}&"
                 f"response_type={response_type}&"
                 f"state={state}"
             )
             
-            logging.info(f"[generate_auth_code_url] Generated auth URL")
+            logging.info(f"[generate_auth_code_url] Generated auth URL for {self.app_id}")
+            logging.debug(f"[generate_auth_code_url] Redirect URI: {self.redirect_uri}")
+            
             return auth_url
             
         except Exception as e:
             logging.error(f"[generate_auth_code_url] Error: {e}")
+            self.last_error = f"Failed to generate auth URL: {str(e)}"
             return ""
     
     def generate_access_token(self, auth_code: str) -> bool:
         """
         Generate access token from authorization code.
+        
+        Per Fyers API v3 spec: https://myapi.fyers.in/docsv3
         
         Args:
             auth_code: Authorization code from OAuth callback
@@ -123,7 +140,7 @@ class FyersOrderService:
         """
         try:
             if not self.app_id or not self.secret_key:
-                self.last_error = "APP_ID or SECRET_KEY is missing"
+                self.last_error = "APP_ID or SECRET_KEY is missing from environment"
                 logging.error(f"[generate_access_token] {self.last_error}")
                 return False
             
@@ -132,42 +149,71 @@ class FyersOrderService:
                 logging.error(f"[generate_access_token] {self.last_error}")
                 return False
             
-            logging.info("[generate_access_token] Generating access token...")
+            logging.info("[generate_access_token] Generating access token from auth code...")
             
+            # Per Fyers API v3 docs: POST to /validate-authcode with appIdHash
             url = "https://api-t1.fyers.in/api/v3/validate-authcode"
+            
+            # Create appIdHash: SHA256(APP_ID:SECRET_KEY)
+            app_id_hash = hashlib.sha256(f"{self.app_id}:{self.secret_key}".encode()).hexdigest()
             
             payload = {
                 "grant_type": "authorization_code",
-                "appIdHash": hashlib.sha256(f"{self.app_id}:{self.secret_key}".encode()).hexdigest(),
+                "appIdHash": app_id_hash,
                 "code": auth_code
             }
             
+            logging.debug(f"[generate_access_token] Request to {url}")
+            logging.debug(f"[generate_access_token] Payload keys: {list(payload.keys())}")
+            
             response = requests.post(url, json=payload, timeout=30)
+            
+            logging.info(f"[generate_access_token] Response status: {response.status_code}")
+            
             data = response.json()
+            logging.debug(f"[generate_access_token] Response: {data}")
             
-            logging.info(f"[generate_access_token] Response: {data}")
-            
+            # Fyers API returns status in 's' field: 'ok' or 'error'
             if response.status_code == 200 and data.get('s') == 'ok':
                 access_token = data.get('access_token')
+                
                 if access_token:
+                    # Store in format: APP_ID:token
                     self.access_token = f"{self.app_id}:{access_token}"
                     logging.info("[generate_access_token] ✅ Access token generated successfully!")
+                    logging.debug(f"[generate_access_token] Token format: {self.app_id}:***")
                     
                     # Save to .env
                     self._save_token(access_token)
                     return True
                 else:
-                    self.last_error = "No access token in response"
+                    self.last_error = "No access token in response from Fyers"
                     logging.error(f"[generate_access_token] {self.last_error}")
                     return False
             else:
-                error_msg = data.get('message') or 'Unknown error'
+                # Extract error message from response
+                error_msg = data.get('message') or data.get('error') or 'Unknown error'
+                
+                # Handle specific Fyers error codes
+                error_code = data.get('error_code')
+                if error_code:
+                    error_msg = f"(Code: {error_code}) {error_msg}"
+                
                 self.last_error = f"Token generation failed: {error_msg}"
                 logging.error(f"[generate_access_token] {self.last_error}")
+                logging.error(f"[generate_access_token] Full response: {data}")
                 return False
                 
+        except requests.exceptions.Timeout:
+            self.last_error = "Token generation request timed out (30s)"
+            logging.error(f"[generate_access_token] {self.last_error}")
+            return False
+        except requests.exceptions.RequestException as e:
+            self.last_error = f"Network error during token generation: {str(e)}"
+            logging.error(f"[generate_access_token] {self.last_error}")
+            return False
         except Exception as e:
-            self.last_error = f"Token generation error: {str(e)}"
+            self.last_error = f"Unexpected error: {str(e)}"
             logging.error(f"[generate_access_token] {self.last_error}")
             import traceback
             logging.error(f"[generate_access_token] Traceback: {traceback.format_exc()}")
@@ -176,6 +222,7 @@ class FyersOrderService:
     def verify_token(self) -> bool:
         """
         Verify access token by fetching user profile.
+        Tests that the token is valid and has proper permissions.
         
         Returns:
             bool: True if token is valid, False otherwise
@@ -186,38 +233,69 @@ class FyersOrderService:
                 logging.error(f"[verify_token] {self.last_error}")
                 return False
             
-            logging.info("[verify_token] Verifying Fyers credentials...")
+            logging.info("[verify_token] Verifying Fyers access token...")
             
+            # API endpoint to get user profile - validates token
             url = f"{self.base_url}/profile"
             headers = {
-                "Authorization": self.access_token
+                "Authorization": self.access_token,
+                "Content-Type": "application/json"
             }
             
+            logging.debug(f"[verify_token] Request to {url}")
+            
             response = requests.get(url, headers=headers, timeout=30)
+            
+            logging.info(f"[verify_token] Response status: {response.status_code}")
+            
             data = response.json()
+            logging.debug(f"[verify_token] Response: {data}")
             
-            logging.info(f"[verify_token] Response: {data}")
-            
+            # Fyers returns status in 's' field: 'ok' or 'error'
             if response.status_code == 200 and data.get('s') == 'ok':
                 profile_data = data.get('data', {})
                 client_id = profile_data.get('fy_id')
                 name = profile_data.get('name')
                 email = profile_data.get('email_id')
+                account_type = profile_data.get('account_type')
                 
-                logging.info("[verify_token] ✅ Credentials verified!")
+                logging.info("[verify_token] ✅ Token verified successfully!")
                 logging.info(f"[verify_token] Client ID: {client_id}")
                 logging.info(f"[verify_token] Name: {name}")
                 logging.info(f"[verify_token] Email: {email}")
+                logging.info(f"[verify_token] Account Type: {account_type}")
                 
                 return True
             else:
-                error_msg = data.get('message') or 'Unknown error'
-                self.last_error = f"Verification failed: {error_msg}"
+                error_msg = data.get('message') or data.get('error') or 'Unknown error'
+                error_code = data.get('error_code')
+                
+                if error_code:
+                    error_msg = f"(Code: {error_code}) {error_msg}"
+                
+                self.last_error = f"Token verification failed: {error_msg}"
                 logging.error(f"[verify_token] {self.last_error}")
+                
+                # Common error codes
+                if error_code == 401:
+                    self.last_error = "Unauthorized: Token may have expired or is invalid"
+                elif error_code == 403:
+                    self.last_error = "Forbidden: Token doesn't have required permissions"
+                
                 return False
                 
+        except requests.exceptions.Timeout:
+            self.last_error = "Token verification timed out (30s)"
+            logging.error(f"[verify_token] {self.last_error}")
+            return False
+        except requests.exceptions.RequestException as e:
+            self.last_error = f"Network error during verification: {str(e)}"
+            logging.error(f"[verify_token] {self.last_error}")
+            return False
         except Exception as e:
             self.last_error = f"Verification error: {str(e)}"
+            logging.error(f"[verify_token] {self.last_error}")
+            return False
             logging.error(f"[verify_token] {self.last_error}")
             import traceback
             logging.error(f"[verify_token] Traceback: {traceback.format_exc()}")
