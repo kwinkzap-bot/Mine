@@ -111,19 +111,37 @@ class KotakOrderService:
             # Clean credentials
             access_token_str = str(self.access_token).strip()
             mobile_str = str(self.mobile_number).strip()
-            ucc_str = str(self.ucc).strip()
+            ucc_str = str(self.ucc).strip().upper()  # UCC is typically uppercase
             mpin_str = str(self.mpin).strip()
             totp_str = str(self.totp_secret).strip()
             
-            # Validate TOTP length (must be 6 digits)
+            # Remove +91 from mobile if already present
+            if mobile_str.startswith('+91'):
+                mobile_str = mobile_str[3:]
+            elif mobile_str.startswith('91'):
+                mobile_str = mobile_str[2:]
+            
+            # Validate mobile number (10 digits)
+            if len(mobile_str) != 10 or not mobile_str.isdigit():
+                self.last_error = f"Mobile must be 10 digits (got: {len(mobile_str)} characters: {mobile_str})"
+                logging.error(f"[authenticate] {self.last_error}")
+                return False
+            
+            # Validate TOTP/OTP length (must be 6 digits)
             if len(totp_str) != 6 or not totp_str.isdigit():
-                self.last_error = f"TOTP must be 6 digits (got: {len(totp_str)} characters)"
+                self.last_error = f"OTP must be 6 digits (got: {len(totp_str)} characters). OTP expires after 30 seconds."
                 logging.error(f"[authenticate] {self.last_error}")
                 return False
             
             # Validate MPIN length (must be 6 digits)
             if len(mpin_str) != 6 or not mpin_str.isdigit():
-                self.last_error = f"MPIN must be 6 digits (got: {len(mpin_str)} characters)"
+                self.last_error = f"MPIN must be 6 digits (got: {len(mpin_str)} characters: {mpin_str})"
+                logging.error(f"[authenticate] {self.last_error}")
+                return False
+            
+            # Validate UCC length (typically 5 characters)
+            if len(ucc_str) < 3 or len(ucc_str) > 10:
+                self.last_error = f"UCC must be 3-10 characters (got: {len(ucc_str)} characters: {ucc_str})"
                 logging.error(f"[authenticate] {self.last_error}")
                 return False
             
@@ -131,7 +149,7 @@ class KotakOrderService:
             logging.info(f"[authenticate] Mobile: +91{mobile_str}")
             logging.info(f"[authenticate] UCC: {ucc_str}")
             logging.info(f"[authenticate] MPIN: {'*' * len(mpin_str)}")
-            logging.info(f"[authenticate] TOTP: {totp_str}")
+            logging.info(f"[authenticate] OTP: {totp_str[:2]}****")
             
             # STEP 1: TOTP Login → Get VIEW_TOKEN and VIEW_SID
             logging.info("[authenticate] Step 1: TOTP Login...")
@@ -162,42 +180,62 @@ class KotakOrderService:
                         login_data.get('errMsg') or 
                         login_data.get('error') or
                         login_data.get('msg') or
-                        f"HTTP {login_response.status_code}: {login_data}"
+                        f"HTTP {login_response.status_code}"
                     )
-                    self.last_error = f"Login failed: {error_msg}"
+                    self.last_error = f"Step 1 Login failed: {error_msg}"
                     logging.error(f"[authenticate] {self.last_error}")
                     logging.error(f"[authenticate] Full response: {login_response.text}")
                     return False
                 
-                if 'data' not in login_data:
-                    # Check if response has error field
-                    if 'error' in login_data or 'errMsg' in login_data:
-                        error_msg = login_data.get('error') or login_data.get('errMsg')
-                        self.last_error = f"Login failed: {error_msg}"
+                # Check if successful (status 200)
+                if login_response.status_code == 200:
+                    # Response structure: {"success": true, "data": {"token": "...", "sid": "..."}}
+                    if 'data' in login_data:
+                        data = login_data['data']
+                        self.view_token = data.get('token') or data.get('Authorization')
+                        self.view_sid = data.get('sid')
+                        
+                        if not self.view_token or not self.view_sid:
+                            self.last_error = f"Step 1: Token/SID missing from response: {data}"
+                            logging.error(f"[authenticate] {self.last_error}")
+                            return False
+                        
+                        logging.info(f"[authenticate] ✓ Step 1 successful")
+                        logging.info(f"[authenticate] VIEW_TOKEN: {self.view_token[:20]}...")
+                        logging.info(f"[authenticate] VIEW_SID: {self.view_sid}")
+                    else:
+                        # Check for error in response
+                        if 'error' in login_data or 'errMsg' in login_data or 'message' in login_data:
+                            error_msg = (login_data.get('error') or 
+                                       login_data.get('errMsg') or 
+                                       login_data.get('message', 'Unknown error'))
+                            self.last_error = f"Step 1: {error_msg}"
+                            logging.error(f"[authenticate] {self.last_error}")
+                            return False
+                        
+                        self.last_error = f"Step 1: Invalid response structure: {login_data}"
                         logging.error(f"[authenticate] {self.last_error}")
                         return False
-                    
-                    self.last_error = f"Login response missing 'data': {login_data}"
+                else:
+                    self.last_error = f"Step 1: HTTP {login_response.status_code}"
                     logging.error(f"[authenticate] {self.last_error}")
                     return False
                 
-                data = login_data['data']
-                self.view_token = data.get('token')
-                self.view_sid = data.get('sid')
-                
-                logging.info(f"[authenticate] ✓ TOTP Login successful")
-                logging.info(f"[authenticate] VIEW_TOKEN: {self.view_token[:20] if self.view_token else 'None'}...")
-                logging.info(f"[authenticate] VIEW_SID: {self.view_sid}")
-                
-            except requests.exceptions.RequestException as req_error:
-                self.last_error = f"TOTP Login request failed: {str(req_error)}"
+            except requests.exceptions.Timeout:
+                self.last_error = f"Step 1: Request timeout (30s) - Kotak API not responding"
                 logging.error(f"[authenticate] {self.last_error}")
-                logging.error(f"[authenticate] Request details - URL: {login_url}")
-                logging.error(f"[authenticate] Headers: {login_headers}")
-                logging.error(f"[authenticate] Payload: {login_payload}")
+                return False
+            except requests.exceptions.ConnectionError as conn_error:
+                self.last_error = f"Step 1: Connection error - {str(conn_error)}"
+                logging.error(f"[authenticate] {self.last_error}")
+                return False
+            except requests.exceptions.RequestException as req_error:
+                self.last_error = f"Step 1: Request failed - {str(req_error)}"
+                logging.error(f"[authenticate] {self.last_error}")
+                logging.error(f"[authenticate] URL: {login_url}")
                 return False
             except ValueError as json_error:
-                self.last_error = f"TOTP Login response is not valid JSON: {str(json_error)}"
+                self.last_error = f"Step 1: Invalid JSON response - {str(json_error)}"
                 logging.error(f"[authenticate] {self.last_error}")
                 logging.error(f"[authenticate] Response text: {login_response.text if login_response else 'N/A'}")
                 return False
@@ -210,24 +248,35 @@ class KotakOrderService:
             
             # STEP 2: MPIN Validate → Get TRADING_TOKEN, TRADING_SID, BASE_URL
             logging.info("[authenticate] Step 2: MPIN Validate...")
+            
+            # Check if Step 1 tokens are available
+            if not self.view_token or not self.view_sid:
+                self.last_error = "Step 2: Cannot proceed - Step 1 tokens missing"
+                logging.error(f"[authenticate] {self.last_error}")
+                return False
+            
             validate_url = "https://mis.kotaksecurities.com/login/1.0/tradeApiValidate"
             validate_headers = {
                 "Authorization": access_token_str,
                 "neo-fin-key": "neotradeapi",
-                "sid": self.view_sid,
-                "Auth": self.view_token,
+                "sid": str(self.view_sid),
+                "Auth": str(self.view_token),
                 "Content-Type": "application/json"
             }
             validate_payload = {
                 "mpin": mpin_str
             }
             
+            logging.debug(f"[authenticate] Step 2 headers: {validate_headers}")
+            logging.debug(f"[authenticate] Step 2 payload: {validate_payload}")
+            
+            validate_response = None
             try:
                 validate_response = requests.post(validate_url, headers=validate_headers, json=validate_payload, timeout=30)
                 validate_data = validate_response.json()
                 
-                logging.info(f"[authenticate] Validate status code: {validate_response.status_code}")
-                logging.info(f"[authenticate] Validate response: {validate_data}")
+                logging.info(f"[authenticate] Step 2 status code: {validate_response.status_code}")
+                logging.info(f"[authenticate] Step 2 response: {validate_data}")
                 
                 if validate_response.status_code != 200:
                     error_msg = (
@@ -235,55 +284,90 @@ class KotakOrderService:
                         validate_data.get('errMsg') or 
                         validate_data.get('error') or
                         validate_data.get('msg') or
-                        f"HTTP {validate_response.status_code}: {validate_data}"
+                        f"HTTP {validate_response.status_code}"
                     )
-                    self.last_error = f"MPIN validation failed: {error_msg}"
+                    self.last_error = f"Step 2: {error_msg}"
                     logging.error(f"[authenticate] {self.last_error}")
                     logging.error(f"[authenticate] Full response: {validate_response.text}")
                     return False
                 
-                if 'data' not in validate_data:
-                    if 'error' in validate_data or 'errMsg' in validate_data:
-                        error_msg = validate_data.get('error') or validate_data.get('errMsg')
-                        self.last_error = f"MPIN validation failed: {error_msg}"
+                # Check response structure
+                if validate_response.status_code == 200:
+                    if 'data' in validate_data:
+                        data = validate_data['data']
+                        self.trading_token = data.get('token') or data.get('Authorization')
+                        self.trading_sid = data.get('sid')
+                        self.base_url = data.get('baseUrl') or data.get('base_url')
+                        
+                        # Validate that all required tokens were received
+                        if not self.trading_token:
+                            self.last_error = f"Step 2: TRADING_TOKEN missing from response"
+                            logging.error(f"[authenticate] {self.last_error}")
+                            return False
+                        
+                        if not self.trading_sid:
+                            self.last_error = f"Step 2: TRADING_SID missing from response"
+                            logging.error(f"[authenticate] {self.last_error}")
+                            return False
+                        
+                        if not self.base_url:
+                            self.last_error = f"Step 2: BASE_URL missing from response"
+                            logging.error(f"[authenticate] {self.last_error}")
+                            return False
+                        
+                        logging.info("[authenticate] ✓ Step 2 successful!")
+                        logging.info(f"[authenticate] TRADING_TOKEN: {self.trading_token[:20]}...")
+                        logging.info(f"[authenticate] TRADING_SID: {self.trading_sid}")
+                        logging.info(f"[authenticate] BASE_URL: {self.base_url}")
+                        logging.info("[authenticate] =================================")
+                        logging.info("[authenticate] ✅ Authentication SUCCESSFUL!")
+                        logging.info("[authenticate] =================================")
+                        
+                        # Save tokens to environment
+                        self._save_trading_token()
+                        
+                        return True
+                    else:
+                        # Check for error in response
+                        if 'error' in validate_data or 'errMsg' in validate_data or 'message' in validate_data:
+                            error_msg = (validate_data.get('error') or 
+                                       validate_data.get('errMsg') or 
+                                       validate_data.get('message', 'Unknown error'))
+                            self.last_error = f"Step 2: {error_msg}"
+                            logging.error(f"[authenticate] {self.last_error}")
+                            return False
+                        
+                        self.last_error = f"Step 2: Invalid response structure: {validate_data}"
                         logging.error(f"[authenticate] {self.last_error}")
                         return False
-                    
-                    self.last_error = f"Validate response missing 'data': {validate_data}"
+                else:
+                    self.last_error = f"Step 2: HTTP {validate_response.status_code}"
                     logging.error(f"[authenticate] {self.last_error}")
                     return False
                 
-                data = validate_data['data']
-                self.trading_token = data.get('token')
-                self.trading_sid = data.get('sid')
-                self.base_url = data.get('baseUrl')
-                
-                logging.info("[authenticate] ✓ MPIN Validation successful!")
-                logging.info(f"[authenticate] TRADING_TOKEN: {self.trading_token[:20] if self.trading_token else 'None'}...")
-                logging.info(f"[authenticate] TRADING_SID: {self.trading_sid}")
-                logging.info(f"[authenticate] BASE_URL: {self.base_url}")
-                logging.info("[authenticate] =================================")
-                logging.info("[authenticate] Authentication completed successfully")
-                logging.info("[authenticate] =================================")
-                
-                # Save tokens to environment
-                self._save_trading_token()
-                
-                return True
-                
-            except requests.exceptions.RequestException as req_error:
-                self.last_error = f"MPIN Validate request failed: {str(req_error)}"
+            except requests.exceptions.Timeout:
+                self.last_error = f"Step 2: Request timeout (30s) - Kotak API not responding"
                 logging.error(f"[authenticate] {self.last_error}")
+                return False
+            except requests.exceptions.ConnectionError as conn_error:
+                self.last_error = f"Step 2: Connection error - {str(conn_error)}"
+                logging.error(f"[authenticate] {self.last_error}")
+                return False
+            except requests.exceptions.RequestException as req_error:
+                self.last_error = f"Step 2: Request failed - {str(req_error)}"
+                logging.error(f"[authenticate] {self.last_error}")
+                return False
+            except ValueError as json_error:
+                self.last_error = f"Step 2: Invalid JSON response - {str(json_error)}"
+                logging.error(f"[authenticate] {self.last_error}")
+                logging.error(f"[authenticate] Response text: {validate_response.text if validate_response else 'N/A'}")
                 return False
             except Exception as validate_error:
-                self.last_error = f"MPIN Validate failed: {str(validate_error)}"
+                self.last_error = f"Step 2: Unexpected error - {str(validate_error)}"
                 logging.error(f"[authenticate] {self.last_error}")
+                import traceback
+                logging.error(f"[authenticate] Traceback: {traceback.format_exc()}")
                 return False
-            
-            # Check if authentication was successful
-            self.last_error = "Authentication completed but no token received"
-            logging.error(f"[authenticate] {self.last_error}")
-            return False
                 
         except Exception as e:
             self.last_error = f"Authentication error: {str(e)}"
@@ -327,6 +411,72 @@ class KotakOrderService:
             logging.info("[_save_trading_token] Saved trading credentials to .env")
         except Exception as e:
             logging.warning(f"[_save_trading_token] Failed to save: {e}")
+    
+    def diagnose_authentication(self) -> Dict[str, Any]:
+        """
+        Diagnose authentication issues by checking credentials and endpoints.
+        
+        Returns:
+            Dict with diagnostic information
+        """
+        logging.info("[diagnose] Starting authentication diagnostic...")
+        
+        result = {
+            'credentials_present': {},
+            'validation_errors': [],
+            'suggestions': []
+        }
+        
+        # Check each required credential
+        creds = {
+            'ACCESS_TOKEN': (self.access_token, 'API access token from Kotak Neo portal'),
+            'MOBILE_NUMBER': (self.mobile_number, '10-digit phone number without +91'),
+            'UCC': (self.ucc, 'Unique Client Code (5 characters)'),
+            'MPIN': (self.mpin, '6-digit trading PIN'),
+            'TOTP/OTP': (self.totp_secret, '6-digit OTP from authenticator (expires in 30 sec)')
+        }
+        
+        for name, (value, desc) in creds.items():
+            present = bool(value)
+            result['credentials_present'][name] = present
+            
+            if not present:
+                result['validation_errors'].append(f"{name} is missing: {desc}")
+                result['suggestions'].append(f"1) Add {name} to .env file, 2) Or pass it when creating KotakOrderService")
+        
+        # Validate format of each credential
+        if self.mobile_number:
+            mobile_clean = str(self.mobile_number).strip()
+            if mobile_clean.startswith(('+91', '91')):
+                mobile_clean = mobile_clean[-10:] if len(mobile_clean) >= 10 else mobile_clean
+            
+            if len(mobile_clean) != 10 or not mobile_clean.isdigit():
+                result['validation_errors'].append(f"MOBILE_NUMBER format invalid: must be 10 digits, got: {mobile_clean}")
+        
+        if self.mpin:
+            mpin_clean = str(self.mpin).strip()
+            if len(mpin_clean) != 6 or not mpin_clean.isdigit():
+                result['validation_errors'].append(f"MPIN format invalid: must be 6 digits, got {len(mpin_clean)} chars")
+        
+        if self.totp_secret:
+            totp_clean = str(self.totp_secret).strip()
+            if len(totp_clean) != 6 or not totp_clean.isdigit():
+                result['validation_errors'].append(f"OTP format invalid: must be 6 digits, got {len(totp_clean)} chars. OTP expires after 30 seconds!")
+            else:
+                result['suggestions'].append("OTP is valid format but may have expired - use fresh OTP from authenticator app")
+        
+        # Test connectivity
+        try:
+            response = requests.get("https://mis.kotaksecurities.com/", timeout=5)
+            result['endpoint_reachable'] = response.status_code < 500
+            logging.info(f"[diagnose] Kotak API endpoint: {response.status_code}")
+        except Exception as e:
+            result['endpoint_reachable'] = False
+            result['validation_errors'].append(f"Cannot reach Kotak API: {str(e)}")
+            result['suggestions'].append("Check internet connection or firewall settings")
+        
+        logging.info(f"[diagnose] Diagnostic results: {result}")
+        return result
     
     def place_order(self, tradingsymbol: str, transaction_type: str, price: float,
                    quantity: int, order_type: str = 'MKT', product_type: str = 'MIS',
