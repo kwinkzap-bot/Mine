@@ -809,6 +809,7 @@ class DhanOrderService:
         Search for a symbol in Dhan's symbol master.
         
         This API retrieves security ID and other details for a symbol.
+        Supports both equity and options symbols.
         
         Args:
             symbol: Trading symbol to search (e.g., "NIFTY26FEB25600CE")
@@ -824,8 +825,14 @@ class DhanOrderService:
                     'error': 'Not authenticated'
                 }
             
-            # Dhan has a symbol search API endpoint
-            url = f"{self.base_url}/symbol/search?symbol={symbol}"
+            # Try multiple Dhan API endpoints
+            # 1. Try direct symbol search first
+            endpoints = [
+                f"{self.base_url}/symbol/search?symbol={symbol}",
+                f"{self.base_url}/instruments?symbol={symbol}",
+                f"{self.base_url}/searchsymbol?symbol={symbol}",
+            ]
+            
             headers = {
                 "access-token": self.access_token,
                 "Content-Type": "application/json"
@@ -833,41 +840,57 @@ class DhanOrderService:
             
             logging.info(f"[search_symbol] Searching for {symbol}")
             
-            response = requests.get(url, headers=headers, timeout=10)
-            data = response.json()
-            
-            logging.info(f"[search_symbol] Response: {data}")
-            
-            if response.status_code == 200 and 'data' in data:
-                # Extract security ID from response
-                symbol_data = data['data']
-                if isinstance(symbol_data, list) and len(symbol_data) > 0:
-                    first_match = symbol_data[0]
-                    security_id = first_match.get('securityId') or first_match.get('security_id')
+            for url in endpoints:
+                try:
+                    logging.debug(f"[search_symbol] Trying endpoint: {url}")
+                    response = requests.get(url, headers=headers, timeout=5)
                     
-                    if security_id:
-                        logging.info(f"✓ Found security ID for {symbol}: {security_id}")
-                        return {
-                            'success': True,
-                            'security_id': security_id,
-                            'symbol': symbol,
-                            'data': first_match
-                        }
+                    if response.status_code == 200:
+                        data = response.json()
+                        logging.info(f"[search_symbol] Response from {url}: {data}")
+                        
+                        # Check if data contains the security ID
+                        if isinstance(data, dict):
+                            # Try various response formats
+                            if 'data' in data:
+                                symbol_data = data['data']
+                                if isinstance(symbol_data, list) and len(symbol_data) > 0:
+                                    first_match = symbol_data[0]
+                                elif isinstance(symbol_data, dict):
+                                    first_match = symbol_data
+                                else:
+                                    continue
+                            elif 'securityId' in data or 'security_id' in data:
+                                first_match = data
+                            else:
+                                # Try treating entire response as symbol data
+                                first_match = data
+                            
+                            security_id = first_match.get('securityId') or first_match.get('security_id')
+                            
+                            if security_id and str(security_id).isdigit():
+                                logging.info(f"✓ Found numeric security ID for {symbol}: {security_id}")
+                                return {
+                                    'success': True,
+                                    'security_id': str(security_id),
+                                    'symbol': symbol,
+                                    'data': first_match
+                                }
+                        
+                except requests.exceptions.Timeout:
+                    logging.debug(f"[search_symbol] Timeout on {url}")
+                    continue
+                except Exception as e:
+                    logging.debug(f"[search_symbol] Error on {url}: {e}")
+                    continue
             
-            logging.warning(f"[search_symbol] No results found for {symbol}")
+            logging.warning(f"[search_symbol] No numeric security ID found for {symbol} via API")
             return {
                 'success': False,
-                'error': f'Symbol {symbol} not found in Dhan master',
+                'error': f'Symbol {symbol} not found or API endpoints not available',
                 'symbol': symbol
             }
             
-        except requests.exceptions.Timeout:
-            logging.error(f"[search_symbol] Timeout searching for {symbol}")
-            return {
-                'success': False,
-                'error': 'Symbol search timeout',
-                'symbol': symbol
-            }
         except Exception as e:
             logging.error(f"[search_symbol] Error: {e}")
             return {

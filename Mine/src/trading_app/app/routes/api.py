@@ -2072,25 +2072,48 @@ def place_intraday_920_order() -> EndpointResponse:
                     client_id=dhan_client_id
                 )
                 
-                # Build option trading symbol (e.g., NIFTY26FEB25600CE)
-                from datetime import datetime
-                now = datetime.now()
-                year = now.strftime('%y')
-                month = now.strftime('%b').upper()
-                trading_symbol = f"{symbol}{year}{month}{strike}{option_type}"
+                # First, validate the option exists using Kite
+                # This gives us a reference point and ensures the option is valid
+                kite = get_kite()
+                if not kite:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Kite connection required for Dhan option validation'
+                    }), 401
                 
-                logger.info(f"[Dhan] Trading symbol: {trading_symbol}, searching for security ID...")
+                from trading_app.service.kite_order_services import KiteService
+                kite_service = KiteService(kite_instance=kite)
                 
-                # Search for the symbol in Dhan's symbol master to get security ID
-                search_result = dhan_service.search_symbol(trading_symbol)
+                # Get the Kite option symbol (validates the option exists)
+                # Format: NIFTY26FEB25600CE
+                kite_option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+                if not kite_option_symbol:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Option {symbol} {strike} {option_type} not found in Kite master'
+                    }), 400
                 
-                if not search_result['success']:
-                    # Fallback: try using trading symbol directly as security ID
-                    logger.warning(f"[Dhan] Symbol search failed, will try trading symbol as security ID")
-                    security_id = trading_symbol
+                logger.info(f"[Dhan] Validated option symbol via Kite: {kite_option_symbol}")
+                
+                # For Dhan, we need the numeric security ID
+                # Try to search for it, but have a fallback approach
+                logger.info(f"[Dhan] Searching for Dhan security ID for {kite_option_symbol}...")
+                search_result = dhan_service.search_symbol(kite_option_symbol)
+                
+                if search_result['success'] and str(search_result.get('security_id', '')).isdigit():
+                    # Use the numeric security ID from search
+                    security_id = str(search_result.get('security_id', ''))
+                    logger.info(f"[Dhan] Found numeric security ID: {security_id}")
                 else:
-                    security_id = search_result.get('security_id', trading_symbol)
-                    logger.info(f"[Dhan] Found security ID: {security_id}")
+                    # If search fails or returns non-numeric ID, inform user
+                    logger.error(f"[Dhan] Could not find numeric security ID via API")
+                    logger.warning(f"[Dhan] Dhan requires numeric security IDs which we couldn't retrieve from their API")
+                    return jsonify({
+                        'success': False,
+                        'error': 'Cannot find Dhan security ID. Please ensure: 1) Your Dhan account has API access enabled, 2) The option symbol exists in Dhan, 3) Dhan API is responding correctly.',
+                        'symbol': kite_option_symbol,
+                        'hint': 'Try refreshing your Dhan credentials or contact Dhan support'
+                    }), 400
                 
                 lot_size = dhan_service.get_lot_size(symbol)
                 order_quantity = (quantity or 1) * lot_size
@@ -2098,9 +2121,9 @@ def place_intraday_920_order() -> EndpointResponse:
                 # Map action to transaction type
                 transaction_type = 'BUY' if action == 'BUY' else 'SELL'
                 
-                logger.info(f"[Dhan] Placing {transaction_type} order: symbol={trading_symbol}, security_id={security_id}, qty={order_quantity}")
+                logger.info(f"[Dhan] Placing {transaction_type} order: symbol={kite_option_symbol}, security_id={security_id}, qty={order_quantity}")
                 
-                # Place order using the security ID from symbol search
+                # Place order using the numeric security ID
                 result = dhan_service.place_order(
                     security_id=security_id,
                     transaction_type=transaction_type,
