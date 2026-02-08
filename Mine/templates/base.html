@@ -24,9 +24,9 @@
             <a href="/intraday-920" class="nav-link {% if request.path == '/intraday-920' %}active{% endif %}">⏰ Intraday 9:20</a>
             <div class="login-dropdown">
                 <button class="nav-link-login" id="loginToggle">🔑</button>
-                {% if session.username %}
+                <!-- {% if session.username %}
                 <a href="/auth/user-logout" class="nav-link-logout" id="logoutButton" title="Logout">⏻</a>
-                {% endif %}
+                {% endif %} -->
                 <div class="dropdown-menu" id="dropdownMenu">
                     <div style="padding: 8px 12px; font-weight: bold; border-bottom: 1px solid #ddd; color: #666; font-size: 12px;">
                         {% if session.username %}
