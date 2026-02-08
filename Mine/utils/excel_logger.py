@@ -19,11 +19,16 @@ except ImportError:
     logger.warning("openpyxl not installed. Excel logging disabled.")
 
 
+# Get project root directory (relative path)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_LOGS_DIR = os.path.join(_PROJECT_ROOT, 'logs')
+
+
 class ExcelLogger:
     """Logs signal checks and trades to Excel file."""
     
-    EXCEL_FILE = "/Users/kavinkumar/Mine/Mine/logs/signal_logs.xlsx"
-    LOGS_DIR = "/Users/kavinkumar/Mine/Mine/logs"
+    EXCEL_FILE = os.path.join(_LOGS_DIR, 'signal_logs.xlsx')
+    LOGS_DIR = _LOGS_DIR
     
     def __init__(self, file_path: Optional[str] = None, username: Optional[str] = None, file_prefix: str = "signal_logs"):
         """Initialize Excel logger.
