@@ -20,8 +20,8 @@ from .HighLowSignal import HighLowSignal
 # Import excel logger
 from utils.excel_logger import ExcelLogger
 
-# Use a separate log file to avoid mixing with Intraday 9:20 logs
-excel_logger = ExcelLogger(file_path="/Users/kavinkumar/Mine/Mine/signal_logs_highlow.xlsx")
+# Excel logger will be initialized per user when HighLowLiveSignal is instantiated
+excel_logger = None
 
 load_dotenv()
 
@@ -91,16 +91,23 @@ class HighLowLiveSignal:
     NFO_EXCHANGE = 'NFO'
     NIFTY_TOKEN = 256265
     
-    def __init__(self, kite_instance: Optional[KiteConnect] = None, symbol: str = 'NIFTY'):
+    def __init__(self, kite_instance: Optional[KiteConnect] = None, symbol: str = 'NIFTY', username: Optional[str] = None):
         """Initialize HighLowLiveSignal instance.
         
         Args:
             kite_instance: Existing KiteConnect instance (optional)
             symbol: Trading symbol (default: 'NIFTY')
+            username: Username for Excel logger file naming (optional)
         """
+        global excel_logger
+        
         self.kite = self._initialize_kite(kite_instance)
         self.symbol = symbol
         self.signal_detector = HighLowSignal()
+        
+        # Initialize Excel logger with username-specific file
+        if not excel_logger or username:
+            excel_logger = ExcelLogger(username=username, file_prefix="signal_logs_highlow")
         
         # Initialize KiteService for order placement
         from trading_app.service.kite_order_services import KiteService

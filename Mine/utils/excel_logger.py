@@ -22,11 +22,33 @@ except ImportError:
 class ExcelLogger:
     """Logs signal checks and trades to Excel file."""
     
-    EXCEL_FILE = "/Users/kavinkumar/Mine/Mine/signal_logs.xlsx"
+    EXCEL_FILE = "/Users/kavinkumar/Mine/Mine/logs/signal_logs.xlsx"
+    LOGS_DIR = "/Users/kavinkumar/Mine/Mine/logs"
     
-    def __init__(self, file_path: Optional[str] = None):
+    def __init__(self, file_path: Optional[str] = None, username: Optional[str] = None, file_prefix: str = "signal_logs"):
+        """Initialize Excel logger.
+        
+        Args:
+            file_path: Explicit file path (takes precedence)
+            username: Username for dynamic file naming (e.g., "mine" -> "mine_signal_logs.xlsx")
+            file_prefix: Prefix for dynamically named files (default: "signal_logs")
+        """
         self.available = EXCEL_AVAILABLE
-        self.file_path = file_path or self.EXCEL_FILE
+        
+        # Determine file path
+        if file_path:
+            # Explicit file path provided
+            self.file_path = file_path
+        elif username:
+            # Generate dynamic filename based on username
+            self.file_path = os.path.join(self.LOGS_DIR, f"{username.lower()}_{file_prefix}.xlsx")
+        else:
+            # Use default
+            self.file_path = self.EXCEL_FILE
+        
+        # Ensure logs directory exists
+        os.makedirs(self.LOGS_DIR, exist_ok=True)
+        
         if not self.available:
             logger.warning("Excel logging disabled - install openpyxl: pip install openpyxl")
         
@@ -503,6 +525,6 @@ class ExcelLogger:
             return False
 
 
-# Global instance
-excel_logger = ExcelLogger()
+# Global instance - will be initialized with username when needed
+excel_logger = None
 

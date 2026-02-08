@@ -7,7 +7,9 @@ Steps:
 2. You'll log in with your Zerodha credentials
 3. You'll be redirected with a REQUEST_TOKEN
 4. This script will generate an ACCESS_TOKEN
-5. The ACCESS_TOKEN will be saved to .env
+5. The ACCESS_TOKEN will be saved to env/USERNAME.env
+
+This script now supports the per-user environment configuration.
 """
 
 import os
@@ -15,21 +17,35 @@ import sys
 from dotenv import load_dotenv
 from kiteconnect import KiteConnect
 
+# Add src to path for UserEnvManager
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+from trading_app.app.utils.user_env import UserEnvManager
+
 def get_access_token():
     """Interactive setup to get access token from Zerodha."""
     
-    load_dotenv()
-    
-    api_key = os.getenv("API_KEY")
-    api_secret = os.getenv("API_SECRET")
-    
-    if not api_key or not api_secret:
-        print("❌ API_KEY and API_SECRET must be set in .env")
-        return False
-    
+    # Get username from user
     print("\n" + "="*70)
     print("ZERODHA ACCESS TOKEN SETUP")
     print("="*70)
+    
+    username = input("\nEnter your username (e.g., Mine, Kavin): ").strip()
+    if not username:
+        print("❌ Username is required")
+        return False
+    
+    print(f"\nSetting up access token for user: {username}")
+    
+    # Load user's environment
+    load_dotenv()
+    UserEnvManager.load_user_env(username)
+    
+    api_key = UserEnvManager.get_user_var(username, "API_KEY")
+    api_secret = UserEnvManager.get_user_var(username, "API_SECRET")
+    
+    if not api_key or not api_secret:
+        print("❌ API_KEY and API_SECRET must be set in env/{username}.env")
+        return False
     
     print(f"\n✓ API_KEY found: {api_key[:10]}...")
     print(f"✓ API_SECRET found: {api_secret[:10]}...")
@@ -73,35 +89,32 @@ def get_access_token():
     
     try:
         session = kite.generate_session(request_token, api_secret)
-        access_token = session['access_token']
+        
+        # Handle both dict and object responses
+        if isinstance(session, dict):
+            access_token = session.get('access_token', '')
+        else:
+            access_token = getattr(session, 'access_token', '')
+        
+        if not access_token:
+            print("❌ Failed to extract access token from session")
+            return False
         
         print(f"✓ Access token generated: {access_token[:20]}...")
         
-        # Step 4: Save to .env
+        # Step 4: Save to user-specific .env
         print("\n" + "="*70)
-        print("STEP 4: Saving to .env")
+        print("STEP 4: Saving to env/{username}.env")
         print("="*70)
         
-        env_file = "/Users/kavinkumar/Mine/Mine/.env"
+        # Use UserEnvManager to save token
+        success = UserEnvManager.save_user_var(username, 'ACCESS_TOKEN', access_token)
         
-        # Read current .env
-        with open(env_file, 'r') as f:
-            content = f.read()
-        
-        # Replace ACCESS_TOKEN
-        lines = content.split('\n')
-        new_lines = []
-        for line in lines:
-            if line.startswith('ACCESS_TOKEN='):
-                new_lines.append(f'ACCESS_TOKEN={access_token}')
-            else:
-                new_lines.append(line)
-        
-        # Write back
-        with open(env_file, 'w') as f:
-            f.write('\n'.join(new_lines))
-        
-        print(f"✓ ACCESS_TOKEN saved to {env_file}")
+        if success:
+            print(f"✓ ACCESS_TOKEN saved to env/{username}.env")
+        else:
+            print(f"❌ Failed to save ACCESS_TOKEN to env/{username}.env")
+            return False
         
         # Step 5: Verify
         print("\n" + "="*70)
@@ -118,8 +131,17 @@ def get_access_token():
         try:
             profile = kite2.profile()
             print(f"✓ API connection successful!")
-            print(f"  User: {profile['user_name']}")
-            print(f"  Broker: {profile['broker']}")
+            
+            # Handle both dict and object responses
+            if isinstance(profile, dict):
+                user_name = profile.get('user_name', 'N/A')
+                broker = profile.get('broker', 'N/A')
+            else:
+                user_name = getattr(profile, 'user_name', 'N/A')
+                broker = getattr(profile, 'broker', 'N/A')
+            
+            print(f"  User: {user_name}")
+            print(f"  Broker: {broker}")
         except Exception as e:
             print(f"⚠️  Could not verify (API may be rate-limited): {e}")
         

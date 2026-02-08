@@ -79,7 +79,11 @@ def start_live_monitoring():
         
         logger.info("Initializing legacy live signal monitoring...")
         from trading_app.strategy.Live.HighLowLiveSignal import HighLowLiveSignal
-        live_signal = HighLowLiveSignal(symbol='NIFTY')
+        
+        # Get username from environment (loaded by UserEnvManager during login)
+        username = os.getenv('USERNAME', 'default')
+        
+        live_signal = HighLowLiveSignal(symbol='NIFTY', username=username)
         live_signal.start_live_monitoring()
     except Exception as e:
         logger.error(f"Error in live monitoring thread: {e}")
