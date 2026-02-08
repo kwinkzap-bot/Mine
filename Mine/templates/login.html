@@ -132,10 +132,11 @@
         });
 
         // Auto-fill for development (remove in production)
-        {% if config.DEBUG %}
+        // eslint-disable-next-line
+        /* {% if config.DEBUG %} */
         document.getElementById('username').value = 'Mine';
         document.getElementById('password').value = 'Mine';
-        {% endif %}
+        /* {% endif %} */
     </script>
 </body>
 </html>
