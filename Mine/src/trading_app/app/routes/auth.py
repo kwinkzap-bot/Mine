@@ -70,13 +70,46 @@ def user_logout():
 
 @auth_bp.route('/login')
 def login():
-    """Redirect to Zerodha Kite OAuth login."""
+    """Redirect to Zerodha Kite OAuth login.
+    
+    Supports multiple Kite instances via broker_id parameter.
+    Uses user-specific credentials from username.env file.
+    Usage: /auth/login or /auth/login?broker_id=kite_2
+    """
+    from trading_app.app.utils.user_env import UserEnvManager
+    
     logger.info("Login request received")
     
-    api_key = os.getenv('API_KEY')
+    # Get current username from session
+    username = session.get('username')
+    if not username:
+        logger.error("No user authenticated for login")
+        return jsonify({'error': 'User not authenticated'}), 401
+    
+    # Get broker_id from query parameter (defaults to kite_1 for Zerodha)
+    broker_id = request.args.get('broker_id', 'kite_1').lower()
+    
+    # Extract instance number from broker_id (e.g., 'kite_2' -> instance 2)
+    instance_num = 1
+    if '_' in broker_id:
+        try:
+            instance_num = int(broker_id.split('_')[-1])
+        except (ValueError, IndexError):
+            instance_num = 1
+    
+    # Get API credentials from user-specific .env file
+    if instance_num == 1:
+        # First instance uses original env var names
+        api_key = UserEnvManager.get_user_var(username, 'API_KEY')
+        api_secret = UserEnvManager.get_user_var(username, 'API_SECRET')
+    else:
+        # Additional instances use prefixed names
+        api_key = UserEnvManager.get_user_var(username, f'KITE_{instance_num}_API_KEY')
+        api_secret = UserEnvManager.get_user_var(username, f'KITE_{instance_num}_API_SECRET')
+    
     if not api_key:
-        logger.error("API_KEY not configured in environment")
-        return jsonify({'error': 'API_KEY not configured'}), 500
+        logger.error(f"API_KEY not configured for {username} - broker_id: {broker_id}")
+        return jsonify({'error': f'API_KEY not configured for {broker_id}'}), 500
     
     try:
         # Initialize KiteConnect
@@ -84,21 +117,30 @@ def login():
         
         # Get login URL for OAuth
         login_url = kite.login_url()
-        logger.info(f"Redirecting to Zerodha login: {login_url}")
+        logger.info(f"Redirecting to Zerodha login for {username} - {broker_id}: {login_url}")
         
-        # Store API key in session for use in callback
+        # Store credentials in session for use in callback
+        session['broker_id'] = broker_id
+        session['instance_num'] = instance_num
         session['api_key'] = api_key
+        session['api_secret'] = api_secret
         session.permanent = True
         
         return redirect(login_url)
     except Exception as e:
-        logger.error(f"Error during login: {e}")
+        logger.error(f"Error during login for {username} - {broker_id}: {e}")
         return jsonify({'error': f'Login failed: {str(e)}'}), 500
 
 
 @auth_bp.route('/callback')
 def callback():
-    """Handle Zerodha OAuth callback."""
+    """Handle Zerodha OAuth callback for any broker instance.
+    
+    Handles callbacks from multiple Kite instances (kite_1, kite_2, etc.)
+    Saves tokens to user-specific .env file
+    """
+    from trading_app.app.utils.user_env import UserEnvManager
+    
     request_token = request.args.get('request_token')
     
     if not request_token:
@@ -108,11 +150,20 @@ def callback():
     logger.info(f"Callback received with request_token: {request_token}")
     
     try:
-        api_key = session.get('api_key') or os.getenv('API_KEY')
-        api_secret = os.getenv('API_SECRET')
+        # Get current username from session
+        username = session.get('username')
+        if not username:
+            logger.error("No user authenticated in callback")
+            return jsonify({'error': 'User not authenticated'}), 401
+        
+        # Get credentials from session (set during login)
+        broker_id = session.get('broker_id', 'kite_1')
+        instance_num = session.get('instance_num', 1)
+        api_key = session.get('api_key')
+        api_secret = session.get('api_secret')
         
         if not api_key or not api_secret:
-            logger.error("API credentials not configured")
+            logger.error(f"API credentials not found in session for {username} - {broker_id}")
             return jsonify({'error': 'API credentials not configured'}), 500
         
         # Initialize KiteConnect
@@ -122,42 +173,115 @@ def callback():
         data = kite.generate_session(request_token, api_secret=api_secret)
         access_token = data['access_token']  # type: ignore[index]
         
-        # Store in session
+        # Store in session with broker_id context
         session['access_token'] = access_token
         session['request_token'] = request_token
+        session['broker_id'] = broker_id
+        session['instance_num'] = instance_num
         session.permanent = True
         
-        logger.info("Session generated successfully, access_token stored")
+        logger.info(f"Session generated successfully for {username} - {broker_id}, access_token stored")
         logger.info(f"User authenticated with access_token: {access_token[:20]}...")
         
-        # Store in environment for immediate use
+        # Store in environment for immediate use (with broker context)
+        os.environ['ACCESS_TOKEN'] = access_token
+        os.environ['REQUEST_TOKEN'] = request_token
+        os.environ['ACTIVE_BROKER_ID'] = broker_id
+        os.environ['ACTIVE_INSTANCE'] = str(instance_num)
+        os.environ['ACTIVE_USER'] = username
+        
+        # Store in persistent cache to survive socket pool flushes
+        save_access_token(access_token, request_token)
+        logger.info(f"Token saved to persistent cache for {username} - {broker_id}")
+        
+        # Update user-specific .env file with new tokens (instance-specific if needed)
+        _update_user_env_tokens(username, access_token, request_token, broker_id, instance_num)
         os.environ['ACCESS_TOKEN'] = access_token
         os.environ['REQUEST_TOKEN'] = request_token
         
         # Store in persistent cache to survive socket pool flushes
         save_access_token(access_token, request_token)
-        logger.info("Token saved to persistent cache")
+        logger.info(f"Token saved to persistent cache for {broker_id}")
         
-        # Update .env file with new tokens
-        _update_env_tokens(access_token, request_token)
+        # Update .env file with new tokens (instance-specific if needed)
+        _update_env_tokens(access_token, request_token, broker_id, instance_num)
         
-        return redirect(url_for('pages.index'))
+        return redirect(url_for('pages.index', login_success=True))
     
     except Exception as e:
         logger.error(f"Error during callback: {e}", exc_info=True)
         return jsonify({'error': f'Authentication failed: {str(e)}'}), 500
 
 
-def _update_env_tokens(access_token: str, request_token: str) -> bool:
-    """Update ACCESS_TOKEN and REQUEST_TOKEN in .env file.
+def _update_user_env_tokens(username: str, access_token: str, request_token: str, broker_id: str = 'kite_1', instance_num: int = 1) -> bool:
+    """Update tokens in user-specific .env file.
+    
+    Saves tokens to the user's .env file (e.g., Kavin.env).
+    For instance_num=1, updates the original ACCESS_TOKEN and REQUEST_TOKEN.
+    For instance_num>1, updates instance-specific variables.
     
     Args:
-        access_token: New access token from Zerodha
-        request_token: New request token from Zerodha
+        username: Username whose .env file to update
+        access_token: New access token from broker
+        request_token: New request token from broker
+        broker_id: Broker identifier (e.g., 'kite_1', 'kite_2')
+        instance_num: Instance number (1 for primary, 2+ for additional)
         
     Returns:
         True if successful, False otherwise
     """
+    from trading_app.app.utils.user_env import UserEnvManager
+    
+    try:
+        # Determine the token variable names based on instance number
+        if instance_num == 1:
+            access_token_var = 'ACCESS_TOKEN'
+            request_token_var = 'REQUEST_TOKEN'
+        else:
+            access_token_var = f'ACCESS_TOKEN_{instance_num}'
+            request_token_var = f'REQUEST_TOKEN_{instance_num}'
+        
+        # Save tokens to user-specific .env
+        tokens_dict = {
+            access_token_var: access_token,
+            request_token_var: request_token
+        }
+        
+        success = UserEnvManager.save_user_vars(username, tokens_dict)
+        
+        if success:
+            logger.info(f"✓ {username}.env updated with new tokens for {broker_id} (instance {instance_num})")
+            logger.info(f"  {access_token_var}: {access_token[:20]}...")
+            logger.info(f"  {request_token_var}: {request_token[:20]}...")
+        
+        return success
+        
+    except Exception as e:
+        logger.error(f"❌ Error updating tokens in {username}.env: {e}", exc_info=True)
+        return False
+
+
+def _update_env_tokens(username: str, access_token: str, request_token: str, broker_id: str = 'kite_1', instance_num: int = 1) -> bool:
+    """Update ACCESS_TOKEN and REQUEST_TOKEN in .env file.
+    
+    Legacy function - kept for backward compatibility.
+    Supports multiple broker instances. For instance_num=1, updates the original
+    ACCESS_TOKEN and REQUEST_TOKEN. For instance_num>1, updates instance-specific
+    variables like ACCESS_TOKEN_2, REQUEST_TOKEN_2, etc.
+    
+    Args:
+        username: Username (or empty string for system .env)
+        access_token: New access token from broker
+        request_token: New request token from broker
+        broker_id: Broker identifier (e.g., 'kite_1', 'kite_2')
+        instance_num: Instance number (1 for primary, 2+ for additional)
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    if username:
+        return _update_user_env_tokens(username, access_token, request_token, broker_id, instance_num)
+    
     try:
         env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')
         
@@ -169,35 +293,43 @@ def _update_env_tokens(access_token: str, request_token: str) -> bool:
         with open(env_file, 'r') as f:
             lines = f.readlines()
         
+        # Determine the token variable names based on instance number
+        if instance_num == 1:
+            access_token_var = 'ACCESS_TOKEN'
+            request_token_var = 'REQUEST_TOKEN'
+        else:
+            access_token_var = f'ACCESS_TOKEN_{instance_num}'
+            request_token_var = f'REQUEST_TOKEN_{instance_num}'
+        
         # Update or add tokens
         updated_lines = []
         access_token_found = False
         request_token_found = False
         
         for line in lines:
-            if line.startswith('ACCESS_TOKEN='):
-                updated_lines.append(f'ACCESS_TOKEN={access_token}\n')
+            if line.startswith(f'{access_token_var}='):
+                updated_lines.append(f'{access_token_var}={access_token}\n')
                 access_token_found = True
-            elif line.startswith('REQUEST_TOKEN='):
-                updated_lines.append(f'REQUEST_TOKEN={request_token}\n')
+            elif line.startswith(f'{request_token_var}='):
+                updated_lines.append(f'{request_token_var}={request_token}\n')
                 request_token_found = True
             else:
                 updated_lines.append(line)
         
         # Add tokens if they don't exist
         if not access_token_found:
-            updated_lines.append(f'\nACCESS_TOKEN={access_token}\n')
+            updated_lines.append(f'{access_token_var}={access_token}\n')
         
         if not request_token_found:
-            updated_lines.append(f'REQUEST_TOKEN={request_token}\n')
+            updated_lines.append(f'{request_token_var}={request_token}\n')
         
         # Write updated .env file
         with open(env_file, 'w') as f:
             f.writelines(updated_lines)
         
-        logger.info(f"✓ .env file updated with new tokens")
-        logger.info(f"  ACCESS_TOKEN: {access_token[:20]}...")
-        logger.info(f"  REQUEST_TOKEN: {request_token[:20]}...")
+        logger.info(f"✓ .env file updated with new tokens for {broker_id} (instance {instance_num})")
+        logger.info(f"  {access_token_var}: {access_token[:20]}...")
+        logger.info(f"  {request_token_var}: {request_token[:20]}...")
         
         return True
         
@@ -621,8 +753,11 @@ def fyers_login():
         
     except Exception as e:
         logger.error(f"[Fyers Login] Error: {e}", exc_info=True)
-        return jsonify({'error': f'Login failed: {str(e)}'}), 500
+        return jsonify({'error': str(e)}), 500
+
+
 @auth_bp.route('/callback/fyers')
+@auth_bp.route('/login/fyers/callback')
 def fyers_oauth_callback():
     """
     Handle Fyers OAuth callback (similar to Kite callback).
@@ -630,15 +765,24 @@ def fyers_oauth_callback():
     Automatically exchanges code for access token and stores in .env.
     
     Query parameters:
-    - code: Authorization code (required)
+    - auth_code: Authorization code (required) - Fyers uses 'auth_code'
+    - code: HTTP status code (Fyers v3)
+    - s: Status field (Fyers v3)
     - state: State parameter (for security validation)
     """
-    auth_code = request.args.get('code', '').strip()
+    # Fyers sends auth_code, not code
+    auth_code = request.args.get('auth_code', '').strip()
+    
+    # Also try 'code' parameter as fallback (for compatibility)
+    if not auth_code:
+        auth_code = request.args.get('code', '').strip()
+    
     state = request.args.get('state', '').strip()
     error = request.args.get('error', '').strip()
     error_description = request.args.get('error_description', '').strip()
     
-    logger.info(f"[Fyers Callback] Received OAuth callback - error: {error if error else 'None'}")
+    logger.info(f"[Fyers Callback] Received OAuth callback")
+    logger.info(f"[Fyers Callback] auth_code present: {bool(auth_code)}, error: {error if error else 'None'}")
     
     # Handle OAuth errors
     if error:
@@ -648,7 +792,8 @@ def fyers_oauth_callback():
                              error_description=error_description), 400
     
     if not auth_code:
-        logger.error("[Fyers Callback] No auth code received")
+        logger.error("[Fyers Callback] No auth code received from Fyers")
+        logger.error(f"[Fyers Callback] Request args: {dict(request.args)}")
         return render_template('auth_error.html', 
                              error='No authorization code received from Fyers'), 400
     
@@ -690,95 +835,10 @@ def fyers_oauth_callback():
                                  error_description=error_msg), 401
             
     except Exception as e:
-        logger.error(f"[Fyers Callback] Error: {e}", exc_info=True)
+        logger.error(f"[Fyers Callback] Exception: {e}", exc_info=True)
         return render_template('auth_error.html', 
                              error='OAuth callback processing failed',
                              error_description=str(e)), 500
-
-
-@auth_bp.route('/login/fyers')
-def login_fyers():
-    """
-    Fyers OAuth login - works exactly like Kite login.
-    
-    GET /login/fyers
-        → Redirects to Fyers OAuth authorization page
-    
-    Query parameter (from Fyers callback):
-        code: Authorization code
-    """
-    auth_code = request.args.get('code')
-    
-    if auth_code:
-        # This is the callback from Fyers OAuth
-        logger.info("[Fyers Login] Processing OAuth callback with auth code")
-        
-        try:
-            from trading_app.service.fyers_order_services import FyersOrderService
-            
-            # Exchange auth code for access token
-            fyers_service = FyersOrderService()
-            
-            if fyers_service.generate_access_token(auth_code):
-                access_token = fyers_service.access_token
-                
-                # Store in session (like Kite does)
-                session['fyers_access_token'] = access_token
-                session['fyers_authenticated'] = True
-                session.permanent = True
-                
-                # Store in environment
-                if access_token:
-                    os.environ['FYERS_ACCESS_TOKEN'] = access_token
-                    
-                    # Update .env file (like Kite callback does)
-                    _update_fyers_env_credentials(access_token=access_token)
-                    
-                    logger.info(f"[Fyers Login] ✅ Successfully authenticated")
-                    logger.info(f"[Fyers Login] Token stored: {access_token[:30]}...")
-                
-                # Redirect to home page (like Kite does)
-                return redirect(url_for('pages.index'))
-            else:
-                error_msg = fyers_service.last_error or 'Failed to generate access token'
-                logger.error(f"[Fyers Login] Token generation failed: {error_msg}")
-                
-                return render_template('auth_error.html',
-                                     error='Fyers Authentication Failed',
-                                     error_description=error_msg), 401
-        
-        except Exception as e:
-            logger.error(f"[Fyers Login] Error processing callback: {e}", exc_info=True)
-            return render_template('auth_error.html',
-                                 error='Fyers OAuth Error',
-                                 error_description=str(e)), 500
-    
-    else:
-        # Initial login request - redirect to Fyers OAuth
-        logger.info("[Fyers Login] Initiating Fyers OAuth flow...")
-        
-        try:
-            from trading_app.service.fyers_order_services import FyersOrderService
-            
-            fyers_service = FyersOrderService()
-            auth_url = fyers_service.generate_auth_code_url()
-            
-            if auth_url:
-                logger.info(f"[Fyers Login] Redirecting to Fyers OAuth: {auth_url[:80]}...")
-                # Redirect to Fyers OAuth page (like Kite does)
-                return redirect(auth_url)
-            else:
-                logger.error("[Fyers Login] Failed to generate auth URL")
-                error_msg = fyers_service.last_error or 'Missing FYERS_APP_ID or FYERS_SECRET_KEY in .env'
-                return render_template('auth_error.html',
-                                     error='Failed to Initialize Fyers Login',
-                                     error_description=error_msg), 400
-        
-        except Exception as e:
-            logger.error(f"[Fyers Login] Error initiating OAuth: {e}", exc_info=True)
-            return render_template('auth_error.html',
-                                 error='Fyers Login Error',
-                                 error_description=str(e)), 500
 
 
 def _update_fyers_env_credentials(access_token: Optional[str] = None) -> bool:

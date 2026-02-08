@@ -33,8 +33,12 @@ def start_intraday_9_20_monitoring():
             logger.warning("⚠️  Kite connection not available - missing credentials")
             return
         
-        kite = KiteConnect(api_key=api_key)
-        kite.set_access_token(access_token)
+        try:
+            kite = KiteConnect(api_key=api_key)
+            kite.set_access_token(access_token)
+        except Exception as e:
+            logger.error(f"Error creating KiteConnect instance: {e}")
+            return
         
         # Create monitors for NIFTY only
         symbols = ['NIFTY']
@@ -53,7 +57,7 @@ def start_intraday_9_20_monitoring():
                 else:
                     logger.info(f"ℹ️  Not a market day - {symbol} monitoring not started")
             except Exception as e:
-                logger.error(f"Error starting monitoring for {symbol}: {str(e)}")
+                logger.error(f"Error starting monitoring for {symbol}: {str(e)}", exc_info=True)
         
         if live_monitors:
             logger.info(f"✅ Intraday 9:20 Live Signal Monitoring active for: {', '.join(live_monitors.keys())}")

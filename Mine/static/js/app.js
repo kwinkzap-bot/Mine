@@ -441,283 +441,35 @@ window.submitDhanLogin = async function() {
 };
 
 /**
- * Show modal to login to Fyers (OAuth or Direct Token)
- * @param {string} loginUrl - The URL to post authentication data to (default: /auth/login/fyers)
+ * Show Fyers login - redirects to OAuth (like Kite)
+ * Works exactly like Kite: click button → redirect to Fyers OAuth → login → redirect back
  */
-window.showFyersLoginModal = function(loginUrl = '/auth/login/fyers') {
-    // Create modal HTML with OAuth and direct token options
-    const modalHtml = `
-        <div id="fyersLoginModal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;">
-            <div style="background: white; padding: 30px; border-radius: 8px; max-width: 550px; width: 90%; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-height: 90vh; overflow-y: auto;">
-                <h2 style="margin-top: 0; color: #333;">Fyers Authentication</h2>
-                
-                <!-- OAuth Flow Tab -->
-                <div id="fyersOAuthTab" style="display: none;">
-                    <p style="color: #666; margin-bottom: 20px;">
-                        <strong>OAuth Method (Recommended):</strong> More secure - you authorize in Fyers app
-                    </p>
-                    
-                    <div style="background: #f8f9fa; padding: 15px; border-radius: 4px; margin-bottom: 15px;">
-                        <p style="margin: 0 0 10px 0; color: #333; font-weight: bold;">How it works:</p>
-                        <ol style="margin: 0; padding-left: 20px; color: #666; font-size: 14px;">
-                            <li>Click "Open Fyers Login" button below</li>
-                            <li>A new window opens with Fyers login</li>
-                            <li>Enter your Fyers credentials and authorize</li>
-                            <li>You'll be automatically authenticated</li>
-                        </ol>
-                    </div>
-                    
-                    <button onclick="initiateFyersOAuth()" 
-                            style="width: 100%; padding: 12px; margin-bottom: 15px; border: none; background: #007bff; color: white; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold;">
-                        🔒 Open Fyers Login
-                    </button>
-                    
-                    <p style="text-align: center; color: #999; margin: 20px 0;">Or use direct token:</p>
-                </div>
-                
-                <!-- Direct Token Tab -->
-                <div id="fyersTokenTab">
-                    <p style="color: #666; margin-bottom: 20px;">
-                        <strong>Direct Token Method:</strong> Enter your access token directly
-                    </p>
-                    
-                    <div style="margin-bottom: 15px;">
-                        <label style="display: block; margin-bottom: 5px; color: #333; font-weight: bold;">Access Token *</label>
-                        <textarea id="fyersAccessToken" placeholder="Enter your access token (format: APPID:token or just token)" 
-                                  rows="4"
-                                  style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; font-family: monospace; resize: vertical; box-sizing: border-box;"></textarea>
-                        <small style="color: #666; display: block; margin-top: 5px;">
-                            Get from: <strong>https://myapi.fyers.in/dashboard/</strong> → Your Profile → Generate Token
-                        </small>
-                    </div>
-                </div>
-                
-                <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 25px;">
-                    <button onclick="closeFyersLoginModal()" 
-                            style="padding: 10px 20px; border: 1px solid #ddd; background: white; color: #333; border-radius: 4px; cursor: pointer; font-size: 14px;">
-                        Cancel
-                    </button>
-                    <button onclick="submitFyersLogin()" 
-                            style="padding: 10px 20px; border: none; background: #28a745; color: white; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;">
-                        Authenticate
-                    </button>
-                </div>
-                
-                <div id="fyersLoginStatus" style="margin-top: 15px; padding: 10px; border-radius: 4px; display: none;"></div>
-            </div>
-        </div>
-    `;
+window.showFyersLoginModal = function() {
+    console.log('[Fyers Login] Initiating OAuth flow...');
     
-    // Remove existing modal if present
-    const existingModal = document.getElementById('fyersLoginModal');
-    if (existingModal) {
-        existingModal.remove();
+    // Show loading indicator
+    if (typeof showNotification === 'function') {
+        showNotification('Redirecting to Fyers login...', 'info');
     }
     
-    // Add modal to page
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
-    
-    // Store login URL for submit function
-    window.fyersLoginUrl = loginUrl;
-    
-    // Show OAuth tab by default
-    document.getElementById('fyersOAuthTab').style.display = 'block';
-    document.getElementById('fyersTokenTab').style.display = 'block';
-    
-    // Focus on access token input
-    setTimeout(() => {
-        document.getElementById('fyersAccessToken')?.focus();
-    }, 100);
-    
-    // Setup message listener for OAuth callback
-    window.addEventListener('message', window.handleFyersOAuthMessage);
+    // Redirect to Fyers OAuth endpoint (like Kite)
+    // The backend will handle the OAuth URL generation and redirect
+    window.location.href = '/auth/login/fyers';
 };
 
 /**
- * Handle message from Fyers OAuth callback window
- */
-window.handleFyersOAuthMessage = function(event) {
-    if (event.data && event.data.type === 'fyers_auth_success') {
-        console.log('[Fyers OAuth] Authentication successful:', event.data.message);
-        
-        const statusDiv = document.getElementById('fyersLoginStatus');
-        if (statusDiv) {
-            statusDiv.style.display = 'block';
-            statusDiv.style.background = '#d4edda';
-            statusDiv.style.color = '#155724';
-            statusDiv.textContent = '✓ Authentication successful!';
-        }
-        
-        if (typeof showNotification === 'function') {
-            showNotification('Successfully authenticated with Fyers!', 'success');
-        }
-        
-        // Close modal after 1.5 seconds
-        setTimeout(() => {
-            closeFyersLoginModal();
-            location.reload();
-        }, 1500);
-    }
-};
-
-/**
- * Initiate Fyers OAuth flow
- */
-window.initiateFyersOAuth = async function() {
-    const statusDiv = document.getElementById('fyersLoginStatus');
-    
-    // Show loading status
-    if (statusDiv) {
-        statusDiv.style.display = 'block';
-        statusDiv.style.background = '#d1ecf1';
-        statusDiv.style.color = '#0c5460';
-        statusDiv.textContent = 'Getting OAuth URL from server...';
-    }
-    
-    try {
-        // Request OAuth URL from backend
-        const response = await fetch(window.fyersLoginUrl || '/auth/login/fyers', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({})
-        });
-        
-        const data = await response.json();
-        
-        if (data.success && data.auth_url) {
-            // Open Fyers login in new window
-            const oauthWindow = window.open(data.auth_url, 'fyers_oauth', 'width=600,height=700,toolbar=no,location=no,status=no,menubar=no');
-            
-            if (!oauthWindow) {
-                if (statusDiv) {
-                    statusDiv.style.background = '#f8d7da';
-                    statusDiv.style.color = '#721c24';
-                    statusDiv.textContent = '✗ Failed to open OAuth window. Please check browser popup settings.';
-                }
-                return;
-            }
-            
-            if (statusDiv) {
-                statusDiv.style.display = 'block';
-                statusDiv.style.background = '#d1ecf1';
-                statusDiv.style.color = '#0c5460';
-                statusDiv.textContent = 'Opening Fyers login... Please complete authorization in the new window.';
-            }
-            
-        } else {
-            if (statusDiv) {
-                statusDiv.style.background = '#f8d7da';
-                statusDiv.style.color = '#721c24';
-                statusDiv.textContent = `✗ ${data.error || 'Failed to get OAuth URL'}`;
-            }
-        }
-        
-    } catch (error) {
-        console.error('Error initiating Fyers OAuth:', error);
-        if (statusDiv) {
-            statusDiv.style.background = '#f8d7da';
-            statusDiv.style.color = '#721c24';
-            statusDiv.textContent = `✗ Error: ${error.message}`;
-        }
-    }
-};
-
-/**
- * Close the Fyers login modal
+ * Close the Fyers login modal (not used in simplified flow)
  */
 window.closeFyersLoginModal = function() {
-    const modal = document.getElementById('fyersLoginModal');
-    if (modal) {
-        modal.remove();
-    }
-    window.removeEventListener('message', window.handleFyersOAuthMessage);
+    // No-op in simplified flow
 };
 
 /**
- * Submit Fyers authentication with direct access token
+ * Submit Fyers authentication (not used in simplified flow)
  */
-window.submitFyersLogin = async function() {
-    const accessToken = document.getElementById('fyersAccessToken')?.value?.trim();
-    const statusDiv = document.getElementById('fyersLoginStatus');
-    
-    if (!accessToken) {
-        if (statusDiv) {
-            statusDiv.style.display = 'block';
-            statusDiv.style.background = '#fff3cd';
-            statusDiv.style.color = '#856404';
-            statusDiv.textContent = 'Please enter your access token or use OAuth login';
-        }
-        return;
-    }
-    
-    // Show loading status
-    if (statusDiv) {
-        statusDiv.style.display = 'block';
-        statusDiv.style.background = '#d1ecf1';
-        statusDiv.style.color = '#0c5460';
-        statusDiv.textContent = 'Authenticating with Fyers...';
-    }
-    
-    try {
-        const requestBody = {
-            access_token: accessToken
-        };
-        
-        const response = await fetch(window.fyersLoginUrl || '/auth/login/fyers', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestBody)
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            // Success
-            if (statusDiv) {
-                statusDiv.style.background = '#d4edda';
-                statusDiv.style.color = '#155724';
-                statusDiv.textContent = '✓ Authentication successful!';
-            }
-            
-            if (typeof showNotification === 'function') {
-                showNotification('Successfully authenticated with Fyers!', 'success');
-            }
-            
-            // Close modal after 1.5 seconds
-            setTimeout(() => {
-                closeFyersLoginModal();
-                location.reload();
-            }, 1500);
-            
-        } else {
-            // Error
-            if (statusDiv) {
-                statusDiv.style.background = '#f8d7da';
-                statusDiv.style.color = '#721c24';
-                statusDiv.textContent = `✗ ${data.error || data.message || 'Authentication failed'}`;
-            }
-            
-            if (typeof showNotification === 'function') {
-                showNotification(data.error || 'Fyers authentication failed', 'error');
-            }
-        }
-        
-    } catch (error) {
-        console.error('Error during Fyers login:', error);
-        if (statusDiv) {
-            statusDiv.style.background = '#f8d7da';
-            statusDiv.style.color = '#721c24';
-            statusDiv.textContent = `✗ Error: ${error.message}`;
-        }
-        
-        if (typeof showNotification === 'function') {
-            showNotification('Network error during authentication', 'error');
-        }
-    }
+window.submitFyersLogin = function() {
+    // Redirect to OAuth instead
+    window.showFyersLoginModal();
 };
 
 })();

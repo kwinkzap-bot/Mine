@@ -252,7 +252,6 @@ async function loadStrikePrices() {
  * This function also sets the token in a hidden field for form submission.
  */
 async function loadInstruments() {
-    const statusDiv = document.getElementById('statusMessage') || document.getElementById('status');
     const instrumentType = document.getElementById('instrumentType').value;
     const fnoType = document.getElementById('fnoType').value;
     const symbol = document.getElementById('symbolSelect').value;
@@ -261,38 +260,27 @@ async function loadInstruments() {
 
     selectedInstrumentToken = null; // Reset token
 
-    // If no status div, just return without trying to update UI
-    if (!statusDiv) {
-        console.warn('Status div not found');
-        return;
-    }
-
     // 1. Handle Options: token should be in currentInstruments
     if (instrumentType === 'fno' && fnoType === 'options' && symbol && expiry && strike && currentInstruments.length > 0) {
         const selectedInstrument = currentInstruments.find(inst => inst.strike == strike); // Assuming 'strike' is the field
         if (selectedInstrument) {
             selectedInstrumentToken = selectedInstrument.token; // Assuming 'token' is the field
-            statusDiv.innerHTML = `<div class="status info">Token found: ${selectedInstrumentToken}</div>`;
             return;
         }
     }
 
     // 2. Handle Futures/Indices: need an API call for a single token
     if (symbol) {
-        statusDiv.innerHTML = '<div class="status loading">Finding instrument token...</div>';
         try {
             const data = await fetchJson(`/api/historical/instrument-token?symbol=${symbol}&type=${instrumentType}&fno_type=${fnoType}`);
              if (data.success && data.instrument_token) {
                 selectedInstrumentToken = data.instrument_token;
-                statusDiv.innerHTML = `<div class="status info">Token found: ${selectedInstrumentToken}</div>`;
                 return;
             }
         } catch (e) {
             // Error handled by fetchJson
         }
     }
-
-    statusDiv.innerHTML = '<div class="status error">Could not determine instrument token.</div>';
 }
 
 /**
@@ -303,17 +291,9 @@ async function handleFormSubmission(e) {
     
     const table = document.getElementById('dataTable');
     const tbody = document.getElementById('dataBody') || document.getElementById('dataTableBody');
-    const statusDiv = document.getElementById('statusMessage') || document.getElementById('status');
-    
-    // Early return if required elements don't exist
-    if (!statusDiv) {
-        console.error('Status div not found');
-        return;
-    }
     
     if (!tbody) {
         console.error('Table body not found');
-        statusDiv.innerHTML = '<div class="status error">Error: Data table not found.</div>';
         return;
     }
     

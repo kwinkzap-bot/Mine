@@ -6,6 +6,7 @@ from datetime import datetime
 import requests
 import hashlib
 import urllib.parse
+from fyers_apiv3 import fyersModel
 
 load_dotenv()
 
@@ -57,6 +58,23 @@ class FyersOrderService:
         self.base_url = "https://api-t1.fyers.in/api/v3"
         self.last_error = None
         
+        # Initialize Fyers SDK client if we have access token
+        self.fyers_client = None
+        if self.access_token and self.app_id:
+            try:
+                # Extract token part (SDK expects just the token, not app_id:token format)
+                token_only = self.access_token.split(':')[-1] if ':' in self.access_token else self.access_token
+                self.fyers_client = fyersModel.FyersModel(
+                    token=token_only,  # Use only the token part, SDK handles app_id separately
+                    is_async=False,
+                    client_id=self.app_id,  # Type-safe: already checked for None
+                    log_path=""
+                )
+                logging.info("[FyersOrderService] ✓ Fyers SDK client initialized with token format: extracted")
+            except Exception as e:
+                logging.warning(f"[FyersOrderService] Failed to init SDK client: {e}")
+                self.fyers_client = None
+        
         logging.info("[FyersOrderService] Initialized with Fyers credentials")
         logging.debug(f"[FyersOrderService] Redirect URI: {self.redirect_uri}")
         
@@ -80,6 +98,36 @@ class FyersOrderService:
         # Validity
         self.VALIDITY_DAY = 'DAY'
         self.VALIDITY_IOC = 'IOC'
+    
+    def _parse_response(self, response: requests.Response, method_name: str = "API") -> Dict[str, Any]:
+        """
+        Safely parse JSON response from Fyers API.
+        
+        Args:
+            response: requests.Response object
+            method_name: Name of the calling method (for logging)
+            
+        Returns:
+            Dict with parsed data or error dict
+        """
+        try:
+            data = response.json()
+            return data
+        except ValueError as json_err:
+            logging.error(f"[{method_name}] Failed to parse JSON response: {json_err}")
+            logging.error(f"[{method_name}] Response status: {response.status_code}")
+            logging.error(f"[{method_name}] Response headers: {dict(response.headers)}")
+            logging.error(f"[{method_name}] Raw response: {response.text[:500]}")
+            
+            # Return a structured error response
+            return {
+                's': 'error',
+                'message': f'Invalid JSON response from Fyers: {str(json_err)}',
+                'error': str(json_err),
+                'status_code': response.status_code,
+                'raw_response': response.text[:200],
+                'parse_error': True
+            }
     
     def generate_auth_code_url(self) -> str:
         """
@@ -170,7 +218,7 @@ class FyersOrderService:
             
             logging.info(f"[generate_access_token] Response status: {response.status_code}")
             
-            data = response.json()
+            data = self._parse_response(response, "generate_access_token")
             logging.debug(f"[generate_access_token] Response: {data}")
             
             # Fyers API returns status in 's' field: 'ok' or 'error'
@@ -248,7 +296,7 @@ class FyersOrderService:
             
             logging.info(f"[verify_token] Response status: {response.status_code}")
             
-            data = response.json()
+            data = self._parse_response(response, "verify_token")
             logging.debug(f"[verify_token] Response: {data}")
             
             # Fyers returns status in 's' field: 'ok' or 'error'
@@ -337,6 +385,76 @@ class FyersOrderService:
             
             order_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
+            # Try to use Fyers SDK first
+            if self.fyers_client:
+                try:
+                    logging.info(f"[place_order] Using Fyers SDK to place order for symbol: {symbol}")
+                    logging.debug(f"[place_order] SDK client initialized: {self.fyers_client is not None}")
+                    logging.debug(f"[place_order] Access token format: {self.access_token[:30]}..." if self.access_token else "No token")
+                    
+                    payload = {
+                        "symbol": symbol,
+                        "qty": quantity,
+                        "type": order_type,
+                        "side": side,
+                        "productType": product_type,
+                        "limitPrice": limit_price,
+                        "stopPrice": stop_price,
+                        "validity": validity,
+                        "disclosedQty": disclosed_qty,
+                        "offlineOrder": offline_order,
+                        "stopLoss": stop_loss,
+                        "takeProfit": take_profit
+                    }
+                    
+                    logging.debug(f"[place_order] SDK Payload: {payload}")
+                    
+                    # Use SDK to place order
+                    result = self.fyers_client.place_order(payload)
+                    
+                    logging.info(f"[place_order] SDK Response: {result}")
+                    
+                    # Handle SDK response
+                    if result and result.get('s') == 'ok':
+                        order_id = result.get('id')
+                        
+                        logging.info(f"✅ {order_time} Fyers Order placed successfully. Order ID: {order_id} | "
+                                   f"Symbol: {symbol} @ ₹{limit_price} | Qty: {quantity}")
+                        
+                        return {
+                            'success': True,
+                            'order_id': order_id,
+                            'symbol': symbol,
+                            'price': limit_price,
+                            'quantity': quantity,
+                            'side': 'BUY' if side == 1 else 'SELL',
+                            'order_type': order_type,
+                            'product_type': product_type,
+                            'timestamp': order_time,
+                            'platform': 'FYERS',
+                            'method': 'SDK'
+                        }
+                    else:
+                        error_msg = result.get('message') or result.get('error') or 'Unknown error from SDK'
+                        logging.error(f"[place_order] SDK returned error: {error_msg}")
+                        logging.error(f"[place_order] SDK response: {result}")
+                        logging.error(f"[place_order] Authentication check - app_id: {self.app_id}, token format: {'app_id:token' if ':' in self.access_token else 'token_only'}")
+                        
+                        return {
+                            'success': False,
+                            'error': error_msg,
+                            'symbol': symbol,
+                            'response': result,
+                            'method': 'SDK'
+                        }
+                        
+                except Exception as sdk_error:
+                    logging.warning(f"[place_order] SDK call failed: {sdk_error}")
+                    logging.warning(f"[place_order] Falling back to REST API")
+            
+            # Fallback to REST API if SDK not available or failed
+            logging.info(f"[place_order] Using REST API to place order for symbol: {symbol}")
+            
             url = f"{self.base_url}/orders"
             headers = {
                 "Authorization": self.access_token,
@@ -358,12 +476,18 @@ class FyersOrderService:
                 "takeProfit": take_profit
             }
             
-            logging.info(f"[place_order] Placing order: {payload}")
+            logging.debug(f"[place_order] REST URL: {url}")
+            logging.debug(f"[place_order] REST Headers: Authorization={self.access_token[:30]}..., Content-Type=application/json")
+            logging.debug(f"[place_order] REST Payload: {payload}")
             
             response = requests.post(url, headers=headers, json=payload, timeout=30)
-            data = response.json()
             
-            logging.info(f"[place_order] Response ({response.status_code}): {data}")
+            logging.info(f"[place_order] REST Response status: {response.status_code}")
+            logging.debug(f"[place_order] REST Response body: {response.text}")
+            
+            data = self._parse_response(response, "place_order")
+            
+            logging.info(f"[place_order] REST Parsed response: {data}")
             
             if response.status_code == 200 and data.get('s') == 'ok':
                 order_id = data.get('id')
@@ -384,12 +508,21 @@ class FyersOrderService:
                     'platform': 'FYERS'
                 }
             else:
-                error_msg = data.get('message') or 'Unknown error'
+                # Handle error responses
+                if response.status_code == 404:
+                    error_msg = f"404 Not Found - Check API endpoint or authentication. Response: {data.get('raw_response', response.text)}"
+                    logging.error(f"[place_order] 404 Error - Endpoint might be wrong or auth failed")
+                    logging.error(f"[place_order] URL used: {url}")
+                    logging.error(f"[place_order] Response: {response.text[:200]}")
+                else:
+                    error_msg = data.get('message') or data.get('error') or 'Unknown error'
+                
                 logging.error(f"❌ {order_time} Order placement failed: {error_msg}")
                 return {
                     'success': False,
                     'error': error_msg,
                     'symbol': symbol,
+                    'status_code': response.status_code,
                     'response': data
                 }
                 
@@ -435,9 +568,13 @@ class FyersOrderService:
             logging.info(f"[place_basket_orders] Placing {len(orders)} orders")
             
             response = requests.post(url, headers=headers, json=orders, timeout=30)
-            data = response.json()
             
-            logging.info(f"[place_basket_orders] Response ({response.status_code}): {data}")
+            logging.info(f"[place_basket_orders] Response status: {response.status_code}")
+            logging.debug(f"[place_basket_orders] Response body: {response.text}")
+            
+            data = self._parse_response(response, "place_basket_orders")
+            
+            logging.info(f"[place_basket_orders] Parsed response: {data}")
             
             if response.status_code == 200 and data.get('s') == 'ok':
                 logging.info(f"✅ Basket orders placed successfully")
@@ -501,7 +638,7 @@ class FyersOrderService:
             logging.info(f"[modify_order] Modifying order {order_id}: {payload}")
             
             response = requests.put(url, headers=headers, json=payload, timeout=30)
-            data = response.json()
+            data = self._parse_response(response, "modify_order")
             
             logging.info(f"[modify_order] Response ({response.status_code}): {data}")
             
@@ -559,7 +696,7 @@ class FyersOrderService:
             logging.info(f"[cancel_order] Cancelling order {order_id}")
             
             response = requests.delete(url, headers=headers, json=payload, timeout=30)
-            data = response.json()
+            data = self._parse_response(response, "cancel_order")
             
             logging.info(f"[cancel_order] Response ({response.status_code}): {data}")
             
@@ -724,7 +861,7 @@ class FyersOrderService:
             }
             
             response = requests.get(url, headers=headers, timeout=30)
-            data = response.json()
+            data = self._parse_response(response, "get_orderbook")
             
             if response.status_code == 200 and data.get('s') == 'ok':
                 orders = data.get('orderBook', [])
@@ -769,7 +906,7 @@ class FyersOrderService:
             }
             
             response = requests.get(url, headers=headers, timeout=30)
-            data = response.json()
+            data = self._parse_response(response, "get_positions")
             
             if response.status_code == 200 and data.get('s') == 'ok':
                 positions = data.get('netPositions', [])
@@ -814,7 +951,7 @@ class FyersOrderService:
             }
             
             response = requests.get(url, headers=headers, timeout=30)
-            data = response.json()
+            data = self._parse_response(response, "get_holdings")
             
             if response.status_code == 200 and data.get('s') == 'ok':
                 holdings = data.get('holdings', [])
@@ -859,7 +996,7 @@ class FyersOrderService:
             }
             
             response = requests.get(url, headers=headers, timeout=30)
-            data = response.json()
+            data = self._parse_response(response, "get_funds")
             
             if response.status_code == 200 and data.get('s') == 'ok':
                 funds = data.get('fund_limit', [])

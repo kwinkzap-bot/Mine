@@ -512,11 +512,6 @@
     white-space: nowrap;
 }
 
-.header-middle {
-    flex: 1 1 auto;
-    min-width: auto;
-}
-
 .header-right {
     flex: 0 0 auto;
     display: flex;
@@ -949,10 +944,6 @@
 @media (max-width: 1200px) {
     .strike-header {
         gap: 12px;
-    }
-    
-    .header-middle {
-        min-width: 150px;
     }
     
     .date-picker {

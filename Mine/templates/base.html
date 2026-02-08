@@ -14,6 +14,7 @@
     <div id="notification-container"></div>
     <div class="container">
         <div class="navigation-bar">
+            <a href="/" class="nav-link home-link" title="Home">🏠</a>
             <a href="/historical" class="nav-link {% if request.path == '/historical' %}active{% endif %}">📈 Historical</a>
             <a href="/strategy" class="nav-link {% if request.path == '/strategy' %}active{% endif %}">📊 Strategy</a>
             <a href="/multi-strike" class="nav-link {% if request.path == '/multi-strike' %}active{% endif %}">⚡ Multi Strike</a>
@@ -34,10 +35,9 @@
                         Not logged in
                         {% endif %}
                     </div>
-                    <a href="/auth/login" class="dropdown-item">Login to Zerodha</a>
-                    <a href="#" class="dropdown-item" onclick="event.preventDefault(); showDhanLoginModal();">Login to Dhan</a>
-                    <a href="#" class="dropdown-item" onclick="event.preventDefault(); showFyersLoginModal();">Login to Fyers</a>
-                    <a href="#" class="dropdown-item" onclick="event.preventDefault(); showKotakLoginModal();">Login to Kotak Neo</a>
+                    <div id="dynamicBrokersList" style="max-height: 200px; overflow-y: auto;">
+                        <p style="padding: 8px 16px; font-size: 12px; color: #999;">Loading brokers...</p>
+                    </div>
                     <div style="border-top: 1px solid #ddd; margin-top: 4px; padding-top: 4px;"></div>
                     <a href="/auth/user-logout" class="dropdown-item" style="color: #dc3545;">⏻ Logout</a>
                 </div>
@@ -53,6 +53,81 @@
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script src="{{ url_for('static', filename='js/cpr_filter_scheduler.js') }}"></script>
     <script>
+        /**
+         * Load available brokers into the dropdown menu
+         */
+        async function loadBrokersIntoDropdown() {
+            try {
+                const response = await fetch('/api/available-brokers');
+                const data = await response.json();
+                
+                const container = document.getElementById('dynamicBrokersList');
+                
+                if (!data.success || !data.brokers || data.brokers.length === 0) {
+                    container.innerHTML = `
+                        <p style="padding: 8px 16px; font-size: 12px; color: #999;">
+                            No brokers configured
+                        </p>
+                    `;
+                    return;
+                }
+                
+                // Create dropdown items for each broker
+                let html = '';
+                for (const broker of data.brokers) {
+                    const icon = broker.icon || '🔐';
+                    
+                    // Color mapping for brokers
+                    const colorMap = {
+                        'zerodha': '#FF8C00',    // Orange
+                        'kotak': '#DC143C',      // Red
+                        'dhan': '#28A745',       // Green
+                        'fyers': '#007BFF'       // Blue
+                    };
+                    
+                    const brokerColor = colorMap[broker.broker_type] || '#666';
+                    
+                    if (broker.login_url) {
+                        html += `
+                            <a 
+                                href="${broker.login_url}" 
+                                class="dropdown-item"
+                                title="${broker.description}"
+                                style="border-left: 4px solid ${brokerColor}; padding-left: 12px; font-weight: 500; color: ${brokerColor};"
+                            >
+                                ${icon} ${broker.name}
+                            </a>
+                        `;
+                    } else if (broker.login_action) {
+                        html += `
+                            <a 
+                                href="#" 
+                                class="dropdown-item"
+                                onclick="event.preventDefault(); ${broker.login_action}"
+                                title="${broker.description}"
+                                style="border-left: 4px solid ${brokerColor}; padding-left: 12px; font-weight: 500; color: ${brokerColor};"
+                            >
+                                ${icon} ${broker.name}
+                            </a>
+                        `;
+                    }
+                }
+                
+                container.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error loading brokers:', error);
+                document.getElementById('dynamicBrokersList').innerHTML = `
+                    <p style="padding: 8px 16px; font-size: 12px; color: #dc3545;">
+                        Error loading brokers
+                    </p>
+                `;
+            }
+        }
+        
+        // Load brokers when page loads
+        document.addEventListener('DOMContentLoaded', loadBrokersIntoDropdown);
+        
         // Login dropdown toggle
         document.getElementById('loginToggle').addEventListener('click', function(e) {
             e.preventDefault();

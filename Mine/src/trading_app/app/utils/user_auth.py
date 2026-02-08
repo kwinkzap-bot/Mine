@@ -132,15 +132,24 @@ def is_user_authenticated() -> bool:
 
 def login_user(username: str) -> None:
     """
-    Log in a user by setting session variables.
+    Log in a user by setting session variables and loading their environment.
+    
+    Loads user-specific .env file (e.g., Kavin.env) for per-user broker credentials.
     
     Args:
         username: Username to log in
     """
+    from trading_app.app.utils.user_env import UserEnvManager
+    
     session['user_authenticated'] = True
     session['username'] = username
     session.permanent = True
+    
+    # Load user-specific environment variables
+    UserEnvManager.load_user_env(username)
+    
     logger.info(f"User '{username}' logged in successfully")
+    logger.info(f"Loaded environment from {username}.env")
 
 def logout_user() -> None:
     """

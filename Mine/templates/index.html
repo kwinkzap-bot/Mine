@@ -2,13 +2,132 @@
 {% block title %}Home{% endblock %}
 {% block content %}
 <div class="container" style="text-align: center;">
-    <div id="statusMessage"></div>
+    <!-- Success Notification -->
+    <div id="successNotification" style="display: none; margin-bottom: 20px;">
+        <div style="padding: 16px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 6px; color: #155724;">
+            <strong>✓ Login Successful!</strong>
+            <p style="margin: 8px 0 0 0; font-size: 14px;">You are now authenticated and can access all features.</p>
+        </div>
+    </div>
+
+    <!-- Dynamic Login Buttons Section -->
+    <div id="brokersContainer" style="margin-top: 20px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+        <p style="width: 100%; color: #666; font-size: 14px;">Loading available brokers...</p>
+    </div>
+    
     <div style="margin-top: 20px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-        <button class="btn" id="loginZerodhaBtn" onclick="window.location.href='/auth/login'">Login to Zerodha</button> 
         <button class="btn" id="refreshBtn" style="background: #28a745;">🔄 Refresh</button> 
     </div>
 </div>
 {% endblock %}
 {% block scripts %}
+<script>
+    /**
+     * Load and display available brokers from the API
+     * Only shows brokers that have credentials configured in .env
+     */
+    async function loadAvailableBrokers() {
+        try {
+            const response = await fetch('/api/available-brokers');
+            const data = await response.json();
+            
+            const container = document.getElementById('brokersContainer');
+            
+            if (!data.success || !data.brokers || data.brokers.length === 0) {
+                container.innerHTML = `
+                    <p style="width: 100%; color: #dc3545; font-size: 14px;">
+                        ⚠️ No brokers configured. Please add broker credentials to .env file.
+                    </p>
+                `;
+                return;
+            }
+            
+            // Create a button for each available broker
+            let html = '';
+            for (const broker of data.brokers) {
+                const buttonId = `login-${broker.id}-btn`;
+                const icon = broker.icon || '🔐';
+                
+                // Color mapping for brokers
+                const colorMap = {
+                    'zerodha': '#FF8C00',    // Orange
+                    'kotak': '#DC143C',      // Red
+                    'dhan': '#28A745',       // Green
+                    'fyers': '#007BFF'       // Blue
+                };
+                
+                const brokerColor = colorMap[broker.broker_type] || '#667eea';
+                
+                // Determine if it's a URL-based login or action-based
+                if (broker.login_url) {
+                    // Direct URL navigation
+                    html += `
+                        <button 
+                            class="btn broker-login-btn" 
+                            id="${buttonId}"
+                            onclick="window.location.href='${broker.login_url}'"
+                            title="${broker.description}"
+                            style="background-color: ${brokerColor}; color: white; font-weight: 500;"
+                        >
+                            ${icon} ${broker.name}
+                        </button>
+                    `;
+                } else if (broker.login_action) {
+                    // JavaScript action (modal, etc.)
+                    html += `
+                        <button 
+                            class="btn broker-login-btn" 
+                            id="${buttonId}"
+                            onclick="${broker.login_action}"
+                            title="${broker.description}"
+                            style="background-color: ${brokerColor}; color: white; font-weight: 500;"
+                        >
+                            ${icon} ${broker.name}
+                        </button>
+                    `;
+                }
+            }
+            
+            container.innerHTML = html;
+            
+            // Add info message
+            const infoMsg = document.createElement('p');
+            infoMsg.style.cssText = 'width: 100%; color: #667eea; font-size: 12px; margin-top: 15px;';
+            infoMsg.innerHTML = `✓ ${data.total_configured} broker(s) available - ${data.message}`;
+            container.parentElement.insertBefore(infoMsg, container.nextSibling);
+            
+            console.log(`✓ Loaded ${data.total_configured} available brokers`);
+            
+        } catch (error) {
+            console.error(`Error loading brokers: ${error}`);
+            const container = document.getElementById('brokersContainer');
+            container.innerHTML = `
+                <p style="width: 100%; color: #dc3545; font-size: 14px;">
+                    ❌ Error loading brokers: ${error.message}
+                </p>
+            `;
+        }
+    }
+    
+    // Load brokers on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        loadAvailableBrokers();
+    });
+    
+    // Refresh button handler
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+        const button = document.getElementById('refreshBtn');
+        button.disabled = true;
+        button.style.opacity = '0.5';
+        button.innerHTML = '⏳ Refreshing...';
+        
+        setTimeout(() => {
+            loadAvailableBrokers();
+            button.disabled = false;
+            button.style.opacity = '1';
+            button.innerHTML = '🔄 Refresh';
+        }, 500);
+    });
+</script>
 <script src="{{ url_for('static', filename='js/index.js') }}"></script>
 {% endblock %}

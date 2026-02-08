@@ -37,6 +37,21 @@ body {
     font-weight: 500;
     font-size: 14px;
 }
+
+.home-link {
+    font-size: 18px;
+    margin-right: 20px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.home-link:hover {
+    background: #e8f4f8;
+    color: #0066cc;
+    transform: scale(1.1);
+}
+
 .nav-link-login {
     color: #28a745;
     margin-left: auto;
@@ -231,3 +246,31 @@ td {
 
 /* CPR Filter styles moved to cpr_filter.css for better organization */
 /* The notification styles (from notifications.css) are NOT included here to respect your file separation. */
+/* ================================================================= */
+/* Broker Login Buttons (Dynamic) */
+/* ================================================================= */
+.broker-login-btn {
+    min-width: 140px;
+    padding: 10px 15px !important;
+    height: auto !important;
+    font-size: 15px !important;
+    font-weight: 500;
+    border: 2px solid transparent;
+    transition: all 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.broker-login-btn:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+    border-color: #667eea;
+}
+
+.broker-login-btn:active {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+

@@ -180,6 +180,203 @@ def health() -> EndpointResponse:
     return jsonify({'status': 'healthy'}), 200
 
 
+@api_bp.route('/available-brokers', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def get_available_brokers() -> EndpointResponse:
+    """Get list of available broker instances based on configured credentials
+    
+    Reads from user-specific .env file (e.g., Kavin.env) for per-user credentials.
+    Supports multiple instances of the same broker (e.g., Kite1, Kite2, Kite3).
+    
+    Returns:
+        JSON with list of available broker instances for the current user
+    """
+    try:
+        from trading_app.app.utils.user_env import UserEnvManager
+        
+        # Get current username from session
+        username = session.get('username')
+        if not username:
+            return jsonify({
+                'success': False,
+                'error': 'User not authenticated',
+                'brokers': [],
+                'total_configured': 0
+            }), 401
+        
+        brokers = []
+        
+        # Broker configurations with field patterns
+        broker_configs = {
+            'zerodha': {
+                'name': 'Zerodha (Kite)',
+                'icon': '🪁',
+                'description': 'NSE/BSE stocks & F&O trading',
+                'fields': ['API_KEY', 'API_SECRET'],
+                'prefix': 'KITE',
+                'login_type': 'url',
+                'login_url': '/auth/login'
+            },
+            'kotak': {
+                'name': 'Kotak Neo',
+                'icon': '🏦',
+                'description': 'Stocks, F&O & derivatives trading',
+                'fields': ['KOTAK_ACCESS_TOKEN', 'KOTAK_UCC'],
+                'prefix': 'KOTAK',
+                'login_type': 'modal',
+                'login_action': 'showKotakLoginModal'
+            },
+            'dhan': {
+                'name': 'Dhan',
+                'icon': '📊',
+                'description': 'F&O, options & commodity trading',
+                'fields': ['DHAN_ACCESS_TOKEN', 'DHAN_CLIENT_ID'],
+                'prefix': 'DHAN',
+                'login_type': 'modal',
+                'login_action': 'showDhanLoginModal'
+            },
+            'fyers': {
+                'name': 'Fyers',
+                'icon': '⚡',
+                'description': 'Options & index trading',
+                'fields': ['FYERS_APP_ID', 'FYERS_SECRET_KEY'],
+                'prefix': 'FYERS',
+                'login_type': 'modal',
+                'login_action': 'showFyersLoginModal'
+            }
+        }
+        
+        # For each broker type, scan for multiple instances
+        for broker_type, config in broker_configs.items():
+            instance_num = 1
+            
+            # Try to find instances (up to 10 per broker type)
+            while instance_num <= 10:
+                # Check if all required fields exist for this instance
+                all_fields_present = True
+                
+                if broker_type == 'zerodha':
+                    # Special case: first Zerodha instance uses API_KEY, API_SECRET directly
+                    if instance_num == 1:
+                        api_key = UserEnvManager.get_user_var(username, 'API_KEY', '').strip()
+                        api_secret = UserEnvManager.get_user_var(username, 'API_SECRET', '').strip()
+                        if api_key and api_secret:
+                            broker_id = 'kite_1'
+                            brokers.append({
+                                'id': broker_id,
+                                'name': config['name'],
+                                'icon': config['icon'],
+                                'instance_num': 1,
+                                'broker_type': broker_type,
+                                'description': config['description'],
+                                'configured': True,
+                                'login_url': f"/auth/login?broker_id={broker_id}",
+                                'status': 'Configured and ready',
+                                'login_type': config['login_type']
+                            })
+                            instance_num += 1
+                            continue
+                    else:
+                        # Additional Zerodha instances use KITE_2_API_KEY, etc.
+                        api_key = UserEnvManager.get_user_var(username, f'KITE_{instance_num}_API_KEY', '').strip()
+                        api_secret = UserEnvManager.get_user_var(username, f'KITE_{instance_num}_API_SECRET', '').strip()
+                        if api_key and api_secret:
+                            broker_id = f'kite_{instance_num}'
+                            brokers.append({
+                                'id': broker_id,
+                                'name': config['name'],
+                                'icon': config['icon'],
+                                'instance_num': instance_num,
+                                'broker_type': broker_type,
+                                'description': config['description'],
+                                'configured': True,
+                                'login_url': f"/auth/login?broker_id={broker_id}",
+                                'status': 'Configured and ready',
+                                'login_type': config['login_type']
+                            })
+                        else:
+                            all_fields_present = False
+                
+                else:
+                    # For other brokers, use prefix-based naming
+                    if instance_num == 1:
+                        # First instance can use original field names or prefixed names
+                        field_values = []
+                        for field in config['fields']:
+                            value = UserEnvManager.get_user_var(username, field, '').strip()
+                            if value:
+                                field_values.append(value)
+                        
+                        if len(field_values) == len(config['fields']):
+                            broker_id = f"{broker_type}_1"
+                            brokers.append({
+                                'id': broker_id,
+                                'name': config['name'],
+                                'icon': config['icon'],
+                                'instance_num': 1,
+                                'broker_type': broker_type,
+                                'description': config['description'],
+                                'configured': True,
+                                'login_url': f"/auth/login?broker_id={broker_id}" if config['login_type'] == 'url' else None,
+                                'login_action': f"{config['login_action']}('{broker_id}')" if config['login_type'] == 'modal' else None,
+                                'status': 'Configured and ready',
+                                'login_type': config['login_type']
+                            })
+                            instance_num += 1
+                            continue
+                        else:
+                            all_fields_present = False
+                    else:
+                        # Additional instances use prefixed naming
+                        field_values = []
+                        for field in config['fields']:
+                            # Extract field name without broker prefix
+                            field_suffix = field.replace(f"{config['prefix']}_", '') if field.startswith(config['prefix']) else field
+                            value = UserEnvManager.get_user_var(username, f"{config['prefix']}_{instance_num}_{field_suffix}", '').strip()
+                            if value:
+                                field_values.append(value)
+                        
+                        if len(field_values) == len(config['fields']):
+                            broker_id = f"{broker_type}_{instance_num}"
+                            brokers.append({
+                                'id': broker_id,
+                                'name': config['name'],
+                                'icon': config['icon'],
+                                'instance_num': instance_num,
+                                'broker_type': broker_type,
+                                'description': config['description'],
+                                'configured': True,
+                                'login_url': f"/auth/login?broker_id={broker_id}" if config['login_type'] == 'url' else None,
+                                'login_action': f"{config['login_action']}('{broker_id}')" if config['login_type'] == 'modal' else None,
+                                'status': 'Configured and ready',
+                                'login_type': config['login_type']
+                            })
+                        else:
+                            all_fields_present = False
+                
+                # If this instance doesn't have all fields, stop looking for higher instances
+                if not all_fields_present:
+                    break
+                
+                instance_num += 1
+        
+        return jsonify({
+            'success': True,
+            'brokers': brokers,
+            'total_configured': len(brokers),
+            'message': f'{len(brokers)} broker(s) available for login'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching available brokers: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'brokers': []
+        }), 500
+
+
 @api_bp.route('/token-status', methods=['GET'])
 def token_status() -> EndpointResponse:
     """Check current token status and validity.
@@ -2195,7 +2392,22 @@ def place_intraday_920_order() -> EndpointResponse:
                 # Map action to side (1=BUY, -1=SELL)
                 side = 1 if action == 'BUY' else -1
                 
-                logger.info(f"[Fyers] Placing order for {fyers_symbol} with side={side}, quantity={order_quantity}")
+                # Determine product type based on current time
+                # Fyers disallows MIS orders after 3:20 PM IST (system square-off time)
+                # Switch to CNC (Cash and Carry) after square-off time
+                from datetime import datetime, time
+                current_time = datetime.now().time()
+                FYERS_SQUARE_OFF_TIME = time(15, 20)  # 3:20 PM IST
+                
+                if current_time >= FYERS_SQUARE_OFF_TIME:
+                    # After square-off time, use CNC (Cash and Carry) for positional trades
+                    product_type = 'CNC'
+                    logger.info(f"[Fyers] After square-off time ({FYERS_SQUARE_OFF_TIME}), using CNC instead of INTRADAY")
+                else:
+                    # Before square-off time, use INTRADAY (MIS)
+                    product_type = 'INTRADAY'
+                
+                logger.info(f"[Fyers] Placing order for {fyers_symbol} with side={side}, quantity={order_quantity}, product_type={product_type}")
                 
                 # Use place_order with the Fyers symbol format
                 result = fyers_service.place_order(
@@ -2203,7 +2415,7 @@ def place_intraday_920_order() -> EndpointResponse:
                     side=side,
                     quantity=order_quantity,
                     order_type=2,  # 2=MARKET
-                    product_type='INTRADAY'
+                    product_type=product_type
                 )
                 
                 if result['success']:
