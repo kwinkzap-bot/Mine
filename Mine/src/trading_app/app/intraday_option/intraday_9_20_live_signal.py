@@ -18,37 +18,29 @@ from ...service.kite_order_services import KiteService
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 from utils.excel_logger import ExcelLogger
 
-# Initialize excel logger - will be set per user when monitoring starts
-excel_logger: Optional[ExcelLogger] = None
-
 logger = logging.getLogger(__name__)
 
 
-def _log_to_excel(method_name: str, **kwargs) -> bool:
-    """
-    Safely log to Excel if logger is initialized.
+class _NoOpExcelLogger:
+    """Null object pattern - provides all ExcelLogger methods but does nothing."""
+    file_path = None
     
-    Args:
-        method_name: Name of the ExcelLogger method to call
-        **kwargs: Arguments to pass to the method
-        
-    Returns:
-        True if logged successfully or logger is None, False if error occurred
-    """
-    if not excel_logger:
-        return True  # Skip silently if no logger
+    def log_trade(self, **kwargs):
+        pass
     
-    try:
-        method = getattr(excel_logger, method_name, None)
-        if method and callable(method):
-            method(**kwargs)
-            return True
-        else:
-            logger.warning(f"Excel logger method '{method_name}' not found")
-            return False
-    except Exception as e:
-        logger.error(f"Error logging to Excel via {method_name}: {e}", exc_info=True)
-        return False
+    def log_signal_check(self, **kwargs):
+        pass
+    
+    def log_sl_target_check(self, **kwargs):
+        pass
+    
+    def log_trailing_sl_update(self, **kwargs):
+        pass
+
+
+# Initialize excel logger - will be set per user when monitoring starts
+# Use NoOpLogger as default to avoid None checks everywhere
+excel_logger: ExcelLogger = _NoOpExcelLogger()  # type: ignore
 
 
 def log_order_placement(order_data: Dict[str, Any]) -> None:
@@ -127,9 +119,8 @@ def log_order_placement(order_data: Dict[str, Any]) -> None:
             except (ValueError, TypeError):
                 sl_price = None
         
-        # Log to Excel (if logger is initialized)
-        _log_to_excel(
-            'log_trade',
+        # Log to Excel
+        excel_logger.log_trade(
             order_type=side,
             option_type=option_type,
             strike=strike,
