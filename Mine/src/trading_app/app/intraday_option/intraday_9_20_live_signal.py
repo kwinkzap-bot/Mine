@@ -16,9 +16,39 @@ from ...service.kite_order_services import KiteService
 
 # Add utils to path for excel_logger
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-from utils.excel_logger import excel_logger
+from utils.excel_logger import ExcelLogger
+
+# Initialize excel logger - will be set per user when monitoring starts
+excel_logger: Optional[ExcelLogger] = None
 
 logger = logging.getLogger(__name__)
+
+
+def _log_to_excel(method_name: str, **kwargs) -> bool:
+    """
+    Safely log to Excel if logger is initialized.
+    
+    Args:
+        method_name: Name of the ExcelLogger method to call
+        **kwargs: Arguments to pass to the method
+        
+    Returns:
+        True if logged successfully or logger is None, False if error occurred
+    """
+    if not excel_logger:
+        return True  # Skip silently if no logger
+    
+    try:
+        method = getattr(excel_logger, method_name, None)
+        if method and callable(method):
+            method(**kwargs)
+            return True
+        else:
+            logger.warning(f"Excel logger method '{method_name}' not found")
+            return False
+    except Exception as e:
+        logger.error(f"Error logging to Excel via {method_name}: {e}", exc_info=True)
+        return False
 
 
 def log_order_placement(order_data: Dict[str, Any]) -> None:
@@ -97,8 +127,9 @@ def log_order_placement(order_data: Dict[str, Any]) -> None:
             except (ValueError, TypeError):
                 sl_price = None
         
-        # Log to Excel
-        excel_logger.log_trade(
+        # Log to Excel (if logger is initialized)
+        _log_to_excel(
+            'log_trade',
             order_type=side,
             option_type=option_type,
             strike=strike,
@@ -111,8 +142,7 @@ def log_order_placement(order_data: Dict[str, Any]) -> None:
             order_id=order_data.get('order_id'),
             notes=notes_str
         )
-        
-        logger.info(f"✅ Order logged to Excel: {side}")
+        logger.info(f"✅ Order placed: {side}")
         
     except Exception as e:
         logger.error(f"Failed to write order placement log: {e}", exc_info=True)
