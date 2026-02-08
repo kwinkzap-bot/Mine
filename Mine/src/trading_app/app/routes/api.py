@@ -37,17 +37,27 @@ def get_kite() -> Optional[Any]:
     debug session resets that clear Flask session data:
     1. Session storage (immediate access)
     2. Environment variable (restored after socket pool flush)
-    3. Persistent token cache file (survives process restart)
+    3. UserEnvManager (user-specific .env file)
+    4. Persistent token cache file (survives process restart)
     """
     try:
         from kiteconnect import KiteConnect
         from trading_app.app.utils.token_manager import get_access_token
+        from trading_app.app.utils.user_env import UserEnvManager
         import os
         
-        api_key = os.getenv('API_KEY')
+        # Get username from session to access user-specific credentials
+        username = session.get('username')
+        
+        # Get API_KEY - prefer user-specific first, then environment
+        api_key = None
+        if username:
+            api_key = UserEnvManager.get_user_var(username, 'API_KEY')
+        if not api_key:
+            api_key = os.getenv('API_KEY')
         
         if not api_key:
-            logger.warning("API_KEY not found in environment")
+            logger.warning("API_KEY not found in environment or user config")
             return None
         
         # Get access token with multiple fallback layers
@@ -60,7 +70,13 @@ def get_kite() -> Optional[Any]:
             if access_token:
                 logger.info("Access token restored from environment variable (socket pool flush recovery)")
         
-        # 3. Check persistent token cache
+        # 3. Check UserEnvManager for user-specific token
+        if not access_token and username:
+            access_token = UserEnvManager.get_user_var(username, 'ACCESS_TOKEN')
+            if access_token:
+                logger.info(f"Access token restored from user config ({username})")
+        
+        # 4. Check persistent token cache
         if not access_token:
             access_token = get_access_token()
             if access_token:
@@ -71,7 +87,7 @@ def get_kite() -> Optional[Any]:
                 session.permanent = True
         
         if not access_token:
-            logger.warning("No access token available from any source")
+            logger.warning(f"No access token available from any source (username: {username})")
             return None
         
         # Ensure session is in sync (for future requests)
@@ -83,7 +99,7 @@ def get_kite() -> Optional[Any]:
         kite = KiteConnect(api_key=api_key)
         kite.set_access_token(access_token)
         
-        logger.debug(f"KiteConnect initialized successfully (token: {access_token[:20]}...)")
+        logger.debug(f"KiteConnect initialized successfully for user {username} (token: {access_token[:20]}...)")
         return kite
         
     except Exception as e:
