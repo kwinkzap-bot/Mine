@@ -20,6 +20,80 @@ from utils.excel_logger import ExcelLogger
 
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# CONSTANTS - Magic strings extracted to reduce duplication
+# ============================================================================
+# Option Types
+OPTION_TYPE_CE = 'CE'
+OPTION_TYPE_PE = 'PE'
+
+# Order Status
+ORDER_STATUS_SUCCESS = 'SUCCESS'
+ORDER_STATUS_FAILED = 'FAILED'
+ORDER_STATUS_PLACED = 'PLACED'
+ORDER_STATUS_DEMO = 'DEMO'
+ORDER_STATUS_ERROR = 'ERROR'
+
+# Order Types
+ORDER_TYPE_SL = 'SL_ORDER'
+ORDER_TYPE_BUY = 'BUY'
+ORDER_TYPE_SELL = 'SELL'
+
+# Trade States
+TRADE_STATE_OPEN = 'OPEN'
+TRADE_STATE_CLOSED = 'CLOSED'
+TRADE_STATE_SL_HIT = 'SL_HIT'
+TRADE_STATE_TARGET_HIT = 'TARGET_HIT'
+TRADE_STATE_TRAILING_SL = 'TRAILING_SL'
+
+# Default Values
+DEFAULT_NA = 'N/A'
+DEFAULT_STRIKE = 0
+DEFAULT_PRICE = 0.0
+
+
+# ============================================================================
+# HELPER FUNCTIONS - Reusable utilities to reduce code duplication
+# ============================================================================
+def safe_int(value: Any, default: int = DEFAULT_STRIKE) -> int:
+    """Safely convert value to int with fallback to default."""
+    try:
+        if value:
+            return int(value)
+    except (ValueError, TypeError):
+        pass
+    return default
+
+
+def safe_float(value: Any, default: float = DEFAULT_PRICE) -> float:
+    """Safely convert value to float with fallback to default."""
+    try:
+        if isinstance(value, str):
+            return float(value)
+        elif value:
+            return float(value)
+    except (ValueError, TypeError):
+        pass
+    return default
+
+
+def extract_option_type(side: str) -> str:
+    """Extract CE or PE from side string (e.g., 'BUY CE' -> 'CE')."""
+    if OPTION_TYPE_CE in str(side).upper():
+        return OPTION_TYPE_CE
+    elif OPTION_TYPE_PE in str(side).upper():
+        return OPTION_TYPE_PE
+    return DEFAULT_NA
+
+
+def build_notes_string(data: Dict[str, Any], keys: List[str]) -> str:
+    """Build notes string from dictionary keys that exist."""
+    notes = []
+    for key in keys:
+        if data.get(key):
+            notes.append(f"{key.capitalize()}: {data[key]}")
+    return " | ".join(notes) if notes else ""
+
 
 class _NoOpExcelLogger:
     """Null object pattern - provides all ExcelLogger methods but does nothing."""
@@ -51,73 +125,35 @@ def log_order_placement(order_data: Dict[str, Any]) -> None:
         order_data: Dictionary containing order details
     """
     try:
-        # Determine order type and status for Excel logging
-        side = order_data.get('side', 'N/A')
-        status = order_data.get('status', 'N/A')
+        side = order_data.get('side', DEFAULT_NA)
+        status = order_data.get('status', DEFAULT_NA).upper()
         
         # Map status to Excel logger status
-        excel_status = status
-        if 'SUCCESS' in status.upper():
-            excel_status = side  # BUY or SELL
-        elif 'FAILED' in status.upper() or 'ERROR' in status.upper():
-            excel_status = 'FAILED'
-        elif 'DEMO' in order_data.get('mode', ''):
-            excel_status = f'{side}_DEMO'
+        if ORDER_STATUS_SUCCESS in status:
+            excel_status = side
+        elif ORDER_STATUS_FAILED in status or ORDER_STATUS_ERROR in status:
+            excel_status = ORDER_STATUS_FAILED
+        elif ORDER_STATUS_DEMO in order_data.get('mode', ''):
+            excel_status = f"{side}_{ORDER_STATUS_DEMO}"
+        else:
+            excel_status = status
         
-        # Prepare notes with additional details
-        notes = []
-        if order_data.get('mode'):
-            notes.append(f"Mode: {order_data['mode']}")
-        if order_data.get('error'):
-            notes.append(f"Error: {order_data['error']}")
-        if order_data.get('details'):
-            notes.append(f"Details: {order_data['details']}")
-        if order_data.get('order_type'):
-            notes.append(f"Type: {order_data['order_type']}")
+        # Prepare notes from various fields
+        notes_str = build_notes_string(order_data, ['mode', 'error', 'details', 'order_type'])
+        option_type = extract_option_type(side)
+        strike = safe_int(order_data.get('strike'))
+        entry_price = safe_float(order_data.get('entry_price'))
         
-        notes_str = " | ".join(notes) if notes else ""
-        
-        # Extract option type from side (side contains 'BUY CE', 'SELL PE', etc.)
-        option_type = 'N/A'
-        if 'CE' in str(side):
-            option_type = 'CE'
-        elif 'PE' in str(side):
-            option_type = 'PE'
-        
-        # Get strike as integer
-        strike_val = order_data.get('strike', 0)
-        try:
-            strike = int(strike_val) if strike_val else 0
-        except (ValueError, TypeError):
-            strike = 0
-        
-        # Get entry price as float
-        entry_price_val = order_data.get('entry_price', 0)
-        try:
-            if isinstance(entry_price_val, str):
-                entry_price = float(entry_price_val)
-            else:
-                entry_price = float(entry_price_val) if entry_price_val else 0.0
-        except (ValueError, TypeError):
-            entry_price = 0.0
-        
-        # Get target and SL, handle 'N/A' strings
-        target_val = order_data.get('target')
-        sl_val = order_data.get('sl')
-        
+        # Handle target and SL safely
         target_price = None
-        if target_val not in ['N/A', None, '']:
-            try:
-                target_price = float(target_val) if isinstance(target_val, (int, float, str)) else None
-            except (ValueError, TypeError):
-                target_price = None
+        target_val = order_data.get('target')
+        if target_val not in [DEFAULT_NA, None, '']:
+            target_price = safe_float(target_val)
         
         sl_price = None
-        if sl_val not in ['N/A', None, '']:
-            try:
-                sl_price = float(sl_val) if isinstance(sl_val, (int, float, str)) else None
-            except (ValueError, TypeError):
-                sl_price = None
+        sl_val = order_data.get('sl')
+        if sl_val not in [DEFAULT_NA, None, '']:
+            sl_price = safe_float(sl_val)
         
         # Log to Excel
         excel_logger.log_trade(
@@ -125,10 +161,10 @@ def log_order_placement(order_data: Dict[str, Any]) -> None:
             option_type=option_type,
             strike=strike,
             entry_price=entry_price,
-            current_price=entry_price,  # Same as entry on placement
+            current_price=entry_price,
             target=target_price,
             stop_loss=sl_price,
-            pnl=None,  # No P&L on order placement
+            pnl=None,
             status=excel_status,
             order_id=order_data.get('order_id'),
             notes=notes_str
