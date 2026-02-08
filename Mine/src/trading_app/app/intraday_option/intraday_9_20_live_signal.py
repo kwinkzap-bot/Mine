@@ -290,6 +290,10 @@ class Intraday920LiveSignal:
             from openpyxl import load_workbook
             import os
             
+            # Only check Excel if logger is initialized
+            if not excel_logger or not excel_logger.file_path:
+                return False
+            
             if os.path.exists(excel_logger.file_path):
                 wb = load_workbook(excel_logger.file_path)
                 if 'Trades' in wb.sheetnames:
