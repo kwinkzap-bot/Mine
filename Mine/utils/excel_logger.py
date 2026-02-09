@@ -20,7 +20,9 @@ except ImportError:
 
 
 # Get project root directory (relative path)
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ExcelLogger is at: /Users/kavinkumar/Mine/Mine/utils/excel_logger.py
+# Go up 2 levels: Mine/utils -> Mine/
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOGS_DIR = os.path.join(_PROJECT_ROOT, 'logs')
 
 
