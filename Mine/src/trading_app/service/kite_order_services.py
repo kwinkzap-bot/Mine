@@ -794,7 +794,8 @@ class KiteService:
             logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} (trigger & execute) x {quantity}")
             
             # Place stop loss order with trigger price
-            # For Zerodha Kite: Use LIMIT order with trigger_price parameter
+            # For Zerodha Kite: Use SL order type (not LIMIT)
+            # SL = Stop Loss order that waits for trigger_price before executing
             # The trigger_price parameter is critical - it tells Kite when to activate
             order_id = self.kite.place_order(
                 variety=variety,
@@ -803,9 +804,9 @@ class KiteService:
                 transaction_type=self.kite.TRANSACTION_TYPE_SELL,
                 quantity=quantity,
                 product=product_type,
-                order_type=self.kite.ORDER_TYPE_LIMIT,  # LIMIT order with trigger
-                price=execution_price,  # Execution price (when triggered, execute at this price)
-                trigger_price=trigger_price  # CRITICAL: Trigger price (when to activate the order)
+                order_type=self.kite.ORDER_TYPE_SL,  # SL (Stop Loss) order type - CRITICAL!
+                price=execution_price,  # Execution price (limit price when triggered)
+                trigger_price=trigger_price  # Trigger price (when to activate the order)
             )
             
             logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ ₹{trigger_price:.2f} (stoploss trigger)")
