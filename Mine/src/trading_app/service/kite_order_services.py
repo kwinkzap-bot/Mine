@@ -729,7 +729,7 @@ class KiteService:
         
         Args:
             tradingsymbol: Trading symbol (e.g., 'NIFTY25D26C25000')
-            trigger_price: SL trigger price
+            trigger_price: SL trigger price (when to activate the order)
             quantity: Order quantity (default: 75)
             product: Product type - NRML (normal/default), MIS (intraday)
             
@@ -754,11 +754,16 @@ class KiteService:
             }
             product_type = product_map.get(product, self.kite.PRODUCT_MIS)
             
-            logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} x {quantity} (trigger-based LIMIT order)")
+            # For SL orders: set execution price BELOW trigger price
+            # This prevents immediate execution when order is placed
+            # Execution price is 0.2% below trigger for safety margin
+            execution_price = round(trigger_price * 0.998, 2)
+            
+            logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} (trigger) / ₹{execution_price:.2f} (execute) x {quantity}")
             
             # Place stop loss order with trigger price
             # For Zerodha Kite: Use LIMIT order with trigger_price
-            # When price drops to trigger_price, the order executes at the specified price
+            # When price drops to trigger_price, the order executes at execution_price
             order_id = self.kite.place_order(
                 variety=variety,
                 exchange=self.kite.EXCHANGE_NFO,
@@ -767,17 +772,18 @@ class KiteService:
                 quantity=quantity,
                 product=product_type,
                 order_type=self.kite.ORDER_TYPE_LIMIT,  # LIMIT order with trigger
-                price=trigger_price,  # Execution price (what we want to sell at)
+                price=execution_price,  # Execution price (slightly below trigger for safety)
                 trigger_price=trigger_price  # Trigger price (when to activate)
             )
             
-            logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ ₹{trigger_price:.2f} (Trigger)")
+            logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ Trigger: ₹{trigger_price:.2f}, Execute: ₹{execution_price:.2f}")
             
             return {
                 'success': True,
                 'order_id': order_id,
                 'symbol': tradingsymbol,
                 'trigger_price': trigger_price,
+                'execution_price': execution_price,
                 'quantity': quantity,
                 'order_type': 'STOPLOSS'
             }
