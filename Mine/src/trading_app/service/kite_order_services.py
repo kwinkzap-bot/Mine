@@ -672,10 +672,14 @@ class KiteService:
             result = {}
             for key, quote_data in quotes.items():
                 try:
-                    token = int(key.split(':')[1])
-                    result[token] = quote_data.get('last_price')
-                except (ValueError, KeyError):
-                    result[token] = None
+                    # Handle both string keys (e.g., "NFO:12345") and numeric keys
+                    if isinstance(key, str) and ':' in key:
+                        token = int(key.split(':')[1])
+                    else:
+                        token = int(key)
+                    result[token] = quote_data.get('last_price') if isinstance(quote_data, dict) else None
+                except (ValueError, KeyError, AttributeError, TypeError):
+                    pass  # Skip if unable to parse
             
             logging.debug(f"Fetched prices for {len(result)} tokens")
             return result
