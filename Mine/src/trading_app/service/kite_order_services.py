@@ -754,22 +754,26 @@ class KiteService:
             }
             product_type = product_map.get(product, self.kite.PRODUCT_MIS)
             
-            # For SL orders: set execution price BELOW trigger price with proper tick size
-            # Zerodha options have 0.05 (5 paise) tick size
-            # Round DOWN to the nearest tick size to ensure order is valid
+            # For Zerodha stoploss orders:
+            # - trigger_price: Price at which order becomes active
+            # - price: Execution limit price (should be AT or VERY CLOSE to trigger)
+            # 
+            # CRITICAL: If execution price is too far below trigger, and current price 
+            # is between execution and trigger, the order executes IMMEDIATELY!
+            # 
+            # Solution: Set execution price = trigger price (sell at trigger level)
+            # This ensures the order ONLY executes when price hits the trigger level
+            
             TICK_SIZE = 0.05
             
-            # Round execution price down to nearest tick (0.05)
-            execution_price = int(trigger_price / TICK_SIZE) * TICK_SIZE
+            # Round trigger_price to proper tick size
+            trigger_price = round(int(trigger_price / TICK_SIZE) * TICK_SIZE, 2)
             
-            # Ensure execution_price is at least trigger - 1.0 for safety margin
-            if execution_price >= trigger_price:
-                execution_price = trigger_price - TICK_SIZE
+            # For SELL stoploss: execution_price = trigger_price
+            # This ensures order executes AT the trigger level, not immediately
+            execution_price = trigger_price
             
-            # Final rounding to 2 decimals for safety
-            execution_price = round(execution_price, 2)
-            
-            logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} (trigger) / ₹{execution_price:.2f} (execute, tick-aligned) x {quantity}")
+            logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} (trigger & execute) x {quantity}")
             
             # Place stop loss order with trigger price
             # For Zerodha Kite: Use LIMIT order with trigger_price
@@ -786,7 +790,7 @@ class KiteService:
                 trigger_price=trigger_price  # Trigger price (when to activate)
             )
             
-            logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ Trigger: ₹{trigger_price:.2f}, Execute: ₹{execution_price:.2f} (tick-aligned)")
+            logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ ₹{trigger_price:.2f} (stoploss trigger)")
             
             return {
                 'success': True,
