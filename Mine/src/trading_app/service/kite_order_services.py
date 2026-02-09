@@ -649,6 +649,53 @@ class KiteService:
         
         return None
     
+    def get_current_prices_batch(self, tokens: List[int]) -> Dict[int, Optional[float]]:
+        """Fetch current LTP (Last Traded Price) for multiple tokens in a single API call.
+        
+        Batch fetching is more efficient than individual calls when monitoring multiple instruments.
+        Used by live signal monitoring to check prices every 30 seconds.
+        
+        Args:
+            tokens: List of instrument tokens to fetch
+            
+        Returns:
+            Dictionary mapping token -> price (or None if price unavailable)
+        """
+        try:
+            if not tokens:
+                return {}
+            
+            # Format tokens for Kite API (NFO:token_number)
+            quote_keys = [f"NFO:{token}" for token in tokens]
+            quotes = self.kite.quote(quote_keys)
+            
+            result = {}
+            for key, quote_data in quotes.items():
+                try:
+                    token = int(key.split(':')[1])
+                    result[token] = quote_data.get('last_price')
+                except (ValueError, KeyError):
+                    result[token] = None
+            
+            logging.debug(f"Fetched prices for {len(result)} tokens")
+            return result
+            
+        except Exception as e:
+            logging.error(f"Error fetching batch prices for {len(tokens)} tokens: {e}")
+            return {token: None for token in tokens}
+    
+    def get_current_price(self, token: int) -> Optional[float]:
+        """Fetch current LTP (Last Traded Price) for a given token.
+        
+        Args:
+            token: Instrument token
+            
+        Returns:
+            Current price or None if failed
+        """
+        prices = self.get_current_prices_batch([token])
+        return prices.get(token)
+    
     def place_option_order(self, symbol: str, strike: int, option_type: str, 
                           transaction_type: str, quantity: Optional[int] = None) -> Dict[str, Any]:
         """Place an order for an option contract.

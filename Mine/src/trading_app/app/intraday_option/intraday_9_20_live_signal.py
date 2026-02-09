@@ -863,22 +863,24 @@ class Intraday920LiveSignal:
             logger.error(f"Error checking entry signals: {str(e)}")
             return {'success': False, 'error': str(e), 'timestamp': datetime.now().isoformat()}
     
-    def place_buy_order(self, side: str, token: int, strike: int, entry_price: float) -> Optional[str]:
+    def place_buy_order(self, side: str, token: int, strike: int, entry_price: float, 
+                        transaction_type: str = 'BUY') -> Optional[str]:
         """
         Place a buy order for CE or PE option when entry signal detected.
         
-        Reuses KiteService.place_option_order() which:
+        Generic method that delegates to KiteService.place_option_order():
         1. Looks up the option trading symbol
         2. Fetches current market price
-        3. Places market order on Zerodha Kite
+        3. Places market order via broker service
         
-        Logs order placement to dedicated order_placement.log file.
+        Logs order placement to Excel Trade sheet.
         
         Args:
             side: 'CE' or 'PE'
-            token: Option token
+            token: Option token (unused but kept for compatibility)
             strike: Strike price
             entry_price: Entry price from signal
+            transaction_type: 'BUY' or 'SELL' (default: 'BUY')
             
         Returns:
             Order ID or None if failed
@@ -886,13 +888,13 @@ class Intraday920LiveSignal:
         logger.info(f"place_buy_order called: {side} {strike} @ {entry_price:.2f} (live_trading={self.live_trading})")
         
         if not self.live_trading:
-            demo_msg = f"DEMO: BUY {side} {strike} @ {entry_price:.2f}"
+            demo_msg = f"DEMO: {transaction_type} {side} {strike} @ {entry_price:.2f}"
             logger.info(demo_msg)
             
             # Log DEMO order placement
             log_order_placement({
                 'symbol': self.symbol,
-                'side': f'BUY {side}',
+                'side': f'{transaction_type} {side}',
                 'strike': strike,
                 'entry_price': f"{entry_price:.2f}",
                 'order_type': 'MARKET',
@@ -906,20 +908,27 @@ class Intraday920LiveSignal:
             return "DEMO_ORDER"
         
         try:
+            # Map transaction_type string to Kite constant
+            transaction_type_map = {
+                'BUY': self.kite.TRANSACTION_TYPE_BUY,
+                'SELL': self.kite.TRANSACTION_TYPE_SELL
+            }
+            transaction_type_const = transaction_type_map.get(transaction_type, self.kite.TRANSACTION_TYPE_BUY)
+            
             result = self.kite_service.place_option_order(
                 symbol=self.symbol,
                 strike=strike,
                 option_type=side,
-                transaction_type=self.kite.TRANSACTION_TYPE_BUY
+                transaction_type=transaction_type_const
             )
             
             if result['success']:
-                logger.info(f"✅ BUY Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {entry_price:.2f}")
+                logger.info(f"✅ {transaction_type} Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {entry_price:.2f}")
                 
                 # Log successful live order placement
                 log_order_placement({
                     'symbol': self.symbol,
-                    'side': f'BUY {side}',
+                    'side': f'{transaction_type} {side}',
                     'strike': strike,
                     'entry_price': f"{entry_price:.2f}",
                     'order_type': 'MARKET',
@@ -928,17 +937,17 @@ class Intraday920LiveSignal:
                     'order_id': result['order_id'],
                     'sl': 'N/A',
                     'target': 'N/A',
-                    'details': f"Order placed successfully on Zerodha"
+                    'details': f"Order placed successfully via KiteService"
                 })
                 
                 return result['order_id']
             else:
-                logger.error(f"❌ BUY Order failed: {result['error']}")
+                logger.error(f"❌ {transaction_type} Order failed: {result['error']}")
                 
                 # Log failed live order placement
                 log_order_placement({
                     'symbol': self.symbol,
-                    'side': f'BUY {side}',
+                    'side': f'{transaction_type} {side}',
                     'strike': strike,
                     'entry_price': f"{entry_price:.2f}",
                     'order_type': 'MARKET',
@@ -976,7 +985,8 @@ class Intraday920LiveSignal:
         """
         Fetch multiple current prices (LTP) in single API call for efficiency.
         
-        Batch fetching reduces API overhead when monitoring multiple tokens.
+        Generic method that delegates to KiteService for broker-agnostic price fetching.
+        Reduces API overhead when monitoring multiple tokens.
         
         Args:
             tokens: List of instrument tokens to fetch
@@ -984,31 +994,13 @@ class Intraday920LiveSignal:
         Returns:
             Dictionary mapping token -> price
         """
-        try:
-            if not tokens:
-                return {}
-            
-            # Batch tokens in chunks if necessary
-            quote_keys = [f"NFO:{token}" for token in tokens]
-            quotes = self.kite.quote(quote_keys)
-            
-            result = {}
-            for key, quote_data in quotes.items():
-                try:
-                    token = int(key.split(':')[1])
-                    result[token] = quote_data.get('last_price')
-                except (ValueError, KeyError):
-                    pass
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error fetching batch prices for {len(tokens)} tokens: {e}")
-            return {}
+        return self.kite_service.get_current_prices_batch(tokens)
     
     def get_current_price(self, token: int) -> Optional[float]:
         """
         Fetch current LTP (Last Traded Price) for a given token.
+        
+        Generic method that delegates to KiteService for broker-agnostic price fetching.
         
         Args:
             token: Instrument token
@@ -1016,8 +1008,7 @@ class Intraday920LiveSignal:
         Returns:
             Current price or None if failed
         """
-        prices = self.get_current_prices([token])
-        return prices.get(token)
+        return self.kite_service.get_current_price(token)
     
     def _get_option_symbol(self, symbol: str, strike: int, option_type: str) -> Optional[str]:
         """
@@ -1346,22 +1337,24 @@ class Intraday920LiveSignal:
                     self.active_trades[side]['status'] = 'CLOSED'
                     logger.info(f"📋 {side} trade marked as CLOSED - allowing new entry on next signal")
     
-    def place_sell_order(self, side: str, strike: int, exit_price: float, exit_reason: str = "Manual Exit") -> Optional[str]:
+    def place_sell_order(self, side: str, strike: int, exit_price: float, exit_reason: str = "Manual Exit",
+                         transaction_type: str = 'SELL') -> Optional[str]:
         """
         Place a sell order for CE or PE option to exit trade.
         
-        Reuses KiteService.place_option_order() which:
+        Generic method that delegates to KiteService.place_option_order():
         1. Looks up the option trading symbol
         2. Fetches current market price
-        3. Places market order on Zerodha Kite
+        3. Places market order via broker service
         
-        Logs order placement to dedicated order_placement.log file.
+        Logs order placement to Excel Trade sheet.
         
         Args:
             side: 'CE' or 'PE'
             strike: Strike price
             exit_price: Exit price
             exit_reason: Reason for exit (Target Hit, SL Hit, Manual, etc.)
+            transaction_type: 'BUY' or 'SELL' (default: 'SELL')
             
         Returns:
             Order ID or None if failed
@@ -1369,13 +1362,13 @@ class Intraday920LiveSignal:
         logger.info(f"place_sell_order called: {side} {strike} @ {exit_price:.2f} | Reason: {exit_reason} (live_trading={self.live_trading})")
         
         if not self.live_trading:
-            demo_msg = f"DEMO: SELL {side} {strike} @ {exit_price:.2f} | {exit_reason}"
+            demo_msg = f"DEMO: {transaction_type} {side} {strike} @ {exit_price:.2f} | {exit_reason}"
             logger.info(demo_msg)
             
             # Log DEMO sell order placement
             log_order_placement({
                 'symbol': self.symbol,
-                'side': f'SELL {side}',
+                'side': f'{transaction_type} {side}',
                 'strike': strike,
                 'entry_price': f"{exit_price:.2f}",
                 'order_type': 'MARKET',
@@ -1390,20 +1383,27 @@ class Intraday920LiveSignal:
             return "DEMO_ORDER"
         
         try:
+            # Map transaction_type string to Kite constant
+            transaction_type_map = {
+                'BUY': self.kite.TRANSACTION_TYPE_BUY,
+                'SELL': self.kite.TRANSACTION_TYPE_SELL
+            }
+            transaction_type_const = transaction_type_map.get(transaction_type, self.kite.TRANSACTION_TYPE_SELL)
+            
             result = self.kite_service.place_option_order(
                 symbol=self.symbol,
                 strike=strike,
                 option_type=side,
-                transaction_type=self.kite.TRANSACTION_TYPE_SELL
+                transaction_type=transaction_type_const
             )
             
             if result['success']:
-                logger.info(f"✅ SELL Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {exit_price:.2f} | {exit_reason}")
+                logger.info(f"✅ {transaction_type} Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {exit_price:.2f} | {exit_reason}")
                 
                 # Log successful live sell order placement
                 log_order_placement({
                     'symbol': self.symbol,
-                    'side': f'SELL {side}',
+                    'side': f'{transaction_type} {side}',
                     'strike': strike,
                     'entry_price': f"{exit_price:.2f}",
                     'order_type': 'MARKET',
