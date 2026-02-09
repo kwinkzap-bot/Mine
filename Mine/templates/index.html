@@ -59,7 +59,7 @@
                 const brokerColor = colorMap[broker.broker_type] || '#667eea';
                 
                 // Determine if it's a URL-based login or action-based
-                if (broker.login_url) {
+                if (broker.login_type === 'url' && broker.login_url) {
                     // Direct URL navigation
                     html += `
                         <button 
@@ -72,13 +72,13 @@
                             ${icon} ${broker.name}
                         </button>
                     `;
-                } else if (broker.login_action) {
-                    // JavaScript action (modal, etc.)
+                } else if (broker.login_type === 'modal' && broker.login_action && broker.auth_endpoint) {
+                    // JavaScript action (modal, etc.) - call function with endpoint
                     html += `
                         <button 
                             class="btn broker-login-btn" 
                             id="${buttonId}"
-                            onclick="${broker.login_action}"
+                            onclick="window.${broker.login_action}('${broker.auth_endpoint}')"
                             title="${broker.description}"
                             style="background-color: ${brokerColor}; color: white; font-weight: 500;"
                         >

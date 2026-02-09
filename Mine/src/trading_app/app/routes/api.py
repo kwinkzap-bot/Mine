@@ -338,7 +338,8 @@ def get_available_brokers() -> EndpointResponse:
                                 'description': config['description'],
                                 'configured': True,
                                 'login_url': f"/auth/login?broker_id={broker_id}" if config['login_type'] == 'url' else config.get('login_url'),
-                                'login_action': f"{config['login_action']}('{config.get('login_url')}')" if config['login_type'] == 'modal' else None,
+                                'login_action': config['login_action'] if config['login_type'] == 'modal' else None,
+                                'auth_endpoint': config.get('login_url') if config['login_type'] == 'modal' else None,
                                 'status': 'Configured and ready',
                                 'login_type': config['login_type']
                             })
@@ -367,7 +368,8 @@ def get_available_brokers() -> EndpointResponse:
                                 'description': config['description'],
                                 'configured': True,
                                 'login_url': f"/auth/login?broker_id={broker_id}" if config['login_type'] == 'url' else config.get('login_url'),
-                                'login_action': f"{config['login_action']}('{config.get('login_url')}')" if config['login_type'] == 'modal' else None,
+                                'login_action': config['login_action'] if config['login_type'] == 'modal' else None,
+                                'auth_endpoint': config.get('login_url') if config['login_type'] == 'modal' else None,
                                 'status': 'Configured and ready',
                                 'login_type': config['login_type']
                             })
