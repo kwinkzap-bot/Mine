@@ -241,7 +241,8 @@ def get_available_brokers() -> EndpointResponse:
                 'fields': ['KOTAK_ACCESS_TOKEN', 'KOTAK_UCC'],
                 'prefix': 'KOTAK',
                 'login_type': 'modal',
-                'login_action': 'showKotakLoginModal'
+                'login_action': 'showKotakLoginModal',
+                'login_url': '/auth/login/kotak'
             },
             'dhan': {
                 'name': 'Dhan',
@@ -250,7 +251,8 @@ def get_available_brokers() -> EndpointResponse:
                 'fields': ['DHAN_ACCESS_TOKEN', 'DHAN_CLIENT_ID'],
                 'prefix': 'DHAN',
                 'login_type': 'modal',
-                'login_action': 'showDhanLoginModal'
+                'login_action': 'showDhanLoginModal',
+                'login_url': '/auth/login/dhan'
             },
             'fyers': {
                 'name': 'Fyers',
@@ -259,7 +261,8 @@ def get_available_brokers() -> EndpointResponse:
                 'fields': ['FYERS_APP_ID', 'FYERS_SECRET_KEY'],
                 'prefix': 'FYERS',
                 'login_type': 'modal',
-                'login_action': 'showFyersLoginModal'
+                'login_action': 'showFyersLoginModal',
+                'login_url': '/auth/login/fyers'
             }
         }
         
@@ -334,8 +337,8 @@ def get_available_brokers() -> EndpointResponse:
                                 'broker_type': broker_type,
                                 'description': config['description'],
                                 'configured': True,
-                                'login_url': f"/auth/login?broker_id={broker_id}" if config['login_type'] == 'url' else None,
-                                'login_action': f"{config['login_action']}('{broker_id}')" if config['login_type'] == 'modal' else None,
+                                'login_url': f"/auth/login?broker_id={broker_id}" if config['login_type'] == 'url' else config.get('login_url'),
+                                'login_action': f"{config['login_action']}('{config.get('login_url')}')" if config['login_type'] == 'modal' else None,
                                 'status': 'Configured and ready',
                                 'login_type': config['login_type']
                             })
@@ -363,8 +366,8 @@ def get_available_brokers() -> EndpointResponse:
                                 'broker_type': broker_type,
                                 'description': config['description'],
                                 'configured': True,
-                                'login_url': f"/auth/login?broker_id={broker_id}" if config['login_type'] == 'url' else None,
-                                'login_action': f"{config['login_action']}('{broker_id}')" if config['login_type'] == 'modal' else None,
+                                'login_url': f"/auth/login?broker_id={broker_id}" if config['login_type'] == 'url' else config.get('login_url'),
+                                'login_action': f"{config['login_action']}('{config.get('login_url')}')" if config['login_type'] == 'modal' else None,
                                 'status': 'Configured and ready',
                                 'login_type': config['login_type']
                             })
