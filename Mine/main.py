@@ -43,15 +43,19 @@ def start_intraday_9_20_monitoring():
         # Create monitors for NIFTY only
         symbols = ['NIFTY']
         
+        # Get username from environment (set by Flask session or use default)
+        username = os.getenv('MONITORING_USERNAME', 'default_user')
+        
         for symbol in symbols:
             try:
-                monitor = Intraday920LiveSignal(kite, symbol=symbol)
+                # Pass username for per-user Excel logging
+                monitor = Intraday920LiveSignal(kite, symbol=symbol, username=username)
                 
                 # Start monitoring if it's a market day and within hours
                 if monitor.is_market_day():
                     if monitor.start_monitoring():
                         live_monitors[symbol] = monitor
-                        logger.info(f"✅ Live monitoring started for {symbol}")
+                        logger.info(f"✅ Live monitoring started for {symbol} (user: {username})")
                     else:
                         logger.warning(f"⚠️  Could not start monitoring for {symbol}")
                 else:
@@ -92,24 +96,9 @@ def main():
     """Run the Flask application and live monitoring."""
     app = create_app()
 
-    # Start Intraday 9:20 monitoring in a background thread
-    intraday_thread = threading.Thread(
-        target=start_intraday_9_20_monitoring, 
-        name="Intraday920Monitor",
-        daemon=True
-    )
-    intraday_thread.start()
-
-    # Start legacy live monitoring in a background thread (only if access token exists)
-    if os.getenv('ACCESS_TOKEN'):
-        monitoring_thread = threading.Thread(
-            target=start_live_monitoring, 
-            name="LegacyLiveMonitor",
-            daemon=True
-        )
-        monitoring_thread.start()
-    else:
-        logger.info("ACCESS_TOKEN not configured - legacy live monitoring disabled")
+    # Note: Live monitoring will be started via API endpoint after user login
+    # This ensures per-user credentials and Excel logging
+    logger.info("ℹ️  Live monitoring will start after user login via /api/start-monitoring")
     
     # Get host and port from environment
     host = os.getenv('FLASK_HOST', '127.0.0.1')

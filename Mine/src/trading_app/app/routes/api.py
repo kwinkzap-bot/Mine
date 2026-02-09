@@ -329,7 +329,7 @@ def get_available_brokers() -> EndpointResponse:
                         
                         if len(field_values) == len(config['fields']):
                             broker_id = f"{broker_type}_1"
-                            brokers.append({
+                            broker_entry = {
                                 'id': broker_id,
                                 'name': config['name'],
                                 'icon': config['icon'],
@@ -337,12 +337,17 @@ def get_available_brokers() -> EndpointResponse:
                                 'broker_type': broker_type,
                                 'description': config['description'],
                                 'configured': True,
-                                'login_url': f"/auth/login?broker_id={broker_id}" if config['login_type'] == 'url' else config.get('login_url'),
-                                'login_action': config['login_action'] if config['login_type'] == 'modal' else None,
-                                'auth_endpoint': config.get('login_url') if config['login_type'] == 'modal' else None,
                                 'status': 'Configured and ready',
                                 'login_type': config['login_type']
-                            })
+                            }
+                            
+                            if config['login_type'] == 'url':
+                                broker_entry['login_url'] = f"/auth/login?broker_id={broker_id}"
+                            else:  # modal
+                                broker_entry['login_action'] = config.get('login_action')
+                                broker_entry['auth_endpoint'] = config.get('login_url')
+                            
+                            brokers.append(broker_entry)
                             instance_num += 1
                             continue
                         else:
@@ -359,7 +364,7 @@ def get_available_brokers() -> EndpointResponse:
                         
                         if len(field_values) == len(config['fields']):
                             broker_id = f"{broker_type}_{instance_num}"
-                            brokers.append({
+                            broker_entry = {
                                 'id': broker_id,
                                 'name': config['name'],
                                 'icon': config['icon'],
@@ -367,12 +372,17 @@ def get_available_brokers() -> EndpointResponse:
                                 'broker_type': broker_type,
                                 'description': config['description'],
                                 'configured': True,
-                                'login_url': f"/auth/login?broker_id={broker_id}" if config['login_type'] == 'url' else config.get('login_url'),
-                                'login_action': config['login_action'] if config['login_type'] == 'modal' else None,
-                                'auth_endpoint': config.get('login_url') if config['login_type'] == 'modal' else None,
                                 'status': 'Configured and ready',
                                 'login_type': config['login_type']
-                            })
+                            }
+                            
+                            if config['login_type'] == 'url':
+                                broker_entry['login_url'] = f"/auth/login?broker_id={broker_id}"
+                            else:  # modal
+                                broker_entry['login_action'] = config.get('login_action')
+                                broker_entry['auth_endpoint'] = config.get('login_url')
+                            
+                            brokers.append(broker_entry)
                         else:
                             all_fields_present = False
                 
@@ -2464,6 +2474,66 @@ def place_intraday_920_order() -> EndpointResponse:
         return jsonify({
             'success': False,
             'error': f'Error placing order: {str(e)}'
+        }), 500
+
+
+@api_bp.route('/start-monitoring', methods=['POST'])
+def start_monitoring() -> EndpointResponse:
+    """Start live signal monitoring for the logged-in user.
+    
+    Creates per-user Excel log files and starts background monitoring thread.
+    Uses username from session to ensure user-specific logging.
+    """
+    try:
+        from trading_app.app.intraday_option.intraday_9_20_live_signal import Intraday920LiveSignal, excel_logger
+        from kiteconnect import KiteConnect
+        import threading
+        
+        username = session.get('username')
+        if not username:
+            return jsonify({
+                'success': False,
+                'error': 'User not authenticated'
+            }), 401
+        
+        # Get KiteConnect instance
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'KiteConnect not initialized - please login with Zerodha first'
+            }), 400
+        
+        # Create monitor with username for per-user Excel logging
+        monitor = Intraday920LiveSignal(kite, symbol='NIFTY', username=username)
+        
+        # Check if it's a market day
+        if not monitor.is_market_day():
+            return jsonify({
+                'success': False,
+                'error': 'Not a market day - monitoring not started'
+            }), 400
+        
+        # Start monitoring in background thread
+        if monitor.start_monitoring():
+            logger.info(f"✅ Live monitoring started for {username}")
+            return jsonify({
+                'success': True,
+                'message': f'Live monitoring started for user {username}',
+                'username': username,
+                'excel_file': excel_logger.file_path
+            }), 200
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Could not start monitoring'
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Error starting monitoring: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f'Error starting monitoring: {str(e)}'
         }), 500
 
 

@@ -206,6 +206,37 @@ def callback():
         # Update .env file with new tokens (instance-specific if needed)
         _update_env_tokens(access_token, request_token, broker_id, instance_num)
         
+        # Auto-start live monitoring after successful Kite authentication
+        try:
+            from trading_app.app.intraday_option.intraday_9_20_live_signal import Intraday920LiveSignal
+            import threading
+            
+            def start_monitoring_async():
+                """Start monitoring in background thread."""
+                try:
+                    kite_instance = KiteConnect(api_key=api_key)
+                    kite_instance.set_access_token(access_token)
+                    
+                    monitor = Intraday920LiveSignal(kite_instance, symbol='NIFTY', username=username)
+                    
+                    # Check if it's a market day and start monitoring
+                    if monitor.is_market_day():
+                        if monitor.start_monitoring():
+                            logger.info(f"✅ Auto-started live monitoring for {username}")
+                        else:
+                            logger.warning(f"Could not auto-start monitoring for {username}")
+                    else:
+                        logger.info(f"Not a market day - skipping monitoring for {username}")
+                except Exception as e:
+                    logger.error(f"Error auto-starting monitoring: {e}")
+            
+            # Start monitoring in background thread
+            monitor_thread = threading.Thread(target=start_monitoring_async, daemon=True)
+            monitor_thread.start()
+            
+        except Exception as e:
+            logger.warning(f"Could not auto-start monitoring: {e}")
+        
         return redirect(url_for('pages.index', login_success=True))
     
     except Exception as e:

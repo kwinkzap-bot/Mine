@@ -135,10 +135,12 @@ def login_user(username: str) -> None:
     Log in a user by setting session variables and loading their environment.
     
     Loads user-specific .env file (e.g., Kavin.env) for per-user broker credentials.
+    Sets MONITORING_USERNAME for per-user live signal monitoring.
     
     Args:
         username: Username to log in
     """
+    import os
     from trading_app.app.utils.user_env import UserEnvManager
     
     session['user_authenticated'] = True
@@ -148,8 +150,12 @@ def login_user(username: str) -> None:
     # Load user-specific environment variables
     UserEnvManager.load_user_env(username)
     
+    # Set MONITORING_USERNAME for per-user live signal monitoring with Excel logging
+    os.environ['MONITORING_USERNAME'] = username
+    
     logger.info(f"User '{username}' logged in successfully")
     logger.info(f"Loaded environment from {username}.env")
+    logger.info(f"Set MONITORING_USERNAME={username} for live monitoring")
 
 def logout_user() -> None:
     """
