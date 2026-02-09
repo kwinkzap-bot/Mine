@@ -503,17 +503,18 @@ class KiteService:
     
     def place_order(self, tradingsymbol: str, transaction_type: str, price: float, 
                    quantity: int = 65, product: str = 'NRML', order_type: str = 'MARKET',
-                   exchange: str = 'NFO') -> Dict[str, Any]:
+                   exchange: str = 'NFO', trigger_price: Optional[float] = None) -> Dict[str, Any]:
         """Place an order in Zerodha Kite.
         
         Args:
             tradingsymbol: Trading symbol (e.g., 'NIFTY25D26C25000')
             transaction_type: BUY or SELL (use kite.TRANSACTION_TYPE_BUY/SELL)
-            price: Order price (ignored for MARKET orders)
+            price: Order price (execution price for LIMIT/stoploss orders)
             quantity: Order quantity (default: 75)
             product: Product type - NRML (normal/default), MIS (intraday), CNC (delivery)
-            order_type: ORDER_TYPE_MARKET (default - normal/market order) or ORDER_TYPE_LIMIT
+            order_type: ORDER_TYPE_MARKET (default) or ORDER_TYPE_LIMIT
             exchange: Exchange - NFO (options), NSE (stocks)
+            trigger_price: Trigger price for stoploss orders (optional)
             
         Returns:
             Dict with success status, order_id, and details
@@ -533,7 +534,11 @@ class KiteService:
                 variety = self.kite.VARIETY_AMO
                 order_time = "AMO"
             
-            logging.info(f"Placing {order_time} {transaction_type} order: {tradingsymbol} @ ₹{price:.2f} x {quantity}")
+            # Log with trigger_price info if provided
+            if trigger_price:
+                logging.info(f"Placing {order_time} {transaction_type} order: {tradingsymbol} @ ₹{price:.2f} (execute) with trigger @ ₹{trigger_price:.2f} x {quantity}")
+            else:
+                logging.info(f"Placing {order_time} {transaction_type} order: {tradingsymbol} @ ₹{price:.2f} x {quantity}")
             
             # Map product string to Kite constant
             product_map = {
@@ -558,18 +563,30 @@ class KiteService:
             }
             exchange_const = exchange_map.get(exchange, self.kite.EXCHANGE_NFO)
             
-            order_id = self.kite.place_order(
-                variety=variety,
-                exchange=exchange_const,
-                tradingsymbol=tradingsymbol,
-                transaction_type=transaction_type,
-                quantity=quantity,
-                product=product_type,
-                order_type=order_type_const,
-                price=price
-            )
+            # Build order parameters
+            order_params = {
+                'variety': variety,
+                'exchange': exchange_const,
+                'tradingsymbol': tradingsymbol,
+                'transaction_type': transaction_type,
+                'quantity': quantity,
+                'product': product_type,
+                'order_type': order_type_const,
+                'price': price
+            }
             
-            logging.info(f"✅ {order_time} Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ ₹{price:.2f}")
+            # Add trigger_price if provided (for stoploss orders)
+            if trigger_price is not None and trigger_price > 0:
+                order_params['trigger_price'] = trigger_price
+                logging.info(f"[Stoploss] Adding trigger_price={trigger_price:.2f} to order parameters")
+            
+            # Place the order with all parameters
+            order_id = self.kite.place_order(**order_params)
+            
+            if trigger_price:
+                logging.info(f"✅ {order_time} Stoploss Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ Execute: ₹{price:.2f}, Trigger: ₹{trigger_price:.2f}")
+            else:
+                logging.info(f"✅ {order_time} Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ ₹{price:.2f}")
             
             return {
                 'success': True,
@@ -577,7 +594,8 @@ class KiteService:
                 'symbol': tradingsymbol,
                 'price': price,
                 'quantity': quantity,
-                'transaction_type': transaction_type
+                'transaction_type': transaction_type,
+                'trigger_price': trigger_price if trigger_price else None
             }
             
         except Exception as e:
@@ -776,8 +794,8 @@ class KiteService:
             logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} (trigger & execute) x {quantity}")
             
             # Place stop loss order with trigger price
-            # For Zerodha Kite: Use LIMIT order with trigger_price
-            # When price drops to trigger_price, the order executes at execution_price
+            # For Zerodha Kite: Use LIMIT order with trigger_price parameter
+            # The trigger_price parameter is critical - it tells Kite when to activate
             order_id = self.kite.place_order(
                 variety=variety,
                 exchange=self.kite.EXCHANGE_NFO,
@@ -786,8 +804,8 @@ class KiteService:
                 quantity=quantity,
                 product=product_type,
                 order_type=self.kite.ORDER_TYPE_LIMIT,  # LIMIT order with trigger
-                price=execution_price,  # Execution price (slightly below trigger for safety)
-                trigger_price=trigger_price  # Trigger price (when to activate)
+                price=execution_price,  # Execution price (when triggered, execute at this price)
+                trigger_price=trigger_price  # CRITICAL: Trigger price (when to activate the order)
             )
             
             logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ ₹{trigger_price:.2f} (stoploss trigger)")
