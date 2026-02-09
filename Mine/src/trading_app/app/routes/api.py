@@ -2233,6 +2233,43 @@ def place_intraday_920_order() -> EndpointResponse:
             
             if result['success']:
                 logger.info(f"Kite - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
+                
+                # **AUTO-PLACE SL ORDER** - If BUY order was successful
+                if action == 'BUY':
+                    try:
+                        entry_price = result.get('entry_price', 0)
+                        sl_price = entry_price - 20  # SL at entry - 20 points
+                        
+                        logger.info(f"Auto-placing SL order: Entry={entry_price:.2f}, SL Trigger={sl_price:.2f}")
+                        
+                        # Get option symbol for SL order
+                        option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+                        if option_symbol:
+                            lot_size = kite_service.get_lot_size(symbol)
+                            
+                            sl_result = kite_service.place_stoploss_order(
+                                tradingsymbol=option_symbol,
+                                trigger_price=sl_price,
+                                quantity=lot_size
+                            )
+                            
+                            if sl_result['success']:
+                                logger.info(f"✅ SL order auto-placed: {option_symbol} @ {sl_price:.2f} | SL Order ID: {sl_result['order_id']}")
+                                result['sl_order_id'] = sl_result['order_id']
+                                result['sl_trigger_price'] = sl_price
+                                result['sl_success'] = True
+                            else:
+                                logger.warning(f"⚠️  SL order auto-placement failed: {sl_result.get('error')}")
+                                result['sl_success'] = False
+                                result['sl_error'] = sl_result.get('error')
+                        else:
+                            logger.warning(f"Could not get option symbol for SL order: {symbol} {strike} {option_type}")
+                            
+                    except Exception as e:
+                        logger.error(f"Error auto-placing SL order: {e}")
+                        result['sl_success'] = False
+                        result['sl_error'] = str(e)
+                
                 return jsonify(result), 200
             else:
                 logger.warning(f"Kite - Order placement failed: {result.get('error')}")
