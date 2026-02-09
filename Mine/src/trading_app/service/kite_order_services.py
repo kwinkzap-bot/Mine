@@ -754,12 +754,22 @@ class KiteService:
             }
             product_type = product_map.get(product, self.kite.PRODUCT_MIS)
             
-            # For SL orders: set execution price BELOW trigger price
-            # This prevents immediate execution when order is placed
-            # Execution price is 0.2% below trigger for safety margin
-            execution_price = round(trigger_price * 0.998, 2)
+            # For SL orders: set execution price BELOW trigger price with proper tick size
+            # Zerodha options have 0.05 (5 paise) tick size
+            # Round DOWN to the nearest tick size to ensure order is valid
+            TICK_SIZE = 0.05
             
-            logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} (trigger) / ₹{execution_price:.2f} (execute) x {quantity}")
+            # Round execution price down to nearest tick (0.05)
+            execution_price = int(trigger_price / TICK_SIZE) * TICK_SIZE
+            
+            # Ensure execution_price is at least trigger - 1.0 for safety margin
+            if execution_price >= trigger_price:
+                execution_price = trigger_price - TICK_SIZE
+            
+            # Final rounding to 2 decimals for safety
+            execution_price = round(execution_price, 2)
+            
+            logging.info(f"Placing SL order: {tradingsymbol} @ ₹{trigger_price:.2f} (trigger) / ₹{execution_price:.2f} (execute, tick-aligned) x {quantity}")
             
             # Place stop loss order with trigger price
             # For Zerodha Kite: Use LIMIT order with trigger_price
@@ -776,7 +786,7 @@ class KiteService:
                 trigger_price=trigger_price  # Trigger price (when to activate)
             )
             
-            logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ Trigger: ₹{trigger_price:.2f}, Execute: ₹{execution_price:.2f}")
+            logging.info(f"✅ SL Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ Trigger: ₹{trigger_price:.2f}, Execute: ₹{execution_price:.2f} (tick-aligned)")
             
             return {
                 'success': True,
