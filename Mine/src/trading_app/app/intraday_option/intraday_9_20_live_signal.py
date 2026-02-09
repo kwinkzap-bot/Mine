@@ -117,6 +117,18 @@ class _NoOpExcelLogger:
 excel_logger: ExcelLogger = _NoOpExcelLogger()  # type: ignore
 
 
+def init_excel_logger(username: Optional[str] = None, file_prefix: str = "signal_logs") -> None:
+    """Initialize the excel logger for Intraday 9:20 monitoring.
+    
+    Args:
+        username: Username for Excel logger file naming (optional)
+        file_prefix: Prefix for the Excel file (default: "signal_logs")
+    """
+    global excel_logger
+    excel_logger = ExcelLogger(username=username, file_prefix=file_prefix)
+    logger.info(f"Excel logger initialized: {excel_logger.file_path}")
+
+
 def log_order_placement(order_data: Dict[str, Any]) -> None:
     """
     Log order placement details to Excel file.
@@ -191,7 +203,7 @@ class Intraday920LiveSignal:
     MARKET_CLOSE = time(15, 20, 0)    # 3:20 PM (market closes at 3:30 but last candle is 3:20)
     MONITORING_INTERVAL = 3  # seconds
     
-    def __init__(self, kite_instance, symbol: str = 'NIFTY', live_trading: bool = True):
+    def __init__(self, kite_instance, symbol: str = 'NIFTY', live_trading: bool = True, username: Optional[str] = None):
         """
         Initialize live signal monitor.
         
@@ -199,11 +211,16 @@ class Intraday920LiveSignal:
             kite_instance: KiteConnect instance
             symbol: Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
             live_trading: Whether to place real orders (default: True for live trading)
+            username: Username for Excel logger file naming (optional)
         """
         self.kite = kite_instance
         self.symbol = symbol
+        self.username = username
         self.strategy = Intraday920Strategy(kite_instance)
         self.kite_service = KiteService(kite_instance=kite_instance)
+        
+        # Initialize Excel logger for this user
+        init_excel_logger(username=username, file_prefix="signal_logs")
         
         # Monitoring state
         self.is_monitoring = False
