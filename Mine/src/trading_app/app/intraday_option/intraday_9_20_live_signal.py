@@ -436,12 +436,15 @@ class Intraday920LiveSignal:
                                 row_order_type == 'BUY'):
                                 
                                 # Convert row_date to timestamp for comparison
+                                entry_timestamp = None
                                 if isinstance(row_date, str):
-                                    entry_dt = datetime.strptime(row_date, '%Y-%m-%d %H:%M:%S')
-                                else:
-                                    entry_dt = row_date
-                                
-                                entry_timestamp = entry_dt.timestamp() if entry_dt else None
+                                    try:
+                                        entry_dt = datetime.strptime(row_date, '%Y-%m-%d %H:%M:%S')
+                                        entry_timestamp = entry_dt.timestamp()
+                                    except (ValueError, TypeError):
+                                        entry_timestamp = None
+                                elif isinstance(row_date, datetime):
+                                    entry_timestamp = row_date.timestamp()
                                 
                                 # Keep track of the earliest (first) entry
                                 if entry_timestamp:
