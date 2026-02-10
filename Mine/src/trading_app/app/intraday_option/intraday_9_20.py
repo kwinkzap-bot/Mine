@@ -521,16 +521,13 @@ class Intraday920Strategy:
                 }
             
             # Step 3: Get strike data for both high and low in PARALLEL for speed
-            # IMPORTANT: fetch_candles=False for live monitoring to avoid timeout
-            # Only fetch candles for backtesting, not for live data during trading hours
+            # IMPORTANT: Always fetch candles to get ce_high, ce_low, pe_high, pe_low values
+            # The get_strike_data method has retry logic with timeouts, so it won't hang
             from concurrent.futures import ThreadPoolExecutor, as_completed
             
-            # Determine if we should fetch candles (only for historical/backtest mode)
-            # During live trading (9:15-15:20), skip candle fetching - it's too slow and times out
-            from datetime import time as dt_time
-            now = datetime.now().time()
-            is_live_market = dt_time(9, 15) <= now <= dt_time(15, 20)
-            should_fetch_candles = not is_live_market  # Only fetch candles if market is closed
+            # Always fetch candles - get_strike_data has comprehensive retry logic
+            # to handle timeouts and connection errors gracefully
+            should_fetch_candles = True
             
             with ThreadPoolExecutor(max_workers=2) as executor:
                 high_future = executor.submit(self.get_strike_data, symbol, high, should_fetch_candles, reference_date)
