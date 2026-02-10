@@ -443,36 +443,101 @@ class Intraday920LiveSignal:
             return {'success': False, 'error': str(e)}
 
     def _fetch_live_data_with_refresh(self) -> Dict[str, Any]:
-        """Fetch live data and retry once after access-token refresh if needed."""
-        live_data = self.strategy.get_intraday_920_data(self.symbol)
-        if live_data.get('success'):
-            return live_data
-
-        error_msg = str(live_data.get('error', ''))
-        if 'Incorrect `api_key` or `access_token`' in error_msg:
-            logger.warning("Access token invalid during live fetch. Attempting refresh and retry...")
-            refresh_ok = False
+        """Fetch live data with retry logic for connection resilience.
+        
+        Strategy:
+        1. Try to fetch live data (get current price and 5-minute candles)
+        2. If token invalid, refresh token and retry
+        3. If connection error, retry up to 3 times with exponential backoff
+        """
+        import time as time_module
+        
+        max_retries = 3
+        retry_delay = 0.5  # Start with 500ms
+        last_error = None
+        
+        for attempt in range(max_retries):
             try:
-                refresh_ok = self.strategy._refresh_kite_access_token()  # type: ignore[attr-defined]
-            except Exception as e:
-                logger.warning(f"Token refresh failed: {e}")
-
-            if refresh_ok:
                 live_data = self.strategy.get_intraday_920_data(self.symbol)
+                if live_data.get('success'):
+                    return live_data
+                
+                # Check if error is token-related
+                error_msg = str(live_data.get('error', ''))
+                if 'Incorrect `api_key` or `access_token`' in error_msg:
+                    logger.warning(f"[Live Data Fetch] Access token invalid (attempt {attempt + 1}/{max_retries}). Attempting refresh...")
+                    try:
+                        refresh_ok = self.strategy._refresh_kite_access_token()  # type: ignore[attr-defined]
+                        if refresh_ok:
+                            # Retry after token refresh
+                            time_module.sleep(retry_delay)
+                            continue
+                    except Exception as e:
+                        logger.warning(f"Token refresh failed: {e}")
+                
+                # Check if error is retriable (connection reset, timeout, etc)
+                is_retriable = any(keyword in error_msg.lower() for keyword in [
+                    'connection reset', 'connection aborted', 'connection refused',
+                    'timeout', 'gateway', '504', '503'
+                ])
+                
+                if is_retriable and attempt < max_retries - 1:
+                    logger.warning(f"[Live Data Fetch] Retriable error (attempt {attempt + 1}/{max_retries}): {error_msg}")
+                    last_error = error_msg
+                    # Exponential backoff
+                    time_module.sleep(retry_delay * (2 ** attempt))
+                    continue
+                else:
+                    # Non-retriable error
+                    logger.error(f"[Live Data Fetch] Failed to fetch live data: {error_msg}")
+                    return live_data
+                    
+            except Exception as e:
+                logger.warning(f"[Live Data Fetch] Exception (attempt {attempt + 1}/{max_retries}): {e}")
+                last_error = str(e)
+                if attempt < max_retries - 1:
+                    time_module.sleep(retry_delay * (2 ** attempt))
+                    continue
+                else:
+                    return {
+                        'success': False,
+                        'error': f'Failed after {max_retries} retries: {last_error}'
+                    }
+        
+        # All retries exhausted
+        return {
+            'success': False,
+            'error': f'Failed to fetch live data after {max_retries} retries. Last error: {last_error}'
+        }
 
-        return live_data
 
-    def _fetch_live_data_with_timeout(self, timeout_seconds: int = 10) -> Dict[str, Any]:
-        """Fetch live data with a timeout to avoid blocking the 5-min log cycle."""
+    def _fetch_live_data_with_timeout(self, timeout_seconds: int = 20) -> Dict[str, Any]:
+        """Fetch live data with a timeout to avoid blocking the 5-min log cycle.
+        
+        Uses ThreadPoolExecutor to run fetch in a separate thread with timeout protection.
+        Increased timeout to 20 seconds to allow for API retries and network variability.
+        
+        Args:
+            timeout_seconds: Maximum time to wait for live data fetch (default: 20s)
+            
+        Returns:
+            Live data dictionary or error response
+        """
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(self._fetch_live_data_with_refresh)
             try:
                 return future.result(timeout=timeout_seconds)
             except FuturesTimeoutError:
-                logger.warning(f"Live data fetch timed out after {timeout_seconds}s")
+                logger.error(f"[Live Data Fetch] Timeout after {timeout_seconds}s")
                 return {
                     'success': False,
-                    'error': f'Live data fetch timed out after {timeout_seconds}s'
+                    'error': f'Live data fetch timed out after {timeout_seconds}s - possible API or network issue'
+                }
+            except Exception as e:
+                logger.error(f"[Live Data Fetch] Unexpected error: {e}")
+                return {
+                    'success': False,
+                    'error': f'Failed to fetch live data: {str(e)}'
                 }
     
     def check_entry_signals_parallel(self, high_strike: Dict[str, Any], low_strike: Dict[str, Any]) -> tuple:

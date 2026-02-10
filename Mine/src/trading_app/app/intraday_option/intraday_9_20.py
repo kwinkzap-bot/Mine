@@ -122,8 +122,8 @@ class Intraday920Strategy:
                 logger.info(f"Fetching first 5-minute candle for {symbol} starting from {current_check_date.date()}")
             
             # Try to fetch data, falling back to previous days if no data found
-            max_retries = 30  # Try up to 30 days back
-            for attempt in range(max_retries):
+            max_date_retries = 30  # Try up to 30 days back
+            for date_attempt in range(max_date_retries):
                 # Skip weekends
                 while current_check_date.weekday() in [5, 6]:  # Saturday=5, Sunday=6
                     current_check_date -= timedelta(days=1)
@@ -132,39 +132,57 @@ class Intraday920Strategy:
                 from_date = current_check_date.replace(minute=15)
                 to_date = current_check_date
                 
-                logger.info(f"Attempt {attempt + 1}: Fetching candles from {from_date} to {to_date}")
-                
-                try:
-                    candles = self.data_service.get_candlestick_data(
-                        symbol_token,
-                        interval='5minute',
-                        from_date=from_date,
-                        to_date=to_date
-                    )
-                    
-                    if candles and len(candles) > 0:
-                        # Found data! Get the first candle
-                        first_candle = candles[0]
-                        first_5min_high = first_candle.get('high', 0)
-                        first_5min_low = first_candle.get('low', 0)
-                        first_5min_close = first_candle.get('close', 0)
+                # Retry logic for connection issues
+                max_connection_retries = 3
+                for conn_attempt in range(max_connection_retries):
+                    try:
+                        logger.info(f"Fetching candles: Date attempt {date_attempt + 1}/{max_date_retries}, Connection attempt {conn_attempt + 1}/{max_connection_retries}")
+                        logger.info(f"  Period: {from_date} to {to_date}")
                         
-                        logger.info(f"Found first 5min candle for {symbol} on {current_check_date.date()}: High={first_5min_high}, Low={first_5min_low}, Close={first_5min_close}")
+                        candles = self.data_service.get_candlestick_data(
+                            symbol_token,
+                            interval='5minute',
+                            from_date=from_date,
+                            to_date=to_date
+                        )
                         
-                        return {
-                            'symbol': symbol,
-                            'first_5min_high': round(first_5min_high, 2),
-                            'first_5min_low': round(first_5min_low, 2),
-                            'first_5min_close': round(first_5min_close, 2),
-                            'timestamp': datetime.now().isoformat(),
-                            'success': True,
-                            'data_date': current_check_date.date().isoformat()
-                        }
-                    else:
-                        logger.warning(f"No candles found for {symbol} on {current_check_date.date()}, trying previous day...")
-                
-                except Exception as e:
-                    logger.warning(f"Error fetching candles for {current_check_date.date()}: {str(e)}, trying previous day...")
+                        if candles and len(candles) > 0:
+                            # Found data! Get the first candle
+                            first_candle = candles[0]
+                            first_5min_high = first_candle.get('high', 0)
+                            first_5min_low = first_candle.get('low', 0)
+                            first_5min_close = first_candle.get('close', 0)
+                            
+                            logger.info(f"✓ Found first 5min candle for {symbol} on {current_check_date.date()}: High={first_5min_high}, Low={first_5min_low}, Close={first_5min_close}")
+                            
+                            return {
+                                'symbol': symbol,
+                                'first_5min_high': round(first_5min_high, 2),
+                                'first_5min_low': round(first_5min_low, 2),
+                                'first_5min_close': round(first_5min_close, 2),
+                                'timestamp': datetime.now().isoformat(),
+                                'success': True,
+                                'data_date': current_check_date.date().isoformat()
+                            }
+                        else:
+                            # No data on this date, try previous date
+                            logger.debug(f"No candles found for {symbol} on {current_check_date.date()}")
+                            break  # Break connection retry loop, move to previous date
+                        
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        is_retriable = any(keyword in error_str for keyword in [
+                            'connection reset', 'connection aborted', 'connection refused',
+                            'timeout', 'gateway', '504', '503', 'broken pipe'
+                        ])
+                        
+                        if is_retriable and conn_attempt < max_connection_retries - 1:
+                            logger.warning(f"Connection error (attempt {conn_attempt + 1}/{max_connection_retries}): {e}")
+                            time.sleep(0.5 * (2 ** conn_attempt))  # Exponential backoff
+                            continue
+                        else:
+                            logger.warning(f"Failed to fetch candles for {current_check_date.date()}: {e}")
+                            break  # Break connection retry loop, move to previous date
                 
                 # Move to previous day and retry
                 current_check_date -= timedelta(days=1)
@@ -420,20 +438,24 @@ class Intraday920Strategy:
                             'success': False
                         }
                 except (ValueError, Exception) as e:
-                    # Catches JSON parsing errors (504, 503 gateway timeouts) and other retriable errors
+                    # Catches JSON parsing errors (504, 503 gateway timeouts), connection resets, and other retriable errors
                     error_str = str(e).lower()
-                    is_retriable = any(keyword in error_str for keyword in ['504', '503', 'gateway', 'timeout', 'couldn\'t parse', 'json'])
+                    is_retriable = any(keyword in error_str for keyword in [
+                        '504', '503', 'gateway', 'timeout', 'couldn\'t parse', 'json',
+                        'connection reset', 'connection aborted', 'connection refused',
+                        'broken pipe', 'reset by peer'
+                    ])
                     
                     if is_retriable:
-                        logger.warning(f"Server/Gateway error fetching quote (attempt {attempt + 1}/{max_retries}): {e}")
+                        logger.warning(f"Retriable error fetching quote (attempt {attempt + 1}/{max_retries}): {e}")
                         if attempt < max_retries - 1:
                             # Use longer delay for server timeouts
-                            delay = retry_delay * (attempt + 1) if "504" in error_str or "503" in error_str else retry_delay
+                            delay = retry_delay * (attempt + 1) if any(k in error_str for k in ["504", "503"]) else retry_delay
                             time.sleep(delay)
                         else:
                             return {
                                 'symbol': symbol,
-                                'error': f'Server timeout fetching quote after {max_retries} retries: {str(e)}',
+                                'error': f'Error fetching quote after {max_retries} retries: {str(e)}',
                                 'timestamp': datetime.now().isoformat(),
                                 'success': False
                             }
@@ -499,11 +521,20 @@ class Intraday920Strategy:
                 }
             
             # Step 3: Get strike data for both high and low in PARALLEL for speed
+            # IMPORTANT: fetch_candles=False for live monitoring to avoid timeout
+            # Only fetch candles for backtesting, not for live data during trading hours
             from concurrent.futures import ThreadPoolExecutor, as_completed
             
+            # Determine if we should fetch candles (only for historical/backtest mode)
+            # During live trading (9:15-15:20), skip candle fetching - it's too slow and times out
+            from datetime import time as dt_time
+            now = datetime.now().time()
+            is_live_market = dt_time(9, 15) <= now <= dt_time(15, 20)
+            should_fetch_candles = not is_live_market  # Only fetch candles if market is closed
+            
             with ThreadPoolExecutor(max_workers=2) as executor:
-                high_future = executor.submit(self.get_strike_data, symbol, high, True, reference_date)
-                low_future = executor.submit(self.get_strike_data, symbol, low, True, reference_date)
+                high_future = executor.submit(self.get_strike_data, symbol, high, should_fetch_candles, reference_date)
+                low_future = executor.submit(self.get_strike_data, symbol, low, should_fetch_candles, reference_date)
                 
                 high_strike_data = high_future.result()
                 low_strike_data = low_future.result()
