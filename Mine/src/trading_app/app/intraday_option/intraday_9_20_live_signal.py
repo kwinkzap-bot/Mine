@@ -391,6 +391,72 @@ class Intraday920LiveSignal:
             self.daily_entries = {}
             logger.info("🔄 Daily entries tracking reset")
     
+    def get_first_entry_time_today(self, side: str, strike: int) -> Optional[float]:
+        """
+        Get the FIRST entry time for a strike+side combination today from Excel.
+        Used to ensure only the FIRST entry is used for that strike, matching backtest logic.
+        
+        Args:
+            side: 'CE' or 'PE'
+            strike: Strike price
+            
+        Returns:
+            Entry timestamp (Unix) if found, None if not found or no entries today
+        """
+        today = datetime.now().date()
+        
+        try:
+            from openpyxl import load_workbook
+            import os
+            
+            if not excel_logger or not excel_logger.file_path:
+                return None
+            
+            if os.path.exists(excel_logger.file_path):
+                wb = load_workbook(excel_logger.file_path)
+                if 'Trades' in wb.sheetnames:
+                    ws = wb['Trades']
+                    today_str = today.strftime('%Y-%m-%d')
+                    
+                    # Find ALL BUY entries for this strike+side today, return the FIRST one
+                    first_entry_time = None
+                    
+                    for row_idx in range(2, ws.max_row + 1):
+                        row_date = ws.cell(row=row_idx, column=1).value  # Timestamp
+                        row_order_type = ws.cell(row=row_idx, column=2).value  # Order Type
+                        row_option_type = ws.cell(row=row_idx, column=3).value  # Option Type
+                        row_strike = ws.cell(row=row_idx, column=4).value  # Strike
+                        
+                        if row_date and row_option_type and row_strike:
+                            row_date_str = str(row_date)[:10] if row_date else ""
+                            
+                            if (row_date_str == today_str and 
+                                row_option_type == side and 
+                                row_strike == strike and
+                                row_order_type == 'BUY'):
+                                
+                                # Convert row_date to timestamp for comparison
+                                if isinstance(row_date, str):
+                                    entry_dt = datetime.strptime(row_date, '%Y-%m-%d %H:%M:%S')
+                                else:
+                                    entry_dt = row_date
+                                
+                                entry_timestamp = entry_dt.timestamp() if entry_dt else None
+                                
+                                # Keep track of the earliest (first) entry
+                                if entry_timestamp:
+                                    if first_entry_time is None or entry_timestamp < first_entry_time:
+                                        first_entry_time = entry_timestamp
+                    
+                    if first_entry_time:
+                        logger.info(f"✅ Found first entry for {side} {strike} today: {first_entry_time}")
+                    
+                    return first_entry_time
+        except Exception as e:
+            logger.warning(f"Could not check first entry time from Excel: {e}")
+        
+        return None
+    
     def should_check_entry_signal(self) -> bool:
         """
         Determine if we should check for ENTRY signals now.
@@ -667,6 +733,7 @@ class Intraday920LiveSignal:
             # Allow new CE entry ONLY if:
             # 1. Signal exists AND (no CE trade exists OR existing CE trade is already closed)
             # 2. AND no entry has been made for this CE STRIKE today (prevent multiple entries per strike per day)
+            # LOGIC MATCHES BACKTEST: Only the FIRST entry for a strike is accepted, others are rejected
             if ce_signal.get('has_signal'):
                 order_id = None
                 ce_strike = None
@@ -680,8 +747,10 @@ class Intraday920LiveSignal:
                         if ce_high_val:
                             ce_strike = int(ce_high_val)
                 
+                # Check if already entered today for this CE strike
+                # This prevents duplicate entries matching backtest "only first entry" logic
                 if ce_strike and self.has_entered_today('CE', ce_strike):
-                    logger.info(f"⛔ CE {ce_strike} entry already made today - skipping to prevent multiple entries per strike per day")
+                    logger.info(f"⛔ CE {ce_strike} entry already made today - rejecting subsequent entry signals (matches backtest logic: only first entry per strike)")
                 elif 'CE' not in self.active_trades or self.active_trades['CE'].get('status') == 'CLOSED':
                     # Place order FIRST, only mark as entered if successful
                     order_id = None
@@ -772,6 +841,7 @@ class Intraday920LiveSignal:
             # Allow new PE entry ONLY if:
             # 1. Signal exists AND (no PE trade exists OR existing PE trade is already closed)
             # 2. AND no entry has been made for this PE STRIKE today (prevent multiple entries per strike per day)
+            # LOGIC MATCHES BACKTEST: Only the FIRST entry for a strike is accepted, others are rejected
             if pe_signal.get('has_signal'):
                 order_id = None
                 pe_strike = None
@@ -785,8 +855,10 @@ class Intraday920LiveSignal:
                         if pe_high_val:
                             pe_strike = int(pe_high_val)
                 
+                # Check if already entered today for this PE strike
+                # This prevents duplicate entries matching backtest "only first entry" logic
                 if pe_strike and self.has_entered_today('PE', pe_strike):
-                    logger.info(f"⛔ PE {pe_strike} entry already made today - skipping to prevent multiple entries per strike per day")
+                    logger.info(f"⛔ PE {pe_strike} entry already made today - rejecting subsequent entry signals (matches backtest logic: only first entry per strike)")
                 elif 'PE' not in self.active_trades or self.active_trades['PE'].get('status') == 'CLOSED':
                     # Place order FIRST, only mark as entered if successful
                     order_id = None
