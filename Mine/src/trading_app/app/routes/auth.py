@@ -758,8 +758,19 @@ def fyers_login():
     secret_key = os.getenv('FYERS_SECRET_KEY')
     
     if not app_id or not secret_key:
-        logger.error("[Fyers Login] FYERS_APP_ID or FYERS_SECRET_KEY not configured")
-        return jsonify({'error': 'FYERS_APP_ID or FYERS_SECRET_KEY not configured'}), 500
+        error_msg = "Fyers credentials not configured. "
+        if not app_id:
+            error_msg += "Missing FYERS_APP_ID. "
+        if not secret_key:
+            error_msg += "Missing FYERS_SECRET_KEY. "
+        error_msg += "Please add these to your user's env file (e.g., Mine/env/Kavin.env). "
+        error_msg += "Get credentials from: https://myapi.fyers.in/dashboard/"
+        
+        logger.error(f"[Fyers Login] {error_msg}")
+        return jsonify({
+            'error': error_msg,
+            'details': 'FYERS_APP_ID and FYERS_SECRET_KEY must be configured in user environment'
+        }), 500
     
     try:
         from trading_app.service.fyers_order_services import FyersOrderService
