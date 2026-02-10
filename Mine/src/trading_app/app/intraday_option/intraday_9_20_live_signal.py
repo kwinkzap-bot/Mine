@@ -232,6 +232,7 @@ class Intraday920LiveSignal:
         self.daily_entries_lock = threading.Lock()  # Thread safety for daily_entries
         self.last_entry_check_time = None  # Track last entry signal check to prevent duplicates
         self.last_sl_target_check_time = None  # Track last SL/Target check time (for time-based intervals)
+        self.market_close_processed = False  # Flag to ensure market close only happens once per day
         
         # Trading configuration
         self.live_trading = live_trading  # False=demo mode, True=live orders
@@ -389,7 +390,8 @@ class Intraday920LiveSignal:
         """
         with self.daily_entries_lock:
             self.daily_entries = {}
-            logger.info("🔄 Daily entries tracking reset")
+            self.market_close_processed = False  # Reset market close flag for next day
+            logger.info("🔄 Daily entries tracking reset & market close flag reset")
     
     def get_first_entry_time_today(self, side: str, strike: int) -> Optional[float]:
         """
@@ -1803,7 +1805,7 @@ class Intraday920LiveSignal:
                 # ====== MARKET CLOSE CHECK (3:20 PM) ======
                 # Force exit all trades at market close time
                 current_time = datetime.now().time()
-                if current_time >= time(15, 20, 0):  # 3:20 PM IST
+                if current_time >= time(15, 20, 0) and not self.market_close_processed:  # 3:20 PM IST
                     if self.active_trades:
                         market_close_timestamp = datetime.now()
                         logger.info(f"🔴 Market close (3:20 PM) - Force closing all active trades")
@@ -1819,15 +1821,26 @@ class Intraday920LiveSignal:
                                         current_price = trade.get('entry_price')
                                     
                                     entry_price = trade.get('entry_price', 0)
+                                    strike = trade.get('strike')
                                     pnl = current_price - entry_price if current_price else 0
                                     
                                     logger.info(f"🔴 {side} Force Exit at Market Close: Entry {entry_price:.2f}, Exit {current_price:.2f}, P&L: {pnl:+.2f}")
+                                    
+                                    # Place SELL order to actually close the position
+                                    if strike and current_price:
+                                        order_id = self.place_sell_order(
+                                            side=side,
+                                            strike=strike,
+                                            exit_price=current_price,
+                                            exit_reason="Market Close (3:20 PM)"
+                                        )
+                                        logger.info(f"✅ {side} Sell order placed at market close | Order ID: {order_id if order_id else 'N/A'}")
                                     
                                     # Log to Signal Checks sheet
                                     excel_logger.log_sl_target_check(
                                         timestamp=market_close_timestamp,
                                         side=side,
-                                        strike=trade.get('strike'),
+                                        strike=strike,
                                         current_price=current_price if current_price else entry_price,
                                         entry_price=entry_price,
                                         initial_sl=trade.get('sl'),
@@ -1840,7 +1853,7 @@ class Intraday920LiveSignal:
                                     excel_logger.log_trade(
                                         order_type='SELL',
                                         option_type=side,
-                                        strike=trade.get('strike'),
+                                        strike=strike,
                                         entry_price=entry_price,
                                         current_price=current_price if current_price else entry_price,
                                         target=trade.get('target'),
@@ -1852,6 +1865,12 @@ class Intraday920LiveSignal:
                                     
                                     # Close the trade
                                     self.close_trade(side, current_price if current_price else entry_price, "Market Close (3:20 PM)")
+                        
+                        # Mark that market close has been processed
+                        self.market_close_processed = True
+                    else:
+                        logger.info("No active trades at market close (3:20 PM)")
+                        self.market_close_processed = True
                 
                 # Sleep 1 second and check again
                 time_module.sleep(1)
