@@ -649,44 +649,85 @@ class KiteService:
         
         return None
     
-    def get_current_prices_batch(self, tokens: List[int]) -> Dict[int, Optional[float]]:
+    def get_current_prices_batch(self, tokens: List[int], max_retries: int = 3) -> Dict[int, Optional[float]]:
         """Fetch current LTP (Last Traded Price) for multiple tokens in a single API call.
         
-        Batch fetching is more efficient than individual calls when monitoring multiple instruments.
-        Used by live signal monitoring to check prices every 30 seconds.
+        CRITICAL: Used by live signal monitoring to check prices every 30 seconds.
+        Implements retry logic with exponential backoff for connection resilience.
         
         Args:
             tokens: List of instrument tokens to fetch
+            max_retries: Maximum retry attempts on failure (default: 3)
             
         Returns:
             Dictionary mapping token -> price (or None if price unavailable)
         """
-        try:
-            if not tokens:
-                return {}
-            
-            # Format tokens for Kite API (NFO:token_number)
-            quote_keys = [f"NFO:{token}" for token in tokens]
-            quotes = self.kite.quote(quote_keys)
-            
-            result = {}
-            for key, quote_data in quotes.items():
-                try:
-                    # Handle both string keys (e.g., "NFO:12345") and numeric keys
-                    if isinstance(key, str) and ':' in key:
-                        token = int(key.split(':')[1])
-                    else:
-                        token = int(key)
-                    result[token] = quote_data.get('last_price') if isinstance(quote_data, dict) else None
-                except (ValueError, KeyError, AttributeError, TypeError):
-                    pass  # Skip if unable to parse
-            
-            logging.debug(f"Fetched prices for {len(result)} tokens")
-            return result
-            
-        except Exception as e:
-            logging.error(f"Error fetching batch prices for {len(tokens)} tokens: {e}")
-            return {token: None for token in tokens}
+        import time
+        from kiteconnect import NetworkException, TokenException
+        
+        if not tokens:
+            return {}
+        
+        retry_delay = 0.5  # Start with 500ms
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                # Format tokens for Kite API (NFO:token_number)
+                quote_keys = [f"NFO:{token}" for token in tokens]
+                quotes = self.kite.quote(quote_keys)
+                
+                result = {}
+                for key, quote_data in quotes.items():
+                    try:
+                        # Handle both string keys (e.g., "NFO:12345") and numeric keys
+                        if isinstance(key, str) and ':' in key:
+                            token = int(key.split(':')[1])
+                        else:
+                            token = int(key)
+                        result[token] = quote_data.get('last_price') if isinstance(quote_data, dict) else None
+                    except (ValueError, KeyError, AttributeError, TypeError):
+                        pass  # Skip if unable to parse
+                
+                logging.debug(f"Fetched prices for {len(result)} tokens")
+                return result
+                
+            except TokenException:
+                logging.warning(f"[Batch Price Fetch] Access token invalid (attempt {attempt + 1}/{max_retries})")
+                last_error = "Token expired"
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    
+            except NetworkException as e:
+                logging.warning(f"[Batch Price Fetch] Network error (attempt {attempt + 1}/{max_retries}): {e}")
+                last_error = f"Network error: {str(e)}"
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 0.5s, 1s, 2s
+                    time.sleep(retry_delay * (2 ** attempt))
+                    
+            except Exception as e:
+                error_str = str(e).lower()
+                # Check if error is retriable (connection reset, timeout, gateway errors)
+                is_retriable = any(keyword in error_str for keyword in [
+                    'connection reset', 'connection aborted', 'connection refused',
+                    '504', '503', 'gateway', 'timeout', 'couldn\'t parse', 'json',
+                    'broken pipe', 'reset by peer'
+                ])
+                
+                if is_retriable and attempt < max_retries - 1:
+                    logging.warning(f"[Batch Price Fetch] Retriable error (attempt {attempt + 1}/{max_retries}): {e}")
+                    last_error = f"Retriable error: {str(e)}"
+                    # Exponential backoff: 0.5s, 1s, 2s
+                    time.sleep(retry_delay * (2 ** attempt))
+                else:
+                    logging.error(f"[Batch Price Fetch] Non-retriable error: {e}")
+                    last_error = f"Error: {str(e)}"
+                    break
+        
+        # After all retries exhausted, log and return empty dict with None values
+        logging.error(f"[Batch Price Fetch] Failed after {max_retries} retries. Last error: {last_error}")
+        return {token: None for token in tokens}
+
     
     def get_current_price(self, token: int) -> Optional[float]:
         """Fetch current LTP (Last Traded Price) for a given token.
