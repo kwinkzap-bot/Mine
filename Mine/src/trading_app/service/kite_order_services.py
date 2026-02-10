@@ -479,10 +479,18 @@ class KiteService:
                     if hasattr(expiry_date, 'date'):
                         expiry_date = expiry_date.date()
                     
-                    from datetime import date
-                    # Skip today's expiry (expires at 3:30 PM)
-                    # Only include contracts expiring tomorrow or later
-                    if expiry_date > date.today():
+                    from datetime import date, time, datetime as dt
+                    # On expiry day: use current expiry if before 3:20 PM (market close)
+                    # After 3:20 PM: use next expiry
+                    current_time = dt.now().time()
+                    is_market_open = time(9, 15) <= current_time <= time(15, 20)
+                    
+                    if expiry_date == date.today():
+                        # Today's expiry - only use if market is still open (before 3:20 PM)
+                        if is_market_open:
+                            matching_instruments.append(inst)
+                    elif expiry_date > date.today():
+                        # Future expiry - always include
                         matching_instruments.append(inst)
             
             if matching_instruments:
