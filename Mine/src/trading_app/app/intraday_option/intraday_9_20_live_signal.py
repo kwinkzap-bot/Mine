@@ -683,19 +683,19 @@ class Intraday920LiveSignal:
                 if ce_strike and self.has_entered_today('CE', ce_strike):
                     logger.info(f"⛔ CE {ce_strike} entry already made today - skipping to prevent multiple entries per strike per day")
                 elif 'CE' not in self.active_trades or self.active_trades['CE'].get('status') == 'CLOSED':
-                    # Mark entry IMMEDIATELY to prevent race conditions with multiple signals
-                    if ce_strike:
-                        self.mark_entry_today('CE', ce_strike)
-                    
-                    if strike_data:
+                    # Place order FIRST, only mark as entered if successful
+                    order_id = None
+                    if strike_data and ce_strike:
+                        order_id = self.place_buy_order(
+                            side='CE',
+                            token=strike_data.get('ce_token'),  # type: ignore
+                            strike=ce_strike,
+                            entry_price=ce_signal.get('entry_price')
+                        )
                         
-                        if ce_strike:
-                            order_id = self.place_buy_order(
-                                side='CE',
-                                token=strike_data.get('ce_token'),  # type: ignore
-                                strike=ce_strike,
-                                entry_price=ce_signal.get('entry_price')
-                            )
+                        # Mark entry ONLY if order was successfully placed
+                        if order_id:
+                            self.mark_entry_today('CE', ce_strike)
                     
                     # Place SL order on broker
                     sl_order_id = None
@@ -788,19 +788,19 @@ class Intraday920LiveSignal:
                 if pe_strike and self.has_entered_today('PE', pe_strike):
                     logger.info(f"⛔ PE {pe_strike} entry already made today - skipping to prevent multiple entries per strike per day")
                 elif 'PE' not in self.active_trades or self.active_trades['PE'].get('status') == 'CLOSED':
-                    # Mark entry IMMEDIATELY to prevent race conditions with multiple signals
-                    if pe_strike:
-                        self.mark_entry_today('PE', pe_strike)
-                    
-                    if strike_data:
+                    # Place order FIRST, only mark as entered if successful
+                    order_id = None
+                    if strike_data and pe_strike:
+                        order_id = self.place_buy_order(
+                            side='PE',
+                            token=strike_data.get('pe_token'),  # type: ignore
+                            strike=pe_strike,
+                            entry_price=pe_signal.get('entry_price')
+                        )
                         
-                        if pe_strike:
-                            order_id = self.place_buy_order(
-                                side='PE',
-                                token=strike_data.get('pe_token'),  # type: ignore
-                                strike=pe_strike,
-                                entry_price=pe_signal.get('entry_price')
-                            )
+                        # Mark entry ONLY if order was successfully placed
+                        if order_id:
+                            self.mark_entry_today('PE', pe_strike)
                     
                     # Place SL order on broker
                     sl_order_id = None
