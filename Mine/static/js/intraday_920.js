@@ -957,6 +957,12 @@ class Intraday920Tracker {
             const highStrike = this.strategyData.high_strike || {};
             const lowStrike = this.strategyData.low_strike || {};
 
+            // Use first_5min_high/low as reference for PDH (previous day high)
+            // During live market hours, candle data is not fetched (too slow), so ce_high/pe_high would be 0
+            // In that case, use the first 5-minute candle high/low from parent strategy data
+            const referenceHigh = this.strategyData.first_5min_high || highStrike.ce_high || 0;
+            const referenceLow = this.strategyData.first_5min_low || lowStrike.pe_high || 0;
+
             const backtestResults = {
                 highCe: null,
                 highPe: null,
@@ -966,11 +972,15 @@ class Intraday920Tracker {
 
             // Analyze High Strike (full day backtest)
             if (highStrike.success && highStrike.ce_token && highStrike.pe_token) {
+                // Use strike data's ce_high, fallback to reference high if 0 (live market)
+                const ceHigh = highStrike.ce_high > 0 ? highStrike.ce_high : referenceHigh;
+                const peHigh = highStrike.pe_high > 0 ? highStrike.pe_high : referenceHigh;
+                
                 const analysis = await this.runFullDayBacktest(
                     highStrike.ce_token,
                     highStrike.pe_token,
-                    highStrike.ce_high,
-                    highStrike.pe_high,
+                    ceHigh,
+                    peHigh,
                     'High Strike'
                 );
                 if (analysis.success) {
@@ -981,11 +991,15 @@ class Intraday920Tracker {
 
             // Analyze Low Strike (full day backtest)
             if (lowStrike.success && lowStrike.ce_token && lowStrike.pe_token) {
+                // Use strike data's ce_high, fallback to reference high if 0 (live market)
+                const ceHigh = lowStrike.ce_high > 0 ? lowStrike.ce_high : referenceHigh;
+                const peHigh = lowStrike.pe_high > 0 ? lowStrike.pe_high : referenceHigh;
+                
                 const analysis = await this.runFullDayBacktest(
                     lowStrike.ce_token,
                     lowStrike.pe_token,
-                    lowStrike.ce_high,
-                    lowStrike.pe_high,
+                    ceHigh,
+                    peHigh,
                     'Low Strike'
                 );
                 if (analysis.success) {
