@@ -290,7 +290,9 @@ class Intraday920Strategy:
                     logger.info(f"Fetching first 5-min candles starting from {current_check_date.date()}")
                     
                     # Try to fetch first 5-min candles, with fallback to previous days
-                    max_retries = 30
+                    # OPTIMIZATION: Only try 3 days max (today + 2 previous trading days)
+                    # Most trades happen within last 2 days, further back is unlikely needed
+                    max_retries = 3
                     for attempt in range(max_retries):
                         # Skip weekends
                         while current_check_date.weekday() in [5, 6]:  # Saturday=5, Sunday=6

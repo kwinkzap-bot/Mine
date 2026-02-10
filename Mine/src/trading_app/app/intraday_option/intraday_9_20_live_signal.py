@@ -511,14 +511,14 @@ class Intraday920LiveSignal:
         }
 
 
-    def _fetch_live_data_with_timeout(self, timeout_seconds: int = 20) -> Dict[str, Any]:
+    def _fetch_live_data_with_timeout(self, timeout_seconds: int = 45) -> Dict[str, Any]:
         """Fetch live data with a timeout to avoid blocking the 5-min log cycle.
         
         Uses ThreadPoolExecutor to run fetch in a separate thread with timeout protection.
-        Increased timeout to 20 seconds to allow for API retries and network variability.
+        Increased timeout to 45 seconds to allow for candle fetching with retries.
         
         Args:
-            timeout_seconds: Maximum time to wait for live data fetch (default: 20s)
+            timeout_seconds: Maximum time to wait for live data fetch (default: 45s)
             
         Returns:
             Live data dictionary or error response
@@ -528,10 +528,10 @@ class Intraday920LiveSignal:
             try:
                 return future.result(timeout=timeout_seconds)
             except FuturesTimeoutError:
-                logger.error(f"[Live Data Fetch] Timeout after {timeout_seconds}s")
+                logger.error(f"[Live Data Fetch] Timeout after {timeout_seconds}s - candle fetching may be slow")
                 return {
                     'success': False,
-                    'error': f'Live data fetch timed out after {timeout_seconds}s - possible API or network issue'
+                    'error': f'Live data fetch timed out after {timeout_seconds}s - candle fetching took too long, retrying next cycle'
                 }
             except Exception as e:
                 logger.error(f"[Live Data Fetch] Unexpected error: {e}")
