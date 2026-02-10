@@ -663,7 +663,7 @@ class KiteService:
             Dictionary mapping token -> price (or None if price unavailable)
         """
         import time
-        from kiteconnect import NetworkException, TokenException
+        from kiteconnect.exceptions import NetworkException, TokenException
         
         if not tokens:
             return {}

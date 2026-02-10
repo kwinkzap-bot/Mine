@@ -188,10 +188,10 @@ class Intraday920Strategy:
                 current_check_date -= timedelta(days=1)
             
             # No data found after max retries
-            logger.error(f"No candle data found for {symbol} after {max_retries} days")
+            logger.error(f"No candle data found for {symbol} after {max_date_retries} days")
             return {
                 'symbol': symbol,
-                'error': f'No candle data found for {symbol} in the last {max_retries} days',
+                'error': f'No candle data found for {symbol} in the last {max_date_retries} days',
                 'success': False
             }
             
