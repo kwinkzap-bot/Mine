@@ -306,6 +306,7 @@ class Intraday920Strategy:
                         
                         try:
                             if ce_token and not ce_high:
+                                logger.info(f"[FETCH] Fetching CE {ce_strike} candles for {current_check_date.date()}...")
                                 ce_candles = self.data_service.get_candlestick_data(
                                     ce_token, 
                                     interval='5minute',
@@ -317,11 +318,12 @@ class Intraday920Strategy:
                                     first_candle = ce_candles[0]
                                     ce_high = first_candle.get('high', 0)
                                     ce_low = first_candle.get('low', 0)
-                                    logger.info(f"CE {ce_strike} first 5-min ({current_check_date.date()}): High={ce_high}, Low={ce_low}")
+                                    logger.info(f"✅ CE {ce_strike} first 5-min ({current_check_date.date()}): High={ce_high}, Low={ce_low}")
                                 else:
-                                    logger.warning(f"No CE candles found for {ce_strike} on {current_check_date.date()}, trying previous day...")
+                                    logger.warning(f"❌ No CE candles found for {ce_strike} on {current_check_date.date()}, trying previous day...")
                             
                             if pe_token and not pe_high:
+                                logger.info(f"[FETCH] Fetching PE {pe_strike} candles for {current_check_date.date()}...")
                                 pe_candles = self.data_service.get_candlestick_data(
                                     pe_token,
                                     interval='5minute',
@@ -333,16 +335,16 @@ class Intraday920Strategy:
                                     first_candle = pe_candles[0]
                                     pe_high = first_candle.get('high', 0)
                                     pe_low = first_candle.get('low', 0)
-                                    logger.info(f"PE {pe_strike} first 5-min ({current_check_date.date()}): High={pe_high}, Low={pe_low}")
+                                    logger.info(f"✅ PE {pe_strike} first 5-min ({current_check_date.date()}): High={pe_high}, Low={pe_low}")
                                 else:
-                                    logger.warning(f"No PE candles found for {pe_strike} on {current_check_date.date()}, trying previous day...")
+                                    logger.warning(f"❌ No PE candles found for {pe_strike} on {current_check_date.date()}, trying previous day...")
                             
                             # If we found data for both, break out of retry loop
                             if ce_high and pe_high:
                                 break
                         
                         except Exception as e:
-                            logger.warning(f"Error fetching candles for {current_check_date.date()}: {str(e)}, trying previous day...")
+                            logger.error(f"❌ Error fetching candles for {current_check_date.date()}: {str(e)}, trying previous day...")
                         
                         # Move to previous day and retry
                         current_check_date -= timedelta(days=1)
@@ -526,10 +528,14 @@ class Intraday920Strategy:
             # IMPORTANT: Always fetch candles to get ce_high, ce_low, pe_high, pe_low values
             # The get_strike_data method has retry logic with timeouts, so it won't hang
             from concurrent.futures import ThreadPoolExecutor, as_completed
+            import time as time_module
             
             # Always fetch candles - get_strike_data has comprehensive retry logic
             # to handle timeouts and connection errors gracefully
             should_fetch_candles = True
+            
+            logger.info(f"[TIMING] Starting strike data fetch for {symbol}...")
+            fetch_start = time_module.time()
             
             with ThreadPoolExecutor(max_workers=2) as executor:
                 high_future = executor.submit(self.get_strike_data, symbol, high, should_fetch_candles, reference_date)
@@ -537,6 +543,9 @@ class Intraday920Strategy:
                 
                 high_strike_data = high_future.result()
                 low_strike_data = low_future.result()
+            
+            fetch_time = time_module.time() - fetch_start
+            logger.info(f"[TIMING] Strike data fetch completed in {fetch_time:.2f}s")
             
             return {
                 'symbol': symbol,

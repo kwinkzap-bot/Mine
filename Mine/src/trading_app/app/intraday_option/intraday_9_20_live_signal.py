@@ -529,12 +529,19 @@ class Intraday920LiveSignal:
         
         for attempt in range(max_retries):
             try:
+                fetch_start = time_module.time()
+                logger.info(f"[Data Fetch] Attempt {attempt + 1}/{max_retries}: Fetching live data for {self.symbol}...")
                 live_data = self.strategy.get_intraday_920_data(self.symbol)
+                fetch_time = time_module.time() - fetch_start
+                
                 if live_data.get('success'):
+                    logger.info(f"[Data Fetch] ✅ Success in {fetch_time:.2f}s")
                     return live_data
                 
                 # Check if error is token-related
                 error_msg = str(live_data.get('error', ''))
+                logger.warning(f"[Data Fetch] Failed in {fetch_time:.2f}s: {error_msg}")
+                
                 if 'Incorrect `api_key` or `access_token`' in error_msg:
                     logger.warning(f"[Live Data Fetch] Access token invalid (attempt {attempt + 1}/{max_retries}). Attempting refresh...")
                     try:
