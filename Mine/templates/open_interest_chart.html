@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Options Open Interest Chart{% endblock %}
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/open_interest_chart.css') }}">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% endblock %}
+{% block content %}
+<div class="oi-container">
+    <div class="oi-header">
+        <h1>📊 Options Open Interest Chart</h1>
+        <p class="subtitle">Real-time Open Interest (OI) & Change in OI</p>
+    </div>
+
+    <div class="oi-controls">
+        <div class="control-group">
+            <label for="symbolSelect">Select Symbol:</label>
+            <select id="symbolSelect" class="symbol-dropdown">
+                <option value="NIFTY">NIFTY 50</option>
+                <option value="BANKNIFTY">NIFTY BANK</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <div class="status-info">
+                <span class="last-update">Last Update: <span id="lastUpdateTime">--:--:--</span></span>
+                <span class="auto-refresh">
+                    <input type="checkbox" id="autoRefreshToggle" checked>
+                    <label for="autoRefreshToggle">Auto Refresh (30s)</label>
+                </span>
+                <button id="refreshNowBtn" class="btn btn-refresh">🔄 Refresh Now</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="oi-loader hidden" id="oiLoader">
+        <div class="spinner"></div>
+        <p>Loading Open Interest Data...</p>
+    </div>
+
+    <div class="oi-content">
+        <!-- Summary Stats -->
+        <div class="oi-summary">
+            <div class="summary-card ce-card">
+                <h3>CE Summary</h3>
+                <div class="stat-row">
+                    <span class="label">Total OI:</span>
+                    <span class="value" id="ceOITotal">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Change in OI:</span>
+                    <span class="value" id="ceCOI">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Max OI Strike:</span>
+                    <span class="value" id="ceMaxOIStrike">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Max OI Value:</span>
+                    <span class="value" id="ceMaxOIValue">--</span>
+                </div>
+            </div>
+
+            <div class="summary-card pe-card">
+                <h3>PE Summary</h3>
+                <div class="stat-row">
+                    <span class="label">Total OI:</span>
+                    <span class="value" id="peOITotal">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Change in OI:</span>
+                    <span class="value" id="peCOI">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Max OI Strike:</span>
+                    <span class="value" id="peMaxOIStrike">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Max OI Value:</span>
+                    <span class="value" id="peMaxOIValue">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="oi-charts">
+            <div class="chart-container">
+                <h3>Open Interest Distribution</h3>
+                <canvas id="oiChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Change in Open Interest</h3>
+                <canvas id="coiChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Table View -->
+        <div class="oi-table-section">
+            <h3>Detailed Strike Wise Data</h3>
+            <div class="table-wrapper">
+                <table class="oi-table" id="oiTable">
+                    <thead>
+                        <tr>
+                            <th>Strike</th>
+                            <th class="ce-header">CE OI</th>
+                            <th class="ce-header">CE Change</th>
+                            <th class="ce-header">CE IV</th>
+                            <th class="pe-header">PE OI</th>
+                            <th class="pe-header">PE Change</th>
+                            <th class="pe-header">PE IV</th>
+                        </tr>
+                    </thead>
+                    <tbody id="oiTableBody">
+                        <!-- Data will be populated here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="oi-error hidden" id="oiError">
+        <p id="errorMessage"></p>
+        <button onclick="location.reload()" class="btn btn-retry">Retry</button>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/open_interest_chart.js') }}"></script>
+{% endblock %}

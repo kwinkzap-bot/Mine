@@ -86,6 +86,13 @@ def options_chart():
     """Options chart page."""
     return render_template('options_chart.html')
 
+@pages_bp.route('/open-interest')
+@require_user_auth
+@login_required
+def open_interest():
+    """Open interest chart page - displays options OI data."""
+    return render_template('open_interest_chart.html')
+
 @pages_bp.route('/multi-strike')
 @require_user_auth
 @login_required
