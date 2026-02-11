@@ -147,23 +147,39 @@ class OpenInterestService:
         try:
             proper_name = config['name']
             
-            # Filter to symbol options only
-            symbol_options = [
-                inst for inst in instruments
-                if inst.get('name') == proper_name and inst.get('instrument_type') in ['CE', 'PE']
-            ]
+            # Filter to symbol options only - use direct key access like options_chart_service does
+            symbol_options = []
+            for inst in instruments:
+                try:
+                    if inst['name'] == proper_name and inst['instrument_type'] in ['CE', 'PE']:
+                        symbol_options.append(inst)
+                except (KeyError, TypeError):
+                    continue
             
             logger.info(f"Found {len(symbol_options)} total options for {symbol}")
             
             if not symbol_options:
                 logger.error(f"No instruments found for {symbol} with name '{proper_name}'")
                 # Log sample names for debugging
-                all_names = set(inst.get('name') for inst in instruments if inst.get('name'))
+                all_names = set()
+                for inst in instruments:
+                    try:
+                        all_names.add(inst['name'])
+                    except (KeyError, TypeError):
+                        pass
                 logger.error(f"Available names in instruments: {list(all_names)[:20]}")
                 return []
             
-            # Get current/nearest future expiry
-            expiries = sorted([exp for exp in set(inst.get('expiry') for inst in symbol_options if inst.get('expiry')) if exp is not None])
+            # Get current/nearest future expiry - use direct key access
+            expiries_set = set()
+            for inst in symbol_options:
+                try:
+                    if inst['expiry']:
+                        expiries_set.add(inst['expiry'])
+                except (KeyError, TypeError):
+                    continue
+            
+            expiries = sorted(list(expiries_set))
             
             if not expiries:
                 logger.warning(f"No expiries found for {symbol}")
@@ -179,7 +195,7 @@ class OpenInterestService:
                     if expiry_date >= today:
                         current_expiry = expiry_str
                         break
-                except ValueError:
+                except (ValueError, TypeError):
                     continue
             
             if not current_expiry:
@@ -191,33 +207,34 @@ class OpenInterestService:
             strikes_dict = {}
             
             for inst in symbol_options:
-                if inst.get('expiry') != current_expiry:
-                    continue
+                try:
+                    if inst['expiry'] != current_expiry:
+                        continue
+                        
+                    strike = float(inst['strike'])
+                    option_type = inst['instrument_type']
+                    token = int(inst['instrument_token'])
                     
-                strike = inst.get('strike')
-                option_type = inst.get('instrument_type')
-                token = inst.get('instrument_token')
-                
-                if strike is None or not token:
+                    if strike not in strikes_dict:
+                        strikes_dict[strike] = {
+                            'strike': strike,
+                            'ce_token': None,
+                            'pe_token': None,
+                            'distance': abs(strike - current_price)
+                        }
+                    
+                    if option_type == 'CE':
+                        strikes_dict[strike]['ce_token'] = token
+                    else:  # PE
+                        strikes_dict[strike]['pe_token'] = token
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.debug(f"Skipping instrument: {e}")
                     continue
-                
-                if strike not in strikes_dict:
-                    strikes_dict[strike] = {
-                        'strike': strike,
-                        'ce_token': None,
-                        'pe_token': None,
-                        'distance': abs(float(strike) - current_price)
-                    }
-                
-                if option_type == 'CE':
-                    strikes_dict[strike]['ce_token'] = token
-                else:  # PE
-                    strikes_dict[strike]['pe_token'] = token
             
             # Keep only strikes with both CE and PE tokens
             available_strikes = [
                 s for s in strikes_dict.values() 
-                if s['ce_token'] and s['pe_token']
+                if s['ce_token'] is not None and s['pe_token'] is not None
             ]
             
             # Sort by distance to current price and keep nearest 20
@@ -246,21 +263,25 @@ class OpenInterestService:
         try:
             # Collect all tokens to fetch
             all_tokens = []
-            token_to_strike = {}  # Map token to (strike, option_type)
             
             for strike_info in strikes_data:
                 ce_token = strike_info['ce_token']
                 pe_token = strike_info['pe_token']
-                strike = strike_info['strike']
                 
                 if ce_token:
                     all_tokens.append(ce_token)
-                    token_to_strike[ce_token] = (strike, 'CE')
                 if pe_token:
                     all_tokens.append(pe_token)
-                    token_to_strike[pe_token] = (strike, 'PE')
             
             logger.info(f"Fetching quotes for {len(all_tokens)} tokens...")
+            
+            if not all_tokens:
+                logger.warning("No tokens to fetch")
+                return {
+                    'strikes': [],
+                    'ce_summary': {},
+                    'pe_summary': {}
+                }
             
             # Fetch quotes in batches
             batch_size = 50
@@ -269,11 +290,15 @@ class OpenInterestService:
             for i in range(0, len(all_tokens), batch_size):
                 batch = all_tokens[i:i + batch_size]
                 try:
+                    logger.info(f"Fetching batch {i//batch_size + 1} with {len(batch)} tokens...")
                     quotes = self.kite.quote(batch)
-                    all_quotes.update(quotes)
-                    logger.info(f"Batch {i//batch_size + 1}: Fetched {len(quotes)} quotes")
+                    if quotes:
+                        all_quotes.update(quotes)
+                        logger.info(f"✓ Batch {i//batch_size + 1}: Fetched {len(quotes)} quotes")
+                    else:
+                        logger.warning(f"Empty response for batch {i//batch_size + 1}")
                 except Exception as e:
-                    logger.error(f"Error fetching batch: {e}")
+                    logger.error(f"Error fetching batch {i//batch_size + 1}: {e}", exc_info=True)
                     continue
             
             logger.info(f"Total quotes fetched: {len(all_quotes)}")
@@ -297,16 +322,24 @@ class OpenInterestService:
                 # Get CE data
                 ce_token = strike_info['ce_token']
                 if ce_token in all_quotes:
-                    ce_quote = all_quotes[ce_token]
-                    strikes_oi[strike]['ce_oi'] = ce_quote.get('open_interest', 0) or 0
-                    strikes_oi[strike]['ce_iv'] = ce_quote.get('implied_volatility', 0) or 0
+                    try:
+                        ce_quote = all_quotes[ce_token]
+                        if isinstance(ce_quote, dict):
+                            strikes_oi[strike]['ce_oi'] = int(ce_quote.get('open_interest', 0) or 0)
+                            strikes_oi[strike]['ce_iv'] = float(ce_quote.get('implied_volatility', 0) or 0)
+                    except (ValueError, TypeError) as e:
+                        logger.debug(f"Error parsing CE quote for strike {strike}: {e}")
                 
                 # Get PE data
                 pe_token = strike_info['pe_token']
                 if pe_token in all_quotes:
-                    pe_quote = all_quotes[pe_token]
-                    strikes_oi[strike]['pe_oi'] = pe_quote.get('open_interest', 0) or 0
-                    strikes_oi[strike]['pe_iv'] = pe_quote.get('implied_volatility', 0) or 0
+                    try:
+                        pe_quote = all_quotes[pe_token]
+                        if isinstance(pe_quote, dict):
+                            strikes_oi[strike]['pe_oi'] = int(pe_quote.get('open_interest', 0) or 0)
+                            strikes_oi[strike]['pe_iv'] = float(pe_quote.get('implied_volatility', 0) or 0)
+                    except (ValueError, TypeError) as e:
+                        logger.debug(f"Error parsing PE quote for strike {strike}: {e}")
             
             # Convert to list and calculate summaries
             strikes_list = list(strikes_oi.values())
@@ -314,7 +347,7 @@ class OpenInterestService:
             ce_summary = self._calculate_summary(strikes_list, 'CE')
             pe_summary = self._calculate_summary(strikes_list, 'PE')
             
-            logger.info(f"Processed {len(strikes_list)} strikes with OI data")
+            logger.info(f"✓ Processed {len(strikes_list)} strikes with OI data")
             
             return {
                 'strikes': strikes_list,
