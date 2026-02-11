@@ -144,14 +144,18 @@ class OpenInterestService:
             Filtered list of option instruments
         """
         try:
-            # Filter to symbol and option types
+            # Filter to symbol and option types using the proper name from config
+            proper_name = config['name']  # e.g., 'NIFTY 50' instead of 'NIFTY'
             symbol_instruments = [
                 inst for inst in instruments
-                if inst.get('name') == symbol and inst.get('instrument_type') in ['CE', 'PE']
+                if inst.get('name') == proper_name and inst.get('instrument_type') in ['CE', 'PE']
             ]
             
             if not symbol_instruments:
-                logger.warning(f"No option instruments found for {symbol}")
+                logger.warning(f"No option instruments found for {symbol} (looking for name: {proper_name})")
+                # Log some sample instrument names for debugging
+                sample_names = list(set(inst.get('name') for inst in instruments[:20] if inst.get('instrument_type') in ['CE', 'PE']))
+                logger.warning(f"Sample instrument names: {sample_names}")
                 return []
             
             # Get unique expiries and sort to find the latest one
