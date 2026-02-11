@@ -63,6 +63,10 @@ class KiteService:
         access_token = os.getenv("ACCESS_TOKEN")
         kite = KiteConnect(api_key=api_key)
         
+        # Set timeout for HTTP requests (default is 7s, increase to 30s for chart data)
+        # This affects all API calls made through KiteConnect
+        kite.timeout = 30
+        
         if access_token and isinstance(access_token, str) and access_token.strip():
             kite.set_access_token(access_token)
         else:

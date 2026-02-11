@@ -756,8 +756,8 @@ class OptionsChartService:
                 )
                 
                 try:
-                    ce_data = ce_future.result(timeout=30) or []
-                    pe_data = pe_future.result(timeout=30) or []
+                    ce_data = ce_future.result(timeout=45) or []
+                    pe_data = pe_future.result(timeout=45) or []
                 except Exception as e:
                     logging.error(f"Timeout or error fetching futures for tokens {ce_token}, {pe_token}: {e}")
                     raise
