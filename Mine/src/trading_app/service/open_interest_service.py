@@ -164,7 +164,7 @@ class OpenInterestService:
                 # Try alternative matching - search for partial name match
                 logger.warning(f"Exact match failed, trying partial match for {proper_name}")
                 for name in all_names:
-                    if symbol in name or name in symbol or symbol.lower() in name.lower():
+                    if name and (symbol in name or name in symbol or symbol.lower() in name.lower()):
                         logger.info(f"Trying partial match: {name}")
                         symbol_instruments = [
                             inst for inst in instruments
