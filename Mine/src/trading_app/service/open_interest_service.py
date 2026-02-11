@@ -322,8 +322,13 @@ class OpenInterestService:
             if all_quotes:
                 first_token = list(all_quotes.keys())[0]
                 first_quote = all_quotes[first_token]
-                logger.info(f"[DEBUG] Sample quote for token {first_token}: {first_quote}")
-                logger.info(f"[DEBUG] Quote keys available: {list(first_quote.keys()) if isinstance(first_quote, dict) else 'Not a dict'}")
+                logger.error(f"[DEBUG] FULL Sample quote for token {first_token}: {first_quote}")
+                logger.error(f"[DEBUG] Quote keys available: {list(first_quote.keys()) if isinstance(first_quote, dict) else 'Not a dict'}")
+                # Log all quote tokens and their OI values
+                for token, quote_data in list(all_quotes.items())[:3]:  # First 3 only
+                    if isinstance(quote_data, dict):
+                        oi_candidates = {k: v for k, v in quote_data.items() if 'interest' in k.lower() or k in ['oi', 'OI']}
+                        logger.error(f"[DEBUG] Token {token} potential OI fields: {oi_candidates}")
             
             # Organize OI data by strike
             strikes_oi = {}
@@ -347,14 +352,15 @@ class OpenInterestService:
                     try:
                         ce_quote = all_quotes[ce_token]
                         if isinstance(ce_quote, dict):
-                            # Try 'open_interest' field first, then 'oi'
-                            oi_val = ce_quote.get('open_interest') or ce_quote.get('oi', 0)
-                            if oi_val:
-                                logger.debug(f"[DEBUG] CE Strike {strike} token {ce_token}: OI={oi_val} (field: {'open_interest' if 'open_interest' in ce_quote else 'oi'})")
-                            strikes_oi[strike]['ce_oi'] = int(oi_val or 0)
+                            # Kite returns open_interest key
+                            oi_val = ce_quote.get('open_interest')
+                            logger.error(f"[RAW] CE Token {ce_token} Strike {strike}: open_interest raw value = {repr(oi_val)} (type: {type(oi_val).__name__})")
+                            
+                            # Convert to int, handling None/null
+                            strikes_oi[strike]['ce_oi'] = int(oi_val) if oi_val else 0
                             strikes_oi[strike]['ce_iv'] = float(ce_quote.get('implied_volatility', 0) or 0)
                     except (ValueError, TypeError) as e:
-                        logger.debug(f"Error parsing CE quote for strike {strike}: {e}")
+                        logger.error(f"Error parsing CE quote for strike {strike} token {ce_token}: {e}")
                 
                 # Get PE data
                 pe_token = strike_info['pe_token']
@@ -362,14 +368,15 @@ class OpenInterestService:
                     try:
                         pe_quote = all_quotes[pe_token]
                         if isinstance(pe_quote, dict):
-                            # Try 'open_interest' field first, then 'oi'
-                            oi_val = pe_quote.get('open_interest') or pe_quote.get('oi', 0)
-                            if oi_val:
-                                logger.debug(f"[DEBUG] PE Strike {strike} token {pe_token}: OI={oi_val} (field: {'open_interest' if 'open_interest' in pe_quote else 'oi'})")
-                            strikes_oi[strike]['pe_oi'] = int(oi_val or 0)
+                            # Kite returns open_interest key
+                            oi_val = pe_quote.get('open_interest')
+                            logger.error(f"[RAW] PE Token {pe_token} Strike {strike}: open_interest raw value = {repr(oi_val)} (type: {type(oi_val).__name__})")
+                            
+                            # Convert to int, handling None/null
+                            strikes_oi[strike]['pe_oi'] = int(oi_val) if oi_val else 0
                             strikes_oi[strike]['pe_iv'] = float(pe_quote.get('implied_volatility', 0) or 0)
                     except (ValueError, TypeError) as e:
-                        logger.debug(f"Error parsing PE quote for strike {strike}: {e}")
+                        logger.error(f"Error parsing PE quote for strike {strike} token {pe_token}: {e}")
             
             # Convert to list and calculate summaries
             strikes_list = list(strikes_oi.values())
