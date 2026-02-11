@@ -70,7 +70,8 @@ class OpenInterestService:
             # Step 1: Get current underlying price
             try:
                 quote = self.kite.quote([config['instrument_key']])
-                current_price = quote[config['instrument_key']].get('last_price', 0)
+                quote_data = quote.get(config['instrument_key'], {})
+                current_price = float(quote_data.get('last_price', 0)) if isinstance(quote_data, dict) else 0
                 logger.info(f"{symbol} current price: {current_price}")
             except Exception as e:
                 logger.error(f"Failed to get current price for {symbol}: {e}")
@@ -154,7 +155,7 @@ class OpenInterestService:
                 return []
             
             # Get unique expiries and sort to find the latest one
-            expiries = sorted(list(set(inst.get('expiry') for inst in symbol_instruments)))
+            expiries = sorted([exp for exp in set(inst.get('expiry') for inst in symbol_instruments) if exp is not None])
             
             if not expiries:
                 logger.warning(f"No expiries found for {symbol}")
@@ -214,6 +215,10 @@ class OpenInterestService:
                 open_interest = inst.get('open_interest', 0)
                 iv = inst.get('implied_volatility', 0)  # Implied volatility
                 
+                if strike is None or not isinstance(strike, (int, float)):
+                    continue
+                    
+                strike_float = float(strike)
                 if strike not in strikes_dict:
                     strikes_dict[strike] = {
                         'strike': strike,
@@ -223,7 +228,7 @@ class OpenInterestService:
                         'pe_oi': 0,
                         'pe_change_in_oi': 0,
                         'pe_iv': 0,
-                        'distance': abs(strike - current_price)
+                        'distance': abs(strike_float - current_price)
                     }
                 
                 if option_type == 'CE':
