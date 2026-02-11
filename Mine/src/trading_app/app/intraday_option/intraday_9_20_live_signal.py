@@ -1630,6 +1630,23 @@ class Intraday920LiveSignal:
                     # Fetch live data (timeout-protected)
                     live_data = self._fetch_live_data_with_timeout()
                     
+                    # ALWAYS log the check attempt to Signal Checks sheet, even if it fails
+                    if not live_data.get('success'):
+                        error_msg = live_data.get('error', 'Unknown error')
+                        logger.warning(f"Entry signal check failed at {check_timestamp.strftime('%H:%M:%S')}: {error_msg}")
+                        
+                        # Log the failed check to Excel so we can see the gap
+                        excel_logger.log_signal_check(
+                            timestamp=check_timestamp,
+                            ce_prev_high=None,
+                            ce_prev_low=None,
+                            pe_prev_high=None,
+                            pe_prev_low=None,
+                            ce_signal=False,
+                            pe_signal=False,
+                            notes=f"Data fetch failed: {error_msg}"
+                        )
+                    
                     if live_data.get('success'):
                         # Extract strike info
                         high_strike = live_data.get('high_strike', {})
