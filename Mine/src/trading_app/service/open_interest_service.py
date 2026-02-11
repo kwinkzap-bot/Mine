@@ -144,6 +144,13 @@ class OpenInterestService:
             Filtered list of option instruments
         """
         try:
+            logger.info(f"Filtering instruments for {symbol} (name: {config['name']})")
+            logger.info(f"Total instruments received: {len(instruments)}")
+            
+            # Get all unique names to see what we have
+            all_names = set(inst.get('name') for inst in instruments if inst.get('name'))
+            logger.info(f"All unique instrument names: {all_names}")
+            
             # Filter to symbol and option types using the proper name from config
             proper_name = config['name']  # e.g., 'NIFTY 50' instead of 'NIFTY'
             symbol_instruments = [
@@ -151,11 +158,24 @@ class OpenInterestService:
                 if inst.get('name') == proper_name and inst.get('instrument_type') in ['CE', 'PE']
             ]
             
+            logger.info(f"Found {len(symbol_instruments)} option instruments for {proper_name}")
+            
             if not symbol_instruments:
-                logger.warning(f"No option instruments found for {symbol} (looking for name: {proper_name})")
-                # Log some sample instrument names for debugging
-                sample_names = list(set(inst.get('name') for inst in instruments[:20] if inst.get('instrument_type') in ['CE', 'PE']))
-                logger.warning(f"Sample instrument names: {sample_names}")
+                # Try alternative matching - search for partial name match
+                logger.warning(f"Exact match failed, trying partial match for {proper_name}")
+                for name in all_names:
+                    if symbol in name or name in symbol or symbol.lower() in name.lower():
+                        logger.info(f"Trying partial match: {name}")
+                        symbol_instruments = [
+                            inst for inst in instruments
+                            if inst.get('name') == name and inst.get('instrument_type') in ['CE', 'PE']
+                        ]
+                        if symbol_instruments:
+                            logger.info(f"Found {len(symbol_instruments)} instruments with name: {name}")
+                            break
+            
+            if not symbol_instruments:
+                logger.error(f"No option instruments found for {symbol} (looking for name: {proper_name})")
                 return []
             
             # Get unique expiries and sort to find the latest one
