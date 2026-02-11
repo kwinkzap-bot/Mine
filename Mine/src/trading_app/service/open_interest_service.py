@@ -25,20 +25,20 @@ class OpenInterestService:
         # Symbol configuration
         self.SYMBOL_CONFIG = {
             'NIFTY': {
-                'name': 'NIFTY 50',
-                'instrument_key': 'NSE:NIFTY 50',
+                'name': 'NIFTY',  # Direct name from instruments list
+                'instrument_key': 'NSE:NIFTY 50',  # For price quote
                 'lot_size': 50,
                 'strike_diff': 50
             },
             'BANKNIFTY': {
-                'name': 'NIFTY BANK',
-                'instrument_key': 'NSE:NIFTY BANK',
+                'name': 'BANKNIFTY',  # Direct name from instruments list
+                'instrument_key': 'NSE:NIFTY BANK',  # For price quote
                 'lot_size': 25,
                 'strike_diff': 100
             },
             'FINNIFTY': {
-                'name': 'NIFTY FIN SERVICE',
-                'instrument_key': 'NSE:NIFTY FIN SERVICE',
+                'name': 'FINNIFTY',  # Direct name from instruments list
+                'instrument_key': 'NSE:NIFTY FIN SERVICE',  # For price quote
                 'lot_size': 40,
                 'strike_diff': 50
             }
@@ -146,28 +146,44 @@ class OpenInterestService:
         """
         try:
             proper_name = config['name']
+            logger.info(f"[DEBUG] Looking for instruments with name='{proper_name}' and type in ['CE', 'PE']")
+            logger.info(f"[DEBUG] Total instruments in NFO: {len(instruments)}")
+            
+            # Log sample instruments to see structure
+            if instruments:
+                logger.info(f"[DEBUG] Sample instrument 0: {instruments[0]}")
+                logger.info(f"[DEBUG] Sample instrument keys: {instruments[0].keys() if instruments else 'N/A'}")
             
             # Filter to symbol options only - use direct key access like options_chart_service does
             symbol_options = []
             for inst in instruments:
                 try:
-                    if inst['name'] == proper_name and inst['instrument_type'] in ['CE', 'PE']:
+                    inst_name = inst['name']
+                    inst_type = inst['instrument_type']
+                    
+                    # Debug: log mismatches
+                    if inst_name and 'NIFTY' in inst_name.upper() and inst_type in ['CE', 'PE']:
+                        logger.debug(f"[DEBUG] Found NIFTY-like option: {inst_name} ({inst_type})")
+                    
+                    if inst_name == proper_name and inst_type in ['CE', 'PE']:
                         symbol_options.append(inst)
-                except (KeyError, TypeError):
+                except (KeyError, TypeError) as e:
                     continue
             
-            logger.info(f"Found {len(symbol_options)} total options for {symbol}")
+            logger.info(f"Found {len(symbol_options)} total options for {symbol} (looking for name='{proper_name}')")
             
             if not symbol_options:
                 logger.error(f"No instruments found for {symbol} with name '{proper_name}'")
-                # Log sample names for debugging
+                # Log ALL unique names for debugging
                 all_names = set()
                 for inst in instruments:
                     try:
-                        all_names.add(inst['name'])
+                        name = inst['name']
+                        if name:
+                            all_names.add(name)
                     except (KeyError, TypeError):
                         pass
-                logger.error(f"Available names in instruments: {list(all_names)[:20]}")
+                logger.error(f"Available names in instruments ({len(all_names)} unique): {sorted(list(all_names))}")
                 return []
             
             # Get current/nearest future expiry - use direct key access
