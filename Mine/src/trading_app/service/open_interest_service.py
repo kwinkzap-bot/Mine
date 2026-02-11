@@ -80,7 +80,7 @@ class OpenInterestService:
                     'error': f'Failed to get current price: {str(e)}'
                 }
             
-            # Step 2: Get all instruments for the symbol
+            # Step 2: Get all NFO instruments and find available strikes
             try:
                 instruments = self.kite.instruments('NFO')
             except Exception as e:
@@ -90,22 +90,22 @@ class OpenInterestService:
                     'error': f'Failed to get instruments: {str(e)}'
                 }
             
-            # Step 3: Filter instruments for the symbol with latest expiry
-            option_instruments = self._filter_option_instruments(instruments, symbol, config)
+            # Step 3: Get available strikes for symbol using KiteService method pattern
+            strikes_data = self._get_available_strikes(instruments, symbol, current_price, config)
             
-            if not option_instruments:
+            if not strikes_data:
                 return {
                     'success': False,
-                    'error': f'No option instruments found for {symbol}'
+                    'error': f'No option strikes found for {symbol}'
                 }
             
-            logger.info(f"Found {len(option_instruments)} option instruments for {symbol}")
+            logger.info(f"Found {len(strikes_data)} available strikes for {symbol}")
             
-            # Step 4: Fetch quotes for all instruments to get OI data
+            # Step 4: Fetch quotes for all strike tokens
             try:
-                oi_data = self._fetch_open_interest_data(option_instruments, current_price, config)
+                oi_data = self._fetch_open_interest_data(strikes_data, current_price)
             except Exception as e:
-                logger.error(f"Failed to fetch OI data: {e}")
+                logger.error(f"Failed to fetch OI data: {e}", exc_info=True)
                 return {
                     'success': False,
                     'error': f'Failed to fetch OI data: {str(e)}'
@@ -130,62 +130,46 @@ class OpenInterestService:
                 'error': str(e)
             }
     
-    def _filter_option_instruments(self, instruments: List[Dict[str, Any]], symbol: str, 
-                                  config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _get_available_strikes(self, instruments: List[Dict[str, Any]], symbol: str, 
+                              current_price: float, config: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Filter instruments to get only CE and PE for the symbol with latest expiry.
+        Get available strikes for a symbol similar to KiteDataFetchService.get_available_strikes()
         
         Args:
-            instruments: List of all instruments from Kite
-            symbol: Trading symbol
+            instruments: List of all NFO instruments
+            symbol: Trading symbol (NIFTY, BANKNIFTY, etc.)
+            current_price: Current underlying price
             config: Symbol configuration
             
         Returns:
-            Filtered list of option instruments
+            List of strikes with CE/PE tokens
         """
         try:
-            logger.info(f"Filtering instruments for {symbol} (name: {config['name']})")
-            logger.info(f"Total instruments received: {len(instruments)}")
+            proper_name = config['name']
             
-            # Get all unique names to see what we have
-            all_names = set(inst.get('name') for inst in instruments if inst.get('name'))
-            logger.info(f"All unique instrument names: {all_names}")
-            
-            # Filter to symbol and option types using the proper name from config
-            proper_name = config['name']  # e.g., 'NIFTY 50' instead of 'NIFTY'
-            symbol_instruments = [
+            # Filter to symbol options only
+            symbol_options = [
                 inst for inst in instruments
                 if inst.get('name') == proper_name and inst.get('instrument_type') in ['CE', 'PE']
             ]
             
-            logger.info(f"Found {len(symbol_instruments)} option instruments for {proper_name}")
+            logger.info(f"Found {len(symbol_options)} total options for {symbol}")
             
-            if not symbol_instruments:
-                # Try alternative matching - search for partial name match
-                logger.warning(f"Exact match failed, trying partial match for {proper_name}")
-                for name in all_names:
-                    if name and (symbol in name or name in symbol or symbol.lower() in name.lower()):
-                        logger.info(f"Trying partial match: {name}")
-                        symbol_instruments = [
-                            inst for inst in instruments
-                            if inst.get('name') == name and inst.get('instrument_type') in ['CE', 'PE']
-                        ]
-                        if symbol_instruments:
-                            logger.info(f"Found {len(symbol_instruments)} instruments with name: {name}")
-                            break
-            
-            if not symbol_instruments:
-                logger.error(f"No option instruments found for {symbol} (looking for name: {proper_name})")
+            if not symbol_options:
+                logger.error(f"No instruments found for {symbol} with name '{proper_name}'")
+                # Log sample names for debugging
+                all_names = set(inst.get('name') for inst in instruments if inst.get('name'))
+                logger.error(f"Available names in instruments: {list(all_names)[:20]}")
                 return []
             
-            # Get unique expiries and sort to find the latest one
-            expiries = sorted([exp for exp in set(inst.get('expiry') for inst in symbol_instruments) if exp is not None])
+            # Get current/nearest future expiry
+            expiries = sorted([exp for exp in set(inst.get('expiry') for inst in symbol_options if inst.get('expiry')) if exp is not None])
             
             if not expiries:
                 logger.warning(f"No expiries found for {symbol}")
                 return []
             
-            # Get the latest/nearest future expiry
+            # Select nearest future expiry
             today = datetime.now().date()
             current_expiry = None
             
@@ -199,137 +183,141 @@ class OpenInterestService:
                     continue
             
             if not current_expiry:
-                # If no future expiry, use the latest available
                 current_expiry = expiries[-1]
             
-            logger.info(f"Using expiry: {current_expiry} for {symbol}")
+            logger.info(f"Using expiry: {current_expiry}")
             
-            # Filter by selected expiry
-            filtered = [
-                inst for inst in symbol_instruments
-                if inst.get('expiry') == current_expiry
+            # Group by strike and collect CE/PE tokens
+            strikes_dict = {}
+            
+            for inst in symbol_options:
+                if inst.get('expiry') != current_expiry:
+                    continue
+                    
+                strike = inst.get('strike')
+                option_type = inst.get('instrument_type')
+                token = inst.get('instrument_token')
+                
+                if strike is None or not token:
+                    continue
+                
+                if strike not in strikes_dict:
+                    strikes_dict[strike] = {
+                        'strike': strike,
+                        'ce_token': None,
+                        'pe_token': None,
+                        'distance': abs(float(strike) - current_price)
+                    }
+                
+                if option_type == 'CE':
+                    strikes_dict[strike]['ce_token'] = token
+                else:  # PE
+                    strikes_dict[strike]['pe_token'] = token
+            
+            # Keep only strikes with both CE and PE tokens
+            available_strikes = [
+                s for s in strikes_dict.values() 
+                if s['ce_token'] and s['pe_token']
             ]
             
-            return filtered
+            # Sort by distance to current price and keep nearest 20
+            available_strikes.sort(key=lambda x: x['distance'])
+            nearby_strikes = available_strikes[:20]
+            
+            logger.info(f"Selected {len(nearby_strikes)} strikes near current price {current_price}")
+            return nearby_strikes
             
         except Exception as e:
-            logger.error(f"Error filtering instruments: {e}")
+            logger.error(f"Error getting available strikes: {e}", exc_info=True)
             return []
     
-    def _fetch_open_interest_data(self, instruments: List[Dict[str, Any]], 
-                                 current_price: float, config: Dict[str, Any]) -> Dict[str, Any]:
+    def _fetch_open_interest_data(self, strikes_data: List[Dict[str, Any]], 
+                                 current_price: float) -> Dict[str, Any]:
         """
-        Fetch open interest data from Kite API quotes.
-        
-        OI data is not in instruments list - we need to fetch quotes.
+        Fetch OI data from Kite quotes API using pre-collected tokens.
         
         Args:
-            instruments: Filtered option instruments with tokens
+            strikes_data: List of strikes with CE/PE tokens
             current_price: Current underlying price
-            config: Symbol configuration
             
         Returns:
             Dictionary with OI data organized by strike
         """
         try:
-            # Step 1: Group instruments by strike and extract tokens
-            strikes_by_token = {}
-            strike_info = {}
+            # Collect all tokens to fetch
+            all_tokens = []
+            token_to_strike = {}  # Map token to (strike, option_type)
             
-            for inst in instruments:
-                strike = inst.get('strike')
-                option_type = inst.get('instrument_type')  # CE or PE
-                token = inst.get('instrument_token')
+            for strike_info in strikes_data:
+                ce_token = strike_info['ce_token']
+                pe_token = strike_info['pe_token']
+                strike = strike_info['strike']
                 
-                if strike is None or not isinstance(strike, (int, float)) or not token:
-                    continue
-                    
-                strike_float = float(strike)
-                
-                if strike not in strike_info:
-                    strike_info[strike] = {
-                        'strike': strike,
-                        'ce_oi': 0,
-                        'ce_change_in_oi': 0,
-                        'ce_iv': 0,
-                        'ce_token': None,
-                        'pe_oi': 0,
-                        'pe_change_in_oi': 0,
-                        'pe_iv': 0,
-                        'pe_token': None,
-                        'distance': abs(strike_float - current_price)
-                    }
-                
-                # Store token for this option type
-                if option_type == 'CE':
-                    strike_info[strike]['ce_token'] = token
-                else:  # PE
-                    strike_info[strike]['pe_token'] = token
-                
-                strikes_by_token[token] = (strike, option_type)
+                if ce_token:
+                    all_tokens.append(ce_token)
+                    token_to_strike[ce_token] = (strike, 'CE')
+                if pe_token:
+                    all_tokens.append(pe_token)
+                    token_to_strike[pe_token] = (strike, 'PE')
             
-            logger.info(f"Fetching quotes for {len(strikes_by_token)} instruments...")
+            logger.info(f"Fetching quotes for {len(all_tokens)} tokens...")
             
-            # Step 2: Fetch quotes in batches (Kite API has a limit)
-            token_list = list(strikes_by_token.keys())
+            # Fetch quotes in batches
             batch_size = 50
             all_quotes = {}
             
-            for i in range(0, len(token_list), batch_size):
-                batch = token_list[i:i + batch_size]
+            for i in range(0, len(all_tokens), batch_size):
+                batch = all_tokens[i:i + batch_size]
                 try:
                     quotes = self.kite.quote(batch)
                     all_quotes.update(quotes)
-                    logger.info(f"Fetched quotes for batch {i//batch_size + 1}: {len(quotes)} instruments")
+                    logger.info(f"Batch {i//batch_size + 1}: Fetched {len(quotes)} quotes")
                 except Exception as e:
-                    logger.error(f"Error fetching batch {i//batch_size + 1}: {e}")
+                    logger.error(f"Error fetching batch: {e}")
                     continue
             
-            logger.info(f"Successfully fetched {len(all_quotes)} quotes")
+            logger.info(f"Total quotes fetched: {len(all_quotes)}")
             
-            # Step 3: Extract OI data from quotes
-            for token, quote_data in all_quotes.items():
-                if token not in strikes_by_token:
-                    continue
-                    
-                strike, option_type = strikes_by_token[token]
-                if strike not in strike_info:
-                    continue
+            # Organize OI data by strike
+            strikes_oi = {}
+            
+            for strike_info in strikes_data:
+                strike = strike_info['strike']
                 
-                # Extract OI from quote
-                oi = quote_data.get('open_interest', 0) or 0
-                iv = quote_data.get('implied_volatility', 0) or 0
+                strikes_oi[strike] = {
+                    'strike': strike,
+                    'ce_oi': 0,
+                    'ce_change_in_oi': 0,
+                    'ce_iv': 0,
+                    'pe_oi': 0,
+                    'pe_change_in_oi': 0,
+                    'pe_iv': 0
+                }
                 
-                if option_type == 'CE':
-                    strike_info[strike]['ce_oi'] = oi
-                    strike_info[strike]['ce_iv'] = iv
-                else:  # PE
-                    strike_info[strike]['pe_oi'] = oi
-                    strike_info[strike]['pe_iv'] = iv
+                # Get CE data
+                ce_token = strike_info['ce_token']
+                if ce_token in all_quotes:
+                    ce_quote = all_quotes[ce_token]
+                    strikes_oi[strike]['ce_oi'] = ce_quote.get('open_interest', 0) or 0
+                    strikes_oi[strike]['ce_iv'] = ce_quote.get('implied_volatility', 0) or 0
+                
+                # Get PE data
+                pe_token = strike_info['pe_token']
+                if pe_token in all_quotes:
+                    pe_quote = all_quotes[pe_token]
+                    strikes_oi[strike]['pe_oi'] = pe_quote.get('open_interest', 0) or 0
+                    strikes_oi[strike]['pe_iv'] = pe_quote.get('implied_volatility', 0) or 0
             
-            # Step 4: Sort and filter strikes by distance to current price
-            sorted_strikes = sorted(
-                strike_info.values(),
-                key=lambda x: x['distance']
-            )
+            # Convert to list and calculate summaries
+            strikes_list = list(strikes_oi.values())
             
-            # Keep only strikes near current price (top 20 nearest)
-            nearby_strikes = sorted_strikes[:20]
+            ce_summary = self._calculate_summary(strikes_list, 'CE')
+            pe_summary = self._calculate_summary(strikes_list, 'PE')
             
-            # Remove token info for final response
-            for strike_data in nearby_strikes:
-                strike_data.pop('ce_token', None)
-                strike_data.pop('pe_token', None)
-                strike_data.pop('distance', None)
-            
-            # Step 5: Calculate summaries
-            ce_summary = self._calculate_summary(nearby_strikes, 'CE')
-            pe_summary = self._calculate_summary(nearby_strikes, 'PE')
-            
-            logger.info(f"Processed {len(nearby_strikes)} strikes with OI data")
+            logger.info(f"Processed {len(strikes_list)} strikes with OI data")
             
             return {
-                'strikes': nearby_strikes,
+                'strikes': strikes_list,
                 'ce_summary': ce_summary,
                 'pe_summary': pe_summary
             }
