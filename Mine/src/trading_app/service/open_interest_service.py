@@ -101,7 +101,7 @@ class OpenInterestService:
             
             logger.info(f"Found {len(option_instruments)} option instruments for {symbol}")
             
-            # Step 4: Get quotes for all instruments to fetch OI data
+            # Step 4: Fetch quotes for all instruments to get OI data
             try:
                 oi_data = self._fetch_open_interest_data(option_instruments, current_price, config)
             except Exception as e:
@@ -219,10 +219,12 @@ class OpenInterestService:
     def _fetch_open_interest_data(self, instruments: List[Dict[str, Any]], 
                                  current_price: float, config: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Fetch open interest data from instruments.
+        Fetch open interest data from Kite API quotes.
+        
+        OI data is not in instruments list - we need to fetch quotes.
         
         Args:
-            instruments: Filtered option instruments
+            instruments: Filtered option instruments with tokens
             current_price: Current underlying price
             config: Symbol configuration
             
@@ -230,56 +232,101 @@ class OpenInterestService:
             Dictionary with OI data organized by strike
         """
         try:
-            # Group instruments by strike
-            strikes_dict = {}
+            # Step 1: Group instruments by strike and extract tokens
+            strikes_by_token = {}
+            strike_info = {}
             
             for inst in instruments:
                 strike = inst.get('strike')
                 option_type = inst.get('instrument_type')  # CE or PE
-                open_interest = inst.get('open_interest', 0)
-                iv = inst.get('implied_volatility', 0)  # Implied volatility
+                token = inst.get('instrument_token')
                 
-                if strike is None or not isinstance(strike, (int, float)):
+                if strike is None or not isinstance(strike, (int, float)) or not token:
                     continue
                     
                 strike_float = float(strike)
-                if strike not in strikes_dict:
-                    strikes_dict[strike] = {
+                
+                if strike not in strike_info:
+                    strike_info[strike] = {
                         'strike': strike,
                         'ce_oi': 0,
                         'ce_change_in_oi': 0,
                         'ce_iv': 0,
+                        'ce_token': None,
                         'pe_oi': 0,
                         'pe_change_in_oi': 0,
                         'pe_iv': 0,
+                        'pe_token': None,
                         'distance': abs(strike_float - current_price)
                     }
                 
+                # Store token for this option type
                 if option_type == 'CE':
-                    strikes_dict[strike]['ce_oi'] = open_interest
-                    strikes_dict[strike]['ce_iv'] = iv
-                    # Change in OI is calculated as difference (simplified)
-                    # In production, this would come from tick-by-tick data
-                    strikes_dict[strike]['ce_change_in_oi'] = 0
+                    strike_info[strike]['ce_token'] = token
                 else:  # PE
-                    strikes_dict[strike]['pe_oi'] = open_interest
-                    strikes_dict[strike]['pe_iv'] = iv
-                    strikes_dict[strike]['pe_change_in_oi'] = 0
+                    strike_info[strike]['pe_token'] = token
+                
+                strikes_by_token[token] = (strike, option_type)
             
-            # Sort by distance to current price
+            logger.info(f"Fetching quotes for {len(strikes_by_token)} instruments...")
+            
+            # Step 2: Fetch quotes in batches (Kite API has a limit)
+            token_list = list(strikes_by_token.keys())
+            batch_size = 50
+            all_quotes = {}
+            
+            for i in range(0, len(token_list), batch_size):
+                batch = token_list[i:i + batch_size]
+                try:
+                    quotes = self.kite.quote(batch)
+                    all_quotes.update(quotes)
+                    logger.info(f"Fetched quotes for batch {i//batch_size + 1}: {len(quotes)} instruments")
+                except Exception as e:
+                    logger.error(f"Error fetching batch {i//batch_size + 1}: {e}")
+                    continue
+            
+            logger.info(f"Successfully fetched {len(all_quotes)} quotes")
+            
+            # Step 3: Extract OI data from quotes
+            for token, quote_data in all_quotes.items():
+                if token not in strikes_by_token:
+                    continue
+                    
+                strike, option_type = strikes_by_token[token]
+                if strike not in strike_info:
+                    continue
+                
+                # Extract OI from quote
+                oi = quote_data.get('open_interest', 0) or 0
+                iv = quote_data.get('implied_volatility', 0) or 0
+                
+                if option_type == 'CE':
+                    strike_info[strike]['ce_oi'] = oi
+                    strike_info[strike]['ce_iv'] = iv
+                else:  # PE
+                    strike_info[strike]['pe_oi'] = oi
+                    strike_info[strike]['pe_iv'] = iv
+            
+            # Step 4: Sort and filter strikes by distance to current price
             sorted_strikes = sorted(
-                strikes_dict.values(),
+                strike_info.values(),
                 key=lambda x: x['distance']
             )
             
-            # Keep only strikes near current price (±10 strikes)
-            nearby_strikes = sorted_strikes[:20]  # Top 20 nearest strikes
+            # Keep only strikes near current price (top 20 nearest)
+            nearby_strikes = sorted_strikes[:20]
             
-            # Calculate summaries
+            # Remove token info for final response
+            for strike_data in nearby_strikes:
+                strike_data.pop('ce_token', None)
+                strike_data.pop('pe_token', None)
+                strike_data.pop('distance', None)
+            
+            # Step 5: Calculate summaries
             ce_summary = self._calculate_summary(nearby_strikes, 'CE')
             pe_summary = self._calculate_summary(nearby_strikes, 'PE')
             
-            logger.info(f"Processed {len(nearby_strikes)} strikes")
+            logger.info(f"Processed {len(nearby_strikes)} strikes with OI data")
             
             return {
                 'strikes': nearby_strikes,
@@ -288,7 +335,7 @@ class OpenInterestService:
             }
             
         except Exception as e:
-            logger.error(f"Error fetching OI data: {e}")
+            logger.error(f"Error fetching OI data: {e}", exc_info=True)
             raise
     
     def _calculate_summary(self, strikes: List[Dict[str, Any]], option_type: str) -> Dict[str, Any]:
