@@ -22,6 +22,10 @@ def check_user_authentication():
     """Require user authentication for all API routes."""
     from trading_app.app.utils.user_auth import is_user_authenticated
     
+    # Allow test endpoints without authentication
+    if request.path.endswith('/open-interest-test'):
+        return None
+    
     if not is_user_authenticated():
         return jsonify({
             'success': False,
@@ -2595,6 +2599,45 @@ def start_monitoring() -> EndpointResponse:
         return jsonify({
             'success': False,
             'error': f'Error starting monitoring: {str(e)}'
+        }), 500
+
+
+@api_bp.route('/open-interest-test', methods=['POST'])
+def get_open_interest_test() -> EndpointResponse:
+    """
+    Test endpoint for open interest data (no auth required).
+    
+    Returns:
+        JSON with open interest data for CE and PE strikes
+    """
+    try:
+        data = request.get_json() or {}
+        symbol = data.get('symbol', 'NIFTY')
+        
+        logger.info(f"[TEST] Fetching open interest data for {symbol}")
+        
+        from trading_app.service.open_interest_service import OpenInterestService
+        
+        kite = get_kite()
+        if not kite:
+            return jsonify({
+                'success': False,
+                'error': 'Kite connection not available'
+            }), 400
+        
+        oi_service = OpenInterestService(kite)
+        oi_data = oi_service.get_open_interest_data(symbol)
+        
+        if not oi_data.get('success'):
+            return jsonify(oi_data), 400
+        
+        return jsonify(oi_data), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching open interest: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 500
 
 
