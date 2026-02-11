@@ -316,8 +316,14 @@ class OpenInterestService:
                 except Exception as e:
                     logger.error(f"Error fetching batch {i//batch_size + 1}: {e}", exc_info=True)
                     continue
-            
             logger.info(f"Total quotes fetched: {len(all_quotes)}")
+            
+            # Log sample quote to see structure
+            if all_quotes:
+                first_token = list(all_quotes.keys())[0]
+                first_quote = all_quotes[first_token]
+                logger.info(f"[DEBUG] Sample quote for token {first_token}: {first_quote}")
+                logger.info(f"[DEBUG] Quote keys available: {list(first_quote.keys()) if isinstance(first_quote, dict) else 'Not a dict'}")
             
             # Organize OI data by strike
             strikes_oi = {}
@@ -341,7 +347,11 @@ class OpenInterestService:
                     try:
                         ce_quote = all_quotes[ce_token]
                         if isinstance(ce_quote, dict):
-                            strikes_oi[strike]['ce_oi'] = int(ce_quote.get('open_interest', 0) or 0)
+                            # Try 'open_interest' field first, then 'oi'
+                            oi_val = ce_quote.get('open_interest') or ce_quote.get('oi', 0)
+                            if oi_val:
+                                logger.debug(f"[DEBUG] CE Strike {strike} token {ce_token}: OI={oi_val} (field: {'open_interest' if 'open_interest' in ce_quote else 'oi'})")
+                            strikes_oi[strike]['ce_oi'] = int(oi_val or 0)
                             strikes_oi[strike]['ce_iv'] = float(ce_quote.get('implied_volatility', 0) or 0)
                     except (ValueError, TypeError) as e:
                         logger.debug(f"Error parsing CE quote for strike {strike}: {e}")
@@ -352,7 +362,11 @@ class OpenInterestService:
                     try:
                         pe_quote = all_quotes[pe_token]
                         if isinstance(pe_quote, dict):
-                            strikes_oi[strike]['pe_oi'] = int(pe_quote.get('open_interest', 0) or 0)
+                            # Try 'open_interest' field first, then 'oi'
+                            oi_val = pe_quote.get('open_interest') or pe_quote.get('oi', 0)
+                            if oi_val:
+                                logger.debug(f"[DEBUG] PE Strike {strike} token {pe_token}: OI={oi_val} (field: {'open_interest' if 'open_interest' in pe_quote else 'oi'})")
+                            strikes_oi[strike]['pe_oi'] = int(oi_val or 0)
                             strikes_oi[strike]['pe_iv'] = float(pe_quote.get('implied_volatility', 0) or 0)
                     except (ValueError, TypeError) as e:
                         logger.debug(f"Error parsing PE quote for strike {strike}: {e}")
