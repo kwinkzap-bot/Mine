@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Options Open Interest Chart{% endblock %}
+{% block title %}Open Interest{% endblock %}
 {% block head %}
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/open_interest_chart.css') }}">
@@ -8,7 +8,7 @@
 {% block content %}
 <div class="oi-container">
     <div class="oi-header">
-        <h1>📊 Options Open Interest Chart</h1>
+        <h1>📊 Open Interest</h1>
         <p class="subtitle">Real-time Open Interest (OI) & Change in OI</p>
     </div>
 
