@@ -218,7 +218,6 @@
 .stat-row .value {
     color: #2c3e50;
     font-size: 0.95em;
-    font-weight: 600;
 }
 
 .stat-row .value.color-red {

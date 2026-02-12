@@ -364,6 +364,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
     const ctx = document.getElementById('coiChart').getContext('2d');
     
     // Create dynamic colors based on positive/negative values - Light colors for Change in OI
+    // CE (Call OI Change) = Red, PE (Put OI Change) = Green
     const ceBackgroundColors = ceData.map(val => val >= 0 ? 'rgba(255, 127, 127, 0.8)' : 'rgba(255, 127, 127, 0.4)');
     const ceBorderColors = ceData.map(val => val >= 0 ? 'rgba(220, 20, 60, 1)' : 'rgba(220, 20, 60, 0.6)');
     const peBackgroundColors = peData.map(val => val >= 0 ? 'rgba(144, 238, 144, 0.8)' : 'rgba(144, 238, 144, 0.4)');
@@ -375,19 +376,19 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
             labels: labels,
             datasets: [
                 {
-                    label: 'Call OI Change',
-                    data: ceData,
-                    backgroundColor: ceBackgroundColors,
-                    borderColor: ceBorderColors,
+                    label: 'Put OI Change',
+                    data: peData,
+                    backgroundColor: peBackgroundColors,
+                    borderColor: peBorderColors,
                     borderWidth: 1,
                     borderRadius: 0,
                     yAxisID: 'y'
                 },
                 {
-                    label: 'Put OI Change',
-                    data: peData,
-                    backgroundColor: peBackgroundColors,
-                    borderColor: peBorderColors,
+                    label: 'Call OI Change',
+                    data: ceData,
+                    backgroundColor: ceBackgroundColors,
+                    borderColor: ceBorderColors,
                     borderWidth: 1,
                     borderRadius: 0,
                     yAxisID: 'y'
@@ -417,17 +418,6 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                         font: {
                             size: 12,
                             weight: 'bold'
-                        },
-                        generateLabels: function(chart) {
-                            const data = chart.data;
-                            return data.datasets.map((dataset, index) => ({
-                                text: dataset.label,
-                                fillStyle: dataset.backgroundColor[0] || 'rgba(0,0,0,0)',
-                                strokeStyle: dataset.borderColor[0] || 'rgba(0,0,0,1)',
-                                lineWidth: dataset.borderWidth || 1,
-                                hidden: !chart.isDatasetVisible(index),
-                                index: index
-                            }));
                         }
                     }
                 },
@@ -462,7 +452,6 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                     display: true,
                     position: 'left',
                     beginAtZero: true,
-                    stacked: false,
                     title: {
                         display: true,
                         text: 'Change in Open Interest',
@@ -473,19 +462,6 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                     ticks: {
                         callback: function(value) {
                             return formatNumber(value);
-                        }
-                    },
-                    grace: '10%',
-                    afterBuildTicks: function(scale) {
-                        // Ensure scale includes negative values
-                        const minValue = Math.min(...ceData, ...peData);
-                        const maxValue = Math.max(...ceData, ...peData);
-                        
-                        if (minValue < 0) {
-                            scale.min = minValue;
-                        }
-                        if (maxValue > 0) {
-                            scale.max = maxValue;
                         }
                     }
                 },
@@ -611,7 +587,7 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
             labels: labels,
             datasets: [
                 {
-                    label: 'Put OI',
+                    label: 'Put OI (Opening)',
                     data: peOI.map((val, idx) => val - peCOI[idx]),
                     backgroundColor: peColors,
                     borderColor: peBorders,
@@ -629,7 +605,7 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                     stack: 'pe'
                 },
                 {
-                    label: 'Call OI',
+                    label: 'Call OI (Opening)',
                     data: ceOI.map((val, idx) => val - ceCOI[idx]),
                     backgroundColor: ceColors,
                     borderColor: ceBorders,
@@ -723,13 +699,22 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                         afterLabel: function(context) {
                             const idx = context.dataIndex;
                             
-                            // Show current OI at 3:30 PM (or current time)
+                            // Get current time in HH:MM AM/PM format
+                            const now = new Date();
+                            const hours = now.getHours();
+                            const minutes = now.getMinutes();
+                            const ampm = hours >= 12 ? 'PM' : 'AM';
+                            const displayHours = hours % 12 || 12;
+                            const displayMinutes = minutes.toString().padStart(2, '0');
+                            const currentTime = `${displayHours}:${displayMinutes} ${ampm}`;
+                            
+                            // Show current OI at current time
                             if (context.datasetIndex === 1) {
-                                // After Put OI Change, show Put OI at 3:30 PM
-                                return `Put OI at 3:30 PM   ${formatNumber(peOI[idx])}`;
+                                // After Put OI Change, show Put OI at current time
+                                return `Put OI at ${currentTime}   ${formatNumber(peOI[idx])}`;
                             } else if (context.datasetIndex === 3) {
-                                // After Call OI Change, show Call OI at 3:30 PM
-                                return `Call OI at 3:30 PM  ${formatNumber(ceOI[idx])}`;
+                                // After Call OI Change, show Call OI at current time
+                                return `Call OI at ${currentTime}  ${formatNumber(ceOI[idx])}`;
                             }
                             
                             return '';
