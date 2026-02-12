@@ -378,13 +378,16 @@ class OpenInterestService:
                             strikes_oi[strike]['ce_oi'] = current_oi
                             
                             # Calculate daily change from opening OI
-                            if strike in OpenInterestService._opening_oi_cache[symbol]:
+                            if strike not in OpenInterestService._opening_oi_cache[symbol]:
+                                # First time seeing this strike - initialize
+                                OpenInterestService._opening_oi_cache[symbol][strike] = {'ce_oi': current_oi, 'pe_oi': 0}
+                                strikes_oi[strike]['ce_change_in_oi'] = 0
+                            else:
+                                # Strike already has opening data
                                 opening_oi = OpenInterestService._opening_oi_cache[symbol][strike].get('ce_oi', current_oi)
                                 strikes_oi[strike]['ce_change_in_oi'] = current_oi - opening_oi
-                            else:
-                                # First request of day - capture as opening
-                                OpenInterestService._opening_oi_cache[symbol][strike] = {'ce_oi': current_oi, 'pe_oi': None}
-                                strikes_oi[strike]['ce_change_in_oi'] = 0
+                                # Update the current opening value for next refresh
+                                OpenInterestService._opening_oi_cache[symbol][strike]['ce_oi'] = current_oi
                             
                             strikes_oi[strike]['ce_iv'] = float(ce_quote.get('implied_volatility', 0) or 0)
                     except (ValueError, TypeError) as e:
@@ -402,17 +405,16 @@ class OpenInterestService:
                             strikes_oi[strike]['pe_oi'] = current_oi
                             
                             # Calculate daily change from opening OI
-                            if strike in OpenInterestService._opening_oi_cache[symbol]:
-                                opening_oi = OpenInterestService._opening_oi_cache[symbol][strike].get('pe_oi', current_oi)
-                                strikes_oi[strike]['pe_change_in_oi'] = current_oi - opening_oi
-                                # Update CE opening if it was set
-                                if 'ce_oi' not in OpenInterestService._opening_oi_cache[symbol][strike]:
-                                    OpenInterestService._opening_oi_cache[symbol][strike]['ce_oi'] = strikes_oi[strike]['ce_oi']
-                                OpenInterestService._opening_oi_cache[symbol][strike]['pe_oi'] = current_oi
-                            else:
-                                # First request of day - capture as opening
+                            if strike not in OpenInterestService._opening_oi_cache[symbol]:
+                                # First time seeing this strike - initialize
                                 OpenInterestService._opening_oi_cache[symbol][strike] = {'ce_oi': strikes_oi[strike]['ce_oi'], 'pe_oi': current_oi}
                                 strikes_oi[strike]['pe_change_in_oi'] = 0
+                            else:
+                                # Strike already has opening data
+                                opening_oi = OpenInterestService._opening_oi_cache[symbol][strike].get('pe_oi', current_oi)
+                                strikes_oi[strike]['pe_change_in_oi'] = current_oi - opening_oi
+                                # Update the current opening value for next refresh
+                                OpenInterestService._opening_oi_cache[symbol][strike]['pe_oi'] = current_oi
                             
                             strikes_oi[strike]['pe_iv'] = float(pe_quote.get('implied_volatility', 0) or 0)
                     except (ValueError, TypeError) as e:
