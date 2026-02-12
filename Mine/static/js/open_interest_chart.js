@@ -119,7 +119,7 @@ function startAutoRefresh() {
     autoRefreshInterval = setInterval(() => {
         if (isMarketOpen()) {
             console.log(`Auto-refreshing OI data for ${currentSymbol}...`);
-            refreshData(false);  // false = don't show loader (auto-refresh)
+            refreshData(false, false);  // false = don't show loader, false = don't update summary stats (auto-refresh)
         } else {
             console.log('Market hours closed. Auto-refresh paused.');
         }
@@ -139,12 +139,14 @@ function stopAutoRefresh() {
 /**
  * Fetch and display open interest data
  */
-async function refreshData(showLoader = true) {
+async function refreshData(showLoader = true, updateSummary = true) {
     const errorEl = document.getElementById('oiError');
     const refreshBtn = document.getElementById('refreshNowBtn');
     
-    // Add spinning animation to refresh button
-    refreshBtn.classList.add('refreshing');
+    // Add spinning animation to refresh button (only for manual refresh)
+    if (showLoader) {
+        refreshBtn.classList.add('refreshing');
+    }
     
     try {
         errorEl.classList.add('hidden');
@@ -177,12 +179,18 @@ async function refreshData(showLoader = true) {
         cachedData = data;
         
         // Update UI with data
-        updateSummaryStats(data);
+        // On auto-refresh (updateSummary=false), only update charts
+        // On manual refresh (updateSummary=true), update both summary and charts
+        if (updateSummary) {
+            updateSummaryStats(data);
+        }
         updateCharts(data);
         updateLastUpdateTime();
         
         // Remove spinning animation from refresh button
-        refreshBtn.classList.remove('refreshing');
+        if (showLoader) {
+            refreshBtn.classList.remove('refreshing');
+        }
         
     } catch (error) {
         console.error('Error fetching OI data:', error);
@@ -190,7 +198,9 @@ async function refreshData(showLoader = true) {
         document.getElementById('errorMessage').textContent = `Error: ${error.message}`;
         
         // Remove spinning animation from refresh button
-        refreshBtn.classList.remove('refreshing');
+        if (showLoader) {
+            refreshBtn.classList.remove('refreshing');
+        }
     }
 }
 
@@ -236,6 +246,31 @@ function updateSummaryStats(data) {
         maxPainElement.classList.add('color-red');
     } else if (maxPain > currentPrice) {
         maxPainElement.classList.add('color-green');
+    }
+    
+    // IV Percentile
+    const ivPercentile = data.iv_percentile !== undefined ? data.iv_percentile : null;
+    const ivElement = document.getElementById('ivPercentile');
+    
+    if (ivPercentile !== null) {
+        // Determine label based on percentile value
+        let ivLabel = 'Medium';
+        if (ivPercentile < 30) {
+            ivLabel = 'Low';
+        } else if (ivPercentile > 70) {
+            ivLabel = 'High';
+        }
+        
+        ivElement.textContent = ivPercentile.toFixed(2) + '% - ' + ivLabel;
+        // IV Percentile: Low = Red (low IV), High = Green (high IV)
+        ivElement.classList.remove('color-red', 'color-green');
+        if (ivPercentile < 30) {
+            ivElement.classList.add('color-red');
+        } else if (ivPercentile > 70) {
+            ivElement.classList.add('color-green');
+        }
+    } else {
+        ivElement.textContent = '--';
     }
 }
 
@@ -364,11 +399,11 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
     const ctx = document.getElementById('coiChart').getContext('2d');
     
     // Create dynamic colors based on positive/negative values - Light colors for Change in OI
-    // CE (Call OI Change) = Red, PE (Put OI Change) = Green
-    const ceBackgroundColors = ceData.map(val => val >= 0 ? 'rgba(255, 127, 127, 0.8)' : 'rgba(255, 127, 127, 0.4)');
-    const ceBorderColors = ceData.map(val => val >= 0 ? 'rgba(220, 20, 60, 1)' : 'rgba(220, 20, 60, 0.6)');
+    // PE (Put OI Change) = Green, CE (Call OI Change) = Red
     const peBackgroundColors = peData.map(val => val >= 0 ? 'rgba(144, 238, 144, 0.8)' : 'rgba(144, 238, 144, 0.4)');
     const peBorderColors = peData.map(val => val >= 0 ? 'rgba(34, 139, 34, 1)' : 'rgba(34, 139, 34, 0.6)');
+    const ceBackgroundColors = ceData.map(val => val >= 0 ? 'rgba(255, 127, 127, 0.8)' : 'rgba(255, 127, 127, 0.4)');
+    const ceBorderColors = ceData.map(val => val >= 0 ? 'rgba(220, 20, 60, 1)' : 'rgba(220, 20, 60, 0.6)');
     
     const chartConfig = {
         type: 'bar',
@@ -376,7 +411,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
             labels: labels,
             datasets: [
                 {
-                    label: 'Put OI Change',
+                    label: 'Put OI chg',
                     data: peData,
                     backgroundColor: peBackgroundColors,
                     borderColor: peBorderColors,
@@ -385,7 +420,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                     yAxisID: 'y'
                 },
                 {
-                    label: 'Call OI Change',
+                    label: 'Call OI chg',
                     data: ceData,
                     backgroundColor: ceBackgroundColors,
                     borderColor: ceBorderColors,
@@ -396,7 +431,6 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
             ]
         },
         options: {
-            indexAxis: undefined,
             responsive: true,
             maintainAspectRatio: true,
             animation: {
@@ -413,24 +447,61 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                 legend: {
                     display: true,
                     position: 'bottom',
+                    align: 'center',
                     labels: {
                         padding: 15,
                         font: {
                             size: 12,
                             weight: 'bold'
+                        },
+                        boxWidth: 15,
+                        boxHeight: 15,
+                        generateLabels: function(chart) {
+                            const datasets = chart.data.datasets;
+                            const labels = [];
+                            
+                            datasets.forEach((dataset, index) => {
+                                // Calculate total change for this dataset
+                                const total = dataset.data.reduce((sum, val) => sum + val, 0);
+                                const indicator = total > 0 ? '+' : total < 0 ? '' : '';
+                                // Convert to Lakhs and force 2 decimal places
+                                const inLakhs = Math.abs(total) / 100000;
+                                let decimalValue = inLakhs.toFixed(2);
+                                
+                                labels.push({
+                                    text: `${dataset.label}  ${indicator}${decimalValue}L`,
+                                    fillStyle: dataset.backgroundColor[0] || '#999',
+                                    hidden: false,
+                                    index: index
+                                });
+                            });
+                            
+                            return labels;
                         }
-                    }
+                    },
+                    border: {
+                        color: 'rgba(0, 0, 0, 0.1)',
+                        width: 1
+                    },
+                    backgroundColor: 'rgba(255, 255, 255, 0.95)'
                 },
                 tooltip: {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
                     padding: 12,
                     titleFont: {
-                        size: 14,
+                        size: 13,
                         weight: 'bold'
                     },
                     bodyFont: {
-                        size: 12
+                        size: 12,
+                        lineHeight: 1.5
                     },
+                    titleColor: '#000000',
+                    bodyColor: '#000000',
+                    borderColor: 'rgba(0, 0, 0, 0.3)',
+                    borderWidth: 1,
+                    displayColors: true,
+                    boxPadding: 8,
                     callbacks: {
                         title: function(context) {
                             return `Strike: ${context[0].label}`;
@@ -438,10 +509,9 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                         label: function(context) {
                             const datasetLabel = context.dataset.label;
                             const value = context.parsed.y;
-                            const absValue = formatNumber(Math.abs(value));
-                            const changeIndicator = value > 0 ? '↑ Increase' : value < 0 ? '↓ Decrease' : '→ Unchanged';
+                            const changeIndicator = value > 0 ? '↑' : value < 0 ? '↓' : '→';
                             
-                            return `${datasetLabel}: ${formatNumber(value)} (${changeIndicator}: ${absValue})`;
+                            return `${datasetLabel}: ${changeIndicator} ${formatNumber(value)}`;
                         }
                     }
                 }
@@ -453,11 +523,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                     position: 'left',
                     beginAtZero: true,
                     title: {
-                        display: true,
-                        text: 'Change in Open Interest',
-                        font: {
-                            weight: 'bold'
-                        }
+                        display: false
                     },
                     ticks: {
                         callback: function(value) {
@@ -468,11 +534,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                 x: {
                     stacked: false,
                     title: {
-                        display: true,
-                        text: 'Strike Price',
-                        font: {
-                            weight: 'bold'
-                        }
+                        display: false
                     }
                 }
             }
@@ -482,12 +544,12 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
     
     if (coiChartInstance) {
         coiChartInstance.data.labels = labels;
-        coiChartInstance.data.datasets[0].data = ceData;
-        coiChartInstance.data.datasets[0].backgroundColor = ceBackgroundColors;
-        coiChartInstance.data.datasets[0].borderColor = ceBorderColors;
-        coiChartInstance.data.datasets[1].data = peData;
-        coiChartInstance.data.datasets[1].backgroundColor = peBackgroundColors;
-        coiChartInstance.data.datasets[1].borderColor = peBorderColors;
+        coiChartInstance.data.datasets[0].data = peData;
+        coiChartInstance.data.datasets[0].backgroundColor = peBackgroundColors;
+        coiChartInstance.data.datasets[0].borderColor = peBorderColors;
+        coiChartInstance.data.datasets[1].data = ceData;
+        coiChartInstance.data.datasets[1].backgroundColor = ceBackgroundColors;
+        coiChartInstance.data.datasets[1].borderColor = ceBorderColors;
         coiChartInstance.options.plugins.currentPriceLine.price = currentPrice;
         coiChartInstance.update('active');
     } else {
