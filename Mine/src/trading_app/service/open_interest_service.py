@@ -2,20 +2,226 @@
 Open Interest Service - Fetches and processes open interest data from Zerodha Kite
 """
 import logging
-import json
-import os
-from datetime import datetime, timedelta
+import math
+from datetime import datetime, timedelta, time
 from typing import Dict, List, Any, Optional
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import NetworkException, TokenException
+from trading_app.app.utils.opening_oi_cache import get_opening_oi_cache
 
 logger = logging.getLogger(__name__)
 
 
+def _normal_cdf(x: float) -> float:
+    """Approximate normal CDF using error function approximation."""
+    # Using Abramowitz and Stegun approximation
+    a1 = 0.254829592
+    a2 = -0.284496736
+    a3 = 1.421413741
+    a4 = -1.453152027
+    a5 = 1.061405429
+    p = 0.3275911
+    
+    sign = 1 if x >= 0 else -1
+    x = abs(x) / math.sqrt(2)
+    
+    t = 1.0 / (1.0 + p * x)
+    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x)
+    
+    return 0.5 * (1.0 + sign * y)
+
+
+def _black_scholes_call(S: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Calculate Black-Scholes call option price."""
+    if T <= 0 or sigma <= 0:
+        return max(S - K, 0)
+    
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    
+    call_price = S * _normal_cdf(d1) - K * math.exp(-r * T) * _normal_cdf(d2)
+    return call_price
+
+
+def _black_scholes_put(S: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Calculate Black-Scholes put option price."""
+    if T <= 0 or sigma <= 0:
+        return max(K - S, 0)
+    
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    
+    put_price = K * math.exp(-r * T) * _normal_cdf(-d2) - S * _normal_cdf(-d1)
+    return put_price
+
+
+def _get_oi_from_historical_data(kite: KiteConnect, instrument_token: int) -> Optional[Dict[str, Any]]:
+    """
+    Fetch open interest from historical data endpoint.
+    
+    Note: Historical data is finalized end-of-day. During market hours or immediately
+    after close, today's data may not be available yet. Use oi_day_low from quotes instead.
+    
+    Args:
+        kite: KiteConnect client instance
+        instrument_token: Token of the instrument
+        
+    Returns:
+        Dictionary with 'current_oi', 'opening_oi', and 'timestamp' or None
+    """
+    try:
+        # Fetch last 3 days of data to handle delayed finalization
+        to_date = datetime.now()
+        from_date = to_date - timedelta(days=3)
+        
+        data = kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=from_date.strftime('%Y-%m-%d'),
+            to_date=to_date.strftime('%Y-%m-%d'),
+            interval='day',
+            oi=True
+        )
+        
+        if not data or len(data) == 0:
+            logger.debug(f"Historical data empty for token {instrument_token}")
+            return None
+        
+        # Get most recent available data
+        latest_candle = data[-1]
+        current_oi = latest_candle.get('oi', 0)
+        
+        # Get previous day's closing OI (proxy for opening)
+        opening_oi = None
+        if len(data) > 1:
+            opening_oi = data[-2].get('oi', 0)
+        
+        return {
+            'current_oi': current_oi,
+            'opening_oi': opening_oi,
+            'timestamp': latest_candle.get('date')
+        }
+        
+    except Exception as e:
+        logger.debug(f"Historical data failed for {instrument_token}: {e}")
+        return None
+
+
+def _estimate_oi_change_from_depth(quote: Dict[str, Any]) -> Optional[float]:
+    """
+    Estimate OI change when oi_day_low is not available.
+    Uses bid-ask depth and volume indicators as proxy.
+    
+    Args:
+        quote: Quote dictionary from Kite API
+        
+    Returns:
+        Estimated OI change or None if cannot estimate
+    """
+    try:
+        # Check for bid-ask spread data (depth)
+        if 'depth' not in quote:
+            return None
+        
+        depth = quote.get('depth', {})
+        if not depth or 'buy' not in depth or 'sell' not in depth:
+            return None
+        
+        buy_depth = depth.get('buy', [])
+        sell_depth = depth.get('sell', [])
+        
+        if not buy_depth or not sell_depth:
+            return None
+        
+        # Get bid-ask volume imbalance (positive = more buyers, negative = more sellers)
+        buy_volume = sum(item.get('quantity', 0) for item in buy_depth if item)
+        sell_volume = sum(item.get('quantity', 0) for item in sell_depth if item)
+        
+        # Volume imbalance as percentage (can indicate OI change direction)
+        if buy_volume + sell_volume == 0:
+            return None
+        
+        imbalance_ratio = (buy_volume - sell_volume) / (buy_volume + sell_volume)
+        
+        # Use current OI as base for estimation
+        current_oi = quote.get('oi', 0)
+        if current_oi <= 0:
+            return None
+        
+        # Estimate OI change as a small percentage of current OI based on imbalance
+        estimated_change = int(current_oi * imbalance_ratio * 0.1)  # Conservative 10% of imbalance
+        
+        return estimated_change
+    except Exception as e:
+        logger.debug(f"Could not estimate OI change from depth: {e}")
+        return None
+
+
+def _calculate_iv_from_price(S: float, K: float, T: float, r: float, market_price: float, option_type: str) -> float:
+    """
+    Calculate implied volatility from option market price using Newton-Raphson method.
+    
+    Args:
+        S: Current stock price
+        K: Strike price
+        T: Time to expiration (in years)
+        r: Risk-free rate
+        market_price: Observed market price of option
+        option_type: 'CE' for call, 'PE' for put
+        
+    Returns:
+        Implied volatility (as decimal, e.g., 0.25 = 25%)
+    """
+    if market_price <= 0 or T <= 0:
+        return 0.0
+    
+    # Intrinsic value bounds
+    if option_type == 'CE':
+        intrinsic = max(S - K, 0)
+        if market_price < intrinsic:
+            return 0.0
+    else:  # PE
+        intrinsic = max(K - S, 0)
+        if market_price < intrinsic:
+            return 0.0
+    
+    try:
+        # Newton-Raphson method to find IV
+        sigma = 0.5  # Initial guess: 50% volatility
+        max_iterations = 100
+        tolerance = 1e-6
+        
+        for i in range(max_iterations):
+            # Calculate option price and vega at current sigma
+            if option_type == 'CE':
+                price = _black_scholes_call(S, K, T, r, sigma)
+            else:
+                price = _black_scholes_put(S, K, T, r, sigma)
+            
+            # Check convergence
+            if abs(price - market_price) < tolerance:
+                return sigma
+            
+            # Calculate vega (derivative of price w.r.t. sigma)
+            d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T)) if sigma > 0 else 0
+            vega = S * _normal_cdf(d1) * math.sqrt(T)
+            
+            if abs(vega) < 1e-10:  # Vega too small, avoid division
+                break
+            
+            # Newton-Raphson update
+            sigma = sigma - (price - market_price) / vega
+            
+            # Ensure sigma stays in reasonable bounds
+            sigma = max(0.001, min(sigma, 2.0))
+        
+        return sigma
+    except Exception as e:
+        logger.debug(f"IV calculation failed: {e}")
+        return 0.0
+
+
 class OpenInterestService:
     """Service to fetch and process open interest data for options."""
-    
-    OPENING_OI_CACHE_DIR = '/tmp/opening_oi_cache'
     
     def __init__(self, kite_instance: KiteConnect):
         """
@@ -25,9 +231,6 @@ class OpenInterestService:
             kite_instance: KiteConnect instance
         """
         self.kite = kite_instance
-        
-        # Create cache directory if it doesn't exist
-        os.makedirs(self.OPENING_OI_CACHE_DIR, exist_ok=True)
         
         # Symbol configuration
         self.SYMBOL_CONFIG = {
@@ -51,61 +254,6 @@ class OpenInterestService:
             }
         }
     
-    def _get_opening_oi_cache_file(self, symbol: str) -> str:
-        """Get the cache file path for opening OI for a symbol."""
-        today = datetime.now().strftime('%Y-%m-%d')
-        return os.path.join(self.OPENING_OI_CACHE_DIR, f'{symbol}_opening_oi_{today}.json')
-    
-    def _load_opening_oi_cache(self, symbol: str) -> Dict[int, Dict[str, int]]:
-        """
-        Load opening OI cache from file.
-        
-        Returns:
-            Dict with strike as key and {'ce_oi': value, 'pe_oi': value} as value
-        """
-        cache_file = self._get_opening_oi_cache_file(symbol)
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, 'r') as f:
-                    cache = json.load(f)
-                    logger.info(f"Loaded opening OI cache for {symbol}: {len(cache)} strikes")
-                    return cache
-            except Exception as e:
-                logger.error(f"Error loading opening OI cache: {e}")
-        return {}
-    
-    def _save_opening_oi_cache(self, symbol: str, cache: Dict[int, Dict[str, int]]):
-        """Save opening OI cache to file."""
-        cache_file = self._get_opening_oi_cache_file(symbol)
-        try:
-            with open(cache_file, 'w') as f:
-                json.dump(cache, f)
-                logger.info(f"Saved opening OI cache for {symbol}: {len(cache)} strikes")
-        except Exception as e:
-            logger.error(f"Error saving opening OI cache: {e}")
-    
-    def _is_market_open(self) -> bool:
-        """Check if market is open (9:15 AM - 3:30 PM IST, weekdays)."""
-        now = datetime.now()
-        market_open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-        market_close_time = now.replace(hour=15, minute=30, second=0, microsecond=0)
-        
-        is_weekday = now.weekday() < 5  # 0-4 = Mon-Fri
-        is_market_hours = market_open_time <= now <= market_close_time
-        
-        return is_weekday and is_market_hours
-    
-    def _should_initialize_cache(self) -> bool:
-        """Check if we should initialize cache at market open (within first 5 minutes)."""
-        now = datetime.now()
-        market_open_time = now.replace(hour=9, minute=15, second=0, microsecond=0)
-        market_open_plus_5min = market_open_time + timedelta(minutes=5)
-        
-        is_weekday = now.weekday() < 5
-        is_near_open = market_open_time <= now <= market_open_plus_5min
-        
-        return is_weekday and is_near_open
-    
     def get_open_interest_data(self, symbol: str = 'NIFTY') -> Dict[str, Any]:
         """
         Get open interest data for options strikes.
@@ -126,6 +274,7 @@ class OpenInterestService:
                 }
             
             config = self.SYMBOL_CONFIG[symbol]
+            self._current_symbol = symbol  # Store for use in cache operations
             
             logger.info(f"Fetching open interest data for {symbol}...")
             
@@ -175,9 +324,10 @@ class OpenInterestService:
             
             logger.info(f"✅ Successfully fetched OI data for {symbol}")
             
-            # Calculate PCR (Put-Call Ratio) and Max Pain
+            # Calculate PCR (Put-Call Ratio), Max Pain, and IV Percentile
             pcr_oi = self._calculate_pcr(oi_data['strikes'])
             max_pain = self._calculate_max_pain(oi_data['strikes'], current_price)
+            iv_percentile = self._calculate_iv_percentile(oi_data['strikes'], current_price)
             
             return {
                 'success': True,
@@ -188,7 +338,8 @@ class OpenInterestService:
                 'ce_summary': oi_data['ce_summary'],
                 'pe_summary': oi_data['pe_summary'],
                 'pcr_oi': pcr_oi,
-                'max_pain': max_pain
+                'max_pain': max_pain,
+                'iv_percentile': iv_percentile
             }
             
         except Exception as e:
@@ -302,7 +453,8 @@ class OpenInterestService:
                             'strike': strike,
                             'ce_token': None,
                             'pe_token': None,
-                            'distance': abs(strike - current_price)
+                            'distance': abs(strike - current_price),
+                            'expiry': current_expiry  # Add expiry date for IV calculation
                         }
                     
                     if option_type == 'CE':
@@ -342,6 +494,9 @@ class OpenInterestService:
             Dictionary with OI data organized by strike
         """
         try:
+            # Get opening OI cache
+            opening_oi_cache = get_opening_oi_cache()
+            
             # Collect all tokens to fetch as strings (kite.quote expects string tokens)
             all_tokens = []
             token_to_strike_info = {}  # Map string token to strike info for later lookup
@@ -377,7 +532,8 @@ class OpenInterestService:
                 batch = all_tokens[i:i + batch_size]
                 try:
                     logger.info(f"Fetching batch {i//batch_size + 1} with {len(batch)} tokens...")
-                    quotes = self.kite.quote(batch)
+                    # Request quote data - Kite API returns oi, oi_day_low, oi_day_high by default
+                    quotes = self.kite.quote(batch)  # Standard quote includes OI fields
                     if quotes:
                         all_quotes.update(quotes)
                         logger.info(f"✓ Batch {i//batch_size + 1}: Fetched {len(quotes)} quotes")
@@ -388,20 +544,17 @@ class OpenInterestService:
                     continue
             logger.info(f"Total quotes fetched: {len(all_quotes)}")
             
-            # Load or initialize opening OI cache
-            opening_oi_cache = self._load_opening_oi_cache(symbol)
-            should_save_cache = False
-            
-            # Initialize cache at market open (first 5 minutes)
-            if self._should_initialize_cache() and not opening_oi_cache:
-                logger.info(f"Market open detected - initializing opening OI cache for {symbol}")
-                should_save_cache = True
-            
-            # Log sample quote to see structure
+            # Log sample quote to see structure and available OI fields
             if all_quotes:
                 first_token = list(all_quotes.keys())[0]
                 first_quote = all_quotes[first_token]
                 logger.debug(f"Sample quote for token {first_token}: keys = {list(first_quote.keys()) if isinstance(first_quote, dict) else 'Not a dict'}")
+                logger.info(f"Sample Quote Keys Available: {list(first_quote.keys()) if isinstance(first_quote, dict) else 'Not a dict'}")
+                
+                # Check for OI-related fields
+                if isinstance(first_quote, dict):
+                    oi_fields = {k: v for k, v in first_quote.items() if 'oi' in k.lower()}
+                    logger.info(f"OI-Related Fields in Quote: {oi_fields}")
             # Organize OI data by strike
             strikes_oi = {}
             
@@ -426,41 +579,84 @@ class OpenInterestService:
                         try:
                             ce_quote = all_quotes[ce_token_str]
                             if isinstance(ce_quote, dict):
+                                # Log all available keys in first quote
+                                if 'ce_iv_logged' not in locals():
+                                    logger.info(f"CE Quote Keys: {list(ce_quote.keys())}")
+                                    ce_iv_logged = True
+                                
                                 # Kite returns 'oi' key for open interest
                                 oi_val = ce_quote.get('oi')
                                 logger.debug(f"CE Token {ce_token_str} Strike {strike}: oi = {oi_val}")
                                 
                                 # Convert to int, handling None/null
-                                strikes_oi[strike]['ce_oi'] = int(oi_val) if oi_val else 0
-                                
-                                # Calculate change in OI using cache
                                 current_ce_oi = int(oi_val) if oi_val else 0
+                                strikes_oi[strike]['ce_oi'] = current_ce_oi
                                 
-                                # Try to get opening OI from cache first
-                                cached_ce_oi = None
-                                if str(strike) in opening_oi_cache:
-                                    cached_ce_oi = opening_oi_cache[str(strike)].get('ce_oi')
+                                # Get opening OI from cache for accurate change calculation
+                                cached_opening_oi = opening_oi_cache.get_opening_oi(self._current_symbol, strike, 'CE')
                                 
-                                if cached_ce_oi is not None:
-                                    # Use cached opening OI
-                                    change_in_oi = current_ce_oi - cached_ce_oi
+                                # Get opening OI value - try multiple sources
+                                # IMPORTANT: opening_oi should be the OI at market open (9:15 AM)
+                                # which is yesterday's closing OI from historical data
+                                oi_day_low = ce_quote.get('oi_day_low', 0) or 0
+                                oi_day_low = int(oi_day_low) if oi_day_low else 0
+                                
+                                # Try to get opening OI from any available source
+                                opening_oi = None
+                                source = "unknown"
+                                
+                                # Source 1: Cache from 9:15 AM (best if available)
+                                if cached_opening_oi is not None:
+                                    opening_oi = cached_opening_oi
+                                    source = "cache"
+                                
+                                # Source 2: Historical data (yesterday's closing = today's opening)
+                                elif opening_oi is None:
+                                    try:
+                                        hist_oi_data = _get_oi_from_historical_data(self.kite, ce_token)
+                                        if hist_oi_data and hist_oi_data.get('opening_oi') is not None:
+                                            opening_oi = hist_oi_data['opening_oi']
+                                            source = "historical_data"
+                                    except Exception as e:
+                                        logger.debug(f"Historical data failed for CE {strike}: {e}")
+                                
+                                # Source 3: Fallback to oi_day_low (less reliable but better than nothing)
+                                if opening_oi is None and oi_day_low > 0:
+                                    opening_oi = oi_day_low
+                                    source = "oi_day_low"
+                                
+                                # Calculate OI change: current - opening (can be negative if OI decreased)
+                                if opening_oi is not None:
+                                    change_in_oi = current_ce_oi - opening_oi
                                 else:
-                                    # Fallback to API values: try oi_day_open, then oi_day_low
-                                    oi_day_open = ce_quote.get('oi_day_open')
-                                    if not oi_day_open:
-                                        oi_day_open = ce_quote.get('oi_day_low', 0) or 0
-                                    change_in_oi = current_ce_oi - (int(oi_day_open) if oi_day_open else 0)
-                                    
-                                    # If this is market open initialization, save current OI to cache
-                                    if should_save_cache:
-                                        if str(strike) not in opening_oi_cache:
-                                            opening_oi_cache[str(strike)] = {}
-                                        opening_oi_cache[str(strike)]['ce_oi'] = current_ce_oi
+                                    # No opening OI data available
+                                    change_in_oi = 0
+                                    source = "no_opening_data"
                                 
                                 strikes_oi[strike]['ce_change_in_oi'] = change_in_oi
                                 
-                                # Try to get implied_volatility from quote
-                                iv_val = ce_quote.get('implied_volatility')
+                                # Calculate IV from option price using Black-Scholes
+                                last_price = ce_quote.get('last_price', 0)
+                                
+                                if last_price > 0 and strike_info.get('expiry'):
+                                    # Calculate days to expiration
+                                    expiry_date = strike_info['expiry']
+                                    if isinstance(expiry_date, str):
+                                        expiry_date = datetime.strptime(expiry_date, '%Y-%m-%d').date()
+                                    
+                                    days_to_expiry = (expiry_date - datetime.now().date()).days
+                                    T = max(days_to_expiry / 365.0, 0.001)  # Time to expiration in years
+                                    r = 0.05  # Risk-free rate (5% assumption)
+                                    K = strike
+                                    S = current_price
+                                    
+                                    # Calculate IV from last traded price
+                                    iv_val = _calculate_iv_from_price(S, K, T, r, last_price, 'CE')
+                                    logger.debug(f"CE Strike {strike}: IV = {iv_val:.4f} from LTP={last_price}")
+                                else:
+                                    iv_val = 0.0
+                                    logger.debug(f"CE Strike {strike}: Could not calculate IV (LTP={last_price}, expiry={strike_info.get('expiry')})")
+                                
                                 strikes_oi[strike]['ce_iv'] = float(iv_val) if iv_val else 0
                         except (ValueError, TypeError) as e:
                             logger.error(f"Error parsing CE quote for strike {strike} token {ce_token_str}: {e}")
@@ -478,45 +674,96 @@ class OpenInterestService:
                                 logger.debug(f"PE Token {pe_token_str} Strike {strike}: oi = {oi_val}")
                                 
                                 # Convert to int, handling None/null
-                                strikes_oi[strike]['pe_oi'] = int(oi_val) if oi_val else 0
-                                
-                                # Calculate change in OI using cache
                                 current_pe_oi = int(oi_val) if oi_val else 0
+                                strikes_oi[strike]['pe_oi'] = current_pe_oi
                                 
-                                # Try to get opening OI from cache first
-                                cached_pe_oi = None
-                                if str(strike) in opening_oi_cache:
-                                    cached_pe_oi = opening_oi_cache[str(strike)].get('pe_oi')
+                                # Get opening OI from cache for accurate change calculation
+                                cached_opening_oi = opening_oi_cache.get_opening_oi(self._current_symbol, strike, 'PE')
                                 
-                                if cached_pe_oi is not None:
-                                    # Use cached opening OI
-                                    change_in_oi = current_pe_oi - cached_pe_oi
+                                # Get opening OI value - try multiple sources
+                                # IMPORTANT: opening_oi should be the OI at market open (9:15 AM)
+                                # which is yesterday's closing OI from historical data
+                                oi_day_low = pe_quote.get('oi_day_low', 0) or 0
+                                oi_day_low = int(oi_day_low) if oi_day_low else 0
+                                
+                                # Try to get opening OI from any available source
+                                opening_oi = None
+                                source = "unknown"
+                                
+                                # Source 1: Cache from 9:15 AM (best if available)
+                                if cached_opening_oi is not None:
+                                    opening_oi = cached_opening_oi
+                                    source = "cache"
+                                
+                                # Source 2: Historical data (yesterday's closing = today's opening)
+                                elif opening_oi is None:
+                                    try:
+                                        hist_oi_data = _get_oi_from_historical_data(self.kite, pe_token)
+                                        if hist_oi_data and hist_oi_data.get('opening_oi') is not None:
+                                            opening_oi = hist_oi_data['opening_oi']
+                                            source = "historical_data"
+                                    except Exception as e:
+                                        logger.debug(f"Historical data failed for PE {strike}: {e}")
+                                
+                                # Source 3: Fallback to oi_day_low (less reliable but better than nothing)
+                                if opening_oi is None and oi_day_low > 0:
+                                    opening_oi = oi_day_low
+                                    source = "oi_day_low"
+                                
+                                # Calculate OI change: current - opening (can be negative if OI decreased)
+                                if opening_oi is not None:
+                                    change_in_oi = current_pe_oi - opening_oi
                                 else:
-                                    # Fallback to API values: try oi_day_open, then oi_day_low
-                                    oi_day_open = pe_quote.get('oi_day_open')
-                                    if not oi_day_open:
-                                        oi_day_open = pe_quote.get('oi_day_low', 0) or 0
-                                    change_in_oi = current_pe_oi - (int(oi_day_open) if oi_day_open else 0)
-                                    
-                                    # If this is market open initialization, save current OI to cache
-                                    if should_save_cache:
-                                        if str(strike) not in opening_oi_cache:
-                                            opening_oi_cache[str(strike)] = {}
-                                        opening_oi_cache[str(strike)]['pe_oi'] = current_pe_oi
+                                    # No opening OI data available
+                                    change_in_oi = 0
+                                    source = "no_opening_data"
                                 
                                 strikes_oi[strike]['pe_change_in_oi'] = change_in_oi
                                 
-                                # Try to get implied_volatility from quote
-                                iv_val = pe_quote.get('implied_volatility')
+                                # Calculate IV from option price using Black-Scholes
+                                last_price = pe_quote.get('last_price', 0)
+                                
+                                if last_price > 0 and strike_info.get('expiry'):
+                                    # Calculate days to expiration
+                                    expiry_date = strike_info['expiry']
+                                    if isinstance(expiry_date, str):
+                                        expiry_date = datetime.strptime(expiry_date, '%Y-%m-%d').date()
+                                    
+                                    days_to_expiry = (expiry_date - datetime.now().date()).days
+                                    T = max(days_to_expiry / 365.0, 0.001)  # Time to expiration in years
+                                    r = 0.05  # Risk-free rate (5% assumption)
+                                    K = strike
+                                    S = current_price
+                                    
+                                    # Calculate IV from last traded price
+                                    iv_val = _calculate_iv_from_price(S, K, T, r, last_price, 'PE')
+                                    logger.debug(f"PE Strike {strike}: IV = {iv_val:.4f} from LTP={last_price}")
+                                else:
+                                    iv_val = 0.0
+                                    logger.debug(f"PE Strike {strike}: Could not calculate IV (LTP={last_price}, expiry={strike_info.get('expiry')})")
+                                
                                 strikes_oi[strike]['pe_iv'] = float(iv_val) if iv_val else 0
                         except (ValueError, TypeError) as e:
                             logger.error(f"Error parsing PE quote for strike {strike} token {pe_token_str}: {e}")
                     else:
                         logger.debug(f"PE Token {pe_token_str} NOT found in quotes")
             
-            # Save cache if initialized at market open
-            if should_save_cache and opening_oi_cache:
-                self._save_opening_oi_cache(symbol, opening_oi_cache)
+            # Cache opening OI if it's 9:15 AM - 9:20 AM (first call of the day)
+            current_time = datetime.now().time()
+            market_open = time(9, 15)
+            market_open_end = time(9, 20)
+            
+            is_cache_window = market_open <= current_time <= market_open_end
+            is_already_cached = opening_oi_cache.is_cached_today(self._current_symbol)
+            logger.info(f"Cache Status: time={current_time}, window={is_cache_window}, already_cached={is_already_cached}")
+            
+            if is_cache_window and not is_already_cached:
+                logger.info(f"📝 Caching opening OI for {self._current_symbol} at {current_time}")
+                opening_oi_data = {strike: {'ce_oi': data['ce_oi'], 'pe_oi': data['pe_oi']} 
+                                   for strike, data in strikes_oi.items()}
+                logger.debug(f"Opening OI data sample: {list(opening_oi_data.items())[:3]}")
+                opening_oi_cache.cache_opening_oi(self._current_symbol, opening_oi_data)
+                logger.info(f"✅ Opening OI cached successfully")
             
             # Convert to list and calculate summaries
             strikes_list = list(strikes_oi.values())
@@ -677,4 +924,81 @@ class OpenInterestService:
         except Exception as e:
             logger.error(f"Error calculating Max Pain: {e}")
             return current_price
+    
+    def _calculate_iv_percentile(self, strikes: List[Dict[str, Any]], current_price: float) -> float:
+        """
+        Calculate IV Percentile - measures current IV relative to its 52-week range.
+        
+        IV Percentile = (Current IV - Min IV) / (Max IV - Min IV) * 100
+        
+        Uses the IV of the strike closest to current price.
+        
+        Args:
+            strikes: List of strike data with 'strike', 'ce_iv' and 'pe_iv' keys
+            current_price: Current market price
+            
+        Returns:
+            IV Percentile value (0-100)
+        """
+        try:
+            logger.info(f"Starting IV Percentile calculation with {len(strikes)} strikes, current_price: {current_price}")
+            
+            # Collect all IV values and find ATM
+            all_ivs = []
+            atm_iv = None
+            closest_distance = float('inf')
+            
+            for i, strike in enumerate(strikes):
+                ce_iv = strike.get('ce_iv', 0)
+                pe_iv = strike.get('pe_iv', 0)
+                strike_price = strike.get('strike', 0)
+                
+                logger.debug(f"Strike {i}: price={strike_price}, ce_iv={ce_iv}, pe_iv={pe_iv}")
+                
+                if ce_iv > 0:
+                    all_ivs.append(ce_iv)
+                if pe_iv > 0:
+                    all_ivs.append(pe_iv)
+                
+                # Find the strike closest to current price (ATM)
+                distance = abs(current_price - strike_price)
+                if distance < closest_distance:
+                    closest_distance = distance
+                    # Average the CE and PE IV for this strike
+                    if ce_iv > 0 and pe_iv > 0:
+                        atm_iv = (ce_iv + pe_iv) / 2
+                    else:
+                        atm_iv = ce_iv if ce_iv > 0 else pe_iv
+                    logger.debug(f"New closest strike found: {strike_price} (distance: {distance}, ATM IV: {atm_iv})")
+            
+            logger.info(f"Collected {len(all_ivs)} IV values, ATM IV: {atm_iv}")
+            
+            if not all_ivs:
+                logger.warning("No IV values found for percentile calculation")
+                return 50.0
+            
+            if atm_iv is None or atm_iv == 0:
+                logger.warning(f"Could not determine ATM IV (atm_iv={atm_iv})")
+                return 50.0
+            
+            # Calculate statistics
+            min_iv = min(all_ivs)
+            max_iv = max(all_ivs)
+            
+            logger.info(f"IV Stats - Min: {min_iv}, Max: {max_iv}, ATM: {atm_iv}")
+            
+            # Avoid division by zero
+            if max_iv == min_iv:
+                logger.warning(f"Min IV equals Max IV ({min_iv}), returning 50%")
+                return 50.0
+            
+            # Calculate percentile using ATM IV as current IV
+            iv_percentile = ((atm_iv - min_iv) / (max_iv - min_iv)) * 100
+            iv_percentile = max(0, min(100, iv_percentile))  # Clamp between 0-100
+            
+            logger.info(f"✓ IV Percentile calculated: {iv_percentile:.2f}% (Min IV: {min_iv:.2f}, ATM IV: {atm_iv:.2f}, Max IV: {max_iv:.2f})")
+            return iv_percentile
+        except Exception as e:
+            logger.error(f"Error calculating IV Percentile: {e}", exc_info=True)
+            return 50.0  # Default to middle on error
 

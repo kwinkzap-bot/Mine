@@ -17,7 +17,12 @@ def setup_logger(name):
         )
         handler.setFormatter(formatter)
         logger.addHandler(handler)
-        logger.setLevel(current_config.LOG_LEVEL)
+        
+        # Handle both string and logging level constants
+        log_level = current_config.LOG_LEVEL
+        if isinstance(log_level, str):
+            log_level = getattr(logging, log_level.upper(), logging.INFO)
+        logger.setLevel(log_level)
     
     return logger
 
