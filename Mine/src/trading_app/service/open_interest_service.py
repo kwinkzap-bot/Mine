@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 class OpenInterestService:
     """Service to fetch and process open interest data for options."""
     
+    # Class-level cache for opening OI values captured at 9:15 AM
+    # Format: {symbol: {strike: {'ce_oi': value, 'pe_oi': value}, ...}}
+    _opening_oi_cache = {}
+    
+    # Track the date for daily reset
+    _opening_oi_date = None
+    
     def __init__(self, kite_instance: KiteConnect):
         """
         Initialize OpenInterestService.
@@ -103,7 +110,7 @@ class OpenInterestService:
             
             # Step 4: Fetch quotes for all strike tokens
             try:
-                oi_data = self._fetch_open_interest_data(strikes_data, current_price)
+                oi_data = self._fetch_open_interest_data(strikes_data, current_price, symbol)
             except Exception as e:
                 logger.error(f"Failed to fetch OI data: {e}", exc_info=True)
                 return {
@@ -265,17 +272,30 @@ class OpenInterestService:
             return []
     
     def _fetch_open_interest_data(self, strikes_data: List[Dict[str, Any]], 
-                                 current_price: float) -> Dict[str, Any]:
+                                 current_price: float, symbol: str) -> Dict[str, Any]:
         """
         Fetch OI data from Kite quotes API using pre-collected tokens.
         
         Args:
             strikes_data: List of strikes with CE/PE tokens
             current_price: Current underlying price
+            symbol: Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
             
         Returns:
             Dictionary with OI data organized by strike
         """
+        # Check if we need to reset opening OI cache for a new trading day
+        today_date = datetime.now().strftime('%Y-%m-%d')
+        if OpenInterestService._opening_oi_date != today_date:
+            OpenInterestService._opening_oi_date = today_date
+            OpenInterestService._opening_oi_cache = {}
+            logger.info(f"📅 New trading day ({today_date}). Opening OI cache reset.")
+        
+        # Initialize opening OI cache for this symbol if not exists
+        if symbol not in OpenInterestService._opening_oi_cache:
+            OpenInterestService._opening_oi_cache[symbol] = {}
+            logger.info(f"⏰ First request for {symbol} today - will capture opening OI")
+        
         try:
             # Collect all tokens to fetch
             all_tokens = []
@@ -354,10 +374,18 @@ class OpenInterestService:
                         if isinstance(ce_quote, dict):
                             # Kite returns open_interest key
                             oi_val = ce_quote.get('open_interest')
-                            logger.error(f"[RAW] CE Token {ce_token} Strike {strike}: open_interest raw value = {repr(oi_val)} (type: {type(oi_val).__name__})")
+                            current_oi = int(oi_val) if oi_val else 0
+                            strikes_oi[strike]['ce_oi'] = current_oi
                             
-                            # Convert to int, handling None/null
-                            strikes_oi[strike]['ce_oi'] = int(oi_val) if oi_val else 0
+                            # Calculate daily change from opening OI
+                            if strike in OpenInterestService._opening_oi_cache[symbol]:
+                                opening_oi = OpenInterestService._opening_oi_cache[symbol][strike].get('ce_oi', current_oi)
+                                strikes_oi[strike]['ce_change_in_oi'] = current_oi - opening_oi
+                            else:
+                                # First request of day - capture as opening
+                                OpenInterestService._opening_oi_cache[symbol][strike] = {'ce_oi': current_oi, 'pe_oi': None}
+                                strikes_oi[strike]['ce_change_in_oi'] = 0
+                            
                             strikes_oi[strike]['ce_iv'] = float(ce_quote.get('implied_volatility', 0) or 0)
                     except (ValueError, TypeError) as e:
                         logger.error(f"Error parsing CE quote for strike {strike} token {ce_token}: {e}")
@@ -370,10 +398,22 @@ class OpenInterestService:
                         if isinstance(pe_quote, dict):
                             # Kite returns open_interest key
                             oi_val = pe_quote.get('open_interest')
-                            logger.error(f"[RAW] PE Token {pe_token} Strike {strike}: open_interest raw value = {repr(oi_val)} (type: {type(oi_val).__name__})")
+                            current_oi = int(oi_val) if oi_val else 0
+                            strikes_oi[strike]['pe_oi'] = current_oi
                             
-                            # Convert to int, handling None/null
-                            strikes_oi[strike]['pe_oi'] = int(oi_val) if oi_val else 0
+                            # Calculate daily change from opening OI
+                            if strike in OpenInterestService._opening_oi_cache[symbol]:
+                                opening_oi = OpenInterestService._opening_oi_cache[symbol][strike].get('pe_oi', current_oi)
+                                strikes_oi[strike]['pe_change_in_oi'] = current_oi - opening_oi
+                                # Update CE opening if it was set
+                                if 'ce_oi' not in OpenInterestService._opening_oi_cache[symbol][strike]:
+                                    OpenInterestService._opening_oi_cache[symbol][strike]['ce_oi'] = strikes_oi[strike]['ce_oi']
+                                OpenInterestService._opening_oi_cache[symbol][strike]['pe_oi'] = current_oi
+                            else:
+                                # First request of day - capture as opening
+                                OpenInterestService._opening_oi_cache[symbol][strike] = {'ce_oi': strikes_oi[strike]['ce_oi'], 'pe_oi': current_oi}
+                                strikes_oi[strike]['pe_change_in_oi'] = 0
+                            
                             strikes_oi[strike]['pe_iv'] = float(pe_quote.get('implied_volatility', 0) or 0)
                     except (ValueError, TypeError) as e:
                         logger.error(f"Error parsing PE quote for strike {strike} token {pe_token}: {e}")
