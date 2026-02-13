@@ -70,9 +70,9 @@ def _get_oi_from_historical_data(kite: KiteConnect, instrument_token: int) -> Op
         Dictionary with 'current_oi', 'opening_oi', and 'timestamp' or None
     """
     try:
-        # Fetch last 3 days of data to handle delayed finalization
+        # Fetch last 1 day of data (optimization: reduced from 3 days)
         to_date = datetime.now()
-        from_date = to_date - timedelta(days=3)
+        from_date = to_date - timedelta(days=1)
         
         data = kite.historical_data(
             instrument_token=instrument_token,
@@ -231,6 +231,8 @@ class OpenInterestService:
             kite_instance: KiteConnect instance
         """
         self.kite = kite_instance
+        # Simple in-memory cache for historical data (no ThreadPoolExecutor overhead)
+        self._hist_cache = {}
         
         # Symbol configuration
         self.SYMBOL_CONFIG = {
@@ -277,6 +279,18 @@ class OpenInterestService:
             self._current_symbol = symbol  # Store for use in cache operations
             
             logger.info(f"Fetching open interest data for {symbol}...")
+            
+            # Clear old historical cache entries (older than 2 minutes) to ensure fresh data
+            current_time = datetime.now()
+            expired_keys = []
+            for token, cached_data in self._hist_cache.items():
+                if cached_data and 'timestamp' in cached_data:
+                    cache_age = (current_time - cached_data['timestamp']).total_seconds()
+                    if cache_age > 120:  # 2 minutes
+                        expired_keys.append(token)
+            for key in expired_keys:
+                del self._hist_cache[key]
+                logger.debug(f"Cleared expired cache for token {key}")
             
             # Step 1: Get current underlying price
             try:
@@ -555,6 +569,10 @@ class OpenInterestService:
                 if isinstance(first_quote, dict):
                     oi_fields = {k: v for k, v in first_quote.items() if 'oi' in k.lower()}
                     logger.info(f"OI-Related Fields in Quote: {oi_fields}")
+                    # Log timestamp if available
+                    timestamp = first_quote.get('timestamp')
+                    logger.info(f"Quote timestamp: {timestamp}, Last price: {first_quote.get('last_price')}")
+            
             # Organize OI data by strike
             strikes_oi = {}
             
@@ -613,7 +631,10 @@ class OpenInterestService:
                                 # Source 2: Historical data (yesterday's closing = today's opening)
                                 elif opening_oi is None:
                                     try:
-                                        hist_oi_data = _get_oi_from_historical_data(self.kite, ce_token)
+                                        # Check cache first to avoid repeated API calls
+                                        if ce_token not in self._hist_cache:
+                                            self._hist_cache[ce_token] = _get_oi_from_historical_data(self.kite, ce_token)
+                                        hist_oi_data = self._hist_cache[ce_token]
                                         if hist_oi_data and hist_oi_data.get('opening_oi') is not None:
                                             opening_oi = hist_oi_data['opening_oi']
                                             source = "historical_data"
@@ -698,7 +719,10 @@ class OpenInterestService:
                                 # Source 2: Historical data (yesterday's closing = today's opening)
                                 elif opening_oi is None:
                                     try:
-                                        hist_oi_data = _get_oi_from_historical_data(self.kite, pe_token)
+                                        # Check cache first to avoid repeated API calls
+                                        if pe_token not in self._hist_cache:
+                                            self._hist_cache[pe_token] = _get_oi_from_historical_data(self.kite, pe_token)
+                                        hist_oi_data = self._hist_cache[pe_token]
                                         if hist_oi_data and hist_oi_data.get('opening_oi') is not None:
                                             opening_oi = hist_oi_data['opening_oi']
                                             source = "historical_data"
@@ -927,11 +951,17 @@ class OpenInterestService:
     
     def _calculate_iv_percentile(self, strikes: List[Dict[str, Any]], current_price: float) -> float:
         """
-        Calculate IV Percentile - measures current IV relative to its 52-week range.
+        Calculate IV Percentile - measures current IV relative to its range.
         
-        IV Percentile = (Current IV - Min IV) / (Max IV - Min IV) * 100
+        Proper formula (from tastylive):
+        IV Percentile = (Current IV - 52-Week Low IV) / (52-Week High IV - 52-Week Low IV) * 100
         
-        Uses the IV of the strike closest to current price.
+        Since we don't have 52-week historical IV data, we use:
+        - ATM IV as the "current IV"
+        - Min IV across the entire options chain as proxy for "low"
+        - Max IV across the entire options chain as proxy for "high"
+        
+        This gives a meaningful percentile relative to current market structure.
         
         Args:
             strikes: List of strike data with 'strike', 'ce_iv' and 'pe_iv' keys
@@ -955,6 +985,7 @@ class OpenInterestService:
                 
                 logger.debug(f"Strike {i}: price={strike_price}, ce_iv={ce_iv}, pe_iv={pe_iv}")
                 
+                # Collect valid IVs (> 0)
                 if ce_iv > 0:
                     all_ivs.append(ce_iv)
                 if pe_iv > 0:
@@ -981,22 +1012,25 @@ class OpenInterestService:
                 logger.warning(f"Could not determine ATM IV (atm_iv={atm_iv})")
                 return 50.0
             
-            # Calculate statistics
+            # Calculate IV percentile using proper formula
+            # IV Percentile = (Current IV - Min IV) / (Max IV - Min IV) * 100
             min_iv = min(all_ivs)
             max_iv = max(all_ivs)
             
-            logger.info(f"IV Stats - Min: {min_iv}, Max: {max_iv}, ATM: {atm_iv}")
+            logger.info(f"IV Stats - Min: {min_iv:.2f}, ATM: {atm_iv:.2f}, Max: {max_iv:.2f}")
             
-            # Avoid division by zero
+            # Handle edge case where all IVs are the same
             if max_iv == min_iv:
-                logger.warning(f"Min IV equals Max IV ({min_iv}), returning 50%")
+                logger.warning(f"All IVs equal ({min_iv:.2f}), returning 50%")
                 return 50.0
             
-            # Calculate percentile using ATM IV as current IV
+            # Apply tastylive formula
             iv_percentile = ((atm_iv - min_iv) / (max_iv - min_iv)) * 100
             iv_percentile = max(0, min(100, iv_percentile))  # Clamp between 0-100
             
             logger.info(f"✓ IV Percentile calculated: {iv_percentile:.2f}% (Min IV: {min_iv:.2f}, ATM IV: {atm_iv:.2f}, Max IV: {max_iv:.2f})")
+            logger.info(f"  Interpretation: ATM IV is {iv_percentile:.1f}% of the way from minimum to maximum IV in the options chain")
+            
             return iv_percentile
         except Exception as e:
             logger.error(f"Error calculating IV Percentile: {e}", exc_info=True)

@@ -2670,7 +2670,18 @@ def get_open_interest() -> EndpointResponse:
         if not oi_data.get('success'):
             return jsonify(oi_data), 400
         
-        return jsonify(oi_data), 200
+        # Add server timestamp to verify data freshness
+        from datetime import datetime
+        oi_data['server_timestamp'] = datetime.now().isoformat()
+        logger.info(f"API response server_timestamp: {oi_data['server_timestamp']}")
+        logger.info(f"Sample OI values - CE Total: {oi_data.get('ce_summary', {}).get('total_oi')}, PE Total: {oi_data.get('pe_summary', {}).get('total_oi')}")
+        
+        response = jsonify(oi_data)
+        # Disable caching for real-time data
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response, 200
         
     except Exception as e:
         logger.error(f"Error fetching open interest: {str(e)}", exc_info=True)

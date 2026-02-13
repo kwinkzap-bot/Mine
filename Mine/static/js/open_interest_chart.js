@@ -9,6 +9,8 @@ let autoRefreshInterval = null;
 let currentSymbol = 'NIFTY';
 let strikeRangeCount = 15; // Default strike range
 let cachedData = null; // Store fetched data to avoid repeated API calls
+let oiHistoryData = []; // Store OI history for the table (keep last 20 entries)
+const MAX_HISTORY_ROWS = 20;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
@@ -123,7 +125,7 @@ function startAutoRefresh() {
         } else {
             console.log('Market hours closed. Auto-refresh paused.');
         }
-    }, 30000); // 30 seconds
+    }, 60000); // 1 minute
 }
 
 /**
@@ -153,14 +155,21 @@ async function refreshData(showLoader = true, updateSummary = true) {
         
         console.log(`Fetching OI data for ${currentSymbol}...`);
         
+        // Add cache-busting timestamp to ensure fresh data
+        const timestamp = new Date().getTime();
+        
         const response = await fetch('/api/open-interest', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache',
+                'Pragma': 'no-cache'
             },
             body: JSON.stringify({
-                symbol: currentSymbol
-            })
+                symbol: currentSymbol,
+                _t: timestamp  // Cache-busting parameter
+            }),
+            cache: 'no-store'  // Disable browser caching
         });
         
         if (!response.ok) {
@@ -175,6 +184,13 @@ async function refreshData(showLoader = true, updateSummary = true) {
         
         console.log(`✅ OI data received for ${currentSymbol}:`, data);
         
+        // Log server timestamp for debugging data freshness
+        if (data.server_timestamp) {
+            console.log(`Server timestamp: ${data.server_timestamp}`);
+            const serverTime = new Date(data.server_timestamp);
+            console.log(`Latest OI values - CE: ${data.ce_summary?.total_oi}, PE: ${data.pe_summary?.total_oi}, Server time: ${serverTime.toLocaleTimeString()}`);
+        }
+        
         // Cache the data for later use when strike range changes
         cachedData = data;
         
@@ -183,9 +199,14 @@ async function refreshData(showLoader = true, updateSummary = true) {
         // On manual refresh (updateSummary=true), update both summary and charts
         if (updateSummary) {
             updateSummaryStats(data);
+        } else {
+            // During auto-refresh, update only the OI summary table (not full summary stats)
+            const ceStats = data.ce_summary || {};
+            const peStats = data.pe_summary || {};
+            updateOISummaryTable(peStats, ceStats);
         }
         updateCharts(data);
-        updateLastUpdateTime();
+        updateLastUpdateTime(data.server_timestamp);
         
         // Remove spinning animation from refresh button
         if (showLoader) {
@@ -271,6 +292,115 @@ function updateSummaryStats(data) {
         }
     } else {
         ivElement.textContent = '--';
+    }
+    
+    // Update OI Summary Table with current data
+    updateOISummaryTable(peStats, ceStats);
+}
+
+/**
+ * Update OI Summary Table with historical data
+ */
+function updateOISummaryTable(peStats, ceStats) {
+    try {
+        // Get current time
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('en-US', { 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            second: '2-digit',
+            hour12: true 
+        });
+        
+        // Calculate differences
+        const totalPeOI = peStats.total_oi || 0;
+        const totalCeOI = ceStats.total_oi || 0;
+        const peCOI = peStats.change_in_oi || 0;
+        const ceCOI = ceStats.change_in_oi || 0;
+        
+        const oiDifferent = totalPeOI - totalCeOI;
+        const oiChangeDifferent = peCOI - ceCOI;
+        
+        // Create history entry
+        const historyEntry = {
+            time: timeStr,
+            totalPeOI: totalPeOI,
+            peCOI: peCOI,
+            totalCeOI: totalCeOI,
+            ceCOI: ceCOI,
+            oiDifferent: oiDifferent,
+            oiChangeDifferent: oiChangeDifferent
+        };
+        
+        // Add to beginning of array (latest first)
+        oiHistoryData.unshift(historyEntry);
+        
+        // Keep only last 20 entries
+        if (oiHistoryData.length > MAX_HISTORY_ROWS) {
+            oiHistoryData.pop();
+        }
+        
+        // Render table
+        renderOISummaryTable();
+    } catch (error) {
+        console.error('Error updating OI summary table:', error);
+    }
+}
+
+/**
+ * Render OI Summary Table
+ */
+function renderOISummaryTable() {
+    try {
+        const tbody = document.getElementById('oiSummaryTableBody');
+        if (!tbody) return;
+        
+        // Clear existing rows
+        tbody.innerHTML = '';
+        
+        // If no data, show loading message
+        if (oiHistoryData.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px;">No data available</td></tr>';
+            return;
+        }
+        
+        // Render each history entry
+        oiHistoryData.forEach((entry, index) => {
+            const row = document.createElement('tr');
+            
+            // Format PE OI Change with color
+            const peCOIClass = entry.peCOI >= 0 ? '' : 'negative';
+            const peCOISign = entry.peCOI >= 0 ? '+' : '';
+            
+            // Format CE OI Change with color
+            const ceCOIClass = entry.ceCOI >= 0 ? '' : 'negative';
+            const ceCOISign = entry.ceCOI >= 0 ? '+' : '';
+            
+            // Calculate Diff: previous OI Change Different - current OI Change Different
+            let diffValue = 0;
+            let diffClass = '';
+            let diffSign = '';
+            
+            if (index > 0) {
+                const previousOiChangeDiff = oiHistoryData[index - 1].oiChangeDifferent;
+                diffValue = previousOiChangeDiff - entry.oiChangeDifferent;
+                diffClass = diffValue >= 0 ? '' : 'negative';
+                diffSign = diffValue >= 0 ? '+' : '';
+            }
+            
+            row.innerHTML = `
+                <td>${entry.time}</td>
+                <td><span class="oi-pe-oi">${formatNumberForGrid(entry.totalPeOI)}</span></td>
+                <td><span class="oi-pe-chg ${peCOIClass}">${peCOISign}${formatNumberForGrid(entry.peCOI)}</span></td>
+                <td><span class="oi-ce-oi">${formatNumberForGrid(entry.totalCeOI)}</span></td>
+                <td><span class="oi-ce-chg ${ceCOIClass}">${ceCOISign}${formatNumberForGrid(entry.ceCOI)}</span></td>
+                <td><span class="oi-change-diff ${diffClass}">${diffSign}${formatNumberForGrid(diffValue)}</span></td>
+            `;
+            
+            tbody.appendChild(row);
+        });
+    } catch (error) {
+        console.error('Error rendering OI summary table:', error);
     }
 }
 
@@ -525,7 +655,15 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                     title: {
                         display: false
                     },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)',
+                        drawBorder: true,
+                        borderColor: 'rgba(0, 0, 0, 0.08)'
+                    },
                     ticks: {
+                        font: {
+                            size: 10
+                        },
                         callback: function(value) {
                             return formatNumber(value);
                         }
@@ -535,6 +673,16 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                     stacked: false,
                     title: {
                         display: false
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)',
+                        drawBorder: true,
+                        borderColor: 'rgba(0, 0, 0, 0.08)'
+                    },
+                    ticks: {
+                        font: {
+                            size: 10
+                        }
                     }
                 }
             }
@@ -560,7 +708,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
 /**
  * Update last update time
  */
-function updateLastUpdateTime() {
+function updateLastUpdateTime(serverTimestamp = null) {
     const now = new Date();
     const timeStr = now.toLocaleTimeString('en-IN', {
         hour: '2-digit',
@@ -569,6 +717,18 @@ function updateLastUpdateTime() {
         hour12: true
     });
     document.getElementById('lastUpdateTime').textContent = timeStr;
+    
+    // Display server timestamp if provided
+    if (serverTimestamp) {
+        const serverTime = new Date(serverTimestamp);
+        const serverTimeStr = serverTime.toLocaleTimeString('en-IN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: true
+        });
+        document.getElementById('serverTimestamp').textContent = `(Server: ${serverTimeStr})`;
+    }
 }
 
 /**
@@ -594,248 +754,303 @@ function formatNumber(num) {
 }
 
 /**
+ * Format number for grid display - only use K (thousands)
+ */
+function formatNumberForGrid(num) {
+    if (!num && num !== 0) return '--';
+    
+    const absNum = Math.abs(num);
+    
+    // Format with Thousand (K) only
+    if (absNum >= 1000) {
+        return (num / 1000).toFixed(1) + 'K';     // Thousand
+    }
+    
+    return num.toLocaleString('en-IN', {
+        maximumFractionDigits: 0
+    });
+}
+
+/**
  * Update Combined Stacked Chart - Shows OI with Change direction overlay
  */
 function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
-    const ctx = document.getElementById('combinedChart').getContext('2d');
-    
-    // OI colors: Dark green for PE, Dark red for CE
-    const peColors = peOI.map((val, idx) => {
-        const change = peCOI[idx];
-        if (change > 0) {
-            return 'rgba(22, 128, 67, 0.9)'; // Dark green for increase
-        } else if (change < 0) {
-            return 'rgba(22, 128, 67, 0.5)'; // Light dark green for decrease
+    try {
+        // Get fresh canvas context each time
+        const canvasElement = document.getElementById('combinedChart');
+        if (!canvasElement) {
+            console.error('Combined chart canvas element not found');
+            return;
         }
-        return 'rgba(22, 128, 67, 0.9)'; // Dark green for no change
-    });
-    
-    const ceColors = ceOI.map((val, idx) => {
-        const change = ceCOI[idx];
-        if (change > 0) {
-            return 'rgba(153, 27, 27, 0.9)'; // Dark red for increase
-        } else if (change < 0) {
-            return 'rgba(153, 27, 27, 0.5)'; // Light dark red for decrease
+        
+        const ctx = canvasElement.getContext('2d');
+        if (!ctx) {
+            console.error('Failed to get 2D context from combined chart canvas');
+            return;
         }
-        return 'rgba(153, 27, 27, 0.9)'; // Dark red for no change
-    });
-    
-    const peBorders = peCOI.map(change => 
-        change > 0 ? 'rgba(22, 128, 67, 1)' : 'rgba(22, 128, 67, 0.7)'
-    );
-    
-    const ceBorders = ceCOI.map(change => 
-        change > 0 ? 'rgba(153, 27, 27, 1)' : 'rgba(153, 27, 27, 0.7)'
-    );
-    
-    // Change in OI colors: Light red for Call, Light green for Put
-    const peCoiColors = peCOI.map(val => 
-        val >= 0 ? 'rgba(144, 238, 144, 0.8)' : 'rgba(144, 238, 144, 0.4)'
-    );
-    const peCoiBorders = peCOI.map(val => 
-        val >= 0 ? 'rgba(34, 139, 34, 1)' : 'rgba(34, 139, 34, 0.6)'
-    );
-    
-    const ceCoiColors = ceCOI.map(val => 
-        val >= 0 ? 'rgba(255, 127, 127, 0.8)' : 'rgba(255, 127, 127, 0.4)'
-    );
-    const ceCoiBorders = ceCOI.map(val => 
-        val >= 0 ? 'rgba(220, 20, 60, 1)' : 'rgba(220, 20, 60, 0.6)'
-    );
-    
-    const chartConfig = {
-        type: 'bar',
-        data: {
-            labels: labels,
-            datasets: [
-                {
-                    label: 'Put OI (Opening)',
-                    data: peOI.map((val, idx) => val - peCOI[idx]),
-                    backgroundColor: peColors,
-                    borderColor: peBorders,
-                    borderWidth: 2,
-                    yAxisID: 'y',
-                    stack: 'pe'
-                },
-                {
-                    label: 'Put OI Change',
-                    data: peCOI,
-                    backgroundColor: peCoiColors,
-                    borderColor: peCoiBorders,
-                    borderWidth: 2,
-                    yAxisID: 'y',
-                    stack: 'pe'
-                },
-                {
-                    label: 'Call OI (Opening)',
-                    data: ceOI.map((val, idx) => val - ceCOI[idx]),
-                    backgroundColor: ceColors,
-                    borderColor: ceBorders,
-                    borderWidth: 2,
-                    yAxisID: 'y',
-                    stack: 'ce'
-                },
-                {
-                    label: 'Call OI Change',
-                    data: ceCOI,
-                    backgroundColor: ceCoiColors,
-                    borderColor: ceCoiBorders,
-                    borderWidth: 2,
-                    yAxisID: 'y',
-                    stack: 'ce'
-                }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: true,
-            animation: {
-                duration: 300
+        
+        // Recalculate totals for legend labels
+        const totalPeCOI = peCOI.reduce((sum, val) => sum + val, 0);
+        const totalCeCOI = ceCOI.reduce((sum, val) => sum + val, 0);
+        const peCOILabel = totalPeCOI >= 0 ? `Put OI Change: +${formatNumber(totalPeCOI)}` : `Put OI Change: ${formatNumber(totalPeCOI)}`;
+        const ceCOILabel = totalCeCOI >= 0 ? `Call OI Change: +${formatNumber(totalCeCOI)}` : `Call OI Change: ${formatNumber(totalCeCOI)}`;
+        
+        // OI colors: Dark green for PE, Dark red for CE
+        const peColors = peOI.map((val, idx) => {
+            const change = peCOI[idx];
+            if (change > 0) {
+                return 'rgba(22, 128, 67, 0.9)'; // Dark green for increase
+            } else if (change < 0) {
+                return 'rgba(22, 128, 67, 0.5)'; // Light dark green for decrease
+            }
+            return 'rgba(22, 128, 67, 0.9)'; // Dark green for no change
+        });
+        
+        const ceColors = ceOI.map((val, idx) => {
+            const change = ceCOI[idx];
+            if (change > 0) {
+                return 'rgba(153, 27, 27, 0.9)'; // Dark red for increase
+            } else if (change < 0) {
+                return 'rgba(153, 27, 27, 0.5)'; // Light dark red for decrease
+            }
+            return 'rgba(153, 27, 27, 0.9)'; // Dark red for no change
+        });
+        
+        const peBorders = peCOI.map(change => 
+            change > 0 ? 'rgba(22, 128, 67, 1)' : 'rgba(22, 128, 67, 0.7)'
+        );
+        
+        const ceBorders = ceCOI.map(change => 
+            change > 0 ? 'rgba(153, 27, 27, 1)' : 'rgba(153, 27, 27, 0.7)'
+        );
+        
+        // Change in OI colors: Light red for Call, Light green for Put
+        const peCoiColors = peCOI.map(val => {
+            if (val >= 0) {
+                return 'rgba(144, 238, 144, 0.8)'; // Light green for positive change
+            } else {
+                return 'rgba(255, 255, 255, 0.8)'; // White for negative change
+            }
+        });
+        const peCoiBorders = peCOI.map(val => 
+            val >= 0 ? 'rgba(34, 139, 34, 1)' : 'rgba(34, 139, 34, 1)'
+        );
+        
+        const ceCoiColors = ceCOI.map(val => 
+            val >= 0 ? 'rgba(255, 127, 127, 0.8)' : 'rgba(255, 127, 127, 0.4)'
+        );
+        const ceCoiBorders = ceCOI.map(val => 
+            val >= 0 ? 'rgba(220, 20, 60, 1)' : 'rgba(220, 20, 60, 1)'
+        );
+        
+        const chartConfig = {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Put OI (Opening)',
+                        data: peOI.map((val, idx) => val - peCOI[idx]),
+                        backgroundColor: peColors,
+                        borderColor: peBorders,
+                        borderWidth: 2,
+                        yAxisID: 'y',
+                        stack: 'pe'
+                    },
+                    {
+                        label: peCOILabel,
+                        data: peCOI,
+                        backgroundColor: peCoiColors,
+                        borderColor: peCoiBorders,
+                        borderWidth: 2,
+                        yAxisID: 'y',
+                        stack: 'pe'
+                    },
+                    {
+                        label: 'Call OI (Opening)',
+                        data: ceOI.map((val, idx) => val - ceCOI[idx]),
+                        backgroundColor: ceColors,
+                        borderColor: ceBorders,
+                        borderWidth: 2,
+                        yAxisID: 'y',
+                        stack: 'ce'
+                    },
+                    {
+                        label: ceCOILabel,
+                        data: ceCOI,
+                        backgroundColor: ceCoiColors,
+                        borderColor: ceCoiBorders,
+                        borderWidth: 2,
+                        yAxisID: 'y',
+                        stack: 'ce'
+                    }
+                ]
             },
-            interaction: {
-                mode: 'index',
-                intersect: false,
-            },
-            plugins: {
-                currentPriceLine: {
-                    price: currentPrice
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                animation: {
+                    duration: 300
                 },
-                legend: {
-                    display: true,
-                    position: 'bottom',
-                    labels: {
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                plugins: {
+                    currentPriceLine: {
+                        price: currentPrice
+                    },
+                    legend: {
+                        display: true,
+                        position: 'bottom',
+                        labels: {
+                            padding: 15,
+                            font: {
+                                size: 12,
+                                weight: 'bold'
+                            }
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
                         padding: 15,
-                        font: {
+                        titleFont: {
                             size: 12,
                             weight: 'bold'
+                        },
+                        bodyFont: {
+                            size: 10,
+                            family: 'Arial, sans-serif'
+                        },
+                        titleColor: '#000000',
+                        bodyColor: '#000000',
+                        borderColor: 'rgba(0, 0, 0, 0.3)',
+                        borderWidth: 1,
+                        displayColors: true,
+                        boxPadding: 8,
+                        callbacks: {
+                            title: function(context) {
+                                return `Strike ${context[0].label}`;
+                            },
+                            label: function(context) {
+                                const idx = context.dataIndex;
+                                
+                                // Calculate OI at 9:15 AM (opening OI)
+                                const peOIOpening = peOI[idx] - peCOI[idx];
+                                const ceOIOpening = ceOI[idx] - ceCOI[idx];
+                                
+                                // Format based on dataset
+                                if (context.datasetIndex === 0) {
+                                    // Put OI
+                                    return `Put OI at 9:15 AM   ${formatNumber(peOIOpening)}`;
+                                } else if (context.datasetIndex === 1) {
+                                    // Put OI Change
+                                    const changeIndicator = peCOI[idx] >= 0 ? '+' : '';
+                                    return `Put OI chg          ${changeIndicator}${formatNumber(peCOI[idx])}`;
+                                } else if (context.datasetIndex === 2) {
+                                    // Call OI
+                                    return `Call OI at 9:15 AM  ${formatNumber(ceOIOpening)}`;
+                                } else if (context.datasetIndex === 3) {
+                                    // Call OI Change
+                                    const changeIndicator = ceCOI[idx] >= 0 ? '+' : '';
+                                    return `Call OI chg         ${changeIndicator}${formatNumber(ceCOI[idx])}`;
+                                }
+                                
+                                return '';
+                            },
+                            afterLabel: function(context) {
+                                const idx = context.dataIndex;
+                                
+                                // Get current time in HH:MM AM/PM format
+                                const now = new Date();
+                                const hours = now.getHours();
+                                const minutes = now.getMinutes();
+                                const ampm = hours >= 12 ? 'PM' : 'AM';
+                                const displayHours = hours % 12 || 12;
+                                const displayMinutes = minutes.toString().padStart(2, '0');
+                                const currentTime = `${displayHours}:${displayMinutes} ${ampm}`;
+                                
+                                // Show current OI at current time
+                                if (context.datasetIndex === 1) {
+                                    // After Put OI Change, show Put OI at current time
+                                    return `Put OI at ${currentTime}   ${formatNumber(peOI[idx])}`;
+                                } else if (context.datasetIndex === 3) {
+                                    // After Call OI Change, show Call OI at current time
+                                    return `Call OI at ${currentTime}  ${formatNumber(ceOI[idx])}`;
+                                }
+                                
+                                return '';
+                            }
                         }
                     }
                 },
-                tooltip: {
-                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                    padding: 15,
-                    titleFont: {
-                        size: 12,
-                        weight: 'bold'
-                    },
-                    bodyFont: {
-                        size: 10,
-                        family: 'Arial, sans-serif'
-                    },
-                    titleColor: '#000000',
-                    bodyColor: '#000000',
-                    borderColor: 'rgba(0, 0, 0, 0.3)',
-                    borderWidth: 1,
-                    displayColors: true,
-                    boxPadding: 8,
-                    callbacks: {
-                        title: function(context) {
-                            return `Strike ${context[0].label}`;
+                scales: {
+                    y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        stacked: true,
+                        title: {
+                            display: false
                         },
-                        label: function(context) {
-                            const idx = context.dataIndex;
-                            
-                            // Calculate OI at 9:15 AM (opening OI)
-                            const peOIOpening = peOI[idx] - peCOI[idx];
-                            const ceOIOpening = ceOI[idx] - ceCOI[idx];
-                            
-                            // Format based on dataset
-                            if (context.datasetIndex === 0) {
-                                // Put OI
-                                return `Put OI at 9:15 AM   ${formatNumber(peOIOpening)}`;
-                            } else if (context.datasetIndex === 1) {
-                                // Put OI Change
-                                const changeIndicator = peCOI[idx] >= 0 ? '+' : '';
-                                return `Put OI chg          ${changeIndicator}${formatNumber(peCOI[idx])}`;
-                            } else if (context.datasetIndex === 2) {
-                                // Call OI
-                                return `Call OI at 9:15 AM  ${formatNumber(ceOIOpening)}`;
-                            } else if (context.datasetIndex === 3) {
-                                // Call OI Change
-                                const changeIndicator = ceCOI[idx] >= 0 ? '+' : '';
-                                return `Call OI chg         ${changeIndicator}${formatNumber(ceCOI[idx])}`;
-                            }
-                            
-                            return '';
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)',
+                            drawBorder: true,
+                            borderColor: 'rgba(0, 0, 0, 0.08)'
                         },
-                        afterLabel: function(context) {
-                            const idx = context.dataIndex;
-                            
-                            // Get current time in HH:MM AM/PM format
-                            const now = new Date();
-                            const hours = now.getHours();
-                            const minutes = now.getMinutes();
-                            const ampm = hours >= 12 ? 'PM' : 'AM';
-                            const displayHours = hours % 12 || 12;
-                            const displayMinutes = minutes.toString().padStart(2, '0');
-                            const currentTime = `${displayHours}:${displayMinutes} ${ampm}`;
-                            
-                            // Show current OI at current time
-                            if (context.datasetIndex === 1) {
-                                // After Put OI Change, show Put OI at current time
-                                return `Put OI at ${currentTime}   ${formatNumber(peOI[idx])}`;
-                            } else if (context.datasetIndex === 3) {
-                                // After Call OI Change, show Call OI at current time
-                                return `Call OI at ${currentTime}  ${formatNumber(ceOI[idx])}`;
+                        ticks: {
+                            font: {
+                                size: 10
+                            },
+                            callback: function(value) {
+                                return formatNumber(value);
                             }
-                            
-                            return '';
+                        }
+                    },
+                    x: {
+                        stacked: true,
+                        title: {
+                            display: false
+                        },
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)',
+                            drawBorder: true,
+                            borderColor: 'rgba(0, 0, 0, 0.08)'
+                        },
+                        ticks: {
+                            font: {
+                                size: 10
+                            }
                         }
                     }
                 }
             },
-            scales: {
-                y: {
-                    type: 'linear',
-                    display: true,
-                    position: 'left',
-                    stacked: true,
-                    title: {
-                        display: true,
-                        text: 'Open Interest & Change in OI',
-                        font: {
-                            weight: 'bold'
-                        }
-                    },
-                    ticks: {
-                        callback: function(value) {
-                            return formatNumber(value);
-                        }
-                    }
-                },
-                x: {
-                    stacked: true,
-                    title: {
-                        display: true,
-                        text: 'Strike Price',
-                        font: {
-                            weight: 'bold'
-                        }
-                    }
-                }
+            plugins: [currentPriceLinePlugin]
+        };
+        
+        // Always destroy and recreate instead of updating - avoids Chart.js state issues
+        if (combinedChartInstance) {
+            try {
+                combinedChartInstance.destroy();
+            } catch (e) {
+                console.debug('Error destroying old combined chart:', e);
             }
-        },
-        plugins: [currentPriceLinePlugin]
-    };
-    
-    if (combinedChartInstance) {
-        combinedChartInstance.data.labels = labels;
-        combinedChartInstance.data.datasets[0].data = peOI.map((val, idx) => val - peCOI[idx]);
-        combinedChartInstance.data.datasets[0].backgroundColor = peColors;
-        combinedChartInstance.data.datasets[0].borderColor = peBorders;
-        combinedChartInstance.data.datasets[1].data = peCOI;
-        combinedChartInstance.data.datasets[1].backgroundColor = peCoiColors;
-        combinedChartInstance.data.datasets[1].borderColor = peCoiBorders;
-        combinedChartInstance.data.datasets[2].data = ceOI.map((val, idx) => val - ceCOI[idx]);
-        combinedChartInstance.data.datasets[2].backgroundColor = ceColors;
-        combinedChartInstance.data.datasets[2].borderColor = ceBorders;
-        combinedChartInstance.data.datasets[3].data = ceCOI;
-        combinedChartInstance.data.datasets[3].backgroundColor = ceCoiColors;
-        combinedChartInstance.data.datasets[3].borderColor = ceCoiBorders;
-        combinedChartInstance.options.plugins.currentPriceLine.price = currentPrice;
-        combinedChartInstance.update('active');
-    } else {
+        }
+        
+        // Create fresh chart instance
         combinedChartInstance = new Chart(ctx, chartConfig);
+        
+    } catch (error) {
+        console.error('Error in updateCombinedChart:', error);
+        try {
+            if (combinedChartInstance) {
+                combinedChartInstance.destroy();
+                combinedChartInstance = null;
+            }
+        } catch (destroyError) {
+            console.error('Error destroying chart during recovery:', destroyError);
+            combinedChartInstance = null;
+        }
     }
 }
 

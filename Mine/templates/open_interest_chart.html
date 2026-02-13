@@ -19,6 +19,7 @@
         <div class="control-group">
             <div class="status-info">
                 <span class="last-update">Last Update: <span id="lastUpdateTime">--:--:--</span></span>
+                <span class="server-timestamp" id="serverTimestamp" style="margin-left: 15px; font-size: 12px; color: #666;">(Server: --:--:--)</span>
                 <button id="refreshNowBtn" class="icon-btn refresh-icon" title="Refresh Now">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
@@ -31,26 +32,6 @@
     <div class="oi-content">
         <!-- Summary Stats -->
         <div class="oi-summary">
-            <div class="summary-card ce-card">
-                <h3>CE Summary</h3>
-                <div class="stat-row">
-                    <span class="label">Total OI:</span>
-                    <span class="value" id="ceOITotal">--</span>
-                </div>
-                <div class="stat-row">
-                    <span class="label">Change in OI:</span>
-                    <span class="value" id="ceCOI">--</span>
-                </div>
-                <div class="stat-row">
-                    <span class="label">Max OI Strike:</span>
-                    <span class="value" id="ceMaxOIStrike">--</span>
-                </div>
-                <div class="stat-row">
-                    <span class="label">Max OI Value:</span>
-                    <span class="value" id="ceMaxOIValue">--</span>
-                </div>
-            </div>
-
             <div class="summary-card pe-card">
                 <h3>PE Summary</h3>
                 <div class="stat-row">
@@ -68,6 +49,25 @@
                 <div class="stat-row">
                     <span class="label">Max OI Value:</span>
                     <span class="value" id="peMaxOIValue">--</span>
+                </div>
+            </div>
+            <div class="summary-card ce-card">
+                <h3>CE Summary</h3>
+                <div class="stat-row">
+                    <span class="label">Total OI:</span>
+                    <span class="value" id="ceOITotal">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Change in OI:</span>
+                    <span class="value" id="ceCOI">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Max OI Strike:</span>
+                    <span class="value" id="ceMaxOIStrike">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Max OI Value:</span>
+                    <span class="value" id="ceMaxOIValue">--</span>
                 </div>
             </div>
 
@@ -115,6 +115,32 @@
             <div class="chart-container full-width">
                 <h3>Change in Open Interest</h3>
                 <canvas id="coiChart"></canvas>
+            </div>
+        </div>
+
+        <!-- OI Summary Grid -->
+        <div class="oi-grid-section">
+            <div class="chart-container full-width">
+                <h3>OI Summary History</h3>
+                <div class="oi-grid-wrapper">
+                    <table class="oi-summary-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Total PE OI</th>
+                                <th>PE OI Change</th>
+                                <th>Total CE OI</th>
+                                <th>CE OI Change</th>
+                                <th>Diff</th>
+                            </tr>
+                        </thead>
+                        <tbody id="oiSummaryTableBody">
+                            <tr>
+                                <td colspan="6" style="text-align: center; padding: 20px;">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>

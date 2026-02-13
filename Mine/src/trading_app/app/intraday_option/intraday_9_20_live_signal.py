@@ -1831,25 +1831,40 @@ class Intraday920LiveSignal:
                 # This prevents trying to close trades already closed by SL hits
                 current_time = datetime.now().time()
                 if current_time >= time(15, 20, 0) and not self.market_close_processed:  # 3:20 PM IST
+                    logger.info(f"🔴 Market close time (3:20 PM) reached - Checking for active trades to square off")
+                    
                     if self.active_trades:
+                        logger.info(f"Found {len(self.active_trades)} active trades to potentially close")
                         market_close_timestamp = datetime.now()
-                        logger.info(f"🔴 Market close (3:20 PM) - Checking which trades are still active on broker")
                         
                         # Get active orders from broker to sync state
+                        active_orders = []
                         try:
-                            active_orders = self.kite.orders() if self.live_trading else []
+                            if self.live_trading:
+                                active_orders = self.kite.orders() if self.kite else []
+                                logger.info(f"Fetched {len(active_orders)} active orders from broker")
+                            else:
+                                logger.info("Demo mode - skipping broker order fetch")
                         except Exception as e:
                             logger.warning(f"Could not fetch active orders from broker: {e}")
                             active_orders = []
                         
                         # Create set of active order IDs for quick lookup
-                        active_order_ids = {str(order.get('order_id')) for order in active_orders}
-                        logger.info(f"📋 Active orders on broker: {active_order_ids if active_order_ids else 'None'}")
+                        active_order_ids = {str(order.get('order_id')) for order in active_orders if order.get('order_id')}
+                        logger.info(f"📋 Active order IDs on broker: {active_order_ids if active_order_ids else 'None'}")
+                        
+                        closed_trades = []
+                        skipped_trades = []
                         
                         with self.active_trades_lock:
                             for side in list(self.active_trades.keys()):
                                 trade = self.active_trades.get(side)
-                                if trade and trade.get('status') == 'OPEN':
+                                if not trade:
+                                    continue
+                                
+                                logger.info(f"Processing {side} trade: Status={trade.get('status')}, OrderID={trade.get('order_id')}")
+                                
+                                if trade.get('status') == 'OPEN':
                                     entry_order_id = trade.get('order_id')
                                     
                                     # Check if entry order is still open on broker
@@ -1858,68 +1873,129 @@ class Intraday920LiveSignal:
                                     # Check if this order was placed by THIS SYSTEM
                                     is_system_order = entry_order_id is not None
                                     
+                                    logger.info(f"{side} Trade - System Order: {is_system_order}, Active on Broker: {is_order_active_on_broker}")
+                                    
                                     if is_system_order and is_order_active_on_broker:
                                         # This is our order and it's still active - close it
                                         token = trade.get('token')
-                                        if token:
-                                            current_price = self.get_current_price(token)
-                                        else:
+                                        current_price = None
+                                        
+                                        try:
+                                            if token:
+                                                current_price = self.get_current_price(token)
+                                                logger.info(f"{side} Current price from token {token}: {current_price}")
+                                            else:
+                                                logger.warning(f"{side} No token available, using entry price")
+                                        except Exception as e:
+                                            logger.warning(f"Error fetching current price for {side}: {e}")
+                                        
+                                        if not current_price:
                                             current_price = trade.get('entry_price')
                                         
                                         entry_price = trade.get('entry_price', 0)
                                         strike = trade.get('strike')
                                         pnl = current_price - entry_price if current_price else 0
                                         
-                                        logger.info(f"🔴 {side} Force Exit at Market Close: Entry {entry_price:.2f}, Exit {current_price:.2f}, P&L: {pnl:+.2f} | Order ID: {entry_order_id}")
+                                        logger.info(f"🔴 {side} Market Close Square Off: Entry {entry_price:.2f}, Exit {current_price:.2f}, P&L: {pnl:+.2f} | Order ID: {entry_order_id}")
                                         
                                         # Place SELL order to close the position
-                                        if strike and current_price:
-                                            sell_order_id = self.place_sell_order(
+                                        try:
+                                            if strike and current_price:
+                                                sell_order_id = self.place_sell_order(
+                                                    side=side,
+                                                    strike=strike,
+                                                    exit_price=current_price,
+                                                    exit_reason="Market Close (3:20 PM)"
+                                                )
+                                                logger.info(f"✅ {side} Square off order placed at market close | Exit Order ID: {sell_order_id if sell_order_id else 'N/A'}")
+                                                closed_trades.append(side)
+                                            else:
+                                                logger.error(f"❌ Cannot place sell order for {side}: Strike={strike}, Price={current_price}")
+                                                skipped_trades.append(f"{side} (missing strike/price)")
+                                        except Exception as e:
+                                            logger.error(f"Error placing sell order for {side} at market close: {e}", exc_info=True)
+                                            skipped_trades.append(f"{side} (order error: {str(e)})")
+                                        
+                                        # Log to Excel sheets
+                                        try:
+                                            entry_time = trade.get('entry_time', 'N/A')
+                                            entry_order_id = trade.get('order_id', 'N/A')
+                                            
+                                            excel_logger.log_sl_target_check(
+                                                timestamp=market_close_timestamp,
                                                 side=side,
                                                 strike=strike,
-                                                exit_price=current_price,
-                                                exit_reason="Market Close (3:20 PM)"
+                                                current_price=current_price if current_price else entry_price,
+                                                entry_price=entry_price,
+                                                initial_sl=trade.get('sl'),
+                                                target=trade.get('target'),
+                                                target_hit=trade.get('target_hit'),
+                                                check_reason="MARKET_CLOSE"
                                             )
-                                            logger.info(f"✅ {side} Sell order placed at market close | Exit Order ID: {sell_order_id if sell_order_id else 'N/A'}")
+                                            
+                                            excel_logger.log_trade(
+                                                order_type='SELL',
+                                                option_type=side,
+                                                strike=strike,
+                                                entry_price=entry_price,
+                                                current_price=current_price if current_price else entry_price,
+                                                target=trade.get('target'),
+                                                stop_loss=trade.get('sl'),
+                                                pnl=pnl,
+                                                status='MARKET_CLOSE',
+                                                notes=f"Market Close Square-Off (3:20 PM) | Entry Time: {entry_time} | Entry Order ID: {entry_order_id} | Entry Price: {entry_price:.2f} | Stop Loss: {trade.get('sl', 'N/A')} | Exit Price: {current_price:.2f} | P&L: {pnl:+.2f}"
+                                            )
+                                            logger.info(f"✅ {side} trade logged to Excel with entry and stop loss details")
+                                        except Exception as e:
+                                            logger.warning(f"Error logging trade to Excel for {side}: {e}")
                                         
-                                        # Log to Signal Checks sheet
-                                        excel_logger.log_sl_target_check(
-                                            timestamp=market_close_timestamp,
-                                            side=side,
-                                            strike=strike,
-                                            current_price=current_price if current_price else entry_price,
-                                            entry_price=entry_price,
-                                            initial_sl=trade.get('sl'),
-                                            target=trade.get('target'),
-                                            target_hit=trade.get('target_hit'),
-                                            check_reason="MARKET_CLOSE"
-                                        )
-                                        
-                                        # Log to Excel trade sheet
-                                        excel_logger.log_trade(
-                                            order_type='SELL',
-                                            option_type=side,
-                                            strike=strike,
-                                            entry_price=entry_price,
-                                            current_price=current_price if current_price else entry_price,
-                                            target=trade.get('target'),
-                                            stop_loss=trade.get('sl'),
-                                            pnl=pnl,
-                                            status='MARKET_CLOSE',
-                                            notes=f"Forced exit at market close (3:20 PM) | Entry: {entry_price:.2f} | Exit: {current_price:.2f} | P&L: {pnl:+.2f}"
-                                        )
-                                        
-                                        # Close the trade
-                                        self.close_trade(side, current_price if current_price else entry_price, "Market Close (3:20 PM)")
+                                        # Close the trade in system
+                                        try:
+                                            self.close_trade(side, current_price if current_price else entry_price, "Market Close (3:20 PM)")
+                                        except Exception as e:
+                                            logger.error(f"Error closing trade {side} in system: {e}")
                                     
                                     elif is_system_order and not is_order_active_on_broker:
                                         # Our order but already closed (likely by SL hit) - just mark as closed in system
-                                        logger.info(f"⏹️  {side} Order {entry_order_id} already closed on broker (likely by SL hit) - skipping")
-                                        self.close_trade(side, trade.get('entry_price'), "Already closed on broker (SL hit)")
+                                        logger.info(f"⏹️  {side} Order {entry_order_id} already closed on broker (likely by SL hit) - marking as closed")
+                                        try:
+                                            entry_time = trade.get('entry_time', 'N/A')
+                                            entry_price = trade.get('entry_price', 0)
+                                            exit_price = trade.get('exit_price', entry_price)
+                                            pnl = exit_price - entry_price if entry_price else 0
+                                            
+                                            # Log the already-closed trade
+                                            excel_logger.log_trade(
+                                                order_type='SELL',
+                                                option_type=side,
+                                                strike=trade.get('strike'),
+                                                entry_price=entry_price,
+                                                current_price=exit_price if exit_price else entry_price,
+                                                target=trade.get('target'),
+                                                stop_loss=trade.get('sl'),
+                                                pnl=pnl,
+                                                status='SL_HIT',
+                                                notes=f"Trade closed by Stop Loss Hit (checked at 3:20 PM) | Entry Time: {entry_time} | Entry Order ID: {entry_order_id} | Entry Price: {entry_price:.2f} | Stop Loss: {trade.get('sl', 'N/A')} | Exit Price: {exit_price:.2f} | P&L: {pnl:+.2f}"
+                                            )
+                                            logger.info(f"✅ {side} already-closed trade logged to Excel")
+                                            
+                                            self.close_trade(side, trade.get('entry_price'), "Already closed on broker (SL hit)")
+                                            closed_trades.append(f"{side} (already closed by SL)")
+                                        except Exception as e:
+                                            logger.error(f"Error closing already-closed trade {side}: {e}")
                                     
                                     else:
                                         # Not our order - don't touch it (manual trades or from other sources)
                                         logger.info(f"⏭️  {side} Order is not from this system - skipping (allowing manual trades to remain open)")
+                                        skipped_trades.append(f"{side} (not system order)")
+                                else:
+                                    logger.info(f"{side} Trade is not OPEN (Status: {trade.get('status')}) - skipping")
+                                    skipped_trades.append(f"{side} (not open)")
+                        
+                        # Summary logging
+                        logger.info(f"🏁 Market close square off complete:")
+                        logger.info(f"   ✅ Closed: {closed_trades if closed_trades else 'None'}")
+                        logger.info(f"   ⏭️  Skipped: {skipped_trades if skipped_trades else 'None'}")
                         
                         # Mark that market close has been processed
                         self.market_close_processed = True

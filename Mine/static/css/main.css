@@ -232,9 +232,6 @@ th.sort-desc:after {
 tr {
     transition: background-color 0.2s ease;
 }
-tr:hover {
-    background-color: #f0f4ff;
-}
 tr:nth-child(even) {
     background-color: #fafbfc;
 }
