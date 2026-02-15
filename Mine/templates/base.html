@@ -1,15 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-    <link rel="icon" type="image/png" href="{{ url_for('static', filename='trading.png') }}">   
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='trading.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/notifications.css') }}">
     <title>{% block title %}Stock Scanner{% endblock %}</title>
     {% block head %}{% endblock %}
 </head>
+
 <body>
     <div id="notification-container"></div>
     <div class="container">
@@ -18,18 +20,24 @@
             <!-- <a href="/historical" class="nav-link {% if request.path == '/historical' %}active{% endif %}">📈 Historical</a>
             <a href="/strategy" class="nav-link {% if request.path == '/strategy' %}active{% endif %}">📊 Strategy</a>
             <a href="/multi-strike" class="nav-link {% if request.path == '/multi-strike' %}active{% endif %}">⚡ Multi Strike</a> -->
-            <a href="/cpr-filter" class="nav-link {% if request.path == '/cpr-filter' %}active{% endif %}">🔍 CPR Filter</a>
-            <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉 Options Chart</a>
-            <a href="/open-interest" class="nav-link {% if request.path == '/open-interest' %}active{% endif %}">📊 Open Interest</a>
-            <a href="/intraday-option" class="nav-link {% if request.path == '/intraday-option' %}active{% endif %}">💹 Intraday Option</a>
-            <a href="/intraday-920" class="nav-link {% if request.path == '/intraday-920' %}active{% endif %}">⏰ Intraday 9:20</a>
+            <a href="/cpr-filter" class="nav-link {% if request.path == '/cpr-filter' %}active{% endif %}">🔍 CPR
+                Filter</a>
+            <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉
+                Options Chart</a>
+            <a href="/intraday-option" class="nav-link {% if request.path == '/intraday-option' %}active{% endif %}">💹
+                Intraday Option</a>
+            <a href="/intraday-920" class="nav-link {% if request.path == '/intraday-920' %}active{% endif %}">⏰
+                Intraday 9:20</a>
+            <a href="/open-interest" class="nav-link {% if request.path == '/open-interest' %}active{% endif %}">📊 Open
+                Interest</a>
             <div class="login-dropdown">
                 <button class="nav-link-login" id="loginToggle">🔑</button>
                 <!-- {% if session.username %}
                 <a href="/auth/user-logout" class="nav-link-logout" id="logoutButton" title="Logout">⏻</a>
                 {% endif %} -->
                 <div class="dropdown-menu" id="dropdownMenu">
-                    <div style="padding: 8px 12px; font-weight: bold; border-bottom: 1px solid #ddd; color: #666; font-size: 12px;">
+                    <div
+                        style="padding: 8px 12px; font-weight: bold; border-bottom: 1px solid #ddd; color: #666; font-size: 12px;">
                         {% if session.username %}
                         Logged in as: {{ session.username }}
                         {% else %}
@@ -61,9 +69,9 @@
             try {
                 const response = await fetch('/api/available-brokers');
                 const data = await response.json();
-                
+
                 const container = document.getElementById('dynamicBrokersList');
-                
+
                 if (!data.success || !data.brokers || data.brokers.length === 0) {
                     container.innerHTML = `
                         <p style="padding: 8px 16px; font-size: 12px; color: #999;">
@@ -72,12 +80,12 @@
                     `;
                     return;
                 }
-                
+
                 // Create dropdown items for each broker
                 let html = '';
                 for (const broker of data.brokers) {
                     const icon = broker.icon || '🔐';
-                    
+
                     // Color mapping for brokers
                     const colorMap = {
                         'zerodha': '#FF8C00',    // Orange
@@ -85,9 +93,9 @@
                         'dhan': '#28A745',       // Green
                         'fyers': '#007BFF'       // Blue
                     };
-                    
+
                     const brokerColor = colorMap[broker.broker_type] || '#666';
-                    
+
                     if (broker.login_url) {
                         html += `
                             <a 
@@ -113,9 +121,9 @@
                         `;
                     }
                 }
-                
+
                 container.innerHTML = html;
-                
+
             } catch (error) {
                 console.error('Error loading brokers:', error);
                 document.getElementById('dynamicBrokersList').innerHTML = `
@@ -125,19 +133,19 @@
                 `;
             }
         }
-        
+
         // Load brokers when page loads
         document.addEventListener('DOMContentLoaded', loadBrokersIntoDropdown);
-        
+
         // Login dropdown toggle
-        document.getElementById('loginToggle').addEventListener('click', function(e) {
+        document.getElementById('loginToggle').addEventListener('click', function (e) {
             e.preventDefault();
             const dropdownMenu = document.getElementById('dropdownMenu');
             dropdownMenu.classList.toggle('show');
         });
 
         // Close dropdown when clicking outside
-        document.addEventListener('click', function(e) {
+        document.addEventListener('click', function (e) {
             const dropdown = document.querySelector('.login-dropdown');
             if (!dropdown.contains(e.target)) {
                 document.getElementById('dropdownMenu').classList.remove('show');
@@ -146,4 +154,5 @@
     </script>
     {% block scripts %}{% endblock %}
 </body>
+
 </html>

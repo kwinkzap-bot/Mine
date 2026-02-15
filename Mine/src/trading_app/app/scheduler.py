@@ -38,6 +38,7 @@ class MarketScheduler:
         """Initialize the scheduler."""
         self.scheduler: Optional[Any] = None
         self.cpr_filter_job: Optional[Any] = None
+        self.oi_persistence_job: Optional[Any] = None
         
         if not APSCHEDULER_AVAILABLE:
             return
@@ -82,9 +83,25 @@ class MarketScheduler:
             misfire_grace_time=60  # Allow 60s grace period if task is late
         )
         
+        # Schedule OI Persistence - Every 3 minutes
+        self.oi_persistence_job = self.scheduler.add_job(
+            self._run_oi_persistence_task,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/3',
+                second='30'  # Offset by 30s to avoid conflict with 5-min tasks
+            ),
+            id='oi_persistence',
+            name='Open Interest Persistence',
+            replace_existing=True,
+            misfire_grace_time=60
+        )
+        
         self.scheduler.start()
         logger.info("Market scheduler started")
         logger.info("CPR filter job scheduled: Every 5 minutes during market hours")
+        logger.info("OI persistence job scheduled: Every 3 minutes during market hours")
     
     def stop(self):
         """Stop the background scheduler."""
@@ -113,6 +130,50 @@ class MarketScheduler:
             
         except Exception as e:
             logger.error(f"Unexpected error in CPR filter background task: {e}", exc_info=True)
+
+    def _run_oi_persistence_task(self):
+        """Fetch and store Open Interest data."""
+        try:
+            if not self.is_market_hours():
+                logger.debug("Outside market hours, skipping OI persistence task")
+                return
+            
+            if not self.is_trading_day():
+                logger.debug("Not a trading day, skipping OI persistence task")
+                return
+
+            # Need to get Kite instance without session
+            # This requires token to be available in environment or cache
+            from trading_app.app.routes.api import get_kite
+            
+            # Since we're in a background thread, get_kite needs to find token 
+            # from file cache or environment variable
+            kite = get_kite()
+            
+            if not kite:
+                logger.warning("OI Persistence: Could not get Kite instance (no token?)")
+                return
+                
+            from trading_app.service.open_interest_service import OpenInterestService
+            oi_service = OpenInterestService(kite)
+            
+            symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+            for symbol in symbols:
+                try:
+                    logger.info(f"OI Persistence: Fetching data for {symbol}...")
+                    data = oi_service.get_open_interest_data(symbol)
+                    
+                    if data.get('success'):
+                        oi_service.save_oi_snapshot(symbol, data)
+                        logger.info(f"OI Persistence: Saved snapshot for {symbol}")
+                    else:
+                        logger.warning(f"OI Persistence: Failed to fetch {symbol}: {data.get('error')}")
+                        
+                except Exception as inner_e:
+                    logger.error(f"OI Persistence: Error processing {symbol}: {inner_e}")
+                    
+        except Exception as e:
+            logger.error(f"Unexpected error in OI persistence task: {e}", exc_info=True)
 
 
 # Global scheduler instance

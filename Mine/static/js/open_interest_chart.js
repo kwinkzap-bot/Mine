@@ -5,6 +5,7 @@
 
 let coiChartInstance = null;
 let combinedChartInstance = null;
+let oiHistoryChart = null; // TradingViewChart instance
 let autoRefreshInterval = null;
 let currentSymbol = 'NIFTY';
 let strikeRangeCount = 15; // Default strike range
@@ -13,21 +14,23 @@ let oiHistoryData = []; // Store OI history for the table (keep last 20 entries)
 const MAX_HISTORY_ROWS = 20;
 
 // Initialize on page load
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     console.log('Open Interest Chart - Initializing...');
-    
+
     // Event listeners
     document.getElementById('symbolSelect').addEventListener('change', onSymbolChange);
     document.getElementById('refreshNowBtn').addEventListener('click', refreshData);
-    
+
     // Strike range button listeners - only manipulate cached data, no API call
     document.querySelectorAll('.strike-btn').forEach(btn => {
         btn.addEventListener('click', onStrikeRangeChange);
     });
-    
+
     // Initial load
     refreshData();
-    
+    // Initialize Historical Chart
+    initHistoricalChart();
+
     // Start auto-refresh on every 30 seconds during market hours
     startAutoRefresh();
 });
@@ -48,13 +51,13 @@ function onStrikeRangeChange(e) {
     const newCount = parseInt(e.target.getAttribute('data-strikes'));
     strikeRangeCount = newCount;
     console.log(`Strike range changed to: ${strikeRangeCount}`);
-    
+
     // Update active button styling
     document.querySelectorAll('.strike-btn').forEach(btn => {
         btn.classList.remove('active');
     });
     e.target.classList.add('active');
-    
+
     // Use cached data to update charts without API call
     if (cachedData) {
         updateChartsWithCachedData(cachedData);
@@ -68,24 +71,24 @@ function updateChartsWithCachedData(data) {
     try {
         const strikes = data.strikes || [];
         const currentPrice = data.current_price || 0;
-        
+
         // Filter strikes to show strikeRangeCount above and below current price
         const filteredStrikes = filterStrikesByCurrentPrice(strikes, currentPrice, strikeRangeCount);
-        
+
         const ceOI = filteredStrikes.map(s => s.ce_oi || 0);
         const peOI = filteredStrikes.map(s => s.pe_oi || 0);
         const ceCOI = filteredStrikes.map(s => s.ce_change_in_oi || 0);
         const peCOI = filteredStrikes.map(s => s.pe_change_in_oi || 0);
         const strikeLabels = filteredStrikes.map(s => s.strike);
-        
+
         // Update Change in OI Chart
         updateCOIChart(strikeLabels, ceCOI, peCOI, currentPrice);
-        
+
         // Update Combined Chart
         updateCombinedChart(strikeLabels, ceOI, peOI, ceCOI, peCOI, currentPrice);
-        
+
         updateLastUpdateTime();
-        
+
     } catch (error) {
         console.error('Error updating charts with cached data:', error);
     }
@@ -99,14 +102,14 @@ function isMarketOpen() {
     const hours = now.getHours();
     const minutes = now.getMinutes();
     const currentTime = hours * 60 + minutes; // Convert to minutes since midnight
-    
+
     const marketOpenTime = 9 * 60 + 15;  // 9:15 AM in minutes
     const marketCloseTime = 15 * 60 + 30; // 3:30 PM in minutes
-    
+
     // Check if it's a weekday (Monday = 1, Friday = 5)
     const dayOfWeek = now.getDay();
     const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
-    
+
     return isWeekday && currentTime >= marketOpenTime && currentTime <= marketCloseTime;
 }
 
@@ -117,7 +120,7 @@ function startAutoRefresh() {
     if (autoRefreshInterval) {
         clearInterval(autoRefreshInterval);
     }
-    
+
     autoRefreshInterval = setInterval(() => {
         if (isMarketOpen()) {
             console.log(`Auto-refreshing OI data for ${currentSymbol}...`);
@@ -144,20 +147,23 @@ function stopAutoRefresh() {
 async function refreshData(showLoader = true, updateSummary = true) {
     const errorEl = document.getElementById('oiError');
     const refreshBtn = document.getElementById('refreshNowBtn');
-    
+
+    // Refresh historical data as well
+    fetchAndRenderOiHistory();
+
     // Add spinning animation to refresh button (only for manual refresh)
     if (showLoader) {
         refreshBtn.classList.add('refreshing');
     }
-    
+
     try {
         errorEl.classList.add('hidden');
-        
+
         console.log(`Fetching OI data for ${currentSymbol}...`);
-        
+
         // Add cache-busting timestamp to ensure fresh data
         const timestamp = new Date().getTime();
-        
+
         const response = await fetch('/api/open-interest', {
             method: 'POST',
             headers: {
@@ -171,29 +177,29 @@ async function refreshData(showLoader = true, updateSummary = true) {
             }),
             cache: 'no-store'  // Disable browser caching
         });
-        
+
         if (!response.ok) {
             throw new Error(`API Error: ${response.statusText}`);
         }
-        
+
         const data = await response.json();
-        
+
         if (!data.success) {
             throw new Error(data.error || 'Failed to fetch open interest data');
         }
-        
+
         console.log(`✅ OI data received for ${currentSymbol}:`, data);
-        
+
         // Log server timestamp for debugging data freshness
         if (data.server_timestamp) {
             console.log(`Server timestamp: ${data.server_timestamp}`);
             const serverTime = new Date(data.server_timestamp);
             console.log(`Latest OI values - CE: ${data.ce_summary?.total_oi}, PE: ${data.pe_summary?.total_oi}, Server time: ${serverTime.toLocaleTimeString()}`);
         }
-        
+
         // Cache the data for later use when strike range changes
         cachedData = data;
-        
+
         // Update UI with data
         // On auto-refresh (updateSummary=false), only update charts
         // On manual refresh (updateSummary=true), update both summary and charts
@@ -207,17 +213,17 @@ async function refreshData(showLoader = true, updateSummary = true) {
         }
         updateCharts(data);
         updateLastUpdateTime(data.server_timestamp);
-        
+
         // Remove spinning animation from refresh button
         if (showLoader) {
             refreshBtn.classList.remove('refreshing');
         }
-        
+
     } catch (error) {
         console.error('Error fetching OI data:', error);
         errorEl.classList.remove('hidden');
         document.getElementById('errorMessage').textContent = `Error: ${error.message}`;
-        
+
         // Remove spinning animation from refresh button
         if (showLoader) {
             refreshBtn.classList.remove('refreshing');
@@ -231,34 +237,219 @@ async function refreshData(showLoader = true, updateSummary = true) {
 function updateSummaryStats(data) {
     const ceStats = data.ce_summary || {};
     const peStats = data.pe_summary || {};
-    
+
     // CE Summary
     document.getElementById('ceOITotal').textContent = formatNumber(ceStats.total_oi);
     document.getElementById('ceCOI').textContent = formatNumber(ceStats.change_in_oi);
-    document.getElementById('ceMaxOIStrike').textContent = ceStats.max_oi_strike || '--';
+    const ceMaxStrike = ceStats.max_oi_strike || 0;
+    document.getElementById('ceMaxOIStrike').textContent = ceMaxStrike || '--';
     document.getElementById('ceMaxOIValue').textContent = formatNumber(ceStats.max_oi_value);
-    
+
     // PE Summary
     document.getElementById('peOITotal').textContent = formatNumber(peStats.total_oi);
     document.getElementById('peCOI').textContent = formatNumber(peStats.change_in_oi);
-    document.getElementById('peMaxOIStrike').textContent = peStats.max_oi_strike || '--';
+    const peMaxStrike = peStats.max_oi_strike || 0;
+    document.getElementById('peMaxOIStrike').textContent = peMaxStrike || '--';
     document.getElementById('peMaxOIValue').textContent = formatNumber(peStats.max_oi_value);
-    
+
     // Market Metrics
     const pcrValue = data.pcr_oi || 0;
     const maxPain = data.max_pain || 0;
     const currentPrice = data.current_price || 0;
-    
+    // --- Straddle / ATM Strike ---
+    // --- Straddle / ATM Strike ---
+    const strikes = data.strikes || [];
+    let straddleStrike = 0;
+
+    // Logic: Find strike where both CE and PE are substantial (> 50L) and comparable
+    // Heuristic: Maximize min(CE, PE)
+    // This naturally finds the strike where *both* sides are strongest.
+
+    const STRADDLE_THRESHOLD = 5000000; // 50 Lakhs
+    let maxMinOI = 0;
+
+    strikes.forEach(s => {
+        const ceOI = s.ce_oi || 0;
+        const peOI = s.pe_oi || 0;
+
+        if (ceOI > STRADDLE_THRESHOLD && peOI > STRADDLE_THRESHOLD) {
+            const minOI = Math.min(ceOI, peOI);
+            if (minOI > maxMinOI) {
+                maxMinOI = minOI;
+                straddleStrike = s.strike;
+            }
+        }
+    });
+
+    // Fallback to ATM if no straddle criteria met
+    if (straddleStrike === 0 && currentPrice > 0 && strikes.length > 0) {
+        let minDiff = Number.MAX_VALUE;
+        strikes.forEach(s => {
+            const diff = Math.abs(s.strike - currentPrice);
+            if (diff < minDiff) {
+                minDiff = diff;
+                straddleStrike = s.strike;
+            }
+        });
+    }
+
+    const straddleElement = document.getElementById('straddleStrike');
+    if (straddleElement) {
+        if (maxMinOI > 0) {
+            straddleElement.textContent = straddleStrike + ' (Active)';
+            straddleElement.className = 'value active-straddle'; // Add a class for styling
+            straddleElement.style.color = '#2563eb'; // Blue color for Active Straddle
+            straddleElement.style.fontWeight = 'bold';
+        } else {
+            straddleElement.textContent = straddleStrike + ' (ATM)';
+            straddleElement.className = 'value';
+            straddleElement.style.color = '#666';
+            straddleElement.style.fontWeight = 'normal';
+        }
+    }
+
+    // --- Support & Resistance (Advanced Logic) ---
+    // Criteria: PE/CE OI > 1 Cr (10,000,000) AND Opposite Leg OI < 50% of Dominant Leg
+    const THRESHOLD_OI = 10000000; // 1 Crore
+
+    // Find Support (Highest PE OI below or at ATM meeting criteria)
+    // UPDATE: User requested "Nearest" Support. So we find the *largest* strike <= Straddle that meets criteria.
+    // Iterating downwards from Straddle would be best, but filter sorts by Default? No, Filter keeps original order.
+    // Strikes are usually sorted ascending.
+
+    let validSupport = 0;
+
+    // Create a reversed copy of strikes <= straddle to iterate downwards from ATM
+    const supportCandidates = strikes.filter(s => s.strike <= straddleStrike + 50)
+        .sort((a, b) => b.strike - a.strike); // Descending order
+
+    for (const s of supportCandidates) {
+        const peOI = s.pe_oi || 0;
+        const ceOI = s.ce_oi || 0;
+
+        if (peOI > THRESHOLD_OI && ceOI < (peOI * 0.5)) {
+            validSupport = s.strike;
+            break; // Found the nearest one!
+        }
+    }
+
+    // Find Resistance (Highest CE OI above or at ATM meeting criteria)
+    // UPDATE: User requested "Nearest" Resistance. So we find the *smallest* strike >= Straddle that meets criteria.
+    let validResistance = 0;
+
+    const resistanceCandidates = strikes.filter(s => s.strike >= straddleStrike - 50)
+        .sort((a, b) => a.strike - b.strike); // Ascending order
+
+    for (const s of resistanceCandidates) {
+        const ceOI = s.ce_oi || 0;
+        const peOI = s.pe_oi || 0;
+
+        if (ceOI > THRESHOLD_OI && peOI < (ceOI * 0.5)) {
+            validResistance = s.strike;
+            break; // Found the nearest one!
+        }
+    }
+
+    // Fallback: If advanced criteria not met, show just Max OI but mark as weak? 
+    // Or strictly follow user request. User said "Nearest support... means value should be..." 
+    // implying strict definition. I will show "--" or "Weak" if criteria failing, 
+    // but to be safe, let's show the Max OI but maybe color it differently or just show it.
+    // Actually, let's prioritize the "Valid" ones. If no valid one found, we return the Max OI from summary stats but maybe add a note?
+    // Let's stick to the Valid one if found, else fall back to the generic Max OI but maybe with a visual cue.
+
+    const supportElement = document.getElementById('supportLevel');
+    if (supportElement) {
+        if (validSupport > 0) {
+            supportElement.textContent = validSupport;
+            supportElement.className = 'value color-green';
+        } else {
+            // Fallback to generic max but neutral color
+            supportElement.textContent = (peMaxStrike || '--') + ' (Weak)';
+            supportElement.className = 'value';
+        }
+    }
+
+    // UPDATE Summary Cards with Calculated S/R
+    // PE Summary (Support)
+    // UPDATE Summary Cards with Absolute Max OI (as requested by user)
+    // PE Summary (Max PE OI Strike)
+    const peMaxOIStrikeElem = document.getElementById('peMaxOIStrike');
+    if (peMaxOIStrikeElem) {
+        peMaxOIStrikeElem.textContent = peMaxStrike || '--';
+        peMaxOIStrikeElem.style.fontWeight = 'normal';
+        peMaxOIStrikeElem.title = 'Absolute Max OI Strike';
+    }
+
+    // Resistance Logic (Restored) for Market Metrics
+    const resistanceElement = document.getElementById('resistanceLevel');
+    if (resistanceElement) {
+        if (validResistance > 0) {
+            resistanceElement.textContent = validResistance;
+            resistanceElement.className = 'value color-red';
+        } else {
+            resistanceElement.textContent = (ceMaxStrike || '--') + ' (Weak)';
+            resistanceElement.className = 'value';
+        }
+    }
+
+    // CE Summary (Max CE OI Strike)
+    const ceMaxOIStrikeElem = document.getElementById('ceMaxOIStrike');
+    if (ceMaxOIStrikeElem) {
+        ceMaxOIStrikeElem.textContent = ceMaxStrike || '--';
+        ceMaxOIStrikeElem.style.fontWeight = 'normal';
+        ceMaxOIStrikeElem.title = 'Absolute Max OI Strike';
+    }
+
+    // --- Trend Determination ---
+    // Logic: 
+    // PCR > 1.0 = Bullish
+    // PCR < 0.7 = Bearish
+    // Range 0.7 - 1.0 = Neutral/Sideways
+    // Confirmation from Change in OI Difference
+    const trendElement = document.getElementById('marketTrend');
+    let trendText = 'Neutral';
+    let trendClass = 'status-sideway'; // class from CSS (we might need to add these classes or use existing color classes)
+
+    const oiChangeDiff = (peStats.change_in_oi || 0) - (ceStats.change_in_oi || 0);
+
+    if (pcrValue >= 1.0) {
+        trendText = 'BULLISH';
+        trendClass = 'color-green';
+        if (pcrValue > 1.2) trendText = 'STRONG BULLISH';
+    } else if (pcrValue <= 0.7) {
+        trendText = 'BEARISH';
+        trendClass = 'color-red';
+        if (pcrValue < 0.5) trendText = 'STRONG BEARISH';
+    } else {
+        // Between 0.7 and 1.0 - check momentum
+        if (oiChangeDiff > 100000) { // Significant PE writing
+            trendText = 'MILD BULLISH';
+            trendClass = 'color-green';
+        } else if (oiChangeDiff < -100000) { // Significant CE writing
+            trendText = 'MILD BEARISH';
+            trendClass = 'color-red';
+        } else {
+            trendText = 'SIDEWAYS';
+            trendClass = '';
+        }
+    }
+
+    if (trendElement) {
+        trendElement.textContent = trendText;
+        trendElement.className = 'value ' + trendClass; // Reset class and add new one
+        trendElement.style.fontWeight = 'bold';
+    }
+
     const pcrElement = document.getElementById('pcrOI');
     pcrElement.textContent = pcrValue.toFixed(2);
     // PCR: Below 1 = Red (bearish), Above 1 = Green (bullish)
     pcrElement.classList.remove('color-red', 'color-green');
-    if (pcrValue < 1) {
+    if (pcrValue < 0.8) {
         pcrElement.classList.add('color-red');
     } else if (pcrValue > 1) {
         pcrElement.classList.add('color-green');
     }
-    
+
     const maxPainElement = document.getElementById('maxPain');
     maxPainElement.textContent = maxPain;
     // Max Pain: Below current price = Red, Above current price = Green
@@ -268,11 +459,11 @@ function updateSummaryStats(data) {
     } else if (maxPain > currentPrice) {
         maxPainElement.classList.add('color-green');
     }
-    
+
     // IV Percentile
     const ivPercentile = data.iv_percentile !== undefined ? data.iv_percentile : null;
     const ivElement = document.getElementById('ivPercentile');
-    
+
     if (ivPercentile !== null) {
         // Determine label based on percentile value
         let ivLabel = 'Medium';
@@ -281,19 +472,19 @@ function updateSummaryStats(data) {
         } else if (ivPercentile > 70) {
             ivLabel = 'High';
         }
-        
-        ivElement.textContent = ivPercentile.toFixed(2) + '% - ' + ivLabel;
+
+        ivElement.textContent = ivPercentile.toFixed(1) + '%';
         // IV Percentile: Low = Red (low IV), High = Green (high IV)
         ivElement.classList.remove('color-red', 'color-green');
-        if (ivPercentile < 30) {
+        if (ivPercentile < 20) {
             ivElement.classList.add('color-red');
-        } else if (ivPercentile > 70) {
+        } else if (ivPercentile > 80) {
             ivElement.classList.add('color-green');
         }
     } else {
         ivElement.textContent = '--';
     }
-    
+
     // Update OI Summary Table with current data
     updateOISummaryTable(peStats, ceStats);
 }
@@ -305,22 +496,22 @@ function updateOISummaryTable(peStats, ceStats) {
     try {
         // Get current time
         const now = new Date();
-        const timeStr = now.toLocaleTimeString('en-US', { 
-            hour: '2-digit', 
-            minute: '2-digit', 
+        const timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
             second: '2-digit',
-            hour12: true 
+            hour12: true
         });
-        
+
         // Calculate differences
         const totalPeOI = peStats.total_oi || 0;
         const totalCeOI = ceStats.total_oi || 0;
         const peCOI = peStats.change_in_oi || 0;
         const ceCOI = ceStats.change_in_oi || 0;
-        
+
         const oiDifferent = totalPeOI - totalCeOI;
         const oiChangeDifferent = peCOI - ceCOI;
-        
+
         // Create history entry
         const historyEntry = {
             time: timeStr,
@@ -331,15 +522,15 @@ function updateOISummaryTable(peStats, ceStats) {
             oiDifferent: oiDifferent,
             oiChangeDifferent: oiChangeDifferent
         };
-        
+
         // Add to beginning of array (latest first)
         oiHistoryData.unshift(historyEntry);
-        
+
         // Keep only last 20 entries
         if (oiHistoryData.length > MAX_HISTORY_ROWS) {
             oiHistoryData.pop();
         }
-        
+
         // Render table
         renderOISummaryTable();
     } catch (error) {
@@ -354,40 +545,40 @@ function renderOISummaryTable() {
     try {
         const tbody = document.getElementById('oiSummaryTableBody');
         if (!tbody) return;
-        
+
         // Clear existing rows
         tbody.innerHTML = '';
-        
+
         // If no data, show loading message
         if (oiHistoryData.length === 0) {
             tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 20px;">No data available</td></tr>';
             return;
         }
-        
+
         // Render each history entry
         oiHistoryData.forEach((entry, index) => {
             const row = document.createElement('tr');
-            
+
             // Format PE OI Change with color
             const peCOIClass = entry.peCOI >= 0 ? '' : 'negative';
             const peCOISign = entry.peCOI >= 0 ? '+' : '';
-            
+
             // Format CE OI Change with color
             const ceCOIClass = entry.ceCOI >= 0 ? '' : 'negative';
             const ceCOISign = entry.ceCOI >= 0 ? '+' : '';
-            
+
             // Calculate Diff: previous OI Change Different - current OI Change Different
             let diffValue = 0;
             let diffClass = '';
             let diffSign = '';
-            
+
             if (index > 0) {
                 const previousOiChangeDiff = oiHistoryData[index - 1].oiChangeDifferent;
                 diffValue = previousOiChangeDiff - entry.oiChangeDifferent;
                 diffClass = diffValue >= 0 ? '' : 'negative';
                 diffSign = diffValue >= 0 ? '+' : '';
             }
-            
+
             row.innerHTML = `
                 <td>${entry.time}</td>
                 <td><span class="oi-pe-oi">${formatNumberForGrid(entry.totalPeOI)}</span></td>
@@ -396,7 +587,7 @@ function renderOISummaryTable() {
                 <td><span class="oi-ce-chg ${ceCOIClass}">${ceCOISign}${formatNumberForGrid(entry.ceCOI)}</span></td>
                 <td><span class="oi-change-diff ${diffClass}">${diffSign}${formatNumberForGrid(diffValue)}</span></td>
             `;
-            
+
             tbody.appendChild(row);
         });
     } catch (error) {
@@ -412,19 +603,19 @@ const currentPriceLinePlugin = {
     afterDatasetsDraw(chart) {
         const currentPrice = chart.options.plugins?.currentPriceLine?.price;
         if (!currentPrice) return;
-        
+
         const ctx = chart.ctx;
         const xAxis = chart.scales.x;
         const yAxis = chart.scales.y;
-        
+
         if (!xAxis || !yAxis) return;
-        
+
         // Find the index of the current price in the labels
         const labels = chart.data.labels || [];
         let xPixel = null;
         let closestIndex = -1;
         let closestDiff = Infinity;
-        
+
         // Find closest strike to current price
         for (let i = 0; i < labels.length; i++) {
             const strikePrice = parseFloat(labels[i]);
@@ -434,7 +625,7 @@ const currentPriceLinePlugin = {
                 closestIndex = i;
             }
         }
-        
+
         if (closestIndex >= 0) {
             // Get pixel position for this strike
             const meta = chart.getDatasetMeta(0);
@@ -442,31 +633,31 @@ const currentPriceLinePlugin = {
                 xPixel = meta.data[closestIndex].x;
             }
         }
-        
+
         if (xPixel !== null) {
             // Draw vertical dashed line
             ctx.save();
             ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
             ctx.lineWidth = 2;
             ctx.setLineDash([5, 5]);
-            
+
             ctx.beginPath();
             ctx.moveTo(xPixel, yAxis.top);
             ctx.lineTo(xPixel, yAxis.bottom);
             ctx.stroke();
-            
+
             // Draw label text only (no background or border)
             ctx.font = 'bold 11px Arial';
             ctx.textAlign = 'center';
             ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-            
+
             const labelText = `${currentPrice.toFixed(2)}`;
             const labelY = yAxis.top + 15;
             const labelX = xPixel;
-            
+
             // Draw text
             ctx.fillText(labelText, labelX, labelY);
-            
+
             ctx.restore();
         }
     }
@@ -478,19 +669,19 @@ const currentPriceLinePlugin = {
 function updateCharts(data) {
     const strikes = data.strikes || [];
     const currentPrice = data.current_price || 0;
-    
+
     // Filter strikes to show strikeRangeCount above and below current price
     const filteredStrikes = filterStrikesByCurrentPrice(strikes, currentPrice, strikeRangeCount);
-    
+
     const ceOI = filteredStrikes.map(s => s.ce_oi || 0);
     const peOI = filteredStrikes.map(s => s.pe_oi || 0);
     const ceCOI = filteredStrikes.map(s => s.ce_change_in_oi || 0);
     const peCOI = filteredStrikes.map(s => s.pe_change_in_oi || 0);
     const strikeLabels = filteredStrikes.map(s => s.strike);
-    
+
     // Update Change in OI Chart
     updateCOIChart(strikeLabels, ceCOI, peCOI, currentPrice);
-    
+
     // Update Combined Chart
     updateCombinedChart(strikeLabels, ceOI, peOI, ceCOI, peCOI, currentPrice);
 }
@@ -502,19 +693,19 @@ function filterStrikesByCurrentPrice(strikes, currentPrice, count = 10) {
     if (!strikes || strikes.length === 0) {
         return [];
     }
-    
+
     // Separate strikes into above and below current price
     const below = strikes.filter(s => s.strike < currentPrice);
     const above = strikes.filter(s => s.strike > currentPrice);
     const atPrice = strikes.filter(s => s.strike === currentPrice);
-    
+
     // Get the last 'count' strikes below and first 'count' strikes above
     const selectedBelow = below.slice(Math.max(0, below.length - count));
     const selectedAbove = above.slice(0, count);
-    
+
     // Combine: below + at price + above
     const filtered = [...selectedBelow, ...atPrice, ...selectedAbove];
-    
+
     // Sort by strike price
     return filtered.sort((a, b) => a.strike - b.strike);
 }
@@ -527,14 +718,14 @@ function filterStrikesByCurrentPrice(strikes, currentPrice, count = 10) {
  */
 function updateCOIChart(labels, ceData, peData, currentPrice) {
     const ctx = document.getElementById('coiChart').getContext('2d');
-    
+
     // Create dynamic colors based on positive/negative values - Light colors for Change in OI
     // PE (Put OI Change) = Green, CE (Call OI Change) = Red
     const peBackgroundColors = peData.map(val => val >= 0 ? 'rgba(144, 238, 144, 0.8)' : 'rgba(144, 238, 144, 0.4)');
     const peBorderColors = peData.map(val => val >= 0 ? 'rgba(34, 139, 34, 1)' : 'rgba(34, 139, 34, 0.6)');
     const ceBackgroundColors = ceData.map(val => val >= 0 ? 'rgba(255, 127, 127, 0.8)' : 'rgba(255, 127, 127, 0.4)');
     const ceBorderColors = ceData.map(val => val >= 0 ? 'rgba(220, 20, 60, 1)' : 'rgba(220, 20, 60, 0.6)');
-    
+
     const chartConfig = {
         type: 'bar',
         data: {
@@ -586,10 +777,10 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                         },
                         boxWidth: 15,
                         boxHeight: 15,
-                        generateLabels: function(chart) {
+                        generateLabels: function (chart) {
                             const datasets = chart.data.datasets;
                             const labels = [];
-                            
+
                             datasets.forEach((dataset, index) => {
                                 // Calculate total change for this dataset
                                 const total = dataset.data.reduce((sum, val) => sum + val, 0);
@@ -597,7 +788,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                                 // Convert to Lakhs and force 2 decimal places
                                 const inLakhs = Math.abs(total) / 100000;
                                 let decimalValue = inLakhs.toFixed(2);
-                                
+
                                 labels.push({
                                     text: `${dataset.label}  ${indicator}${decimalValue}L`,
                                     fillStyle: dataset.backgroundColor[0] || '#999',
@@ -605,7 +796,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                                     index: index
                                 });
                             });
-                            
+
                             return labels;
                         }
                     },
@@ -633,14 +824,14 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                     displayColors: true,
                     boxPadding: 8,
                     callbacks: {
-                        title: function(context) {
+                        title: function (context) {
                             return `Strike: ${context[0].label}`;
                         },
-                        label: function(context) {
+                        label: function (context) {
                             const datasetLabel = context.dataset.label;
                             const value = context.parsed.y;
                             const changeIndicator = value > 0 ? '↑' : value < 0 ? '↓' : '→';
-                            
+
                             return `${datasetLabel}: ${changeIndicator} ${formatNumber(value)}`;
                         }
                     }
@@ -664,7 +855,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                         font: {
                             size: 10
                         },
-                        callback: function(value) {
+                        callback: function (value) {
                             return formatNumber(value);
                         }
                     }
@@ -689,7 +880,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
         },
         plugins: [currentPriceLinePlugin]
     };
-    
+
     if (coiChartInstance) {
         coiChartInstance.data.labels = labels;
         coiChartInstance.data.datasets[0].data = peData;
@@ -717,7 +908,7 @@ function updateLastUpdateTime(serverTimestamp = null) {
         hour12: true
     });
     document.getElementById('lastUpdateTime').textContent = timeStr;
-    
+
     // Display server timestamp if provided
     if (serverTimestamp) {
         const serverTime = new Date(serverTimestamp);
@@ -736,9 +927,9 @@ function updateLastUpdateTime(serverTimestamp = null) {
  */
 function formatNumber(num) {
     if (!num && num !== 0) return '--';
-    
+
     const absNum = Math.abs(num);
-    
+
     // Indian numbering system: K (thousand), L (lakh), C (crore)
     if (absNum >= 10000000) {
         return (num / 10000000).toFixed(1) + 'Cr';  // Crore
@@ -747,7 +938,7 @@ function formatNumber(num) {
     } else if (absNum >= 1000) {
         return (num / 1000).toFixed(1) + 'K';     // Thousand
     }
-    
+
     return num.toLocaleString('en-IN', {
         maximumFractionDigits: 0
     });
@@ -758,14 +949,14 @@ function formatNumber(num) {
  */
 function formatNumberForGrid(num) {
     if (!num && num !== 0) return '--';
-    
+
     const absNum = Math.abs(num);
-    
+
     // Format with Thousand (K) only
     if (absNum >= 1000) {
         return (num / 1000).toFixed(1) + 'K';     // Thousand
     }
-    
+
     return num.toLocaleString('en-IN', {
         maximumFractionDigits: 0
     });
@@ -782,19 +973,19 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
             console.error('Combined chart canvas element not found');
             return;
         }
-        
+
         const ctx = canvasElement.getContext('2d');
         if (!ctx) {
             console.error('Failed to get 2D context from combined chart canvas');
             return;
         }
-        
+
         // Recalculate totals for legend labels
         const totalPeCOI = peCOI.reduce((sum, val) => sum + val, 0);
         const totalCeCOI = ceCOI.reduce((sum, val) => sum + val, 0);
         const peCOILabel = totalPeCOI >= 0 ? `Put OI Change: +${formatNumber(totalPeCOI)}` : `Put OI Change: ${formatNumber(totalPeCOI)}`;
         const ceCOILabel = totalCeCOI >= 0 ? `Call OI Change: +${formatNumber(totalCeCOI)}` : `Call OI Change: ${formatNumber(totalCeCOI)}`;
-        
+
         // OI colors: Dark green for PE, Dark red for CE
         const peColors = peOI.map((val, idx) => {
             const change = peCOI[idx];
@@ -805,7 +996,7 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
             }
             return 'rgba(22, 128, 67, 0.9)'; // Dark green for no change
         });
-        
+
         const ceColors = ceOI.map((val, idx) => {
             const change = ceCOI[idx];
             if (change > 0) {
@@ -815,15 +1006,15 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
             }
             return 'rgba(153, 27, 27, 0.9)'; // Dark red for no change
         });
-        
-        const peBorders = peCOI.map(change => 
+
+        const peBorders = peCOI.map(change =>
             change > 0 ? 'rgba(22, 128, 67, 1)' : 'rgba(22, 128, 67, 0.7)'
         );
-        
-        const ceBorders = ceCOI.map(change => 
+
+        const ceBorders = ceCOI.map(change =>
             change > 0 ? 'rgba(153, 27, 27, 1)' : 'rgba(153, 27, 27, 0.7)'
         );
-        
+
         // Change in OI colors: Light red for Call, Light green for Put
         const peCoiColors = peCOI.map(val => {
             if (val >= 0) {
@@ -832,17 +1023,17 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                 return 'rgba(255, 255, 255, 0.8)'; // White for negative change
             }
         });
-        const peCoiBorders = peCOI.map(val => 
+        const peCoiBorders = peCOI.map(val =>
             val >= 0 ? 'rgba(34, 139, 34, 1)' : 'rgba(34, 139, 34, 1)'
         );
-        
-        const ceCoiColors = ceCOI.map(val => 
+
+        const ceCoiColors = ceCOI.map(val =>
             val >= 0 ? 'rgba(255, 127, 127, 0.8)' : 'rgba(255, 127, 127, 0.4)'
         );
-        const ceCoiBorders = ceCOI.map(val => 
+        const ceCoiBorders = ceCOI.map(val =>
             val >= 0 ? 'rgba(220, 20, 60, 1)' : 'rgba(220, 20, 60, 1)'
         );
-        
+
         const chartConfig = {
             type: 'bar',
             data: {
@@ -929,16 +1120,16 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                         displayColors: true,
                         boxPadding: 8,
                         callbacks: {
-                            title: function(context) {
+                            title: function (context) {
                                 return `Strike ${context[0].label}`;
                             },
-                            label: function(context) {
+                            label: function (context) {
                                 const idx = context.dataIndex;
-                                
+
                                 // Calculate OI at 9:15 AM (opening OI)
                                 const peOIOpening = peOI[idx] - peCOI[idx];
                                 const ceOIOpening = ceOI[idx] - ceCOI[idx];
-                                
+
                                 // Format based on dataset
                                 if (context.datasetIndex === 0) {
                                     // Put OI
@@ -955,12 +1146,12 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                                     const changeIndicator = ceCOI[idx] >= 0 ? '+' : '';
                                     return `Call OI chg         ${changeIndicator}${formatNumber(ceCOI[idx])}`;
                                 }
-                                
+
                                 return '';
                             },
-                            afterLabel: function(context) {
+                            afterLabel: function (context) {
                                 const idx = context.dataIndex;
-                                
+
                                 // Get current time in HH:MM AM/PM format
                                 const now = new Date();
                                 const hours = now.getHours();
@@ -969,7 +1160,7 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                                 const displayHours = hours % 12 || 12;
                                 const displayMinutes = minutes.toString().padStart(2, '0');
                                 const currentTime = `${displayHours}:${displayMinutes} ${ampm}`;
-                                
+
                                 // Show current OI at current time
                                 if (context.datasetIndex === 1) {
                                     // After Put OI Change, show Put OI at current time
@@ -978,7 +1169,7 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                                     // After Call OI Change, show Call OI at current time
                                     return `Call OI at ${currentTime}  ${formatNumber(ceOI[idx])}`;
                                 }
-                                
+
                                 return '';
                             }
                         }
@@ -1002,7 +1193,7 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                             font: {
                                 size: 10
                             },
-                            callback: function(value) {
+                            callback: function (value) {
                                 return formatNumber(value);
                             }
                         }
@@ -1027,7 +1218,7 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
             },
             plugins: [currentPriceLinePlugin]
         };
-        
+
         // Always destroy and recreate instead of updating - avoids Chart.js state issues
         if (combinedChartInstance) {
             try {
@@ -1036,10 +1227,10 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                 console.debug('Error destroying old combined chart:', e);
             }
         }
-        
+
         // Create fresh chart instance
         combinedChartInstance = new Chart(ctx, chartConfig);
-        
+
     } catch (error) {
         console.error('Error in updateCombinedChart:', error);
         try {
@@ -1054,11 +1245,54 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
     }
 }
 
+/**
+ * Initialize Historical Chart
+ */
+function initHistoricalChart() {
+    if (!window.TradingViewChart) {
+        console.error("TradingViewChart module not loaded.");
+        return;
+    }
+
+    // Initialize OI History Chart (Line Chart)
+    oiHistoryChart = TradingViewChart.create({
+        containerId: 'oiHistoryChart',
+        data: [],
+        type: 'LINE',
+        timeframe: '3minute', // Default interval
+        lineColor: '#2962ff',
+        options: { height: 400 }
+    });
+}
+
+/**
+ * Fetch and render OI history
+ */
+async function fetchAndRenderOiHistory() {
+    if (!currentSymbol || !oiHistoryChart) return;
+
+    try {
+        const response = await fetch(`/api/open-interest/history?symbol=${currentSymbol}&limit=100`);
+        const result = await response.json();
+
+        if (result.success && result.data && result.data.length > 0) {
+            const pcrData = result.data.map(item => ({
+                time: Math.floor(new Date(item.timestamp).getTime() / 1000),
+                value: item.pcr
+            }));
+
+            oiHistoryChart.update(pcrData);
+        }
+    } catch (e) {
+        console.error("Failed to fetch OI history:", e);
+    }
+}
+
 // Cleanup on page unload
-window.addEventListener('beforeunload', function() {
+window.addEventListener('beforeunload', function () {
     stopAutoRefresh();
-    if (oiChartInstance) {
-        oiChartInstance.destroy();
+    if (oiHistoryChart) {
+        oiHistoryChart.destroy();
     }
     if (coiChartInstance) {
         coiChartInstance.destroy();

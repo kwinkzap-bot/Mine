@@ -13,16 +13,20 @@
             <select id="symbolSelect" class="symbol-dropdown">
                 <option value="NIFTY">NIFTY 50</option>
                 <option value="BANKNIFTY">NIFTY BANK</option>
+                <option value="FINNIFTY">NIFTY FIN SERVICE</option>
+                <option value="SENSEX">SENSEX</option>
             </select>
         </div>
 
         <div class="control-group">
             <div class="status-info">
                 <span class="last-update">Last Update: <span id="lastUpdateTime">--:--:--</span></span>
-                <span class="server-timestamp" id="serverTimestamp" style="margin-left: 15px; font-size: 12px; color: #666;">(Server: --:--:--)</span>
+                <span class="server-timestamp" id="serverTimestamp"
+                    style="margin-left: 15px; font-size: 12px; color: #666;">(Server: --:--:--)</span>
                 <button id="refreshNowBtn" class="icon-btn refresh-icon" title="Refresh Now">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
                     </svg>
                 </button>
             </div>
@@ -43,7 +47,7 @@
                     <span class="value" id="peCOI">--</span>
                 </div>
                 <div class="stat-row">
-                    <span class="label">Max OI Strike:</span>
+                    <span class="label">Max PE OI Strike:</span>
                     <span class="value" id="peMaxOIStrike">--</span>
                 </div>
                 <div class="stat-row">
@@ -62,7 +66,7 @@
                     <span class="value" id="ceCOI">--</span>
                 </div>
                 <div class="stat-row">
-                    <span class="label">Max OI Strike:</span>
+                    <span class="label">Max CE OI Strike:</span>
                     <span class="value" id="ceMaxOIStrike">--</span>
                 </div>
                 <div class="stat-row">
@@ -74,8 +78,24 @@
             <div class="summary-card metrics-card">
                 <h3>Market Metrics</h3>
                 <div class="stat-row">
+                    <span class="label">Trend:</span>
+                    <span class="value" id="marketTrend">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Straddle (ATM):</span>
+                    <span class="value" id="straddleStrike">--</span>
+                </div>
+                <div class="stat-row">
                     <span class="label">PCR (OI):</span>
                     <span class="value" id="pcrOI">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Support Near PE:</span>
+                    <span class="value" id="supportLevel">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Resistance Near CE:</span>
+                    <span class="value" id="resistanceLevel">--</span>
                 </div>
                 <div class="stat-row">
                     <span class="label">Max Pain:</span>
@@ -102,6 +122,7 @@
                                 <button class="strike-btn active" data-strikes="15">15</button>
                                 <button class="strike-btn" data-strikes="20">20</button>
                                 <button class="strike-btn" data-strikes="25">25</button>
+                                <button class="strike-btn" data-strikes="200">All</button>
                             </div>
                         </div>
                     </div>
@@ -115,6 +136,16 @@
             <div class="chart-container full-width">
                 <h3>Change in Open Interest</h3>
                 <canvas id="coiChart"></canvas>
+            </div>
+        </div>
+
+
+
+        <!-- OI Summary Grid -->
+        <div class="oi-grid-section">
+            <div class="chart-container full-width">
+                <h3>Open Interest Analysis (History)</h3>
+                <div id="oiHistoryChart" class="chart-element" style="height: 400px;"></div>
             </div>
         </div>
 
@@ -151,5 +182,7 @@
     </div>
 </div>
 
+<script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
+<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}"></script>
 <script src="{{ url_for('static', filename='js/open_interest_chart.js') }}"></script>
 {% endblock %}

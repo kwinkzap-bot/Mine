@@ -2691,6 +2691,66 @@ def get_open_interest() -> EndpointResponse:
         }), 500
 
 
+@api_bp.route('/open-interest/history', methods=['GET'])
+def get_open_interest_history() -> EndpointResponse:
+    """
+    Get historical open interest data.
+    
+    Query Params:
+        symbol: Trading symbol (NIFTY, BANKNIFTY, FINNIFTY) - default NIFTY
+        limit: Number of records to retrieve - default 20
+    
+    Returns:
+        JSON with historical data points
+    """
+    try:
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        limit = int(request.args.get('limit', 20))
+        
+        # Cap limit to prevent excessive data transfer
+        limit = min(limit, 100)
+        
+        from trading_app.service.open_interest_service import OpenInterestService
+        
+        # We don't need a live Kite connection just to read DB
+        # But OpenInterestService constructor requires it.
+        # Ideally we'd separate DB logic, but for now we can pass None if we handle it in service
+        # OR just get a kite instance (cached/env)
+        
+        kite = get_kite()
+        # Even if kite is None, we might be able to initialize service if we modify it
+        # But OpenInterestService stores kite in self.kite
+        # Let's check OpenInterestService.__init__... it just stores it.
+        # So passing None is fine IF we only call get_oi_history
+        
+        # However, type hint says KiteConnect. Let's try get_kite() first.
+        # If it fails (e.g. no token), we might need a workaround or just return empty
+        
+        # Initialize service - workaround if kite is missing
+        class MockKite:
+            pass
+            
+        kite_instance = kite if kite else MockKite()
+        
+        oi_service = OpenInterestService(kite_instance) # type: ignore
+        
+        history = oi_service.get_oi_history(symbol, limit)
+        
+        return jsonify({
+            'success': True,
+            'symbol': symbol,
+            'count': len(history),
+            'data': history
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching OI history: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @api_bp.errorhandler(404)
 def not_found(error):
     """Handle 404 errors."""

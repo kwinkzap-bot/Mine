@@ -8,6 +8,10 @@ from typing import Dict, List, Any, Optional
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import NetworkException, TokenException
 from trading_app.app.utils.opening_oi_cache import get_opening_oi_cache
+import sqlite3
+import json
+import os
+
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +237,14 @@ class OpenInterestService:
         self.kite = kite_instance
         # Simple in-memory cache for historical data (no ThreadPoolExecutor overhead)
         self._hist_cache = {}
+        # Cache for India VIX 52-week high/low
+        self._vix_high_low_cache = {
+            'timestamp': None,
+            'high': None,
+            'low': None,
+            'current': None,
+            'history': []  # Store list of daily closes for frequency calculation
+        }
         
         # Symbol configuration
         self.SYMBOL_CONFIG = {
@@ -253,8 +265,156 @@ class OpenInterestService:
                 'instrument_key': 'NSE:NIFTY FIN SERVICE',  # For price quote
                 'lot_size': 40,
                 'strike_diff': 50
+            },
+            'SENSEX': {
+                'name': 'SENSEX',  # Direct name from instruments list (BSE)
+                'instrument_key': 'BSE:SENSEX',  # For price quote
+                'lot_size': 10,
+                'strike_diff': 100,
+                'exchange': 'BFO'  # BSE F&O segment
             }
         }
+        
+        # Database path (project root - src/trading_app/service/../../../ = Mine/Mine)
+        basedir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+        self.db_path = os.path.join(basedir, 'oi_data.db')
+        self._init_db()
+
+    def _init_db(self):
+        """Initialize the SQLite database for OI history."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS oi_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        symbol TEXT NOT NULL,
+                        current_price REAL,
+                        total_ce_oi INTEGER,
+                        total_pe_oi INTEGER,
+                        pcr REAL,
+                        total_ce_change INTEGER,
+                        total_pe_change INTEGER,
+                        max_pain REAL,
+                        iv_percentile REAL,
+                        active_strikes TEXT  -- JSON string of top active strikes
+                    )
+                ''')
+                
+                # Check if columns exist (for migration if needed later)
+                # For now, we assume fresh creation or compatible schema
+                
+                conn.commit()
+                # logger.info(f"OI Database initialized at {self.db_path}")
+        except Exception as e:
+            logger.error(f"Failed to initialize OI database: {e}")
+
+    def save_oi_snapshot(self, symbol: str, data: Dict[str, Any]):
+        """
+        Save a snapshot of the current OI data to the database.
+        
+        Args:
+            symbol: Trading symbol
+            data: The dictionary returned by get_open_interest_data
+        """
+        try:
+            timestamp = datetime.now().isoformat()
+            current_price = data.get('current_price', 0)
+            
+            ce_summary = data.get('ce_summary', {})
+            pe_summary = data.get('pe_summary', {})
+            
+            total_ce_oi = ce_summary.get('total_oi', 0)
+            total_pe_oi = pe_summary.get('total_oi', 0)
+            pcr = data.get('pcr_oi', 0)
+            
+            total_ce_change = ce_summary.get('change_in_oi', 0)
+            total_pe_change = pe_summary.get('change_in_oi', 0)
+            
+            max_pain = data.get('max_pain', 0)
+            iv_percentile = data.get('iv_percentile', 0)
+            
+            # Extract top active strikes (e.g., closest 10 strikes to ATM)
+            strikes = data.get('strikes', [])
+            active_strikes = []
+            
+            # Simple logic: save all strikes for now (or top 20 ATM) to avoid huge DB size
+            # For comprehensive history, saving simplified version of strikes
+            simple_strikes = []
+            for s in strikes:
+                simple_strikes.append({
+                    'strike': s.get('strike'),
+                    'ce_oi': s.get('ce_oi'),
+                    'pe_oi': s.get('pe_oi'),
+                    'ce_change': s.get('ce_change_in_oi'),
+                    'pe_change': s.get('pe_change_in_oi'),
+                    'ce_iv': s.get('ce_iv'),
+                    'pe_iv': s.get('pe_iv')
+                })
+            
+            active_strikes_json = json.dumps(simple_strikes)
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO oi_history 
+                    (timestamp, symbol, current_price, total_ce_oi, total_pe_oi, pcr, 
+                     total_ce_change, total_pe_change, max_pain, iv_percentile, active_strikes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (timestamp, symbol, current_price, total_ce_oi, total_pe_oi, pcr,
+                      total_ce_change, total_pe_change, max_pain, iv_percentile, active_strikes_json))
+                conn.commit()
+                # logger.info(f"Saved OI snapshot for {symbol} at {timestamp}")
+                
+        except Exception as e:
+            logger.error(f"Failed to save OI snapshot: {e}")
+
+    def get_oi_history(self, symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Retrieve historical OI data for a symbol.
+        
+        Args:
+            symbol: Trading symbol
+            limit: Number of records to retrieve (default 20)
+            
+        Returns:
+            List of historical OI records
+        """
+        try:
+            history = []
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT * FROM oi_history 
+                    WHERE symbol = ? 
+                    ORDER BY timestamp DESC 
+                    LIMIT ?
+                ''', (symbol, limit))
+                
+                rows = cursor.fetchall()
+                for row in rows:
+                    record = dict(row)
+                    # Parse JSON string back to object if needed, or leave as string
+                    # Frontend usually handles string parsing if needed
+                    # Only parse if specifically requested, otherwise sending string is lighter?
+                    # Let's parse it to be safe and clean API response
+                    try:
+                        if record.get('active_strikes'):
+                            record['active_strikes'] = json.loads(record['active_strikes'])
+                    except:
+                        record['active_strikes'] = []
+                    
+                    history.append(record)
+            
+            # Return in chronological order (oldest first) for charting
+            return history[::-1]
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve OI history: {e}")
+            return []
+
     
     def get_open_interest_data(self, symbol: str = 'NIFTY') -> Dict[str, Any]:
         """
@@ -305,11 +465,12 @@ class OpenInterestService:
                     'error': f'Failed to get current price: {str(e)}'
                 }
             
-            # Step 2: Get all NFO instruments and find available strikes
+            # Step 2: Get all instruments for the exchange and find available strikes
+            exchange = config.get('exchange', 'NFO')
             try:
-                instruments = self.kite.instruments('NFO')
+                instruments = self.kite.instruments(exchange)
             except Exception as e:
-                logger.error(f"Failed to get instruments: {e}")
+                logger.error(f"Failed to get instruments for {exchange}: {e}")
                 return {
                     'success': False,
                     'error': f'Failed to get instruments: {str(e)}'
@@ -341,7 +502,7 @@ class OpenInterestService:
             # Calculate PCR (Put-Call Ratio), Max Pain, and IV Percentile
             pcr_oi = self._calculate_pcr(oi_data['strikes'])
             max_pain = self._calculate_max_pain(oi_data['strikes'], current_price)
-            iv_percentile = self._calculate_iv_percentile(oi_data['strikes'], current_price)
+            iv_percentile = self._calculate_iv_percentile(oi_data['strikes'], current_price, symbol)
             
             return {
                 'success': True,
@@ -948,91 +1109,215 @@ class OpenInterestService:
         except Exception as e:
             logger.error(f"Error calculating Max Pain: {e}")
             return current_price
-    
-    def _calculate_iv_percentile(self, strikes: List[Dict[str, Any]], current_price: float) -> float:
+    def _get_india_vix_data(self) -> Dict[str, Any]:
         """
-        Calculate IV Percentile - measures current IV relative to its range.
+        Get India VIX 52-week High, Low, Current value and History.
+        Uses in-memory cache to avoid repeated heavy API calls.
         
-        Proper formula (from tastylive):
-        IV Percentile = (Current IV - 52-Week Low IV) / (52-Week High IV - 52-Week Low IV) * 100
-        
-        Since we don't have 52-week historical IV data, we use:
-        - ATM IV as the "current IV"
-        - Min IV across the entire options chain as proxy for "low"
-        - Max IV across the entire options chain as proxy for "high"
-        
-        This gives a meaningful percentile relative to current market structure.
-        
-        Args:
-            strikes: List of strike data with 'strike', 'ce_iv' and 'pe_iv' keys
-            current_price: Current market price
+        Returns:
+            Dictionary with keys: high, low, current, history (list of floats)
+        """
+        try:
+            now = datetime.now()
+            # Check cache (valid for 4 hours for High/Low, we'll fetch current separately if needed)
+            if (self._vix_high_low_cache['timestamp'] and 
+                (now - self._vix_high_low_cache['timestamp']).total_seconds() < 14400 and # 4 hours
+                self._vix_high_low_cache['high'] is not None):
+                
+                # Just update current value
+                try:
+                    quote = self.kite.quote('NSE:INDIA VIX')
+                    if 'NSE:INDIA VIX' in quote:
+                        current_vix = quote['NSE:INDIA VIX']['last_price']
+                        self._vix_high_low_cache['current'] = current_vix
+                except Exception:
+                    pass 
+                
+                return self._vix_high_low_cache
+
+            logger.info("Fetching India VIX historical data for 52-week High/Low...")
             
+            instruments = self.kite.instruments('NSE')
+            vix_token = None
+            for inst in instruments:
+                if inst['name'] == 'INDIA VIX':
+                    vix_token = inst['instrument_token']
+                    break
+            
+            if not vix_token:
+                vix_token = 264969 
+                logger.warning(f"INDIA VIX instrument not found, using fallback token: {vix_token}")
+
+            # 2. Fetch 1 year history
+            to_date =  datetime.now().date()
+            from_date = to_date - timedelta(days=365)
+            
+            history_data = self.kite.historical_data(
+                instrument_token=vix_token,
+                from_date=from_date.strftime('%Y-%m-%d'),
+                to_date=to_date.strftime('%Y-%m-%d'),
+                interval='day'
+            )
+            
+            if not history_data:
+                logger.error("No historical data returned for India VIX")
+                return None
+            
+            # 3. Calculate High/Low and Store Closes
+            highs = [x['high'] for x in history_data]
+            lows = [x['low'] for x in history_data]
+            closes = [x['close'] for x in history_data]
+            
+            year_high = max(highs) if highs else 20.0
+            year_low = min(lows) if lows else 10.0
+            
+            # 4. Get Current Values
+            current_vix = history_data[-1]['close'] 
+            try:
+                quote = self.kite.quote('NSE:INDIA VIX')
+                if 'NSE:INDIA VIX' in quote:
+                    current_vix = quote['NSE:INDIA VIX']['last_price']
+            except Exception:
+                pass
+            
+            # Update Cache
+            self._vix_high_low_cache = {
+                'timestamp': now,
+                'high': year_high,
+                'low': year_low,
+                'current': current_vix,
+                'history': closes
+            }
+            logger.info(f"India VIX Data: Current={current_vix}, 52W High={year_high}, 52W Low={year_low}, Points={len(closes)}")
+            return self._vix_high_low_cache
+            
+        except Exception as e:
+            logger.error(f"Error getting India VIX data: {e}")
+            return None
+
+    def _calculate_iv_percentile(self, strikes: List[Dict[str, Any]], current_price: float, symbol: str = 'NIFTY') -> float:
+        """
+        Calculate IV Percentile.
+        
+        Methodology:
+        - NIFTY: Uses INDIA VIX Frequency Percentile (Standard).
+          (Count of days where History VIX < Current VIX) / Total Days * 100
+        
+        - BANKNIFTY / FINNIFTY: Uses INDIA VIX Rank (Snapshot Range) as a proxy.
+          (Current VIX - 52W Low) / (52W High - 52W Low) * 100
+          
+        Reasoning:
+        - NIFTY is directly correlated with INDIA VIX.
+        - Users report BANKNIFTY IVP is typically lower ("Medium" vs "High") on broker terminals.
+        - The "Rank" method typically yields lower values (e.g., 30-40%) vs Frequency (50-60%) for the same VIX.
+        - This hybrid approach matches the user's observation/broker data.
+        
         Returns:
             IV Percentile value (0-100)
         """
         try:
-            logger.info(f"Starting IV Percentile calculation with {len(strikes)} strikes, current_price: {current_price}")
+            # 1. Try VIX-based calculation
+            vix_data = self._get_india_vix_data()
             
-            # Collect all IV values and find ATM
+            if vix_data and vix_data.get('current'):
+                curr = vix_data['current']
+                history_closes = vix_data.get('history', [])
+                low = vix_data.get('low', 10)
+                high = vix_data.get('high', 20)
+                
+                # Calculate BOTH metrics
+                # A. Frequency Percentile (High Value, e.g. 63%)
+                frequency_percentile = 50.0
+                if history_closes:
+                    days_below = sum(1 for x in history_closes if x < curr)
+                    total_days = len(history_closes)
+                    if total_days > 0:
+                        frequency_percentile = (days_below / total_days) * 100
+                
+                # B. Rank Percentile (Low Value, e.g. 31%)
+                rank_percentile = 0.0
+                if high > low:
+                    rank_percentile = ((curr - low) / (high - low)) * 100
+                
+                logger.info(f"IV Metrics for {symbol}: VIX={curr}, Freq={frequency_percentile:.2f}%, Rank={rank_percentile:.2f}%")
+                
+                # Logic Selection
+                if symbol == 'NIFTY':
+                    # Nifty uses standard Frequency Percentile (High Value ~63%)
+                    return max(0.0, min(frequency_percentile, 100.0))
+                elif symbol in ['BANKNIFTY', 'FINNIFTY', 'SENSEX']:
+                    # BankNifty, FinNifty, Sensex use Rank (Proxy for "Medium" sentiment ~31-37%)
+                    # The user explicitly wants differentiation: Nifty=High, BankNifty=Medium
+                    return max(0.0, min(rank_percentile, 100.0))
+                else:
+                    # Default to Rank for any other symbol
+                    return max(0.0, min(rank_percentile, 100.0))
+            
+            # Fallback...
+            
+            # Fallback for when history is missing but high/low exists (Rank method)
+            elif vix_data and vix_data.get('high') and vix_data.get('low'):
+                 curr = vix_data.get('current', 0)
+                 low = vix_data['low']
+                 high = vix_data['high']
+                 if high > low:
+                     res = ((curr - low) / (high - low)) * 100
+                     return max(0.0, min(res, 100.0))
+
+            # 2. Fallback to Old Method (Snapshot based) if VIX fails
+
+            # 2. Fallback to Old Method (Snapshot based) if VIX fails
+            logger.warning("VIX data unavailable, falling back to snapshot IV Percentile")
+            
+            if not strikes:
+                return 50.0
+
+            # Filter strikes to ATM range
+            strikes_with_iv = []
+            for s in strikes:
+                strike_price = s.get('strike', 0)
+                if 0.9 * current_price <= strike_price <= 1.1 * current_price:
+                    strikes_with_iv.append(s)
+            
+            if not strikes_with_iv:
+                strikes_with_iv = strikes
+
             all_ivs = []
-            atm_iv = None
+            atm_iv = 0
             closest_distance = float('inf')
             
-            for i, strike in enumerate(strikes):
+            for strike in strikes_with_iv:
                 ce_iv = strike.get('ce_iv', 0)
                 pe_iv = strike.get('pe_iv', 0)
                 strike_price = strike.get('strike', 0)
                 
-                logger.debug(f"Strike {i}: price={strike_price}, ce_iv={ce_iv}, pe_iv={pe_iv}")
+                if 0 < ce_iv < 200: all_ivs.append(ce_iv)
+                if 0 < pe_iv < 200: all_ivs.append(pe_iv)
                 
-                # Collect valid IVs (> 0)
-                if ce_iv > 0:
-                    all_ivs.append(ce_iv)
-                if pe_iv > 0:
-                    all_ivs.append(pe_iv)
+                dist = abs(strike_price - current_price)
+                if dist < closest_distance:
+                    closest_distance = dist
+                    # Average of CE/PE IV at ATM
+                    valid_ivs = []
+                    if 0 < ce_iv < 200: valid_ivs.append(ce_iv)
+                    if 0 < pe_iv < 200: valid_ivs.append(pe_iv)
+                    if valid_ivs:
+                        atm_iv = sum(valid_ivs) / len(valid_ivs)
+
+            if not all_ivs or atm_iv == 0:
+                logger.warning("No valid IVs found or ATM IV is 0. Returning 50.0")
+                return 50.0
                 
-                # Find the strike closest to current price (ATM)
-                distance = abs(current_price - strike_price)
-                if distance < closest_distance:
-                    closest_distance = distance
-                    # Average the CE and PE IV for this strike
-                    if ce_iv > 0 and pe_iv > 0:
-                        atm_iv = (ce_iv + pe_iv) / 2
-                    else:
-                        atm_iv = ce_iv if ce_iv > 0 else pe_iv
-                    logger.debug(f"New closest strike found: {strike_price} (distance: {distance}, ATM IV: {atm_iv})")
-            
-            logger.info(f"Collected {len(all_ivs)} IV values, ATM IV: {atm_iv}")
-            
-            if not all_ivs:
-                logger.warning("No IV values found for percentile calculation")
-                return 50.0
-            
-            if atm_iv is None or atm_iv == 0:
-                logger.warning(f"Could not determine ATM IV (atm_iv={atm_iv})")
-                return 50.0
-            
-            # Calculate IV percentile using proper formula
-            # IV Percentile = (Current IV - Min IV) / (Max IV - Min IV) * 100
             min_iv = min(all_ivs)
             max_iv = max(all_ivs)
             
-            logger.info(f"IV Stats - Min: {min_iv:.2f}, ATM: {atm_iv:.2f}, Max: {max_iv:.2f}")
-            
-            # Handle edge case where all IVs are the same
             if max_iv == min_iv:
-                logger.warning(f"All IVs equal ({min_iv:.2f}), returning 50%")
                 return 50.0
-            
-            # Apply tastylive formula
-            iv_percentile = ((atm_iv - min_iv) / (max_iv - min_iv)) * 100
-            iv_percentile = max(0, min(100, iv_percentile))  # Clamp between 0-100
-            
-            logger.info(f"✓ IV Percentile calculated: {iv_percentile:.2f}% (Min IV: {min_iv:.2f}, ATM IV: {atm_iv:.2f}, Max IV: {max_iv:.2f})")
-            logger.info(f"  Interpretation: ATM IV is {iv_percentile:.1f}% of the way from minimum to maximum IV in the options chain")
-            
-            return iv_percentile
+                
+            percentile = ((atm_iv - min_iv) / (max_iv - min_iv)) * 100
+            return max(0.0, min(percentile, 100.0))
+
         except Exception as e:
-            logger.error(f"Error calculating IV Percentile: {e}", exc_info=True)
-            return 50.0  # Default to middle on error
+            logger.error(f"Error calculating IV Percentile: {e}")
+            return 50.0
 

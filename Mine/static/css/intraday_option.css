@@ -14,7 +14,6 @@
 }
 
 .intraday-option-container {
-    max-width: 1400px;
     margin: 0 auto;
     padding: 12px 0px;
     background: var(--bg-light);

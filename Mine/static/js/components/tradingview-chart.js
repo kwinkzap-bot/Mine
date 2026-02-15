@@ -34,7 +34,7 @@ window.TradingViewChart = (function () {
                 } else if (typeof timestamp === 'string') {
                     // Parse ISO string like "2025-01-08T10:30:00Z"
                     const date = new Date(timestamp);
-                    
+
                     // Validate the date object was created successfully
                     if (isNaN(date.getTime())) {
                         console.warn(`[formatChartData] Invalid date at index ${index}: "${timestamp}". Using current time as fallback.`);
@@ -80,7 +80,7 @@ window.TradingViewChart = (function () {
             time: (businessDayOrTimestamp) => {
                 // Convert timestamp to readable format in IST timezone
                 const date = new Date(businessDayOrTimestamp * 1000);
-                
+
                 // Format in IST timezone using Intl.DateTimeFormat
                 const formatter = new Intl.DateTimeFormat('en-IN', {
                     timeZone: 'Asia/Kolkata',
@@ -88,7 +88,7 @@ window.TradingViewChart = (function () {
                     minute: '2-digit',
                     hour12: false
                 });
-                
+
                 return formatter.format(date);
             }
         };
@@ -441,8 +441,15 @@ window.TradingViewChart = (function () {
                 });
 
                 series = ceSeries; // Primary series for backward compatibility
+            } else if (type === 'LINE') {
+                // Single line series chart (for OI)
+                series = chart.addLineSeries({
+                    color: config.lineColor || '#2962ff',
+                    lineWidth: 2,
+                    crosshairMarkerVisible: true
+                });
             } else {
-                // Single series chart
+                // Single candlestick series chart
                 series = chart.addCandlestickSeries({
                     upColor: upColor,
                     downColor: downColor,
@@ -626,7 +633,7 @@ window.TradingViewChart = (function () {
                     // Or check if it's a reference object (has price-level properties)
                     const isReferenceUpdate = referenceOrPeData && typeof referenceOrPeData === 'object' && !Array.isArray(referenceOrPeData) &&
                         (referenceOrPeData.ce_payload_high !== undefined || referenceOrPeData.pe_payload_high !== undefined ||
-                         referenceOrPeData.ce_payload_low !== undefined || referenceOrPeData.pe_payload_low !== undefined);
+                            referenceOrPeData.ce_payload_low !== undefined || referenceOrPeData.pe_payload_low !== undefined);
 
                     // If refresh flag is true, clear existing price lines before updating
                     if (refresh) {
@@ -652,6 +659,20 @@ window.TradingViewChart = (function () {
                         }
                         if (peFormattedData.length > 0) {
                             peSeries.setData(peFormattedData);
+                        }
+
+                    } else if (type === 'LINE') {
+                        // Line chart update
+                        // Data format: { time, value }
+                        // Ensure data is sorted by time
+                        const lineData = newData.map(item => ({
+                            time: item.time || Math.floor(new Date(item.timestamp).getTime() / 1000),
+                            value: item.value
+                        })).sort((a, b) => a.time - b.time);
+
+                        if (lineData.length > 0) {
+                            series.setData(lineData);
+                            this.data = lineData;
                         }
                     } else {
                         // Single series chart
@@ -693,15 +714,15 @@ window.TradingViewChart = (function () {
                  */
                 getStatus: function () {
                     const latestPrice = this.getLatestPrice();
-                    
+
                     if (latestPrice === null || latestPrice === undefined) {
                         return { text: '--', className: 'status-na' };
                     }
-                    
+
                     // Get the comparison PDH/PDL based on chart type
                     let comparisonPdh = null;
                     let comparisonPdl = null;
-                    
+
                     if (type === 'CE') {
                         // CE chart: use PE PDH/PDL for comparison
                         comparisonPdh = storedPePdh;
@@ -714,18 +735,18 @@ window.TradingViewChart = (function () {
                         // Unknown chart type
                         return { text: '--', className: 'status-na' };
                     }
-                    
+
                     // Check if we have valid PDH/PDL values
-                    if (comparisonPdh === null || comparisonPdl === null || 
+                    if (comparisonPdh === null || comparisonPdl === null ||
                         comparisonPdh === undefined || comparisonPdl === undefined ||
                         comparisonPdh <= 0 || comparisonPdl <= 0) {
                         return { text: '--', className: 'status-na' };
                     }
-                    
+
                     // Calculate status based on price vs PDH/PDL
                     let status = 'sideway';
                     let className = 'status-sideway';
-                    
+
                     if (latestPrice > comparisonPdh) {
                         status = 'WIN';
                         className = 'status-win';
@@ -737,7 +758,7 @@ window.TradingViewChart = (function () {
                         status = 'SIDEWAY';
                         className = 'status-sideway';
                     }
-                    
+
                     return { text: status, className: className };
                 },
 
@@ -754,7 +775,7 @@ window.TradingViewChart = (function () {
                     }
 
                     console.log('[addReferenceLines] Called with:', references);
-                    
+
                     try {
                         // Clear previous reference lines (keep PDH/PDL lines, remove only reference lines)
                         // Expected structure: PDH/PDL lines are at indices 0-3 (ce_pdh, ce_pdl, pe_pdh, pe_pdl)
@@ -770,7 +791,7 @@ window.TradingViewChart = (function () {
                                 }
                             }
                         }
-                        
+
                         console.log(`[addReferenceLines] Cleared previous reference lines, keeping ${this.priceLinesArray.length} PDH/PDL lines`);
 
                         // Determine which type of reference lines to add based on chart type
