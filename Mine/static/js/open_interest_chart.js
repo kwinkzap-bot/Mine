@@ -5,7 +5,6 @@
 
 let coiChartInstance = null;
 let combinedChartInstance = null;
-let oiHistoryChart = null; // TradingViewChart instance
 let autoRefreshInterval = null;
 let currentSymbol = 'NIFTY';
 let strikeRangeCount = 15; // Default strike range
@@ -28,8 +27,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Initial load
     refreshData();
-    // Initialize Historical Chart
-    initHistoricalChart();
+
+    // Fetch and render historical data for grid
+    fetchAndRenderOiHistory();
 
     // Start auto-refresh on every 30 seconds during market hours
     startAutoRefresh();
@@ -147,9 +147,6 @@ function stopAutoRefresh() {
 async function refreshData(showLoader = true, updateSummary = true) {
     const errorEl = document.getElementById('oiError');
     const refreshBtn = document.getElementById('refreshNowBtn');
-
-    // Refresh historical data as well
-    fetchAndRenderOiHistory();
 
     // Add spinning animation to refresh button (only for manual refresh)
     if (showLoader) {
@@ -452,13 +449,13 @@ function updateSummaryStats(data) {
 
     const maxPainElement = document.getElementById('maxPain');
     maxPainElement.textContent = maxPain;
-    // Max Pain: Below current price = Red, Above current price = Green
-    maxPainElement.classList.remove('color-red', 'color-green');
-    if (maxPain < currentPrice) {
-        maxPainElement.classList.add('color-red');
-    } else if (maxPain > currentPrice) {
-        maxPainElement.classList.add('color-green');
-    }
+    // // Max Pain: Below current price = Red, Above current price = Green
+    // maxPainElement.classList.remove('color-red', 'color-green');
+    // if (maxPain < currentPrice) {
+    //     maxPainElement.classList.add('color-red');
+    // } else if (maxPain > currentPrice) {
+    //     maxPainElement.classList.add('color-green');
+    // }
 
     // IV Percentile
     const ivPercentile = data.iv_percentile !== undefined ? data.iv_percentile : null;
@@ -1040,8 +1037,15 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                 labels: labels,
                 datasets: [
                     {
-                        label: 'Put OI (Opening)',
-                        data: peOI.map((val, idx) => val - peCOI[idx]),
+                        label: 'Put OI',
+                        data: peOI.map((val, idx) => {
+                            const change = peCOI[idx];
+                            // If change is positive, we stack it on top of Opening to reach Current
+                            // Logic: Base = Current - Change (Opening)
+                            if (change > 0) return val - change;
+                            // If change is negative, it plots downwards. Base should be Current.
+                            return val;
+                        }),
                         backgroundColor: peColors,
                         borderColor: peBorders,
                         borderWidth: 2,
@@ -1058,8 +1062,14 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                         stack: 'pe'
                     },
                     {
-                        label: 'Call OI (Opening)',
-                        data: ceOI.map((val, idx) => val - ceCOI[idx]),
+                        label: 'Call OI',
+                        data: ceOI.map((val, idx) => {
+                            const change = ceCOI[idx];
+                            // If change is positive, we stack it on top of Opening to reach Current
+                            if (change > 0) return val - change;
+                            // If change is negative, it plots downwards. Base should be Current.
+                            return val;
+                        }),
                         backgroundColor: ceColors,
                         borderColor: ceBorders,
                         borderWidth: 2,
@@ -1248,40 +1258,80 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
 /**
  * Initialize Historical Chart
  */
-function initHistoricalChart() {
-    if (!window.TradingViewChart) {
-        console.error("TradingViewChart module not loaded.");
-        return;
-    }
 
-    // Initialize OI History Chart (Line Chart)
-    oiHistoryChart = TradingViewChart.create({
-        containerId: 'oiHistoryChart',
-        data: [],
-        type: 'LINE',
-        timeframe: '3minute', // Default interval
-        lineColor: '#2962ff',
-        options: { height: 400 }
-    });
-}
 
 /**
  * Fetch and render OI history
  */
+/**
+ * Fetch and render OI history (Chart + Grid)
+ */
 async function fetchAndRenderOiHistory() {
-    if (!currentSymbol || !oiHistoryChart) return;
+    if (!currentSymbol) {
+        console.warn("fetchAndRenderOiHistory: Missing symbol", { currentSymbol });
+        return;
+    }
 
     try {
+        console.log(`Fetching OI history for ${currentSymbol}...`);
         const response = await fetch(`/api/open-interest/history?symbol=${currentSymbol}&limit=100`);
         const result = await response.json();
+        console.log("OI History API Response:", result);
 
         if (result.success && result.data && result.data.length > 0) {
-            const pcrData = result.data.map(item => ({
-                time: Math.floor(new Date(item.timestamp).getTime() / 1000),
-                value: item.pcr
-            }));
+            console.log(`Processing ${result.data.length} history records...`);
 
-            oiHistoryChart.update(pcrData);
+            // Populate OI Summary Grid
+            // History comes in chrono order (oldest first) from API
+            // We want latest first for the grid
+            // But we need to calculate diffs correctly? No, each record has totals.
+
+            // Map to grid data format
+            const historyGridData = result.data.map(item => {
+                // Formatting time
+                const date = new Date(item.timestamp);
+                const timeStr = date.toLocaleTimeString('en-IN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true
+                });
+
+                // Calculate derived values if missing from DB
+                const totalPeOI = item.total_pe_oi || 0;
+                const totalCeOI = item.total_ce_oi || 0;
+                const peCOI = item.total_pe_change || 0;
+                const ceCOI = item.total_ce_change || 0;
+
+                const oiDifferent = totalPeOI - totalCeOI;
+                const oiChangeDifferent = peCOI - ceCOI;
+
+                return {
+                    time: timeStr,
+                    totalPeOI: totalPeOI,
+                    peCOI: peCOI,
+                    totalCeOI: totalCeOI,
+                    ceCOI: ceCOI,
+                    oiDifferent: oiDifferent,
+                    oiChangeDifferent: oiChangeDifferent,
+                    timestamp: date.getTime() // store explicit timestamp for sorting
+                };
+            });
+
+            // Sort Descending (Latest First) for Grid
+            historyGridData.sort((a, b) => b.timestamp - a.timestamp);
+
+            // Validate against current `oiHistoryData`
+            // If live data was just added, it might overlap?
+            // Since we call this on load, likely empty.
+            // Just replace it to be safe and consistent with DB history.
+            oiHistoryData = historyGridData;
+
+            console.log(`Populated ${oiHistoryData.length} rows for OI Grid.`);
+            renderOISummaryTable();
+
+        } else {
+            console.warn("OI History API returned no data or success=false", result);
         }
     } catch (e) {
         console.error("Failed to fetch OI history:", e);
@@ -1291,9 +1341,7 @@ async function fetchAndRenderOiHistory() {
 // Cleanup on page unload
 window.addEventListener('beforeunload', function () {
     stopAutoRefresh();
-    if (oiHistoryChart) {
-        oiHistoryChart.destroy();
-    }
+
     if (coiChartInstance) {
         coiChartInstance.destroy();
     }

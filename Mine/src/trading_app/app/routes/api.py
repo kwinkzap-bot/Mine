@@ -34,24 +34,35 @@ def check_user_authentication():
         }), 401
 
 
-def get_kite() -> Optional[Any]:
+def get_kite(user: Optional[str] = None) -> Optional[Any]:
     """Get authenticated KiteConnect instance from session or create new one.
     
     Provides multiple fallback layers to handle socket pool flushes and 
     debug session resets that clear Flask session data:
-    1. Session storage (immediate access)
+    1. Session storage (immediate access) - only if in request context
     2. Environment variable (restored after socket pool flush)
     3. UserEnvManager (user-specific .env file)
     4. Persistent token cache file (survives process restart)
+    
+    Args:
+        user (str, optional): Username to use if session is unavailable/background task
     """
     try:
         from kiteconnect import KiteConnect
         from trading_app.app.utils.token_manager import get_access_token
         from trading_app.app.utils.user_env import UserEnvManager
         import os
+        from flask import has_request_context
         
-        # Get username from session to access user-specific credentials
-        username = session.get('username')
+        # Determine username and access_token source
+        username = user
+        access_token = None
+        
+        # Check session if in request context
+        if has_request_context():
+            if not username:
+                username = session.get('username')
+            access_token = session.get('access_token')
         
         # Get API_KEY - prefer user-specific first, then environment
         api_key = None
@@ -61,41 +72,48 @@ def get_kite() -> Optional[Any]:
             api_key = os.getenv('API_KEY')
         
         if not api_key:
-            logger.warning("API_KEY not found in environment or user config")
+            if has_request_context():
+                logger.warning(f"API_KEY not found in environment or user config (user: {username})")
             return None
         
         # Get access token with multiple fallback layers
-        # 1. Check session first
-        access_token = session.get('access_token')
+        
+        # 1. Session check done above
         
         # 2. Check environment variable (restored after socket pool flush)
         if not access_token:
             access_token = os.getenv('ACCESS_TOKEN')
             if access_token:
-                logger.info("Access token restored from environment variable (socket pool flush recovery)")
+                 # Only log if we're in a request context to avoid noise in logs
+                if has_request_context():
+                    logger.info("Access token restored from environment variable (socket pool flush recovery)")
         
         # 3. Check UserEnvManager for user-specific token
         if not access_token and username:
             access_token = UserEnvManager.get_user_var(username, 'ACCESS_TOKEN')
             if access_token:
-                logger.info(f"Access token restored from user config ({username})")
+                if has_request_context():
+                    logger.info(f"Access token restored from user config ({username})")
         
         # 4. Check persistent token cache
         if not access_token:
             access_token = get_access_token()
             if access_token:
-                logger.info("Access token restored from persistent cache")
-                # Update session and environment for future requests
-                session['access_token'] = access_token
+                if has_request_context():
+                    logger.info("Access token restored from persistent cache")
+                    # Update session and environment for future requests
+                    session['access_token'] = access_token
+                    session.permanent = True
+                
                 os.environ['ACCESS_TOKEN'] = access_token
-                session.permanent = True
         
         if not access_token:
-            logger.warning(f"No access token available from any source (username: {username})")
+            if has_request_context():
+                logger.warning(f"No access token available from any source (username: {username})")
             return None
         
-        # Ensure session is in sync (for future requests)
-        if 'access_token' not in session:
+        # Ensure session is in sync (for future requests) if we are in one
+        if has_request_context() and 'access_token' not in session:
             session['access_token'] = access_token
             session.permanent = True
         
@@ -103,7 +121,10 @@ def get_kite() -> Optional[Any]:
         kite = KiteConnect(api_key=api_key)
         kite.set_access_token(access_token)
         
-        logger.debug(f"KiteConnect initialized successfully for user {username} (token: {access_token[:20]}...)")
+        # Only log debug in request context or if specifically requested
+        if has_request_context() or user:
+            logger.debug(f"KiteConnect initialized successfully for user {username} (token: {access_token[:20]}...)")
+            
         return kite
         
     except Exception as e:
@@ -2542,17 +2563,28 @@ def place_intraday_920_order() -> EndpointResponse:
         }), 500
 
 
+# Global registry for live signal monitors
+# Key: username, Value: Intraday920LiveSignal instance
+_live_signal_monitors = {}
+import threading
+_monitor_lock = threading.Lock()
+
+
 @api_bp.route('/start-monitoring', methods=['POST'])
 def start_monitoring() -> EndpointResponse:
     """Start live signal monitoring for the logged-in user.
     
     Creates per-user Excel log files and starts background monitoring thread.
     Uses username from session to ensure user-specific logging.
+    
+    Query Params:
+        type (str): 'ENTRY', 'SL', or 'ALL' (default 'ALL')
     """
     try:
         from trading_app.app.intraday_option.intraday_9_20_live_signal import Intraday920LiveSignal, excel_logger
         from kiteconnect import KiteConnect
         import threading
+
         
         username = session.get('username')
         if not username:
@@ -2561,16 +2593,40 @@ def start_monitoring() -> EndpointResponse:
                 'error': 'User not authenticated'
             }), 401
         
-        # Get KiteConnect instance
-        kite = get_kite()
-        if not kite:
+        # Get monitoring type
+        monitor_type = request.args.get('type', 'ALL').upper()
+        if monitor_type not in ['ENTRY', 'SL', 'ALL']:
             return jsonify({
                 'success': False,
-                'error': 'KiteConnect not initialized - please login with Zerodha first'
+                'error': 'Invalid type. Must be ENTRY, SL, or ALL'
             }), 400
+            
+        monitor_entries = monitor_type in ['ENTRY', 'ALL']
+        monitor_sl = monitor_type in ['SL', 'ALL']
         
-        # Create monitor with username for per-user Excel logging
-        monitor = Intraday920LiveSignal(kite, symbol='NIFTY', username=username)
+        # Get or create monitor instance
+        global _live_signal_monitors
+        
+        # Use lock to prevent race conditions where multiple requests create multiple monitors
+        with _monitor_lock:
+            monitor = _live_signal_monitors.get(username)
+            
+            if not monitor:
+                # Get KiteConnect instance
+                kite = get_kite()
+                if not kite:
+                    return jsonify({
+                        'success': False,
+                        'error': 'KiteConnect not initialized - please login with Zerodha first'
+                    }), 400
+                
+                # Create new monitor
+                logger.info(f"Creating new Intraday920LiveSignal instance for {username}")
+                monitor = Intraday920LiveSignal(kite, symbol='NIFTY', username=username)
+                _live_signal_monitors[username] = monitor
+            else:
+                logger.info(f"Using existing Intraday920LiveSignal instance for {username} (ID: {id(monitor)})")
+
         
         # Check if it's a market day
         if not monitor.is_market_day():
@@ -2579,26 +2635,97 @@ def start_monitoring() -> EndpointResponse:
                 'error': 'Not a market day - monitoring not started'
             }), 400
         
-        # Start monitoring in background thread
-        if monitor.start_monitoring():
-            logger.info(f"✅ Live monitoring started for {username}")
-            return jsonify({
-                'success': True,
-                'message': f'Live monitoring started for user {username}',
-                'username': username,
-                'excel_file': excel_logger.file_path
-            }), 200
-        else:
-            return jsonify({
-                'success': False,
-                'error': 'Could not start monitoring'
-            }), 400
+        # Start requested components
+        start_result = monitor.start_monitoring(monitor_entries=monitor_entries, monitor_sl=monitor_sl)
+        
+        active_components = []
+        if monitor.is_entry_monitoring: active_components.append("ENTRY")
+        if monitor.is_sl_monitoring: active_components.append("SL")
+        
+        status_msg = f"Monitoring active: {', '.join(active_components)}"
+        
+        return jsonify({
+            'success': True,
+            'message': f'Live monitoring updated for {username}. {status_msg}',
+            'username': username,
+            'excel_file': excel_logger.file_path,
+            'status': {
+                'entry_monitoring': monitor.is_entry_monitoring,
+                'sl_monitoring': monitor.is_sl_monitoring,
+                'details': start_result
+            }
+        }), 200
             
     except Exception as e:
         logger.error(f"Error starting monitoring: {e}", exc_info=True)
         return jsonify({
             'success': False,
             'error': f'Error starting monitoring: {str(e)}'
+        }), 500
+
+
+@api_bp.route('/stop-monitoring', methods=['POST'])
+def stop_monitoring() -> EndpointResponse:
+    """Stop live signal monitoring for the logged-in user.
+    
+    Query Params:
+        type (str): 'ENTRY', 'SL', or 'ALL' (default 'ALL')
+    """
+    try:
+        username = session.get('username')
+        if not username:
+            return jsonify({
+                'success': False,
+                'error': 'User not authenticated'
+            }), 401
+            
+        # Get monitoring type
+        monitor_type = request.args.get('type', 'ALL').upper()
+        if monitor_type not in ['ENTRY', 'SL', 'ALL']:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid type. Must be ENTRY, SL, or ALL'
+            }), 400
+            
+        stop_entries = monitor_type in ['ENTRY', 'ALL']
+        stop_sl = monitor_type in ['SL', 'ALL']
+        
+        global _live_signal_monitors
+        monitor = _live_signal_monitors.get(username)
+        
+        if not monitor:
+            return jsonify({
+                'success': False,
+                'error': 'No active monitoring session found'
+            }), 404
+            
+        # Stop requested components
+        stop_result = monitor.stop_monitoring(stop_entries=stop_entries, stop_sl=stop_sl)
+        
+        active_components = []
+        if monitor.is_entry_monitoring: active_components.append("ENTRY")
+        if monitor.is_sl_monitoring: active_components.append("SL")
+        
+        status_msg = f"Monitoring status: {', '.join(active_components) if active_components else 'STOPPED'}"
+        
+        # If everything stopped, we could optionally remove from registry
+        # But keeping it allows restarting with same state/trades
+        
+        return jsonify({
+            'success': True,
+            'message': f'Monitoring stopped for {username}. {status_msg}',
+            'status': {
+                'entry_monitoring': monitor.is_entry_monitoring,
+                'sl_monitoring': monitor.is_sl_monitoring,
+                'details': stop_result
+            }
+        }), 200
+            
+    except Exception as e:
+        logger.error(f"Error stopping monitoring: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': f'Error stopping monitoring: {str(e)}'
         }), 500
 
 
@@ -2646,6 +2773,9 @@ def get_open_interest() -> EndpointResponse:
     """
     Get open interest data for options strikes.
     
+    Prioritizes reading from local DB (populated by background scheduler).
+    Falls back to live fetch if DB data is stale or missing.
+    
     Returns:
         JSON with open interest data for CE and PE strikes
     """
@@ -2658,6 +2788,10 @@ def get_open_interest() -> EndpointResponse:
         from trading_app.service.open_interest_service import OpenInterestService
         
         kite = get_kite()
+        # Note: If kite is None, we might still be able to read from DB if we don't need live fallback immediately
+        # But OpenInterestService currently requires kite instance. 
+        # TODO: Refactor Service to safely Init without kite for DB-only reads if needed.
+        # For now, we enforce kite connection as usual.
         if not kite:
             return jsonify({
                 'success': False,
@@ -2665,23 +2799,43 @@ def get_open_interest() -> EndpointResponse:
             }), 400
         
         oi_service = OpenInterestService(kite)
+        
+        # 1. Try to get data from DB first (up to 3 minutes old is fine, scheduler runs every 3 min)
+        # Using 5 mins as buffer to avoid race conditions
+        db_data = oi_service.get_latest_oi_from_db(symbol, max_age_minutes=5)
+        
+        if db_data:
+            logger.info(f"✅ Serving OI data from DB for {symbol} (Timestamp: {db_data.get('timestamp')})")
+            db_data['server_timestamp'] = datetime.now().isoformat()
+            db_data['data_source'] = 'DATABASE'
+            return jsonify(db_data)
+        
+        # 2. Fallback: Fetch Live if DB is empty or stale
+        logger.info(f"⚠️ DB data missing or stale for {symbol}. Fetching live...")
         oi_data = oi_service.get_open_interest_data(symbol)
         
         if not oi_data.get('success'):
             return jsonify(oi_data), 400
+            
+        # Save this live fetch to DB so next call is fast
+        try:
+            oi_service.save_oi_snapshot(symbol, oi_data)
+            logger.info(f"Saved fallback OI snapshot for {symbol}")
+        except Exception as save_e:
+            logger.error(f"Failed to save fallback snapshot: {save_e}")
         
         # Add server timestamp to verify data freshness
-        from datetime import datetime
         oi_data['server_timestamp'] = datetime.now().isoformat()
+        oi_data['data_source'] = 'LIVE_FALLBACK'
+        
         logger.info(f"API response server_timestamp: {oi_data['server_timestamp']}")
-        logger.info(f"Sample OI values - CE Total: {oi_data.get('ce_summary', {}).get('total_oi')}, PE Total: {oi_data.get('pe_summary', {}).get('total_oi')}")
         
         response = jsonify(oi_data)
         # Disable caching for real-time data
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'
-        return response, 200
+        return response
         
     except Exception as e:
         logger.error(f"Error fetching open interest: {str(e)}", exc_info=True)

@@ -665,14 +665,31 @@ window.TradingViewChart = (function () {
                         // Line chart update
                         // Data format: { time, value }
                         // Ensure data is sorted by time
-                        const lineData = newData.map(item => ({
-                            time: item.time || Math.floor(new Date(item.timestamp).getTime() / 1000),
-                            value: item.value
-                        })).sort((a, b) => a.time - b.time);
+                        console.log(`[Chart] Updating LINE chart with ${newData.length} points`);
+
+                        const lineData = newData.map(item => {
+                            // Handle existing time (seconds) or parse timestamp
+                            const timeVal = item.time || Math.floor(new Date(item.timestamp).getTime() / 1000);
+                            if (isNaN(timeVal)) {
+                                console.warn('[Chart] Invalid time in data point:', item);
+                            }
+                            return {
+                                time: timeVal,
+                                value: item.value
+                            };
+                        }).sort((a, b) => a.time - b.time);
 
                         if (lineData.length > 0) {
+                            console.log('[Chart] Setting LINE series data:', lineData[0], '...', lineData[lineData.length - 1]);
                             series.setData(lineData);
                             this.data = lineData;
+                            try {
+                                chart.timeScale().fitContent();
+                            } catch (e) {
+                                console.warn('[Chart] Failed to fit content:', e);
+                            }
+                        } else {
+                            console.warn('[Chart] No valid data points for LINE chart');
                         }
                     } else {
                         // Single series chart

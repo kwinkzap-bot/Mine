@@ -98,12 +98,12 @@
                     <span class="value" id="resistanceLevel">--</span>
                 </div>
                 <div class="stat-row">
-                    <span class="label">Max Pain:</span>
-                    <span class="value" id="maxPain">--</span>
-                </div>
-                <div class="stat-row">
                     <span class="label">IV Percentile:</span>
                     <span class="value" id="ivPercentile">--</span>
+                </div>
+                <div class="stat-row">
+                    <span class="label">Max Pain:</span>
+                    <span class="value" id="maxPain">--</span>
                 </div>
             </div>
         </div>
@@ -141,13 +141,7 @@
 
 
 
-        <!-- OI Summary Grid -->
-        <div class="oi-grid-section">
-            <div class="chart-container full-width">
-                <h3>Open Interest Analysis (History)</h3>
-                <div id="oiHistoryChart" class="chart-element" style="height: 400px;"></div>
-            </div>
-        </div>
+
 
         <!-- OI Summary Grid -->
         <div class="oi-grid-section">
@@ -183,6 +177,6 @@
 </div>
 
 <script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}"></script>
+
 <script src="{{ url_for('static', filename='js/open_interest_chart.js') }}"></script>
 {% endblock %}

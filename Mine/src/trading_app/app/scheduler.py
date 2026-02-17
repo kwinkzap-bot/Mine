@@ -89,8 +89,8 @@ class MarketScheduler:
             CronTrigger(
                 day_of_week='mon-fri',
                 hour='9-15',
-                minute='*/3',
-                second='30'  # Offset by 30s to avoid conflict with 5-min tasks
+                minute='*',  # Run every minute
+                second='30'  # Offset by 30s
             ),
             id='oi_persistence',
             name='Open Interest Persistence',
@@ -131,27 +131,31 @@ class MarketScheduler:
         except Exception as e:
             logger.error(f"Unexpected error in CPR filter background task: {e}", exc_info=True)
 
+        except Exception as e:
+            logger.error(f"Unexpected error in OI persistence task: {e}", exc_info=True)
+
     def _run_oi_persistence_task(self):
         """Fetch and store Open Interest data."""
         try:
-            if not self.is_market_hours():
-                logger.debug("Outside market hours, skipping OI persistence task")
+            # Strict checks for production - Run only during market hours on trading days
+            # Unless FORCE_OI_TASK env var is set (for testing)
+            if (not self.is_market_hours() or not self.is_trading_day()) and not os.getenv('FORCE_OI_TASK'):
                 return
-            
-            if not self.is_trading_day():
-                logger.debug("Not a trading day, skipping OI persistence task")
-                return
+
+            logger.info("Starting OI Persistence Task...")
 
             # Need to get Kite instance without session
             # This requires token to be available in environment or cache
             from trading_app.app.routes.api import get_kite
+            import os
             
             # Since we're in a background thread, get_kite needs to find token 
             # from file cache or environment variable
+            # We assume the 'Mine' user or default env vars are set
             kite = get_kite()
             
             if not kite:
-                logger.warning("OI Persistence: Could not get Kite instance (no token?)")
+                logger.warning("OI Persistence: Could not get Kite instance. Check API_KEY/ACCESS_TOKEN in env.")
                 return
                 
             from trading_app.service.open_interest_service import OpenInterestService
@@ -165,12 +169,12 @@ class MarketScheduler:
                     
                     if data.get('success'):
                         oi_service.save_oi_snapshot(symbol, data)
-                        logger.info(f"OI Persistence: Saved snapshot for {symbol}")
+                        logger.info(f"✅ OI Persistence: Saved snapshot for {symbol}")
                     else:
-                        logger.warning(f"OI Persistence: Failed to fetch {symbol}: {data.get('error')}")
+                        logger.warning(f"⚠️ OI Persistence: Failed to fetch {symbol}: {data.get('error')}")
                         
                 except Exception as inner_e:
-                    logger.error(f"OI Persistence: Error processing {symbol}: {inner_e}")
+                    logger.error(f"❌ OI Persistence: Error processing {symbol}: {inner_e}", exc_info=True)
                     
         except Exception as e:
             logger.error(f"Unexpected error in OI persistence task: {e}", exc_info=True)

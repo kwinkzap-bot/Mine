@@ -1,0 +1,587 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © ajithcpas
+
+//@version=5
+indicator("CPR by KK", "CPR by KK", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
+
+AUTO = "Auto"
+DAILY = "Daily"
+WEEKLY = "Weekly"
+MONTHLY = "Monthly"
+QUARTERLY = "Quarterly"
+HALF_YEARLY = "Half-yearly"
+YEARLY = "Yearly"
+
+// Input fields
+cpr_time_frame = input.string(title="CPR Timeframe", defval=AUTO, options=[AUTO, DAILY, WEEKLY, MONTHLY, QUARTERLY, HALF_YEARLY, YEARLY])
+look_back = input.int(title="Number of CPR Back", defval=10, minval=1, maxval=5000)
+is_daily_based = input.bool(title="Use Daily-based Values", defval=true, tooltip="When this option is unchecked, CPR will use intraday data while calculating on intraday charts. If Extended Hours are displayed on the chart, they will be taken into account during the CPR level calculation. If intraday OHLC values are different from daily-based values (normal for stocks), the CPR levels will also differ.")
+
+show_labels = input.bool(title="Show Labels", defval=true, group="labels")
+show_prices = input.bool(title="Show Prices", defval=false, group="labels")
+position_labels = input.string("Right", "Labels Position", options=["Left", "Right"], group="labels")
+line_width = input.int(title="Line Width", defval=1, minval=1, maxval=100, group="labels")
+
+var arr_time = array.new_int()
+var p = array.new_float()
+var tp = array.new_float()
+var bp = array.new_float()
+var prev_high_arr = array.new_float()
+var prev_low_arr = array.new_float()
+var r1_curr = array.new_float()
+var s1_curr = array.new_float()
+var cam_r3_curr = array.new_float()
+var cam_s3_curr = array.new_float()
+cpr_show = input.bool(true, "", inline="CPR", group="CPR levels")
+cpr_color = input.color(color.rgb(255, 105, 135), "CPR", inline="CPR", group="CPR levels")
+
+var SR_COLOR = #FB8C00
+sr_show = input.bool(true, "Show SR Levels", inline="Show SR Levels", group="CPR levels")
+hist_sr_show = input.bool(true, "Show Historical SR Levels", inline="Show SR Levels", group="CPR levels")
+session_ranges_show = input.bool(true, "Session Ranges", group="CPR levels")
+var r0_5 = array.new_float()
+var s0_5 = array.new_float()
+var r_quarter = array.new_float()
+var s_quarter = array.new_float()
+s0_5_show = input.bool(true, "", inline="S0.5/R0.5", group="CPR levels")
+s0_5_color = input.color(SR_COLOR, "S0.5", inline="S0.5/R0.5" , group="CPR levels")
+r0_5_show = input.bool(true, "", inline="S0.5/R0.5", group="CPR levels")
+r0_5_color = input.color(SR_COLOR, "R0.5", inline="S0.5/R0.5", group="CPR levels")
+var r1 = array.new_float()
+var s1 = array.new_float()
+s1_color = input.color(SR_COLOR, "S1", inline="S1/R1" , group="CPR levels")
+r1_color = input.color(SR_COLOR, "R1", inline="S1/R1", group="CPR levels")
+var cam_cs3_show = input.bool(true, "Show C-R3/C-S3", inline="C-S3/C-R3", group="CPR levels")
+var cam_r3_color = input.color(color.purple, "C-R3", inline="C-S3/C-R3", group="CPR levels")
+var cam_s3_color = input.color(color.purple, "C-S3", inline="C-S3/C-R3", group="CPR levels")
+
+quarter_show = input.bool(true, "Show Quarter Lines", inline="Quarter", group="CPR levels")
+quarter_color = input.color(color.gray, "Quarter", inline="Quarter", group="CPR levels")
+
+open_show = input.bool(true, "Show Open", group="Open/Mid")
+open_color = input.color(color.blue, "Open Color", group="Open/Mid")
+var open_arr = array.new_float()
+
+// Immediate S/R
+immediate_sr_show = input.bool(false, "Immediate S/R", group="Immediate S/R")
+immediate_r_color = input.color(color.red, "Resistance Color", group="Immediate S/R")
+immediate_s_color = input.color(color.green, "Support Color", group="Immediate S/R")
+
+// Higher Timeframe CPR
+htf_show = input.bool(false, "Show Higher Timeframe CPR", group="Higher Timeframe")
+htf_cpr_color = input.color(color.new(color.orange, 70), "HTF CPR Color", group="Higher Timeframe")
+htf_sr_color = input.color(color.new(#ADD8E6, 50), "HTF Session Range Color", group="Higher Timeframe")
+
+var htf_tp = array.new_float()
+var htf_bp = array.new_float()
+var htf_p = array.new_float()
+var htf_r1_curr = array.new_float()
+var htf_s1_curr = array.new_float()
+var htf_prev_high_arr = array.new_float()
+var htf_prev_low_arr = array.new_float()
+var htf_arr_time = array.new_int()
+var htf_period_start = array.new_int()
+var htf_period_end = array.new_int()
+var htf_last_period_time = int(na)
+
+pivotX_open = float(na)
+pivotX_open := nz(pivotX_open[1], open)
+pivotX_high = float(na)
+pivotX_high := nz(pivotX_high[1], high)
+pivotX_low = float(na)
+pivotX_low := nz(pivotX_low[1], low)
+pivotX_prev_open = float(na)
+pivotX_prev_open := nz(pivotX_prev_open[1])
+pivotX_prev_high = float(na)
+pivotX_prev_high := nz(pivotX_prev_high[1])
+pivotX_prev_low = float(na)
+pivotX_prev_low := nz(pivotX_prev_low[1])
+pivotX_prev_close = float(na)
+pivotX_prev_close := nz(pivotX_prev_close[1])
+
+// Higher timeframe pivot variables
+htf_open = float(na)
+htf_open := nz(htf_open[1], open)
+htf_high = float(na)
+htf_high := nz(htf_high[1], high)
+htf_low = float(na)
+htf_low := nz(htf_low[1], low)
+htf_prev_open = float(na)
+htf_prev_open := nz(htf_prev_open[1])
+htf_prev_high = float(na)
+htf_prev_high := nz(htf_prev_high[1])
+htf_prev_low = float(na)
+htf_prev_low := nz(htf_prev_low[1])
+htf_prev_close = float(na)
+htf_prev_close := nz(htf_prev_close[1])
+
+get_pivot_resolution() =>
+    resolution = "M"
+    if cpr_time_frame == AUTO
+        if timeframe.isintraday
+            resolution := timeframe.multiplier <= 15 ? "D" : "W"
+        else if timeframe.isdaily
+            resolution := "M"
+        else if timeframe.isweekly
+            resolution := "6M"
+        else
+            resolution := "12M"
+    else if cpr_time_frame == DAILY
+        resolution := "D"
+    else if cpr_time_frame == WEEKLY
+        resolution := "W"
+    else if cpr_time_frame == MONTHLY
+        resolution := "M"
+    else if cpr_time_frame == QUARTERLY
+        resolution := "3M"
+    else if cpr_time_frame == HALF_YEARLY
+        resolution := "6M"
+    else if cpr_time_frame == YEARLY
+        resolution := "12M"
+    resolution
+
+get_higher_timeframe(res) =>
+    htf_res = "D"
+    if res == "1" or res == "5" or res == "15"
+        htf_res := "60"
+    else if res == "60"
+        htf_res := "D"
+    else if res == "D"
+        htf_res := "W"
+    else if res == "W"
+        htf_res := "M"
+    else if res == "M"
+        htf_res := "3M"
+    else if res == "3M"
+        htf_res := "6M"
+    else if res == "6M"
+        htf_res := "12M"
+    else
+        htf_res := res
+    htf_res
+
+var lines = array.new_line()
+var labels = array.new_label()
+var sr_boxes = array.new_box()  // Separate boxes for session ranges
+var sr_labels = array.new_label()  // Separate labels for session ranges
+var htf_boxes = array.new_box()  // Separate boxes for HTF
+var htf_labels = array.new_label()  // Separate labels for HTF
+var immediate_boxes = array.new_box() // Boxes for Immediate S/R
+
+draw_line(i, pivot, col, line_style=line.style_solid) =>
+    line aLine = na
+    if array.size(arr_time) > 1
+        aLine := line.new(array.get(arr_time, i), array.get(pivot, i), array.get(arr_time, i + 1), array.get(pivot, i), color=col, xloc=xloc.bar_time, width=line_width, style=line_style)
+        array.push(lines, aLine)
+    aLine
+
+draw_label(i, y, txt, txt_color) =>
+    if show_labels or show_prices
+        display_text = ""
+        if show_labels and show_prices and txt != ''
+            display_text := str.format("                                {0} - {1}", txt, math.round_to_mintick(y))
+        else if show_labels and txt != ''
+            display_text := "                           " + txt
+        else
+            display_text := str.format("                                {0}", math.round_to_mintick(y))
+        x = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
+        array.push(labels, label.new(x=x, y=y, text=display_text, textcolor=txt_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+
+traditional() =>
+    pivotX_Median = (pivotX_prev_high + pivotX_prev_low + pivotX_prev_close) / 3
+
+    _r1 = pivotX_Median * 2 - pivotX_prev_low
+    _s1 = pivotX_Median * 2 - pivotX_prev_high
+    _r2 = pivotX_Median + 1 * (pivotX_prev_high - pivotX_prev_low)
+    _s2 = pivotX_Median - 1 * (pivotX_prev_high - pivotX_prev_low)
+    array.push(r0_5, (pivotX_Median + _r1) / 2)
+    array.push(s0_5, (pivotX_Median + _s1) / 2)
+    
+    // Quarter Lines: 25% from R0.5/S0.5 towards High/Low
+    r05_val = (pivotX_Median + _r1) / 2
+    s05_val = (pivotX_Median + _s1) / 2
+    r_q_val = r05_val + (pivotX_prev_high - r05_val) / 4
+    s_q_val = s05_val - (s05_val - pivotX_prev_low) / 4
+    
+    array.push(r_quarter, r_q_val)
+    array.push(s_quarter, s_q_val)
+
+    array.push(r1, _r1)
+    array.push(s1, _s1)
+
+calc_pivot() =>
+    pivotX_Median = (pivotX_prev_high + pivotX_prev_low + pivotX_prev_close) / 3
+    pivotX_Bottom = (pivotX_prev_high + pivotX_prev_low) / 2
+    pivotX_Top = pivotX_Median * 2 - pivotX_Bottom
+
+    if pivotX_Bottom > pivotX_Top
+        temp = pivotX_Bottom
+        pivotX_Bottom := pivotX_Top
+        pivotX_Top := temp
+
+    array.push(p, pivotX_Median)
+    array.push(tp, pivotX_Top)
+    array.push(bp, pivotX_Bottom)
+    
+    // Store previous high/low for this period
+    array.push(prev_high_arr, pivotX_prev_high)
+    array.push(prev_low_arr, pivotX_prev_low)
+    
+    // Store open price for this period
+    array.push(open_arr, pivotX_open)
+    
+    // Calculate Traditional R1/S1 (for CPR display) and Camarilla R3/S3 (always on)
+    _r1_period = pivotX_Median * 2 - pivotX_prev_low
+    _s1_period = pivotX_Median * 2 - pivotX_prev_high
+
+    cam_range = pivotX_prev_high - pivotX_prev_low
+    _cam_r3_period = pivotX_prev_close + cam_range * 1.1 / 4.0
+    _cam_s3_period = pivotX_prev_close - cam_range * 1.1 / 4.0
+    
+    array.push(r1_curr, _r1_period)
+    array.push(s1_curr, _s1_period)
+    array.push(cam_r3_curr, _cam_r3_period)
+    array.push(cam_s3_curr, _cam_s3_period)
+
+    traditional()
+
+calc_htf_pivot(htf_res) =>
+    htf_Median = (htf_prev_high + htf_prev_low + htf_prev_close) / 3
+    htf_Bottom = (htf_prev_high + htf_prev_low) / 2
+    htf_Top = htf_Median * 2 - htf_Bottom
+
+    if htf_Bottom > htf_Top
+        temp = htf_Bottom
+        htf_Bottom := htf_Top
+        htf_Top := temp
+
+    array.push(htf_p, htf_Median)
+    array.push(htf_tp, htf_Top)
+    array.push(htf_bp, htf_Bottom)
+    array.push(htf_prev_high_arr, htf_prev_high)
+    array.push(htf_prev_low_arr, htf_prev_low)
+    array.push(htf_period_start, time)
+    array.push(htf_period_end, time_close(htf_res))
+    
+    // Calculate R1/S1 for HTF (Traditional style)
+    htf_r1 = htf_Median * 2 - htf_prev_low
+    htf_s1 = htf_Median * 2 - htf_prev_high
+    
+    array.push(htf_r1_curr, htf_r1)
+    array.push(htf_s1_curr, htf_s1)
+
+resolution = get_pivot_resolution()
+htf_resolution = get_higher_timeframe(resolution)
+
+calc_high(prev, curr) =>
+    if na(prev) or na(curr)
+        nz(prev, nz(curr, na))
+    else
+        math.max(prev, curr)
+
+calc_low(prev, curr) =>
+    if not na(prev) and not na(curr)
+        math.min(prev, curr)
+    else
+        nz(prev, nz(curr, na))
+
+[sec_open, sec_high, sec_low, sec_close, sec_time] = request.security(syminfo.tickerid, resolution, [open, high, low, close, time], lookahead = barmerge.lookahead_on)
+[prev_sec_open, prev_sec_high, prev_sec_low, prev_sec_close, prev_sec_time] = request.security(syminfo.tickerid, resolution, [open, high, low, close, time], lookahead = barmerge.lookahead_off)
+sec_open_gaps_on = request.security(syminfo.tickerid, resolution, open, gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_on)
+
+// Higher timeframe data
+[htf_open_temp, htf_high_temp, htf_low_temp, htf_close_temp, htf_time_temp] = request.security(syminfo.tickerid, htf_resolution, [open, high, low, close, time], lookahead = barmerge.lookahead_on)
+[htf_prev_open_temp, htf_prev_high_temp, htf_prev_low_temp, htf_prev_close_temp, htf_prev_time_temp] = request.security(syminfo.tickerid, htf_resolution, [open, high, low, close, time], lookahead = barmerge.lookahead_off)
+
+htf_open := htf_open_temp
+htf_high := htf_high_temp
+htf_low := htf_low_temp
+htf_prev_open := htf_prev_open_temp
+htf_prev_high := htf_prev_high_temp
+htf_prev_low := htf_prev_low_temp
+htf_prev_close := htf_prev_close_temp
+
+var is_change = false
+var uses_current_bar = false
+var change_time = int(na)
+is_time_change = ta.change(time(resolution)) != 0
+if is_time_change
+    change_time := time
+
+var start_time = time
+
+without_time_change = barstate.islast and array.size(arr_time) == 0
+is_can_calc_pivot = (not uses_current_bar and is_time_change) or (uses_current_bar and not na(sec_open_gaps_on)) or without_time_change
+enough_bars_for_calculate = prev_sec_time >= start_time or is_daily_based
+
+if is_can_calc_pivot and enough_bars_for_calculate
+    if array.size(arr_time) == 0 and is_daily_based
+        pivotX_prev_open := prev_sec_open
+        pivotX_prev_high := prev_sec_high
+        pivotX_prev_low := prev_sec_low
+        pivotX_prev_close := prev_sec_close
+        pivotX_open := open
+        pivotX_high := sec_high
+        pivotX_low := sec_low
+        array.push(arr_time, start_time)
+        calc_pivot()
+
+    if is_daily_based
+        pivotX_prev_open := prev_sec_open
+        pivotX_prev_high := prev_sec_high
+        pivotX_prev_low := prev_sec_low
+        pivotX_prev_close := prev_sec_close
+        pivotX_open := open
+        pivotX_high := sec_high
+        pivotX_low := sec_low
+    else
+        pivotX_prev_high := pivotX_high
+        pivotX_prev_low := pivotX_low
+        pivotX_prev_open := pivotX_open
+        pivotX_prev_close := close[1]
+        pivotX_open := open
+        pivotX_high := high
+        pivotX_low := low
+
+    if barstate.islast and not is_change and array.size(arr_time) > 0 and not without_time_change
+        array.set(arr_time, array.size(arr_time) - 1, change_time)
+    else if without_time_change
+        array.push(arr_time, start_time)
+    else
+        array.push(arr_time, nz(change_time, time))
+
+    calc_pivot()
+
+    if array.size(arr_time) > look_back
+        if array.size(arr_time) > 0
+            array.shift(arr_time)
+        if array.size(p) > 0 and cpr_show
+            array.shift(p)
+        if array.size(tp) > 0 and cpr_show
+            array.shift(tp)
+        if array.size(bp) > 0 and cpr_show
+            array.shift(bp)
+        if array.size(prev_high_arr) > 0
+            array.shift(prev_high_arr)
+        if array.size(prev_low_arr) > 0
+            array.shift(prev_low_arr)
+        if array.size(r1_curr) > 0
+            array.shift(r1_curr)
+        if array.size(s1_curr) > 0
+            array.shift(s1_curr)
+        if array.size(cam_r3_curr) > 0
+            array.shift(cam_r3_curr)
+        if array.size(cam_s3_curr) > 0
+            array.shift(cam_s3_curr)
+
+        if array.size(open_arr) > 0
+            array.shift(open_arr)
+
+        if sr_show or hist_sr_show or quarter_show or immediate_sr_show
+            if array.size(r0_5) > 0 and r0_5_show
+                array.shift(r0_5)
+            if array.size(s0_5) > 0 and s0_5_show
+                array.shift(s0_5)
+            if array.size(r_quarter) > 0
+                array.shift(r_quarter)
+            if array.size(s_quarter) > 0
+                array.shift(s_quarter)
+            if array.size(r1) > 0
+                array.shift(r1)
+            if array.size(s1) > 0
+                array.shift(s1)
+    is_change := true
+else if not is_daily_based
+    pivotX_high := math.max(pivotX_high, high)
+    pivotX_low := math.min(pivotX_low, low)
+
+if barstate.islast and not is_daily_based and array.size(arr_time) == 0
+    runtime.error("Not enough intraday data to calculate CPR. Lower the CPR Timeframe or turn on the 'Use Daily-based Values' option in the indicator settings.")
+
+// Calculate HTF data on every bar when enabled
+if htf_show
+    htf_current_period_time = time(htf_resolution)
+    if na(htf_last_period_time) or htf_current_period_time != htf_last_period_time
+        calc_htf_pivot(htf_resolution)
+        htf_last_period_time := htf_current_period_time
+
+if barstate.islast and array.size(arr_time) > 0 and is_change
+    is_change := false
+    array.push(arr_time, time_close(resolution))
+
+    for i = 0 to array.size(lines) - 1
+        if array.size(lines) > 0
+            line.delete(array.shift(lines))
+        if array.size(labels) > 0
+            label.delete(array.shift(labels))
+
+    for i = 0 to array.size(arr_time) - 2
+        if array.size(p) > 0 and cpr_show
+            draw_line(i, p, cpr_color)
+        if array.size(tp) > 0 and array.size(bp) > 0 and cpr_show
+            tp_line = draw_line(i, tp, cpr_color)
+            bp_line = draw_line(i, bp, cpr_color)
+            linefill.new(tp_line, bp_line, color.new(cpr_color, 95))
+
+    // Clear previous Immediate S/R boxes
+    while array.size(immediate_boxes) > 0
+        box.delete(array.pop(immediate_boxes))
+
+    j = array.size(arr_time) - 2
+    for i = 0 to j
+        // Immediate S/R Boxes
+        if immediate_sr_show
+            // Resistance Box: R0.5 to R0.25
+            if array.size(r0_5) > i and array.size(r_quarter) > i
+                r05_val = array.get(r0_5, i)
+                rq_val = array.get(r_quarter, i)
+                top_val = math.max(r05_val, rq_val)
+                bottom_val = math.min(r05_val, rq_val)
+                box_r = box.new(array.get(arr_time, i), top_val, array.get(arr_time, i + 1), bottom_val, border_color=immediate_r_color, bgcolor=color.new(immediate_r_color, 85), xloc=xloc.bar_time)
+                array.push(immediate_boxes, box_r)
+
+            // Support Box: S0.5 to S0.25
+            if array.size(s0_5) > i and array.size(s_quarter) > i
+                s05_val = array.get(s0_5, i)
+                sq_val = array.get(s_quarter, i)
+                top_val = math.max(s05_val, sq_val)
+                bottom_val = math.min(s05_val, sq_val)
+                box_s = box.new(array.get(arr_time, i), top_val, array.get(arr_time, i + 1), bottom_val, border_color=immediate_s_color, bgcolor=color.new(immediate_s_color, 85), xloc=xloc.bar_time)
+                array.push(immediate_boxes, box_s)
+
+        if sr_show or quarter_show
+            // R0.5 Logic (Resistance)
+            if array.size(r0_5) > 0 and r0_5_show and sr_show and i == j
+                draw_line(i, r0_5, r0_5_color, line.style_dashed)
+                draw_label(i, array.get(r0_5, i), "R0.5", r0_5_color)
+            
+            // S0.5 Logic (Support)
+            if array.size(s0_5) > 0 and s0_5_show and sr_show and i == j
+                draw_line(i, s0_5, s0_5_color, line.style_dashed)
+                draw_label(i, array.get(s0_5, i), "S0.5", s0_5_color)
+            
+            // R0.25 Logic (Resistance Quarter)
+            if array.size(r_quarter) > 0 and quarter_show and i == j
+                draw_line(i, r_quarter, quarter_color, line.style_dotted)
+                draw_label(i, array.get(r_quarter, i), "R0.25", quarter_color)
+
+            // S0.25 Logic (Support Quarter)
+            if array.size(s_quarter) > 0 and quarter_show and i == j
+                draw_line(i, s_quarter, quarter_color, line.style_dotted)
+                draw_label(i, array.get(s_quarter, i), "S0.25", quarter_color)
+            if array.size(cam_r3_curr) > 0 and cam_cs3_show and sr_show
+                cam_r3_line = draw_line(i, cam_r3_curr, cam_r3_color, line.style_solid)
+                if not na(cam_r3_line)
+                    line.set_width(cam_r3_line, 2)
+                if i == j
+                    draw_label(i, array.get(cam_r3_curr, i), "C-R3", cam_r3_color)
+            if array.size(cam_s3_curr) > 0 and cam_cs3_show and sr_show
+                cam_s3_line = draw_line(i, cam_s3_curr, cam_s3_color, line.style_solid)
+                if not na(cam_s3_line)
+                    line.set_width(cam_s3_line, 2)
+                if i == j
+                    draw_label(i, array.get(cam_s3_curr, i), "C-S3", cam_s3_color)
+        
+        // Draw Open line with label (for all historical periods)
+        if open_show and array.size(open_arr) > 0
+            draw_line(i, open_arr, open_color, line.style_dashed)
+            if i == j
+                draw_label(i, array.get(open_arr, i), "Open", open_color)
+
+    i = array.size(arr_time) - 2
+    if array.size(p) > 0 and cpr_show
+        if show_labels
+            x = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
+            array.push(labels, label.new(x=x, y=array.get(p, i), text="                           P", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+    if array.size(tp) > 0 and cpr_show
+        if show_labels
+            x = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
+            array.push(labels, label.new(x=x, y=array.get(tp, i), text="                           TC", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+    if array.size(bp) > 0 and cpr_show
+        if show_labels
+            x = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
+            array.push(labels, label.new(x=x, y=array.get(bp, i), text="                           BC", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+
+// Draw session ranges (completely independent from is_change block)
+if barstate.islast and array.size(arr_time) > 0 and session_ranges_show
+    // Clear previous session range boxes and labels
+    while array.size(sr_boxes) > 0
+        box.delete(array.pop(sr_boxes))
+    while array.size(sr_labels) > 0
+        label.delete(array.pop(sr_labels))
+    
+    j = array.size(arr_time) - 2
+    for i = 0 to j
+        // Draw R1 and Previous High as box with labels (for all historical periods)
+        if array.size(r1_curr) > 0 and array.size(prev_high_arr) > 0
+            r1_val = array.get(r1_curr, i)
+            prev_h_val = array.get(prev_high_arr, i)
+            top_val = math.max(r1_val, prev_h_val)
+            bottom_val = math.min(r1_val, prev_h_val)
+            x_pos = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
+            box_r1 = box.new(array.get(arr_time, i), top_val, array.get(arr_time, i + 1), bottom_val, border_color=color.yellow, bgcolor=na, border_width=2, xloc=xloc.bar_time)
+            array.push(sr_boxes, box_r1)
+            if i == j
+                if r1_val == top_val
+                    array.push(sr_labels, label.new(x=x_pos, y=r1_val, text="                           R1", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+                    array.push(sr_labels, label.new(x=x_pos, y=prev_h_val, text="                           Prev H", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+                else
+                    array.push(sr_labels, label.new(x=x_pos, y=prev_h_val, text="                           Prev H", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+                    array.push(sr_labels, label.new(x=x_pos, y=r1_val, text="                           R1", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+        
+        // Draw S1 and Previous Low as box with labels (for all historical periods)
+        if array.size(s1_curr) > 0 and array.size(prev_low_arr) > 0
+            s1_val = array.get(s1_curr, i)
+            prev_l_val = array.get(prev_low_arr, i)
+            top_val = math.max(s1_val, prev_l_val)
+            bottom_val = math.min(s1_val, prev_l_val)
+            x_pos = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
+            box_s1 = box.new(array.get(arr_time, i), top_val, array.get(arr_time, i + 1), bottom_val, border_color=color.yellow, bgcolor=na, border_width=2, xloc=xloc.bar_time)
+            array.push(sr_boxes, box_s1)
+            if i == j
+                if s1_val == top_val
+                    array.push(sr_labels, label.new(x=x_pos, y=s1_val, text="                           S1", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+                    array.push(sr_labels, label.new(x=x_pos, y=prev_l_val, text="                           Prev L", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+                else
+                    array.push(sr_labels, label.new(x=x_pos, y=prev_l_val, text="                           Prev L", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+                    array.push(sr_labels, label.new(x=x_pos, y=s1_val, text="                           S1", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+
+// Draw Higher Timeframe CPR (on last bar regardless of period change)
+if barstate.islast and htf_show and array.size(htf_r1_curr) > 0
+    // Clear previous HTF boxes and labels
+    while array.size(htf_boxes) > 0
+        box.delete(array.pop(htf_boxes))
+    while array.size(htf_labels) > 0
+        label.delete(array.pop(htf_labels))
+    
+    // Draw all HTF period boxes (including current period)
+    if array.size(htf_period_start) > 0
+        for htf_i = 0 to array.size(htf_period_start) - 1
+            // Draw HTF Session Ranges - R1 (Previous High) level as box
+            if array.size(htf_r1_curr) > htf_i and array.size(htf_prev_high_arr) > htf_i
+                r1_val = array.get(htf_r1_curr, htf_i)
+                prev_h_val = array.get(htf_prev_high_arr, htf_i)
+                top_val = math.max(r1_val, prev_h_val)
+                bottom_val = math.min(r1_val, prev_h_val)
+                htf_start_time = array.get(htf_period_start, htf_i)
+                htf_end_time = array.get(htf_period_end, htf_i)
+                
+                // Draw box for R1 and Previous High using actual HTF time period
+                box_htf_r1 = box.new(htf_start_time, top_val, htf_end_time, bottom_val, border_color=color.orange, bgcolor=color.new(htf_sr_color, 85), border_width=1, xloc=xloc.bar_time)
+                array.push(htf_boxes, box_htf_r1)
+            
+            // Draw HTF Session Ranges - S1 (Previous Low) level as box
+            if array.size(htf_s1_curr) > htf_i and array.size(htf_prev_low_arr) > htf_i
+                s1_val = array.get(htf_s1_curr, htf_i)
+                prev_l_val = array.get(htf_prev_low_arr, htf_i)
+                top_val = math.max(s1_val, prev_l_val)
+                bottom_val = math.min(s1_val, prev_l_val)
+                htf_start_time = array.get(htf_period_start, htf_i)
+                htf_end_time = array.get(htf_period_end, htf_i)
+                
+                // Draw box for S1 and Previous Low using actual HTF time period
+                box_htf_s1 = box.new(htf_start_time, top_val, htf_end_time, bottom_val, border_color=color.orange, bgcolor=color.new(htf_sr_color, 85), border_width=1, xloc=xloc.bar_time)
+                array.push(htf_boxes, box_htf_s1)
+
+
+

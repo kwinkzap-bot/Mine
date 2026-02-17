@@ -225,6 +225,10 @@ class Intraday920LiveSignal:
         # Monitoring state
         self.is_monitoring = False
         self.monitor_thread = None
+        self.is_entry_monitoring = False
+        self.entry_monitor_thread = None
+        self.is_sl_monitoring = False
+        self.sl_monitor_thread = None
         self.active_trades = {}  # Track active trades: {side: {entry_info, order_id, target_hit, trailed_sl}}
         self.active_trades_lock = threading.Lock()  # Thread safety for active_trades
         self.today_signals = []  # All signals generated today
@@ -242,7 +246,8 @@ class Intraday920LiveSignal:
         self.LIVE_DATA_FETCH_TIMEOUT = 10  # seconds
         self.PRICE_FETCH_BATCH_SIZE = 10  # max tokens per quote call
         
-        logger.info(f"Intraday 9:20 Live Signal Monitor initialized for {symbol} (live_trading={live_trading}, ratio={self.risk_reward_ratio})")
+        
+        logger.info(f"Intraday 9:20 Live Signal Monitor initialized for {symbol} (live_trading={live_trading}, ratio={self.risk_reward_ratio}) [Instance ID: {id(self)}]")
     
     def is_market_hours(self, check_time: Optional[datetime] = None) -> bool:
         """
@@ -1263,19 +1268,27 @@ class Intraday920LiveSignal:
                 if target_hit:
                     # Target already hit - implement trailing SL
                     
-                    # Calculate how much price has moved above entry
-                    price_above_entry = current_price - entry_price
+                    # === NEW 1:2 TRAILING LOGIC (10 POINT STEP) ===
+                    # Formula: New_SL = Entry + int((Price - Target) / 10) * 10
+                    # At Target (Price=Target): Diff=0, SL = Entry + 0 = Entry
+                    # At Target+10 (Price=Target+10): Diff=10, SL = Entry + 10
                     
-                    # Trail SL by sl_distance for every sl_distance movement above entry
-                    if price_above_entry > 0:
-                        num_trails = int(price_above_entry / sl_distance)
-                        new_trailed_sl = entry_price + (num_trails * sl_distance)
+                    price_above_target = current_price - target
+                    TRAIL_STEP = 10.0
+                    
+                    # Only trail if price is at or above target (which it should be if target_hit is True)
+                    if price_above_target >= 0:
+                        # Calculate how many full 10-point steps we are above the target
+                        steps_above_target = int(price_above_target / TRAIL_STEP)
+                        
+                        # New SL is Entry + (Steps * 10)
+                        new_trailed_sl = entry_price + (steps_above_target * TRAIL_STEP)
                         
                         if new_trailed_sl > trailed_sl:
                             old_sl = trailed_sl
                             trailed_sl = new_trailed_sl
                             trade['trailed_sl'] = trailed_sl
-                            logger.info(f"📈 {side} Trailing SL updated: {trailed_sl:.2f} (price: {current_price:.2f}, entry: {entry_price:.2f})")
+                            logger.info(f"📈 {side} Trailing SL updated: {trailed_sl:.2f} (price: {current_price:.2f}, target: {target:.2f}, steps: {steps_above_target})")
                             
                             # Modify SL order on broker if live trading
                             sl_order_id = trade.get('sl_order_id')
@@ -1470,6 +1483,37 @@ class Intraday920LiveSignal:
                         # Activate trailing SL - move SL to entry price
                         trade['target_hit'] = True
                         trade['trailed_sl'] = entry_price
+
+                        # === FIX: Update Broker SL to Entry Price ===
+                        sl_order_id = trade.get('sl_order_id')
+                        if self.live_trading and sl_order_id:
+                            try:
+                                modify_result = self.kite_service.modify_stoploss_order(
+                                    order_id=sl_order_id,
+                                    new_trigger_price=entry_price
+                                )
+                                if modify_result['success']:
+                                    logger.info(f"✅ {side} Broker SL moved to Entry: {sl_order_id} -> Trigger: {entry_price:.2f}")
+                                    
+                                    # Log SL update to Trade sheet (Breakeven move)
+                                    excel_logger.log_trade(
+                                        order_type='SL_UPDATE',
+                                        option_type=side,
+                                        strike=strike,
+                                        entry_price=entry_price,
+                                        current_price=current_price,
+                                        target=target,
+                                        stop_loss=entry_price,
+                                        pnl=pnl,
+                                        status='SL_MOVED_TO_ENTRY',
+                                        order_id=sl_order_id,
+                                        notes=f'Target Hit: SL moved to Breakeven {entry_price:.2f}'
+                                    )
+                                else:
+                                    logger.error(f"❌ Failed to move {side} SL to Entry: {modify_result.get('error')}")
+                            except Exception as e:
+                                logger.error(f"Error moving {side} SL to Entry: {e}", exc_info=True)
+                        # ============================================
                         
                         # Don't exit yet - continue with trailing SL
                         
@@ -1607,19 +1651,15 @@ class Intraday920LiveSignal:
             
             return None
     
-    def _monitor_loop(self) -> None:
+    def _entry_monitor_loop(self) -> None:
         """
-        Main monitoring loop - runs in background thread.
-        
-        Two-tier monitoring:
-        1. ENTRY SIGNALS: Checked only at 5-minute marks (9:15, 9:20, 9:25, ..., 3:15, 3:20)
-        2. SL/TARGET MONITORING: Checked every 3 seconds
-        
-        Uses strategy.check_entry_signal() to detect entry signals.
+        Entry signal monitoring loop - runs in background thread.
+        Checked only at 5-minute marks (9:15, 9:20, 9:25, ..., 3:15, 3:20)
         """
-        logger.info(f"Starting live signal monitoring for {self.symbol}")
+        logger.info(f"Starting ENTRY signal monitoring for {self.symbol} [Instance ID: {id(self)}]")
+
         
-        while self.is_monitoring:
+        while self.is_entry_monitoring:
             try:
                 # Check if within market hours
                 if not self.is_market_hours():
@@ -1810,6 +1850,30 @@ class Intraday920LiveSignal:
                             timestamp=check_timestamp,
                             notes=f"Failed to fetch data: {live_data.get('error', 'Unknown error')}"
                         )
+                
+                # Sleep 1 second and check again
+                time_module.sleep(1)
+            
+            except Exception as e:
+                logger.error(f"Error in ENTRY monitoring loop: {str(e)}", exc_info=True)
+                time_module.sleep(1)
+
+    def _sl_monitor_loop(self) -> None:
+        """
+        SL/Target monitoring loop - runs in background thread.
+        Checked every 3 seconds.
+        """
+        logger.info(f"Starting SL/TARGET signal monitoring for {self.symbol} [Instance ID: {id(self)}]")
+
+        
+        while self.is_sl_monitoring:
+            try:
+                # Check if within market hours
+                if not self.is_market_hours():
+                    if self.is_market_day():
+                        logger.debug("Outside market hours, waiting...")
+                    time_module.sleep(1)
+                    continue
                 
                 # ====== SL/TARGET CHECK (3-second intervals) ======
                 if self.should_check_sl_target_now():
@@ -2007,47 +2071,90 @@ class Intraday920LiveSignal:
                 time_module.sleep(1)
                 
             except Exception as e:
-                logger.error(f"Error in monitoring loop: {str(e)}", exc_info=True)
+                logger.error(f"Error in SL monitoring loop: {str(e)}", exc_info=True)
                 time_module.sleep(1)
     
-    def start_monitoring(self) -> bool:
+    def start_monitoring(self, monitor_entries: bool = True, monitor_sl: bool = True) -> Dict[str, bool]:
         """
-        Start live signal monitoring in background thread.
+        Start live signal monitoring in background threads.
         
+        Args:
+            monitor_entries: Whether to start entry monitoring loop
+            monitor_sl: Whether to start SL/Target monitoring loop
+            
         Returns:
-            True if started successfully, False otherwise
+            Dictionary with status of each monitor
         """
-        if self.is_monitoring:
-            logger.warning("Monitoring already running")
-            return False
+        result = {'entries_started': False, 'sl_started': False}
         
         if not self.is_market_day():
             logger.warning("Not a market trading day")
-            return False
+            return result
         
-        self.is_monitoring = True
-        self.monitor_thread = threading.Thread(
-            target=self._monitor_loop,
-            name=f"Intraday920Monitor-{self.symbol}",
-            daemon=True
-        )
-        self.monitor_thread.start()
-        logger.info(f"Live signal monitoring started for {self.symbol}")
+        # Start Entry Monitoring
+        if monitor_entries:
+            if self.is_entry_monitoring:
+                logger.warning("Entry Monitoring already running")
+            else:
+                self.is_entry_monitoring = True
+                self.entry_monitor_thread = threading.Thread(
+                    target=self._entry_monitor_loop,
+                    name=f"Intraday920EntryMonitor-{self.symbol}",
+                    daemon=True
+                )
+                self.entry_monitor_thread.start()
+                self.entry_monitor_thread.start()
+                logger.info(f"Live ENTRY monitoring started for {self.symbol} [Instance ID: {id(self)}]")
+                result['entries_started'] = True
+
+        # Start SL Monitoring
+        if monitor_sl:
+            if self.is_sl_monitoring:
+                logger.warning("SL Monitoring already running")
+            else:
+                self.is_sl_monitoring = True
+                self.sl_monitor_thread = threading.Thread(
+                    target=self._sl_monitor_loop,
+                    name=f"Intraday920SLMonitor-{self.symbol}",
+                    daemon=True
+                )
+                self.sl_monitor_thread.start()
+                self.sl_monitor_thread.start()
+                logger.info(f"Live SL/TARGET monitoring started for {self.symbol} [Instance ID: {id(self)}]")
+                result['sl_started'] = True
         
-        return True
+        self.is_monitoring = self.is_entry_monitoring or self.is_sl_monitoring
+        return result
     
-    def stop_monitoring(self) -> None:
-        """Stop live signal monitoring."""
-        if not self.is_monitoring:
-            logger.warning("Monitoring not running")
-            return
+    def stop_monitoring(self, stop_entries: bool = True, stop_sl: bool = True) -> Dict[str, bool]:
+        """
+        Stop live signal monitoring.
         
-        self.is_monitoring = False
+        Args:
+            stop_entries: Whether to stop entry monitoring
+            stop_sl: Whether to stop SL monitoring
+            
+        Returns:
+            Dictionary with status of each stop action
+        """
+        result = {'entries_stopped': False, 'sl_stopped': False}
         
-        if self.monitor_thread:
-            self.monitor_thread.join(timeout=5)
-        
-        logger.info(f"Live signal monitoring stopped for {self.symbol}")
+        if stop_entries and self.is_entry_monitoring:
+            self.is_entry_monitoring = False
+            if self.entry_monitor_thread:
+                self.entry_monitor_thread.join(timeout=5)
+            logger.info(f"Live ENTRY monitoring stopped for {self.symbol}")
+            result['entries_stopped'] = True
+            
+        if stop_sl and self.is_sl_monitoring:
+            self.is_sl_monitoring = False
+            if self.sl_monitor_thread:
+                self.sl_monitor_thread.join(timeout=5)
+            logger.info(f"Live SL/TARGET monitoring stopped for {self.symbol}")
+            result['sl_stopped'] = True
+            
+        self.is_monitoring = self.is_entry_monitoring or self.is_sl_monitoring
+        return result
     
     def get_active_trades(self) -> Dict[str, Any]:
         """

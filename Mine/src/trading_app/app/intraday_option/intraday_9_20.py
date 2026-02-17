@@ -1198,23 +1198,22 @@ class Intraday920Strategy:
                     
                     # If target was hit, implement trailing stop loss
                     if target_hit:
-                        # Calculate how much price has moved above entry since target was hit
-                        price_above_entry = candle_high - result['entry_price']
+                        # Calculate steps above target
+                        price_above_target = candle_high - initial_target
+                        TRAIL_STEP = 10.0
                         
-                        # Trail SL by sl_distance for every sl_distance movement above entry
-                        if price_above_entry > 0:
-                            num_trails = int(price_above_entry / sl_distance)
-                            new_trailed_sl = result['entry_price'] + (num_trails * sl_distance)
+                        if price_above_target >= 0:
+                            # Calculate how many full 10-point steps we are above the target
+                            steps_above_target = int(price_above_target / TRAIL_STEP)
+                            
+                            # New SL is Entry + (Steps * 10)
+                            new_trailed_sl = result['entry_price'] + (steps_above_target * TRAIL_STEP)
                             
                             if new_trailed_sl > trailed_sl:
                                 trailed_sl = new_trailed_sl
-                                logger.info(f"{side} Trailing SL updated: {trailed_sl} (price high: {candle_high})")
-                        else:
-                            # MISSING FIX: If price pulls back below entry after target hit, 
-                            # ensure SL stays at least at entry_price (lock in the gain)
-                            if trailed_sl < result['entry_price']:
-                                trailed_sl = result['entry_price']
-                                logger.info(f"{side} SL locked at entry: {result['entry_price']} (price pulled back to {candle_high})")
+                                logger.info(f"{side} Trailing SL updated: {trailed_sl} (price high: {candle_high}, target: {initial_target}, steps: {steps_above_target})")
+
+
                         
                         # Check if trailed SL is hit
                         if candle_low <= trailed_sl:

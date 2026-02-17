@@ -413,8 +413,115 @@ class OpenInterestService:
             
         except Exception as e:
             logger.error(f"Failed to retrieve OI history: {e}")
-            return []
+    def get_latest_oi_from_db(self, symbol: str, max_age_minutes: int = 5) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent OI snapshot from the database.
+        
+        Args:
+            symbol: Trading symbol
+            max_age_minutes: Maximum age of data in minutes to consider valid (default 5)
+            
+        Returns:
+            Dictionary matching get_open_interest_data structure or None if no recent data
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT * FROM oi_history 
+                    WHERE symbol = ? 
+                    ORDER BY timestamp DESC 
+                    LIMIT 1
+                ''', (symbol,))
+                
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                # Check data age
+                timestamp_str = row['timestamp']
+                try:
+                    # timestamp is in ISO format from save_oi_snapshot
+                    data_time = datetime.fromisoformat(timestamp_str)
+                    if (datetime.now() - data_time).total_seconds() > (max_age_minutes * 60):
+                        logger.info(f"DB data for {symbol} is stale. Age: {datetime.now() - data_time}")
+                        return None
+                except ValueError:
+                    # Handle legacy timestamp format if any
+                    logger.warning(f"Could not parse timestamp: {timestamp_str}")
+                    return None
+                
+                record = dict(row)
+                
+                # Parse strikes
+                active_strikes = []
+                try:
+                    if record.get('active_strikes'):
+                        stored_strikes = json.loads(record['active_strikes'])
+                        # Map DB keys back to API keys expected by frontend
+                        for s in stored_strikes:
+                            active_strikes.append({
+                                'strike': s.get('strike'),
+                                'ce_oi': s.get('ce_oi'),
+                                'pe_oi': s.get('pe_oi'),
+                                'ce_change_in_oi': s.get('ce_change'),
+                                'pe_change_in_oi': s.get('pe_change'),
+                                'ce_iv': s.get('ce_iv'),
+                                'pe_iv': s.get('pe_iv'),
+                                'ce_token': None, # Tokens not stored in DB, not needed for visualization
+                                'pe_token': None
+                            })
+                except Exception as e:
+                    logger.error(f"Error parsing active_strikes JSON: {e}")
+                    return None
 
+                # Reconstruct full response structure
+                response = {
+                    'success': True,
+                    'symbol': symbol,
+                    'timestamp': timestamp_str,
+                    'current_price': record.get('current_price'),
+                    'pcr_oi': record.get('pcr'),
+                    'max_pain': record.get('max_pain'),
+                    'iv_percentile': record.get('iv_percentile'),
+                    'strikes': active_strikes,
+                    'ce_summary': {
+                        'total_oi': record.get('total_ce_oi'),
+                        'change_in_oi': record.get('total_ce_change'),
+                        'max_oi_strike': 0, # Not currently stored explicitly, frontend might need this?
+                        'max_oi_value': 0   # Frontend calculates if missing? checking js...
+                    },
+                    'pe_summary': {
+                        'total_oi': record.get('total_pe_oi'),
+                        'change_in_oi': record.get('total_pe_change'),
+                        'max_oi_strike': 0,
+                        'max_oi_value': 0
+                    },
+                    'source': 'DATABASE'
+                }
+                
+                # Enriched summaries - calculate max OI strike from loaded strikes
+                # This ensures frontend "Max OI Strike" display works correcty
+                if active_strikes:
+                    try:
+                        # Find Max CE OI
+                        max_ce = max(active_strikes, key=lambda x: x.get('ce_oi', 0) or 0)
+                        response['ce_summary']['max_oi_strike'] = max_ce['strike']
+                        response['ce_summary']['max_oi_value'] = max_ce.get('ce_oi', 0)
+                        
+                        # Find Max PE OI
+                        max_pe = max(active_strikes, key=lambda x: x.get('pe_oi', 0) or 0)
+                        response['pe_summary']['max_oi_strike'] = max_pe['strike']
+                        response['pe_summary']['max_oi_value'] = max_pe.get('pe_oi', 0)
+                    except Exception as calc_e:
+                        logger.warning(f"Failed to recalculate max OI from DB strikes: {calc_e}")
+
+                return response
+                
+        except Exception as e:
+            logger.error(f"Failed to retrieve latest OI from DB: {e}")
+            return None
     
     def get_open_interest_data(self, symbol: str = 'NIFTY') -> Dict[str, Any]:
         """
