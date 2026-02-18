@@ -564,16 +564,33 @@ function renderOISummaryTable() {
             const ceCOIClass = entry.ceCOI >= 0 ? '' : 'negative';
             const ceCOISign = entry.ceCOI >= 0 ? '+' : '';
 
-            // Calculate Diff: previous OI Change Different - current OI Change Different
-            let diffValue = 0;
-            let diffClass = '';
-            let diffSign = '';
+            // Calculate Diff: PE Change - CE Change (Net Sentiment)
+            const diffValue = entry.oiChangeDifferent;
+            const diffClass = diffValue > 0 ? 'positive' : (diffValue < 0 ? 'negative' : '');
+            const diffSign = diffValue > 0 ? '+' : '';
 
-            if (index > 0) {
-                const previousOiChangeDiff = oiHistoryData[index - 1].oiChangeDifferent;
-                diffValue = previousOiChangeDiff - entry.oiChangeDifferent;
-                diffClass = diffValue >= 0 ? '' : 'negative';
-                diffSign = diffValue >= 0 ? '+' : '';
+            // Calculate Desc (Momentum): Previous Diff - Current Diff
+            // Since array is sorted descending (newest first), "Previous" time is at index + 1
+            let descValue = 0;
+            let descClass = '';
+            let descSign = '';
+
+            if (index < oiHistoryData.length - 1) {
+                const prevEntry = oiHistoryData[index + 1];
+                // Formula: Previous Time's Diff - Current Time's Diff
+                // Note: The user requested "Previous - Current", where "Previous" implies t-1.
+                // Let's verify: If Prev(t-1) was 100 and Curr(t) is 150, sentiment increased.
+                // Formula: 100 - 150 = -50.
+                // If Prev(t-1) was 150 and Curr(t) is 100, sentiment decreased.
+                // Formula: 150 - 100 = +50.
+
+                // Wait, if sentiment *improved* (100 -> 150), we usually want Green (+50).
+                // But the user specific "Previous - Current".
+                // Let's stick strictly to the user's requested formula: "Previous OI CHG DIFF - Current OI CHG DIFF"
+                descValue = prevEntry.oiChangeDifferent - diffValue;
+
+                descClass = descValue > 0 ? 'positive' : (descValue < 0 ? 'negative' : '');
+                descSign = descValue > 0 ? '+' : '';
             }
 
             row.innerHTML = `
@@ -583,6 +600,7 @@ function renderOISummaryTable() {
                 <td><span class="oi-ce-oi">${formatNumberForGrid(entry.totalCeOI)}</span></td>
                 <td><span class="oi-ce-chg ${ceCOIClass}">${ceCOISign}${formatNumberForGrid(entry.ceCOI)}</span></td>
                 <td><span class="oi-change-diff ${diffClass}">${diffSign}${formatNumberForGrid(diffValue)}</span></td>
+                <td><span class="oi-change-diff ${descClass}">${descSign}${formatNumberForGrid(descValue)}</span></td>
             `;
 
             tbody.appendChild(row);

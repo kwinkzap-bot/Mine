@@ -591,3 +591,7 @@
 .oi-change-diff.negative {
     color: #d32f2f;
 }
+
+.oi-change-diff.positive {
+    color: #16803d;
+}

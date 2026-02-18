@@ -83,7 +83,7 @@ class MarketScheduler:
             misfire_grace_time=60  # Allow 60s grace period if task is late
         )
         
-        # Schedule OI Persistence - Every 3 minutes
+        # Schedule OI Persistence - Every 1 minute
         self.oi_persistence_job = self.scheduler.add_job(
             self._run_oi_persistence_task,
             CronTrigger(
@@ -101,7 +101,7 @@ class MarketScheduler:
         self.scheduler.start()
         logger.info("Market scheduler started")
         logger.info("CPR filter job scheduled: Every 5 minutes during market hours")
-        logger.info("OI persistence job scheduled: Every 3 minutes during market hours")
+        logger.info("OI persistence job scheduled: Every 1 minute during market hours")
     
     def stop(self):
         """Stop the background scheduler."""
