@@ -947,6 +947,15 @@ def get_cpr_filter_results() -> EndpointResponse:
     if not current_kite:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
+    # Get date parameter
+    date_str = request.args.get('date')
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
     try:
         # Verify kite has access token
         if not hasattr(current_kite, 'access_token') or not current_kite.access_token:
@@ -959,22 +968,31 @@ def get_cpr_filter_results() -> EndpointResponse:
         
         from trading_app.filters.cpr_filter import CPRFilterService
         
-        logger.info("Initializing CPRFilterService...")
+        logger.info(f"Initializing CPRFilterService with target date: {target_date if target_date else 'current'}")
         cpr_service = CPRFilterService(kite_instance=current_kite)
         
         logger.info("Starting CPR filter stocks processing...")
-        results = cpr_service.filter_cpr_stocks()
+        results = cpr_service.filter_cpr_stocks(root_date=target_date)
         
         signals = results.get('signals', []) if isinstance(results, dict) else []
         weekly_cross = results.get('weekly_cross', {}) if isinstance(results, dict) else {}
+        reversal = results.get('reversal', {}) if isinstance(results, dict) else {}
 
         logger.info(
             "CPR filter completed. "
             f"Found {len(signals)} primary signals, "
             f"{len(weekly_cross.get('crossed_above', [])) if isinstance(weekly_cross, dict) else 0} crossed above weekly CPR, "
-            f"{len(weekly_cross.get('crossed_below', [])) if isinstance(weekly_cross, dict) else 0} crossed below weekly CPR."
+            f"{len(weekly_cross.get('crossed_below', [])) if isinstance(weekly_cross, dict) else 0} crossed below weekly CPR, "
+            f"{len(reversal.get('bullish', [])) if isinstance(reversal, dict) else 0} bullish reversal, "
+            f"{len(reversal.get('bearish', [])) if isinstance(reversal, dict) else 0} bearish reversal."
         )
-        return jsonify({'success': True, 'data': signals, 'weekly_cross': weekly_cross})
+        return jsonify({
+            'success': True, 
+            'data': signals, 
+            'weekly_cross': weekly_cross, 
+            'reversal': reversal,
+            'date': target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
+        })
     except Exception as e:
         logger.error(f"Error in CPR filter: {type(e).__name__}: {e}", exc_info=True)
         error_str = str(e).lower()
@@ -2800,9 +2818,9 @@ def get_open_interest() -> EndpointResponse:
         
         oi_service = OpenInterestService(kite)
         
-        # 1. Try to get data from DB first (up to 3 minutes old is fine, scheduler runs every 3 min)
-        # Using 5 mins as buffer to avoid race conditions
-        db_data = oi_service.get_latest_oi_from_db(symbol, max_age_minutes=5)
+        # 1. Try to get data from DB first
+        # Reduce max_age to 1 minute to ensure fresh data (user requested 1 min intervals)
+        db_data = oi_service.get_latest_oi_from_db(symbol, max_age_minutes=1)
         
         if db_data:
             logger.info(f"✅ Serving OI data from DB for {symbol} (Timestamp: {db_data.get('timestamp')})")
