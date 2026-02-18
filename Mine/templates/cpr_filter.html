@@ -5,23 +5,68 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/cpr_filter.css') }}">
 {% endblock %}
 {% block content %}
-<div id="status-bar" class="status-bar text-right status-bar-height"></div>
+<div id="status-bar" class="status-bar">
+    <span id="status-text"></span>
+    <div class="controls">
+        <input type="date" id="cprDateFilter" class="date-picker">
+    </div>
+</div>
+<div class="results-row">
+    <div id="bullishReversalResults" class="results results-hidden results-block">
+        <h3>🐂 Bullish Reversal (M S1/Low) <span id="bullishReversalCount">(0)</span></h3>
+        <div class="results-scroll">
+            <table id="bullishReversalTable">
+                <thead>
+                    <tr>
+                        <th data-column-index="0">Symbol</th>
+                        <th data-column-index="1">Price</th>
+                        <th data-column-index="2">Monthly CPR TC</th>
+                        <th data-column-index="3">Monthly S1</th>
+                        <th data-column-index="4">Prev M Low</th>
+                        <th data-column-index="5">M Gap %</th>
+                    </tr>
+                </thead>
+                <tbody id="bullishReversalBody"></tbody>
+            </table>
+        </div>
+    </div>
+    <div id="bearishReversalResults" class="results results-hidden results-block">
+        <h3>🐻 Bearish Reversal (M R1/High) <span id="bearishReversalCount">(0)</span></h3>
+        <div class="results-scroll">
+            <table id="bearishReversalTable">
+                <thead>
+                    <tr>
+                        <th data-column-index="0">Symbol</th>
+                        <th data-column-index="1">Price</th>
+                        <th data-column-index="2">Monthly CPR BC</th>
+                        <th data-column-index="3">Monthly R1</th>
+                        <th data-column-index="4">Prev M High</th>
+                        <th data-column-index="5">M Gap %</th>
+                    </tr>
+                </thead>
+                <tbody id="bearishReversalBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
 <div class="results-container">
     <div class="results-row">
         <div id="aboveResults" class="results results-hidden results-block">
             <h3>📈 CPR Above <span id="aboveCount">(0)</span></h3>
             <div class="results-scroll">
                 <table id="aboveTable">
-                    <thead><tr>
-                        <th data-column-index="0">Symbol</th>
-                        <th data-column-index="1">Price</th>
-                        <th data-column-index="2">Daily CPR</th>
-                        <th data-column-index="3">Weekly CPR</th>
-                        <th data-column-index="4">Monthly CPR</th>
-                        <th data-column-index="5">D Gap %</th>
-                        <th data-column-index="6">W Gap %</th>
-                        <th data-column-index="7">M Gap %</th>
-                    </tr></thead>
+                    <thead>
+                        <tr>
+                            <th data-column-index="0">Symbol</th>
+                            <th data-column-index="1">Price</th>
+                            <th data-column-index="2">Daily CPR</th>
+                            <th data-column-index="3">Weekly CPR</th>
+                            <th data-column-index="4">Monthly CPR</th>
+                            <th data-column-index="5">D Gap %</th>
+                            <th data-column-index="6">W Gap %</th>
+                            <th data-column-index="7">M Gap %</th>
+                        </tr>
+                    </thead>
                     <tbody id="aboveBody"></tbody>
                 </table>
             </div>
@@ -30,53 +75,60 @@
             <h3>📉 CPR Below <span id="belowCount">(0)</span></h3>
             <div class="results-scroll">
                 <table id="belowTable">
-                    <thead><tr>
-                        <th data-column-index="0">Symbol</th>
-                        <th data-column-index="1">Price</th>
-                        <th data-column-index="2">Daily CPR</th>
-                        <th data-column-index="3">Weekly CPR</th>
-                        <th data-column-index="4">Monthly CPR</th>
-                        <th data-column-index="5">D Gap %</th>
-                        <th data-column-index="6">W Gap %</th>
-                        <th data-column-index="7">M Gap %</th>
-                    </tr></thead>
+                    <thead>
+                        <tr>
+                            <th data-column-index="0">Symbol</th>
+                            <th data-column-index="1">Price</th>
+                            <th data-column-index="2">Daily CPR</th>
+                            <th data-column-index="3">Weekly CPR</th>
+                            <th data-column-index="4">Monthly CPR</th>
+                            <th data-column-index="5">D Gap %</th>
+                            <th data-column-index="6">W Gap %</th>
+                            <th data-column-index="7">M Gap %</th>
+                        </tr>
+                    </thead>
                     <tbody id="belowBody"></tbody>
                 </table>
             </div>
         </div>
     </div>
-    <div class="results-row">
-        <div id="crossAboveResults" class="results results-hidden results-block">
-            <h3>⏫ Crossed Above Weekly CPR <span id="crossAboveCount">(0)</span></h3>
-            <div class="results-scroll">
-                <table id="crossAboveTable">
-                    <thead><tr>
+</div>
+<div class="results-row">
+    <div id="crossAboveResults" class="results results-hidden results-block">
+        <h3>⏫ Crossed Above Weekly CPR <span id="crossAboveCount">(0)</span></h3>
+        <div class="results-scroll">
+            <table id="crossAboveTable">
+                <thead>
+                    <tr>
                         <th data-column-index="0">Symbol</th>
                         <th data-column-index="1">Price</th>
                         <th data-column-index="2">Daily CPR</th>
                         <th data-column-index="3">Weekly CPR</th>
                         <th data-column-index="4">Monthly CPR</th>
-                    </tr></thead>
-                    <tbody id="crossAboveBody"></tbody>
-                </table>
-            </div>
-        </div>
-        <div id="crossBelowResults" class="results results-hidden results-block">
-            <h3>⏬ Crossed Below Weekly CPR <span id="crossBelowCount">(0)</span></h3>
-            <div class="results-scroll">
-                <table id="crossBelowTable">
-                    <thead><tr>
-                        <th data-column-index="0">Symbol</th>
-                        <th data-column-index="1">Price</th>
-                        <th data-column-index="2">Daily CPR</th>
-                        <th data-column-index="3">Weekly CPR</th>
-                        <th data-column-index="4">Monthly CPR</th>
-                    </tr></thead>
-                    <tbody id="crossBelowBody"></tbody>
-                </table>
-            </div>
+                    </tr>
+                </thead>
+                <tbody id="crossAboveBody"></tbody>
+            </table>
         </div>
     </div>
+    <div id="crossBelowResults" class="results results-hidden results-block">
+        <h3>⏬ Crossed Below Weekly CPR <span id="crossBelowCount">(0)</span></h3>
+        <div class="results-scroll">
+            <table id="crossBelowTable">
+                <thead>
+                    <tr>
+                        <th data-column-index="0">Symbol</th>
+                        <th data-column-index="1">Price</th>
+                        <th data-column-index="2">Daily CPR</th>
+                        <th data-column-index="3">Weekly CPR</th>
+                        <th data-column-index="4">Monthly CPR</th>
+                    </tr>
+                </thead>
+                <tbody id="crossBelowBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
 </div>
 {% endblock %}
 {% block scripts %}
