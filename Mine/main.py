@@ -12,6 +12,30 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from trading_app.app import create_app
 from trading_app.app.utils.logger import logger
+from dotenv import load_dotenv
+import glob
+
+# Load environment variables from env/*.env if available
+# This ensures local config (like Mine.env) is loaded when running main.py directly
+def load_local_env():
+    """Load the first .env file found in the env/ directory."""
+    try:
+        # Path to env directory: current_dir/env
+        env_dir = os.path.join(os.path.dirname(__file__), 'env')
+        if os.path.exists(env_dir):
+            env_files = glob.glob(os.path.join(env_dir, '*.env'))
+            if env_files:
+                # Prioritize Mine.env if it exists, otherwise take the first one
+                target_env = next((f for f in env_files if 'Mine.env' in f), env_files[0])
+                load_dotenv(target_env)
+                print(f"✅ Loaded environment from {os.path.basename(target_env)}")
+                return True
+    except Exception as e:
+        print(f"⚠️  Failed to load local env: {e}")
+    return False
+
+# Load env before importing other modules that might use os.getenv
+load_local_env()
 
 # Global reference to live monitoring instances
 live_monitors = {}

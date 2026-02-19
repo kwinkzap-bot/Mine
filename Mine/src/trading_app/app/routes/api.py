@@ -266,7 +266,7 @@ def get_available_brokers() -> EndpointResponse:
                 'fields': ['KOTAK_ACCESS_TOKEN', 'KOTAK_UCC'],
                 'prefix': 'KOTAK',
                 'login_type': 'modal',
-                'login_action': 'showKotakLoginModal',
+                'login_action': 'showKotakLoginModal()',
                 'login_url': '/auth/login/kotak'
             },
             'dhan': {
@@ -276,7 +276,7 @@ def get_available_brokers() -> EndpointResponse:
                 'fields': ['DHAN_ACCESS_TOKEN', 'DHAN_CLIENT_ID'],
                 'prefix': 'DHAN',
                 'login_type': 'modal',
-                'login_action': 'showDhanLoginModal',
+                'login_action': 'showDhanLoginModal()',
                 'login_url': '/auth/login/dhan'
             },
             'fyers': {
@@ -286,7 +286,7 @@ def get_available_brokers() -> EndpointResponse:
                 'fields': ['FYERS_APP_ID', 'FYERS_SECRET_KEY'],
                 'prefix': 'FYERS',
                 'login_type': 'modal',
-                'login_action': 'showFyersLoginModal',
+                'login_action': 'showFyersLoginModal()',
                 'login_url': '/auth/login/fyers'
             }
         }
@@ -519,9 +519,26 @@ def get_underlying_price() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Global cache for symbols list
+_symbols_cache = {
+    'data': [],
+    'last_updated': 0
+}
+
 @api_bp.route('/symbols', methods=['GET'])
 def get_symbols() -> EndpointResponse:
-    """Get list of available symbols."""
+    """Get list of available symbols (Indices + F&O Stocks)."""
+    global _symbols_cache
+    
+    # Check cache (valid for 1 hour)
+    current_time = datetime.now().timestamp()
+    if _symbols_cache['data'] and (current_time - _symbols_cache['last_updated'] < 3600):
+        # logger.debug("Serving symbols from cache")
+        return jsonify({
+            'success': True,
+            'symbols': _symbols_cache['data']
+        })
+
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -531,12 +548,37 @@ def get_symbols() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
     try:
-        # Return only NIFTY 50
-        symbols = ['NIFTY']
+        from trading_app.filters import CPRFilterService
+        
+        # Initialize service
+        cpr_service = CPRFilterService(kite_instance=current_kite)
+        
+        # Get F&O Stocks
+        fo_stocks = cpr_service.get_fo_stocks()
+        
+        # Define Indices - ensure these are always returned even if F&O fails
+        indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']
+        
+        if fo_stocks:
+            # Combine and Sort
+            # Indices first, then stocks alphabetically
+            combined_symbols = indices + sorted(fo_stocks)
+            
+            # Update cache only if we successfully fetched stocks
+            _symbols_cache = {
+                'data': combined_symbols,
+                'last_updated': current_time
+            }
+            logger.info(f"Fetched and cached {len(combined_symbols)} symbols (Indices: {len(indices)}, Stocks: {len(fo_stocks)})")
+        else:
+            # If F&O fetch failed/empty, just return indices but DO NOT CACHE
+            # This allows retry on next request
+            logger.warning("F&O stocks fetch returned empty list. Returning indices only (not caching).")
+            combined_symbols = indices
         
         return jsonify({
             'success': True,
-            'symbols': symbols
+            'symbols': combined_symbols
         })
     except Exception as e:
         logger.error(f"Error fetching symbols: {e}")
@@ -2786,6 +2828,61 @@ def get_open_interest_test() -> EndpointResponse:
         }), 500
 
 
+@api_bp.route('/debug-symbol', methods=['GET'])
+def debug_symbol():
+    try:
+        symbol = request.args.get('symbol', 'ABB').strip().upper()
+        kite = get_kite()
+        if not kite:
+            return jsonify({'error': 'No kite session'}), 400
+            
+        instruments = kite.instruments('NFO')
+        
+        # 1. Exact Name Match
+        exact_matches = [i for i in instruments if i['name'] == symbol]
+        
+        # 2. Case-Insensitive Name Match
+        case_matches = [i for i in instruments if i['name'].strip().upper() == symbol]
+        
+        # 3. Contains Match
+        contains_matches = [i for i in instruments if symbol in i['name'].strip().upper()]
+        
+        # 4. Option Types in Exact/Case Matches
+        options = [i for i in case_matches if i['instrument_type'] in ['CE', 'PE']]
+        
+        # 5. Expiries
+        expiries = sorted(list(set(str(i['expiry']) for i in options))) if options else []
+        
+        # 6. Test OpenInterestService logic directly
+        from trading_app.service.open_interest_service import OpenInterestService
+        service = OpenInterestService(kite)
+        
+        # Create config like the service does
+        config = {'name': symbol, 'exchange': 'NFO', 'instrument_key': f'NSE:{symbol}'}
+        
+        # Call private method (for debug)
+        strikes_debug = service._get_available_strikes(instruments, symbol, 0, config)
+        service_found_count = len(strikes_debug) if strikes_debug else 0
+        
+        response = {
+            'symbol_requested': symbol,
+            'total_nfo_instruments': len(instruments),
+            'exact_matches_count': len(exact_matches),
+            'case_matches_count': len(case_matches),
+            'contains_matches_sample': [i['name'] for i in contains_matches[:10]],
+            'options_found_count': len(options),
+            'option_expiries': expiries,
+            'sample_instrument': options[0] if options else (case_matches[0] if case_matches else None),
+            'SERVICE_TEST_RESULT': {
+                'found_count': service_found_count,
+                'success': bool(strikes_debug)
+            }
+        }
+        return jsonify(response)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @api_bp.route('/open-interest', methods=['POST'])
 def get_open_interest() -> EndpointResponse:
     """
@@ -2857,66 +2954,6 @@ def get_open_interest() -> EndpointResponse:
         
     except Exception as e:
         logger.error(f"Error fetching open interest: {str(e)}", exc_info=True)
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
-
-@api_bp.route('/open-interest/history', methods=['GET'])
-def get_open_interest_history() -> EndpointResponse:
-    """
-    Get historical open interest data.
-    
-    Query Params:
-        symbol: Trading symbol (NIFTY, BANKNIFTY, FINNIFTY) - default NIFTY
-        limit: Number of records to retrieve - default 20
-    
-    Returns:
-        JSON with historical data points
-    """
-    try:
-        symbol = request.args.get('symbol', 'NIFTY').upper()
-        limit = int(request.args.get('limit', 20))
-        
-        # Cap limit to prevent excessive data transfer
-        limit = min(limit, 100)
-        
-        from trading_app.service.open_interest_service import OpenInterestService
-        
-        # We don't need a live Kite connection just to read DB
-        # But OpenInterestService constructor requires it.
-        # Ideally we'd separate DB logic, but for now we can pass None if we handle it in service
-        # OR just get a kite instance (cached/env)
-        
-        kite = get_kite()
-        # Even if kite is None, we might be able to initialize service if we modify it
-        # But OpenInterestService stores kite in self.kite
-        # Let's check OpenInterestService.__init__... it just stores it.
-        # So passing None is fine IF we only call get_oi_history
-        
-        # However, type hint says KiteConnect. Let's try get_kite() first.
-        # If it fails (e.g. no token), we might need a workaround or just return empty
-        
-        # Initialize service - workaround if kite is missing
-        class MockKite:
-            pass
-            
-        kite_instance = kite if kite else MockKite()
-        
-        oi_service = OpenInterestService(kite_instance) # type: ignore
-        
-        history = oi_service.get_oi_history(symbol, limit)
-        
-        return jsonify({
-            'success': True,
-            'symbol': symbol,
-            'count': len(history),
-            'data': history
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Error fetching OI history: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)

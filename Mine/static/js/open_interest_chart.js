@@ -10,6 +10,7 @@ let currentSymbol = 'NIFTY';
 let strikeRangeCount = 15; // Default strike range
 let cachedData = null; // Store fetched data to avoid repeated API calls
 let oiHistoryData = []; // Store OI history for the table (keep last 20 entries)
+let allSymbols = []; // Store all available symbols for custom dropdown
 const MAX_HISTORY_ROWS = 20;
 
 // Initialize on page load
@@ -17,7 +18,62 @@ document.addEventListener('DOMContentLoaded', function () {
     console.log('Open Interest Chart - Initializing...');
 
     // Event listeners
-    document.getElementById('symbolSelect').addEventListener('change', onSymbolChange);
+    const symbolInput = document.getElementById('symbolSelect');
+    const symbolList = document.getElementById('symbolDropdownList');
+
+    // Input: Filter list
+    symbolInput.addEventListener('input', function (e) {
+        renderDropdown(e.target.value);
+    });
+
+    // Focus: Clear and/or Show list
+    symbolInput.addEventListener('focus', function (e) {
+        // Clear value on click/focus per user request
+        this.value = '';
+        renderDropdown(''); // Show full list
+    });
+
+    // Blur: Restore if empty & Hide list
+    symbolInput.addEventListener('blur', function (e) {
+        // Delay hiding to allow click event on list item to fire
+        setTimeout(() => {
+            symbolList.classList.remove('show');
+            if (!this.value.trim()) {
+                this.value = currentSymbol;
+            }
+        }, 200);
+    });
+
+    // Keydown: Handle Enter for custom selection or blur
+    symbolInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+            // If list is visible and has items, select first?
+            // Or just trigger refresh with current text?
+            // Let's stick to current text if valid, or just blur to trigger restore/refresh
+            symbolList.classList.remove('show');
+
+            let val = e.target.value.trim().toUpperCase();
+            if (val) {
+                // Check if valid symbol?
+                if (allSymbols.includes(val) || val === 'NIFTY' || val === 'BANKNIFTY') {
+                    selectSymbol(val);
+                } else {
+                    // Just try it?
+                    selectSymbol(val);
+                }
+            } else {
+                e.target.blur();
+            }
+        }
+    });
+
+    // Click outside to close
+    document.addEventListener('click', function (e) {
+        if (!symbolInput.contains(e.target) && !symbolList.contains(e.target)) {
+            symbolList.classList.remove('show');
+        }
+    });
+
     document.getElementById('refreshNowBtn').addEventListener('click', refreshData);
 
     // Strike range button listeners - only manipulate cached data, no API call
@@ -25,24 +81,106 @@ document.addEventListener('DOMContentLoaded', function () {
         btn.addEventListener('click', onStrikeRangeChange);
     });
 
-    // Initial load
-    refreshData();
+    // Fetch symbols first, then load data
+    fetchSymbols().then(() => {
+        // Initial load
+        refreshData();
 
-    // Fetch and render historical data for grid
-    fetchAndRenderOiHistory();
-
-    // Start auto-refresh on every 30 seconds during market hours
-    startAutoRefresh();
+        // Start auto-refresh on every 30 seconds during market hours
+        startAutoRefresh();
+    });
 });
 
 /**
- * Handle symbol change
+ * Fetch available symbols (Indices + F&O Stocks)
  */
-function onSymbolChange(e) {
-    currentSymbol = e.target.value;
-    console.log(`Symbol changed to: ${currentSymbol}`);
-    refreshData(true);  // true = show loader (manual refresh)
+/**
+ * Fetch available symbols (Indices + F&O Stocks)
+ */
+async function fetchSymbols() {
+    try {
+        const response = await fetch('/api/symbols');
+        if (!response.ok) throw new Error('Failed to fetch symbols');
+
+        const data = await response.json();
+        if (data.success && data.symbols && data.symbols.length > 0) {
+            allSymbols = data.symbols;
+            console.log(`Loaded ${allSymbols.length} symbols`);
+        }
+    } catch (error) {
+        console.error('Error fetching symbols:', error);
+    }
 }
+
+/**
+ * Render custom dropdown list
+ */
+function renderDropdown(filterText = '') {
+    const list = document.getElementById('symbolDropdownList');
+    list.innerHTML = '';
+
+    // Create map for display text
+    const displayMap = {
+        'NIFTY': 'NIFTY 50',
+        'BANKNIFTY': 'NIFTY BANK',
+        'FINNIFTY': 'NIFTY FIN SERVICE',
+        'SENSEX': 'SENSEX'
+    };
+
+    const filter = filterText.toUpperCase();
+
+    // Filter symbols
+    const matches = allSymbols.filter(s => {
+        if (!filter) return true; // Show all if no filter
+        return s.includes(filter) || (displayMap[s] && displayMap[s].includes(filter));
+    });
+
+    if (matches.length === 0) {
+        list.classList.remove('show');
+        return;
+    }
+
+    matches.forEach(symbol => {
+        const li = document.createElement('li');
+        const displayName = displayMap[symbol] || symbol;
+
+        li.textContent = displayName;
+        if (displayName !== symbol) {
+            li.innerHTML = `<strong>${displayName}</strong> <span style="font-size:0.8em; color:#888">(${symbol})</span>`;
+        }
+
+        if (symbol === currentSymbol) {
+            li.classList.add('highlighted');
+        }
+
+        li.addEventListener('click', () => {
+            selectSymbol(symbol);
+        });
+
+        list.appendChild(li);
+    });
+
+    list.classList.add('show');
+}
+
+/**
+ * Handle symbol selection
+ */
+function selectSymbol(symbol) {
+    const input = document.getElementById('symbolSelect');
+    const list = document.getElementById('symbolDropdownList');
+
+    currentSymbol = symbol;
+    input.value = symbol;
+
+    list.classList.remove('show');
+
+    console.log(`Symbol selected: ${currentSymbol}`);
+    refreshData(true);
+}
+
+
+
 
 /**
  * Handle strike range change - only updates charts with cached data, no API call
@@ -462,21 +600,35 @@ function updateSummaryStats(data) {
     const ivElement = document.getElementById('ivPercentile');
 
     if (ivPercentile !== null) {
-        // Determine label based on percentile value
-        let ivLabel = 'Medium';
-        if (ivPercentile < 30) {
-            ivLabel = 'Low';
-        } else if (ivPercentile > 70) {
-            ivLabel = 'High';
+        // Determine label and color based on percentile value
+        let ivLabel = '';
+        let ivClass = '';
+
+        if (ivPercentile >= 80) {
+            ivLabel = 'Very High Premium';
+            ivClass = 'color-red';
+        } else if (ivPercentile >= 70) {
+            ivLabel = 'High Premium';
+            ivClass = 'color-orange';
+        } else if (ivPercentile >= 30) {
+            ivLabel = 'Medium';
+            ivClass = ''; // Default color
+        } else if (ivPercentile >= 20) {
+            ivLabel = 'Low Premium';
+            ivClass = 'color-green';
+        } else {
+            ivLabel = 'Very Low Premium';
+            ivClass = 'color-bright-green';
         }
 
-        ivElement.textContent = ivPercentile.toFixed(1) + '%';
-        // IV Percentile: Low = Red (low IV), High = Green (high IV)
-        ivElement.classList.remove('color-red', 'color-green');
-        if (ivPercentile < 20) {
-            ivElement.classList.add('color-red');
-        } else if (ivPercentile > 80) {
-            ivElement.classList.add('color-green');
+        ivElement.textContent = `${ivPercentile.toFixed(1)}% - ${ivLabel}`;
+
+        // Remove all color classes first
+        ivElement.classList.remove('color-red', 'color-orange', 'color-green', 'color-bright-green');
+
+        // Add applicable class if any
+        if (ivClass) {
+            ivElement.classList.add(ivClass);
         }
     } else {
         ivElement.textContent = '--';
@@ -1284,77 +1436,7 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
 /**
  * Fetch and render OI history (Chart + Grid)
  */
-async function fetchAndRenderOiHistory() {
-    if (!currentSymbol) {
-        console.warn("fetchAndRenderOiHistory: Missing symbol", { currentSymbol });
-        return;
-    }
 
-    try {
-        console.log(`Fetching OI history for ${currentSymbol}...`);
-        const response = await fetch(`/api/open-interest/history?symbol=${currentSymbol}&limit=100`);
-        const result = await response.json();
-        console.log("OI History API Response:", result);
-
-        if (result.success && result.data && result.data.length > 0) {
-            console.log(`Processing ${result.data.length} history records...`);
-
-            // Populate OI Summary Grid
-            // History comes in chrono order (oldest first) from API
-            // We want latest first for the grid
-            // But we need to calculate diffs correctly? No, each record has totals.
-
-            // Map to grid data format
-            const historyGridData = result.data.map(item => {
-                // Formatting time
-                const date = new Date(item.timestamp);
-                const timeStr = date.toLocaleTimeString('en-IN', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    hour12: true
-                });
-
-                // Calculate derived values if missing from DB
-                const totalPeOI = item.total_pe_oi || 0;
-                const totalCeOI = item.total_ce_oi || 0;
-                const peCOI = item.total_pe_change || 0;
-                const ceCOI = item.total_ce_change || 0;
-
-                const oiDifferent = totalPeOI - totalCeOI;
-                const oiChangeDifferent = peCOI - ceCOI;
-
-                return {
-                    time: timeStr,
-                    totalPeOI: totalPeOI,
-                    peCOI: peCOI,
-                    totalCeOI: totalCeOI,
-                    ceCOI: ceCOI,
-                    oiDifferent: oiDifferent,
-                    oiChangeDifferent: oiChangeDifferent,
-                    timestamp: date.getTime() // store explicit timestamp for sorting
-                };
-            });
-
-            // Sort Descending (Latest First) for Grid
-            historyGridData.sort((a, b) => b.timestamp - a.timestamp);
-
-            // Validate against current `oiHistoryData`
-            // If live data was just added, it might overlap?
-            // Since we call this on load, likely empty.
-            // Just replace it to be safe and consistent with DB history.
-            oiHistoryData = historyGridData;
-
-            console.log(`Populated ${oiHistoryData.length} rows for OI Grid.`);
-            renderOISummaryTable();
-
-        } else {
-            console.warn("OI History API returned no data or success=false", result);
-        }
-    } catch (e) {
-        console.error("Failed to fetch OI history:", e);
-    }
-}
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', function () {

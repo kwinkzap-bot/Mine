@@ -10,12 +10,11 @@
     <div class="oi-controls">
         <div class="control-group">
             <label for="symbolSelect">Select Symbol:</label>
-            <select id="symbolSelect" class="symbol-dropdown">
-                <option value="NIFTY">NIFTY 50</option>
-                <option value="BANKNIFTY">NIFTY BANK</option>
-                <option value="FINNIFTY">NIFTY FIN SERVICE</option>
-                <option value="SENSEX">SENSEX</option>
-            </select>
+            <div class="search-container">
+                <input type="text" id="symbolSelect" class="symbol-dropdown" placeholder="Search Symbol..."
+                    value="NIFTY" autocomplete="off">
+                <ul id="symbolDropdownList" class="custom-dropdown-list hidden"></ul>
+            </div>
         </div>
 
         <div class="control-group">
@@ -177,7 +176,8 @@
     </div>
 </div>
 
-<script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
+{% endblock %}
 
+{% block scripts %}
 <script src="{{ url_for('static', filename='js/open_interest_chart.js') }}"></script>
 {% endblock %}

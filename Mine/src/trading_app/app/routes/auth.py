@@ -394,12 +394,26 @@ def login_kotak():
         # Get credentials from request body
         data = request.get_json() or {}
         
-        # Extract credentials - only TOTP comes from request, rest from .env
-        totp_code = data.get('totp_secret', '').strip() if data.get('totp_secret') else ''
-        access_token = data.get('access_token', '').strip() if data.get('access_token') else os.getenv('KOTAK_ACCESS_TOKEN', '')
-        mobile = data.get('mobile', '').strip() if data.get('mobile') else os.getenv('KOTAK_MOBILE_NUMBER', '')
-        ucc = data.get('ucc', '').strip() if data.get('ucc') else os.getenv('KOTAK_UCC', '')
-        mpin = data.get('mpin', '').strip() if data.get('mpin') else os.getenv('KOTAK_MPIN', '')
+        from trading_app.app.utils.user_env import UserEnvManager
+        
+        # Get current username
+        username = session.get('username')
+        
+        # Helper to get variable from request, then user env, then os env
+        def get_var(key, env_key):
+            val = data.get(key, '').strip()
+            if val: return val
+            if username:
+                val = UserEnvManager.get_user_var(username, env_key)
+                if val: return val
+            return os.getenv(env_key, '')
+        
+        # Extract credentials
+        totp_code = data.get('totp_secret', '').strip()
+        access_token = get_var('access_token', 'KOTAK_ACCESS_TOKEN')
+        mobile = get_var('mobile', 'KOTAK_MOBILE_NUMBER')
+        ucc = get_var('ucc', 'KOTAK_UCC')
+        mpin = get_var('mpin', 'KOTAK_MPIN')
         
         # Validate required fields
         missing_fields = []
@@ -609,9 +623,22 @@ def login_dhan():
         # Get credentials from request body
         data = request.get_json() or {}
         
+        # Get current username
+        username = session.get('username')
+        from trading_app.app.utils.user_env import UserEnvManager
+        
+        # Helper to get variable from request, then user env, then os env
+        def get_var(key, env_key):
+            val = data.get(key, '').strip()
+            if val: return val
+            if username:
+                val = UserEnvManager.get_user_var(username, env_key)
+                if val: return val
+            return os.getenv(env_key, '')
+        
         # Extract credentials
-        access_token = data.get('access_token', '').strip() if data.get('access_token') else os.getenv('DHAN_ACCESS_TOKEN', '')
-        client_id = data.get('client_id', '').strip() if data.get('client_id') else os.getenv('DHAN_CLIENT_ID', '')
+        access_token = get_var('access_token', 'DHAN_ACCESS_TOKEN')
+        client_id = get_var('client_id', 'DHAN_CLIENT_ID')
         
         # Validate required fields
         if not access_token:
@@ -754,8 +781,19 @@ def fyers_login():
     """
     logger.info("[Fyers Login] Login request received")
     
-    app_id = os.getenv('FYERS_APP_ID')
-    secret_key = os.getenv('FYERS_SECRET_KEY')
+    # Get current username
+    username = session.get('username')
+    from trading_app.app.utils.user_env import UserEnvManager
+    
+    # Helper to get variable from user env, then os env
+    def get_var(env_key):
+        if username:
+            val = UserEnvManager.get_user_var(username, env_key)
+            if val: return val
+        return os.getenv(env_key, '')
+    
+    app_id = get_var('FYERS_APP_ID')
+    secret_key = get_var('FYERS_SECRET_KEY')
     
     if not app_id or not secret_key:
         error_msg = "Fyers credentials not configured. "
@@ -845,7 +883,18 @@ def fyers_oauth_callback():
         logger.info(f"[Fyers Callback] Exchanging auth code for access token...")
         
         # Initialize Fyers service (will read credentials from env)
-        fyers_service = FyersOrderService()
+        # We need to manually pass credentials because FyersOrderService might rely on os.getenv
+        # which doesn't see UserEnvManager values unless explicitly passed or patched
+        
+        # Get username from session
+        username = session.get('username')
+        
+        # Get credentials using UserEnvManager
+        from trading_app.app.utils.user_env import UserEnvManager
+        app_id = UserEnvManager.get_user_var(username, 'FYERS_APP_ID') if username else os.getenv('FYERS_APP_ID')
+        
+        # Initialize service with explicit app_id
+        fyers_service = FyersOrderService(app_id=app_id)
         
         # Exchange auth code for access token
         if fyers_service.generate_access_token(auth_code):
@@ -861,7 +910,7 @@ def fyers_oauth_callback():
                 os.environ['FYERS_ACCESS_TOKEN'] = access_token
                 
                 # Update .env file (like Kite callback does)
-                _update_fyers_env_credentials(access_token=access_token)
+                _update_fyers_env_credentials(access_token=access_token, username=session.get('username'))
                 
                 logger.info(f"[Fyers Callback] ✅ Authentication successful")
                 logger.info(f"[Fyers Callback] Access token: {access_token[:30]}...")
@@ -883,7 +932,7 @@ def fyers_oauth_callback():
                              error_description=str(e)), 500
 
 
-def _update_fyers_env_credentials(access_token: Optional[str] = None) -> bool:
+def _update_fyers_env_credentials(access_token: Optional[str] = None, username: Optional[str] = None) -> bool:
     """Update Fyers credentials in .env file (async/non-blocking).
     
     Args:
@@ -895,6 +944,15 @@ def _update_fyers_env_credentials(access_token: Optional[str] = None) -> bool:
     try:
         import threading
         
+        # Use UserEnvManager if username is available
+        if username:
+            from trading_app.app.utils.user_env import UserEnvManager
+            success = UserEnvManager.save_user_vars(username, {'FYERS_ACCESS_TOKEN': access_token})
+            if success:
+                logger.info(f"✓ {username}.env updated with Fyers credentials")
+                return True
+        
+        # Fallback to updating system .env if no username or UserEnvManager failed
         def _async_update():
             try:
                 env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env')

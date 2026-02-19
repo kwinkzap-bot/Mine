@@ -10,9 +10,13 @@ import threading
 import time as time_module
 import os
 import sys
+import fcntl
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from .intraday_9_20 import Intraday920Strategy
 from ...service.kite_order_services import KiteService
+from ...service.kotak_order_services import KotakOrderService
+from ...service.dhan_order_services import DhanOrderService
+from ...service.fyers_order_services import FyersOrderService
 
 # Add utils to path for excel_logger
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
@@ -219,6 +223,10 @@ class Intraday920LiveSignal:
         self.strategy = Intraday920Strategy(kite_instance)
         self.kite_service = KiteService(kite_instance=kite_instance)
         
+        # Initialize Multi-Broker Support
+        self.extra_brokers = {}  # Dictionary to hold active broker services
+        self._init_extra_brokers()
+        
         # Initialize Excel logger for this user
         init_excel_logger(username=username, file_prefix="signal_logs")
         
@@ -246,8 +254,79 @@ class Intraday920LiveSignal:
         self.LIVE_DATA_FETCH_TIMEOUT = 10  # seconds
         self.PRICE_FETCH_BATCH_SIZE = 10  # max tokens per quote call
         
+        # Process locking
+        self.lock_file = f"/tmp/intraday_9_20_{username if username else 'default'}.lock"
+        self.lock_fd = None
+
+        
         
         logger.info(f"Intraday 9:20 Live Signal Monitor initialized for {symbol} (live_trading={live_trading}, ratio={self.risk_reward_ratio}) [Instance ID: {id(self)}]")
+    
+    def _init_extra_brokers(self):
+        """Initialize additional broker services if credentials are present in env."""
+        # 1. Kotak Neo
+        if os.getenv("KOTAK_ACCESS_TOKEN") and os.getenv("KOTAK_MOBILE_NUMBER"):
+            try:
+                self.extra_brokers['KOTAK'] = KotakOrderService()
+                logger.info("✅ Kotak Neo Service Initialized")
+            except Exception as e:
+                logger.error(f"❌ Failed to init Kotak Neo: {e}")
+        
+        # 2. Dhan
+        if os.getenv("DHAN_ACCESS_TOKEN") and os.getenv("DHAN_CLIENT_ID"):
+            try:
+                self.extra_brokers['DHAN'] = DhanOrderService()
+                logger.info("✅ Dhan Service Initialized")
+            except Exception as e:
+                logger.error(f"❌ Failed to init Dhan: {e}")
+
+        # 3. Fyers
+        if os.getenv("FYERS_APP_ID") and (os.getenv("FYERS_ACCESS_TOKEN") or os.getenv("FYERS_SECRET_KEY")):
+            try:
+                self.extra_brokers['FYERS'] = FyersOrderService()
+                logger.info("✅ Fyers Service Initialized")
+            except Exception as e:
+                logger.error(f"❌ Failed to init Fyers: {e}")
+                
+        if self.extra_brokers:
+            logger.info(f"Active Extra Brokers: {list(self.extra_brokers.keys())}")
+
+    def _acquire_process_lock(self) -> bool:
+        """
+        Acquire file lock to ensure only one monitor instance runs per user.
+        Prevents multiple processes (e.g., Gunicorn workers) from running duplicate monitors.
+        """
+        try:
+            self.lock_fd = open(self.lock_file, 'w')
+            # Try to acquire an exclusive lock - non-blocking
+            fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Write PID to lock file
+            self.lock_fd.write(str(os.getpid()))
+            self.lock_fd.flush()
+            logger.info(f"🔒 Process lock acquired: {self.lock_file} (PID: {os.getpid()})")
+            return True
+        except (IOError, OSError):
+            logger.warning(f"⚠️ Could not acquire process lock for {self.username}. Another instance is running.")
+            if self.lock_fd:
+                try:
+                    self.lock_fd.close()
+                except:
+                    pass
+                self.lock_fd = None
+            return False
+            
+    def _release_process_lock(self) -> None:
+        """Release the process lock."""
+        if self.lock_fd:
+            try:
+                fcntl.flock(self.lock_fd, fcntl.LOCK_UN)
+                self.lock_fd.close()
+                logger.info(f"🔓 Process lock released: {self.lock_file}")
+            except Exception as e:
+                logger.error(f"Error releasing process lock: {e}")
+            finally:
+                self.lock_fd = None
+
     
     def is_market_hours(self, check_time: Optional[datetime] = None) -> bool:
         """
@@ -800,6 +879,22 @@ class Intraday920LiveSignal:
                                     quantity=entry_quantity,
                                     product='NRML'
                                 )
+                                
+                                # --- Multi-Broker SL Order ---
+                                if self.extra_brokers and self.live_trading:
+                                    logger.info(f"⚡ Placing COPY SL orders on {len(self.extra_brokers)} extra brokers...")
+                                    for broker_name, service in self.extra_brokers.items():
+                                        try:
+                                            threading.Thread(
+                                                target=self._place_extra_broker_sl_order,
+                                                args=(broker_name, service, 'CE', ce_strike, ce_signal.get('sl')),
+                                                name=f"SL-{broker_name}-CE-{ce_strike}",
+                                                daemon=True
+                                            ).start()
+                                        except Exception as e:
+                                            logger.error(f"Failed to trigger {broker_name} SL order: {e}")
+                                # -----------------------------
+
                                 if sl_result['success']:
                                     sl_order_id = sl_result['order_id']
                                     logger.info(f"✅ CE SL order placed: {option_symbol} @ {ce_signal.get('sl'):.2f} | SL Order ID: {sl_order_id}")
@@ -908,6 +1003,22 @@ class Intraday920LiveSignal:
                                     quantity=entry_quantity,
                                     product='NRML'
                                 )
+                                
+                                # --- Multi-Broker SL Order ---
+                                if self.extra_brokers and self.live_trading:
+                                    logger.info(f"⚡ Placing COPY SL orders on {len(self.extra_brokers)} extra brokers...")
+                                    for broker_name, service in self.extra_brokers.items():
+                                        try:
+                                            threading.Thread(
+                                                target=self._place_extra_broker_sl_order,
+                                                args=(broker_name, service, 'PE', pe_strike, pe_signal.get('sl')),
+                                                name=f"SL-{broker_name}-PE-{pe_strike}",
+                                                daemon=True
+                                            ).start()
+                                        except Exception as e:
+                                            logger.error(f"Failed to trigger {broker_name} SL order: {e}")
+                                # -----------------------------
+
                                 if sl_result['success']:
                                     sl_order_id = sl_result['order_id']
                                     logger.info(f"✅ PE SL order placed: {option_symbol} @ {pe_signal.get('sl'):.2f} | SL Order ID: {sl_order_id}")
@@ -1076,6 +1187,21 @@ class Intraday920LiveSignal:
                 transaction_type=transaction_type_const
             )
             
+            # --- Multi-Broker Order Placement ---
+            if self.extra_brokers and self.live_trading:
+                logger.info(f"⚡ Placing COPY orders on {len(self.extra_brokers)} extra brokers...")
+                for broker_name, service in self.extra_brokers.items():
+                    try:
+                        threading.Thread(
+                            target=self._place_extra_broker_order,
+                            args=(broker_name, service, side, strike, entry_price, transaction_type),
+                            name=f"Order-{broker_name}-{side}-{strike}",
+                            daemon=True
+                        ).start()
+                    except Exception as e:
+                        logger.error(f"Failed to trigger {broker_name} order: {e}")
+            # ------------------------------------
+            
             if result['success']:
                 logger.info(f"✅ {transaction_type} Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {entry_price:.2f}")
                 
@@ -1164,6 +1290,116 @@ class Intraday920LiveSignal:
         """
         return self.kite_service.get_current_price(token)
     
+    def _place_extra_broker_order(self, broker_name: str, service: Any, side: str, 
+                                 strike: int, price: float, transaction_type: str) -> None:
+        """
+        Place generic buy/sell order on extra brokers.
+        Executes in a separate thread.
+        """
+        try:
+            qty = self.kite_service.get_lot_size(self.symbol)
+            txn_type = 'BUY' if transaction_type == 'BUY' else 'SELL'
+            
+            logger.info(f"⚡ [{broker_name}] Attempting {txn_type} {side} {strike} x {qty}...")
+
+            if broker_name == 'KOTAK':
+                # Kotak uses 'B' for BUY and 'S' for SELL
+                k_txn = 'B' if txn_type == 'BUY' else 'S'
+                # Kotak service handles symbol construction internally
+                service.place_option_order(
+                    symbol=self.symbol,
+                    strike=strike,
+                    option_type=side,
+                    transaction_type=k_txn,
+                    quantity=qty
+                )
+            
+            elif broker_name == 'DHAN':
+                # Dhan needs numeric security ID for options
+                # get_option_security_id(symbol, strike, option_type)
+                sec_id = service.get_option_security_id(self.symbol, strike, side)
+                if sec_id:
+                    service.place_order(
+                        security_id=sec_id,
+                        transaction_type=txn_type,
+                        quantity=qty,
+                        order_type='MARKET',
+                        product_type='INTRADAY',
+                        exchange_segment='NSE_FNO'
+                    )
+                else:
+                    logger.error(f"[{broker_name}] Could not resolve security ID for {side} {strike}")
+
+            elif broker_name == 'FYERS':
+                # Fyers needs NSE:SYMBOL format e.g. NSE:NIFTY24JAN21500CE
+                # Reuse Kite's symbol resolution to get base trading symbol
+                kite_symbol = self._get_option_symbol(self.symbol, strike, side)
+                if kite_symbol:
+                    fyers_symbol = f"NSE:{kite_symbol}"
+                    # Fyers side: 1 (Buy), -1 (Sell)
+                    f_side = 1 if txn_type == 'BUY' else -1
+                    service.place_order(
+                        symbol=fyers_symbol,
+                        side=f_side,
+                        quantity=qty,
+                        order_type=2, # MARKET
+                        product_type='INTRADAY'
+                    )
+                else:
+                    logger.error(f"[{broker_name}] Could not resolve symbol for {side} {strike}")
+
+        except Exception as e:
+            logger.error(f"❌ [{broker_name}] Order placement failed: {e}")
+
+    def _place_extra_broker_sl_order(self, broker_name: str, service: Any, side: str, 
+                                    strike: int, trigger_price: float) -> None:
+        """
+        Place generic SL (Sell) order on extra brokers.
+        Executes in a separate thread.
+        """
+        try:
+            qty = self.kite_service.get_lot_size(self.symbol)
+            # SL for Long option is always a SELL
+            
+            logger.info(f"⚡ [{broker_name}] Attempting SL SELL {side} {strike} @ {trigger_price}...")
+
+            if broker_name == 'KOTAK':
+                # Kotak doesn't have a direct SL helper in the service wrapper that takes trigger_price easily
+                # skipping for now to avoid errors, or needs raw API call implementation
+                logger.warning(f"[{broker_name}] SL orders not yet fully supported in service wrapper")
+                pass
+            
+            elif broker_name == 'DHAN':
+                # Dhan needs security ID
+                sec_id = service.get_option_security_id(self.symbol, strike, side)
+                if sec_id:
+                    service.place_stoploss_order(
+                        security_id=sec_id,
+                        trigger_price=trigger_price,
+                        quantity=qty,
+                        product_type='INTRADAY',
+                        exchange_segment='NSE_FNO'
+                    )
+                else:
+                    logger.error(f"[{broker_name}] Could not resolve security ID for SL {side} {strike}")
+
+            elif broker_name == 'FYERS':
+                # Fyers needs NSE:SYMBOL
+                kite_symbol = self._get_option_symbol(self.symbol, strike, side)
+                if kite_symbol:
+                    fyers_symbol = f"NSE:{kite_symbol}"
+                    service.place_stoploss_order(
+                        symbol=fyers_symbol,
+                        trigger_price=trigger_price,
+                        quantity=qty,
+                        product_type='INTRADAY'
+                    )
+                else:
+                    logger.error(f"[{broker_name}] Could not resolve symbol for SL {side} {strike}")
+
+        except Exception as e:
+            logger.error(f"❌ [{broker_name}] SL Order placement failed: {e}")
+
     def _get_option_symbol(self, symbol: str, strike: int, option_type: str) -> Optional[str]:
         """
         Get the trading symbol for an option contract.
@@ -2091,6 +2327,12 @@ class Intraday920LiveSignal:
             logger.warning("Not a market trading day")
             return result
         
+        # Acquire process lock before starting threads
+        if not self._acquire_process_lock():
+            logger.error(f"❌ Failed to start monitoring: Another instance is already running for {self.username}")
+            return result
+
+        
         # Start Entry Monitoring
         if monitor_entries:
             if self.is_entry_monitoring:
@@ -2102,7 +2344,6 @@ class Intraday920LiveSignal:
                     name=f"Intraday920EntryMonitor-{self.symbol}",
                     daemon=True
                 )
-                self.entry_monitor_thread.start()
                 self.entry_monitor_thread.start()
                 logger.info(f"Live ENTRY monitoring started for {self.symbol} [Instance ID: {id(self)}]")
                 result['entries_started'] = True
@@ -2118,7 +2359,6 @@ class Intraday920LiveSignal:
                     name=f"Intraday920SLMonitor-{self.symbol}",
                     daemon=True
                 )
-                self.sl_monitor_thread.start()
                 self.sl_monitor_thread.start()
                 logger.info(f"Live SL/TARGET monitoring started for {self.symbol} [Instance ID: {id(self)}]")
                 result['sl_started'] = True
@@ -2152,6 +2392,10 @@ class Intraday920LiveSignal:
                 self.sl_monitor_thread.join(timeout=5)
             logger.info(f"Live SL/TARGET monitoring stopped for {self.symbol}")
             result['sl_stopped'] = True
+            
+        # Release lock if everything stopped
+        if not self.is_entry_monitoring and not self.is_sl_monitoring:
+            self._release_process_lock()
             
         self.is_monitoring = self.is_entry_monitoring or self.is_sl_monitoring
         return result
