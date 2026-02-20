@@ -127,6 +127,16 @@ window.addEventListener('load', function () {
             });
         });
     }
+
+    // Add sort listeners for High IV Percentile table
+    const highIvTable = document.getElementById('highIvTable');
+    if (highIvTable) {
+        highIvTable.querySelectorAll('th').forEach(header => {
+            header.addEventListener('click', () => {
+                sortTable('highIvTable', header.dataset.columnIndex);
+            });
+        });
+    }
 });
 
 /**
@@ -175,6 +185,8 @@ async function loadCPRData() {
             const bullishReversalResults = reversal.bullish || [];
             const bearishReversalResults = reversal.bearish || [];
 
+            const highIvResults = response.high_iv_stocks || [];
+
             // Split data into above and below CPR
             const aboveResults = [];
             const belowResults = [];
@@ -210,8 +222,9 @@ async function loadCPRData() {
             const crossBelowCount = crossBelowResults.length;
             const bullishReversalCount = bullishReversalResults.length;
             const bearishReversalCount = bearishReversalResults.length;
+            const highIvCount = highIvResults.length;
 
-            console.log(`Data loaded - Above: ${aboveCount}, Below: ${belowCount}, Cross Above: ${crossAboveCount}, Cross Below: ${crossBelowCount}, Bullish Rev: ${bullishReversalCount}, Bearish Rev: ${bearishReversalCount}`);
+            console.log(`Data loaded - Above: ${aboveCount}, Below: ${belowCount}, Cross Above: ${crossAboveCount}, Cross Below: ${crossBelowCount}, Bullish Rev: ${bullishReversalCount}, Bearish Rev: ${bearishReversalCount}, High IV: ${highIvCount}`);
 
             // Display results
             displayResults('above', aboveResults);
@@ -220,8 +233,9 @@ async function loadCPRData() {
             displayResults('crossBelow', crossBelowResults);
             displayResults('bullishReversal', bullishReversalResults);
             displayResults('bearishReversal', bearishReversalResults);
+            displayResults('highIv', highIvResults);
 
-            updateStats(aboveCount, belowCount, crossAboveCount, crossBelowCount, bullishReversalCount, bearishReversalCount);
+            updateStats(aboveCount, belowCount, crossAboveCount, crossBelowCount, bullishReversalCount, bearishReversalCount, highIvCount);
 
             // Hide the controls section if we have data to show results
             const controls = document.getElementById('controls');
@@ -295,7 +309,17 @@ async function loadCPRData() {
                 }
             }
 
-            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}, Cross Above: ${crossAboveCount}, Cross Below: ${crossBelowCount}, Bullish Rev: ${bullishReversalCount}, Bearish Rev: ${bearishReversalCount}`;
+            // Show/hide high IV percentile results section
+            const highIvDiv = document.getElementById('highIvResults');
+            if (highIvDiv) {
+                if (highIvCount > 0) {
+                    highIvDiv.classList.remove('results-hidden');
+                } else {
+                    highIvDiv.classList.add('results-hidden');
+                }
+            }
+
+            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}, Cross Above: ${crossAboveCount}, Cross Below: ${crossBelowCount}, Bullish Rev: ${bullishReversalCount}, Bearish Rev: ${bearishReversalCount}, High IV: ${highIvCount}`;
         } else if (response && !response.needs_login) {
             // Only show error if it's not a session expiration handled by fetchJson
             const errorMsg = response.message || 'Unknown error';
@@ -350,7 +374,8 @@ function displayResults(type, results) {
         crossAbove: { dailyKey: 'daily_tc', weeklyKey: 'weekly_tc', monthlyKey: 'monthly_tc', showGaps: false },
         crossBelow: { dailyKey: 'daily_bc', weeklyKey: 'weekly_bc', monthlyKey: 'monthly_bc', showGaps: false },
         bullishReversal: { col3: 'monthly_tc', col4: 'monthly_s1', col5: 'prev_month_low', showGaps: true },
-        bearishReversal: { col3: 'monthly_bc', col4: 'monthly_r1', col5: 'prev_month_high', showGaps: true }
+        bearishReversal: { col3: 'monthly_bc', col4: 'monthly_r1', col5: 'prev_month_high', showGaps: true },
+        highIv: { isHighIv: true }
     };
     const config = tableConfig[type] || tableConfig.above;
     const showGaps = config.showGaps;
@@ -362,7 +387,40 @@ function displayResults(type, results) {
         const tradingViewUrl = `https://in.tradingview.com/chart/?symbol=NSE:${stock.symbol}`;
         const symbolCell = `<a href="${tradingViewUrl}" target="_blank" rel="noopener noreferrer" class="symbol-link">${stock.symbol}</a>`;
 
-        if (type === 'bullishReversal' || type === 'bearishReversal') {
+        if (config.isHighIv) {
+            // High IV Percentile table - 8 columns
+            const ivPercentile = Number(stock.iv_percentile || 0);
+            const ivClass = ivPercentile >= 90 ? 'iv-very-high' : 'iv-high';
+            const atmIv = Number(stock.atm_iv || 0);
+            const volume = stock.volume || 0;
+            const oiChangePct = Number(stock.oi_change_pct || 0);
+            const pcr = Number(stock.pcr || 0);
+            const maxPain = Number(stock.max_pain || 0);
+
+            // Format volume with K/L/Cr suffixes
+            const formatVolume = (v) => {
+                if (v >= 10000000) return (v / 10000000).toFixed(1) + 'Cr';
+                if (v >= 100000) return (v / 100000).toFixed(1) + 'L';
+                if (v >= 1000) return (v / 1000).toFixed(1) + 'K';
+                return v.toString();
+            };
+
+            // OI% change color
+            const oiClass = oiChangePct > 0 ? 'gap-up' : (oiChangePct < 0 ? 'gap-down' : '');
+            // PCR color
+            const pcrClass = pcr > 1 ? 'gap-up' : (pcr < 0.7 ? 'gap-down' : '');
+
+            rowHtml = `
+                <td>${symbolCell}</td>
+                <td>${stock.current_price.toFixed(2)}</td>
+                <td class="${ivClass}">${ivPercentile.toFixed(1)}%</td>
+                <td>${atmIv.toFixed(1)}%</td>
+                <td>${formatVolume(volume)}</td>
+                <td class="${oiClass}">${oiChangePct.toFixed(1)}%</td>
+                <td class="${pcrClass}">${pcr.toFixed(2)}</td>
+                <td>${maxPain.toFixed(0)}</td>
+            `;
+        } else if (type === 'bullishReversal' || type === 'bearishReversal') {
             const val3 = Number(stock[config.col3] || 0);
             const val4 = Number(stock[config.col4] || 0);
             const val5 = Number(stock[config.col5] || 0);
@@ -422,11 +480,12 @@ function displayResults(type, results) {
  * @param {number} aboveCount 
  * @param {number} belowCount 
  */
-function updateStats(aboveCount, belowCount, crossAboveCount = 0, crossBelowCount = 0) {
+function updateStats(aboveCount, belowCount, crossAboveCount = 0, crossBelowCount = 0, bullishReversalCount = 0, bearishReversalCount = 0, highIvCount = 0) {
     const aboveCountEl = document.getElementById('aboveCount');
     const belowCountEl = document.getElementById('belowCount');
     const crossAboveCountEl = document.getElementById('crossAboveCount');
     const crossBelowCountEl = document.getElementById('crossBelowCount');
+    const highIvCountEl = document.getElementById('highIvCount');
 
     if (aboveCountEl) {
         aboveCountEl.textContent = `(${aboveCount})`;
@@ -439,6 +498,9 @@ function updateStats(aboveCount, belowCount, crossAboveCount = 0, crossBelowCoun
     }
     if (crossBelowCountEl) {
         crossBelowCountEl.textContent = `(${crossBelowCount})`;
+    }
+    if (highIvCountEl) {
+        highIvCountEl.textContent = `(${highIvCount})`;
     }
 }
 

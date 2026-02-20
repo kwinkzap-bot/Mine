@@ -12,6 +12,28 @@
     </div>
 </div>
 <div class="results-row">
+    <div id="highIvResults" class="results results-hidden results-block">
+        <h3>🔥 High IV Percentile (>80%) <span id="highIvCount">(0)</span></h3>
+        <div class="results-scroll">
+            <table id="highIvTable">
+                <thead>
+                    <tr>
+                        <th data-column-index="0">Symbol</th>
+                        <th data-column-index="1">Price</th>
+                        <th data-column-index="2">IV Pctl %</th>
+                        <th data-column-index="3">ATM IV %</th>
+                        <th data-column-index="4">Volume</th>
+                        <th data-column-index="5">OI% Chg</th>
+                        <th data-column-index="6">PCR</th>
+                        <th data-column-index="7">Max Pain</th>
+                    </tr>
+                </thead>
+                <tbody id="highIvBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+<div class="results-row">
     <div id="bullishReversalResults" class="results results-hidden results-block">
         <h3>🐂 Bullish Reversal (M S1/Low) <span id="bullishReversalCount">(0)</span></h3>
         <div class="results-scroll">

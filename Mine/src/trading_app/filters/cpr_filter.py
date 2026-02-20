@@ -1,4 +1,5 @@
 import pandas as pd
+import math
 from datetime import datetime, timedelta, date
 from kiteconnect import KiteConnect
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ logger = logging.getLogger(__name__)
 # Global persistent cache (survives between filter requests)
 _global_cache = {}
 _global_cache_lock = threading.Lock()
+
+# Global cache for per-stock Historical Volatility data (valid 24h)
+_global_hv_cache = {}
 
 @dataclass
 class CPRLevels:
@@ -73,6 +77,7 @@ class CPRFilterService:
         self._cache_lock = _global_cache_lock
         self._last_api_call = 0.0
         self._api_lock = threading.Lock()
+        self._hv_cache = _global_hv_cache  # Shared HV cache across requests
         self._load_instruments()
 
     def _rate_limit(self):
@@ -396,6 +401,164 @@ class CPRFilterService:
             return self.BEARISH_REVERSAL
         return None
 
+    def calculate_stock_iv_percentile(self, symbol: str, atm_iv: float) -> Optional[float]:
+        """
+        Calculate IV Percentile for a stock using the Hybrid method
+        (same as OpenInterestService._calculate_hybrid_iv_percentile).
+        
+        Methodology:
+        1. Fetch 1 year of daily OHLC data for the stock.
+        2. Calculate 20-day annualized rolling Historical Volatility (HV).
+        3. Rank the given ATM IV against the 1-year HV history.
+        
+        Args:
+            symbol: Stock trading symbol
+            atm_iv: Current ATM Implied Volatility (decimal, e.g. 0.25 for 25%)
+        
+        Returns:
+            IV Percentile (0-100) or None if data unavailable.
+        """
+        try:
+            if atm_iv <= 0:
+                return None
+
+            # ----- Step 1: Get HV rolling volatility (cached 24h) -----
+            now = datetime.now()
+            cached = self._hv_cache.get(symbol)
+            if cached and (now - cached['timestamp']).total_seconds() < 86400:
+                rolling_volatility = cached['rolling_volatility']
+                logger.debug(f"Using cached HV data for {symbol} ({len(rolling_volatility)} points)")
+            else:
+                # Find instrument token
+                token = self.get_token(symbol)
+                if not token:
+                    logger.debug(f"IV Percentile: No token for {symbol}")
+                    return None
+                
+                # Fetch 1-year daily OHLC
+                to_date = now.date()
+                from_date = to_date - timedelta(days=365 + 30)  # +30 buffer for rolling window
+                
+                self._rate_limit()
+                history_data = self.kite.historical_data(
+                    instrument_token=token,
+                    from_date=from_date.strftime('%Y-%m-%d'),
+                    to_date=to_date.strftime('%Y-%m-%d'),
+                    interval='day'
+                )
+                
+                if not history_data or len(history_data) < 30:
+                    logger.debug(f"IV Percentile: Insufficient history for {symbol}")
+                    return None
+                
+                # Calculate daily log returns
+                prices = [x['close'] for x in history_data]
+                if len(prices) < 2:
+                    return None
+                
+                log_returns = []
+                for i in range(1, len(prices)):
+                    if prices[i] > 0 and prices[i-1] > 0:
+                        log_returns.append(math.log(prices[i] / prices[i-1]))
+                
+                # Calculate 20-day annualized rolling volatility
+                window = 20
+                sqrt_days = math.sqrt(252)
+                rolling_volatility = []
+                
+                if len(log_returns) < window:
+                    return None
+                
+                for i in range(len(log_returns) - window + 1):
+                    window_returns = log_returns[i: i + window]
+                    mean = sum(window_returns) / window
+                    variance = sum((x - mean) ** 2 for x in window_returns) / (window - 1)
+                    rolling_volatility.append(math.sqrt(variance) * sqrt_days)
+                
+                if not rolling_volatility:
+                    return None
+                
+                # Cache for 24 hours
+                self._hv_cache[symbol] = {
+                    'timestamp': now,
+                    'rolling_volatility': rolling_volatility
+                }
+                logger.debug(f"Cached HV data for {symbol} ({len(rolling_volatility)} points)")
+            
+            # ----- Step 2: Rank ATM IV against HV history -----
+            count_below = sum(1 for hv in rolling_volatility if hv < atm_iv)
+            total_count = len(rolling_volatility)
+            
+            percentile = (count_below / total_count) * 100
+            logger.info(f"IV Percentile for {symbol}: {percentile:.1f}% (ATM IV: {atm_iv:.2%}, Current HV: {rolling_volatility[-1]:.2%})")
+            return round(percentile, 2)
+        
+        except Exception as e:
+            logger.debug(f"IV Percentile calc failed for {symbol}: {e}")
+            return None
+
+    @staticmethod
+    def _normal_cdf(x: float) -> float:
+        """Approximate normal CDF (Abramowitz & Stegun) - matches open_interest_service."""
+        a1, a2, a3, a4, a5 = 0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429
+        p = 0.3275911
+        sign = 1 if x >= 0 else -1
+        x = abs(x) / math.sqrt(2)
+        t = 1.0 / (1.0 + p * x)
+        y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x)
+        return 0.5 * (1.0 + sign * y)
+
+    @staticmethod
+    def _normal_pdf(x: float) -> float:
+        """Standard normal PDF."""
+        return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
+
+    @staticmethod
+    def _calculate_iv_newton(S: float, K: float, T: float, r: float, market_price: float, option_type: str) -> float:
+        """
+        Calculate implied volatility using Newton-Raphson method (Black-Scholes).
+        Matches OpenInterestService._calculate_iv_from_price.
+        Uses manual normal CDF/PDF (no scipy dependency).
+        """
+        if market_price <= 0 or T <= 0:
+            return 0.0
+        
+        # Intrinsic value check
+        if option_type == 'CE':
+            intrinsic = max(S - K, 0)
+        else:
+            intrinsic = max(K - S, 0)
+        if market_price < intrinsic:
+            return 0.0
+        
+        try:
+            sigma = 0.5  # Initial guess
+            for _ in range(100):
+                if sigma <= 0:
+                    sigma = 0.001
+                d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+                d2 = d1 - sigma * math.sqrt(T)
+                
+                if option_type == 'CE':
+                    price = S * CPRFilterService._normal_cdf(d1) - K * math.exp(-r * T) * CPRFilterService._normal_cdf(d2)
+                else:
+                    price = K * math.exp(-r * T) * CPRFilterService._normal_cdf(-d2) - S * CPRFilterService._normal_cdf(-d1)
+                
+                if abs(price - market_price) < 1e-6:
+                    return sigma
+                
+                # Vega
+                vega = S * CPRFilterService._normal_pdf(d1) * math.sqrt(T)
+                if abs(vega) < 1e-10:
+                    break
+                
+                sigma = sigma - (price - market_price) / vega
+                sigma = max(0.001, min(sigma, 2.0))
+            
+            return sigma
+        except Exception:
+            return 0.0
+
     def process_stock(self, symbol: str, root_date: datetime) -> Optional[Dict]:
         try:
             cpr = self.calc_cpr_levels(symbol, root_date)
@@ -486,6 +649,405 @@ class CPRFilterService:
             logger.error(f"Error processing {symbol}: {e}")
             return None
 
+    def _build_atm_option_map(self, stocks: List[str]) -> Dict[str, Dict]:
+        """
+        Build a mapping of stock symbol -> nearest-expiry ATM CE option info.
+        Pre-loads NFO instruments once and finds the ATM option for each stock.
+        Also captures stock volume via kite.quote().
+        
+        Returns:
+            Dict[symbol, {'tradingsymbol': str, 'strike': float, 'expiry': date,
+                          'current_price': float, 'volume': int}]
+        """
+        try:
+            if not hasattr(self, '_nfo_instruments') or self._nfo_instruments is None:
+                self._rate_limit()
+                self._nfo_instruments = self.kite.instruments('NFO')
+                logger.info(f"Loaded {len(self._nfo_instruments)} NFO instruments for IV calculation")
+            
+            # Fetch stock quotes (gives price + volume) instead of just LTP
+            ltp_keys = [f"NSE:{s}" for s in stocks]
+            stock_prices = {}
+            stock_volumes = {}
+            
+            batch_size = 250
+            for i in range(0, len(ltp_keys), batch_size):
+                batch = ltp_keys[i:i + batch_size]
+                self._rate_limit()
+                try:
+                    quote_data = self.kite.quote(batch)
+                    for key, val in quote_data.items():
+                        symbol = key.replace('NSE:', '')
+                        stock_prices[symbol] = val.get('last_price', 0)
+                        stock_volumes[symbol] = val.get('volume', 0)
+                except Exception as e:
+                    logger.warning(f"Batch quote fetch failed: {e}")
+            
+            logger.info(f"Got prices+volumes for {len(stock_prices)} stocks")
+            
+            # Build ATM option map
+            today = date.today()
+            atm_map = {}
+            
+            # Group NFO options (both CE and PE) by stock name for lookup
+            stock_options: Dict[str, List] = {}
+            for inst in self._nfo_instruments:
+                inst_type = inst.get('instrument_type', '')
+                if inst_type in ('CE', 'PE') and inst.get('expiry'):
+                    name = inst.get('name', '')
+                    if name in stock_prices:
+                        expiry = inst['expiry']
+                        if hasattr(expiry, 'date'):
+                            expiry = expiry.date()
+                        if expiry >= today:
+                            if name not in stock_options:
+                                stock_options[name] = []
+                            stock_options[name].append({
+                                'tradingsymbol': inst.get('tradingsymbol', ''),
+                                'strike': inst.get('strike', 0),
+                                'expiry': expiry,
+                                'type': inst_type
+                            })
+            
+            for symbol, options in stock_options.items():
+                current_price = stock_prices.get(symbol, 0)
+                if current_price <= 0 or not options:
+                    continue
+                
+                # Find suitable expiry (skip near-expiry < 5 days for reliable IV)
+                unique_expiries = sorted(set(o['expiry'] for o in options))
+                
+                min_days = 5
+                suitable_expiry = None
+                for exp in unique_expiries:
+                    if (exp - today).days >= min_days:
+                        suitable_expiry = exp
+                        break
+                
+                if suitable_expiry is None:
+                    suitable_expiry = unique_expiries[0]
+                
+                expiry_options = [o for o in options if o['expiry'] == suitable_expiry]
+                
+                # Find closest ATM strike
+                all_strikes = set(o['strike'] for o in expiry_options if o['strike'] > 0)
+                if not all_strikes:
+                    continue
+                atm_strike = min(all_strikes, key=lambda s: abs(s - current_price))
+                
+                # Get both CE and PE tradingsymbols at ATM strike
+                ce_ts = None
+                pe_ts = None
+                for o in expiry_options:
+                    if o['strike'] == atm_strike:
+                        if o['type'] == 'CE':
+                            ce_ts = o['tradingsymbol']
+                        elif o['type'] == 'PE':
+                            pe_ts = o['tradingsymbol']
+                
+                if ce_ts or pe_ts:
+                    atm_map[symbol] = {
+                        'ce_tradingsymbol': ce_ts,
+                        'pe_tradingsymbol': pe_ts,
+                        'strike': atm_strike,
+                        'expiry': suitable_expiry,
+                        'current_price': current_price,
+                        'volume': stock_volumes.get(symbol, 0)
+                    }
+            
+            logger.info(f"Built ATM option map for {len(atm_map)} stocks")
+            return atm_map
+        
+        except Exception as e:
+            logger.error(f"Error building ATM option map: {e}")
+            return {}
+
+    def _enrich_high_iv_stocks(self, high_iv_stocks: List[Dict], atm_map: Dict, atm_ivs: Dict) -> List[Dict]:
+        """
+        Enrich high-IV stocks with option chain data: PCR, Max Pain, OI% Change.
+        Only fetches data for the ~10-15 stocks that passed the >80% filter.
+        """
+        if not high_iv_stocks:
+            return high_iv_stocks
+        
+        try:
+            logger.info(f"Enriching {len(high_iv_stocks)} high-IV stocks with option chain data...")
+            today = date.today()
+            
+            # For each high-IV stock, collect all CE+PE option tradingsymbols for nearest expiry
+            stock_options: Dict[str, List[Dict]] = {}  # symbol -> list of {tradingsymbol, strike, type}
+            for stock in high_iv_stocks:
+                symbol = stock['symbol']
+                if symbol not in atm_map:
+                    continue
+                
+                nearest_expiry = atm_map[symbol]['expiry']
+                options = []
+                
+                for inst in self._nfo_instruments:
+                    name = inst.get('name', '')
+                    inst_type = inst.get('instrument_type', '')
+                    if name == symbol and inst_type in ('CE', 'PE') and inst.get('expiry'):
+                        expiry = inst['expiry']
+                        if hasattr(expiry, 'date'):
+                            expiry = expiry.date()
+                        if expiry == nearest_expiry:
+                            options.append({
+                                'tradingsymbol': inst.get('tradingsymbol', ''),
+                                'strike': inst.get('strike', 0),
+                                'type': inst_type
+                            })
+                
+                if options:
+                    stock_options[symbol] = options
+            
+            # Batch-fetch quotes for all option instruments across all high-IV stocks
+            all_option_keys = []
+            for symbol, options in stock_options.items():
+                for opt in options:
+                    all_option_keys.append(f"NFO:{opt['tradingsymbol']}")
+            
+            option_quotes = {}  # tradingsymbol -> quote dict
+            batch_size = 250
+            for i in range(0, len(all_option_keys), batch_size):
+                batch = all_option_keys[i:i + batch_size]
+                self._rate_limit()
+                try:
+                    quote_data = self.kite.quote(batch)
+                    for key, val in quote_data.items():
+                        ts = key.replace('NFO:', '')
+                        option_quotes[ts] = val
+                except Exception as e:
+                    logger.warning(f"Option chain quote batch failed: {e}")
+            
+            logger.info(f"Got quotes for {len(option_quotes)} options across {len(stock_options)} stocks")
+            
+            # Compute PCR, Max Pain, OI% Change per stock
+            enrichment = {}  # symbol -> {pcr, max_pain, oi_change_pct}
+            for symbol, options in stock_options.items():
+                current_price = atm_map[symbol]['current_price']
+                strikes_data = {}  # strike -> {ce_oi, pe_oi}
+                total_oi_today = 0
+                total_oi_day_low = 0
+                
+                for opt in options:
+                    ts = opt['tradingsymbol']
+                    quote = option_quotes.get(ts, {})
+                    oi = quote.get('oi', 0)
+                    strike = opt['strike']
+                    
+                    if strike not in strikes_data:
+                        strikes_data[strike] = {'strike': strike, 'ce_oi': 0, 'pe_oi': 0}
+                    
+                    if opt['type'] == 'CE':
+                        strikes_data[strike]['ce_oi'] = oi
+                    else:
+                        strikes_data[strike]['pe_oi'] = oi
+                    
+                    total_oi_today += oi
+                    # Use oi_day_low for OI change estimation
+                    oi_day_low = quote.get('ohlc', {}).get('open', oi)  # Approximate with open
+                
+                strikes_list = list(strikes_data.values())
+                
+                # PCR
+                total_ce_oi = sum(s['ce_oi'] for s in strikes_list)
+                total_pe_oi = sum(s['pe_oi'] for s in strikes_list)
+                pcr = round(total_pe_oi / total_ce_oi, 2) if total_ce_oi > 0 else 0.0
+                
+                # Max Pain
+                max_pain = self._calculate_max_pain_local(strikes_list, current_price)
+                
+                # OI% Change (total OI change from previous day)
+                # Use previous close OI if available, otherwise estimate
+                prev_oi = 0
+                for opt in options:
+                    ts = opt['tradingsymbol']
+                    quote = option_quotes.get(ts, {})
+                    # net_change in OI compared to previous day
+                    oi_change = quote.get('oi_day_high', 0) - quote.get('oi_day_low', 0) if quote.get('oi_day_high') else 0
+                    prev_oi += max(0, quote.get('oi', 0) - oi_change)
+                
+                oi_change_pct = round(((total_oi_today - prev_oi) / prev_oi) * 100, 2) if prev_oi > 0 else 0.0
+                
+                enrichment[symbol] = {
+                    'pcr': pcr,
+                    'max_pain': max_pain,
+                    'oi_change_pct': oi_change_pct
+                }
+            
+            # Merge enrichment data into high_iv_stocks
+            for stock in high_iv_stocks:
+                symbol = stock['symbol']
+                stock['atm_iv'] = round(atm_ivs.get(symbol, 0) * 100, 2)  # Convert to %
+                stock['volume'] = atm_map.get(symbol, {}).get('volume', 0)
+                
+                enrich = enrichment.get(symbol, {})
+                stock['pcr'] = enrich.get('pcr', 0.0)
+                stock['max_pain'] = enrich.get('max_pain', 0.0)
+                stock['oi_change_pct'] = enrich.get('oi_change_pct', 0.0)
+            
+            logger.info(f"Enrichment complete for {len(high_iv_stocks)} stocks")
+            return high_iv_stocks
+        
+        except Exception as e:
+            logger.error(f"Enrichment failed: {e}")
+            # Return stocks with default values
+            for stock in high_iv_stocks:
+                symbol = stock['symbol']
+                stock.setdefault('atm_iv', round(atm_ivs.get(symbol, 0) * 100, 2))
+                stock.setdefault('volume', atm_map.get(symbol, {}).get('volume', 0))
+                stock.setdefault('pcr', 0.0)
+                stock.setdefault('max_pain', 0.0)
+                stock.setdefault('oi_change_pct', 0.0)
+            return high_iv_stocks
+
+    @staticmethod
+    def _calculate_max_pain_local(strikes: List[Dict], current_price: float) -> float:
+        """
+        Calculate Max Pain — strike where option writers incur least loss.
+        Matches the algorithm in OpenInterestService._calculate_max_pain.
+        """
+        if not strikes:
+            return current_price
+        
+        sorted_strikes = sorted(strikes, key=lambda x: x['strike'])
+        min_loss = float('inf')
+        max_pain_strike = current_price
+        
+        for test in sorted_strikes:
+            test_strike = test['strike']
+            total_loss = 0
+            
+            for s in sorted_strikes:
+                if s['strike'] < test_strike:
+                    total_loss += (test_strike - s['strike']) * s.get('ce_oi', 0)
+                if s['strike'] > test_strike:
+                    total_loss += (s['strike'] - test_strike) * s.get('pe_oi', 0)
+            
+            if total_loss < min_loss:
+                min_loss = total_loss
+                max_pain_strike = test_strike
+        
+        return max_pain_strike
+
+    def _batch_compute_iv_percentiles(self, stocks: List[str]) -> List[Dict]:
+        """
+        Compute IV percentile for all F&O stocks in a batch-optimized manner:
+        1. Build ATM option map (NFO instruments + stock prices)
+        2. Batch-fetch all ATM option LTPs in one API call
+        3. Compute IV for each stock via Black-Scholes
+        4. Compute HV percentile for each stock (with 24h caching, parallelized)
+        
+        Returns:
+            List of {symbol, current_price, iv_percentile} for stocks with percentile > 80
+        """
+        try:
+            logger.info(f"Starting batch IV percentile computation for {len(stocks)} stocks...")
+            iv_start = time.time()
+            
+            # Step 1: Build ATM option map
+            atm_map = self._build_atm_option_map(stocks)
+            if not atm_map:
+                logger.warning("No ATM options found for any stock")
+                return []
+            
+            # Step 2: Batch-fetch all ATM option LTPs (both CE and PE)
+            option_keys = []
+            for info in atm_map.values():
+                if info.get('ce_tradingsymbol'):
+                    option_keys.append(f"NFO:{info['ce_tradingsymbol']}")
+                if info.get('pe_tradingsymbol'):
+                    option_keys.append(f"NFO:{info['pe_tradingsymbol']}")
+            
+            option_ltp_map = {}  # tradingsymbol -> ltp
+            
+            batch_size = 250
+            for i in range(0, len(option_keys), batch_size):
+                batch = option_keys[i:i + batch_size]
+                self._rate_limit()
+                try:
+                    ltp_data = self.kite.ltp(batch)
+                    for key, val in ltp_data.items():
+                        ts = key.replace('NFO:', '')
+                        option_ltp_map[ts] = val.get('last_price', 0)
+                except Exception as e:
+                    logger.warning(f"Batch option LTP fetch failed for batch {i}: {e}")
+            
+            logger.info(f"Got LTPs for {len(option_ltp_map)} ATM options (CE+PE)")
+            
+            # Step 3: Compute ATM IV for each stock via Black-Scholes (average CE and PE)
+            atm_ivs = {}  # symbol -> atm_iv (decimal)
+            today = date.today()
+            r = 0.07  # Risk-free rate
+            
+            for symbol, info in atm_map.items():
+                S = info['current_price']
+                K = info['strike']
+                days_to_expiry = (info['expiry'] - today).days
+                if days_to_expiry <= 0:
+                    days_to_expiry = 1
+                T = days_to_expiry / 365.0
+                
+                # Compute IV for both CE and PE, then average
+                valid_ivs = []
+                
+                ce_ts = info.get('ce_tradingsymbol')
+                if ce_ts:
+                    ce_ltp = option_ltp_map.get(ce_ts, 0)
+                    if ce_ltp > 0:
+                        ce_iv = self._calculate_iv_newton(S, K, T, r, ce_ltp, 'CE')
+                        if 0 < ce_iv < 2.0:  # Cap at 200%
+                            valid_ivs.append(ce_iv)
+                
+                pe_ts = info.get('pe_tradingsymbol')
+                if pe_ts:
+                    pe_ltp = option_ltp_map.get(pe_ts, 0)
+                    if pe_ltp > 0:
+                        pe_iv = self._calculate_iv_newton(S, K, T, r, pe_ltp, 'PE')
+                        if 0 < pe_iv < 2.0:  # Cap at 200%
+                            valid_ivs.append(pe_iv)
+                
+                if valid_ivs:
+                    atm_ivs[symbol] = sum(valid_ivs) / len(valid_ivs)
+            
+            logger.info(f"Computed ATM IV (avg CE+PE) for {len(atm_ivs)} stocks")
+            
+            # Step 4: Compute HV percentile for each stock (parallelized with threading)
+            high_iv_stocks = []
+            
+            def _compute_single_hv(symbol_iv_pair):
+                symbol, atm_iv = symbol_iv_pair
+                try:
+                    iv_pct = self.calculate_stock_iv_percentile(symbol, atm_iv)
+                    if iv_pct is not None and iv_pct > 80:
+                        return {
+                            'symbol': symbol,
+                            'current_price': round(atm_map[symbol]['current_price'], 2),
+                            'iv_percentile': iv_pct
+                        }
+                except Exception as e:
+                    logger.debug(f"HV percentile failed for {symbol}: {e}")
+                return None
+            
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                results = executor.map(_compute_single_hv, atm_ivs.items())
+                for result in results:
+                    if result:
+                        high_iv_stocks.append(result)
+            
+            iv_time = time.time() - iv_start
+            logger.info(f"IV Percentile batch complete: {len(high_iv_stocks)} stocks > 80% (of {len(atm_ivs)} with valid IV) in {iv_time:.1f}s")
+            
+            # Step 5: Enrich high-IV stocks with ATM IV, Volume, PCR, Max Pain, OI% Change
+            high_iv_stocks = self._enrich_high_iv_stocks(high_iv_stocks, atm_map, atm_ivs)
+            
+            return high_iv_stocks
+        
+        except Exception as e:
+            logger.error(f"Batch IV percentile computation failed: {e}")
+            return []
+
     def filter_cpr_stocks(self, root_date: Optional[datetime] = None) -> FilterResult:
         stocks = self.get_fo_stocks()
         # stocks = ["COLPAL"]
@@ -503,6 +1065,7 @@ class CPRFilterService:
         failed = 0
         start_time = time.time()
         
+        # Phase 1: CPR processing (existing logic, unchanged)
         with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
             futures = {executor.submit(self.process_stock, symbol, root_date): symbol for symbol in stocks}
             for future in as_completed(futures):
@@ -527,17 +1090,24 @@ class CPRFilterService:
                     processed += 1
                     if processed % 10 == 0:
                         elapsed = time.time() - start_time
-                        logger.info(f"Progress: {processed}/{len(stocks)} ({failed} failed) in {elapsed:.1f}s")
+                        logger.info(f"CPR Progress: {processed}/{len(stocks)} ({failed} failed) in {elapsed:.1f}s")
                 except Exception as e:
                     logger.debug(f"Stock {symbol} failed: {e}")
                     failed += 1
                     processed += 1
         
+        cpr_time = time.time() - start_time
+        logger.info(f"CPR phase complete in {cpr_time:.1f}s. Starting IV percentile computation...")
+        
+        # Phase 2: IV Percentile computation (batch-optimized, separate from CPR)
+        high_iv_stocks = self._batch_compute_iv_percentiles(stocks)
+        
         total_time = time.time() - start_time
         logger.info(
             f"Filter complete: {len(signals)} match criteria, "
             f"{len(cross_above)} crossed above weekly CPR, {len(cross_below)} crossed below weekly CPR, "
-            f"{len(bullish_reversal)} bullish reversal, {len(bearish_reversal)} bearish reversal "
+            f"{len(bullish_reversal)} bullish reversal, {len(bearish_reversal)} bearish reversal, "
+            f"{len(high_iv_stocks)} high IV percentile "
             f"({failed} failed) in {total_time:.1f}s. Cache: {len(self._historical_data_cache)} entries"
         )
         return {
@@ -549,7 +1119,8 @@ class CPRFilterService:
             'reversal': {
                 'bullish': sorted(bullish_reversal, key=lambda x: x['symbol']),
                 'bearish': sorted(bearish_reversal, key=lambda x: x['symbol'])
-            }
+            },
+            'high_iv_stocks': sorted(high_iv_stocks, key=lambda x: x['iv_percentile'], reverse=True)
         }
 
     def clear_cache(self):

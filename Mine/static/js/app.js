@@ -2,130 +2,130 @@
  * app.js (Pure Vanilla JavaScript - Application Utility)
  * Defines a global utility for fetching data from API endpoints.
  */
-(function() {
+(function () {
     "use strict";
 
-/**
- * Global utility function to fetch data and handle common API concerns:
- * session expiration (401/403), error messages, and JSON parsing.
- * Includes automatic retry logic for transient 403 errors.
- * Assumes showNotification is available (from notifications.js).
- * @param {string} url - The API endpoint URL.
- * @param {object} options - Fetch options (e.g., method, headers, body).
- * @param {number} maxRetries - Maximum retry attempts (default: 3).
- * @returns {Promise<object>} - The parsed JSON response object.
- */
-window.fetchJson = async function(url, options = {}, maxRetries = 3) {
-    let lastError;
-    let lastResponse;
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            const response = await fetch(url, options);
-            lastResponse = response;
+    /**
+     * Global utility function to fetch data and handle common API concerns:
+     * session expiration (401/403), error messages, and JSON parsing.
+     * Includes automatic retry logic for transient 403 errors.
+     * Assumes showNotification is available (from notifications.js).
+     * @param {string} url - The API endpoint URL.
+     * @param {object} options - Fetch options (e.g., method, headers, body).
+     * @param {number} maxRetries - Maximum retry attempts (default: 3).
+     * @returns {Promise<object>} - The parsed JSON response object.
+     */
+    window.fetchJson = async function (url, options = {}, maxRetries = 3) {
+        let lastError;
+        let lastResponse;
 
-            // Handle session expired / unauthorized (401 - permanent)
-            if (response.status === 401) {
-                try {
-                    const data = await response.json();
-                    const errorMsg = data.error || 'Your session has expired or you are not authorized. Please login again.';
-                    if (typeof showNotification === 'function') {
-                        showNotification(errorMsg, 'error');
-                    }
-                } catch (e) {
-                    if (typeof showNotification === 'function') {
-                        showNotification('Authentication error. Redirecting to login...', 'error');
-                    }
-                }
-                // Redirect to login after showing notification
-                setTimeout(() => { window.location.href = '/auth/login'; }, 1500);
-                return { success: false, message: 'Unauthorized', needs_login: true };
-            }
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                const response = await fetch(url, options);
+                lastResponse = response;
 
-            // Handle 403 Forbidden - retry up to maxRetries times with delay
-            if (response.status === 403) {
-                if (attempt < maxRetries) {
-                    console.warn(`[Attempt ${attempt}/${maxRetries}] Got 403 Forbidden. Retrying in ${attempt * 500}ms...`);
-                    // Exponential backoff: 500ms, 1000ms, 1500ms
-                    await new Promise(resolve => setTimeout(resolve, attempt * 500));
-                    continue; // Retry the request
-                } else {
-                    // Final attempt failed, show error
+                // Handle session expired / unauthorized (401 - permanent)
+                if (response.status === 401) {
                     try {
                         const data = await response.json();
-                        const errorMsg = data.error || 'Access forbidden. Please check your permissions and try again.';
+                        const errorMsg = data.error || 'Your session has expired or you are not authorized. Please login again.';
                         if (typeof showNotification === 'function') {
                             showNotification(errorMsg, 'error');
                         }
                     } catch (e) {
                         if (typeof showNotification === 'function') {
-                            showNotification('Access denied (403). Please refresh the page and try again.', 'error');
+                            showNotification('Authentication error. Redirecting to login...', 'error');
                         }
                     }
-                    return { success: false, message: 'Forbidden', statusCode: 403 };
+                    // Redirect to login after showing notification
+                    setTimeout(() => { window.location.href = '/auth/login'; }, 1500);
+                    return { success: false, message: 'Unauthorized', needs_login: true };
                 }
-            }
 
-            // Handle non-OK status codes (other than 401/403)
-            if (!response.ok) {
-                const errorText = await response.text();
-                let errorData = {};
-                try {
-                    // Try to parse the error message if it's JSON
-                    errorData = JSON.parse(errorText);
-                } catch (e) {
-                    // Fallback if response is not JSON
-                    throw new Error(`Server error: HTTP status ${response.status}`);
+                // Handle 403 Forbidden - retry up to maxRetries times with delay
+                if (response.status === 403) {
+                    if (attempt < maxRetries) {
+                        console.warn(`[Attempt ${attempt}/${maxRetries}] Got 403 Forbidden. Retrying in ${attempt * 500}ms...`);
+                        // Exponential backoff: 500ms, 1000ms, 1500ms
+                        await new Promise(resolve => setTimeout(resolve, attempt * 500));
+                        continue; // Retry the request
+                    } else {
+                        // Final attempt failed, show error
+                        try {
+                            const data = await response.json();
+                            const errorMsg = data.error || 'Access forbidden. Please check your permissions and try again.';
+                            if (typeof showNotification === 'function') {
+                                showNotification(errorMsg, 'error');
+                            }
+                        } catch (e) {
+                            if (typeof showNotification === 'function') {
+                                showNotification('Access denied (403). Please refresh the page and try again.', 'error');
+                            }
+                        }
+                        return { success: false, message: 'Forbidden', statusCode: 403 };
+                    }
                 }
-                throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-            }
-            
-            // Parse the response
-            const data = await response.json();
-            
-            // Check if response contains auth_error flag (even with 200 status)
-            if (data && data.auth_error === true) {
-                const errorMsg = data.error || 'Authentication required. Redirecting to login...';
-                if (typeof showNotification === 'function') {
-                    showNotification(errorMsg, 'error');
+
+                // Handle non-OK status codes (other than 401/403)
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    let errorData = {};
+                    try {
+                        // Try to parse the error message if it's JSON
+                        errorData = JSON.parse(errorText);
+                    } catch (e) {
+                        // Fallback if response is not JSON
+                        throw new Error(`Server error: HTTP status ${response.status}`);
+                    }
+                    throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
                 }
-                setTimeout(() => { window.location.href = '/auth/login'; }, 1500);
-                return { success: false, message: 'Unauthorized', needs_login: true };
-            }
-            
-            // Success! Return parsed JSON data
-            if (attempt > 1) {
-                console.log(`[Success] Request succeeded after ${attempt} attempts`);
-            }
-            return data;
-        } catch (error) {
-            lastError = error;
-            console.error(`[Attempt ${attempt}/${maxRetries}] Fetch error:`, error);
-            
-            // For network errors, retry if we haven't exceeded max retries
-            if (attempt < maxRetries) {
-                console.warn(`Retrying in ${attempt * 500}ms...`);
-                await new Promise(resolve => setTimeout(resolve, attempt * 500));
-                continue;
+
+                // Parse the response
+                const data = await response.json();
+
+                // Check if response contains auth_error flag (even with 200 status)
+                if (data && data.auth_error === true) {
+                    const errorMsg = data.error || 'Authentication required. Redirecting to login...';
+                    if (typeof showNotification === 'function') {
+                        showNotification(errorMsg, 'error');
+                    }
+                    setTimeout(() => { window.location.href = '/auth/login'; }, 1500);
+                    return { success: false, message: 'Unauthorized', needs_login: true };
+                }
+
+                // Success! Return parsed JSON data
+                if (attempt > 1) {
+                    console.log(`[Success] Request succeeded after ${attempt} attempts`);
+                }
+                return data;
+            } catch (error) {
+                lastError = error;
+                console.error(`[Attempt ${attempt}/${maxRetries}] Fetch error:`, error);
+
+                // For network errors, retry if we haven't exceeded max retries
+                if (attempt < maxRetries) {
+                    console.warn(`Retrying in ${attempt * 500}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, attempt * 500));
+                    continue;
+                }
             }
         }
-    }
-    
-    // All retries exhausted
-    console.error('Fetch failed after all retry attempts');
-    if (typeof showNotification === 'function') {
-        showNotification(`Failed to load data. ${lastError?.message || 'Please refresh the page.'}`, 'error');
-    }
-    return { success: false, message: lastError?.message || 'Request failed' };
-};
 
-/**
- * Show modal to collect Kotak Neo TOTP secret and authenticate
- * @param {string} loginUrl - The URL to post authentication data to (default: /auth/login/kotak)
- */
-window.showKotakLoginModal = function(loginUrl = '/auth/login/kotak') {
-    // Create modal HTML
-    const modalHtml = `
+        // All retries exhausted
+        console.error('Fetch failed after all retry attempts');
+        if (typeof showNotification === 'function') {
+            showNotification(`Failed to load data. ${lastError?.message || 'Please refresh the page.'}`, 'error');
+        }
+        return { success: false, message: lastError?.message || 'Request failed' };
+    };
+
+    /**
+     * Show modal to collect Kotak Neo TOTP secret and authenticate
+     * @param {string} loginUrl - The URL to post authentication data to (default: /auth/login/kotak)
+     */
+    window.showKotakLoginModal = function (loginUrl = '/auth/login/kotak') {
+        // Create modal HTML
+        const modalHtml = `
         <div id="kotakLoginModal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;">
             <div style="background: white; padding: 30px; border-radius: 8px; max-width: 500px; width: 90%; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <h2 style="margin-top: 0; color: #333;">Kotak Neo Authentication</h2>
@@ -135,6 +135,7 @@ window.showKotakLoginModal = function(loginUrl = '/auth/login/kotak') {
                     <label style="display: block; margin-bottom: 5px; color: #333; font-weight: bold;">6-Digit OTP *</label>
                     <input type="text" id="kotakTotpSecret" placeholder="Enter 6-digit OTP from authenticator app" 
                            maxlength="6" pattern="[0-9]{6}"
+                           onkeydown="if(event.key==='Enter'){event.preventDefault();submitKotakLogin();}"
                            style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
                     <small style="color: #666; display: block; margin-top: 5px;">
                         Enter the 6-digit code from your authenticator app (Google Authenticator, Authy, etc.)<br>
@@ -157,145 +158,145 @@ window.showKotakLoginModal = function(loginUrl = '/auth/login/kotak') {
             </div>
         </div>
     `;
-    
-    // Remove existing modal if present
-    const existingModal = document.getElementById('kotakLoginModal');
-    if (existingModal) {
-        existingModal.remove();
-    }
-    
-    // Add modal to page
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
-    
-    // Store login URL for submit function
-    window.kotakLoginUrl = loginUrl;
-    
-    // Focus on TOTP input
-    setTimeout(() => {
-        document.getElementById('kotakTotpSecret')?.focus();
-    }, 100);
-};
 
-/**
- * Close the Kotak login modal
- */
-window.closeKotakLoginModal = function() {
-    const modal = document.getElementById('kotakLoginModal');
-    if (modal) {
-        modal.remove();
-    }
-};
+        // Remove existing modal if present
+        const existingModal = document.getElementById('kotakLoginModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
 
-/**
- * Submit Kotak Neo authentication with TOTP secret
- */
-window.submitKotakLogin = async function() {
-    const totpSecret = document.getElementById('kotakTotpSecret')?.value?.trim();
-    const statusDiv = document.getElementById('kotakLoginStatus');
-    
-    if (!totpSecret) {
+        // Add modal to page
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        // Store login URL for submit function
+        window.kotakLoginUrl = loginUrl;
+
+        // Focus on TOTP input
+        setTimeout(() => {
+            document.getElementById('kotakTotpSecret')?.focus();
+        }, 100);
+    };
+
+    /**
+     * Close the Kotak login modal
+     */
+    window.closeKotakLoginModal = function () {
+        const modal = document.getElementById('kotakLoginModal');
+        if (modal) {
+            modal.remove();
+        }
+    };
+
+    /**
+     * Submit Kotak Neo authentication with TOTP secret
+     */
+    window.submitKotakLogin = async function () {
+        const totpSecret = document.getElementById('kotakTotpSecret')?.value?.trim();
+        const statusDiv = document.getElementById('kotakLoginStatus');
+
+        if (!totpSecret) {
+            if (statusDiv) {
+                statusDiv.style.display = 'block';
+                statusDiv.style.background = '#fff3cd';
+                statusDiv.style.color = '#856404';
+                statusDiv.textContent = 'Please enter your 6-digit OTP';
+            }
+            return;
+        }
+
+        // Show loading status
         if (statusDiv) {
             statusDiv.style.display = 'block';
-            statusDiv.style.background = '#fff3cd';
-            statusDiv.style.color = '#856404';
-            statusDiv.textContent = 'Please enter your 6-digit OTP';
+            statusDiv.style.background = '#d1ecf1';
+            statusDiv.style.color = '#0c5460';
+            statusDiv.textContent = 'Authenticating with Kotak Neo...';
         }
-        return;
-    }
-    
-    // Show loading status
-    if (statusDiv) {
-        statusDiv.style.display = 'block';
-        statusDiv.style.background = '#d1ecf1';
-        statusDiv.style.color = '#0c5460';
-        statusDiv.textContent = 'Authenticating with Kotak Neo...';
-    }
-    
-    try {
-        const requestBody = {
-            totp_secret: totpSecret
-        };
-        
-        // Set a 60-second frontend timeout to prevent indefinite waiting
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => {
-            controller.abort();
-            if (statusDiv) {
-                statusDiv.style.background = '#f8d7da';
-                statusDiv.style.color = '#721c24';
-                statusDiv.textContent = '✗ Request timeout - Kotak API not responding. Try again.';
-            }
-        }, 60000);
-        
-        const response = await fetch(window.kotakLoginUrl || '/auth/login/kotak', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestBody),
-            signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            // Success
-            if (statusDiv) {
-                statusDiv.style.background = '#d4edda';
-                statusDiv.style.color = '#155724';
-                statusDiv.textContent = '✓ Authentication successful! You are now logged in.';
-            }
-            
-            if (typeof showNotification === 'function') {
-                showNotification('Successfully authenticated with Kotak Neo!', 'success');
-            }
-            
-            // Close modal after 1.5 seconds
-            setTimeout(() => {
-                closeKotakLoginModal();
-            }, 1500);
-            
-        } else {
-            // Error
-            if (statusDiv) {
-                statusDiv.style.background = '#f8d7da';
-                statusDiv.style.color = '#721c24';
-                statusDiv.textContent = `✗ ${data.error || data.message || 'Authentication failed'}`;
-            }
-            
-            if (typeof showNotification === 'function') {
-                showNotification(data.error || 'Kotak Neo authentication failed', 'error');
-            }
-        }
-        
-    } catch (error) {
-        console.error('Error during Kotak login:', error);
-        if (statusDiv) {
-            statusDiv.style.background = '#f8d7da';
-            statusDiv.style.color = '#721c24';
-            if (error.name === 'AbortError') {
-                statusDiv.textContent = '✗ Request timeout - Kotak API not responding. Please try again.';
-            } else {
-                statusDiv.textContent = `✗ Error: ${error.message}`;
-            }
-        }
-        
-        if (typeof showNotification === 'function') {
-            const msg = error.name === 'AbortError' ? 'Request timeout - please try again' : 'Network error during authentication';
-            showNotification(msg, 'error');
-        }
-    }
-};
 
-/**
- * Show modal to collect Dhan Access Token and authenticate
- * @param {string} loginUrl - The URL to post authentication data to (default: /auth/login/dhan)
- */
-window.showDhanLoginModal = function(loginUrl = '/auth/login/dhan') {
-    // Create modal HTML
-    const modalHtml = `
+        try {
+            const requestBody = {
+                totp_secret: totpSecret
+            };
+
+            // Set a 60-second frontend timeout to prevent indefinite waiting
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => {
+                controller.abort();
+                if (statusDiv) {
+                    statusDiv.style.background = '#f8d7da';
+                    statusDiv.style.color = '#721c24';
+                    statusDiv.textContent = '✗ Request timeout - Kotak API not responding. Try again.';
+                }
+            }, 60000);
+
+            const response = await fetch(window.kotakLoginUrl || '/auth/login/kotak', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody),
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            const data = await response.json();
+
+            if (data.success) {
+                // Success
+                if (statusDiv) {
+                    statusDiv.style.background = '#d4edda';
+                    statusDiv.style.color = '#155724';
+                    statusDiv.textContent = '✓ Authentication successful! You are now logged in.';
+                }
+
+                if (typeof showNotification === 'function') {
+                    showNotification('Successfully authenticated with Kotak Neo!', 'success');
+                }
+
+                // Close modal after 1.5 seconds
+                setTimeout(() => {
+                    closeKotakLoginModal();
+                }, 1500);
+
+            } else {
+                // Error
+                if (statusDiv) {
+                    statusDiv.style.background = '#f8d7da';
+                    statusDiv.style.color = '#721c24';
+                    statusDiv.textContent = `✗ ${data.error || data.message || 'Authentication failed'}`;
+                }
+
+                if (typeof showNotification === 'function') {
+                    showNotification(data.error || 'Kotak Neo authentication failed', 'error');
+                }
+            }
+
+        } catch (error) {
+            console.error('Error during Kotak login:', error);
+            if (statusDiv) {
+                statusDiv.style.background = '#f8d7da';
+                statusDiv.style.color = '#721c24';
+                if (error.name === 'AbortError') {
+                    statusDiv.textContent = '✗ Request timeout - Kotak API not responding. Please try again.';
+                } else {
+                    statusDiv.textContent = `✗ Error: ${error.message}`;
+                }
+            }
+
+            if (typeof showNotification === 'function') {
+                const msg = error.name === 'AbortError' ? 'Request timeout - please try again' : 'Network error during authentication';
+                showNotification(msg, 'error');
+            }
+        }
+    };
+
+    /**
+     * Show modal to collect Dhan Access Token and authenticate
+     * @param {string} loginUrl - The URL to post authentication data to (default: /auth/login/dhan)
+     */
+    window.showDhanLoginModal = function (loginUrl = '/auth/login/dhan') {
+        // Create modal HTML
+        const modalHtml = `
         <div id="dhanLoginModal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;">
             <div style="background: white; padding: 30px; border-radius: 8px; max-width: 500px; width: 90%; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <h2 style="margin-top: 0; color: #333;">Dhan Authentication</h2>
@@ -305,6 +306,7 @@ window.showDhanLoginModal = function(loginUrl = '/auth/login/dhan') {
                     <label style="display: block; margin-bottom: 5px; color: #333; font-weight: bold;">Access Token *</label>
                     <textarea id="dhanAccessToken" placeholder="Enter your JWT access token from web.dhan.co" 
                               rows="4"
+                              onkeydown="if(event.key==='Enter'){event.preventDefault();submitDhanLogin();}"
                               style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; font-family: monospace; resize: vertical;"></textarea>
                     <small style="color: #666; display: block; margin-top: 5px;">
                         Get from: <strong>web.dhan.co → My Profile → Access DhanHQ APIs → Generate Access Token</strong><br>
@@ -327,149 +329,149 @@ window.showDhanLoginModal = function(loginUrl = '/auth/login/dhan') {
             </div>
         </div>
     `;
-    
-    // Remove existing modal if present
-    const existingModal = document.getElementById('dhanLoginModal');
-    if (existingModal) {
-        existingModal.remove();
-    }
-    
-    // Add modal to page
-    document.body.insertAdjacentHTML('beforeend', modalHtml);
-    
-    // Store login URL for submit function
-    window.dhanLoginUrl = loginUrl;
-    
-    // Focus on access token input
-    setTimeout(() => {
-        document.getElementById('dhanAccessToken')?.focus();
-    }, 100);
-};
 
-/**
- * Close the Dhan login modal
- */
-window.closeDhanLoginModal = function() {
-    const modal = document.getElementById('dhanLoginModal');
-    if (modal) {
-        modal.remove();
-    }
-};
+        // Remove existing modal if present
+        const existingModal = document.getElementById('dhanLoginModal');
+        if (existingModal) {
+            existingModal.remove();
+        }
 
-/**
- * Submit Dhan authentication with access token
- */
-window.submitDhanLogin = async function() {
-    const accessToken = document.getElementById('dhanAccessToken')?.value?.trim();
-    const statusDiv = document.getElementById('dhanLoginStatus');
-    
-    if (!accessToken) {
+        // Add modal to page
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        // Store login URL for submit function
+        window.dhanLoginUrl = loginUrl;
+
+        // Focus on access token input
+        setTimeout(() => {
+            document.getElementById('dhanAccessToken')?.focus();
+        }, 100);
+    };
+
+    /**
+     * Close the Dhan login modal
+     */
+    window.closeDhanLoginModal = function () {
+        const modal = document.getElementById('dhanLoginModal');
+        if (modal) {
+            modal.remove();
+        }
+    };
+
+    /**
+     * Submit Dhan authentication with access token
+     */
+    window.submitDhanLogin = async function () {
+        const accessToken = document.getElementById('dhanAccessToken')?.value?.trim();
+        const statusDiv = document.getElementById('dhanLoginStatus');
+
+        if (!accessToken) {
+            if (statusDiv) {
+                statusDiv.style.display = 'block';
+                statusDiv.style.background = '#fff3cd';
+                statusDiv.style.color = '#856404';
+                statusDiv.textContent = 'Please enter your access token';
+            }
+            return;
+        }
+
+        // Show loading status
         if (statusDiv) {
             statusDiv.style.display = 'block';
-            statusDiv.style.background = '#fff3cd';
-            statusDiv.style.color = '#856404';
-            statusDiv.textContent = 'Please enter your access token';
+            statusDiv.style.background = '#d1ecf1';
+            statusDiv.style.color = '#0c5460';
+            statusDiv.textContent = 'Authenticating with Dhan...';
         }
-        return;
-    }
-    
-    // Show loading status
-    if (statusDiv) {
-        statusDiv.style.display = 'block';
-        statusDiv.style.background = '#d1ecf1';
-        statusDiv.style.color = '#0c5460';
-        statusDiv.textContent = 'Authenticating with Dhan...';
-    }
-    
-    try {
-        const requestBody = {
-            access_token: accessToken
-        };
-        
-        const response = await fetch(window.dhanLoginUrl || '/auth/login/dhan', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(requestBody)
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            // Success
-            if (statusDiv) {
-                statusDiv.style.background = '#d4edda';
-                statusDiv.style.color = '#155724';
-                statusDiv.textContent = `✓ Authentication successful! Client ID: ${data.client_id || 'N/A'}`;
+
+        try {
+            const requestBody = {
+                access_token: accessToken
+            };
+
+            const response = await fetch(window.dhanLoginUrl || '/auth/login/dhan', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestBody)
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                // Success
+                if (statusDiv) {
+                    statusDiv.style.background = '#d4edda';
+                    statusDiv.style.color = '#155724';
+                    statusDiv.textContent = `✓ Authentication successful! Client ID: ${data.client_id || 'N/A'}`;
+                }
+
+                if (typeof showNotification === 'function') {
+                    showNotification('Successfully authenticated with Dhan!', 'success');
+                }
+
+                // Close modal after 1.5 seconds
+                setTimeout(() => {
+                    closeDhanLoginModal();
+                }, 1500);
+
+            } else {
+                // Error
+                if (statusDiv) {
+                    statusDiv.style.background = '#f8d7da';
+                    statusDiv.style.color = '#721c24';
+                    statusDiv.textContent = `✗ ${data.error || data.message || 'Authentication failed'}`;
+                }
+
+                if (typeof showNotification === 'function') {
+                    showNotification(data.error || 'Dhan authentication failed', 'error');
+                }
             }
-            
-            if (typeof showNotification === 'function') {
-                showNotification('Successfully authenticated with Dhan!', 'success');
-            }
-            
-            // Close modal after 1.5 seconds
-            setTimeout(() => {
-                closeDhanLoginModal();
-            }, 1500);
-            
-        } else {
-            // Error
+
+        } catch (error) {
+            console.error('Error during Dhan login:', error);
             if (statusDiv) {
                 statusDiv.style.background = '#f8d7da';
                 statusDiv.style.color = '#721c24';
-                statusDiv.textContent = `✗ ${data.error || data.message || 'Authentication failed'}`;
+                statusDiv.textContent = `✗ Error: ${error.message}`;
             }
-            
+
             if (typeof showNotification === 'function') {
-                showNotification(data.error || 'Dhan authentication failed', 'error');
+                showNotification('Network error during authentication', 'error');
             }
         }
-        
-    } catch (error) {
-        console.error('Error during Dhan login:', error);
-        if (statusDiv) {
-            statusDiv.style.background = '#f8d7da';
-            statusDiv.style.color = '#721c24';
-            statusDiv.textContent = `✗ Error: ${error.message}`;
-        }
-        
+    };
+
+    /**
+     * Show Fyers login - redirects to OAuth (like Kite)
+     * Works exactly like Kite: click button → redirect to Fyers OAuth → login → redirect back
+     */
+    window.showFyersLoginModal = function () {
+        console.log('[Fyers Login] Initiating OAuth flow...');
+
+        // Show loading indicator
         if (typeof showNotification === 'function') {
-            showNotification('Network error during authentication', 'error');
+            showNotification('Redirecting to Fyers login...', 'info');
         }
-    }
-};
 
-/**
- * Show Fyers login - redirects to OAuth (like Kite)
- * Works exactly like Kite: click button → redirect to Fyers OAuth → login → redirect back
- */
-window.showFyersLoginModal = function() {
-    console.log('[Fyers Login] Initiating OAuth flow...');
-    
-    // Show loading indicator
-    if (typeof showNotification === 'function') {
-        showNotification('Redirecting to Fyers login...', 'info');
-    }
-    
-    // Redirect to Fyers OAuth endpoint (like Kite)
-    // The backend will handle the OAuth URL generation and redirect
-    window.location.href = '/auth/login/fyers';
-};
+        // Redirect to Fyers OAuth endpoint (like Kite)
+        // The backend will handle the OAuth URL generation and redirect
+        window.location.href = '/auth/login/fyers';
+    };
 
-/**
- * Close the Fyers login modal (not used in simplified flow)
- */
-window.closeFyersLoginModal = function() {
-    // No-op in simplified flow
-};
+    /**
+     * Close the Fyers login modal (not used in simplified flow)
+     */
+    window.closeFyersLoginModal = function () {
+        // No-op in simplified flow
+    };
 
-/**
- * Submit Fyers authentication (not used in simplified flow)
- */
-window.submitFyersLogin = function() {
-    // Redirect to OAuth instead
-    window.showFyersLoginModal();
-};
+    /**
+     * Submit Fyers authentication (not used in simplified flow)
+     */
+    window.submitFyersLogin = function () {
+        // Redirect to OAuth instead
+        window.showFyersLoginModal();
+    };
 
 })();

@@ -238,7 +238,7 @@ class Intraday920LiveSignal:
         self.is_sl_monitoring = False
         self.sl_monitor_thread = None
         self.active_trades = {}  # Track active trades: {side: {entry_info, order_id, target_hit, trailed_sl}}
-        self.active_trades_lock = threading.Lock()  # Thread safety for active_trades
+        self.active_trades_lock = threading.RLock()  # Reentrant lock - allows nested acquisition (e.g., close_trade called from within check_sl_target)
         self.today_signals = []  # All signals generated today
         self.daily_entries = {}  # Track entries per side per day: {side: entry_date} to prevent multiple entries per day
         self.daily_entries_lock = threading.Lock()  # Thread safety for daily_entries
@@ -881,18 +881,26 @@ class Intraday920LiveSignal:
                                 )
                                 
                                 # --- Multi-Broker SL Order ---
+                                extra_sl_ids = {}
                                 if self.extra_brokers and self.live_trading:
                                     logger.info(f"⚡ Placing COPY SL orders on {len(self.extra_brokers)} extra brokers...")
-                                    for broker_name, service in self.extra_brokers.items():
-                                        try:
-                                            threading.Thread(
-                                                target=self._place_extra_broker_sl_order,
-                                                args=(broker_name, service, 'CE', ce_strike, ce_signal.get('sl')),
-                                                name=f"SL-{broker_name}-CE-{ce_strike}",
-                                                daemon=True
-                                            ).start()
-                                        except Exception as e:
-                                            logger.error(f"Failed to trigger {broker_name} SL order: {e}")
+                                    
+                                    with ThreadPoolExecutor(max_workers=3) as executor:
+                                        futures = {
+                                            executor.submit(
+                                                self._place_extra_broker_sl_order, 
+                                                name, service, 'CE', ce_strike, ce_signal.get('sl')
+                                            ): name for name, service in self.extra_brokers.items()
+                                        }
+                                        
+                                        for future in futures:
+                                            try:
+                                                result = future.result(timeout=5)
+                                                if result:
+                                                    b_name, b_order_id = result
+                                                    extra_sl_ids[b_name] = b_order_id
+                                            except Exception as e:
+                                                logger.error(f"SL placement failed for {futures[future]}: {e}")
                                 # -----------------------------
 
                                 if sl_result['success']:
@@ -936,6 +944,7 @@ class Intraday920LiveSignal:
                         'entry_time': datetime.now().isoformat(),
                         'order_id': order_id,
                         'sl_order_id': sl_order_id,  # Track SL order ID for modifications
+                        'extra_sl_ids': extra_sl_ids, # Track SL IDs for other brokers
                         'token': strike_data.get('ce_token') if strike_data else None,  # type: ignore
                         'strike': ce_strike if strike_data else None,
                         'status': 'OPEN',
@@ -1005,18 +1014,26 @@ class Intraday920LiveSignal:
                                 )
                                 
                                 # --- Multi-Broker SL Order ---
+                                extra_sl_ids = {}
                                 if self.extra_brokers and self.live_trading:
                                     logger.info(f"⚡ Placing COPY SL orders on {len(self.extra_brokers)} extra brokers...")
-                                    for broker_name, service in self.extra_brokers.items():
-                                        try:
-                                            threading.Thread(
-                                                target=self._place_extra_broker_sl_order,
-                                                args=(broker_name, service, 'PE', pe_strike, pe_signal.get('sl')),
-                                                name=f"SL-{broker_name}-PE-{pe_strike}",
-                                                daemon=True
-                                            ).start()
-                                        except Exception as e:
-                                            logger.error(f"Failed to trigger {broker_name} SL order: {e}")
+                                    
+                                    with ThreadPoolExecutor(max_workers=3) as executor:
+                                        futures = {
+                                            executor.submit(
+                                                self._place_extra_broker_sl_order, 
+                                                name, service, 'PE', pe_strike, pe_signal.get('sl')
+                                            ): name for name, service in self.extra_brokers.items()
+                                        }
+                                        
+                                        for future in futures:
+                                            try:
+                                                result = future.result(timeout=5)
+                                                if result:
+                                                    b_name, b_order_id = result
+                                                    extra_sl_ids[b_name] = b_order_id
+                                            except Exception as e:
+                                                logger.error(f"SL placement failed for {futures[future]}: {e}")
                                 # -----------------------------
 
                                 if sl_result['success']:
@@ -1060,6 +1077,7 @@ class Intraday920LiveSignal:
                         'entry_time': datetime.now().isoformat(),
                         'order_id': order_id,
                         'sl_order_id': sl_order_id,  # Track SL order ID for modifications
+                        'extra_sl_ids': extra_sl_ids, # Track SL IDs for other brokers
                         'token': strike_data.get('pe_token') if strike_data else None,  # type: ignore
                         'strike': pe_strike if strike_data else None,
                         'status': 'OPEN',
@@ -1302,11 +1320,14 @@ class Intraday920LiveSignal:
             
             logger.info(f"⚡ [{broker_name}] Attempting {txn_type} {side} {strike} x {qty}...")
 
+            response = None
+            
             if broker_name == 'KOTAK':
                 # Kotak uses 'B' for BUY and 'S' for SELL
                 k_txn = 'B' if txn_type == 'BUY' else 'S'
+                
                 # Kotak service handles symbol construction internally
-                service.place_option_order(
+                response = service.place_option_order(
                     symbol=self.symbol,
                     strike=strike,
                     option_type=side,
@@ -1316,10 +1337,9 @@ class Intraday920LiveSignal:
             
             elif broker_name == 'DHAN':
                 # Dhan needs numeric security ID for options
-                # get_option_security_id(symbol, strike, option_type)
                 sec_id = service.get_option_security_id(self.symbol, strike, side)
                 if sec_id:
-                    service.place_order(
+                    response = service.place_order(
                         security_id=sec_id,
                         transaction_type=txn_type,
                         quantity=qty,
@@ -1328,17 +1348,17 @@ class Intraday920LiveSignal:
                         exchange_segment='NSE_FNO'
                     )
                 else:
-                    logger.error(f"[{broker_name}] Could not resolve security ID for {side} {strike}")
+                    logger.error(f"❌ [{broker_name}] Could not resolve security ID for {side} {strike}")
+                    return
 
             elif broker_name == 'FYERS':
                 # Fyers needs NSE:SYMBOL format e.g. NSE:NIFTY24JAN21500CE
-                # Reuse Kite's symbol resolution to get base trading symbol
                 kite_symbol = self._get_option_symbol(self.symbol, strike, side)
                 if kite_symbol:
                     fyers_symbol = f"NSE:{kite_symbol}"
                     # Fyers side: 1 (Buy), -1 (Sell)
                     f_side = 1 if txn_type == 'BUY' else -1
-                    service.place_order(
+                    response = service.place_order(
                         symbol=fyers_symbol,
                         side=f_side,
                         quantity=qty,
@@ -1346,34 +1366,64 @@ class Intraday920LiveSignal:
                         product_type='INTRADAY'
                     )
                 else:
-                    logger.error(f"[{broker_name}] Could not resolve symbol for {side} {strike}")
+                    logger.error(f"❌ [{broker_name}] Could not resolve symbol for {side} {strike}")
+                    return
+
+            # Log result
+            if response and isinstance(response, dict):
+                if response.get('success') or response.get('stat') == 'Ok' or 'nOrdNo' in response:
+                    logger.info(f"✅ [{broker_name}] Order Placed Successfully: {response}")
+                else:
+                    logger.error(f"❌ [{broker_name}] Order Failed: {response}")
+            else:
+                logger.error(f"❌ [{broker_name}] Invalid or No Response: {response}")
 
         except Exception as e:
-            logger.error(f"❌ [{broker_name}] Order placement failed: {e}")
+            logger.error(f"❌ [{broker_name}] Exception during order placement: {e}", exc_info=True)
 
     def _place_extra_broker_sl_order(self, broker_name: str, service: Any, side: str, 
-                                    strike: int, trigger_price: float) -> None:
+                                    strike: int, trigger_price: float) -> Optional[tuple]:
         """
         Place generic SL (Sell) order on extra brokers.
-        Executes in a separate thread.
+        Returns: (broker_name, order_id) or None
         """
         try:
             qty = self.kite_service.get_lot_size(self.symbol)
-            # SL for Long option is always a SELL
-            
             logger.info(f"⚡ [{broker_name}] Attempting SL SELL {side} {strike} @ {trigger_price}...")
+            
+            response = None
+            order_id = None
 
             if broker_name == 'KOTAK':
-                # Kotak doesn't have a direct SL helper in the service wrapper that takes trigger_price easily
-                # skipping for now to avoid errors, or needs raw API call implementation
-                logger.warning(f"[{broker_name}] SL orders not yet fully supported in service wrapper")
-                pass
+                # Kotak now stores SL-M orders via place_stoploss_order (which wraps place_order)
+                # Ensure implementation exists in service
+                # If using generic place_option_stoploss_order which I should add to service wrapper or just use here
+                
+                # Kotak generic place_option_order doesn't support trigger yet in wrapper unless I update it
+                # I updated KotakOrderService.place_option_stoploss_order.
+                
+                # Using the new helper I added (or assumed to add) or just place_order
+                # Let's use the object's method if available, else standard fallback
+                
+                if hasattr(service, 'place_option_stoploss_order'):
+                     response = service.place_option_stoploss_order(
+                        symbol=self.symbol,
+                        strike=strike,
+                        option_type=side,
+                        trigger_price=trigger_price,
+                        quantity=qty,
+                        transaction_type='S'
+                    )
+                else:
+                    # Fallback if service not reloaded yet in memory (should be though)
+                    logger.warning(f"[{broker_name}] Service missing place_option_stoploss_order")
+                    return None
             
             elif broker_name == 'DHAN':
                 # Dhan needs security ID
                 sec_id = service.get_option_security_id(self.symbol, strike, side)
                 if sec_id:
-                    service.place_stoploss_order(
+                    response = service.place_stoploss_order(
                         security_id=sec_id,
                         trigger_price=trigger_price,
                         quantity=qty,
@@ -1381,29 +1431,166 @@ class Intraday920LiveSignal:
                         exchange_segment='NSE_FNO'
                     )
                 else:
-                    logger.error(f"[{broker_name}] Could not resolve security ID for SL {side} {strike}")
+                    logger.error(f"❌ [{broker_name}] Could not resolve security ID for SL {side} {strike}")
+                    return None
 
             elif broker_name == 'FYERS':
                 # Fyers needs NSE:SYMBOL
                 kite_symbol = self._get_option_symbol(self.symbol, strike, side)
                 if kite_symbol:
                     fyers_symbol = f"NSE:{kite_symbol}"
-                    service.place_stoploss_order(
+                    response = service.place_stoploss_order(
                         symbol=fyers_symbol,
                         trigger_price=trigger_price,
                         quantity=qty,
                         product_type='INTRADAY'
                     )
                 else:
-                    logger.error(f"[{broker_name}] Could not resolve symbol for SL {side} {strike}")
+                    logger.error(f"❌ [{broker_name}] Could not resolve symbol for SL {side} {strike}")
+                    return None
+
+            # Log result
+            if response and isinstance(response, dict):
+                if response.get('success') or response.get('stat') == 'Ok' or 'nOrdNo' in response:
+                    logger.info(f"✅ [{broker_name}] SL Order Placed Successfully: {response}")
+                    order_id = response.get('order_id') or response.get('nOrdNo') or response.get('id')
+                    return (broker_name, str(order_id))
+                else:
+                    logger.error(f"❌ [{broker_name}] SL Order Failed: {response}")
+            else:
+                logger.error(f"❌ [{broker_name}] SL Order Invalid/No Response: {response}")
 
         except Exception as e:
-            logger.error(f"❌ [{broker_name}] SL Order placement failed: {e}")
+            logger.error(f"❌ [{broker_name}] SL Order placement failed: {e}", exc_info=True)
+        
+        return None
+
+    def _modify_extra_broker_sl_order(self, broker_name: str, service: Any, order_id: str, 
+                                     new_trigger_price: float) -> bool:
+        """
+        Modify SL order on extra broker.
+        """
+        try:
+            logger.info(f"⚡ [{broker_name}] Modifying SL Order {order_id} -> {new_trigger_price}...")
+            
+            response = None
+            qty = self.kite_service.get_lot_size(self.symbol) # Sometimes needed
+            
+            if broker_name == 'KOTAK':
+                # Kotak modify_order(order_id, price, quantity, trigger_price)
+                if hasattr(service, 'modify_order'):
+                    response = service.modify_order(
+                        order_id=order_id,
+                        trigger_price=new_trigger_price
+                    )
+            
+            elif broker_name == 'DHAN':
+                # Dhan modify_order(order_id, quantity, price, order_type, trigger_price, validity)
+                if hasattr(service, 'modify_order'):
+                    response = service.modify_order(
+                        order_id=order_id,
+                        order_type='STOP_LOSS_MARKET',
+                        trigger_price=new_trigger_price,
+                        quantity=qty,
+                        validity='DAY'
+                    )
+
+            elif broker_name == 'FYERS':
+                # Fyers modify_order doesn't support trigger_price changes
+                # Use cancel + replace strategy instead
+                try:
+                    cancel_resp = service.cancel_order(order_id=order_id)
+                    if cancel_resp.get('success'):
+                        logger.info(f"[FYERS] Old SL cancelled, placing new SL @ {new_trigger_price}")
+                        # Get the trade to find the symbol
+                        for side_key, trade_data in self.active_trades.items():
+                            if trade_data.get('extra_sl_ids', {}).get('FYERS') == order_id:
+                                strike = trade_data.get('strike')
+                                kite_symbol = self._get_option_symbol(self.symbol, strike, side_key)
+                                if kite_symbol:
+                                    fyers_symbol = f"NSE:{kite_symbol}"
+                                    new_resp = service.place_stoploss_order(
+                                        symbol=fyers_symbol,
+                                        trigger_price=new_trigger_price,
+                                        quantity=qty,
+                                        product_type='INTRADAY'
+                                    )
+                                    if new_resp and new_resp.get('success'):
+                                        new_oid = new_resp.get('order_id') or new_resp.get('id')
+                                        trade_data['extra_sl_ids']['FYERS'] = str(new_oid)
+                                        response = new_resp
+                                    else:
+                                        response = new_resp
+                                break
+                    else:
+                        logger.error(f"[FYERS] Failed to cancel old SL: {cancel_resp}")
+                        response = cancel_resp
+                except Exception as fyers_e:
+                    logger.error(f"[FYERS] Cancel+Replace SL failed: {fyers_e}")
+                    response = {'success': False, 'error': str(fyers_e)}
+            
+            # Check success
+            if response and isinstance(response, dict):
+                 if response.get('success') or response.get('stat') == 'Ok':
+                     logger.info(f"✅ [{broker_name}] SL Modified: {new_trigger_price}")
+                     return True
+                 else:
+                     logger.error(f"❌ [{broker_name}] Modification Failed: {response}")
+            
+        except Exception as e:
+            logger.error(f"❌ [{broker_name}] Modify Exception: {e}")
+            
+        return False
+
+    def _cancel_pending_sl_orders(self, trade: Dict[str, Any], side: str) -> None:
+        """
+        Cancel all pending SL orders (Kite + extra brokers) for a trade being closed.
+        Must be called when exiting a trade via SL hit, trailing SL hit, or any exit path.
+        Prevents stale SL orders from triggering on subsequent positions.
+        
+        Args:
+            trade: Trade dictionary containing sl_order_id and extra_sl_ids
+            side: 'CE' or 'PE' (for logging)
+        """
+        # 1. Cancel Kite SL order
+        sl_order_id = trade.get('sl_order_id')
+        if sl_order_id and self.live_trading:
+            try:
+                cancel_result = self.kite_service.cancel_order(order_id=sl_order_id)
+                if cancel_result.get('success', False):
+                    logger.info(f"✅ {side} Kite SL order cancelled: {sl_order_id}")
+                else:
+                    logger.warning(f"⚠️ {side} Kite SL order cancel response: {cancel_result}")
+            except Exception as e:
+                # Order may already be completed/cancelled - this is expected
+                logger.debug(f"{side} Kite SL cancel (may already be done): {e}")
+        
+        # 2. Cancel extra broker SL orders
+        extra_sl_ids = trade.get('extra_sl_ids', {})
+        if extra_sl_ids and self.live_trading:
+            for b_name, b_sl_id in extra_sl_ids.items():
+                if b_name in self.extra_brokers:
+                    try:
+                        service_obj = self.extra_brokers[b_name]
+                        if hasattr(service_obj, 'cancel_order'):
+                            threading.Thread(
+                                target=service_obj.cancel_order,
+                                args=(b_sl_id,),
+                                name=f"CancelSL-{b_name}-{side}",
+                                daemon=True
+                            ).start()
+                            logger.info(f"✅ [{b_name}] SL cancel triggered for {side}: {b_sl_id}")
+                        else:
+                            logger.warning(f"[{b_name}] No cancel_order method found")
+                    except Exception as e:
+                        logger.error(f"Failed to cancel {b_name} SL {b_sl_id}: {e}")
 
     def _get_option_symbol(self, symbol: str, strike: int, option_type: str) -> Optional[str]:
         """
         Get the trading symbol for an option contract.
         e.g., 'NIFTY25D26C25000' for NIFTY, strike 25000, CE, expiry 26-DEC-2025
+        
+        Filters by nearest expiry >= today to avoid returning wrong contract.
         
         Args:
             symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
@@ -1421,24 +1608,37 @@ class Intraday920LiveSignal:
                 nfo_instruments = self.kite_service._nfo_instruments_cache
                 if nfo_instruments:
                     logger.debug(f"Searching in {len(nfo_instruments)} NFO instruments")
+                    
+                    from datetime import date as date_type
+                    today = date_type.today()
+                    
+                    # Collect all matching instruments and pick nearest expiry
+                    candidates = []
                     for instrument in nfo_instruments:
                         if (instrument.get('name') == symbol and 
                             instrument.get('strike') == strike and
                             instrument.get('instrument_type') == option_type):
-                            trading_symbol = instrument.get('tradingsymbol')
-                            logger.info(f"✅ Found option symbol: {trading_symbol} for {symbol} {strike} {option_type}")
-                            return trading_symbol
+                            expiry = instrument.get('expiry')
+                            if expiry:
+                                if hasattr(expiry, 'date'):
+                                    expiry = expiry.date()
+                                if expiry >= today:
+                                    candidates.append((expiry, instrument.get('tradingsymbol')))
+                    
+                    if candidates:
+                        # Sort by expiry and return the nearest one
+                        candidates.sort(key=lambda x: x[0])
+                        nearest_expiry, trading_symbol = candidates[0]
+                        logger.info(f"✅ Found option symbol: {trading_symbol} (expiry: {nearest_expiry}) for {symbol} {strike} {option_type}")
+                        return trading_symbol
+                    
                     logger.warning(f"No match found in NFO cache for {symbol} {strike} {option_type}")
                 else:
                     logger.warning("NFO instruments cache is empty")
             else:
                 logger.warning("KiteService does not have _nfo_instruments_cache")
             
-            # Fallback: Try to get from place_option_order (which may update the cache)
-            logger.info(f"Attempting fallback: querying Kite API for {symbol} {strike} {option_type}")
-            
-            # Use KiteService's existing place_option_order logic which has lookup built-in
-            # For now, return None to force reload or use alternative approach
+            # Fallback
             logger.warning(f"Could not find option symbol for {symbol} {strike} {option_type} - SL order will not be placed")
             return None
             
@@ -1528,32 +1728,48 @@ class Intraday920LiveSignal:
                             
                             # Modify SL order on broker if live trading
                             sl_order_id = trade.get('sl_order_id')
-                            if self.live_trading and sl_order_id:
-                                try:
-                                    modify_result = self.kite_service.modify_stoploss_order(
-                                        order_id=sl_order_id,
-                                        new_trigger_price=trailed_sl
-                                    )
-                                    if modify_result['success']:
-                                        logger.info(f"✅ {side} SL order modified on broker: {sl_order_id} -> Trigger: {trailed_sl:.2f}")
-                                        # Log SL update to Trade sheet
-                                        excel_logger.log_trade(
-                                            order_type='SL_UPDATE',
-                                            option_type=side,
-                                            strike=strike,
-                                            entry_price=entry_price,
-                                            current_price=current_price,
-                                            target=target,
-                                            stop_loss=trailed_sl,
-                                            pnl=current_price - entry_price,
-                                            status='SL_TRAILED',
+                            if self.live_trading:
+                                # 1. Modify Kite SL
+                                if sl_order_id:
+                                    try:
+                                        modify_result = self.kite_service.modify_stoploss_order(
                                             order_id=sl_order_id,
-                                            notes=f'SL Trailed from {old_sl:.2f} to {trailed_sl:.2f}'
+                                            new_trigger_price=trailed_sl
                                         )
-                                    else:
-                                        logger.error(f"❌ Failed to modify {side} SL order: {modify_result.get('error')}")
-                                except Exception as e:
-                                    logger.error(f"Error modifying {side} SL order: {e}", exc_info=True)
+                                        if modify_result['success']:
+                                            logger.info(f"✅ {side} SL order modified on broker: {sl_order_id} -> Trigger: {trailed_sl:.2f}")
+                                            # Log SL update to Trade sheet
+                                            excel_logger.log_trade(
+                                                order_type='SL_UPDATE',
+                                                option_type=side,
+                                                strike=strike,
+                                                entry_price=entry_price,
+                                                current_price=current_price,
+                                                target=target,
+                                                stop_loss=trailed_sl,
+                                                pnl=current_price - entry_price,
+                                                status='SL_TRAILED',
+                                                order_id=sl_order_id,
+                                                notes=f'SL Trailed from {old_sl:.2f} to {trailed_sl:.2f}'
+                                            )
+                                        else:
+                                            logger.error(f"❌ Failed to modify {side} SL order: {modify_result.get('error')}")
+                                    except Exception as e:
+                                        logger.error(f"Error modifying {side} SL order: {e}", exc_info=True)
+                                
+                                # 2. Modify Extra Broker SLs
+                                if trade.get('extra_sl_ids'):
+                                    for b_name, b_order_id in trade['extra_sl_ids'].items():
+                                        if b_name in self.extra_brokers:
+                                            try:
+                                                threading.Thread(
+                                                    target=self._modify_extra_broker_sl_order,
+                                                    args=(b_name, self.extra_brokers[b_name], b_order_id, trailed_sl),
+                                                    name=f"ModSL-{b_name}-{side}",
+                                                    daemon=True
+                                                ).start()
+                                            except Exception as e:
+                                                logger.error(f"Failed to trigger {b_name} SL modification: {e}")
                             
                             # Log to Signal Checks sheet
                             excel_logger.log_sl_target_check(
@@ -1619,6 +1835,9 @@ class Intraday920LiveSignal:
                             notes=f"Trailed SL Hit at {trailed_sl:.2f} | Entry: {entry_price:.2f} | P&L: {pnl:+.2f}"
                         )
                         
+                        # Cancel pending SL orders before placing market sell
+                        self._cancel_pending_sl_orders(trade, side)
+                        
                         # Place sell order
                         order_id = self.place_sell_order(
                             side=side,
@@ -1671,6 +1890,9 @@ class Intraday920LiveSignal:
                             notes=f"Initial SL Hit at {initial_sl:.2f} | Entry: {entry_price:.2f} | P&L: {pnl:+.2f}"
                         )
                         
+                        # Cancel pending SL orders before placing market sell
+                        self._cancel_pending_sl_orders(trade, side)
+                        
                         # Place sell order
                         order_id = self.place_sell_order(
                             side=side,
@@ -1722,33 +1944,49 @@ class Intraday920LiveSignal:
 
                         # === FIX: Update Broker SL to Entry Price ===
                         sl_order_id = trade.get('sl_order_id')
-                        if self.live_trading and sl_order_id:
-                            try:
-                                modify_result = self.kite_service.modify_stoploss_order(
-                                    order_id=sl_order_id,
-                                    new_trigger_price=entry_price
-                                )
-                                if modify_result['success']:
-                                    logger.info(f"✅ {side} Broker SL moved to Entry: {sl_order_id} -> Trigger: {entry_price:.2f}")
-                                    
-                                    # Log SL update to Trade sheet (Breakeven move)
-                                    excel_logger.log_trade(
-                                        order_type='SL_UPDATE',
-                                        option_type=side,
-                                        strike=strike,
-                                        entry_price=entry_price,
-                                        current_price=current_price,
-                                        target=target,
-                                        stop_loss=entry_price,
-                                        pnl=pnl,
-                                        status='SL_MOVED_TO_ENTRY',
+                        if self.live_trading:
+                            # 1. Update Kite SL
+                            if sl_order_id:
+                                try:
+                                    modify_result = self.kite_service.modify_stoploss_order(
                                         order_id=sl_order_id,
-                                        notes=f'Target Hit: SL moved to Breakeven {entry_price:.2f}'
+                                        new_trigger_price=entry_price
                                     )
-                                else:
-                                    logger.error(f"❌ Failed to move {side} SL to Entry: {modify_result.get('error')}")
-                            except Exception as e:
-                                logger.error(f"Error moving {side} SL to Entry: {e}", exc_info=True)
+                                    if modify_result['success']:
+                                        logger.info(f"✅ {side} Broker SL moved to Entry: {sl_order_id} -> Trigger: {entry_price:.2f}")
+                                        
+                                        # Log SL update to Trade sheet (Breakeven move)
+                                        excel_logger.log_trade(
+                                            order_type='SL_UPDATE',
+                                            option_type=side,
+                                            strike=strike,
+                                            entry_price=entry_price,
+                                            current_price=current_price,
+                                            target=target,
+                                            stop_loss=entry_price,
+                                            pnl=pnl,
+                                            status='SL_MOVED_TO_ENTRY',
+                                            order_id=sl_order_id,
+                                            notes=f'Target Hit: SL moved to Breakeven {entry_price:.2f}'
+                                        )
+                                    else:
+                                        logger.error(f"❌ Failed to move {side} SL to Entry: {modify_result.get('error')}")
+                                except Exception as e:
+                                    logger.error(f"Error moving {side} SL to Entry: {e}", exc_info=True)
+                            
+                            # 2. Update Extra Broker SLs
+                            if trade.get('extra_sl_ids'):
+                                for b_name, b_order_id in trade['extra_sl_ids'].items():
+                                    if b_name in self.extra_brokers:
+                                        try:
+                                            threading.Thread(
+                                                target=self._modify_extra_broker_sl_order,
+                                                args=(b_name, self.extra_brokers[b_name], b_order_id, entry_price),
+                                                name=f"ModSL-{b_name}-{side}",
+                                                daemon=True
+                                            ).start()
+                                        except Exception as e:
+                                            logger.error(f"Failed to trigger {b_name} SL modification: {e}")
                         # ============================================
                         
                         # Don't exit yet - continue with trailing SL
@@ -1825,6 +2063,48 @@ class Intraday920LiveSignal:
                 option_type=side,
                 transaction_type=transaction_type_const
             )
+            
+            # --- Multi-Broker EXIT Order ---
+            if self.extra_brokers and self.live_trading:
+                logger.info(f"⚡ Placing COPY EXIT orders on {len(self.extra_brokers)} extra brokers...")
+                
+                # 1. Place Market Exit
+                for broker_name, service in self.extra_brokers.items():
+                    try:
+                        threading.Thread(
+                            target=self._place_extra_broker_order,
+                            args=(broker_name, service, side, strike, exit_price, transaction_type),
+                            name=f"Exit-{broker_name}-{side}-{strike}",
+                            daemon=True
+                        ).start()
+                    except Exception as e:
+                        logger.error(f"Failed to trigger {broker_name} exit order: {e}")
+                
+                # 2. Cancel Pending SL Orders
+                try:
+                    trade = self.active_trades.get(side)
+                    if trade and trade.get('extra_sl_ids'):
+                        logger.info(f"Cancelling pending SL orders for {side}...")
+                        for b_name, b_sl_id in trade['extra_sl_ids'].items():
+                            if b_name in self.extra_brokers:
+                                try:
+                                    service_obj = self.extra_brokers[b_name]
+                                    # Call cancel generic or specific?
+                                    # Services usually have cancel_order(order_id)
+                                    if hasattr(service_obj, 'cancel_order'):
+                                        threading.Thread(
+                                            target=service_obj.cancel_order,
+                                            args=(b_sl_id,),
+                                            name=f"CancelSL-{b_name}",
+                                            daemon=True
+                                        ).start()
+                                    else:
+                                        logger.warning(f"[{b_name}] No cancel_order method found")
+                                except Exception as e:
+                                    logger.error(f"Failed to cancel {b_name} SL {b_sl_id}: {e}")
+                except Exception as e:
+                    logger.error(f"Error coordinating SL cancellation: {e}")
+            # -------------------------------
             
             if result['success']:
                 logger.info(f"✅ {transaction_type} Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {exit_price:.2f} | {exit_reason}")
@@ -2167,15 +2447,31 @@ class Intraday920LiveSignal:
                                 if trade.get('status') == 'OPEN':
                                     entry_order_id = trade.get('order_id')
                                     
-                                    # Check if entry order is still open on broker
-                                    is_order_active_on_broker = entry_order_id and str(entry_order_id) in active_order_ids
-                                    
                                     # Check if this order was placed by THIS SYSTEM
                                     is_system_order = entry_order_id is not None
                                     
-                                    logger.info(f"{side} Trade - System Order: {is_system_order}, Active on Broker: {is_order_active_on_broker}")
+                                    # Check if entry order was filled (COMPLETE) on broker
+                                    # A filled BUY order means we have a position to close
+                                    is_position_open = False
+                                    if is_system_order:
+                                        for order in active_orders:
+                                            if str(order.get('order_id')) == str(entry_order_id):
+                                                order_status = order.get('status', '').upper()
+                                                # COMPLETE = filled, position exists
+                                                # TRIGGER PENDING = SL order waiting (our SL not yet hit)
+                                                if order_status == 'COMPLETE':
+                                                    is_position_open = True
+                                                logger.info(f"{side} Broker order {entry_order_id}: status={order_status}")
+                                                break
+                                        else:
+                                            # Order not found in broker orders at all
+                                            # Assume position exists if we have the trade in our system
+                                            logger.warning(f"{side} Order {entry_order_id} not found in broker orders - assuming position open")
+                                            is_position_open = True
                                     
-                                    if is_system_order and is_order_active_on_broker:
+                                    logger.info(f"{side} Trade - System Order: {is_system_order}, Position Open: {is_position_open}")
+                                    
+                                    if is_system_order and is_position_open:
                                         # This is our order and it's still active - close it
                                         token = trade.get('token')
                                         current_price = None
@@ -2255,7 +2551,7 @@ class Intraday920LiveSignal:
                                         except Exception as e:
                                             logger.error(f"Error closing trade {side} in system: {e}")
                                     
-                                    elif is_system_order and not is_order_active_on_broker:
+                                    elif is_system_order and not is_position_open:
                                         # Our order but already closed (likely by SL hit) - just mark as closed in system
                                         logger.info(f"⏹️  {side} Order {entry_order_id} already closed on broker (likely by SL hit) - marking as closed")
                                         try:
@@ -2430,27 +2726,28 @@ class Intraday920LiveSignal:
         Returns:
             Trade summary
         """
-        if side not in self.active_trades:
-            return {'success': False, 'error': f'No active {side} trade'}
-        
-        trade = self.active_trades[side]
-        entry_price = trade.get('entry_price', 0)
-        pnl = exit_price - entry_price
-        pnl_pct = (pnl / entry_price * 100) if entry_price else 0
-        
-        trade['exit_price'] = exit_price
-        trade['exit_reason'] = exit_reason
-        trade['exit_time'] = datetime.now().isoformat()
-        trade['pnl'] = round(pnl, 2)
-        trade['pnl_pct'] = round(pnl_pct, 2)
-        trade['status'] = 'CLOSED'
-        
-        logger.info(f"🔴 {side} trade closed: Entry {entry_price}, Exit {exit_price}, PnL {pnl} ({pnl_pct}%)")
-        
-        return {
-            'success': True,
-            'trade': trade
-        }
+        with self.active_trades_lock:  # RLock allows nested acquisition from check_sl_target
+            if side not in self.active_trades:
+                return {'success': False, 'error': f'No active {side} trade'}
+            
+            trade = self.active_trades[side]
+            entry_price = trade.get('entry_price', 0)
+            pnl = exit_price - entry_price
+            pnl_pct = (pnl / entry_price * 100) if entry_price else 0
+            
+            trade['exit_price'] = exit_price
+            trade['exit_reason'] = exit_reason
+            trade['exit_time'] = datetime.now().isoformat()
+            trade['pnl'] = round(pnl, 2)
+            trade['pnl_pct'] = round(pnl_pct, 2)
+            trade['status'] = 'CLOSED'
+            
+            logger.info(f"🔴 {side} trade closed: Entry {entry_price}, Exit {exit_price}, PnL {pnl} ({pnl_pct}%)")
+            
+            return {
+                'success': True,
+                'trade': trade
+            }
     
     def reset_daily(self) -> None:
         """Reset daily signals and trades (call at market open)."""

@@ -1019,6 +1019,7 @@ def get_cpr_filter_results() -> EndpointResponse:
         signals = results.get('signals', []) if isinstance(results, dict) else []
         weekly_cross = results.get('weekly_cross', {}) if isinstance(results, dict) else {}
         reversal = results.get('reversal', {}) if isinstance(results, dict) else {}
+        high_iv_stocks = results.get('high_iv_stocks', []) if isinstance(results, dict) else []
 
         logger.info(
             "CPR filter completed. "
@@ -1026,13 +1027,15 @@ def get_cpr_filter_results() -> EndpointResponse:
             f"{len(weekly_cross.get('crossed_above', [])) if isinstance(weekly_cross, dict) else 0} crossed above weekly CPR, "
             f"{len(weekly_cross.get('crossed_below', [])) if isinstance(weekly_cross, dict) else 0} crossed below weekly CPR, "
             f"{len(reversal.get('bullish', [])) if isinstance(reversal, dict) else 0} bullish reversal, "
-            f"{len(reversal.get('bearish', [])) if isinstance(reversal, dict) else 0} bearish reversal."
+            f"{len(reversal.get('bearish', [])) if isinstance(reversal, dict) else 0} bearish reversal, "
+            f"{len(high_iv_stocks)} high IV percentile."
         )
         return jsonify({
             'success': True, 
             'data': signals, 
             'weekly_cross': weekly_cross, 
             'reversal': reversal,
+            'high_iv_stocks': high_iv_stocks,
             'date': target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
         })
     except Exception as e:
