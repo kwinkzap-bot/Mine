@@ -1371,15 +1371,54 @@ class Intraday920LiveSignal:
 
             # Log result
             if response and isinstance(response, dict):
+                order_id_val = response.get('order_id') or response.get('nOrdNo') or response.get('id')
                 if response.get('success') or response.get('stat') == 'Ok' or 'nOrdNo' in response:
                     logger.info(f"✅ [{broker_name}] Order Placed Successfully: {response}")
+                    # Log success to Excel
+                    excel_logger.log_trade(
+                        order_type=f'{txn_type}',
+                        option_type=side,
+                        strike=strike,
+                        entry_price=price,
+                        status='SUCCESS',
+                        order_id=str(order_id_val) if order_id_val else '',
+                        notes=f'[{broker_name}] {txn_type} order placed successfully | Order ID: {order_id_val}'
+                    )
                 else:
+                    error_detail = response.get('error') or response.get('message') or response.get('Emsg') or str(response)
                     logger.error(f"❌ [{broker_name}] Order Failed: {response}")
+                    # Log failure to Excel
+                    excel_logger.log_trade(
+                        order_type=f'{txn_type}',
+                        option_type=side,
+                        strike=strike,
+                        entry_price=price,
+                        status='FAILED',
+                        notes=f'[{broker_name}] {txn_type} Order Failed: {error_detail}'
+                    )
             else:
                 logger.error(f"❌ [{broker_name}] Invalid or No Response: {response}")
+                # Log invalid response to Excel
+                excel_logger.log_trade(
+                    order_type=f'{txn_type}',
+                    option_type=side,
+                    strike=strike,
+                    entry_price=price,
+                    status='ERROR',
+                    notes=f'[{broker_name}] {txn_type} Order: Invalid or No Response'
+                )
 
         except Exception as e:
             logger.error(f"❌ [{broker_name}] Exception during order placement: {e}", exc_info=True)
+            # Log exception to Excel
+            excel_logger.log_trade(
+                order_type=f'{"BUY" if transaction_type == "BUY" else "SELL"}',
+                option_type=side,
+                strike=strike,
+                entry_price=price,
+                status='ERROR',
+                notes=f'[{broker_name}] Order Exception: {str(e)}'
+            )
 
     def _place_extra_broker_sl_order(self, broker_name: str, service: Any, side: str, 
                                     strike: int, trigger_price: float) -> Optional[tuple]:
@@ -1454,14 +1493,56 @@ class Intraday920LiveSignal:
                 if response.get('success') or response.get('stat') == 'Ok' or 'nOrdNo' in response:
                     logger.info(f"✅ [{broker_name}] SL Order Placed Successfully: {response}")
                     order_id = response.get('order_id') or response.get('nOrdNo') or response.get('id')
+                    # Log SL success to Excel
+                    excel_logger.log_trade(
+                        order_type='SL_ORDER',
+                        option_type=side,
+                        strike=strike,
+                        entry_price=trigger_price,
+                        stop_loss=trigger_price,
+                        status='PLACED',
+                        order_id=str(order_id) if order_id else '',
+                        notes=f'[{broker_name}] SL Order Placed | Trigger: {trigger_price:.2f} | Order ID: {order_id}'
+                    )
                     return (broker_name, str(order_id))
                 else:
+                    error_detail = response.get('error') or response.get('message') or response.get('Emsg') or str(response)
                     logger.error(f"❌ [{broker_name}] SL Order Failed: {response}")
+                    # Log SL failure to Excel
+                    excel_logger.log_trade(
+                        order_type='SL_ORDER',
+                        option_type=side,
+                        strike=strike,
+                        entry_price=trigger_price,
+                        stop_loss=trigger_price,
+                        status='FAILED',
+                        notes=f'[{broker_name}] SL Order Failed: {error_detail}'
+                    )
             else:
                 logger.error(f"❌ [{broker_name}] SL Order Invalid/No Response: {response}")
+                # Log invalid response to Excel
+                excel_logger.log_trade(
+                    order_type='SL_ORDER',
+                    option_type=side,
+                    strike=strike,
+                    entry_price=trigger_price,
+                    stop_loss=trigger_price,
+                    status='ERROR',
+                    notes=f'[{broker_name}] SL Order: Invalid or No Response'
+                )
 
         except Exception as e:
             logger.error(f"❌ [{broker_name}] SL Order placement failed: {e}", exc_info=True)
+            # Log SL exception to Excel
+            excel_logger.log_trade(
+                order_type='SL_ORDER',
+                option_type=side,
+                strike=strike,
+                entry_price=trigger_price,
+                stop_loss=trigger_price,
+                status='ERROR',
+                notes=f'[{broker_name}] SL Order Exception: {str(e)}'
+            )
         
         return None
 
@@ -1533,12 +1614,65 @@ class Intraday920LiveSignal:
             if response and isinstance(response, dict):
                  if response.get('success') or response.get('stat') == 'Ok':
                      logger.info(f"✅ [{broker_name}] SL Modified: {new_trigger_price}")
+                     # Log SL modification success to Excel
+                     # Find the trade to get side/strike info
+                     _side = 'N/A'
+                     _strike = 0
+                     _entry_price = 0.0
+                     for side_key, trade_data in self.active_trades.items():
+                         if trade_data.get('extra_sl_ids', {}).get(broker_name) == order_id:
+                             _side = side_key
+                             _strike = trade_data.get('strike', 0)
+                             _entry_price = trade_data.get('entry_price', 0.0)
+                             break
+                     excel_logger.log_trade(
+                         order_type='SL_UPDATE',
+                         option_type=_side,
+                         strike=_strike,
+                         entry_price=_entry_price,
+                         stop_loss=new_trigger_price,
+                         status='SL_TRAILED',
+                         order_id=order_id,
+                         notes=f'[{broker_name}] SL Modified to {new_trigger_price:.2f}'
+                     )
                      return True
                  else:
+                     error_detail = response.get('error') or response.get('message') or response.get('Emsg') or str(response)
                      logger.error(f"❌ [{broker_name}] Modification Failed: {response}")
+                     # Log SL modification failure to Excel
+                     _side = 'N/A'
+                     _strike = 0
+                     _entry_price = 0.0
+                     for side_key, trade_data in self.active_trades.items():
+                         if trade_data.get('extra_sl_ids', {}).get(broker_name) == order_id:
+                             _side = side_key
+                             _strike = trade_data.get('strike', 0)
+                             _entry_price = trade_data.get('entry_price', 0.0)
+                             break
+                     excel_logger.log_trade(
+                         order_type='SL_UPDATE',
+                         option_type=_side,
+                         strike=_strike,
+                         entry_price=_entry_price,
+                         stop_loss=new_trigger_price,
+                         status='FAILED',
+                         order_id=order_id,
+                         notes=f'[{broker_name}] SL Modify Failed: {error_detail}'
+                     )
             
         except Exception as e:
             logger.error(f"❌ [{broker_name}] Modify Exception: {e}")
+            # Log SL modification exception to Excel
+            excel_logger.log_trade(
+                order_type='SL_UPDATE',
+                option_type='N/A',
+                strike=0,
+                entry_price=0.0,
+                stop_loss=new_trigger_price,
+                status='ERROR',
+                order_id=order_id,
+                notes=f'[{broker_name}] SL Modify Exception: {str(e)}'
+            )
             
         return False
 
@@ -1754,8 +1888,32 @@ class Intraday920LiveSignal:
                                             )
                                         else:
                                             logger.error(f"❌ Failed to modify {side} SL order: {modify_result.get('error')}")
+                                            # Log Kite SL modification failure to Excel
+                                            excel_logger.log_trade(
+                                                order_type='SL_UPDATE',
+                                                option_type=side,
+                                                strike=strike,
+                                                entry_price=entry_price,
+                                                current_price=current_price,
+                                                stop_loss=trailed_sl,
+                                                status='FAILED',
+                                                order_id=sl_order_id,
+                                                notes=f'[KITE] SL Trailing Modify Failed: {modify_result.get("error")}'
+                                            )
                                     except Exception as e:
                                         logger.error(f"Error modifying {side} SL order: {e}", exc_info=True)
+                                        # Log Kite SL modification exception to Excel
+                                        excel_logger.log_trade(
+                                            order_type='SL_UPDATE',
+                                            option_type=side,
+                                            strike=strike,
+                                            entry_price=entry_price,
+                                            current_price=current_price,
+                                            stop_loss=trailed_sl,
+                                            status='ERROR',
+                                            order_id=sl_order_id,
+                                            notes=f'[KITE] SL Trailing Modify Exception: {str(e)}'
+                                        )
                                 
                                 # 2. Modify Extra Broker SLs
                                 if trade.get('extra_sl_ids'):
@@ -1971,8 +2129,32 @@ class Intraday920LiveSignal:
                                         )
                                     else:
                                         logger.error(f"❌ Failed to move {side} SL to Entry: {modify_result.get('error')}")
+                                        # Log Kite SL breakeven move failure to Excel
+                                        excel_logger.log_trade(
+                                            order_type='SL_UPDATE',
+                                            option_type=side,
+                                            strike=strike,
+                                            entry_price=entry_price,
+                                            current_price=current_price,
+                                            stop_loss=entry_price,
+                                            status='FAILED',
+                                            order_id=sl_order_id,
+                                            notes=f'[KITE] SL Breakeven Move Failed: {modify_result.get("error")}'
+                                        )
                                 except Exception as e:
                                     logger.error(f"Error moving {side} SL to Entry: {e}", exc_info=True)
+                                    # Log Kite SL breakeven move exception to Excel
+                                    excel_logger.log_trade(
+                                        order_type='SL_UPDATE',
+                                        option_type=side,
+                                        strike=strike,
+                                        entry_price=entry_price,
+                                        current_price=current_price,
+                                        stop_loss=entry_price,
+                                        status='ERROR',
+                                        order_id=sl_order_id,
+                                        notes=f'[KITE] SL Breakeven Move Exception: {str(e)}'
+                                    )
                             
                             # 2. Update Extra Broker SLs
                             if trade.get('extra_sl_ids'):
