@@ -1,0 +1,720 @@
+// This Pine Script™ source code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+// © KavinKumar - Volume Profile with Footprint Zones & Imbalance Detection
+
+//@version=5
+indicator("Volume Profile + Footprint & Imbalance", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ██  INPUT SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── 1. Volume Profile Inputs ────────────────────────────────────────────────────
+grp_vp        = "═══ Volume Profile Inputs ═══"
+vp_rows       = input.int(50, "Row Size", minval=10, maxval=100, group=grp_vp)
+va_pct        = input.float(70.0, "Value Area Vol (%)", minval=50.0, maxval=95.0, step=1.0, group=grp_vp)
+vp_num_days   = input.int(10, "Number of Days", minval=1, maxval=100, group=grp_vp, tooltip="Number of days to display. Dynamically adjusts based on TradingView limits.")
+
+// ── 2. Current Day Plotting ───────────────────────────────────────────────────
+grp_curr      = "═══ Current Day Plotting ═══"
+show_curr_poc = input.bool(true, "Current POC", inline="cpoc", group=grp_curr)
+col_curr_poc  = input.color(color.new(#17066c, 0), "", inline="cpoc", group=grp_curr)
+w_curr_poc    = input.int(2, "Width", minval=1, maxval=5, inline="cpoc", group=grp_curr)
+show_curr_vah = input.bool(true, "Current VAH", inline="cvah", group=grp_curr)
+col_curr_vah  = input.color(color.new(#2862ff, 0), "", inline="cvah", group=grp_curr)
+w_curr_vah    = input.int(2, "Width", minval=1, maxval=5, inline="cvah", group=grp_curr)
+show_curr_val = input.bool(true, "Current VAL", inline="cval", group=grp_curr)
+col_curr_val  = input.color(color.new(#ff6d00, 0), "", inline="cval", group=grp_curr)
+w_curr_val    = input.int(2, "Width", minval=1, maxval=5, inline="cval", group=grp_curr)
+
+// ── 3. Prev Day Plotting ──────────────────────────────────────────────────────
+grp_prev      = "═══ Prev Day Plotting ═══"
+show_prev_poc = input.bool(true, "Prev POC", inline="ppoc", group=grp_prev)
+col_prev_poc  = input.color(color.new(#0c5474, 15), "", inline="ppoc", group=grp_prev)
+w_prev_poc    = input.int(2, "Width", minval=1, maxval=5, inline="ppoc", group=grp_prev)
+show_prev_vah = input.bool(true, "Prev VAH", inline="pvah", group=grp_prev)
+col_prev_vah  = input.color(color.new(#26a69a, 15), "", inline="pvah", group=grp_prev)
+w_prev_vah    = input.int(2, "Width", minval=1, maxval=5, inline="pvah", group=grp_prev)
+show_prev_val = input.bool(true, "Prev VAL", inline="pval", group=grp_prev)
+col_prev_val  = input.color(color.new(#eea719, 15), "", inline="pval", group=grp_prev)
+w_prev_val    = input.int(2, "Width", minval=1, maxval=5, inline="pval", group=grp_prev)
+
+// ── 4. Prev Day OHLC Plotting ────────────────────────────────────────────────
+grp_ohlc      = "═══ Prev Day OHLC Plotting ═══"
+show_pdh      = input.bool(true, "Prev Day High", inline="pdh", group=grp_ohlc)
+col_pdh       = input.color(color.new(#0b5d06, 0), "", inline="pdh", group=grp_ohlc)
+w_pdh         = input.int(2, "Width", minval=1, maxval=5, inline="pdh", group=grp_ohlc)
+show_pdl      = input.bool(true, "Prev Day Low", inline="pdl", group=grp_ohlc)
+col_pdl       = input.color(color.new(#f23645, 0), "", inline="pdl", group=grp_ohlc)
+w_pdl         = input.int(2, "Width", minval=1, maxval=5, inline="pdl", group=grp_ohlc)
+
+// ── 5. Virgin Bars Plotting ───────────────────────────────────────────────────
+grp_vpoc      = "═══ Virgin Bars Plotting ═══"
+show_vpoc     = input.bool(true, "VPOC", inline="vpoc", group=grp_vpoc)
+col_vpoc      = input.color(color.new(#7b1fa2, 0), "", inline="vpoc", group=grp_vpoc)
+w_vpoc        = input.int(2, "Width", minval=1, maxval=5, inline="vpoc", group=grp_vpoc)
+
+// ── 6. Volume Bars Plotting ───────────────────────────────────────────────────
+grp_vbars     = "═══ Volume Bars Plotting ═══"
+show_vol_bars = input.bool(false, "Volume Bars", inline="vbars", group=grp_vbars)
+col_vol_up    = input.color(color.new(#d9d9b2, 0), "Up", inline="vbars", group=grp_vbars)
+col_vol_dn    = input.color(color.new(#ffeacc, 0), "Down", inline="vbars", group=grp_vbars)
+show_va_bars  = input.bool(false, "Value Area", inline="vabars", group=grp_vbars)
+col_va_up     = input.color(color.new(#b4e0d9, 0), "Up", inline="vabars", group=grp_vbars)
+col_va_dn     = input.color(color.new(#f7c5ff, 0), "Down", inline="vabars", group=grp_vbars)
+
+// ── 7. Label Plotting ─────────────────────────────────────────────────────────
+grp_lbl       = "═══ Label Plotting ═══"
+show_prev_lbl = input.bool(true, "Prev Day Labels", inline="plbl", group=grp_lbl)
+prev_lbl_off  = input.int(10, "Offset", minval=0, maxval=50, inline="plbl", group=grp_lbl)
+show_curr_lbl = input.bool(true, "Current Day Labels", inline="clbl", group=grp_lbl)
+curr_lbl_off  = input.int(20, "Offset", minval=0, maxval=50, inline="clbl", group=grp_lbl)
+
+// ── 8. FootPrint Zone Plotting ────────────────────────────────────────────────
+grp_fp        = "═══ FootPrint Zone Plotting ═══"
+fp_enabled    = input.bool(false, "Show FootPrint Zone", inline="fpz", group=grp_fp)
+col_fp_zone   = input.color(color.new(#e040fb, 80), "", inline="fpz", group=grp_fp)
+
+// ── 9. Imbalance Plotting ─────────────────────────────────────────────────────
+grp_imb       = "═══ Imbalance Plotting ═══"
+imb_enabled   = input.bool(false, "Show Imbalance", inline="imb", group=grp_imb)
+col_imb_bull  = input.color(color.new(#00e676, 0), "Bullish", inline="imb", group=grp_imb)
+col_imb_bear  = input.color(color.new(#ff1744, 0), "Bearish", inline="imb", group=grp_imb)
+
+// ── Alerts ───────────────────────────────────────────────────────────────────
+grp_alerts      = "═══ Alerts ═══"
+alert_imbalance = input.bool(true, "Alert on Imbalances", group=grp_alerts)
+alert_vpoc      = input.bool(true, "Alert on VPOC Retest", group=grp_alerts)
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ██  HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+f_estimate_buy_sell(_open, _high, _low, _close, _volume) =>
+    float range_hl = _high - _low
+    float buy_pct  = range_hl > 0 ? (_close - _low) / range_hl : 0.5
+    float buy_vol  = _volume * buy_pct
+    float sell_vol = _volume * (1.0 - buy_pct)
+    [buy_vol, sell_vol]
+
+// Session detection
+is_new_session = ta.change(time("D")) != 0
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ██  MULTI-DAY SESSION STORAGE
+// ═══════════════════════════════════════════════════════════════════════════════
+// We store up to vp_num_days sessions in flat arrays.
+// Each session stores: high, low, start_bar, bar_count, and vp_rows * 3 volume values.
+// Session index 0 = current, 1 = most recent completed, etc.
+
+var int   MAX_DAYS   = 100
+var int   MAX_ROWS   = 50
+
+// Session metadata arrays
+var float[] s_high    = array.new_float(MAX_DAYS, na)
+var float[] s_low     = array.new_float(MAX_DAYS, na)
+var int[]   s_start   = array.new_int(MAX_DAYS, na)
+var int[]   s_bars    = array.new_int(MAX_DAYS, 0)
+var float[] s_poc     = array.new_float(MAX_DAYS, na)
+var float[] s_vah     = array.new_float(MAX_DAYS, na)
+var float[] s_val_arr = array.new_float(MAX_DAYS, na)
+
+// Volume data: flat arrays, indexed by [session_idx * MAX_ROWS + row]
+var float[] s_vol_up    = array.new_float(MAX_DAYS * MAX_ROWS, 0.0)
+var float[] s_vol_dn    = array.new_float(MAX_DAYS * MAX_ROWS, 0.0)
+var float[] s_vol_total = array.new_float(MAX_DAYS * MAX_ROWS, 0.0)
+
+// Footprint touch count per session
+var int[] s_fp_touch  = array.new_int(MAX_DAYS * MAX_ROWS, 0)
+
+// POC row index per session (for footprint ribbon coloring)
+var int[] s_poc_row   = array.new_int(MAX_DAYS, 0)
+var int[] s_va_up_arr = array.new_int(MAX_DAYS, 0)
+var int[] s_va_dn_arr = array.new_int(MAX_DAYS, 0)
+
+// Previous session reference values (for PDH/PDL labels)
+var float prev_session_high = na
+var float prev_session_low  = na
+var float prev_poc_price    = na
+var float prev_vah_price    = na
+var float prev_val_price    = na
+
+// Current session computed values
+var float curr_poc_price = na
+var float curr_vah_price = na
+var float curr_val_price = na
+
+// Session counter
+var int session_count = 1
+
+// ── On new session: shift all sessions down by 1 ────────────────────────────
+if is_new_session
+    // Save previous session reference values
+    prev_session_high := array.get(s_high, 0)
+    prev_session_low  := array.get(s_low, 0)
+    prev_poc_price    := curr_poc_price
+    prev_vah_price    := curr_vah_price
+    prev_val_price    := curr_val_price
+
+    // Shift sessions: move session[i] -> session[i+1] (from end to start)
+    int shift_end = math.min(MAX_DAYS - 1, math.max(1, session_count))
+    for s = shift_end to 1
+        int dst = s
+        int src = s - 1
+        // Copy metadata
+        array.set(s_high, dst, array.get(s_high, src))
+        array.set(s_low, dst, array.get(s_low, src))
+        array.set(s_start, dst, array.get(s_start, src))
+        array.set(s_bars, dst, array.get(s_bars, src))
+        array.set(s_poc, dst, array.get(s_poc, src))
+        array.set(s_vah, dst, array.get(s_vah, src))
+        array.set(s_val_arr, dst, array.get(s_val_arr, src))
+        array.set(s_poc_row, dst, array.get(s_poc_row, src))
+        array.set(s_va_up_arr, dst, array.get(s_va_up_arr, src))
+        array.set(s_va_dn_arr, dst, array.get(s_va_dn_arr, src))
+        // Copy volume data rows
+        for r = 0 to vp_rows - 1
+            int d_idx = dst * MAX_ROWS + r
+            int s_idx = src * MAX_ROWS + r
+            array.set(s_vol_up, d_idx, array.get(s_vol_up, s_idx))
+            array.set(s_vol_dn, d_idx, array.get(s_vol_dn, s_idx))
+            array.set(s_vol_total, d_idx, array.get(s_vol_total, s_idx))
+            array.set(s_fp_touch, d_idx, array.get(s_fp_touch, s_idx))
+
+    // Initialize session 0 (new current session)
+    array.set(s_high, 0, high)
+    array.set(s_low, 0, low)
+    array.set(s_start, 0, bar_index)
+    array.set(s_bars, 0, 1)
+    for r = 0 to vp_rows - 1
+        int idx = r  // session 0 offset
+        array.set(s_vol_up, idx, 0.0)
+        array.set(s_vol_dn, idx, 0.0)
+        array.set(s_vol_total, idx, 0.0)
+        array.set(s_fp_touch, idx, 0)
+
+    session_count += 1
+else
+    // Update current session (index 0)
+    if na(array.get(s_start, 0))
+        array.set(s_start, 0, bar_index)
+    array.set(s_high, 0, math.max(nz(array.get(s_high, 0), high), high))
+    array.set(s_low, 0, math.min(nz(array.get(s_low, 0), low), low))
+    array.set(s_bars, 0, nz(array.get(s_bars, 0), 0) + 1)
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ██  VOLUME DISTRIBUTION INTO CURRENT SESSION (index 0)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+float cur_high = array.get(s_high, 0)
+float cur_low  = array.get(s_low, 0)
+
+if not na(cur_high) and not na(cur_low) and cur_high > cur_low
+    float row_height = (cur_high - cur_low) / vp_rows
+    if row_height > 0
+        [buy_v, sell_v] = f_estimate_buy_sell(open, high, low, close, volume)
+        int row_lo  = math.max(0, math.floor((low - cur_low) / row_height))
+        int row_hi  = math.min(vp_rows - 1, math.floor((high - cur_low) / row_height))
+        float bar_range = high - low
+        if row_lo <= row_hi
+            for i = row_lo to row_hi
+                if i >= 0 and i < vp_rows
+                    float rb = cur_low + i * row_height
+                    float rt = cur_low + (i + 1) * row_height
+                    float overlap = math.min(high, rt) - math.max(low, rb)
+                    float w = bar_range > 0 ? math.max(0.0, overlap / bar_range) : 1.0
+                    int idx = i
+                    array.set(s_vol_up, idx, array.get(s_vol_up, idx) + buy_v * w)
+                    array.set(s_vol_dn, idx, array.get(s_vol_dn, idx) + sell_v * w)
+                    array.set(s_vol_total, idx, array.get(s_vol_total, idx) + (buy_v + sell_v) * w)
+                    array.set(s_fp_touch, idx, array.get(s_fp_touch, idx) + 1)
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ██  POC & VALUE AREA COMPUTATION (every bar, for current session)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if not na(cur_high) and not na(cur_low) and cur_high > cur_low
+    float rh = (cur_high - cur_low) / vp_rows
+
+    // Find POC for session 0
+    int   best_row = 0
+    float best_vol = 0.0
+    for i = 0 to vp_rows - 1
+        float v = array.get(s_vol_total, i)
+        if v > best_vol
+            best_vol := v
+            best_row := i
+
+    array.set(s_poc_row, 0, best_row)
+    curr_poc_price := cur_low + (best_row + 0.5) * rh
+    array.set(s_poc, 0, curr_poc_price)
+
+    // Compute Value Area
+    float tv = 0.0
+    for i = 0 to vp_rows - 1
+        tv += array.get(s_vol_total, i)
+
+    float vat = tv * (va_pct / 100.0)
+    float vav = best_vol
+    int   vu  = best_row
+    int   vd  = best_row
+
+    while vav < vat and (vu < vp_rows - 1 or vd > 0)
+        // CME standard: compare sum of next TWO rows above vs below
+        float va_above = 0.0
+        int   above_count = 0
+        if vu < vp_rows - 1
+            va_above += array.get(s_vol_total, vu + 1)
+            above_count := 1
+            if vu + 2 < vp_rows
+                va_above += array.get(s_vol_total, vu + 2)
+                above_count := 2
+        float va_below = 0.0
+        int   below_count = 0
+        if vd > 0
+            va_below += array.get(s_vol_total, vd - 1)
+            below_count := 1
+            if vd - 2 >= 0
+                va_below += array.get(s_vol_total, vd - 2)
+                below_count := 2
+        if va_above >= va_below and above_count > 0
+            for step = 1 to above_count
+                if vu < vp_rows - 1
+                    vu += 1
+                    vav += array.get(s_vol_total, vu)
+        else if below_count > 0
+            for step = 1 to below_count
+                if vd > 0
+                    vd -= 1
+                    vav += array.get(s_vol_total, vd)
+        else
+            break
+
+    array.set(s_va_up_arr, 0, vu)
+    array.set(s_va_dn_arr, 0, vd)
+    curr_vah_price := cur_low + (vu + 1) * rh
+    curr_val_price := cur_low + vd * rh
+    array.set(s_vah, 0, curr_vah_price)
+    array.set(s_val_arr, 0, curr_val_price)
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ██  VIRGIN POC (VPOC) TRACKING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var float[] vpoc_prices = array.new_float(0)
+var int[]   vpoc_starts = array.new_int(0)
+var int     MAX_VPOCS   = 10
+
+if is_new_session and not na(prev_poc_price) and show_vpoc
+    if array.size(vpoc_prices) >= MAX_VPOCS
+        array.shift(vpoc_prices)
+        array.shift(vpoc_starts)
+    array.push(vpoc_prices, prev_poc_price)
+    array.push(vpoc_starts, bar_index)
+
+if show_vpoc and array.size(vpoc_prices) > 0
+    int idx = array.size(vpoc_prices) - 1
+    while idx >= 0
+        float vp = array.get(vpoc_prices, idx)
+        if low <= vp and high >= vp
+            array.remove(vpoc_prices, idx)
+            array.remove(vpoc_starts, idx)
+            if alert_vpoc and barstate.isconfirmed
+                alert("🎯 VPOC RETESTED at " + str.tostring(vp, format.mintick), alert.freq_once_per_bar)
+        idx -= 1
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ██  3-CANDLE IMBALANCE DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+float atr_val = ta.atr(14)
+float gap_threshold = atr_val * 0.1
+float avg_vol = ta.sma(volume, 20)
+
+bool bull_imb_raw = not na(high[2]) and not na(low) and (low > high[2]) and (low - high[2] >= gap_threshold)
+bool bull_imb = imb_enabled and bull_imb_raw and (volume[1] > avg_vol)
+
+bool bear_imb_raw = not na(low[2]) and not na(high) and (high < low[2]) and (low[2] - high >= gap_threshold)
+bool bear_imb = imb_enabled and bear_imb_raw and (volume[1] > avg_vol)
+
+// Circular markers on all 3 candles
+plotshape(bull_imb, title="Bull Imb C3", location=location.belowbar, style=shape.circle, color=col_imb_bull, size=size.tiny)
+plotshape(bear_imb, title="Bear Imb C3", location=location.abovebar, style=shape.circle, color=col_imb_bear, size=size.tiny)
+plotshape(bull_imb, title="Bull Imb C2", location=location.belowbar, style=shape.circle, color=col_imb_bull, size=size.small, offset=-1)
+plotshape(bear_imb, title="Bear Imb C2", location=location.abovebar, style=shape.circle, color=col_imb_bear, size=size.small, offset=-1)
+plotshape(bull_imb, title="Bull Imb C1", location=location.belowbar, style=shape.circle, color=col_imb_bull, size=size.tiny, offset=-2)
+plotshape(bear_imb, title="Bear Imb C1", location=location.abovebar, style=shape.circle, color=col_imb_bear, size=size.tiny, offset=-2)
+
+if bull_imb
+    box.new(bar_index - 2, low, bar_index, high[2], border_color=col_imb_bull, bgcolor=color.new(col_imb_bull, 85), border_width=1)
+if bear_imb
+    box.new(bar_index - 2, low[2], bar_index, high, border_color=col_imb_bear, bgcolor=color.new(col_imb_bear, 85), border_width=1)
+
+if bull_imb and alert_imbalance and barstate.isconfirmed
+    alert("🟢 BULLISH IMBALANCE at " + str.tostring(close, format.mintick) + " | Gap: " + str.tostring(low - high[2], format.mintick), alert.freq_once_per_bar)
+if bear_imb and alert_imbalance and barstate.isconfirmed
+    alert("🔴 BEARISH IMBALANCE at " + str.tostring(close, format.mintick) + " | Gap: " + str.tostring(low[2] - high, format.mintick), alert.freq_once_per_bar)
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ██  DRAW MULTI-DAY VOLUME PROFILES + KEY LEVELS (on last bar only)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if barstate.islast
+    // Compute number of sessions to draw
+    int num_sessions = math.min(vp_num_days, math.max(1, session_count))
+    // VP bars: limited by 500-box cap (each session uses ~vp_rows boxes)
+    int max_bar_days  = math.min(num_sessions, math.max(1, math.floor(500 / vp_rows)))
+    // Level lines: can show many more days (each session uses ~5 lines, 500/5 = 100)
+    int max_line_days = math.min(num_sessions, math.min(MAX_DAYS, 80))
+    // Recalculate one extra session so Prev POC/VAH/VAL data is available for the last visible session
+    int max_recalc_days = math.min(session_count, math.min(MAX_DAYS, max_line_days + 1))
+
+    // ── Recalculate VP distribution using FINAL session ranges ─────────────
+    // The incremental approach gives wrong POC/VAH/VAL because the session
+    // range expands as bars come in. Recalculating from scratch using the
+    // final range and bar lookback data gives accurate results.
+    
+    // High-resolution calculation for precise POC/VAH/VAL
+    int CALC_ROWS = 200
+    float[] hires_vol = array.new_float(CALC_ROWS, 0.0)
+
+    for s = 0 to max_recalc_days - 1
+        float sh = array.get(s_high, s)
+        float sl = array.get(s_low, s)
+        int   sbar_start_r = nz(array.get(s_start, s), bar_index)
+        int   sbar_count_r = nz(array.get(s_bars, s), 0)
+        if na(sh) or na(sl) or sh <= sl or sbar_count_r <= 0
+            continue
+
+        float rh = (sh - sl) / vp_rows
+        float rh_hi = (sh - sl) / CALC_ROWS
+
+        // Clear display-resolution volume data
+        for r = 0 to vp_rows - 1
+            int flat_idx = s * MAX_ROWS + r
+            array.set(s_vol_up, flat_idx, 0.0)
+            array.set(s_vol_dn, flat_idx, 0.0)
+            array.set(s_vol_total, flat_idx, 0.0)
+            array.set(s_fp_touch, flat_idx, 0)
+
+        // Clear high-resolution array
+        for r = 0 to CALC_ROWS - 1
+            array.set(hires_vol, r, 0.0)
+
+        // Redistribute all bars in this session using final range
+        int first_offset = bar_index - sbar_start_r
+        // Pine Script limits history lookback to 5000 bars
+        if first_offset > 5000
+            continue
+        int last_offset  = math.max(0, first_offset - sbar_count_r + 1)
+        for offset = last_offset to first_offset
+            if offset < 0 or offset > 5000
+                continue
+            float bar_h = high[offset]
+            float bar_l = low[offset]
+            float bar_c = close[offset]
+            float bar_o = open[offset]
+            float bar_v = volume[offset]
+            if na(bar_v) or bar_v <= 0
+                continue
+
+            float range_hl = bar_h - bar_l
+            float buy_pct = range_hl > 0 ? (bar_c - bar_l) / range_hl : 0.5
+            float buy_v = bar_v * buy_pct
+            float sell_v = bar_v * (1.0 - buy_pct)
+
+            // Fill display-resolution arrays (for VP bars)
+            int row_lo = math.max(0, math.floor((bar_l - sl) / rh))
+            int row_hi = math.min(vp_rows - 1, math.floor((bar_h - sl) / rh))
+            if row_lo <= row_hi
+                for i = row_lo to row_hi
+                    if i >= 0 and i < vp_rows
+                        float row_bottom = sl + i * rh
+                        float row_top    = sl + (i + 1) * rh
+                        float overlap    = math.min(bar_h, row_top) - math.max(bar_l, row_bottom)
+                        float weight     = range_hl > 0 ? math.max(0.0, overlap / range_hl) : 1.0
+                        int idx = s * MAX_ROWS + i
+                        array.set(s_vol_up, idx, array.get(s_vol_up, idx) + buy_v * weight)
+                        array.set(s_vol_dn, idx, array.get(s_vol_dn, idx) + sell_v * weight)
+                        array.set(s_vol_total, idx, array.get(s_vol_total, idx) + (buy_v + sell_v) * weight)
+                        array.set(s_fp_touch, idx, array.get(s_fp_touch, idx) + 1)
+
+            // Fill high-resolution array (for POC/VA precision)
+            int hrow_lo = math.max(0, math.floor((bar_l - sl) / rh_hi))
+            int hrow_hi = math.min(CALC_ROWS - 1, math.floor((bar_h - sl) / rh_hi))
+            if hrow_lo <= hrow_hi
+                for i = hrow_lo to hrow_hi
+                    if i >= 0 and i < CALC_ROWS
+                        float rb = sl + i * rh_hi
+                        float rt = sl + (i + 1) * rh_hi
+                        float ov = math.min(bar_h, rt) - math.max(bar_l, rb)
+                        float wt = range_hl > 0 ? math.max(0.0, ov / range_hl) : 1.0
+                        array.set(hires_vol, i, array.get(hires_vol, i) + bar_v * wt)
+
+        // Compute POC from high-resolution data
+        int   best_row = 0
+        float best_vol = 0.0
+        for r = 0 to CALC_ROWS - 1
+            float v = array.get(hires_vol, r)
+            if v > best_vol
+                best_vol := v
+                best_row := r
+        array.set(s_poc, s, sl + (best_row + 0.5) * rh_hi)
+
+        // Map high-res POC row to display-res for VP bar skip
+        int display_poc_row = math.min(vp_rows - 1, math.floor((best_row + 0.5) * rh_hi / rh))
+        array.set(s_poc_row, s, display_poc_row)
+
+        // Compute Value Area from high-resolution data
+        float tv = 0.0
+        for r = 0 to CALC_ROWS - 1
+            tv += array.get(hires_vol, r)
+        float vat = tv * (va_pct / 100.0)
+        float vav = best_vol
+        int vu = best_row
+        int vd = best_row
+        while vav < vat and (vu < CALC_ROWS - 1 or vd > 0)
+            // CME standard: compare sum of next TWO rows above vs below
+            float a2 = 0.0
+            int   ac = 0
+            if vu < CALC_ROWS - 1
+                a2 += array.get(hires_vol, vu + 1)
+                ac := 1
+                if vu + 2 < CALC_ROWS
+                    a2 += array.get(hires_vol, vu + 2)
+                    ac := 2
+            float b2 = 0.0
+            int   bc = 0
+            if vd > 0
+                b2 += array.get(hires_vol, vd - 1)
+                bc := 1
+                if vd - 2 >= 0
+                    b2 += array.get(hires_vol, vd - 2)
+                    bc := 2
+            if a2 >= b2 and ac > 0
+                for step = 1 to ac
+                    if vu < CALC_ROWS - 1
+                        vu += 1
+                        vav += array.get(hires_vol, vu)
+            else if bc > 0
+                for step = 1 to bc
+                    if vd > 0
+                        vd -= 1
+                        vav += array.get(hires_vol, vd)
+            else
+                break
+        // Map high-res VA rows to display-res
+        array.set(s_va_up_arr, s, math.min(vp_rows - 1, math.floor((vu + 1) * rh_hi / rh)))
+        array.set(s_va_dn_arr, s, math.max(0, math.floor(vd * rh_hi / rh)))
+        array.set(s_vah, s, sl + (vu + 1) * rh_hi)
+        array.set(s_val_arr, s, sl + vd * rh_hi)
+
+    // Update current session computed values for labels
+    curr_poc_price := nz(array.get(s_poc, 0))
+    curr_vah_price := nz(array.get(s_vah, 0))
+    curr_val_price := nz(array.get(s_val_arr, 0))
+
+    // ── PASS 1: Draw VP Bars and Footprint Zones (oldest first → current last for FIFO survival) ─
+    for s_idx = 0 to max_bar_days - 1
+        int s = max_bar_days - 1 - s_idx  // reverse: oldest first
+
+        float sh = array.get(s_high, s)
+        float sl = array.get(s_low, s)
+        if na(sh) or na(sl) or sh <= sl
+            continue
+
+        float row_height = (sh - sl) / vp_rows
+        int   sbar_count = nz(array.get(s_bars, s), 1)
+        int   sbar_start = nz(array.get(s_start, s), bar_index)
+        int   poc_r      = array.get(s_poc_row, s)
+        int   va_u       = array.get(s_va_up_arr, s)
+        int   va_d       = array.get(s_va_dn_arr, s)
+
+        // Find max volume for this session
+        float max_vol = 0.0
+        for r = 0 to vp_rows - 1
+            max_vol := math.max(max_vol, array.get(s_vol_total, s * MAX_ROWS + r))
+
+        if max_vol <= 0
+            continue
+
+        int max_bar_width = math.max(3, math.round(sbar_count * 0.25))
+
+        // ── Draw VP Bars ─────────────────────────────────────────────────────
+        for r = 0 to vp_rows - 1
+            float row_bottom = sl + r * row_height
+            float row_top    = row_bottom + row_height
+            float vol_total  = array.get(s_vol_total, s * MAX_ROWS + r)
+            float vol_up_r   = array.get(s_vol_up, s * MAX_ROWS + r)
+            float vol_dn_r   = array.get(s_vol_dn, s * MAX_ROWS + r)
+
+            int bar_len = math.max(1, math.round((vol_total / max_vol) * max_bar_width))
+            int up_len  = vol_total > 0 ? math.max(0, math.round((vol_up_r / vol_total) * bar_len)) : 0
+            int dn_len  = bar_len - up_len
+
+            // 4-color scheme: VA Up/Down inside value area, Vol Up/Down outside
+            bool in_va = r >= va_d and r <= va_u
+
+            // Skip drawing if the relevant toggle is off
+            bool should_draw = (in_va and show_va_bars) or (not in_va and show_vol_bars)
+            if not should_draw
+                continue
+
+            color up_c = in_va ? col_va_up : col_vol_up
+            color dn_c = in_va ? col_va_dn : col_vol_dn
+
+
+            // Skip POC row — only show the POC line, no bar
+            if r == poc_r
+                continue
+
+            // Draw from session start (left side) — semi-transparent so level lines show through
+            if up_len > 0
+                box.new(sbar_start, row_top, sbar_start + up_len, row_bottom, border_color=color.new(color.black, 100), bgcolor=color.new(up_c, 40))
+            if dn_len > 0
+                box.new(sbar_start + up_len, row_top, sbar_start + up_len + dn_len, row_bottom, border_color=color.new(color.black, 100), bgcolor=color.new(dn_c, 40))
+
+        // ── Footprint Zones (Single Print Ribbons) ───────────────────────────
+        if fp_enabled
+            int ribbon_start = -1
+            int ribbon_end   = -1
+
+            for r = 0 to vp_rows - 1
+                int count = array.get(s_fp_touch, s * MAX_ROWS + r)
+                bool is_single = count == 1
+
+                if is_single
+                    if ribbon_start == -1
+                        ribbon_start := r
+                    ribbon_end := r
+                else
+                    if ribbon_start != -1 and (ribbon_end - ribbon_start + 1) >= 3
+                        float rb_bottom = sl + ribbon_start * row_height
+                        float rb_top    = sl + (ribbon_end + 1) * row_height
+                        int rb_right    = s == 0 ? bar_index + 5 : sbar_start + sbar_count
+                        box.new(sbar_start, rb_top, rb_right, rb_bottom, border_color=color.new(col_fp_zone, 50), bgcolor=col_fp_zone, border_width=1, border_style=line.style_dotted)
+                    ribbon_start := -1
+                    ribbon_end   := -1
+
+            // Close final ribbon
+            if ribbon_start != -1 and (ribbon_end - ribbon_start + 1) >= 3
+                float rb_bottom = sl + ribbon_start * row_height
+                float rb_top    = sl + (ribbon_end + 1) * row_height
+                int rb_right    = s == 0 ? bar_index + 5 : sbar_start + sbar_count
+                box.new(sbar_start, rb_top, rb_right, rb_bottom, border_color=color.new(col_fp_zone, 50), bgcolor=col_fp_zone, border_width=1, border_style=line.style_dotted)
+
+    // ── PASS 2: Draw Key Level Lines (separate loop — never skipped by volume check) ────────────────
+    for s2 = 0 to max_line_days - 1
+        float sh2 = array.get(s_high, s2)
+        float sl2 = array.get(s_low, s2)
+        if na(sh2) or na(sl2)
+            continue
+
+        float poc_p = nz(array.get(s_poc, s2))
+        float vah_p = nz(array.get(s_vah, s2))
+        float val_p = nz(array.get(s_val_arr, s2))
+        int   sbar_count2 = nz(array.get(s_bars, s2), 1)
+        int   sbar_start2 = nz(array.get(s_start, s2), bar_index)
+
+        // ── Each session's OWN POC/VAH/VAL (always drawn) ─────────────────────
+        if s2 == 0
+            // Current day: solid lines extending to right edge + labels
+            if show_curr_poc
+                line.new(sbar_start2, poc_p, bar_index + curr_lbl_off, poc_p, color=col_curr_poc, style=line.style_solid, width=w_curr_poc)
+                if show_curr_lbl
+                    label.new(bar_index + curr_lbl_off + 1, poc_p, "POC: " + str.tostring(poc_p, format.mintick), color=col_curr_poc, textcolor=color.white, style=label.style_label_left, size=size.small)
+            if show_curr_vah
+                line.new(sbar_start2, vah_p, bar_index + curr_lbl_off, vah_p, color=col_curr_vah, style=line.style_solid, width=w_curr_vah)
+                if show_curr_lbl
+                    label.new(bar_index + curr_lbl_off + 1, vah_p, "VAH: " + str.tostring(vah_p, format.mintick), color=col_curr_vah, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+            if show_curr_val
+                line.new(sbar_start2, val_p, bar_index + curr_lbl_off, val_p, color=col_curr_val, style=line.style_solid, width=w_curr_val)
+                if show_curr_lbl
+                    label.new(bar_index + curr_lbl_off + 1, val_p, "VAL: " + str.tostring(val_p, format.mintick), color=col_curr_val, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+
+            // ── Prev day levels overlaid on current day (like PDH/PDL) ────────
+            // Prev POC/VAH/VAL = session 1's values drawn on current day
+            if max_line_days > 1
+                float prev_poc_p2 = array.get(s_poc, 1)
+                float prev_vah_p2 = array.get(s_vah, 1)
+                float prev_val_p2 = array.get(s_val_arr, 1)
+                if show_prev_poc and not na(prev_poc_p2)
+                    line.new(sbar_start2, prev_poc_p2, bar_index + curr_lbl_off, prev_poc_p2, color=col_prev_poc, style=line.style_dashed, width=w_prev_poc)
+                    if show_curr_lbl
+                        label.new(bar_index + curr_lbl_off + 1, prev_poc_p2, "Prev POC: " + str.tostring(prev_poc_p2, format.mintick), color=col_prev_poc, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                if show_prev_vah and not na(prev_vah_p2)
+                    line.new(sbar_start2, prev_vah_p2, bar_index + curr_lbl_off, prev_vah_p2, color=col_prev_vah, style=line.style_dashed, width=w_prev_vah)
+                    if show_curr_lbl
+                        label.new(bar_index + curr_lbl_off + 1, prev_vah_p2, "Prev VAH: " + str.tostring(prev_vah_p2, format.mintick), color=col_prev_vah, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                if show_prev_val and not na(prev_val_p2)
+                    line.new(sbar_start2, prev_val_p2, bar_index + curr_lbl_off, prev_val_p2, color=col_prev_val, style=line.style_dashed, width=w_prev_val)
+                    if show_curr_lbl
+                        label.new(bar_index + curr_lbl_off + 1, prev_val_p2, "Prev VAL: " + str.tostring(prev_val_p2, format.mintick), color=col_prev_val, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+
+            // PDH / PDL on current day
+            if show_pdh and not na(prev_session_high)
+                line.new(sbar_start2, prev_session_high, bar_index + curr_lbl_off, prev_session_high, color=col_pdh, style=line.style_dashed, width=w_pdh)
+                if show_curr_lbl
+                    label.new(bar_index + curr_lbl_off + 1, prev_session_high, "PDH: " + str.tostring(prev_session_high, format.mintick), color=col_pdh, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+            if show_pdl and not na(prev_session_low)
+                line.new(sbar_start2, prev_session_low, bar_index + curr_lbl_off, prev_session_low, color=col_pdl, style=line.style_dashed, width=w_pdl)
+                if show_curr_lbl
+                    label.new(bar_index + curr_lbl_off + 1, prev_session_low, "PDL: " + str.tostring(prev_session_low, format.mintick), color=col_pdl, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+        else
+            // Historical days: draw session's OWN POC/VAH/VAL (gated by current toggles)
+            int sess_end2 = sbar_start2 + sbar_count2
+            if show_curr_poc
+                line.new(sbar_start2, poc_p, sess_end2, poc_p, color=col_curr_poc, style=line.style_solid, width=w_curr_poc)
+            if show_curr_vah
+                line.new(sbar_start2, vah_p, sess_end2, vah_p, color=col_curr_vah, style=line.style_solid, width=w_curr_vah)
+            if show_curr_val
+                line.new(sbar_start2, val_p, sess_end2, val_p, color=col_curr_val, style=line.style_solid, width=w_curr_val)
+
+            // PDH / PDL = the day BEFORE this session (s2+1 in our array)
+            if s2 + 1 < MAX_DAYS
+                float pdh_price = array.get(s_high, s2 + 1)
+                float pdl_price = array.get(s_low, s2 + 1)
+                if show_pdh and not na(pdh_price)
+                    line.new(sbar_start2, pdh_price, sess_end2, pdh_price, color=col_pdh, style=line.style_dashed, width=w_pdh)
+                if show_pdl and not na(pdl_price)
+                    line.new(sbar_start2, pdl_price, sess_end2, pdl_price, color=col_pdl, style=line.style_dashed, width=w_pdl)
+
+            // Prev POC/VAH/VAL = the day BEFORE this session (s2+1)
+            if s2 + 1 < math.min(session_count, MAX_DAYS)
+                float prev_poc_h = array.get(s_poc, s2 + 1)
+                float prev_vah_h = array.get(s_vah, s2 + 1)
+                float prev_val_h = array.get(s_val_arr, s2 + 1)
+                if show_prev_poc and not na(prev_poc_h)
+                    line.new(sbar_start2, prev_poc_h, sess_end2, prev_poc_h, color=col_prev_poc, style=line.style_dashed, width=w_prev_poc)
+                if show_prev_vah and not na(prev_vah_h)
+                    line.new(sbar_start2, prev_vah_h, sess_end2, prev_vah_h, color=col_prev_vah, style=line.style_dashed, width=w_prev_vah)
+                if show_prev_val and not na(prev_val_h)
+                    line.new(sbar_start2, prev_val_h, sess_end2, prev_val_h, color=col_prev_val, style=line.style_dashed, width=w_prev_val)
+
+            // Labels at session boundary
+            if show_prev_lbl
+                if show_curr_poc
+                    label.new(sess_end2, poc_p, "POC: " + str.tostring(poc_p, format.mintick), color=col_curr_poc, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                if show_curr_vah
+                    label.new(sess_end2, vah_p, "VAH: " + str.tostring(vah_p, format.mintick), color=col_curr_vah, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                if show_curr_val
+                    label.new(sess_end2, val_p, "VAL: " + str.tostring(val_p, format.mintick), color=col_curr_val, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+
+    // ── Virgin POCs ─────────────────────────────────────────────────────────
+    if show_vpoc and array.size(vpoc_prices) > 0
+        for i = 0 to array.size(vpoc_prices) - 1
+            float vp_price = array.get(vpoc_prices, i)
+            int   vp_start = array.get(vpoc_starts, i)
+            line.new(vp_start, vp_price, bar_index + curr_lbl_off, vp_price, color=col_vpoc, style=line.style_dotted, width=w_vpoc)
+            if show_curr_lbl
+                label.new(bar_index + curr_lbl_off + 1, vp_price, "VPOC: " + str.tostring(vp_price, format.mintick), color=color.new(col_vpoc, 20), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+
+
+
