@@ -3,11 +3,16 @@
 // © KavinKumar - Volume Profile with Footprint Zones & Imbalance Detection
 
 //@version=5
-indicator("Volume Profile + Footprint & Imbalance", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500)
+indicator("Volume Profile + Footprint & Imbalance", overlay=true, max_boxes_count=500, max_labels_count=500, max_lines_count=500, max_bars_back=5000)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ██  INPUT SETTINGS
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// Auto-hide on timeframes greater than 1 hour
+bool tf_valid = timeframe.in_seconds() < 3600
+if not tf_valid
+    runtime.error("")
 
 // ── 1. Volume Profile Inputs ────────────────────────────────────────────────────
 grp_vp        = "═══ Volume Profile Inputs ═══"
@@ -344,12 +349,12 @@ bool bear_imb_raw = not na(low[2]) and not na(high) and (high < low[2]) and (low
 bool bear_imb = imb_enabled and bear_imb_raw and (volume[1] > avg_vol)
 
 // Circular markers on all 3 candles
-plotshape(bull_imb, title="Bull Imb C3", location=location.belowbar, style=shape.circle, color=col_imb_bull, size=size.tiny)
-plotshape(bear_imb, title="Bear Imb C3", location=location.abovebar, style=shape.circle, color=col_imb_bear, size=size.tiny)
-plotshape(bull_imb, title="Bull Imb C2", location=location.belowbar, style=shape.circle, color=col_imb_bull, size=size.small, offset=-1)
-plotshape(bear_imb, title="Bear Imb C2", location=location.abovebar, style=shape.circle, color=col_imb_bear, size=size.small, offset=-1)
-plotshape(bull_imb, title="Bull Imb C1", location=location.belowbar, style=shape.circle, color=col_imb_bull, size=size.tiny, offset=-2)
-plotshape(bear_imb, title="Bear Imb C1", location=location.abovebar, style=shape.circle, color=col_imb_bear, size=size.tiny, offset=-2)
+plotshape(bull_imb, title="Bull Imb C3", location=location.belowbar, style=shape.circle, color=col_imb_bull, size=size.normal)
+plotshape(bear_imb, title="Bear Imb C3", location=location.abovebar, style=shape.circle, color=col_imb_bear, size=size.normal)
+plotshape(bull_imb, title="Bull Imb C2", location=location.belowbar, style=shape.circle, color=col_imb_bull, size=size.normal, offset=-1)
+plotshape(bear_imb, title="Bear Imb C2", location=location.abovebar, style=shape.circle, color=col_imb_bear, size=size.normal, offset=-1)
+plotshape(bull_imb, title="Bull Imb C1", location=location.belowbar, style=shape.circle, color=col_imb_bull, size=size.normal, offset=-2)
+plotshape(bear_imb, title="Bear Imb C1", location=location.abovebar, style=shape.circle, color=col_imb_bear, size=size.normal, offset=-2)
 
 if bull_imb
     box.new(bar_index - 2, low, bar_index, high[2], border_color=col_imb_bull, bgcolor=color.new(col_imb_bull, 85), border_width=1)
@@ -366,7 +371,24 @@ if bear_imb and alert_imbalance and barstate.isconfirmed
 // ██  DRAW MULTI-DAY VOLUME PROFILES + KEY LEVELS (on last bar only)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+var box[] drawn_boxes = array.new_box()
+var line[] drawn_lines = array.new_line()
+var label[] drawn_labels = array.new_label()
+
 if barstate.islast
+    if array.size(drawn_boxes) > 0
+        for i = 0 to array.size(drawn_boxes) - 1
+            box.delete(array.get(drawn_boxes, i))
+        array.clear(drawn_boxes)
+    if array.size(drawn_lines) > 0
+        for i = 0 to array.size(drawn_lines) - 1
+            line.delete(array.get(drawn_lines, i))
+        array.clear(drawn_lines)
+    if array.size(drawn_labels) > 0
+        for i = 0 to array.size(drawn_labels) - 1
+            label.delete(array.get(drawn_labels, i))
+        array.clear(drawn_labels)
+
     // Compute number of sessions to draw
     int num_sessions = math.min(vp_num_days, math.max(1, session_count))
     // VP bars: limited by 500-box cap (each session uses ~vp_rows boxes)
@@ -410,12 +432,13 @@ if barstate.islast
 
         // Redistribute all bars in this session using final range
         int first_offset = bar_index - sbar_start_r
-        // Pine Script limits history lookback to 5000 bars
-        if first_offset > 5000
+        // Cap to available history (bar_index = total bars available)
+        int max_lookback = math.min(bar_index, 5000)
+        if first_offset > max_lookback
             continue
         int last_offset  = math.max(0, first_offset - sbar_count_r + 1)
         for offset = last_offset to first_offset
-            if offset < 0 or offset > 5000
+            if offset < 0 or offset > max_lookback
                 continue
             float bar_h = high[offset]
             float bar_l = low[offset]
@@ -577,9 +600,9 @@ if barstate.islast
 
             // Draw from session start (left side) — semi-transparent so level lines show through
             if up_len > 0
-                box.new(sbar_start, row_top, sbar_start + up_len, row_bottom, border_color=color.new(color.black, 100), bgcolor=color.new(up_c, 40))
+                array.push(drawn_boxes, box.new(sbar_start, row_top, sbar_start + up_len, row_bottom, border_color=color.new(color.black, 100), bgcolor=color.new(up_c, 40)))
             if dn_len > 0
-                box.new(sbar_start + up_len, row_top, sbar_start + up_len + dn_len, row_bottom, border_color=color.new(color.black, 100), bgcolor=color.new(dn_c, 40))
+                array.push(drawn_boxes, box.new(sbar_start + up_len, row_top, sbar_start + up_len + dn_len, row_bottom, border_color=color.new(color.black, 100), bgcolor=color.new(dn_c, 40)))
 
         // ── Footprint Zones (Single Print Ribbons) ───────────────────────────
         if fp_enabled
@@ -599,7 +622,7 @@ if barstate.islast
                         float rb_bottom = sl + ribbon_start * row_height
                         float rb_top    = sl + (ribbon_end + 1) * row_height
                         int rb_right    = s == 0 ? bar_index + 5 : sbar_start + sbar_count
-                        box.new(sbar_start, rb_top, rb_right, rb_bottom, border_color=color.new(col_fp_zone, 50), bgcolor=col_fp_zone, border_width=1, border_style=line.style_dotted)
+                        array.push(drawn_boxes, box.new(sbar_start, rb_top, rb_right, rb_bottom, border_color=color.new(col_fp_zone, 50), bgcolor=col_fp_zone, border_width=1, border_style=line.style_dotted))
                     ribbon_start := -1
                     ribbon_end   := -1
 
@@ -608,7 +631,7 @@ if barstate.islast
                 float rb_bottom = sl + ribbon_start * row_height
                 float rb_top    = sl + (ribbon_end + 1) * row_height
                 int rb_right    = s == 0 ? bar_index + 5 : sbar_start + sbar_count
-                box.new(sbar_start, rb_top, rb_right, rb_bottom, border_color=color.new(col_fp_zone, 50), bgcolor=col_fp_zone, border_width=1, border_style=line.style_dotted)
+                array.push(drawn_boxes, box.new(sbar_start, rb_top, rb_right, rb_bottom, border_color=color.new(col_fp_zone, 50), bgcolor=col_fp_zone, border_width=1, border_style=line.style_dotted))
 
     // ── PASS 2: Draw Key Level Lines (separate loop — never skipped by volume check) ────────────────
     for s2 = 0 to max_line_days - 1
@@ -627,17 +650,17 @@ if barstate.islast
         if s2 == 0
             // Current day: solid lines extending to right edge + labels
             if show_curr_poc
-                line.new(sbar_start2, poc_p, bar_index + curr_lbl_off, poc_p, color=col_curr_poc, style=line.style_solid, width=w_curr_poc)
+                array.push(drawn_lines, line.new(sbar_start2, poc_p, bar_index + curr_lbl_off, poc_p, color=col_curr_poc, style=line.style_solid, width=w_curr_poc))
                 if show_curr_lbl
-                    label.new(bar_index + curr_lbl_off + 1, poc_p, "POC: " + str.tostring(poc_p, format.mintick), color=col_curr_poc, textcolor=color.white, style=label.style_label_left, size=size.small)
+                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, poc_p, "POC: " + str.tostring(poc_p, format.mintick), color=col_curr_poc, textcolor=color.white, style=label.style_label_left, size=size.normal))
             if show_curr_vah
-                line.new(sbar_start2, vah_p, bar_index + curr_lbl_off, vah_p, color=col_curr_vah, style=line.style_solid, width=w_curr_vah)
+                array.push(drawn_lines, line.new(sbar_start2, vah_p, bar_index + curr_lbl_off, vah_p, color=col_curr_vah, style=line.style_solid, width=w_curr_vah))
                 if show_curr_lbl
-                    label.new(bar_index + curr_lbl_off + 1, vah_p, "VAH: " + str.tostring(vah_p, format.mintick), color=col_curr_vah, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, vah_p, "VAH: " + str.tostring(vah_p, format.mintick), color=col_curr_vah, textcolor=color.white, style=label.style_label_left, size=size.normal))
             if show_curr_val
-                line.new(sbar_start2, val_p, bar_index + curr_lbl_off, val_p, color=col_curr_val, style=line.style_solid, width=w_curr_val)
+                array.push(drawn_lines, line.new(sbar_start2, val_p, bar_index + curr_lbl_off, val_p, color=col_curr_val, style=line.style_solid, width=w_curr_val))
                 if show_curr_lbl
-                    label.new(bar_index + curr_lbl_off + 1, val_p, "VAL: " + str.tostring(val_p, format.mintick), color=col_curr_val, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, val_p, "VAL: " + str.tostring(val_p, format.mintick), color=col_curr_val, textcolor=color.white, style=label.style_label_left, size=size.normal))
 
             // ── Prev day levels overlaid on current day (like PDH/PDL) ────────
             // Prev POC/VAH/VAL = session 1's values drawn on current day
@@ -646,45 +669,45 @@ if barstate.islast
                 float prev_vah_p2 = array.get(s_vah, 1)
                 float prev_val_p2 = array.get(s_val_arr, 1)
                 if show_prev_poc and not na(prev_poc_p2)
-                    line.new(sbar_start2, prev_poc_p2, bar_index + curr_lbl_off, prev_poc_p2, color=col_prev_poc, style=line.style_dashed, width=w_prev_poc)
+                    array.push(drawn_lines, line.new(sbar_start2, prev_poc_p2, bar_index + curr_lbl_off, prev_poc_p2, color=col_prev_poc, style=line.style_dashed, width=w_prev_poc))
                     if show_curr_lbl
-                        label.new(bar_index + curr_lbl_off + 1, prev_poc_p2, "Prev POC: " + str.tostring(prev_poc_p2, format.mintick), color=col_prev_poc, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_poc_p2, "Prev POC: " + str.tostring(prev_poc_p2, format.mintick), color=col_prev_poc, textcolor=color.white, style=label.style_label_left, size=size.normal))
                 if show_prev_vah and not na(prev_vah_p2)
-                    line.new(sbar_start2, prev_vah_p2, bar_index + curr_lbl_off, prev_vah_p2, color=col_prev_vah, style=line.style_dashed, width=w_prev_vah)
+                    array.push(drawn_lines, line.new(sbar_start2, prev_vah_p2, bar_index + curr_lbl_off, prev_vah_p2, color=col_prev_vah, style=line.style_dashed, width=w_prev_vah))
                     if show_curr_lbl
-                        label.new(bar_index + curr_lbl_off + 1, prev_vah_p2, "Prev VAH: " + str.tostring(prev_vah_p2, format.mintick), color=col_prev_vah, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_vah_p2, "Prev VAH: " + str.tostring(prev_vah_p2, format.mintick), color=col_prev_vah, textcolor=color.white, style=label.style_label_left, size=size.normal))
                 if show_prev_val and not na(prev_val_p2)
-                    line.new(sbar_start2, prev_val_p2, bar_index + curr_lbl_off, prev_val_p2, color=col_prev_val, style=line.style_dashed, width=w_prev_val)
+                    array.push(drawn_lines, line.new(sbar_start2, prev_val_p2, bar_index + curr_lbl_off, prev_val_p2, color=col_prev_val, style=line.style_dashed, width=w_prev_val))
                     if show_curr_lbl
-                        label.new(bar_index + curr_lbl_off + 1, prev_val_p2, "Prev VAL: " + str.tostring(prev_val_p2, format.mintick), color=col_prev_val, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_val_p2, "Prev VAL: " + str.tostring(prev_val_p2, format.mintick), color=col_prev_val, textcolor=color.white, style=label.style_label_left, size=size.normal))
 
             // PDH / PDL on current day
             if show_pdh and not na(prev_session_high)
-                line.new(sbar_start2, prev_session_high, bar_index + curr_lbl_off, prev_session_high, color=col_pdh, style=line.style_dashed, width=w_pdh)
+                array.push(drawn_lines, line.new(sbar_start2, prev_session_high, bar_index + curr_lbl_off, prev_session_high, color=col_pdh, style=line.style_dashed, width=w_pdh))
                 if show_curr_lbl
-                    label.new(bar_index + curr_lbl_off + 1, prev_session_high, "PDH: " + str.tostring(prev_session_high, format.mintick), color=col_pdh, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_session_high, "PDH: " + str.tostring(prev_session_high, format.mintick), color=col_pdh, textcolor=color.white, style=label.style_label_left, size=size.normal))
             if show_pdl and not na(prev_session_low)
-                line.new(sbar_start2, prev_session_low, bar_index + curr_lbl_off, prev_session_low, color=col_pdl, style=line.style_dashed, width=w_pdl)
+                array.push(drawn_lines, line.new(sbar_start2, prev_session_low, bar_index + curr_lbl_off, prev_session_low, color=col_pdl, style=line.style_dashed, width=w_pdl))
                 if show_curr_lbl
-                    label.new(bar_index + curr_lbl_off + 1, prev_session_low, "PDL: " + str.tostring(prev_session_low, format.mintick), color=col_pdl, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_session_low, "PDL: " + str.tostring(prev_session_low, format.mintick), color=col_pdl, textcolor=color.white, style=label.style_label_left, size=size.normal))
         else
             // Historical days: draw session's OWN POC/VAH/VAL (gated by current toggles)
             int sess_end2 = sbar_start2 + sbar_count2
             if show_curr_poc
-                line.new(sbar_start2, poc_p, sess_end2, poc_p, color=col_curr_poc, style=line.style_solid, width=w_curr_poc)
+                array.push(drawn_lines, line.new(sbar_start2, poc_p, sess_end2, poc_p, color=col_curr_poc, style=line.style_solid, width=w_curr_poc))
             if show_curr_vah
-                line.new(sbar_start2, vah_p, sess_end2, vah_p, color=col_curr_vah, style=line.style_solid, width=w_curr_vah)
+                array.push(drawn_lines, line.new(sbar_start2, vah_p, sess_end2, vah_p, color=col_curr_vah, style=line.style_solid, width=w_curr_vah))
             if show_curr_val
-                line.new(sbar_start2, val_p, sess_end2, val_p, color=col_curr_val, style=line.style_solid, width=w_curr_val)
+                array.push(drawn_lines, line.new(sbar_start2, val_p, sess_end2, val_p, color=col_curr_val, style=line.style_solid, width=w_curr_val))
 
             // PDH / PDL = the day BEFORE this session (s2+1 in our array)
             if s2 + 1 < MAX_DAYS
                 float pdh_price = array.get(s_high, s2 + 1)
                 float pdl_price = array.get(s_low, s2 + 1)
                 if show_pdh and not na(pdh_price)
-                    line.new(sbar_start2, pdh_price, sess_end2, pdh_price, color=col_pdh, style=line.style_dashed, width=w_pdh)
+                    array.push(drawn_lines, line.new(sbar_start2, pdh_price, sess_end2, pdh_price, color=col_pdh, style=line.style_dashed, width=w_pdh))
                 if show_pdl and not na(pdl_price)
-                    line.new(sbar_start2, pdl_price, sess_end2, pdl_price, color=col_pdl, style=line.style_dashed, width=w_pdl)
+                    array.push(drawn_lines, line.new(sbar_start2, pdl_price, sess_end2, pdl_price, color=col_pdl, style=line.style_dashed, width=w_pdl))
 
             // Prev POC/VAH/VAL = the day BEFORE this session (s2+1)
             if s2 + 1 < math.min(session_count, MAX_DAYS)
@@ -692,29 +715,29 @@ if barstate.islast
                 float prev_vah_h = array.get(s_vah, s2 + 1)
                 float prev_val_h = array.get(s_val_arr, s2 + 1)
                 if show_prev_poc and not na(prev_poc_h)
-                    line.new(sbar_start2, prev_poc_h, sess_end2, prev_poc_h, color=col_prev_poc, style=line.style_dashed, width=w_prev_poc)
+                    array.push(drawn_lines, line.new(sbar_start2, prev_poc_h, sess_end2, prev_poc_h, color=col_prev_poc, style=line.style_dashed, width=w_prev_poc))
                 if show_prev_vah and not na(prev_vah_h)
-                    line.new(sbar_start2, prev_vah_h, sess_end2, prev_vah_h, color=col_prev_vah, style=line.style_dashed, width=w_prev_vah)
+                    array.push(drawn_lines, line.new(sbar_start2, prev_vah_h, sess_end2, prev_vah_h, color=col_prev_vah, style=line.style_dashed, width=w_prev_vah))
                 if show_prev_val and not na(prev_val_h)
-                    line.new(sbar_start2, prev_val_h, sess_end2, prev_val_h, color=col_prev_val, style=line.style_dashed, width=w_prev_val)
+                    array.push(drawn_lines, line.new(sbar_start2, prev_val_h, sess_end2, prev_val_h, color=col_prev_val, style=line.style_dashed, width=w_prev_val))
 
             // Labels at session boundary
             if show_prev_lbl
                 if show_curr_poc
-                    label.new(sess_end2, poc_p, "POC: " + str.tostring(poc_p, format.mintick), color=col_curr_poc, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                    array.push(drawn_labels, label.new(sess_end2, poc_p, "POC: " + str.tostring(poc_p, format.mintick), color=col_curr_poc, textcolor=color.white, style=label.style_label_left, size=size.normal))
                 if show_curr_vah
-                    label.new(sess_end2, vah_p, "VAH: " + str.tostring(vah_p, format.mintick), color=col_curr_vah, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                    array.push(drawn_labels, label.new(sess_end2, vah_p, "VAH: " + str.tostring(vah_p, format.mintick), color=col_curr_vah, textcolor=color.white, style=label.style_label_left, size=size.normal))
                 if show_curr_val
-                    label.new(sess_end2, val_p, "VAL: " + str.tostring(val_p, format.mintick), color=col_curr_val, textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                    array.push(drawn_labels, label.new(sess_end2, val_p, "VAL: " + str.tostring(val_p, format.mintick), color=col_curr_val, textcolor=color.white, style=label.style_label_left, size=size.normal))
 
     // ── Virgin POCs ─────────────────────────────────────────────────────────
     if show_vpoc and array.size(vpoc_prices) > 0
         for i = 0 to array.size(vpoc_prices) - 1
             float vp_price = array.get(vpoc_prices, i)
             int   vp_start = array.get(vpoc_starts, i)
-            line.new(vp_start, vp_price, bar_index + curr_lbl_off, vp_price, color=col_vpoc, style=line.style_dotted, width=w_vpoc)
+            array.push(drawn_lines, line.new(vp_start, vp_price, bar_index + curr_lbl_off, vp_price, color=col_vpoc, style=line.style_solid, width=w_vpoc))
             if show_curr_lbl
-                label.new(bar_index + curr_lbl_off + 1, vp_price, "VPOC: " + str.tostring(vp_price, format.mintick), color=color.new(col_vpoc, 20), textcolor=color.white, style=label.style_label_left, size=size.tiny)
+                array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, vp_price, "VPOC: " + str.tostring(vp_price, format.mintick), color=color.new(col_vpoc, 20), textcolor=color.white, style=label.style_label_left, size=size.normal))
 
 
 
