@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 from typing import Optional, Dict, Any, TYPE_CHECKING
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class ExcelLogger:
             file_prefix: Prefix for dynamically named files (default: "signal_logs")
         """
         self.available = EXCEL_AVAILABLE
+        self._lock = threading.Lock()
         
         # Determine file path
         if file_path:
@@ -227,169 +229,171 @@ class ExcelLogger:
         if not self.available:
             return False
         
-        try:
-            wb = self._get_or_create_workbook()
-            ws = self._create_signal_checks_sheet(wb)
+        with self._lock:
+            try:
+                wb = self._get_or_create_workbook()
+                ws = self._create_signal_checks_sheet(wb)
             
-            # Format data
-            timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
-            time_str = timestamp.strftime('%H:%M:%S')
-            market_hour = timestamp.strftime('%H:%M')
+                # Format data
+                timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                time_str = timestamp.strftime('%H:%M:%S')
+                market_hour = timestamp.strftime('%H:%M')
 
-            # Skip duplicate logs with the same timestamp + notes (prevents repeated rows)
-            if ws.max_row >= 2:
-                # Check recent rows to avoid repeated entries from multiple loops
-                recent_start = max(2, ws.max_row - 20)
-                for row_idx in range(ws.max_row, recent_start - 1, -1):
-                    row_timestamp_value = ws.cell(row=row_idx, column=1).value
-                    if isinstance(row_timestamp_value, datetime):
-                        row_timestamp_value = row_timestamp_value.strftime('%Y-%m-%d %H:%M:%S')
-                    if str(row_timestamp_value) == timestamp_str:
-                        row_notes = ws.cell(row=row_idx, column=16).value
-                        if (row_notes or "") == (notes or ""):
-                            logger.info(f"⏭️  Duplicate signal check skipped at {timestamp_str} ({notes})")
-                            return False
+                # Skip duplicate logs with the same timestamp + notes (prevents repeated rows)
+                if ws.max_row >= 2:
+                    # Check recent rows to avoid repeated entries from multiple loops
+                    recent_start = max(2, ws.max_row - 20)
+                    for row_idx in range(ws.max_row, recent_start - 1, -1):
+                        row_timestamp_value = ws.cell(row=row_idx, column=1).value
+                        if isinstance(row_timestamp_value, datetime):
+                            row_timestamp_value = row_timestamp_value.strftime('%Y-%m-%d %H:%M:%S')
+                        if str(row_timestamp_value) == timestamp_str:
+                            row_notes = ws.cell(row=row_idx, column=16).value
+                            if (row_notes or "") == (notes or ""):
+                                logger.info(f"⏭️  Duplicate signal check skipped at {timestamp_str} ({notes})")
+                                return False
             
-            # Prepare row
-            row_data = [
-                timestamp_str,
-                time_str,
-                market_hour,
-                f"{ce_prev_high:.2f}" if ce_prev_high else "",
-                f"{ce_prev_low:.2f}" if ce_prev_low else "",
-                f"{pe_prev_high:.2f}" if pe_prev_high else "",
-                f"{pe_prev_low:.2f}" if pe_prev_low else "",
-                "✓ YES" if ce_signal else "✗ NO",
-                "✓ YES" if pe_signal else "✗ NO",
-                f"{ce_entry_price:.2f}" if ce_entry_price else "",
-                f"{pe_entry_price:.2f}" if pe_entry_price else "",
-                f"{ce_sl:.2f}" if ce_sl else "",
-                f"{pe_sl:.2f}" if pe_sl else "",
-                f"{ce_target:.2f}" if ce_target else "",
-                f"{pe_target:.2f}" if pe_target else "",
-                notes
-            ]
+                # Prepare row
+                row_data = [
+                    timestamp_str,
+                    time_str,
+                    market_hour,
+                    f"{ce_prev_high:.2f}" if ce_prev_high else "",
+                    f"{ce_prev_low:.2f}" if ce_prev_low else "",
+                    f"{pe_prev_high:.2f}" if pe_prev_high else "",
+                    f"{pe_prev_low:.2f}" if pe_prev_low else "",
+                    "✓ YES" if ce_signal else "✗ NO",
+                    "✓ YES" if pe_signal else "✗ NO",
+                    f"{ce_entry_price:.2f}" if ce_entry_price else "",
+                    f"{pe_entry_price:.2f}" if pe_entry_price else "",
+                    f"{ce_sl:.2f}" if ce_sl else "",
+                    f"{pe_sl:.2f}" if pe_sl else "",
+                    f"{ce_target:.2f}" if ce_target else "",
+                    f"{pe_target:.2f}" if pe_target else "",
+                    notes
+                ]
             
-            ws.append(row_data)
+                ws.append(row_data)
             
-            # Apply borders and formatting
-            thin_border = Border(
-                left=Side(style='thin'),
-                right=Side(style='thin'),
-                top=Side(style='thin'),
-                bottom=Side(style='thin')
-            )
+                # Apply borders and formatting
+                thin_border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
             
-            for cell in ws[ws.max_row]:
-                cell.border = thin_border
-                cell.alignment = Alignment(horizontal='center', vertical='center')
+                for cell in ws[ws.max_row]:
+                    cell.border = thin_border
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
                 
-                # Color code signal columns
-                if cell.column == 8:  # CE Signal
-                    if "YES" in str(cell.value):
-                        cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
-                elif cell.column == 9:  # PE Signal
-                    if "YES" in str(cell.value):
-                        cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+                    # Color code signal columns
+                    if cell.column == 8:  # CE Signal
+                        if "YES" in str(cell.value):
+                            cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+                    elif cell.column == 9:  # PE Signal
+                        if "YES" in str(cell.value):
+                            cell.fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
             
-            wb.save(self.file_path)
-            logger.info(f"✅ Signal check logged to Excel: {self.file_path}")
-            return True
+                wb.save(self.file_path)
+                logger.info(f"✅ Signal check logged to Excel: {self.file_path}")
+                return True
             
-        except Exception as e:
-            logger.error(f"❌ Error logging to Excel: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"❌ Error logging to Excel: {e}")
+                return False
     
-    def log_trade(self,
-                  order_type: str,
-                  option_type: str,
-                  strike: int,
-                  entry_price: float,
-                  current_price: Optional[float] = None,
-                  target: Optional[float] = None,
-                  stop_loss: Optional[float] = None,
-                  pnl: Optional[float] = None,
-                  status: str = "OPEN",
-                  order_id: Optional[str] = None,
-                  notes: str = "") -> bool:
-        """Log trade to Excel.
+        def log_trade(self,
+                      order_type: str,
+                      option_type: str,
+                      strike: int,
+                      entry_price: float,
+                      current_price: Optional[float] = None,
+                      target: Optional[float] = None,
+                      stop_loss: Optional[float] = None,
+                      pnl: Optional[float] = None,
+                      status: str = "OPEN",
+                      order_id: Optional[str] = None,
+                      notes: str = "") -> bool:
+            """Log trade to Excel.
         
-        Args:
-            order_type: BUY or SELL
-            option_type: CE or PE
-            strike: Strike price
-            entry_price: Entry price
-            current_price: Current price
-            target: Target price
-            stop_loss: Stop loss level
-            pnl: Profit/Loss
-            status: OPEN, CLOSED, SL_HIT, TARGET_HIT, etc.
-            order_id: Zerodha order ID
-            notes: Additional notes
+            Args:
+                order_type: BUY or SELL
+                option_type: CE or PE
+                strike: Strike price
+                entry_price: Entry price
+                current_price: Current price
+                target: Target price
+                stop_loss: Stop loss level
+                pnl: Profit/Loss
+                status: OPEN, CLOSED, SL_HIT, TARGET_HIT, etc.
+                order_id: Zerodha order ID
+                notes: Additional notes
             
-        Returns:
-            True if logged successfully, False otherwise
-        """
-        if not self.available:
-            return False
+            Returns:
+                True if logged successfully, False otherwise
+            """
+            if not self.available:
+                return False
         
-        try:
-            wb = self._get_or_create_workbook()
-            ws = self._create_trades_sheet(wb)
+        with self._lock:
+            try:
+                wb = self._get_or_create_workbook()
+                ws = self._create_trades_sheet(wb)
             
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
-            # Determine color based on status
-            status_color = {
-                'OPEN': 'FFEB9C',      # Yellow
-                'BUY': 'B4C7E7',       # Light blue
-                'SELL': 'C6EFCE',      # Green
-                'TARGET_HIT': 'C6EFCE', # Green
-                'SL_HIT': 'F8CBAD',    # Orange
-                'CLOSED': 'A9D08E',    # Green
-            }.get(status, 'FFFFFF')
+                # Determine color based on status
+                status_color = {
+                    'OPEN': 'FFEB9C',      # Yellow
+                    'BUY': 'B4C7E7',       # Light blue
+                    'SELL': 'C6EFCE',      # Green
+                    'TARGET_HIT': 'C6EFCE', # Green
+                    'SL_HIT': 'F8CBAD',    # Orange
+                    'CLOSED': 'A9D08E',    # Green
+                }.get(status, 'FFFFFF')
             
-            # Prepare row
-            row_data = [
-                timestamp,
-                order_type,
-                option_type,
-                strike,
-                f"{entry_price:.2f}",
-                f"{current_price:.2f}" if current_price else "",
-                f"{target:.2f}" if target else "",
-                f"{stop_loss:.2f}" if stop_loss else "",
-                f"{pnl:+.2f}" if pnl else "",
-                status,
-                order_id if order_id else "",
-                notes
-            ]
+                # Prepare row
+                row_data = [
+                    timestamp,
+                    order_type,
+                    option_type,
+                    strike,
+                    f"{entry_price:.2f}",
+                    f"{current_price:.2f}" if current_price else "",
+                    f"{target:.2f}" if target else "",
+                    f"{stop_loss:.2f}" if stop_loss else "",
+                    f"{pnl:+.2f}" if pnl else "",
+                    status,
+                    order_id if order_id else "",
+                    notes
+                ]
             
-            ws.append(row_data)
+                ws.append(row_data)
             
-            # Apply formatting
-            thin_border = Border(
-                left=Side(style='thin'),
-                right=Side(style='thin'),
-                top=Side(style='thin'),
-                bottom=Side(style='thin')
-            )
+                # Apply formatting
+                thin_border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
             
-            for cell in ws[ws.max_row]:
-                cell.border = thin_border
-                cell.alignment = Alignment(horizontal='center', vertical='center')
+                for cell in ws[ws.max_row]:
+                    cell.border = thin_border
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
                 
-                # Color status cell
-                if cell.column == 10:  # Status
-                    cell.fill = PatternFill(start_color=status_color, end_color=status_color, fill_type='solid')
+                    # Color status cell
+                    if cell.column == 10:  # Status
+                        cell.fill = PatternFill(start_color=status_color, end_color=status_color, fill_type='solid')
             
-            wb.save(self.file_path)
-            logger.info(f"✅ Trade logged to Excel: {order_type} {option_type} {strike}")
-            return True
+                wb.save(self.file_path)
+                logger.info(f"✅ Trade logged to Excel: {order_type} {option_type} {strike}")
+                return True
             
-        except Exception as e:
-            logger.error(f"❌ Error logging trade to Excel: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"❌ Error logging trade to Excel: {e}")
+                return False
     
     def log_trailing_sl_update(self,
                                option_type: str,
@@ -448,88 +452,89 @@ class ExcelLogger:
         if not self.available:
             return False
         
-        try:
-            wb = self._get_or_create_workbook()
-            ws = self._create_signal_checks_sheet(wb)
+        with self._lock:
+            try:
+                wb = self._get_or_create_workbook()
+                ws = self._create_signal_checks_sheet(wb)
             
-            # Format data
-            timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
-            time_str = timestamp.strftime('%H:%M:%S')
-            market_hour = timestamp.strftime('%H:%M')
+                # Format data
+                timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                time_str = timestamp.strftime('%H:%M:%S')
+                market_hour = timestamp.strftime('%H:%M')
             
-            # Calculate PnL and other metrics
-            pnl = current_price - entry_price
-            pnl_pct = (pnl / entry_price * 100) if entry_price else 0
+                # Calculate PnL and other metrics
+                pnl = current_price - entry_price
+                pnl_pct = (pnl / entry_price * 100) if entry_price else 0
             
-            # Determine effective SL (trailing or initial)
-            effective_sl = trailed_sl if target_hit and trailed_sl is not None else initial_sl
+                # Determine effective SL (trailing or initial)
+                effective_sl = trailed_sl if target_hit and trailed_sl is not None else initial_sl
             
-            # Notes with check details
-            notes = f"{side} {check_reason} | Strike: {strike} | Price: {current_price:.2f} | Entry: {entry_price:.2f} | SL: {effective_sl:.2f} | Target: {target:.2f} | PnL: {pnl:+.2f} ({pnl_pct:+.2f}%)"
+                # Notes with check details
+                notes = f"{side} {check_reason} | Strike: {strike} | Price: {current_price:.2f} | Entry: {entry_price:.2f} | SL: {effective_sl:.2f} | Target: {target:.2f} | PnL: {pnl:+.2f} ({pnl_pct:+.2f}%)"
             
-            if target_hit and trailed_sl is not None:
-                notes += f" | Trailed SL: {trailed_sl:.2f}"
+                if target_hit and trailed_sl is not None:
+                    notes += f" | Trailed SL: {trailed_sl:.2f}"
             
-            # Prepare row - reuse signal check structure
-            row_data = [
-                timestamp_str,
-                time_str,
-                market_hour,
-                strike if side == 'CE' else "",
-                "",
-                strike if side == 'PE' else "",
-                "",
-                "YES" if side == 'CE' and check_reason != "Monitoring" else "",
-                "YES" if side == 'PE' and check_reason != "Monitoring" else "",
-                entry_price if side == 'CE' else "",
-                entry_price if side == 'PE' else "",
-                effective_sl if side == 'CE' else "",
-                effective_sl if side == 'PE' else "",
-                target if side == 'CE' else "",
-                target if side == 'PE' else "",
-                notes
-            ]
+                # Prepare row - reuse signal check structure
+                row_data = [
+                    timestamp_str,
+                    time_str,
+                    market_hour,
+                    strike if side == 'CE' else "",
+                    "",
+                    strike if side == 'PE' else "",
+                    "",
+                    "YES" if side == 'CE' and check_reason != "Monitoring" else "",
+                    "YES" if side == 'PE' and check_reason != "Monitoring" else "",
+                    entry_price if side == 'CE' else "",
+                    entry_price if side == 'PE' else "",
+                    effective_sl if side == 'CE' else "",
+                    effective_sl if side == 'PE' else "",
+                    target if side == 'CE' else "",
+                    target if side == 'PE' else "",
+                    notes
+                ]
             
-            ws.append(row_data)
+                ws.append(row_data)
             
-            # Style the row
-            thin_border = Border(
-                left=Side(style='thin'),
-                right=Side(style='thin'),
-                top=Side(style='thin'),
-                bottom=Side(style='thin')
-            )
+                # Style the row
+                thin_border = Border(
+                    left=Side(style='thin'),
+                    right=Side(style='thin'),
+                    top=Side(style='thin'),
+                    bottom=Side(style='thin')
+                )
             
-            # Color code based on reason
-            if check_reason == "SL_HIT":
-                cell_color = 'FF0000'  # Red
-                font_color = 'FFFFFF'  # White text
-            elif check_reason == "TARGET_HIT":
-                cell_color = '00B050'  # Green
-                font_color = 'FFFFFF'  # White text
-            elif check_reason == "TRAILING":
-                cell_color = 'FFC7CE'  # Light red
-                font_color = '000000'  # Black text
-            else:
-                cell_color = 'E7E6E6'  # Light gray
-                font_color = '000000'  # Black text
+                # Color code based on reason
+                if check_reason == "SL_HIT":
+                    cell_color = 'FF0000'  # Red
+                    font_color = 'FFFFFF'  # White text
+                elif check_reason == "TARGET_HIT":
+                    cell_color = '00B050'  # Green
+                    font_color = 'FFFFFF'  # White text
+                elif check_reason == "TRAILING":
+                    cell_color = 'FFC7CE'  # Light red
+                    font_color = '000000'  # Black text
+                else:
+                    cell_color = 'E7E6E6'  # Light gray
+                    font_color = '000000'  # Black text
             
-            fill = PatternFill(start_color=cell_color, end_color=cell_color, fill_type='solid')
-            font = Font(color=font_color, size=10)
+                fill = PatternFill(start_color=cell_color, end_color=cell_color, fill_type='solid')
+                font = Font(color=font_color, size=10)
             
-            for cell in ws[ws.max_row]:
-                cell.fill = fill
-                cell.font = font
-                cell.border = thin_border
-                if cell.column in [4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]:  # Numeric columns
-                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                for cell in ws[ws.max_row]:
+                    cell.fill = fill
+                    cell.font = font
+                    cell.border = thin_border
+                    if cell.column in [4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]:  # Numeric columns
+                        cell.alignment = Alignment(horizontal='center', vertical='center')
             
-            wb.save(self.file_path)
-            return True
+                wb.save(self.file_path)
+                return True
             
-        except Exception as e:
-            logger.error(f"Error logging SL/Target check: {e}", exc_info=True)
-            return False
+            except Exception as e:
+                logger.error(f"Error logging SL/Target check: {e}", exc_info=True)
+                return False
 
 
 # Global instance - will be initialized with username when needed
