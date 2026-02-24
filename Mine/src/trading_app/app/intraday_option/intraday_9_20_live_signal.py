@@ -862,9 +862,9 @@ class Intraday920LiveSignal:
                         if order_id:
                             self.mark_entry_today('CE', ce_strike)
                     
-                    # Place SL order on broker
+                    # Place SL order on broker only if entry order succeeded
                     sl_order_id = None
-                    if self.live_trading and strike_data and ce_strike:
+                    if order_id and self.live_trading and strike_data and ce_strike:
                         try:
                             # Get lot size for this symbol (same as entry order quantity)
                             entry_quantity = self.kite_service.get_lot_size(self.symbol)
@@ -936,25 +936,27 @@ class Intraday920LiveSignal:
                         except Exception as e:
                             logger.error(f"Error placing CE SL order: {e}", exc_info=True)
                     
-                    self.active_trades['CE'] = {
-                        'entry_price': ce_signal.get('entry_price'),
-                        'entry_high': ce_signal.get('entry_high'),  # Reference high used for entry
-                        'sl': ce_signal.get('sl'),
-                        'target': ce_signal.get('target'),
-                        'entry_time': datetime.now().isoformat(),
-                        'order_id': order_id,
-                        'sl_order_id': sl_order_id,  # Track SL order ID for modifications
-                        'extra_sl_ids': extra_sl_ids, # Track SL IDs for other brokers
-                        'token': strike_data.get('ce_token') if strike_data else None,  # type: ignore
-                        'strike': ce_strike if strike_data else None,
-                        'status': 'OPEN',
-                        # Trailing SL state
-                        'target_hit': False,  # Track if target was hit
-                        'trailed_sl': ce_signal.get('sl'),  # Current trailed SL (starts at initial SL)
-                        'sl_distance': ce_signal.get('entry_price') - ce_signal.get('sl')  # Distance between entry and SL
-                    }
-                    # Entry is already marked above to prevent race conditions
-                    logger.info(f"🟢 CE {ce_strike} trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'} | SL Order ID: {sl_order_id if sl_order_id else 'N/A'}")
+                    if order_id or not self.live_trading:
+                        self.active_trades['CE'] = {
+                            'entry_price': ce_signal.get('entry_price'),
+                            'entry_high': ce_signal.get('entry_high'),  # Reference high used for entry
+                            'sl': ce_signal.get('sl'),
+                            'target': ce_signal.get('target'),
+                            'entry_time': datetime.now().isoformat(),
+                            'order_id': order_id,
+                            'sl_order_id': sl_order_id,  # Track SL order ID for modifications
+                            'extra_sl_ids': extra_sl_ids if 'extra_sl_ids' in locals() else {}, # Track SL IDs for other brokers
+                            'token': strike_data.get('ce_token') if strike_data else None,  # type: ignore
+                            'strike': ce_strike if strike_data else None,
+                            'status': 'OPEN',
+                            # Trailing SL state
+                            'target_hit': False,  # Track if target was hit
+                            'trailed_sl': ce_signal.get('sl'),  # Current trailed SL (starts at initial SL)
+                            'sl_distance': ce_signal.get('entry_price') - ce_signal.get('sl')  # Distance between entry and SL
+                        }
+                        logger.info(f"🟢 CE {ce_strike} trade opened at {ce_signal.get('entry_price')} (Entry High: {ce_signal.get('entry_high')}, SL: {ce_signal.get('sl')}, Target: {ce_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'} | SL Order ID: {sl_order_id if sl_order_id else 'N/A'}")
+                    else:
+                        logger.warning(f"⚠️ CE {ce_strike} entry order failed to place. Trade will NOT be added to open positions, allowing future signals to be evaluated.")
                 else:
                     logger.info(f"⏭️  CE signal detected but trade already OPEN - skipping to allow sequential entries (close existing trade first)")
             
@@ -995,9 +997,9 @@ class Intraday920LiveSignal:
                         if order_id:
                             self.mark_entry_today('PE', pe_strike)
                     
-                    # Place SL order on broker
+                    # Place SL order on broker only if entry order succeeded
                     sl_order_id = None
-                    if self.live_trading and strike_data and pe_strike:
+                    if order_id and self.live_trading and strike_data and pe_strike:
                         try:
                             # Get lot size for this symbol (same as entry order quantity)
                             entry_quantity = self.kite_service.get_lot_size(self.symbol)
@@ -1069,25 +1071,27 @@ class Intraday920LiveSignal:
                         except Exception as e:
                             logger.error(f"Error placing PE SL order: {e}", exc_info=True)
                     
-                    self.active_trades['PE'] = {
-                        'entry_price': pe_signal.get('entry_price'),
-                        'entry_high': pe_signal.get('entry_high'),  # Reference high used for entry
-                        'sl': pe_signal.get('sl'),
-                        'target': pe_signal.get('target'),
-                        'entry_time': datetime.now().isoformat(),
-                        'order_id': order_id,
-                        'sl_order_id': sl_order_id,  # Track SL order ID for modifications
-                        'extra_sl_ids': extra_sl_ids, # Track SL IDs for other brokers
-                        'token': strike_data.get('pe_token') if strike_data else None,  # type: ignore
-                        'strike': pe_strike if strike_data else None,
-                        'status': 'OPEN',
-                        # Trailing SL state
-                        'target_hit': False,  # Track if target was hit
-                        'trailed_sl': pe_signal.get('sl'),  # Current trailed SL (starts at initial SL)
-                        'sl_distance': pe_signal.get('entry_price') - pe_signal.get('sl')  # Distance between entry and SL
-                    }
-                    # Entry is already marked above to prevent race conditions
-                    logger.info(f"🟢 PE {pe_strike} trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'} | SL Order ID: {sl_order_id if sl_order_id else 'N/A'}")
+                    if order_id or not self.live_trading:
+                        self.active_trades['PE'] = {
+                            'entry_price': pe_signal.get('entry_price'),
+                            'entry_high': pe_signal.get('entry_high'),  # Reference high used for entry
+                            'sl': pe_signal.get('sl'),
+                            'target': pe_signal.get('target'),
+                            'entry_time': datetime.now().isoformat(),
+                            'order_id': order_id,
+                            'sl_order_id': sl_order_id,  # Track SL order ID for modifications
+                            'extra_sl_ids': extra_sl_ids if 'extra_sl_ids' in locals() else {}, # Track SL IDs for other brokers
+                            'token': strike_data.get('pe_token') if strike_data else None,  # type: ignore
+                            'strike': pe_strike if strike_data else None,
+                            'status': 'OPEN',
+                            # Trailing SL state
+                            'target_hit': False,  # Track if target was hit
+                            'trailed_sl': pe_signal.get('sl'),  # Current trailed SL (starts at initial SL)
+                            'sl_distance': pe_signal.get('entry_price') - pe_signal.get('sl')  # Distance between entry and SL
+                        }
+                        logger.info(f"🟢 PE {pe_strike} trade opened at {pe_signal.get('entry_price')} (Entry High: {pe_signal.get('entry_high')}, SL: {pe_signal.get('sl')}, Target: {pe_signal.get('target')}) | Order ID: {order_id if order_id else 'N/A'} | SL Order ID: {sl_order_id if sl_order_id else 'N/A'}")
+                    else:
+                        logger.warning(f"⚠️ PE {pe_strike} entry order failed to place. Trade will NOT be added to open positions, allowing future signals to be evaluated.")
                 else:
                     logger.info(f"⏭️  PE signal detected but trade already OPEN - skipping to allow sequential entries (close existing trade first)")
     
