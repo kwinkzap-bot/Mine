@@ -172,12 +172,19 @@ class KotakOrderService:
                     'order_id': response.get('nOrdNo', 'Unknown'),
                     'response': str(response)
                 }
+            elif isinstance(response, dict) and 'message' in response:
+                # E.g., {'code': '900901', 'message': 'Invalid Credentials', 'description': '...'}
+                return {
+                    'success': False,
+                    'error': response.get('description') or response.get('message', 'API Error'),
+                    'response': str(response)
+                }
             
             # If response is an Exception object (like ApiValueError), stringify it!
             if isinstance(response, Exception):
                 return {'success': False, 'error': str(response), 'response': str(response)}
             
-            return {'success': False, 'error': 'Unknown response format', 'response': str(response)}
+            return {'success': False, 'error': f'Unknown response format: {str(response)}', 'response': str(response)}
 
         except Exception as e:
             logging.error(f"❌ Exception placing order for {tradingsymbol}: {e}", exc_info=True)
