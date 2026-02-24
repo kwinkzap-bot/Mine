@@ -303,39 +303,39 @@ class ExcelLogger:
                 logger.error(f"❌ Error logging to Excel: {e}")
                 return False
     
-        def log_trade(self,
-                      order_type: str,
-                      option_type: str,
-                      strike: int,
-                      entry_price: float,
-                      current_price: Optional[float] = None,
-                      target: Optional[float] = None,
-                      stop_loss: Optional[float] = None,
-                      pnl: Optional[float] = None,
-                      status: str = "OPEN",
-                      order_id: Optional[str] = None,
-                      notes: str = "") -> bool:
-            """Log trade to Excel.
+    def log_trade(self,
+                  order_type: str,
+                  option_type: str,
+                  strike: int,
+                  entry_price: float,
+                  current_price: Optional[float] = None,
+                  target: Optional[float] = None,
+                  stop_loss: Optional[float] = None,
+                  pnl: Optional[float] = None,
+                  status: str = "OPEN",
+                  order_id: Optional[str] = None,
+                  notes: str = "") -> bool:
+        """Log trade to Excel.
+    
+        Args:
+            order_type: BUY or SELL
+            option_type: CE or PE
+            strike: Strike price
+            entry_price: Entry price
+            current_price: Current price
+            target: Target price
+            stop_loss: Stop loss level
+            pnl: Profit/Loss
+            status: OPEN, CLOSED, SL_HIT, TARGET_HIT, etc.
+            order_id: Zerodha order ID
+            notes: Additional notes
         
-            Args:
-                order_type: BUY or SELL
-                option_type: CE or PE
-                strike: Strike price
-                entry_price: Entry price
-                current_price: Current price
-                target: Target price
-                stop_loss: Stop loss level
-                pnl: Profit/Loss
-                status: OPEN, CLOSED, SL_HIT, TARGET_HIT, etc.
-                order_id: Zerodha order ID
-                notes: Additional notes
-            
-            Returns:
-                True if logged successfully, False otherwise
-            """
-            if not self.available:
-                return False
-        
+        Returns:
+            True if logged successfully, False otherwise
+        """
+        if not self.available:
+            return False
+    
         with self._lock:
             try:
                 wb = self._get_or_create_workbook()
