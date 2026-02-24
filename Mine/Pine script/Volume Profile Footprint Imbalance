@@ -652,15 +652,15 @@ if barstate.islast
             if show_curr_poc
                 array.push(drawn_lines, line.new(sbar_start2, poc_p, bar_index + curr_lbl_off, poc_p, color=col_curr_poc, style=line.style_solid, width=w_curr_poc))
                 if show_curr_lbl
-                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, poc_p, "POC: " + str.tostring(poc_p, format.mintick), color=col_curr_poc, textcolor=color.white, style=label.style_label_left, size=size.normal))
+                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, poc_p, "POC: " + str.tostring(poc_p, format.mintick), color=col_curr_poc, textcolor=color.white, style=label.style_none, size=size.normal))
             if show_curr_vah
                 array.push(drawn_lines, line.new(sbar_start2, vah_p, bar_index + curr_lbl_off, vah_p, color=col_curr_vah, style=line.style_solid, width=w_curr_vah))
                 if show_curr_lbl
-                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, vah_p, "VAH: " + str.tostring(vah_p, format.mintick), color=col_curr_vah, textcolor=color.white, style=label.style_label_left, size=size.normal))
+                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, vah_p, "VAH: " + str.tostring(vah_p, format.mintick), color=col_curr_vah, textcolor=color.white, style=label.style_none, size=size.normal))
             if show_curr_val
                 array.push(drawn_lines, line.new(sbar_start2, val_p, bar_index + curr_lbl_off, val_p, color=col_curr_val, style=line.style_solid, width=w_curr_val))
                 if show_curr_lbl
-                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, val_p, "VAL: " + str.tostring(val_p, format.mintick), color=col_curr_val, textcolor=color.white, style=label.style_label_left, size=size.normal))
+                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, val_p, "VAL: " + str.tostring(val_p, format.mintick), color=col_curr_val, textcolor=color.white, style=label.style_none, size=size.normal))
 
             // ── Prev day levels overlaid on current day (like PDH/PDL) ────────
             // Prev POC/VAH/VAL = session 1's values drawn on current day
@@ -671,25 +671,25 @@ if barstate.islast
                 if show_prev_poc and not na(prev_poc_p2)
                     array.push(drawn_lines, line.new(sbar_start2, prev_poc_p2, bar_index + curr_lbl_off, prev_poc_p2, color=col_prev_poc, style=line.style_dashed, width=w_prev_poc))
                     if show_curr_lbl
-                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_poc_p2, "Prev POC: " + str.tostring(prev_poc_p2, format.mintick), color=col_prev_poc, textcolor=color.white, style=label.style_label_left, size=size.normal))
+                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_poc_p2, "Prev POC: " + str.tostring(prev_poc_p2, format.mintick), color=col_prev_poc, textcolor=color.white, style=label.style_none, size=size.normal))
                 if show_prev_vah and not na(prev_vah_p2)
                     array.push(drawn_lines, line.new(sbar_start2, prev_vah_p2, bar_index + curr_lbl_off, prev_vah_p2, color=col_prev_vah, style=line.style_dashed, width=w_prev_vah))
                     if show_curr_lbl
-                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_vah_p2, "Prev VAH: " + str.tostring(prev_vah_p2, format.mintick), color=col_prev_vah, textcolor=color.white, style=label.style_label_left, size=size.normal))
+                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_vah_p2, "Prev VAH: " + str.tostring(prev_vah_p2, format.mintick), color=col_prev_vah, textcolor=color.white, style=label.style_none, size=size.normal))
                 if show_prev_val and not na(prev_val_p2)
                     array.push(drawn_lines, line.new(sbar_start2, prev_val_p2, bar_index + curr_lbl_off, prev_val_p2, color=col_prev_val, style=line.style_dashed, width=w_prev_val))
                     if show_curr_lbl
-                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_val_p2, "Prev VAL: " + str.tostring(prev_val_p2, format.mintick), color=col_prev_val, textcolor=color.white, style=label.style_label_left, size=size.normal))
+                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_val_p2, "Prev VAL: " + str.tostring(prev_val_p2, format.mintick), color=col_prev_val, textcolor=color.white, style=label.style_none, size=size.normal))
 
             // PDH / PDL on current day
             if show_pdh and not na(prev_session_high)
                 array.push(drawn_lines, line.new(sbar_start2, prev_session_high, bar_index + curr_lbl_off, prev_session_high, color=col_pdh, style=line.style_dashed, width=w_pdh))
                 if show_curr_lbl
-                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_session_high, "PDH: " + str.tostring(prev_session_high, format.mintick), color=col_pdh, textcolor=color.white, style=label.style_label_left, size=size.normal))
+                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_session_high, "PDH: " + str.tostring(prev_session_high, format.mintick), color=col_pdh, textcolor=color.white, style=label.style_none, size=size.normal))
             if show_pdl and not na(prev_session_low)
                 array.push(drawn_lines, line.new(sbar_start2, prev_session_low, bar_index + curr_lbl_off, prev_session_low, color=col_pdl, style=line.style_dashed, width=w_pdl))
                 if show_curr_lbl
-                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_session_low, "PDL: " + str.tostring(prev_session_low, format.mintick), color=col_pdl, textcolor=color.white, style=label.style_label_left, size=size.normal))
+                    array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_session_low, "PDL: " + str.tostring(prev_session_low, format.mintick), color=col_pdl, textcolor=color.white, style=label.style_none, size=size.normal))
         else
             // Historical days: draw session's OWN POC/VAH/VAL (gated by current toggles)
             int sess_end2 = sbar_start2 + sbar_count2
@@ -722,13 +722,7 @@ if barstate.islast
                     array.push(drawn_lines, line.new(sbar_start2, prev_val_h, sess_end2, prev_val_h, color=col_prev_val, style=line.style_dashed, width=w_prev_val))
 
             // Labels at session boundary
-            if show_prev_lbl
-                if show_curr_poc
-                    array.push(drawn_labels, label.new(sess_end2, poc_p, "POC: " + str.tostring(poc_p, format.mintick), color=col_curr_poc, textcolor=color.white, style=label.style_label_left, size=size.normal))
-                if show_curr_vah
-                    array.push(drawn_labels, label.new(sess_end2, vah_p, "VAH: " + str.tostring(vah_p, format.mintick), color=col_curr_vah, textcolor=color.white, style=label.style_label_left, size=size.normal))
-                if show_curr_val
-                    array.push(drawn_labels, label.new(sess_end2, val_p, "VAL: " + str.tostring(val_p, format.mintick), color=col_curr_val, textcolor=color.white, style=label.style_label_left, size=size.normal))
+            // (Labels hidden for historic sessions as per user request)
 
     // ── Virgin POCs ─────────────────────────────────────────────────────────
     if show_vpoc and array.size(vpoc_prices) > 0
@@ -737,7 +731,7 @@ if barstate.islast
             int   vp_start = array.get(vpoc_starts, i)
             array.push(drawn_lines, line.new(vp_start, vp_price, bar_index + curr_lbl_off, vp_price, color=col_vpoc, style=line.style_solid, width=w_vpoc))
             if show_curr_lbl
-                array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, vp_price, "VPOC: " + str.tostring(vp_price, format.mintick), color=color.new(col_vpoc, 20), textcolor=color.white, style=label.style_label_left, size=size.normal))
+                array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, vp_price, "VPOC: " + str.tostring(vp_price, format.mintick), color=color.new(col_vpoc, 20), textcolor=color.white, style=label.style_none, size=size.normal))
 
 
 
