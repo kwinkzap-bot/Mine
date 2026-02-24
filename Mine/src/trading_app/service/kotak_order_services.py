@@ -85,13 +85,70 @@ class KotakOrderService:
 
     def authenticate(self) -> bool:
         """
-        Authenticate with Kotak Neo API.
-        Currently relies on pre-generated tokens in env.
-        TODO: Implement full login flow if needed.
+        Authenticate with Kotak Neo API using credentials.
+        Performs 2-step login:
+        1. Login with mobile and password.
+        2. Session 2FA with TOTP secret.
         """
-        if self.client and self.client.configuration.edit_token:
-            return True
-        return False
+        try:
+            if not self.client:
+                self._init_client()
+                if not self.client:
+                    self.last_error = "NeoAPI client initialization failed (missing access token?)"
+                    return False
+            
+            # If we don't have the required creds, we can't do a full login
+            if not self.mobile_number or not self.mpin or not self.totp_secret:
+                self.last_error = "Missing mobile number, password/mpin, or TOTP secret."
+                logging.warning(f"[KotakOrderService] Cannot authenticate fully: {self.last_error}")
+                # Fallback to existing logic: if edit_token is cached, assume it's valid
+                if self.client.configuration.edit_token:
+                    return True
+                return False
+                
+            logging.info("[KotakOrderService] Authenticating with NeoAPI...")
+            
+            # 1. First step login
+            # Note: mpin is usually the user's password in Kotak Neo API wrappers unless specified
+            login_res = self.client.login(mobilenumber=self.mobile_number, password=self.mpin)
+            
+            if isinstance(login_res, dict) and 'Error' in login_res:
+                self.last_error = f"Login failed: {login_res.get('Error')}"
+                logging.error(f"[KotakOrderService] {self.last_error}")
+                return False
+                
+            # 2. Second step 2FA
+            otp_res = self.client.session_2fa(self.totp_secret)
+            
+            if isinstance(otp_res, dict) and 'Error' in otp_res:
+                self.last_error = f"2FA failed: {otp_res.get('Error')}"
+                logging.error(f"[KotakOrderService] {self.last_error}")
+                return False
+                
+            # Upon success, neo_api_client securely updates the tokens inside `client.configuration`
+            self.trading_token = getattr(self.client.configuration, 'edit_token', None)
+            self.trading_sid = getattr(self.client.configuration, 'edit_sid', None)
+            
+            # Extract base_url / server id if present in the response
+            # Sometimes hsServerId is returned in otp_res['data']['hsServerId']
+            try:
+                if isinstance(otp_res, dict) and 'data' in otp_res:
+                    self.server_id = otp_res['data'].get('hsServerId', self.server_id)
+            except Exception:
+                pass
+
+            if self.trading_token:
+                logging.info("[KotakOrderService] Successfully generated new session tokens.")
+                return True
+            else:
+                self.last_error = "Authentication succeeded but no trading token was returned."
+                logging.error(f"[KotakOrderService] {self.last_error}")
+                return False
+                
+        except Exception as e:
+            self.last_error = str(e)
+            logging.error(f"[KotakOrderService] Authentication exception: {e}", exc_info=True)
+            return False
     
     def verify_credentials(self) -> Dict[str, Any]:
         """Verify credentials sufficiency"""
