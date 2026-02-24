@@ -36,6 +36,8 @@ class CPRLevels:
     monthly_tc: float
     monthly_s1: float
     monthly_r1: float
+    monthly_s05: float
+    monthly_r05: float
     yearly_pp: float
     yearly_bc: float
     yearly_tc: float
@@ -260,6 +262,10 @@ class CPRFilterService:
         m_s1 = (2 * m_pp) - m_h
         m_r1 = (2 * m_pp) - m_l
         
+        # Calculate Monthly S0.5 and R0.5
+        m_s05 = (m_pp + m_s1) / 2
+        m_r05 = (m_pp + m_r1) / 2
+        
         # Yearly CPR (prev year relative to root_date)
         logger.debug(f"Fetching yearly data for {symbol}...")
         year_start, year_end = self.get_prev_year_range(root_date)
@@ -274,7 +280,7 @@ class CPRFilterService:
         curr_price, curr_open, curr_high, curr_low = [float(daily_df.iloc[-1][col]) for col in ['close', 'open', 'high', 'low']]
         
         logger.debug(f"CPR levels calculated for {symbol}")
-        return CPRLevels(d_pp, d_bc, d_tc, w_pp, w_bc, w_tc, m_pp, m_bc, m_tc, m_s1, m_r1,
+        return CPRLevels(d_pp, d_bc, d_tc, w_pp, w_bc, w_tc, m_pp, m_bc, m_tc, m_s1, m_r1, m_s05, m_r05,
                         y_pp, y_bc, y_tc, curr_price, curr_open, curr_high, curr_low, c, m_h, m_l)
 
     def get_fo_stocks(self) -> List[str]:
@@ -375,14 +381,16 @@ class CPRFilterService:
         """
         List 1(Cross Above S1 and Previous Low). 
         Daily candle price touch the Monthly S1 or Previous Month Low and close above the monthly S1 and Previous Month Low.
+        Added: Price should close above the Monthly S0.5.
         """
         touched_support = (levels.current_low <= levels.monthly_s1) or (levels.current_low <= levels.prev_month_low)
         closed_above_support = (levels.current_price > levels.monthly_s1) and (levels.current_price > levels.prev_month_low)
+        closed_above_s05 = (levels.current_price > levels.monthly_s05)
         
         # Condition 3: Green Candle (Close > Open)
         is_green_candle = levels.current_price > levels.current_open
 
-        if touched_support and closed_above_support and is_green_candle:
+        if touched_support and closed_above_support and closed_above_s05 and is_green_candle:
             return self.BULLISH_REVERSAL
         return None
 
@@ -390,14 +398,16 @@ class CPRFilterService:
         """
         List 2(Cross Below R1 and Previous High). 
         Daily Candle price touch the Monthly R1 or Previous Month High and close below the monthly R1 and Previous Month High.
+        Added: Price should close below the Monthly R0.5.
         """
         touched_resistance = (levels.current_high >= levels.monthly_r1) or (levels.current_high >= levels.prev_month_high)
         closed_below_resistance = (levels.current_price < levels.monthly_r1) and (levels.current_price < levels.prev_month_high)
+        closed_below_r05 = (levels.current_price < levels.monthly_r05)
         
         # Condition 3: Red Candle (Close < Open)
         is_red_candle = levels.current_price < levels.current_open
 
-        if touched_resistance and closed_below_resistance and is_red_candle:
+        if touched_resistance and closed_below_resistance and closed_below_r05 and is_red_candle:
             return self.BEARISH_REVERSAL
         return None
 
