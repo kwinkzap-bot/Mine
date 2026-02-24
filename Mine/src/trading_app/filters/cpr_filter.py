@@ -1030,7 +1030,8 @@ class CPRFilterService:
                 symbol, atm_iv = symbol_iv_pair
                 try:
                     iv_pct = self.calculate_stock_iv_percentile(symbol, atm_iv)
-                    if iv_pct is not None and iv_pct > 80:
+                    # Filter for IV Percentile > 80 AND ATM IV >= 40% (0.40)
+                    if iv_pct is not None and iv_pct > 80 and atm_iv >= 0.40:
                         return {
                             'symbol': symbol,
                             'current_price': round(atm_map[symbol]['current_price'], 2),
@@ -1047,7 +1048,7 @@ class CPRFilterService:
                         high_iv_stocks.append(result)
             
             iv_time = time.time() - iv_start
-            logger.info(f"IV Percentile batch complete: {len(high_iv_stocks)} stocks > 80% (of {len(atm_ivs)} with valid IV) in {iv_time:.1f}s")
+            logger.info(f"IV Percentile batch complete: {len(high_iv_stocks)} stocks > 80% & ATM IV >= 40% (of {len(atm_ivs)} with valid IV) in {iv_time:.1f}s")
             
             # Step 5: Enrich high-IV stocks with ATM IV, Volume, PCR, Max Pain, OI% Change
             high_iv_stocks = self._enrich_high_iv_stocks(high_iv_stocks, atm_map, atm_ivs)
