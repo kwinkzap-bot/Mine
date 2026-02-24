@@ -395,7 +395,7 @@ if barstate.islast
     int max_bar_days  = math.min(num_sessions, math.max(1, math.floor(500 / vp_rows)))
     // Level lines: can show many more days (each session uses ~5 lines, 500/5 = 100)
     int max_line_days = math.min(num_sessions, math.min(MAX_DAYS, 80))
-    // Recalculate one extra session so Prev POC/VAH/VAL data is available for the last visible session
+    // Recalculate one extra session so P-POC/VAH/VAL data is available for the last visible session
     int max_recalc_days = math.min(session_count, math.min(MAX_DAYS, max_line_days + 1))
 
     // ── Recalculate VP distribution using FINAL session ranges ─────────────
@@ -663,7 +663,7 @@ if barstate.islast
                     array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, val_p, "VAL: " + str.tostring(val_p, format.mintick), color=col_curr_val, textcolor=color.white, style=label.style_label_center, size=size.tiny))
 
             // ── Prev day levels overlaid on current day (like PDH/PDL) ────────
-            // Prev POC/VAH/VAL = session 1's values drawn on current day
+            // P-POC/VAH/VAL = session 1's values drawn on current day
             if max_line_days > 1
                 float prev_poc_p2 = array.get(s_poc, 1)
                 float prev_vah_p2 = array.get(s_vah, 1)
@@ -671,15 +671,15 @@ if barstate.islast
                 if show_prev_poc and not na(prev_poc_p2)
                     array.push(drawn_lines, line.new(sbar_start2, prev_poc_p2, bar_index + curr_lbl_off, prev_poc_p2, color=col_prev_poc, style=line.style_dashed, width=w_prev_poc))
                     if show_curr_lbl
-                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_poc_p2, "Prev POC: " + str.tostring(prev_poc_p2, format.mintick), color=col_prev_poc, textcolor=color.white, style=label.style_label_center, size=size.tiny))
+                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_poc_p2, "P-POC: " + str.tostring(prev_poc_p2, format.mintick), color=col_prev_poc, textcolor=color.white, style=label.style_label_center, size=size.tiny))
                 if show_prev_vah and not na(prev_vah_p2)
                     array.push(drawn_lines, line.new(sbar_start2, prev_vah_p2, bar_index + curr_lbl_off, prev_vah_p2, color=col_prev_vah, style=line.style_dashed, width=w_prev_vah))
                     if show_curr_lbl
-                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_vah_p2, "Prev VAH: " + str.tostring(prev_vah_p2, format.mintick), color=col_prev_vah, textcolor=color.white, style=label.style_label_center, size=size.tiny))
+                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_vah_p2, "P-VAH: " + str.tostring(prev_vah_p2, format.mintick), color=col_prev_vah, textcolor=color.white, style=label.style_label_center, size=size.tiny))
                 if show_prev_val and not na(prev_val_p2)
                     array.push(drawn_lines, line.new(sbar_start2, prev_val_p2, bar_index + curr_lbl_off, prev_val_p2, color=col_prev_val, style=line.style_dashed, width=w_prev_val))
                     if show_curr_lbl
-                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_val_p2, "Prev VAL: " + str.tostring(prev_val_p2, format.mintick), color=col_prev_val, textcolor=color.white, style=label.style_label_center, size=size.tiny))
+                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, prev_val_p2, "P-VAL: " + str.tostring(prev_val_p2, format.mintick), color=col_prev_val, textcolor=color.white, style=label.style_label_center, size=size.tiny))
 
             // PDH / PDL on current day
             if show_pdh and not na(prev_session_high)
@@ -709,7 +709,7 @@ if barstate.islast
                 if show_pdl and not na(pdl_price)
                     array.push(drawn_lines, line.new(sbar_start2, pdl_price, sess_end2, pdl_price, color=col_pdl, style=line.style_dashed, width=w_pdl))
 
-            // Prev POC/VAH/VAL = the day BEFORE this session (s2+1)
+            // P-POC/VAH/VAL = the day BEFORE this session (s2+1)
             if s2 + 1 < math.min(session_count, MAX_DAYS)
                 float prev_poc_h = array.get(s_poc, s2 + 1)
                 float prev_vah_h = array.get(s_vah, s2 + 1)

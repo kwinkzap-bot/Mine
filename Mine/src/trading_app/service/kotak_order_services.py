@@ -190,7 +190,7 @@ class KotakOrderService:
             order_params = {
                 'exchange_segment': exchange_segment,
                 'product': product_type,
-                'price': str(price) if price else "0",
+                'price': str(float(price)),
                 'order_type': order_type,
                 'quantity': str(quantity),
                 'validity': 'DAY',
