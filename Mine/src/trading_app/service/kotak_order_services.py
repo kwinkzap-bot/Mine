@@ -124,9 +124,8 @@ class KotakOrderService:
                 if not self.client:
                     return {'success': False, 'error': 'NeoAPI client not initialized'}
 
-            # Map transaction type: B->BUY, S->SELL
-            txn_map = {'B': 'BUY', 'S': 'SELL'}
-            neo_txn_type = txn_map.get(transaction_type, transaction_type)
+            # Map transaction type: Kotak expects 'B'/'Buy' or 'S'/'Sell'
+            neo_txn_type = 'B' if transaction_type.upper() in ['B', 'BUY'] else 'S'
             
             logging.info(f"[Kotak] Placing Order: {tradingsymbol} {neo_txn_type} {quantity} @ {price} (Trg: {trigger_price})")
             
