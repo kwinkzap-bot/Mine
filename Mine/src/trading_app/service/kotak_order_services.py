@@ -111,10 +111,18 @@ class KotakOrderService:
             
             # 1. First step login
             # Note: mpin is usually the user's password in Kotak Neo API wrappers unless specified
-            login_res = self.client.login(mobilenumber=self.mobile_number, password=self.mpin)
-            
-            if isinstance(login_res, dict) and 'Error' in login_res:
-                self.last_error = f"Login failed: {login_res.get('Error')}"
+            try:
+                login_res = self.client.login(mobilenumber=self.mobile_number, password=self.mpin)
+                if isinstance(login_res, dict) and 'Error' in login_res:
+                    self.last_error = f"Login failed: {login_res.get('Error')}"
+                    logging.error(f"[KotakOrderService] {self.last_error}")
+                    return False
+            except Exception as e:
+                err_msg = str(e)
+                if "View Token" in err_msg or "401" in err_msg or "Invalid Access Token" in err_msg:
+                    self.last_error = "Kotak Access Token is expired or invalid. Please generate a new one from the Kotak Neo API Dashboard."
+                else:
+                    self.last_error = f"Login step failed: {err_msg}"
                 logging.error(f"[KotakOrderService] {self.last_error}")
                 return False
                 
