@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import requests
+import pyotp
 from neo_api_client import NeoAPI
 
 load_dotenv()
@@ -118,7 +119,19 @@ class KotakOrderService:
                 return False
                 
             # 2. Second step 2FA
-            otp_res = self.client.session_2fa(self.totp_secret)
+            try:
+                # If user provided exactly 6 digits, assume it is already the OTP
+                if len(self.totp_secret) == 6 and self.totp_secret.isdigit():
+                    otp = self.totp_secret
+                else:
+                    # Otherwise, generate the OTP dynamically using the Base32 TOTP secret
+                    otp = pyotp.TOTP(self.totp_secret).now()
+            except Exception as e:
+                self.last_error = f"Failed to generate OTP from secret: {e}"
+                logging.error(f"[KotakOrderService] {self.last_error}")
+                return False
+                
+            otp_res = self.client.session_2fa(otp)
             
             if isinstance(otp_res, dict) and 'Error' in otp_res:
                 self.last_error = f"2FA failed: {otp_res.get('Error')}"
