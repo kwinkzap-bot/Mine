@@ -410,7 +410,7 @@ def login_kotak():
         
         # Extract credentials
         totp_code = data.get('totp_secret', '').strip()
-        access_token = get_var('access_token', 'KOTAK_ACCESS_TOKEN')
+        consumer_key = get_var('consumer_key', 'KOTAK_CONSUMER_KEY')
         mobile = get_var('mobile', 'KOTAK_MOBILE_NUMBER')
         ucc = get_var('ucc', 'KOTAK_UCC')
         mpin = get_var('mpin', 'KOTAK_MPIN')
@@ -423,9 +423,9 @@ def login_kotak():
             missing_fields.append('totp_code')
             help_messages['totp_code'] = 'Enter the current 6-digit code from your authenticator app (Google/Microsoft Authenticator)'
         
-        if not access_token:
-            missing_fields.append('access_token')
-            help_messages['access_token'] = 'Go to Kotak Neo API Dashboard to get your ACCESS_TOKEN. See GET_ACCESS_TOKEN.md for instructions.'
+        if not consumer_key:
+            missing_fields.append('consumer_key')
+            help_messages['consumer_key'] = 'Go to Kotak Neo App/Web → Invest → Trade API → Your Application to get your Consumer Key.'
         
         if not mobile:
             missing_fields.append('mobile')
@@ -437,7 +437,7 @@ def login_kotak():
         
         if not mpin:
             missing_fields.append('mpin')
-            help_messages['mpin'] = 'Your 6-digit trading PIN (used in Kotak Neo app to authorize orders)'
+            help_messages['mpin'] = 'Your Kotak Neo web password'
         
         if missing_fields:
             logger.warning(f"Kotak Neo credentials missing: {', '.join(missing_fields)}")
@@ -447,15 +447,15 @@ def login_kotak():
                 'help': help_messages,
                 'message': f'Please provide: {", ".join(missing_fields)}',
                 'success': False,
-                'documentation': 'See GET_ACCESS_TOKEN.md for setup instructions'
+                'documentation': 'See https://github.com/Kotak-Neo/Kotak-neo-api-v2 for setup instructions'
             }), 400
         
         # Import the service
         from trading_app.service.kotak_order_services import KotakOrderService
         
-        # Create service instance with REST API credentials
+        # Create service instance with consumer_key only (v2 API — no consumer_secret needed)
         kotak_service = KotakOrderService(
-            access_token=access_token,
+            consumer_key=consumer_key,
             mobile_number=mobile,
             ucc=ucc,
             mpin=mpin,
@@ -1021,7 +1021,7 @@ def logout():
 def status():
     """Check authentication status."""
     access_token = session.get('access_token') or os.getenv('ACCESS_TOKEN')
-    kotak_token = session.get('kotak_access_token') or os.getenv('KOTAK_ACCESS_TOKEN')
+    kotak_token = session.get('kotak_access_token') or os.getenv('KOTAK_CONSUMER_KEY')
     dhan_token = session.get('dhan_access_token') or os.getenv('DHAN_ACCESS_TOKEN')
     fyers_token = session.get('fyers_access_token') or os.getenv('FYERS_ACCESS_TOKEN')
     

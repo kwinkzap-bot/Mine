@@ -1,7 +1,7 @@
 import logging
 from kiteconnect import KiteConnect
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional # Added typing imports
@@ -19,6 +19,7 @@ class KiteService:
         self._instrument_tokens_by_symbol: Dict[str, int] = {}
         self._instrument_tokens_by_name: Dict[str, int] = {}
         self._nfo_instruments_cache: Optional[List[Dict[str, Any]]] = None
+        self._nfo_cache_asof: Optional[date] = None
         self._nfo_option_symbol_cache: Dict[str, str] = {}  # Cache for option symbol lookups
         self._quote_cache: Dict[str, tuple] = {}  # Cache for quotes: {key: (price, timestamp)}
         self._quote_cache_ttl = 5  # Quote cache TTL in seconds
@@ -36,6 +37,7 @@ class KiteService:
             nfo_instruments = self.kite.instruments('NFO')
             logging.info(f"[_load_instruments] Loaded {len(nfo_instruments) if nfo_instruments else 0} NFO instruments")
             self._nfo_instruments_cache = nfo_instruments  # Cache for fast option symbol lookups
+            self._nfo_cache_asof = date.today()
             
             # Combine both
             all_instruments = (nse_instruments or []) + (nfo_instruments or [])
@@ -441,6 +443,89 @@ class KiteService:
             # Emergency fallback
             return {'NIFTY': 65, 'BANKNIFTY': 25, 'FINNIFTY': 40}.get(symbol, 1)
     
+    def _refresh_nfo_cache_if_stale(self, exchange: str = 'NFO') -> None:
+        """Refresh NFO instruments daily or when cache is missing."""
+        try:
+            if (self._nfo_instruments_cache is None) or (self._nfo_cache_asof and self._nfo_cache_asof < date.today()):
+                logging.info("[KiteService] Refreshing NFO instruments cache…")
+                nfo_instruments = self.kite.instruments(exchange)
+                self._nfo_instruments_cache = nfo_instruments
+                self._nfo_cache_asof = date.today()
+                # Clear per-option cache to avoid stale expiries
+                self._nfo_option_symbol_cache.clear()
+        except Exception as e:
+            logging.error(f"[KiteService] Failed to refresh NFO cache: {e}")
+
+    def get_nearest_option_expiry(self, symbol: str, strike: int, option_type: str, exchange: str = 'NFO') -> Optional[date]:
+        """Get the exact expiry date for an option from Kite instruments cache.
+        
+        Args:
+            symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
+            strike: Strike price
+            option_type: 'CE' or 'PE'
+            exchange: Exchange (default: 'NFO')
+            
+        Returns:
+            datetime.date of the nearest expiry, or None if not found
+        """
+        try:
+            self._refresh_nfo_cache_if_stale(exchange)
+            nfo_instruments = self._nfo_instruments_cache
+            if not nfo_instruments:
+                logging.warning("NFO instruments cache empty, loading...")
+                nfo_instruments = self.kite.instruments(exchange)
+                self._nfo_instruments_cache = nfo_instruments
+                from datetime import date as _date_cls
+                self._nfo_cache_asof = _date_cls.today()
+                
+            matching_instruments = []
+            for inst in nfo_instruments:
+                if (inst.get('name') == symbol and
+                    inst.get('instrument_type') == option_type and
+                    inst.get('strike') == strike and
+                    inst.get('expiry')):
+                    
+                    expiry_date = inst['expiry']
+                    if hasattr(expiry_date, 'date'):
+                        expiry_date = expiry_date.date()
+                    
+                    from datetime import date, time, datetime as dt
+                    current_time = dt.now().time()
+                    is_market_open = time(9, 15) <= current_time <= time(15, 20)
+                    
+                    if expiry_date == date.today():
+                        if is_market_open:
+                            matching_instruments.append(inst)
+                    elif expiry_date > date.today():
+                        matching_instruments.append(inst)
+            
+            if matching_instruments:
+                matching_instruments.sort(key=lambda x: x['expiry'])
+                
+                # Prefer Thursday expiries (weekday() == 3 = Thursday in Python)
+                # Regular index options expire on Thursdays
+                thursday_instruments = [i for i in matching_instruments if i['expiry'].weekday() == 3]
+                if thursday_instruments:
+                    expiry = thursday_instruments[0]['expiry']
+                    selected_note = "Thursday expiry (preferred)"
+                else:
+                    # Fallback to next available if no Thursday
+                    expiry = matching_instruments[0]['expiry']
+                    available_weekdays = [i['expiry'].weekday() for i in matching_instruments[:3]]
+                    selected_note = f"Non-Thursday expiry fallback (available: {available_weekdays}, no Thu found)"
+                
+                expiry_date = expiry.date() if hasattr(expiry, 'date') else expiry
+                available_expiries = [inst['expiry'].date() if hasattr(inst['expiry'], 'date') else inst['expiry'] 
+                                    for inst in matching_instruments[:5]]
+                logging.info(f"[KiteService] Found {len(matching_instruments)} instruments for {symbol} {option_type} {strike}. "
+                           f"Available expiries: {available_expiries}. Returning: {expiry_date} (weekday={expiry_date.weekday()}, {selected_note})")
+                return expiry_date
+                
+            return None
+        except Exception as e:
+            logging.error(f"Error getting option expiry for {symbol} {option_type} {strike}: {e}", exc_info=True)
+            return None
+
     def get_option_symbol(self, symbol: str, strike: int, option_type: str, exchange: str = 'NFO') -> Optional[str]:
         """Get the trading symbol for an option.
         
@@ -463,14 +548,17 @@ class KiteService:
             if cache_key in self._nfo_option_symbol_cache:
                 return self._nfo_option_symbol_cache[cache_key]
             
+            self._refresh_nfo_cache_if_stale(exchange)
+
             # Use cached NFO instruments instead of fetching from API (saves ~10-15 seconds)
             nfo_instruments = self._nfo_instruments_cache
-            
+
             # If cache is empty, load it once
             if not nfo_instruments:
                 logging.warning("NFO instruments cache empty, loading...")
                 nfo_instruments = self.kite.instruments(exchange)
                 self._nfo_instruments_cache = nfo_instruments
+                self._nfo_cache_asof = date.today()
             
             matching_instruments = []
             for inst in nfo_instruments:
@@ -483,11 +571,11 @@ class KiteService:
                     if hasattr(expiry_date, 'date'):
                         expiry_date = expiry_date.date()
                     
-                    from datetime import date, time, datetime as dt
+                    from datetime import time as time_cls, datetime as dt
                     # On expiry day: use current expiry if before 3:20 PM (market close)
                     # After 3:20 PM: use next expiry
                     current_time = dt.now().time()
-                    is_market_open = time(9, 15) <= current_time <= time(15, 20)
+                    is_market_open = time_cls(9, 15) <= current_time <= time_cls(15, 20)
                     
                     if expiry_date == date.today():
                         # Today's expiry - only use if market is still open (before 3:20 PM)
@@ -506,6 +594,38 @@ class KiteService:
                 logging.debug(f"Found option symbol: {tradingsymbol} for {symbol} {option_type} {strike}")
                 return tradingsymbol
             
+            # If not found, force-refresh instruments once and retry to avoid stale cache
+            try:
+                logging.warning(f"No {option_type} option found for {symbol} strike {strike}, refreshing instruments and retrying once")
+                nfo_instruments = self.kite.instruments(exchange)
+                self._nfo_instruments_cache = nfo_instruments
+                self._nfo_cache_asof = date.today()
+                matching_instruments = []
+                for inst in nfo_instruments:
+                    if (inst.get('name') == symbol and
+                        inst.get('instrument_type') == option_type and
+                        inst.get('strike') == strike and
+                        inst.get('expiry')):
+                        expiry_date = inst['expiry']
+                        if hasattr(expiry_date, 'date'):
+                            expiry_date = expiry_date.date()
+                        from datetime import time, datetime as dt
+                        current_time = dt.now().time()
+                        is_market_open = time(9, 15) <= current_time <= time(15, 20)
+                        if expiry_date == date.today():
+                            if is_market_open:
+                                matching_instruments.append(inst)
+                        elif expiry_date > date.today():
+                            matching_instruments.append(inst)
+                if matching_instruments:
+                    matching_instruments.sort(key=lambda x: x['expiry'])
+                    tradingsymbol = matching_instruments[0]['tradingsymbol']
+                    self._nfo_option_symbol_cache[cache_key] = tradingsymbol
+                    logging.info(f"[KiteService] Found option after refresh: {tradingsymbol}")
+                    return tradingsymbol
+            except Exception as retry_e:
+                logging.error(f"[KiteService] Retry lookup failed: {retry_e}")
+
             logging.warning(f"No {option_type} option found for {symbol} strike {strike}")
             return None
             

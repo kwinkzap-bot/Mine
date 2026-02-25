@@ -4,6 +4,10 @@ from dotenv import load_dotenv
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import requests
+import csv
+from io import StringIO
+import tempfile
+from pathlib import Path
 
 load_dotenv()
 
@@ -35,6 +39,11 @@ class DhanOrderService:
         self.base_url = "https://api.dhan.co/v2"
         self.last_error = None
         
+        # CSV master data cache
+        self._symbol_master_data = None
+        self._symbol_master_cache_path = None
+        self._build_symbol_master_dict()
+        
         logging.info("[DhanOrderService] Initialized with Dhan credentials")
         
         # Order type mappings for Dhan
@@ -62,6 +71,136 @@ class DhanOrderService:
         self.EXCHANGE_BSE_FNO = 'BSE_FNO'  # BSE F&O
         self.EXCHANGE_MCX = 'MCX'  # MCX Commodity
         self.EXCHANGE_NSE_CURRENCY = 'NSE_CURRENCY'  # NSE Currency
+    
+    def _build_symbol_master_dict(self):
+        """
+        Download and cache Dhan's symbol master CSV file.
+        Creates a dict mapping trading_symbol -> security_id for fast lookups.
+        
+        Dhan provides static CSV master files at:
+        - Compact: https://images.dhan.co/api-data/api-scrip-master.csv
+        - Detailed: https://images.dhan.co/api-data/api-scrip-master-detailed.csv
+        """
+        try:
+            # Use temp directory for cache file
+            cache_dir = Path(tempfile.gettempdir())
+            cache_file = cache_dir / "dhan_scrip_master.csv"
+            self._symbol_master_cache_path = cache_file
+            
+            # Check if cached file is recent (less than 24 hours old)
+            if cache_file.exists():
+                file_age = datetime.now().timestamp() - cache_file.stat().st_mtime
+                if file_age < 86400:  # 24 hours
+                    logging.info("[_build_symbol_master_dict] Using cached Dhan scrip master")
+                    self._symbol_master_data = self._load_csv_to_dict(cache_file)
+                    return
+            
+            # Download fresh CSV from Dhan
+            logging.info("[_build_symbol_master_dict] Downloading Dhan scrip master CSV...")
+            csv_url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+            
+            response = requests.get(csv_url, timeout=30)
+            if response.status_code == 200:
+                # Save to cache file
+                with open(cache_file, 'w', encoding='utf-8') as f:
+                    f.write(response.text)
+                
+                # Parse CSV into dict
+                self._symbol_master_data = self._load_csv_to_dict(cache_file)
+                logging.info(f"[_build_symbol_master_dict] ✓ Cached {len(self._symbol_master_data)} symbols from Dhan")
+            else:
+                logging.warning(f"[_build_symbol_master_dict] Failed to download CSV: {response.status_code}")
+                self._symbol_master_data = {}
+                
+        except Exception as e:
+            logging.warning(f"[_build_symbol_master_dict] Error building symbol master: {e}")
+            self._symbol_master_data = {}
+    
+    def _load_csv_to_dict(self, csv_file: Path) -> Dict[str, Dict[str, str]]:
+        """
+        Load CSV file and create lookup dicts for symbol mapping.
+        
+        Dhan CSV columns:
+            SEM_EXM_EXCH_ID: Exchange (NSE, BSE, MCX)
+            SEM_SEGMENT: Segment (C=Currency, D=Derivatives, E=Equity, M=Commodity)
+            SEM_SMST_SECURITY_ID: Numeric security ID (what we need!)
+            SEM_INSTRUMENT_NAME: Instrument type (OPTIDX, FUTIDX, etc)
+            SEM_TRADING_SYMBOL: Trading symbol (e.g., NIFTY-Mar2026-25550-CE)
+            SEM_CUSTOM_SYMBOL: Display name (e.g., NIFTY 02 MAR 25550 CALL)
+            SEM_STRIKE_PRICE: Strike price
+            SEM_OPTION_TYPE: CE/PE
+            
+        Returns:
+            Dict mapping Kite-format symbols -> security_id
+        """
+        try:
+            symbol_dict = {}
+            kite_format_dict = {}  # Maps Kite format -> Dhan format + security_id
+            
+            with open(csv_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Only process NSE derivatives (options)
+                    exch = row.get('SEM_EXM_EXCH_ID', '').strip()
+                    segment = row.get('SEM_SEGMENT', '').strip()
+                    
+                    if exch != 'NSE' or segment != 'D':
+                        continue
+                    
+                    # Extract security ID (numeric)
+                    security_id = row.get('SEM_SMST_SECURITY_ID', '').strip()
+                    if not security_id or not security_id.isdigit():
+                        continue
+                    
+                    # Get trading symbols
+                    dhan_symbol = row.get('SEM_TRADING_SYMBOL', '').strip()  # NIFTY-Mar2026-25550-CE
+                    display_name = row.get('SEM_CUSTOM_SYMBOL', '').strip()  # NIFTY 02 MAR 25550 CALL
+                    
+                    if not dhan_symbol:
+                        continue
+                    
+                    # Extract option details for Kite format conversion
+                    strike = row.get('SEM_STRIKE_PRICE', '0').strip()
+                    opt_type = row.get('SEM_OPTION_TYPE', '').strip()  # CE or PE
+                    expiry_date = row.get('SEM_EXPIRY_DATE', '').strip()
+                    
+                    # Try to build Kite format: NIFTY26FEB25550CE, NIFTY2630225550CE, etc
+                    if strike and opt_type and expiry_date:
+                        # Parse expiry date: "2026-03-02 14:30:00" -> "26FEB" or "2630225"
+                        try:
+                            exp_dt = datetime.strptime(expiry_date.split()[0], '%Y-%m-%d')
+                            # Two common Kite formats:
+                            # 1. Text month: NIFTY26FEB25550CE (year+month+strike+type)
+                            # 2. Numeric: NIFTY2630225550CE (year+month+date+strike+type)
+                            
+                            year_short = exp_dt.strftime('%y')
+                            month_short = exp_dt.strftime('%b').upper()
+                            day = exp_dt.strftime('%d')
+                            
+                            kite_text_format = f"NIFTY{year_short}{month_short}{strike.split('.')[0]}{opt_type}"
+                            kite_numeric_format = f"NIFTY{year_short}{month_short.replace('JAN','01').replace('FEB','02').replace('MAR','03').replace('APR','04').replace('MAY','05').replace('JUN','06').replace('JUL','07').replace('AUG','08').replace('SEP','09').replace('OCT','10').replace('NOV','11').replace('DEC','12')}{day}{strike.split('.')[0]}{opt_type}"
+                            
+                            # Store both formats
+                            for fmt in [kite_text_format, kite_numeric_format, dhan_symbol]:
+                                if fmt:
+                                    symbol_dict[fmt] = security_id
+                                    
+                        except Exception as e:
+                            logging.debug(f"Could not convert expiry for {dhan_symbol}: {e}")
+                    
+                    # Also store by direct Dhan symbol format
+                    symbol_dict[dhan_symbol] = security_id
+                    
+                    # Store by display name (e.g., "NIFTY 02 MAR 25550 CALL")
+                    if display_name:
+                        symbol_dict[display_name] = security_id
+            
+            logging.info(f"[_load_csv_to_dict] Loaded {len(symbol_dict)} symbol mappings from CSV")
+            return symbol_dict
+            
+        except Exception as e:
+            logging.error(f"[_load_csv_to_dict] Error parsing CSV: {e}")
+            return {}
     
     def verify_credentials(self) -> bool:
         """
@@ -806,98 +945,122 @@ class DhanOrderService:
     
     def search_symbol(self, symbol: str) -> Dict[str, Any]:
         """
-        Search for a symbol in Dhan's symbol master.
+        Convert Kite symbol to Dhan format.
         
-        This API retrieves security ID and other details for a symbol.
-        Supports both equity and options symbols.
+        Handles multiple Kite symbol formats:
+        - NIFTY26FEB25550CE (UNDERLYING + YY + MONTH_TEXT + STRIKE + TYPE)
+        - NIFTY2630225550CE (UNDERLYING + YY + ?? + STRIKE + TYPE)
+        
+        Converts to Dhan format: NIFTY-Mar2026-25550-CE
         
         Args:
-            symbol: Trading symbol to search (e.g., "NIFTY26FEB25600CE")
+            symbol: Kite trading symbol
             
         Returns:
-            Dict with security ID and symbol details
+            Dict with dhan_symbol (formatted for Dhan API)
         """
         try:
-            if not self.access_token:
-                logging.error("[search_symbol] Not authenticated")
+            logging.info(f"[search_symbol] Converting Kite symbol: {symbol}")
+            
+            # Try CSV lookup first if available
+            if self._symbol_master_data and symbol in self._symbol_master_data:
+                security_id = self._symbol_master_data[symbol]
+                logging.info(f"✓ Found in CSV: {symbol} -> {security_id}")
                 return {
-                    'success': False,
-                    'error': 'Not authenticated'
+                    'success': True,
+                    'security_id': security_id,
+                    'symbol': symbol
                 }
             
-            # Try multiple Dhan API endpoints
-            # 1. Try direct symbol search first
-            endpoints = [
-                f"{self.base_url}/symbol/search?symbol={symbol}",
-                f"{self.base_url}/instruments?symbol={symbol}",
-                f"{self.base_url}/searchsymbol?symbol={symbol}",
-            ]
+            import re
             
-            headers = {
-                "access-token": self.access_token,
-                "Content-Type": "application/json"
-            }
+            # Format 1: NIFTY26FEB25550CE (UNDERLYING + YY + MONTH_TEXT + STRIKE + TYPE)
+            match1 = re.match(r'([A-Z]+?)(\d{2})([A-Z]{3})(\d+)([CP]E)', symbol)
+            if match1:
+                underlying, year, month_text, strike, opt_type = match1.groups()
+                year_full = f"20{year}"
+                month_abbr = month_text.capitalize()
+                dhan_symbol = f"{underlying}-{month_abbr}{year_full}-{strike}-{opt_type}"
+                
+                logging.info(f"[search_symbol] Format1 (TextMonth): {symbol} → {dhan_symbol}")
+                
+                # Try to find in master
+                if self._symbol_master_data and dhan_symbol in self._symbol_master_data:
+                    security_id = self._symbol_master_data[dhan_symbol]
+                    return {'success': True, 'security_id': security_id, 'symbol': dhan_symbol}
+                
+                return {'success': False, 'security_id': dhan_symbol, 'symbol': dhan_symbol}
             
-            logging.info(f"[search_symbol] Searching for {symbol}")
-            
-            for url in endpoints:
-                try:
-                    logging.debug(f"[search_symbol] Trying endpoint: {url}")
-                    response = requests.get(url, headers=headers, timeout=5)
+            # Format 2: NIFTY2630225550CE (UNDERLYING + MYSTERY_DIGITS + STRIKE + TYPE)
+            # Extract: UNDERLYING + YY at start, TYPE at end (CE/PE)
+            # For the middle part, try to intelligently extract strike
+            match2 = re.match(r'([A-Z]+?)(\d{2})(\d+)([CP]E)', symbol)
+            if match2:
+                underlying, year, middle_and_strike, opt_type = match2.groups()
+                year_full = f"20{year}"
+                
+                # Try to extract strike - assume last 4 or 5 digits
+                # For NIFTY2630225550CE: try 25550 (5 digits)
+                strike = None
+                for strike_len in [5, 4]:
+                    if len(middle_and_strike) > strike_len:
+                        candidate = middle_and_strike[-strike_len:]
+                        if candidate.isdigit() and int(candidate) >= 100:  # Valid strike
+                            strike = candidate
+                            break
+                
+                if strike:
+                    # Default to March (most liquid monthly expiry)
+                    month_abbr = "Mar"
+                    dhan_symbol = f"{underlying}-{month_abbr}{year_full}-{strike}-{opt_type}"
                     
-                    if response.status_code == 200:
-                        data = response.json()
-                        logging.info(f"[search_symbol] Response from {url}: {data}")
-                        
-                        # Check if data contains the security ID
-                        if isinstance(data, dict):
-                            # Try various response formats
-                            if 'data' in data:
-                                symbol_data = data['data']
-                                if isinstance(symbol_data, list) and len(symbol_data) > 0:
-                                    first_match = symbol_data[0]
-                                elif isinstance(symbol_data, dict):
-                                    first_match = symbol_data
-                                else:
-                                    continue
-                            elif 'securityId' in data or 'security_id' in data:
-                                first_match = data
-                            else:
-                                # Try treating entire response as symbol data
-                                first_match = data
-                            
-                            security_id = first_match.get('securityId') or first_match.get('security_id')
-                            
-                            if security_id and str(security_id).isdigit():
-                                logging.info(f"✓ Found numeric security ID for {symbol}: {security_id}")
-                                return {
-                                    'success': True,
-                                    'security_id': str(security_id),
-                                    'symbol': symbol,
-                                    'data': first_match
-                                }
-                        
-                except requests.exceptions.Timeout:
-                    logging.debug(f"[search_symbol] Timeout on {url}")
-                    continue
-                except Exception as e:
-                    logging.debug(f"[search_symbol] Error on {url}: {e}")
-                    continue
+                    logging.info(f"[search_symbol] Format2 (NumericDate): {symbol}")
+                    logging.info(f"  Extracted: underlying={underlying}, year={year}, strike={strike}, type={opt_type}")
+                    logging.info(f"  Converted (Mar assumed): {dhan_symbol}")
+                    
+                    # Try to find in master
+                    if self._symbol_master_data and dhan_symbol in self._symbol_master_data:
+                        security_id = self._symbol_master_data[dhan_symbol]
+                        return {'success': True, 'security_id': security_id, 'symbol': dhan_symbol}
+                    
+                    return {'success': False, 'security_id': dhan_symbol, 'symbol': dhan_symbol}
             
-            logging.warning(f"[search_symbol] No numeric security ID found for {symbol} via API")
+            # Last resort: Return as-is with dashes added
+            logging.warning(f"[search_symbol] Could not parse {symbol}, returning as-is")
             return {
                 'success': False,
-                'error': f'Symbol {symbol} not found or API endpoints not available',
+                'security_id': symbol,
                 'symbol': symbol
             }
             
         except Exception as e:
-            logging.error(f"[search_symbol] Error: {e}")
-            return {
-                'success': False,
-                'error': str(e),
-                'symbol': symbol
-            }
+            logging.error(f"[search_symbol] Error: {e}", exc_info=True)
+            return {'success': False, 'error': str(e), 'symbol': symbol}
+    
+    def _symbols_match(self, symbol1: str, symbol2: str) -> bool:
+        """
+        Check if two trading symbols represent the same instrument.
+        Handles different formatting variations (NIFTY26FEB25600CE vs NIFTY-26-FEB-25600CE).
+        """
+        # Normalize both symbols by removing common separators
+        norm1 = symbol1.replace('-', '').replace('_', '').upper()
+        norm2 = symbol2.replace('-', '').replace('_', '').upper()
+        
+        # Exact match after normalization
+        if norm1 == norm2:
+            return True
+        
+        # Partial match for base components
+        # Extract: underlying (NIFTY/BANKNIFTY), expiry (26FEB), strike (25600), type (CE/PE)
+        import re
+        match1 = re.match(r'([A-Z]+?)(\d{2}[A-Z]{3})(\d+)([CP]E)', norm1)
+        match2 = re.match(r'([A-Z]+?)(\d{2}[A-Z]{3})(\d+)([CP]E)', norm2)
+        
+        if match1 and match2:
+            # Compare all components (underlying, expiry, strike, type)
+            return match1.groups() == match2.groups()
+        
+        return False
     
     def get_option_symbol(self, symbol: str, strike: int, option_type: str) -> str:
         """

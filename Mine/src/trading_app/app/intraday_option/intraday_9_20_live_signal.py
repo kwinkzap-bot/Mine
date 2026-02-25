@@ -265,7 +265,7 @@ class Intraday920LiveSignal:
     def _init_extra_brokers(self):
         """Initialize additional broker services if credentials are present in env."""
         # 1. Kotak Neo
-        if os.getenv("KOTAK_ACCESS_TOKEN") and os.getenv("KOTAK_MOBILE_NUMBER"):
+        if os.getenv("KOTAK_CONSUMER_KEY") and os.getenv("KOTAK_MOBILE_NUMBER"):
             try:
                 self.extra_brokers['KOTAK'] = KotakOrderService()
                 logger.info("✅ Kotak Neo Service Initialized")

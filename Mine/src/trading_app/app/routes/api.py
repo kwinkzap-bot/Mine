@@ -263,7 +263,7 @@ def get_available_brokers() -> EndpointResponse:
                 'name': 'Kotak Neo',
                 'icon': '🏦',
                 'description': 'Stocks, F&O & derivatives trading',
-                'fields': ['KOTAK_ACCESS_TOKEN', 'KOTAK_UCC'],
+                'fields': ['KOTAK_CONSUMER_KEY', 'KOTAK_UCC'],
                 'prefix': 'KOTAK',
                 'login_type': 'modal',
                 'login_action': 'showKotakLoginModal()',
@@ -2271,6 +2271,8 @@ def place_intraday_920_order() -> EndpointResponse:
         action = data['action'].upper()
         broker = data.get('broker', 'kite').lower()
         quantity = data.get('quantity')
+        tradingsymbol_override = data.get('tradingsymbol')
+        expiry_override = data.get('expiry')  # ISO date string optional
         
         # Validate option_type
         if option_type not in ['CE', 'PE']:
@@ -2408,6 +2410,15 @@ def place_intraday_920_order() -> EndpointResponse:
             kotak_service.trading_token = trading_token
             kotak_service.trading_sid = trading_sid
             kotak_service.base_url = base_url
+            kotak_service._order_base_url = base_url  # Direct server URL for HTTP orders
+            kotak_service.consumer_key = os.getenv('KOTAK_CONSUMER_KEY', '')
+            
+            # DEBUG: Log what we're about to inject
+            logger.info(f"[Kotak] About to inject tokens: token={trading_token[:30] if trading_token else 'NONE'}..., sid={trading_sid[:30] if trading_sid else 'NONE'}...")
+            
+            # RE-INJECT TOKENS INTO SDK CLIENT (critical: tokens were set after init)
+            inject_success = kotak_service.inject_trading_tokens()
+            logger.info(f"[Kotak] Token injection result: {inject_success}")
             
             # Map action to transaction_type for Kotak
             transaction_type = 'BUY' if action == 'BUY' else 'SELL'
@@ -2417,7 +2428,9 @@ def place_intraday_920_order() -> EndpointResponse:
                 strike=strike,
                 option_type=option_type,
                 transaction_type=transaction_type,
-                quantity=quantity
+                quantity=quantity,
+                tradingsymbol=tradingsymbol_override,
+                target_expiry=expiry_override
             )
             
             if result['success']:
@@ -2472,25 +2485,22 @@ def place_intraday_920_order() -> EndpointResponse:
                 
                 logger.info(f"[Dhan] Validated option symbol via Kite: {kite_option_symbol}")
                 
-                # For Dhan, we need the numeric security ID
-                # Try to search for it, but have a fallback approach
-                logger.info(f"[Dhan] Searching for Dhan security ID for {kite_option_symbol}...")
+                # For Dhan, we need the security ID
+                # Try two approaches:
+                # 1. Search for numeric security ID via API
+                # 2. Fall back to using the trading symbol directly (many Dhan endpoints accept this)
+                
+                logger.info(f"[Dhan] Attempting to find security ID for {kite_option_symbol}...")
+                security_id = None
                 search_result = dhan_service.search_symbol(kite_option_symbol)
                 
-                if search_result['success'] and str(search_result.get('security_id', '')).isdigit():
-                    # Use the numeric security ID from search
+                if search_result.get('security_id'):
                     security_id = str(search_result.get('security_id', ''))
-                    logger.info(f"[Dhan] Found numeric security ID: {security_id}")
+                    logger.info(f"[Dhan] Converted to Dhan format: {security_id}")
                 else:
-                    # If search fails or returns non-numeric ID, inform user
-                    logger.error(f"[Dhan] Could not find numeric security ID via API")
-                    logger.warning(f"[Dhan] Dhan requires numeric security IDs which we couldn't retrieve from their API")
-                    return jsonify({
-                        'success': False,
-                        'error': 'Cannot find Dhan security ID. Please ensure: 1) Your Dhan account has API access enabled, 2) The option symbol exists in Dhan, 3) Dhan API is responding correctly.',
-                        'symbol': kite_option_symbol,
-                        'hint': 'Try refreshing your Dhan credentials or contact Dhan support'
-                    }), 400
+                    # Fallback: Use Kite symbol as-is
+                    logger.warning(f"[Dhan] Could not convert symbol, using Kite format: {kite_option_symbol}")
+                    security_id = kite_option_symbol
                 
                 lot_size = dhan_service.get_lot_size(symbol)
                 order_quantity = (quantity or 1) * lot_size
@@ -2500,7 +2510,7 @@ def place_intraday_920_order() -> EndpointResponse:
                 
                 logger.info(f"[Dhan] Placing {transaction_type} order: symbol={kite_option_symbol}, security_id={security_id}, qty={order_quantity}")
                 
-                # Place order using the numeric security ID
+                # Place order using the converted symbol ID
                 result = dhan_service.place_order(
                     security_id=security_id,
                     transaction_type=transaction_type,
