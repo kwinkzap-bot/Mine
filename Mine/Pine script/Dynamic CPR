@@ -35,7 +35,7 @@ var cam_s3_curr = array.new_float()
 cpr_show = input.bool(true, "", inline="CPR", group="CPR levels")
 cpr_color = input.color(color.rgb(255, 105, 135), "CPR", inline="CPR", group="CPR levels")
 
-var SR_COLOR = #FB8C00
+var SR_COLOR = #FFD700
 sr_show = input.bool(true, "Show SR Levels", inline="Show SR Levels", group="CPR levels")
 hist_sr_show = input.bool(true, "Show Historical SR Levels", inline="Show SR Levels", group="CPR levels")
 session_ranges_show = input.bool(true, "Session Ranges", group="CPR levels")
@@ -51,6 +51,12 @@ var r1 = array.new_float()
 var s1 = array.new_float()
 s1_color = input.color(SR_COLOR, "S1", inline="S1/R1" , group="CPR levels")
 r1_color = input.color(SR_COLOR, "R1", inline="S1/R1", group="CPR levels")
+
+// R1/S1 Box Colors
+r1_border_color = input.color(color.new(#FFD700, 0), "R1 Border", inline="R1/S1 Box", group="CPR levels")
+r1_bg_color = input.color(color.new(#FFD700, 95), "R1 Background", inline="R1/S1 Box", group="CPR levels")
+s1_border_color = input.color(color.new(#FFD700, 0), "S1 Border", inline="S1 Box", group="CPR levels")
+s1_bg_color = input.color(color.new(#FFD700, 95), "S1 Background", inline="S1 Box", group="CPR levels")
 var cam_cs3_show = input.bool(true, "Show C-R3/C-S3", inline="C-S3/C-R3", group="CPR levels")
 var cam_r3_color = input.color(color.purple, "C-R3", inline="C-S3/C-R3", group="CPR levels")
 var cam_s3_color = input.color(color.purple, "C-S3", inline="C-S3/C-R3", group="CPR levels")
@@ -519,7 +525,7 @@ if barstate.islast and array.size(arr_time) > 0 and session_ranges_show
             top_val = math.max(r1_val, prev_h_val)
             bottom_val = math.min(r1_val, prev_h_val)
             x_pos = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
-            box_r1 = box.new(array.get(arr_time, i), top_val, array.get(arr_time, i + 1), bottom_val, border_color=color.yellow, bgcolor=na, border_width=2, xloc=xloc.bar_time)
+            box_r1 = box.new(array.get(arr_time, i), top_val, array.get(arr_time, i + 1), bottom_val, border_color=r1_border_color, bgcolor=r1_bg_color, border_width=2, xloc=xloc.bar_time)
             array.push(sr_boxes, box_r1)
             if i == j
                 if r1_val == top_val
@@ -536,7 +542,7 @@ if barstate.islast and array.size(arr_time) > 0 and session_ranges_show
             top_val = math.max(s1_val, prev_l_val)
             bottom_val = math.min(s1_val, prev_l_val)
             x_pos = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
-            box_s1 = box.new(array.get(arr_time, i), top_val, array.get(arr_time, i + 1), bottom_val, border_color=color.yellow, bgcolor=na, border_width=2, xloc=xloc.bar_time)
+            box_s1 = box.new(array.get(arr_time, i), top_val, array.get(arr_time, i + 1), bottom_val, border_color=s1_border_color, bgcolor=s1_bg_color, border_width=2, xloc=xloc.bar_time)
             array.push(sr_boxes, box_s1)
             if i == j
                 if s1_val == top_val

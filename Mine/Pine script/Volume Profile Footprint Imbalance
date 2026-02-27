@@ -44,6 +44,42 @@ show_prev_val = input.bool(true, "Prev VAL", inline="pval", group=grp_prev)
 col_prev_val  = input.color(color.new(#eea719, 15), "", inline="pval", group=grp_prev)
 w_prev_val    = input.int(2, "Width", minval=1, maxval=5, inline="pval", group=grp_prev)
 
+// ── 3a. Previous 10 Days POC Lines (Extended to Current Day) ──────────────────
+grp_10days    = "═══ Previous 10 Days POC ═══"
+show_10days_poc = input.bool(true, "Show Previous 10 Days POC", inline="p10poc", group=grp_10days)
+w_10days_poc = input.int(1, "Width", minval=1, maxval=5, inline="p10poc", group=grp_10days)
+
+// Individual toggles and color pickers for each of the 10 previous days
+show_p10_1    = input.bool(true, "Day 1", inline="p10_1", group=grp_10days)
+col_p10_1     = input.color(color.new(#1f77b4, 0), "", inline="p10_1", group=grp_10days)
+
+show_p10_2    = input.bool(true, "Day 2", inline="p10_2", group=grp_10days)
+col_p10_2     = input.color(color.new(#ff7f0e, 0), "", inline="p10_2", group=grp_10days)
+
+show_p10_3    = input.bool(true, "Day 3", inline="p10_3", group=grp_10days)
+col_p10_3     = input.color(color.new(#2ca02c, 0), "", inline="p10_3", group=grp_10days)
+
+show_p10_4    = input.bool(true, "Day 4", inline="p10_4", group=grp_10days)
+col_p10_4     = input.color(color.new(#d62728, 0), "", inline="p10_4", group=grp_10days)
+
+show_p10_5    = input.bool(true, "Day 5", inline="p10_5", group=grp_10days)
+col_p10_5     = input.color(color.new(#9467bd, 0), "", inline="p10_5", group=grp_10days)
+
+show_p10_6    = input.bool(true, "Day 6", inline="p10_6", group=grp_10days)
+col_p10_6     = input.color(color.new(#8c564b, 0), "", inline="p10_6", group=grp_10days)
+
+show_p10_7    = input.bool(true, "Day 7", inline="p10_7", group=grp_10days)
+col_p10_7     = input.color(color.new(#e377c2, 0), "", inline="p10_7", group=grp_10days)
+
+show_p10_8    = input.bool(true, "Day 8", inline="p10_8", group=grp_10days)
+col_p10_8     = input.color(color.new(#7f7f7f, 0), "", inline="p10_8", group=grp_10days)
+
+show_p10_9    = input.bool(true, "Day 9", inline="p10_9", group=grp_10days)
+col_p10_9     = input.color(color.new(#bcbd22, 0), "", inline="p10_9", group=grp_10days)
+
+show_p10_10   = input.bool(true, "Day 10", inline="p10_10", group=grp_10days)
+col_p10_10    = input.color(color.new(#17becf, 0), "", inline="p10_10", group=grp_10days)
+
 // ── 4. Prev Day OHLC Plotting ────────────────────────────────────────────────
 grp_ohlc      = "═══ Prev Day OHLC Plotting ═══"
 show_pdh      = input.bool(true, "Prev Day High", inline="pdh", group=grp_ohlc)
@@ -733,5 +769,20 @@ if barstate.islast
             if show_curr_lbl
                 array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, vp_price, "VPOC: " + str.tostring(vp_price, format.mintick), color=color.new(col_vpoc, 20), textcolor=color.white, style=label.style_label_center, size=size.tiny))
 
-
-
+    // ── Previous 10 Days POC Lines (Extended to Current Day) ────────────────
+    if show_10days_poc
+        // Array of show toggles and colors for each day
+        show_array = array.from(show_p10_1, show_p10_2, show_p10_3, show_p10_4, show_p10_5, show_p10_6, show_p10_7, show_p10_8, show_p10_9, show_p10_10)
+        col_array = array.from(col_p10_1, col_p10_2, col_p10_3, col_p10_4, col_p10_5, col_p10_6, col_p10_7, col_p10_8, col_p10_9, col_p10_10)
+        
+        // Draw POC lines for each of the 10 previous days
+        for day_idx = 1 to 10
+            if day_idx < MAX_DAYS
+                float poc_price = array.get(s_poc, day_idx)
+                if not na(poc_price) and array.get(show_array, day_idx - 1)
+                    int sbar_s = nz(array.get(s_start, day_idx), bar_index)
+                    // Extend to current day (right edge of current bar)
+                    array.push(drawn_lines, line.new(sbar_s, poc_price, bar_index + curr_lbl_off, poc_price, color=array.get(col_array, day_idx - 1), style=line.style_dashed, width=w_10days_poc))
+                    // Add label for each POC line
+                    if show_curr_lbl
+                        array.push(drawn_labels, label.new(bar_index + curr_lbl_off + 1, poc_price, "D" + str.tostring(day_idx) + " POC: " + str.tostring(poc_price, format.mintick), color=array.get(col_array, day_idx - 1), textcolor=color.white, style=label.style_label_center, size=size.tiny))

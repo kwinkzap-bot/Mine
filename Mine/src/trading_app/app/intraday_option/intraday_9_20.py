@@ -784,6 +784,9 @@ class Intraday920Strategy:
         """
         Get the latest 5-minute candle for a token.
         
+        Uses a wider 10-minute fetch window and retry logic to handle Kite API
+        delay in publishing newly closed candles (typically 10-30 seconds after candle close).
+        
         Args:
             token: Instrument token
             target_date: Optional date to fetch from
@@ -791,6 +794,8 @@ class Intraday920Strategy:
         Returns:
             List of candles (latest first)
         """
+        import time as time_module
+        
         try:
             if target_date is None:
                 target_date = datetime.now()
@@ -800,9 +805,9 @@ class Intraday920Strategy:
             end_minute = (end_time.minute // 5) * 5
             end_time = end_time.replace(minute=end_minute)
 
-            # If we're exactly on the boundary, use the candle that just closed
-            # Otherwise, still use the last fully closed candle
-            start_time = end_time - timedelta(minutes=5)
+            # Fetch a wider 10-minute window to ensure we get at least one complete candle
+            # even if timing is slightly off
+            start_time = end_time - timedelta(minutes=10)
             
             logger.info(f"Fetching candles from {start_time} to {end_time} for token {token}")
             
@@ -813,7 +818,26 @@ class Intraday920Strategy:
                 to_date=end_time
             )
             
-            return candles if candles else []
+            if candles:
+                return candles
+            
+            # Retry once after 5 seconds — Kite API may not have the newly closed candle yet
+            logger.warning(f"No candles found for token {token} on first attempt, retrying in 5s...")
+            time_module.sleep(5)
+            
+            candles = self.data_service.get_candlestick_data(
+                token,
+                interval='5minute',
+                from_date=start_time,
+                to_date=end_time
+            )
+            
+            if candles:
+                logger.info(f"✅ Got {len(candles)} candles for token {token} on retry")
+                return candles
+            
+            logger.warning(f"❌ Still no candles for token {token} after retry")
+            return []
             
         except Exception as e:
             logger.warning(f"Error fetching latest candle for token {token}: {str(e)}")

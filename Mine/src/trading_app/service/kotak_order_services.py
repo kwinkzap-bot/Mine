@@ -1183,22 +1183,24 @@ class KotakOrderService:
             
             modify_params = {
                 'order_id': order_id,
-                'order_type': 'MKT', # Default fallback, ideally should know original
                 'validity': 'DAY'
             }
             
             if price is not None:
                 modify_params['price'] = str(price)
-                modify_params['order_type'] = 'L' # Ensure it's Limit if price is sent
+                if trigger_price is not None:
+                    modify_params['order_type'] = 'SL'  # Stop Loss Limit (price + trigger)
+                else:
+                    modify_params['order_type'] = 'L'  # Limit order
+            elif trigger_price is not None:
+                modify_params['trigger_price'] = str(trigger_price)
+                modify_params['order_type'] = 'SL-M'  # Stop Loss Market (trigger only)
+            else:
+                # Only quantity change - don't override order_type
+                pass
             
             if quantity is not None:
-                modify_params['quantity'] = str(quantity)
-                
-            if trigger_price is not None:
-                modify_params['trigger_price'] = str(trigger_price)
-                if not price:
-                    # If trigger but no price, assume SL-M
-                    modify_params['order_type'] = 'SL-M' 
+                modify_params['quantity'] = str(quantity) 
             
             modify_response = self.client.modify_order(**modify_params)
             

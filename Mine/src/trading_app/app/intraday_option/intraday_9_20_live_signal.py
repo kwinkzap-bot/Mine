@@ -74,7 +74,7 @@ def safe_float(value: Any, default: float = DEFAULT_PRICE) -> float:
     try:
         if isinstance(value, str):
             return float(value)
-        elif value:
+        elif value is not None:
             return float(value)
     except (ValueError, TypeError):
         pass
@@ -549,21 +549,31 @@ class Intraday920LiveSignal:
     def should_check_entry_signal(self) -> bool:
         """
         Determine if we should check for ENTRY signals now.
-        Returns True only at 5-minute marks (9:15, 9:20, 9:25, ..., 3:15, 3:20).
+        Returns True only at 5-minute marks (9:20, 9:25, ..., 3:15, 3:20).
         
         Uses last_entry_check_time to ensure each 5-minute interval is checked exactly once,
         preventing missed checks after hour boundaries or during processing delays.
+        
+        IMPORTANT: Waits until 15 seconds past the 5-minute boundary before triggering.
+        This gives the Kite historical API time to publish the newly closed candle.
+        Without this delay, fetching at 09:20:01 often returns empty data because the
+        9:15-9:20 candle hasn't been published yet (typically takes 10-30s).
         
         Entry signals checked only at 5-minute intervals.
         SL/Target checks happen every 30 seconds.
         
         Returns:
-            True if we're at a 5-minute mark AND haven't checked this interval yet
+            True if we're at a 5-minute mark, past the grace period, AND haven't checked this interval yet
         """
         now = datetime.now()
         
         # Check if we're at a 5-minute mark (minute divisible by 5)
         if now.minute % 5 != 0:
+            return False
+        
+        # Grace period: wait 15 seconds past the boundary so the Kite API
+        # has time to publish the closed candle
+        if now.second < 15:
             return False
         
         # Calculate current 5-minute interval (e.g., 14:00, 14:05, 14:10)
@@ -576,7 +586,7 @@ class Intraday920LiveSignal:
         
         return False
     
-    async def fetch_live_data(self) -> Dict[str, Any]:
+    def fetch_live_data(self) -> Dict[str, Any]:
         """
         Fetch live market data for CE/PE strikes.
         
@@ -864,11 +874,11 @@ class Intraday920LiveSignal:
                     
                     # Place SL order on broker only if entry order succeeded
                     sl_order_id = None
+                    extra_sl_ids = {}  # Always initialize before SL logic
                     if order_id and self.live_trading and strike_data and ce_strike:
                         try:
                             # Get lot size for this symbol (same as entry order quantity)
                             entry_quantity = self.kite_service.get_lot_size(self.symbol)
-                            extra_sl_ids = {}  # Always initialize before SL logic
                             # Get option trading symbol for SL order
                             option_symbol = self._get_option_symbol(self.symbol, ce_strike, 'CE')
                             if option_symbol:
@@ -941,7 +951,7 @@ class Intraday920LiveSignal:
                             'entry_time': datetime.now().isoformat(),
                             'order_id': order_id,
                             'sl_order_id': sl_order_id,  # Track SL order ID for modifications
-                            'extra_sl_ids': extra_sl_ids if 'extra_sl_ids' in locals() else {}, # Track SL IDs for other brokers
+                            'extra_sl_ids': extra_sl_ids, # Track SL IDs for other brokers
                             'token': strike_data.get('ce_token') if strike_data else None,  # type: ignore
                             'strike': ce_strike if strike_data else None,
                             'status': 'OPEN',
@@ -995,6 +1005,7 @@ class Intraday920LiveSignal:
                     
                     # Place SL order on broker only if entry order succeeded
                     sl_order_id = None
+                    extra_sl_ids = {}  # Always initialize before SL logic
                     if order_id and self.live_trading and strike_data and pe_strike:
                         try:
                             # Get lot size for this symbol (same as entry order quantity)
@@ -1012,7 +1023,6 @@ class Intraday920LiveSignal:
                                 )
                                 
                                 # --- Multi-Broker SL Order ---
-                                extra_sl_ids = {}
                                 if self.extra_brokers and self.live_trading:
                                     logger.info(f"⚡ Placing COPY SL orders on {len(self.extra_brokers)} extra brokers...")
                                     
@@ -1076,7 +1086,7 @@ class Intraday920LiveSignal:
                             'entry_time': datetime.now().isoformat(),
                             'order_id': order_id,
                             'sl_order_id': sl_order_id,  # Track SL order ID for modifications
-                            'extra_sl_ids': extra_sl_ids if 'extra_sl_ids' in locals() else {}, # Track SL IDs for other brokers
+                            'extra_sl_ids': extra_sl_ids, # Track SL IDs for other brokers
                             'token': strike_data.get('pe_token') if strike_data else None,  # type: ignore
                             'strike': pe_strike if strike_data else None,
                             'status': 'OPEN',
@@ -1791,8 +1801,20 @@ class Intraday920LiveSignal:
                         # Sort by expiry and return the nearest one
                         candidates.sort(key=lambda x: x[0])
                         
-                        # Prefer weekly/special expiries (exclude 24th - monthly expiry)
-                        weekly_candidates = [(exp, sym) for exp, sym in candidates if exp.day != 24]
+                        # Prefer weekly expiries (exclude monthly expiry = last Thursday of month)
+                        import calendar
+                        def is_monthly_expiry(exp_date):
+                            """Check if date is the last Thursday of its month."""
+                            year, month = exp_date.year, exp_date.month
+                            # Find last day of month, walk backwards to find last Thursday (weekday=3)
+                            last_day = calendar.monthrange(year, month)[1]
+                            from datetime import date as date_type
+                            for d in range(last_day, last_day - 7, -1):
+                                if date_type(year, month, d).weekday() == 3:  # Thursday
+                                    return exp_date.day == d
+                            return False
+                        
+                        weekly_candidates = [(exp, sym) for exp, sym in candidates if not is_monthly_expiry(exp)]
                         candidates_to_use = weekly_candidates if weekly_candidates else candidates
                         
                         nearest_expiry, trading_symbol = candidates_to_use[0]
@@ -2280,10 +2302,11 @@ class Intraday920LiveSignal:
             )
             
             # --- Multi-Broker EXIT Order ---
+            # NOTE: SL cancellation is handled by _cancel_pending_sl_orders() which is
+            # always called by the caller (check_sl_target/market_close) before this method.
             if self.extra_brokers and self.live_trading:
                 logger.info(f"⚡ Placing COPY EXIT orders on {len(self.extra_brokers)} extra brokers...")
                 
-                # 1. Place Market Exit
                 for broker_name, service in self.extra_brokers.items():
                     try:
                         threading.Thread(
@@ -2294,31 +2317,6 @@ class Intraday920LiveSignal:
                         ).start()
                     except Exception as e:
                         logger.error(f"Failed to trigger {broker_name} exit order: {e}")
-                
-                # 2. Cancel Pending SL Orders
-                try:
-                    trade = self.active_trades.get(side)
-                    if trade and trade.get('extra_sl_ids'):
-                        logger.info(f"Cancelling pending SL orders for {side}...")
-                        for b_name, b_sl_id in trade['extra_sl_ids'].items():
-                            if b_name in self.extra_brokers:
-                                try:
-                                    service_obj = self.extra_brokers[b_name]
-                                    # Call cancel generic or specific?
-                                    # Services usually have cancel_order(order_id)
-                                    if hasattr(service_obj, 'cancel_order'):
-                                        threading.Thread(
-                                            target=service_obj.cancel_order,
-                                            args=(b_sl_id,),
-                                            name=f"CancelSL-{b_name}",
-                                            daemon=True
-                                        ).start()
-                                    else:
-                                        logger.warning(f"[{b_name}] No cancel_order method found")
-                                except Exception as e:
-                                    logger.error(f"Failed to cancel {b_name} SL {b_sl_id}: {e}")
-                except Exception as e:
-                    logger.error(f"Error coordinating SL cancellation: {e}")
             # -------------------------------
             
             if result['success']:
@@ -2712,6 +2710,9 @@ class Intraday920LiveSignal:
                                         # Place SELL order to close the position
                                         try:
                                             if strike and current_price:
+                                                # Cancel pending SL orders before placing market sell
+                                                self._cancel_pending_sl_orders(trade, side)
+                                                
                                                 sell_order_id = self.place_sell_order(
                                                     side=side,
                                                     strike=strike,
