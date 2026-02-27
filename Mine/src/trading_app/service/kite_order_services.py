@@ -588,7 +588,24 @@ class KiteService:
             if matching_instruments:
                 # Sort by expiry and get the nearest
                 matching_instruments.sort(key=lambda x: x['expiry'])
-                tradingsymbol = matching_instruments[0]['tradingsymbol']
+                
+                # Prefer weekly/special expiries over monthly expiries
+                # Weekly: Thursdays, Special Mondays like March 2
+                # Monthly: 24th of months (avoid these)
+                from datetime import datetime as dt_class
+                weekly_instruments = []
+                for inst in matching_instruments:
+                    exp = inst['expiry']
+                    if hasattr(exp, 'date'):
+                        exp = exp.date()
+                    # Exclude 24th (monthly expiry)
+                    if exp.day != 24:
+                        weekly_instruments.append(inst)
+                
+                # Use weekly if available, otherwise fall back to all matches
+                instruments_to_use = weekly_instruments if weekly_instruments else matching_instruments
+                
+                tradingsymbol = instruments_to_use[0]['tradingsymbol']
                 # Cache the result for future lookups
                 self._nfo_option_symbol_cache[cache_key] = tradingsymbol
                 logging.debug(f"Found option symbol: {tradingsymbol} for {symbol} {option_type} {strike}")
@@ -619,7 +636,22 @@ class KiteService:
                             matching_instruments.append(inst)
                 if matching_instruments:
                     matching_instruments.sort(key=lambda x: x['expiry'])
-                    tradingsymbol = matching_instruments[0]['tradingsymbol']
+                    
+                    # Prefer weekly/special expiries over monthly expiries
+                    from datetime import date as date_class
+                    weekly_instruments = []
+                    for inst in matching_instruments:
+                        exp = inst['expiry']
+                        if hasattr(exp, 'date'):
+                            exp = exp.date()
+                        # Exclude 24th (monthly expiry)
+                        if exp.day != 24:
+                            weekly_instruments.append(inst)
+                    
+                    # Use weekly if available, otherwise fall back to all matches
+                    instruments_to_use = weekly_instruments if weekly_instruments else matching_instruments
+                    
+                    tradingsymbol = instruments_to_use[0]['tradingsymbol']
                     self._nfo_option_symbol_cache[cache_key] = tradingsymbol
                     logging.info(f"[KiteService] Found option after refresh: {tradingsymbol}")
                     return tradingsymbol

@@ -1010,26 +1010,33 @@ def get_cpr_filter_results() -> EndpointResponse:
         
         from trading_app.filters.cpr_filter import CPRFilterService
         
-        logger.info(f"Initializing CPRFilterService with target date: {target_date if target_date else 'current'}")
+        # logger.info(f"Initializing CPRFilterService with target date: {target_date if target_date else 'current'}")
         cpr_service = CPRFilterService(kite_instance=current_kite)
         
-        logger.info("Starting CPR filter stocks processing...")
+        # logger.info("Starting CPR filter stocks processing...")
         results = cpr_service.filter_cpr_stocks(root_date=target_date)
         
         signals = results.get('signals', []) if isinstance(results, dict) else []
         weekly_cross = results.get('weekly_cross', {}) if isinstance(results, dict) else {}
         reversal = results.get('reversal', {}) if isinstance(results, dict) else {}
         high_iv_stocks = results.get('high_iv_stocks', []) if isinstance(results, dict) else []
+        
+        # FILTER RESPONSE DATA before sending to frontend
+        # Apply any data validation/filtering here if needed
+        signals = signals if isinstance(signals, list) else []
+        weekly_cross = weekly_cross if isinstance(weekly_cross, dict) else {}
+        reversal = reversal if isinstance(reversal, dict) else {}
+        high_iv_stocks = high_iv_stocks if isinstance(high_iv_stocks, list) else []
 
-        logger.info(
-            "CPR filter completed. "
-            f"Found {len(signals)} primary signals, "
-            f"{len(weekly_cross.get('crossed_above', [])) if isinstance(weekly_cross, dict) else 0} crossed above weekly CPR, "
-            f"{len(weekly_cross.get('crossed_below', [])) if isinstance(weekly_cross, dict) else 0} crossed below weekly CPR, "
-            f"{len(reversal.get('bullish', [])) if isinstance(reversal, dict) else 0} bullish reversal, "
-            f"{len(reversal.get('bearish', [])) if isinstance(reversal, dict) else 0} bearish reversal, "
-            f"{len(high_iv_stocks)} high IV percentile."
-        )
+        # logger.info(
+        #     "CPR filter completed. "
+        #     f"Found {len(signals)} primary signals, "
+        #     f"{len(weekly_cross.get('crossed_above', [])) if isinstance(weekly_cross, dict) else 0} crossed above weekly CPR, "
+        #     f"{len(weekly_cross.get('crossed_below', [])) if isinstance(weekly_cross, dict) else 0} crossed below weekly CPR, "
+        #     f"{len(reversal.get('bullish', [])) if isinstance(reversal, dict) else 0} bullish reversal, "
+        #     f"{len(reversal.get('bearish', [])) if isinstance(reversal, dict) else 0} bearish reversal, "
+        #     f"{len(high_iv_stocks)} high IV percentile."
+        # )
         return jsonify({
             'success': True, 
             'data': signals, 
@@ -2522,6 +2529,85 @@ def place_intraday_920_order() -> EndpointResponse:
                 
                 if result['success']:
                     logger.info(f"Dhan - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
+                    # Debug why SL block may not trigger
+                    logger.info(f"[Dhan-SL] DEBUG: action='{action}', action=='BUY'={action == 'BUY'}, result['success']={result['success']}, type={type(action)}")
+                    if action != 'BUY':
+                        logger.error(f"[Dhan-SL] SL block skipped: action='{action}' (should be 'BUY')")
+                    if not result['success']:
+                        logger.error(f"[Dhan-SL] SL block skipped: entry order not successful")
+                    # **AUTO-PLACE SL ORDER** - If BUY order was successful
+                    if action == 'BUY':
+                        try:
+                            # 1. Try Dhan fill price
+                            entry_price = result.get('price', 0)
+                            # 2. If not available, fetch LTP from Kite
+                            if not entry_price or entry_price == 0:
+                                logger.warning(f"[Dhan-SL] Entry price from Dhan response is zero. Attempting to fetch LTP from Kite.")
+                                try:
+                                    kite = get_kite()
+                                    from trading_app.service.kite_order_services import KiteService
+                                    kite_service = KiteService(kite_instance=kite)
+                                    option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+                                    ltp = None
+                                    if kite and option_symbol:
+                                        ltp_data = kite.ltp([f'NSE:{option_symbol}'])
+                                        ltp = ltp_data.get(f'NSE:{option_symbol}', {}).get('last_price', 0)
+                                        if ltp and ltp > 0:
+                                            entry_price = ltp
+                                            logger.info(f"[Dhan-SL] Got LTP from Kite: {ltp}")
+                                except Exception as e:
+                                    logger.error(f"[Dhan-SL] Failed to fetch LTP from Kite: {e}")
+                            # 3. If still not available, fallback to strike, but ensure SL trigger is below LTP
+                            if not entry_price or entry_price == 0:
+                                logger.warning(f"[Dhan-SL] Could not get entry price from Dhan or Kite. Using strike as fallback.")
+                                entry_price = strike
+                                # Try to get LTP for safety margin
+                                ltp = None
+                                try:
+                                    kite = get_kite()
+                                    from trading_app.service.kite_order_services import KiteService
+                                    kite_service = KiteService(kite_instance=kite)
+                                    option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+                                    if kite and option_symbol:
+                                        ltp_data = kite.ltp([f'NSE:{option_symbol}'])
+                                        ltp = ltp_data.get(f'NSE:{option_symbol}', {}).get('last_price', 0)
+                                except Exception as e:
+                                    logger.error(f"[Dhan-SL] Could not fetch LTP for safety margin: {e}")
+                                # If LTP is available and strike is above LTP, set SL just below LTP
+                                if ltp and ltp > 0 and entry_price > ltp:
+                                    entry_price = ltp
+                                    logger.info(f"[Dhan-SL] Adjusted entry price to LTP for SL safety: {ltp}")
+                            # Now set SL trigger price
+                            sl_price = entry_price - 20
+                            # Dhan requires trigger price < price for SL SELL (for BUY order)
+                            # Ensure sl_price < entry_price
+                            if sl_price >= entry_price:
+                                sl_price = entry_price - 1
+                                logger.warning(f"[Dhan-SL] Adjusted SL trigger to be below entry price: {sl_price}")
+                            logger.info(f"[Dhan-SL] Auto-placing SL order: Entry={entry_price:.2f}, SL Trigger={sl_price:.2f}")
+                            # Place SL order using Dhan service
+                            sl_result = dhan_service.place_stoploss_order(
+                                security_id=security_id,
+                                trigger_price=sl_price,
+                                quantity=order_quantity,
+                                product_type='INTRADAY',
+                                exchange_segment='NSE_FNO',
+                                entry_price=entry_price
+                            )
+                            logger.info(f"[Dhan-SL] SL order result: {sl_result}")
+                            if sl_result['success']:
+                                logger.info(f"✅ [Dhan] SL order auto-placed: {kite_option_symbol} @ Trigger {sl_price:.2f} | SL Order ID: {sl_result.get('order_id')}")
+                                result['sl_order_id'] = sl_result.get('order_id')
+                                result['sl_trigger_price'] = sl_price
+                                result['sl_success'] = True
+                            else:
+                                logger.error(f"❌ [Dhan] SL order auto-placement failed: {sl_result.get('error')}")
+                                result['sl_success'] = False
+                                result['sl_error'] = sl_result.get('error', 'Unknown error')
+                        except Exception as e:
+                            logger.error(f"[Dhan-SL] Exception while auto-placing SL: {e}", exc_info=True)
+                            result['sl_success'] = False
+                            result['sl_error'] = str(e)
                     return jsonify(result), 200
                 else:
                     logger.warning(f"Dhan - Order placement failed: {result.get('error')}")

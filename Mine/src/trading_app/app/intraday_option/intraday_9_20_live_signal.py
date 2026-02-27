@@ -868,7 +868,7 @@ class Intraday920LiveSignal:
                         try:
                             # Get lot size for this symbol (same as entry order quantity)
                             entry_quantity = self.kite_service.get_lot_size(self.symbol)
-                            
+                            extra_sl_ids = {}  # Always initialize before SL logic
                             # Get option trading symbol for SL order
                             option_symbol = self._get_option_symbol(self.symbol, ce_strike, 'CE')
                             if option_symbol:
@@ -879,12 +879,9 @@ class Intraday920LiveSignal:
                                     quantity=entry_quantity,
                                     product='NRML'
                                 )
-                                
                                 # --- Multi-Broker SL Order ---
-                                extra_sl_ids = {}
                                 if self.extra_brokers and self.live_trading:
                                     logger.info(f"⚡ Placing COPY SL orders on {len(self.extra_brokers)} extra brokers...")
-                                    
                                     with ThreadPoolExecutor(max_workers=3) as executor:
                                         futures = {
                                             executor.submit(
@@ -892,7 +889,6 @@ class Intraday920LiveSignal:
                                                 name, service, 'CE', ce_strike, ce_signal.get('sl')
                                             ): name for name, service in self.extra_brokers.items()
                                         }
-                                        
                                         for future in futures:
                                             try:
                                                 result = future.result(timeout=5)
@@ -1143,41 +1139,30 @@ class Intraday920LiveSignal:
                 pe_high=pe_high,
                 symbol=self.symbol
             )
-            
             return signals
             
         except Exception as e:
-            logger.error(f"Error checking entry signals: {str(e)}")
-            return {'success': False, 'error': str(e), 'timestamp': datetime.now().isoformat()}
-    
+            logger.error(f"Error checking live entry signals: {e}", exc_info=True)
+            return {'ce': None, 'pe': None}
+
     def place_buy_order(self, side: str, token: int, strike: int, entry_price: float, 
-                        transaction_type: str = 'BUY') -> Optional[str]:
+                      transaction_type: str = 'BUY') -> Optional[str]:
         """
-        Place a buy order for CE or PE option when entry signal detected.
-        
-        Generic method that delegates to KiteService.place_option_order():
-        1. Looks up the option trading symbol
-        2. Fetches current market price
-        3. Places market order via broker service
-        
-        Logs order placement to Excel Trade sheet.
+        Place a buy order for CE or PE option.
         
         Args:
             side: 'CE' or 'PE'
-            token: Option token (unused but kept for compatibility)
+            token: Instrument token
             strike: Strike price
-            entry_price: Entry price from signal
-            transaction_type: 'BUY' or 'SELL' (default: 'BUY')
+            entry_price: Target entry price (for logging)
+            transaction_type: 'BUY' (default) or 'SELL'
             
         Returns:
             Order ID or None if failed
         """
-        logger.info(f"place_buy_order called: {side} {strike} @ {entry_price:.2f} (live_trading={self.live_trading})")
+        logger.info(f"place_buy_order called: {transaction_type} {side} {strike} @ {entry_price:.2f} (live_trading={self.live_trading})")
         
         if not self.live_trading:
-            demo_msg = f"DEMO: {transaction_type} {side} {strike} @ {entry_price:.2f}"
-            logger.info(demo_msg)
-            
             # Log DEMO order placement
             log_order_placement({
                 'symbol': self.symbol,
@@ -1191,7 +1176,6 @@ class Intraday920LiveSignal:
                 'sl': 'N/A',
                 'target': 'N/A'
             })
-            
             return "DEMO_ORDER"
         
         try:
@@ -1202,6 +1186,7 @@ class Intraday920LiveSignal:
             }
             transaction_type_const = transaction_type_map.get(transaction_type, self.kite.TRANSACTION_TYPE_BUY)
             
+            # 1. Place order on Kite (Primary Broker)
             result = self.kite_service.place_option_order(
                 symbol=self.symbol,
                 strike=strike,
@@ -1209,7 +1194,7 @@ class Intraday920LiveSignal:
                 transaction_type=transaction_type_const
             )
             
-            # --- Multi-Broker Order Placement ---
+            # 2. Place COPY orders on Extra Brokers
             if self.extra_brokers and self.live_trading:
                 logger.info(f"⚡ Placing COPY orders on {len(self.extra_brokers)} extra brokers...")
                 for broker_name, service in self.extra_brokers.items():
@@ -1221,8 +1206,7 @@ class Intraday920LiveSignal:
                             daemon=True
                         ).start()
                     except Exception as e:
-                        logger.error(f"Failed to trigger {broker_name} order: {e}")
-            # ------------------------------------
+                        logger.error(f"Failed to trigger {broker_name} copy order: {e}")
             
             if result['success']:
                 logger.info(f"✅ {transaction_type} Order placed successfully. Order ID: {result['order_id']} | {side} {strike} @ {entry_price:.2f}")
@@ -1244,7 +1228,7 @@ class Intraday920LiveSignal:
                 
                 return result['order_id']
             else:
-                logger.error(f"❌ {transaction_type} Order failed: {result['error']}")
+                logger.error(f"❌ {transaction_type} Order failed on Kite: {result['error']}")
                 
                 # Log failed live order placement
                 log_order_placement({
@@ -1264,7 +1248,7 @@ class Intraday920LiveSignal:
                 return None
                 
         except Exception as e:
-            logger.error(f"Error placing BUY order for {side} {strike}: {e}", exc_info=True)
+            logger.error(f"Exception in place_buy_order for {side} {strike}: {e}", exc_info=True)
             
             # Log exception during order placement
             log_order_placement({
@@ -1282,6 +1266,7 @@ class Intraday920LiveSignal:
             })
             
             return None
+
     
     def get_current_prices(self, tokens: List[int]) -> Dict[int, Optional[float]]:
         """
@@ -1321,16 +1306,48 @@ class Intraday920LiveSignal:
         try:
             qty = self.kite_service.get_lot_size(self.symbol)
             txn_type = 'BUY' if transaction_type == 'BUY' else 'SELL'
-            
             logger.info(f"⚡ [{broker_name}] Attempting {txn_type} {side} {strike} x {qty}...")
-
             response = None
-            
+            # Credential checks
+            if broker_name == 'DHAN':
+                if not getattr(service, 'access_token', None) or not getattr(service, 'client_id', None):
+                    logger.error(f"❌ [{broker_name}] Missing or expired credentials. Skipping order.")
+                    excel_logger.log_trade(
+                        order_type=txn_type,
+                        option_type=side,
+                        strike=strike,
+                        entry_price=0,
+                        status='FAILED',
+                        notes=f'[{broker_name}] Order Failed: Missing or expired credentials.'
+                    )
+                    return
+            if broker_name == 'FYERS':
+                if not getattr(service, 'access_token', None) or not getattr(service, 'app_id', None):
+                    logger.error(f"❌ [{broker_name}] Missing or expired credentials. Skipping order.")
+                    excel_logger.log_trade(
+                        order_type=txn_type,
+                        option_type=side,
+                        strike=strike,
+                        entry_price=0,
+                        status='FAILED',
+                        notes=f'[{broker_name}] Order Failed: Missing or expired credentials.'
+                    )
+                    return
             if broker_name == 'KOTAK':
-                # Kotak uses 'B' for BUY and 'S' for SELL
+                if not getattr(service, 'trading_token', None) or not getattr(service, 'base_url', None):
+                    logger.error(f"❌ [{broker_name}] Missing or expired credentials. Skipping order.")
+                    excel_logger.log_trade(
+                        order_type=txn_type,
+                        option_type=side,
+                        strike=strike,
+                        entry_price=0,
+                        status='FAILED',
+                        notes=f'[{broker_name}] Order Failed: Missing or expired credentials.'
+                    )
+                    return
+            # --- Broker-specific order logic ---
+            if broker_name == 'KOTAK':
                 k_txn = 'B' if txn_type == 'BUY' else 'S'
-                
-                # Kotak service handles symbol construction internally
                 response = service.place_option_order(
                     symbol=self.symbol,
                     strike=strike,
@@ -1338,29 +1355,34 @@ class Intraday920LiveSignal:
                     transaction_type=k_txn,
                     quantity=qty
                 )
-            
             elif broker_name == 'DHAN':
-                # Dhan needs numeric security ID for options
                 sec_id = service.get_option_security_id(self.symbol, strike, side)
                 if sec_id:
+                    # Use MARKET for entry order
                     response = service.place_order(
                         security_id=sec_id,
                         transaction_type=txn_type,
                         quantity=qty,
                         order_type='MARKET',
                         product_type='INTRADAY',
-                        exchange_segment='NSE_FNO'
+                        exchange_segment='NSE_FNO',
+                        price=0
                     )
                 else:
                     logger.error(f"❌ [{broker_name}] Could not resolve security ID for {side} {strike}")
+                    excel_logger.log_trade(
+                        order_type=txn_type,
+                        option_type=side,
+                        strike=strike,
+                        entry_price=0,
+                        status='FAILED',
+                        notes=f'[{broker_name}] Order Failed: Could not resolve security ID.'
+                    )
                     return
-
             elif broker_name == 'FYERS':
-                # Fyers needs NSE:SYMBOL format e.g. NSE:NIFTY24JAN21500CE
                 kite_symbol = self._get_option_symbol(self.symbol, strike, side)
                 if kite_symbol:
                     fyers_symbol = f"NSE:{kite_symbol}"
-                    # Fyers side: 1 (Buy), -1 (Sell)
                     f_side = 1 if txn_type == 'BUY' else -1
                     response = service.place_order(
                         symbol=fyers_symbol,
@@ -1371,19 +1393,25 @@ class Intraday920LiveSignal:
                     )
                 else:
                     logger.error(f"❌ [{broker_name}] Could not resolve symbol for {side} {strike}")
+                    excel_logger.log_trade(
+                        order_type=txn_type,
+                        option_type=side,
+                        strike=strike,
+                        entry_price=0,
+                        status='FAILED',
+                        notes=f'[{broker_name}] Order Failed: Could not resolve symbol.'
+                    )
                     return
-
-            # Log result
+            # --- Log result ---
             if response and isinstance(response, dict):
                 order_id_val = response.get('order_id') or response.get('nOrdNo') or response.get('id')
                 if response.get('success') or response.get('stat') == 'Ok' or 'nOrdNo' in response:
                     logger.info(f"✅ [{broker_name}] Order Placed Successfully: {response}")
-                    # Log success to Excel
                     excel_logger.log_trade(
-                        order_type=f'{txn_type}',
+                        order_type=txn_type,
                         option_type=side,
                         strike=strike,
-                        entry_price=price,
+                        entry_price=0,
                         status='SUCCESS',
                         order_id=str(order_id_val) if order_id_val else '',
                         notes=f'[{broker_name}] {txn_type} order placed successfully | Order ID: {order_id_val}'
@@ -1391,35 +1419,31 @@ class Intraday920LiveSignal:
                 else:
                     error_detail = response.get('error') or response.get('message') or response.get('Emsg') or str(response)
                     logger.error(f"❌ [{broker_name}] Order Failed: {response}")
-                    # Log failure to Excel
                     excel_logger.log_trade(
-                        order_type=f'{txn_type}',
+                        order_type=txn_type,
                         option_type=side,
                         strike=strike,
-                        entry_price=price,
+                        entry_price=0,
                         status='FAILED',
                         notes=f'[{broker_name}] {txn_type} Order Failed: {error_detail}'
                     )
             else:
                 logger.error(f"❌ [{broker_name}] Invalid or No Response: {response}")
-                # Log invalid response to Excel
                 excel_logger.log_trade(
-                    order_type=f'{txn_type}',
+                    order_type=txn_type,
                     option_type=side,
                     strike=strike,
-                    entry_price=price,
+                    entry_price=0,
                     status='ERROR',
                     notes=f'[{broker_name}] {txn_type} Order: Invalid or No Response'
                 )
-
         except Exception as e:
             logger.error(f"❌ [{broker_name}] Exception during order placement: {e}", exc_info=True)
-            # Log exception to Excel
             excel_logger.log_trade(
-                order_type=f'{"BUY" if transaction_type == "BUY" else "SELL"}',
+                order_type=txn_type,
                 option_type=side,
                 strike=strike,
-                entry_price=price,
+                entry_price=0,
                 status='ERROR',
                 notes=f'[{broker_name}] Order Exception: {str(e)}'
             )
@@ -1766,7 +1790,12 @@ class Intraday920LiveSignal:
                     if candidates:
                         # Sort by expiry and return the nearest one
                         candidates.sort(key=lambda x: x[0])
-                        nearest_expiry, trading_symbol = candidates[0]
+                        
+                        # Prefer weekly/special expiries (exclude 24th - monthly expiry)
+                        weekly_candidates = [(exp, sym) for exp, sym in candidates if exp.day != 24]
+                        candidates_to_use = weekly_candidates if weekly_candidates else candidates
+                        
+                        nearest_expiry, trading_symbol = candidates_to_use[0]
                         logger.info(f"✅ Found option symbol: {trading_symbol} (expiry: {nearest_expiry}) for {symbol} {strike} {option_type}")
                         return trading_symbol
                     

@@ -185,6 +185,8 @@ const CPRFilterScheduler = (function() {
 })();
 
 // Auto-start scheduler only on the CPR Filter page when user is authenticated
+// COMMENTED OUT - Schedule trigger disabled
+/*
 document.addEventListener('DOMContentLoaded', function() {
     const path = window.location.pathname;
     const isCprFilterPage = path === '/cpr-filter' || path === '/cpr-filter/';
@@ -205,6 +207,7 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log('[CPR Scheduler] Not authenticated, scheduler not started');
         });
 });
+*/
 
 // Clean up on page unload
 window.addEventListener('beforeunload', function() {

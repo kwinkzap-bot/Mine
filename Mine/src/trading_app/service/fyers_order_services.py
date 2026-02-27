@@ -111,9 +111,21 @@ class FyersOrderService:
             Dict with parsed data or error dict
         """
         try:
-            data = response.json()
+            # Clean response text from possible trailing "extra data" (e.g., hidden characters)
+            text = response.text.strip()
+            # If there is extra data after the last closing brace/bracket, truncate it
+            # This is a common issue with some API responses returning junk after JSON
+            last_brace = text.rfind('}')
+            last_bracket = text.rfind(']')
+            max_idx = max(last_brace, last_bracket)
+            if max_idx != -1 and max_idx < len(text) - 1:
+                logging.debug(f"[{method_name}] Truncating extra data after index {max_idx}")
+                text = text[:max_idx + 1]
+            
+            import json
+            data = json.loads(text)
             return data
-        except ValueError as json_err:
+        except (ValueError, json.JSONDecodeError) as json_err:
             logging.error(f"[{method_name}] Failed to parse JSON response: {json_err}")
             logging.error(f"[{method_name}] Response status: {response.status_code}")
             logging.error(f"[{method_name}] Response headers: {dict(response.headers)}")
@@ -754,9 +766,10 @@ class FyersOrderService:
             payload = {
                 "symbol": symbol,
                 "qty": quantity,
-                "type": self.ORDER_TYPE_STOP_LOSS,  # 3 = STOP_LOSS
+                "type": 4,  # 4 = STOP_LOSS_MARKET
                 "side": self.SIDE_SELL,  # -1 = SELL
                 "productType": product_type,
+                "limitPrice": 0,
                 "stopPrice": trigger_price,
                 "validity": "DAY",
                 "disclosedQty": 0,
@@ -766,10 +779,10 @@ class FyersOrderService:
             logging.info(f"[place_stoploss_order] Placing SL order: {symbol} @ {trigger_price:.2f}")
             
             response = requests.post(url, headers=headers, json=payload, timeout=30)
-            data = response.json()
+            data = self._parse_response(response, "place_stoploss_order")
             
             if response.status_code == 200 and data.get('s') == 'ok':
-                order_id = data.get('data', {}).get('id')
+                order_id = data.get('data', {}).get('id') if isinstance(data.get('data'), dict) else data.get('id')
                 if order_id:
                     logging.info(f"✅ SL Order placed: {order_id} | {symbol} @ {trigger_price:.2f}")
                     return {
@@ -822,7 +835,7 @@ class FyersOrderService:
             logging.info(f"[modify_stoploss_order] Modifying SL order {order_id} to {new_trigger_price:.2f}")
             
             response = requests.put(url, headers=headers, json=payload, timeout=30)
-            data = response.json()
+            data = self._parse_response(response, "modify_stoploss_order")
             
             if response.status_code == 200 and data.get('s') == 'ok':
                 logging.info(f"✅ SL Order modified: {order_id} -> Trigger: {new_trigger_price:.2f}")

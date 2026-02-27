@@ -594,7 +594,8 @@ class KotakOrderService:
             order_headers = {
                 "Sid": self.trading_sid,
                 "Auth": self.trading_token,
-                "Content-Type": "application/x-www-form-urlencoded"
+                "Content-Type": "application/x-www-form-urlencoded",
+                "neo-fin-key": self._neo_fin_key if hasattr(self, '_neo_fin_key') else "None",
             }
 
             # Body uses short keys; v2 API sends directly (no jData wrapper)

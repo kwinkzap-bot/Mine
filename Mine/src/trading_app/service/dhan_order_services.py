@@ -152,12 +152,24 @@ class DhanOrderService:
                     if not security_id or not security_id.isdigit():
                         continue
                     
+                    # CRITICAL: Filter for WEEKLY expiries only (W), exclude MONTHLY (M)
+                    # This uses Dhan's official EXPIRY_FLAG column
+                    # Reference: https://dhanhq.co/docs/v2/instruments/#column-description
+                    expiry_flag = row.get('SEM_EXPIRY_FLAG', '').strip()  # W for Weekly, M for Monthly
+                    if expiry_flag != 'W':  # Only accept Weekly expiries
+                        continue
+                    
                     # Get trading symbols
                     dhan_symbol = row.get('SEM_TRADING_SYMBOL', '').strip()  # NIFTY-Mar2026-25550-CE
                     display_name = row.get('SEM_CUSTOM_SYMBOL', '').strip()  # NIFTY 02 MAR 25550 CALL
                     
                     if not dhan_symbol:
                         continue
+                    
+                    # Extract underlying symbol (e.g., "NIFTY" from "NIFTY-Mar2026-25550-CE")
+                    # Get from SM_SYMBOL_NAME or extract from dhan_symbol
+                    symbol_name = row.get('SM_SYMBOL_NAME', '').strip()
+                    underlying = symbol_name.split()[0] if symbol_name else 'NIFTY'  # Default to NIFTY
                     
                     # Extract option details for Kite format conversion
                     strike = row.get('SEM_STRIKE_PRICE', '0').strip()
@@ -184,6 +196,15 @@ class DhanOrderService:
                             for fmt in [kite_text_format, kite_numeric_format, dhan_symbol]:
                                 if fmt:
                                     symbol_dict[fmt] = security_id
+                            
+                            # CRITICAL: Also store with proper spacing format used in CSV lookups
+                            # Dhan CSV format: "NIFTY 02MAR26 25550 CE" (with spaces)
+                            strike_clean = strike.split('.')[0] if strike else ''
+                            # Build: NIFTY 02MAR26 25550 CE
+                            spaced_format = f"{underlying} {day}{month_short}{year_short} {strike_clean} {opt_type}"
+                            if spaced_format:
+                                symbol_dict[spaced_format] = security_id
+                                logging.debug(f"Stored spaced format: {spaced_format} -> {security_id}")
                                     
                         except Exception as e:
                             logging.debug(f"Could not convert expiry for {dhan_symbol}: {e}")
@@ -547,7 +568,8 @@ class DhanOrderService:
     
     def place_stoploss_order(self, security_id: str, trigger_price: float, 
                             quantity: int, product_type: str = 'INTRADAY',
-                            exchange_segment: str = 'NSE_FNO') -> Dict[str, Any]:
+                            exchange_segment: str = 'NSE_FNO', price: float = 0.0,
+                            entry_price: float = 0.0) -> Dict[str, Any]:
         """
         Place a stop loss (sell) order on Dhan platform.
         
@@ -556,10 +578,12 @@ class DhanOrderService:
         
         Args:
             security_id: Exchange standard ID for the scrip
-            trigger_price: SL trigger price
+            trigger_price: SL trigger price (price at which SL is activated)
             quantity: Order quantity
-            product_type: 'INTRADAY', 'CNC', 'MARGIN', etc.
-            exchange_segment: 'NSE_EQ', 'NSE_FNO', 'BSE_EQ', 'BSE_FNO'
+            product_type: 'INTRADAY', 'CNC', 'MARGIN', etc. (default: INTRADAY)
+            exchange_segment: 'NSE_EQ', 'NSE_FNO', 'BSE_EQ', 'BSE_FNO' (default: NSE_FNO)
+            price: Execution price (optional, used for STOP_LOSS limit orders)
+            entry_price: Entry price for calculating SL limit price
             
         Returns:
             Dict with success status, order_id, and details
@@ -577,42 +601,55 @@ class DhanOrderService:
                 "Content-Type": "application/json"
             }
             
+            # Use STOP_LOSS with limit price equal to trigger price
+            # When price drops to trigger_price, sell at trigger_price or better
+            # Example: Entry 200 → SL trigger 180 → sell at 180 or better
+            limit_price = trigger_price
+            
             payload = {
                 "dhanClientId": self.client_id,
                 "transactionType": self.TRANSACTION_SELL,
                 "exchangeSegment": exchange_segment,
                 "productType": product_type,
-                "orderType": self.ORDER_TYPE_STOP_LOSS,
+                "orderType": self.ORDER_TYPE_STOP_LOSS,  # STOP_LOSS with limit price
                 "validity": "DAY",
                 "securityId": security_id,
                 "quantity": str(quantity),
-                "price": "",
-                "triggerPrice": str(trigger_price),
+                "price": str(limit_price),  # Limit price when trigger activates
+                "triggerPrice": str(trigger_price),  # Trigger price to activate the order
                 "disclosedQuantity": "",
                 "afterMarketOrder": False
             }
             
-            logging.info(f"[place_stoploss_order] Placing SL order: {security_id} @ {trigger_price:.2f}")
+            logging.info(f"[place_stoploss_order] Placing SL order: security_id={security_id}, "
+                        f"trigger_price={trigger_price:.2f}, limit_price={limit_price:.4f}, "
+                        f"qty={quantity}, order_type=STOP_LOSS")
+            logging.info(f"[place_stoploss_order] Full payload: {payload}")
             
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             data = response.json()
             
+            logging.info(f"[place_stoploss_order] Response status: {response.status_code}, data: {data}")
+            
             if response.status_code == 200 or response.status_code == 201:
-                order_id = data.get('data', {}).get('orderId')
+                # Check both possible response structures
+                order_id = data.get('orderId') or data.get('data', {}).get('orderId')
                 if order_id:
-                    logging.info(f"✅ SL Order placed: {order_id} | {security_id} @ {trigger_price:.2f}")
+                    logging.info(f"✅ SL Order placed: {order_id} | {security_id} @ Trigger {trigger_price:.2f}, Limit {limit_price:.4f}")
                     return {
                         'success': True,
                         'order_id': order_id,
                         'symbol': security_id,
                         'trigger_price': trigger_price,
+                        'limit_price': limit_price,
                         'quantity': quantity,
-                        'order_type': 'STOPLOSS'
+                        'order_type': 'STOP_LOSS'
                     }
             
-            error_msg = data.get('errorMessage') or data.get('message') or 'Unknown error'
+            error_msg = data.get('errorMessage') or data.get('message') or data.get('error') or 'Unknown error'
             logging.error(f"❌ SL Order failed: {error_msg}")
-            return {'success': False, 'error': error_msg, 'symbol': security_id}
+            logging.error(f"Full response: {data}")
+            return {'success': False, 'error': error_msg, 'symbol': security_id, 'response': data}
             
         except Exception as e:
             logging.error(f"❌ Exception placing SL order: {e}", exc_info=True)
@@ -883,6 +920,112 @@ class DhanOrderService:
             logging.error(f"Error getting lot size for {symbol}: {e}")
             return default_lots.get(symbol, 1)
     
+    def get_nearest_weekly_expiry(self, symbol: str = 'NIFTY') -> 'datetime':
+        """
+        Get the current active expiry date for NSE index options using Kite API.
+        
+        Fetches the actual available expiry from Kite's instruments data rather than hardcoding.
+        This ensures we always get the correct current/next expiry date dynamically.
+        
+        Args:
+            symbol: Symbol like 'NIFTY', 'BANKNIFTY', etc. (default: 'NIFTY')
+        
+        Returns:
+            datetime object of the active expiry for trading
+        """
+        try:
+            from datetime import datetime, timedelta
+            import pandas as pd
+            
+            # Try to use Kite API if available
+            try:
+                from trading_app.service.kite_order_services import KiteService
+                kite_service = KiteService()
+                kite = kite_service.kite
+                
+                if kite:
+                    # Fetch all instruments
+                    instruments = kite.instruments()
+                    df = pd.DataFrame(instruments)
+                    
+                    # Filter for the specified symbol options
+                    symbol_options = df[
+                        (df['name'] == symbol) & 
+                        (df['segment'] == 'NFO-OPT')
+                    ]
+                    
+                    if not symbol_options.empty:
+                        # Get the NEXT expiry (skip current day if it's expiry day)
+                        today = datetime.now().date()
+                        future_expiries = symbol_options[
+                            symbol_options['expiry'].apply(
+                                lambda x: (x.date() if hasattr(x, 'date') else x) > today
+                            )
+                        ]
+                        
+                        if not future_expiries.empty:
+                            nearest_expiry = future_expiries['expiry'].min()
+                            if hasattr(nearest_expiry, 'date'):
+                                nearest_expiry = nearest_expiry.date()
+                            logging.info(f"[get_nearest_weekly_expiry] Fetched from Kite API - Symbol: {symbol}, Expiry: {nearest_expiry}")
+                            return datetime.combine(nearest_expiry, datetime.min.time())
+                        else:
+                            # No future expiries, use minimum available
+                            nearest_expiry = symbol_options['expiry'].min()
+                            if hasattr(nearest_expiry, 'date'):
+                                nearest_expiry = nearest_expiry.date()
+                            logging.info(f"[get_nearest_weekly_expiry] Using current expiry (no future) - Expiry: {nearest_expiry}")
+                            return datetime.combine(nearest_expiry, datetime.min.time())
+                    
+            except Exception as e:
+                logging.debug(f"[get_nearest_weekly_expiry] Could not fetch from Kite API: {e}. Using fallback.")
+            
+            # Fallback: use hardcoded expiry calendar
+            today = datetime.now()
+            current_date = today.date()
+            
+            special_expiries = [
+                datetime(2026, 2, 26).date(),
+                datetime(2026, 3, 2).date(),
+                datetime(2026, 3, 5).date(),
+                datetime(2026, 3, 12).date(),
+                datetime(2026, 3, 19).date(),
+                datetime(2026, 3, 26).date(),
+            ]
+            
+            # Prefer weekly expiries (exclude 24th which is monthly)
+            weekly_expiries = [exp for exp in special_expiries if exp.day != 24]
+            
+            nearest_expiry = None
+            for exp_date in weekly_expiries:
+                if exp_date > current_date:
+                    nearest_expiry = exp_date
+                    break
+            
+            # If no weekly expiry found, fall back to all expiries (including monthly)
+            if not nearest_expiry:
+                for exp_date in special_expiries:
+                    if exp_date > current_date:
+                        nearest_expiry = exp_date
+                        break
+            
+            if nearest_expiry:
+                result = datetime.combine(nearest_expiry, datetime.min.time())
+                logging.info(f"[get_nearest_weekly_expiry] Using hardcoded expiry: {nearest_expiry}")
+                return result
+            
+            # Last fallback: next Thursday
+            days_until_thursday = (3 - today.weekday()) % 7
+            if days_until_thursday == 0:
+                days_until_thursday = 7
+            
+            return today + timedelta(days=days_until_thursday)
+            
+        except Exception as e:
+            logging.error(f"[get_nearest_weekly_expiry] Error: {e}. Using today as fallback.")
+            from datetime import datetime
+            return datetime.now()
+    
     def get_option_security_id(self, symbol: str, strike: int, option_type: str, expiry_date=None) -> str:
         """
         Get the numeric security ID for an option on Dhan.
@@ -928,15 +1071,33 @@ class DhanOrderService:
             from datetime import datetime
             
             if expiry_date:
-                expiry_str = expiry_date.strftime('%y%b').upper()
+                # Format: YYMMM (e.g., "26FEB" for Feb 2026, "26MAR" for Mar 2026)
+                year_yy = expiry_date.strftime('%y')
+                month_text = expiry_date.strftime('%b').upper()
+                expiry_str = f"{year_yy}{month_text}"
             else:
-                now = datetime.now()
-                expiry_str = now.strftime('%y%b').upper()
+                # Get nearest weekly expiry (current or next Thursday)
+                nearest_expiry = self.get_nearest_weekly_expiry(symbol)
+                if nearest_expiry:
+                    # Format: YYMMM (e.g., "26FEB" for Feb 2026, "26MAR" for Mar 2026)
+                    year_yy = nearest_expiry.strftime('%y')
+                    month_text = nearest_expiry.strftime('%b').upper()
+                    expiry_str = f"{year_yy}{month_text}"
+                else:
+                    # Fallback to current date if calculation fails
+                    from datetime import datetime
+                    now = datetime.now()
+                    year_yy = now.strftime('%y')
+                    month_text = now.strftime('%b').upper()
+                    expiry_str = f"{year_yy}{month_text}"
+                    logging.warning(f"[get_option_security_id] Failed to get nearest expiry, using current date: {expiry_str}")
             
             # Try using trading symbol format as security ID
+            # Format: NIFTY26FEB25500CE (SYMBOL + YYMMM + STRIKE + TYPE)
+            # This matches the Kite trading symbol format exactly
             trading_symbol = f"{symbol}{expiry_str}{strike}{option_type}"
             
-            logging.info(f"[get_option_security_id] Mapping {symbol} {strike} {option_type} -> {trading_symbol}")
+            logging.info(f"[get_option_security_id] Using weekly expiry format - Symbol: {symbol}, Expiry: {expiry_str}, Strike: {strike}, Type: {option_type} -> {trading_symbol}")
             return trading_symbol
             
         except Exception as e:
@@ -978,18 +1139,30 @@ class DhanOrderService:
             match1 = re.match(r'([A-Z]+?)(\d{2})([A-Z]{3})(\d+)([CP]E)', symbol)
             if match1:
                 underlying, year, month_text, strike, opt_type = match1.groups()
-                year_full = f"20{year}"
-                month_abbr = month_text.capitalize()
-                dhan_symbol = f"{underlying}-{month_abbr}{year_full}-{strike}-{opt_type}"
+                year_yy = year  # e.g., '26'
+                month_abbr = month_text.upper()  # e.g., 'FEB' -> 'FEB'
+                # Need to get the day from this expiry month to format correctly
+                # First get the date from our expiry calculation
+                nearest_expiry = self.get_nearest_weekly_expiry(underlying)
+                day = nearest_expiry.strftime('%d')  # e.g., '02'
+                # Correct Dhan format: NIFTY02MAR2625550CE (DDMMMYY format)
+                dhan_symbol = f"{underlying}{day}{month_abbr}{year_yy}{strike}{opt_type}"
+                # Also create spaced format for CSV lookup: NIFTY 02MAR26 25550 CE
+                dhan_symbol_spaced = f"{underlying} {day}{month_abbr}{year_yy} {strike} {opt_type}"
                 
-                logging.info(f"[search_symbol] Format1 (TextMonth): {symbol} → {dhan_symbol}")
+                logging.info(f"[search_symbol] Format1 (TextMonth): {symbol} → {dhan_symbol_spaced}")
                 
-                # Try to find in master
+                # Try to find in master (use spaced format which matches CSV)
+                if self._symbol_master_data and dhan_symbol_spaced in self._symbol_master_data:
+                    security_id = self._symbol_master_data[dhan_symbol_spaced]
+                    return {'success': True, 'security_id': security_id, 'symbol': dhan_symbol_spaced}
+                
+                # Also try non-spaced format
                 if self._symbol_master_data and dhan_symbol in self._symbol_master_data:
                     security_id = self._symbol_master_data[dhan_symbol]
                     return {'success': True, 'security_id': security_id, 'symbol': dhan_symbol}
                 
-                return {'success': False, 'security_id': dhan_symbol, 'symbol': dhan_symbol}
+                return {'success': False, 'security_id': dhan_symbol_spaced, 'symbol': dhan_symbol_spaced}
             
             # Format 2: NIFTY2630225550CE (UNDERLYING + MYSTERY_DIGITS + STRIKE + TYPE)
             # Extract: UNDERLYING + YY at start, TYPE at end (CE/PE)
@@ -1010,13 +1183,18 @@ class DhanOrderService:
                             break
                 
                 if strike:
-                    # Default to March (most liquid monthly expiry)
-                    month_abbr = "Mar"
-                    dhan_symbol = f"{underlying}-{month_abbr}{year_full}-{strike}-{opt_type}"
+                    # Use get_nearest_weekly_expiry to get the correct expiry
+                    nearest_expiry = self.get_nearest_weekly_expiry(underlying)
+                    day = nearest_expiry.strftime('%d')  # e.g., '02'
+                    month_abbr = nearest_expiry.strftime('%b').upper()  # e.g., 'MAR'
+                    year_yy = nearest_expiry.strftime('%y')  # e.g., '26'
+                    # Correct Dhan format with spaces: NIFTY 02MAR26 25550 CE
+                    dhan_symbol = f"{underlying} {day}{month_abbr}{year_yy} {strike} {opt_type}"
                     
                     logging.info(f"[search_symbol] Format2 (NumericDate): {symbol}")
                     logging.info(f"  Extracted: underlying={underlying}, year={year}, strike={strike}, type={opt_type}")
-                    logging.info(f"  Converted (Mar assumed): {dhan_symbol}")
+                    logging.info(f"  Using dynamic expiry: {day}{month_abbr}{year_yy}")
+                    logging.info(f"  Converted to Dhan format: {dhan_symbol}")
                     
                     # Try to find in master
                     if self._symbol_master_data and dhan_symbol in self._symbol_master_data:
