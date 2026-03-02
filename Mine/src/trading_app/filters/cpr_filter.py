@@ -38,6 +38,8 @@ class CPRLevels:
     monthly_r1: float
     monthly_s05: float
     monthly_r05: float
+    monthly_cam_r3: float
+    monthly_cam_s3: float
     yearly_pp: float
     yearly_bc: float
     yearly_tc: float
@@ -64,6 +66,8 @@ class CPRFilterService:
     CROSS_BELOW_WEEKLY = "↘ CROSSED BELOW WEEKLY CPR"
     BULLISH_REVERSAL = "🐂 BULLISH REVERSAL (M S1/Low)"
     BEARISH_REVERSAL = "🐻 BEARISH REVERSAL (M R1/High)"
+    CPR_TOUCH_ABOVE = "🟢 MONTHLY CPR TOUCH (Closed Above)"
+    CPR_TOUCH_BELOW = "🔴 MONTHLY CPR TOUCH (Closed Below)"
 
     def __init__(self, kite_instance=None, api_key=None):
         self.kite = kite_instance or KiteConnect(api_key or os.getenv("API_KEY"))
@@ -266,6 +270,11 @@ class CPRFilterService:
         m_s05 = (m_pp + m_s1) / 2
         m_r05 = (m_pp + m_r1) / 2
         
+        # Calculate Monthly Camarilla R3 and S3
+        m_cam_range = m_h - m_l
+        m_cam_r3 = m_c + m_cam_range * 1.1 / 4.0
+        m_cam_s3 = m_c - m_cam_range * 1.1 / 4.0
+        
         # Yearly CPR (prev year relative to root_date)
         logger.debug(f"Fetching yearly data for {symbol}...")
         year_start, year_end = self.get_prev_year_range(root_date)
@@ -281,6 +290,7 @@ class CPRFilterService:
         
         logger.debug(f"CPR levels calculated for {symbol}")
         return CPRLevels(d_pp, d_bc, d_tc, w_pp, w_bc, w_tc, m_pp, m_bc, m_tc, m_s1, m_r1, m_s05, m_r05,
+                        m_cam_r3, m_cam_s3,
                         y_pp, y_bc, y_tc, curr_price, curr_open, curr_high, curr_low, c, m_h, m_l)
 
     def get_fo_stocks(self) -> List[str]:
@@ -319,6 +329,10 @@ class CPRFilterService:
             mbc_ytc_diff <= self.PERCENTAGE_DIFF_THRESHOLD and
             buy_cond and ((cpr.current_low <= cpr.weekly_tc <= cpr.current_price) or 
                          (cpr.current_low <= cpr.monthly_tc <= cpr.current_price))):
+            # Upper wick <= 25% of candle range
+            candle_range = cpr.current_high - cpr.current_low
+            if candle_range > 0 and (cpr.current_high - cpr.current_price) / candle_range > 0.25:
+                return "🟡 IN CPR"
             return "✅ ABOVE CPR TC"
         
         sell_cond = cpr.weekly_tc >= cpr.daily_bc
@@ -329,6 +343,10 @@ class CPRFilterService:
             mtc_ybc_diff <= self.PERCENTAGE_DIFF_THRESHOLD and
             sell_cond and ((cpr.current_high >= cpr.weekly_bc >= cpr.current_price) or 
                           (cpr.current_high >= cpr.monthly_bc >= cpr.current_price))):
+            # Lower wick <= 25% of candle range
+            candle_range = cpr.current_high - cpr.current_low
+            if candle_range > 0 and (cpr.current_price - cpr.current_low) / candle_range > 0.25:
+                return "🟡 IN CPR"
             return "❌ BELOW CPR BC"
         
         return "🟡 IN CPR"
@@ -352,6 +370,10 @@ class CPRFilterService:
             # For bearish reversal, relevant levels are Monthly R1 and Prev Month High
             # Use m_gap for distance from Monthly R1
             return 0.0, 0.0, round(abs(price - levels.monthly_r1) / max(levels.monthly_r1, 1e-6) * 100, 2)
+        elif status == self.CPR_TOUCH_ABOVE:
+            return 0.0, 0.0, round(abs(price - levels.monthly_pp) / max(levels.monthly_pp, 1e-6) * 100, 2)
+        elif status == self.CPR_TOUCH_BELOW:
+            return 0.0, 0.0, round(abs(price - levels.monthly_pp) / max(levels.monthly_pp, 1e-6) * 100, 2)
         return 0.0, 0.0, 0.0
 
     def detect_weekly_cross(self, levels: CPRLevels) -> Optional[str]:
@@ -372,8 +394,16 @@ class CPRFilterService:
         )
 
         if cross_above and not cross_below:
+            # Upper wick <= 25% of candle range
+            candle_range = levels.current_high - levels.current_low
+            if candle_range > 0 and (levels.current_high - levels.current_price) / candle_range > 0.25:
+                return None
             return self.CROSS_ABOVE_WEEKLY
         if cross_below and not cross_above:
+            # Lower wick <= 25% of candle range
+            candle_range = levels.current_high - levels.current_low
+            if candle_range > 0 and (levels.current_price - levels.current_low) / candle_range > 0.25:
+                return None
             return self.CROSS_BELOW_WEEKLY
         return None
 
@@ -391,6 +421,12 @@ class CPRFilterService:
         is_green_candle = levels.current_price > levels.current_open
 
         if touched_support and closed_above_support and closed_above_s05 and is_green_candle:
+            # Upper wick <= 25% of candle range
+            candle_range = levels.current_high - levels.current_low
+            if candle_range <= 0:
+                return None
+            if (levels.current_high - levels.current_price) / candle_range > 0.25:
+                return None
             return self.BULLISH_REVERSAL
         return None
 
@@ -408,7 +444,87 @@ class CPRFilterService:
         is_red_candle = levels.current_price < levels.current_open
 
         if touched_resistance and closed_below_resistance and closed_below_r05 and is_red_candle:
+            # Lower wick <= 25% of candle range
+            candle_range = levels.current_high - levels.current_low
+            if candle_range <= 0:
+                return None
+            if (levels.current_price - levels.current_low) / candle_range > 0.25:
+                return None
             return self.BEARISH_REVERSAL
+        return None
+
+    def detect_cpr_touch_closed_above(self, levels: CPRLevels) -> Optional[str]:
+        """
+        Daily candle touches the Monthly CPR and closes ABOVE.
+        Conditions:
+        1. Touch: daily low dipped into CPR zone (low <= monthly_tc)
+        2. Close above monthly TC
+        3. Green candle (close > open)
+        4. Upper wick <= 40% of candle range
+        5. Gap between close and Monthly Camarilla R3 > 2%
+        6. Monthly CPR must NOT be narrow (TC-BC spread > 0.5% of PP)
+        """
+        # Monthly CPR must not be narrow
+        cpr_spread = abs(levels.monthly_tc - levels.monthly_bc)
+        cpr_spread_pct = cpr_spread / max(levels.monthly_pp, 1e-6) * 100
+        if cpr_spread_pct < 0.5:
+            return None
+
+        touched_cpr = levels.current_low <= levels.monthly_tc
+        closed_above = levels.current_price > levels.monthly_tc
+        is_green = levels.current_price > levels.current_open
+
+        # Upper wick <= 40% of candle range
+        candle_range = levels.current_high - levels.current_low
+        if candle_range <= 0:
+            return None
+        upper_wick = levels.current_high - levels.current_price  # high - close for green candle
+        wick_ratio = upper_wick / candle_range
+        wick_ok = wick_ratio <= 0.20
+
+        # Gap between close and Monthly Camarilla R3 > 2%
+        cam_r3_gap = abs(levels.monthly_cam_r3 - levels.current_price) / max(levels.current_price, 1e-6) * 100
+        cam_gap_ok = cam_r3_gap > 3.0
+
+        if touched_cpr and closed_above and is_green and wick_ok and cam_gap_ok:
+            return self.CPR_TOUCH_ABOVE
+        return None
+
+    def detect_cpr_touch_closed_below(self, levels: CPRLevels) -> Optional[str]:
+        """
+        Daily candle touches the Monthly CPR and closes BELOW.
+        Conditions:
+        1. Touch: daily high reached into CPR zone (high >= monthly_bc)
+        2. Close below monthly BC
+        3. Red candle (close < open)
+        4. Lower wick <= 40% of candle range
+        5. Gap between close and Monthly Camarilla S3 > 2%
+        6. Monthly CPR must NOT be narrow (TC-BC spread > 0.5% of PP)
+        """
+        # Monthly CPR must not be narrow
+        cpr_spread = abs(levels.monthly_tc - levels.monthly_bc)
+        cpr_spread_pct = cpr_spread / max(levels.monthly_pp, 1e-6) * 100
+        if cpr_spread_pct < 0.5:
+            return None
+
+        touched_cpr = levels.current_high >= levels.monthly_bc
+        closed_below = levels.current_price < levels.monthly_bc
+        is_red = levels.current_price < levels.current_open
+
+        # Lower wick <= 40% of candle range
+        candle_range = levels.current_high - levels.current_low
+        if candle_range <= 0:
+            return None
+        lower_wick = levels.current_price - levels.current_low  # close - low for red candle
+        wick_ratio = lower_wick / candle_range
+        wick_ok = wick_ratio <= 0.20
+
+        # Gap between close and Monthly Camarilla S3 > 2%
+        cam_s3_gap = abs(levels.current_price - levels.monthly_cam_s3) / max(levels.current_price, 1e-6) * 100
+        cam_gap_ok = cam_s3_gap > 3.0
+
+        if touched_cpr and closed_below and is_red and wick_ok and cam_gap_ok:
+            return self.CPR_TOUCH_BELOW
         return None
 
     def calculate_stock_iv_percentile(self, symbol: str, atm_iv: float) -> Optional[float]:
@@ -580,12 +696,16 @@ class CPRFilterService:
             weekly_cross_status = self.detect_weekly_cross(cpr)
             bullish_reversal = self.detect_bullish_reversal(cpr)
             bearish_reversal = self.detect_bearish_reversal(cpr)
+            cpr_touch_above = self.detect_cpr_touch_closed_above(cpr)
+            cpr_touch_below = self.detect_cpr_touch_closed_below(cpr)
 
             payloads: Dict[str, Optional[Dict]] = {
                 'signal': None, 
                 'weekly_cross': None,
                 'bullish_reversal': None,
-                'bearish_reversal': None
+                'bearish_reversal': None,
+                'cpr_touch_above': None,
+                'cpr_touch_below': None
             }
 
             if primary_status != "🟡 IN CPR":
@@ -652,6 +772,30 @@ class CPRFilterService:
                     'prev_month_high': round(cpr.prev_month_high, 2),
                     'monthly_bc': round(cpr.monthly_bc, 2), # Context
                     'm_gap': rev_gaps[2]
+                }
+
+            if cpr_touch_above:
+                touch_gaps = self.calc_gaps(cpr.current_price, cpr_touch_above, cpr)
+                payloads['cpr_touch_above'] = {
+                    'symbol': symbol,
+                    'current_price': round(cpr.current_price, 2),
+                    'status': cpr_touch_above,
+                    'monthly_tc': round(cpr.monthly_tc, 2),
+                    'monthly_pp': round(cpr.monthly_pp, 2),
+                    'monthly_bc': round(cpr.monthly_bc, 2),
+                    'm_gap': touch_gaps[2]
+                }
+
+            if cpr_touch_below:
+                touch_gaps = self.calc_gaps(cpr.current_price, cpr_touch_below, cpr)
+                payloads['cpr_touch_below'] = {
+                    'symbol': symbol,
+                    'current_price': round(cpr.current_price, 2),
+                    'status': cpr_touch_below,
+                    'monthly_tc': round(cpr.monthly_tc, 2),
+                    'monthly_pp': round(cpr.monthly_pp, 2),
+                    'monthly_bc': round(cpr.monthly_bc, 2),
+                    'm_gap': touch_gaps[2]
                 }
 
             return payloads if any(payloads.values()) else None
@@ -1072,6 +1216,8 @@ class CPRFilterService:
         cross_below: List[Dict] = []
         bullish_reversal: List[Dict] = []
         bearish_reversal: List[Dict] = []
+        cpr_touch_above: List[Dict] = []
+        cpr_touch_below: List[Dict] = []
         processed = 0
         failed = 0
         start_time = time.time()
@@ -1098,6 +1244,12 @@ class CPRFilterService:
                         
                         if result.get('bearish_reversal'):
                             bearish_reversal.append(result['bearish_reversal'])
+                        
+                        if result.get('cpr_touch_above'):
+                            cpr_touch_above.append(result['cpr_touch_above'])
+                        
+                        if result.get('cpr_touch_below'):
+                            cpr_touch_below.append(result['cpr_touch_below'])
                     processed += 1
                     if processed % 10 == 0:
                         elapsed = time.time() - start_time
@@ -1118,6 +1270,7 @@ class CPRFilterService:
             f"Filter complete: {len(signals)} match criteria, "
             f"{len(cross_above)} crossed above weekly CPR, {len(cross_below)} crossed below weekly CPR, "
             f"{len(bullish_reversal)} bullish reversal, {len(bearish_reversal)} bearish reversal, "
+            f"{len(cpr_touch_above)} CPR touch above, {len(cpr_touch_below)} CPR touch below, "
             f"{len(high_iv_stocks)} high IV percentile "
             f"({failed} failed) in {total_time:.1f}s. Cache: {len(self._historical_data_cache)} entries"
         )
@@ -1130,6 +1283,10 @@ class CPRFilterService:
             'reversal': {
                 'bullish': sorted(bullish_reversal, key=lambda x: x['symbol']),
                 'bearish': sorted(bearish_reversal, key=lambda x: x['symbol'])
+            },
+            'cpr_touch': {
+                'closed_above': sorted(cpr_touch_above, key=lambda x: x['symbol']),
+                'closed_below': sorted(cpr_touch_below, key=lambda x: x['symbol'])
             },
             'high_iv_stocks': sorted(high_iv_stocks, key=lambda x: x['iv_percentile'], reverse=True)
         }

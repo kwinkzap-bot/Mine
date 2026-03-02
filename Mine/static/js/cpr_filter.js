@@ -128,6 +128,25 @@ window.addEventListener('load', function () {
         });
     }
 
+    // Add sort listeners for CPR Touch tables
+    const cprTouchAboveTable = document.getElementById('cprTouchAboveTable');
+    if (cprTouchAboveTable) {
+        cprTouchAboveTable.querySelectorAll('th').forEach(header => {
+            header.addEventListener('click', () => {
+                sortTable('cprTouchAboveTable', header.dataset.columnIndex);
+            });
+        });
+    }
+
+    const cprTouchBelowTable = document.getElementById('cprTouchBelowTable');
+    if (cprTouchBelowTable) {
+        cprTouchBelowTable.querySelectorAll('th').forEach(header => {
+            header.addEventListener('click', () => {
+                sortTable('cprTouchBelowTable', header.dataset.columnIndex);
+            });
+        });
+    }
+
     // Add sort listeners for High IV Percentile table
     const highIvTable = document.getElementById('highIvTable');
     if (highIvTable) {
@@ -187,6 +206,10 @@ async function loadCPRData() {
 
             const highIvResults = response.high_iv_stocks || [];
 
+            const cprTouch = response.cpr_touch || {};
+            const cprTouchAboveResults = cprTouch.closed_above || [];
+            const cprTouchBelowResults = cprTouch.closed_below || [];
+
             // Split data into above and below CPR
             const aboveResults = [];
             const belowResults = [];
@@ -223,8 +246,10 @@ async function loadCPRData() {
             const bullishReversalCount = bullishReversalResults.length;
             const bearishReversalCount = bearishReversalResults.length;
             const highIvCount = highIvResults.length;
+            const cprTouchAboveCount = cprTouchAboveResults.length;
+            const cprTouchBelowCount = cprTouchBelowResults.length;
 
-            console.log(`Data loaded - Above: ${aboveCount}, Below: ${belowCount}, Cross Above: ${crossAboveCount}, Cross Below: ${crossBelowCount}, Bullish Rev: ${bullishReversalCount}, Bearish Rev: ${bearishReversalCount}, High IV: ${highIvCount}`);
+            console.log(`Data loaded - Above: ${aboveCount}, Below: ${belowCount}, Cross Above: ${crossAboveCount}, Cross Below: ${crossBelowCount}, Bullish Rev: ${bullishReversalCount}, Bearish Rev: ${bearishReversalCount}, CPR Touch Above: ${cprTouchAboveCount}, CPR Touch Below: ${cprTouchBelowCount}, High IV: ${highIvCount}`);
 
             // Display results
             displayResults('above', aboveResults);
@@ -233,6 +258,8 @@ async function loadCPRData() {
             displayResults('crossBelow', crossBelowResults);
             displayResults('bullishReversal', bullishReversalResults);
             displayResults('bearishReversal', bearishReversalResults);
+            displayResults('cprTouchAbove', cprTouchAboveResults);
+            displayResults('cprTouchBelow', cprTouchBelowResults);
             displayResults('highIv', highIvResults);
 
             updateStats(aboveCount, belowCount, crossAboveCount, crossBelowCount, bullishReversalCount, bearishReversalCount, highIvCount);
@@ -309,6 +336,26 @@ async function loadCPRData() {
                 }
             }
 
+            // Show/hide CPR Touch Above results section
+            const cprTouchAboveDiv = document.getElementById('cprTouchAboveResults');
+            if (cprTouchAboveDiv) {
+                if (cprTouchAboveCount > 0) {
+                    cprTouchAboveDiv.classList.remove('results-hidden');
+                } else {
+                    cprTouchAboveDiv.classList.add('results-hidden');
+                }
+            }
+
+            // Show/hide CPR Touch Below results section
+            const cprTouchBelowDiv = document.getElementById('cprTouchBelowResults');
+            if (cprTouchBelowDiv) {
+                if (cprTouchBelowCount > 0) {
+                    cprTouchBelowDiv.classList.remove('results-hidden');
+                } else {
+                    cprTouchBelowDiv.classList.add('results-hidden');
+                }
+            }
+
             // Show/hide high IV percentile results section
             const highIvDiv = document.getElementById('highIvResults');
             if (highIvDiv) {
@@ -319,7 +366,7 @@ async function loadCPRData() {
                 }
             }
 
-            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}, Cross Above: ${crossAboveCount}, Cross Below: ${crossBelowCount}, Bullish Rev: ${bullishReversalCount}, Bearish Rev: ${bearishReversalCount}, High IV: ${highIvCount}`;
+            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}, Cross↑: ${crossAboveCount}, Cross↓: ${crossBelowCount}, Bull Rev: ${bullishReversalCount}, Bear Rev: ${bearishReversalCount}, CPR Touch↑: ${cprTouchAboveCount}, CPR Touch↓: ${cprTouchBelowCount}, High IV: ${highIvCount}`;
         } else if (response && !response.needs_login) {
             // Only show error if it's not a session expiration handled by fetchJson
             const errorMsg = response.message || 'Unknown error';
@@ -375,6 +422,8 @@ function displayResults(type, results) {
         crossBelow: { dailyKey: 'daily_bc', weeklyKey: 'weekly_bc', monthlyKey: 'monthly_bc', showGaps: false },
         bullishReversal: { col3: 'monthly_tc', col4: 'monthly_s1', col5: 'prev_month_low', showGaps: true },
         bearishReversal: { col3: 'monthly_bc', col4: 'monthly_r1', col5: 'prev_month_high', showGaps: true },
+        cprTouchAbove: { col3: 'monthly_tc', col4: 'monthly_pp', col5: 'monthly_bc', showGaps: true },
+        cprTouchBelow: { col3: 'monthly_tc', col4: 'monthly_pp', col5: 'monthly_bc', showGaps: true },
         highIv: { isHighIv: true }
     };
     const config = tableConfig[type] || tableConfig.above;
@@ -420,7 +469,7 @@ function displayResults(type, results) {
                 <td class="${pcrClass}">${pcr.toFixed(2)}</td>
                 <td>${maxPain.toFixed(0)}</td>
             `;
-        } else if (type === 'bullishReversal' || type === 'bearishReversal') {
+        } else if (type === 'bullishReversal' || type === 'bearishReversal' || type === 'cprTouchAbove' || type === 'cprTouchBelow') {
             const val3 = Number(stock[config.col3] || 0);
             const val4 = Number(stock[config.col4] || 0);
             const val5 = Number(stock[config.col5] || 0);

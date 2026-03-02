@@ -1020,6 +1020,7 @@ def get_cpr_filter_results() -> EndpointResponse:
         weekly_cross = results.get('weekly_cross', {}) if isinstance(results, dict) else {}
         reversal = results.get('reversal', {}) if isinstance(results, dict) else {}
         high_iv_stocks = results.get('high_iv_stocks', []) if isinstance(results, dict) else []
+        cpr_touch = results.get('cpr_touch', {}) if isinstance(results, dict) else {}
         
         # FILTER RESPONSE DATA before sending to frontend
         # Apply any data validation/filtering here if needed
@@ -1027,6 +1028,7 @@ def get_cpr_filter_results() -> EndpointResponse:
         weekly_cross = weekly_cross if isinstance(weekly_cross, dict) else {}
         reversal = reversal if isinstance(reversal, dict) else {}
         high_iv_stocks = high_iv_stocks if isinstance(high_iv_stocks, list) else []
+        cpr_touch = cpr_touch if isinstance(cpr_touch, dict) else {}
 
         # logger.info(
         #     "CPR filter completed. "
@@ -1042,6 +1044,7 @@ def get_cpr_filter_results() -> EndpointResponse:
             'data': signals, 
             'weekly_cross': weekly_cross, 
             'reversal': reversal,
+            'cpr_touch': cpr_touch,
             'high_iv_stocks': high_iv_stocks,
             'date': target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
         })
