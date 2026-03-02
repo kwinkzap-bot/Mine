@@ -116,11 +116,11 @@ const CPRFilterScheduler = (function() {
         }
         
         // Set recurring interval to check every minute
-        intervalId = setInterval(() => {
-            if (isMarketOpen() && shouldExecuteNow()) {
-                executeCPRFilter();
-            }
-        }, 60 * 1000);  // Check every minute (60 seconds)
+        // intervalId = setInterval(() => {
+        //     if (isMarketOpen() && shouldExecuteNow()) {
+        //         executeCPRFilter();
+        //     }
+        // }, 60 * 1000);  // Check every minute (60 seconds)
         
         console.log(`[CPR Scheduler] Started - CPR filter will execute at :${String(EXECUTE_AT_MINUTE).padStart(2, '0')} of every hour during market hours`);
     }

@@ -998,6 +998,16 @@ def get_cpr_filter_results() -> EndpointResponse:
         except ValueError:
             return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
 
+    # Short-term cache to avoid repeated heavy CPR computations from rapid polling.
+    from trading_app.app.utils.cache import cpr_filter_cache
+    cache_user = session.get('username', 'anonymous')
+    cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
+    cache_key = f"cpr_filter:{cache_user}:{cache_date}"
+
+    cached_response = cpr_filter_cache.get(cache_key)
+    if cached_response is not None:
+        return jsonify(cached_response)
+
     try:
         # Verify kite has access token
         if not hasattr(current_kite, 'access_token') or not current_kite.access_token:
@@ -1039,7 +1049,7 @@ def get_cpr_filter_results() -> EndpointResponse:
         #     f"{len(reversal.get('bearish', [])) if isinstance(reversal, dict) else 0} bearish reversal, "
         #     f"{len(high_iv_stocks)} high IV percentile."
         # )
-        return jsonify({
+        payload = {
             'success': True, 
             'data': signals, 
             'weekly_cross': weekly_cross, 
@@ -1047,7 +1057,10 @@ def get_cpr_filter_results() -> EndpointResponse:
             'cpr_touch': cpr_touch,
             'high_iv_stocks': high_iv_stocks,
             'date': target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
-        })
+        }
+
+        cpr_filter_cache.set(cache_key, payload)
+        return jsonify(payload)
     except Exception as e:
         logger.error(f"Error in CPR filter: {type(e).__name__}: {e}", exc_info=True)
         error_str = str(e).lower()

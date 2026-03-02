@@ -590,12 +590,22 @@ class KotakOrderService:
             
             order_url = order_base_url.rstrip('/') + order_path
             
-            # Build headers per v2 API (Sid + Auth only, no consumer_key)
+            # Build headers per v2 API
+            neo_fin_key = self._neo_fin_key
+            if self.client and hasattr(self.client, 'configuration'):
+                try:
+                    conf = self.client.configuration
+                    if hasattr(conf, 'get_neo_fin_key'):
+                        neo_fin_key = conf.get_neo_fin_key()
+                except Exception:
+                    pass
+
             order_headers = {
+                "Authorization": str(self.consumer_key or ""),
                 "Sid": self.trading_sid,
                 "Auth": self.trading_token,
                 "Content-Type": "application/x-www-form-urlencoded",
-                "neo-fin-key": self._neo_fin_key if hasattr(self, '_neo_fin_key') else "None",
+                "neo-fin-key": neo_fin_key,
             }
 
             # Body uses short keys; v2 API sends directly (no jData wrapper)
@@ -613,17 +623,19 @@ class KotakOrderService:
                 "dq": "0",                            # disclosed quantity - ALWAYS include (SDK default)
                 "mp": "0",                            # market protection - ALWAYS include (SDK default)
                 "pf": "N",                            # partial fill - ALWAYS include
-                "pr": "0",                            # price (default for MKT orders)
-                "tp": "0",                            # trigger price (default for non-SL orders)
+                "pr": str(float(price)) if order_type and order_type.upper() in ['L', 'LIMIT', 'SL'] and price and float(price) > 0 else "0",  # price (required for LIMIT/SL)
+                "tp": str(float(trigger_price)) if trigger_price and float(trigger_price) > 0 else "0",  # trigger price (for SL orders)
             }
             
-            # Override with actual values if provided
-            if price and float(price) > 0:
-                order_body["pr"] = str(float(price))
+            # Validate critical fields
+            if order_body.get("qt") and int(float(order_body["qt"])) == 0:
+                logging.error(f"[place_order] Invalid quantity: {quantity}")
+                return {'success': False, 'error': 'Invalid quantity - must be > 0'}
             
-            if trigger_price and float(trigger_price) > 0:
-                order_body["tp"] = str(float(trigger_price))
-
+            if not order_body.get("ts"):
+                logging.error(f"[place_order] Invalid symbol: {tradingsymbol}")
+                return {'success': False, 'error': 'Invalid trading symbol'}
+            
             # Add query params
             query_params = {}
             if self.server_id:
@@ -796,6 +808,14 @@ class KotakOrderService:
         # First priority: Our built symbol (text month format)
         if default_ts:
             candidates.append(str(default_ts).strip())
+
+        # Kotak scrip-master style symbol (often accepted by Neo APIs)
+        try:
+            optidx_format = self._format_kotak_symbol(default_ts, symbol, expiry, strike, option_type)
+            if optidx_format and optidx_format not in candidates:
+                candidates.append(optidx_format)
+        except Exception:
+            pass
         
         # Second priority: Kite symbol (numeric date format) - try if text format fails
         # Get Kite symbol if we can
@@ -1341,19 +1361,50 @@ class KotakOrderService:
         Helper to place SL-M for an option contract by constructing symbol.
         """
         try:
-            tradingsymbol = self._build_option_symbol(symbol, strike, option_type)
-            if not tradingsymbol:
-                return {'success': False, 'error': 'Symbol build failed'}
-                
-            return self.place_order(
-                tradingsymbol=tradingsymbol,
-                transaction_type=transaction_type,
-                price=0.0,
-                quantity=quantity,
-                order_type='SL-M',
-                product_type=self.PRODUCT_NRML, # Match place_option_order product
-                trigger_price=trigger_price,
-                exchange_segment=self.EXCHANGE_NFO
-            )
+            resolved_expiry: Optional[date] = None
+            resolver_service = None
+
+            # Resolve nearest valid expiry (same strategy as place_option_order)
+            try:
+                from trading_app.service.kite_order_services import KiteService
+                resolver_service = KiteService()
+                resolved_expiry = resolver_service.get_nearest_option_expiry(symbol, strike, option_type)
+            except Exception:
+                resolved_expiry = None
+
+            tradingsymbol = self._build_option_symbol(symbol, strike, option_type, target_expiry=resolved_expiry)
+            candidates = self._candidate_symbols(tradingsymbol, symbol, resolved_expiry, strike, option_type)
+
+            # Also try exact Kite symbol as an extra fallback
+            try:
+                if resolver_service:
+                    kite_symbol = resolver_service.get_option_symbol(symbol, strike, option_type)
+                    if kite_symbol and kite_symbol not in candidates:
+                        candidates.append(kite_symbol)
+            except Exception:
+                pass
+
+            last_result: Dict[str, Any] = {}
+            for candidate_ts in candidates:
+                last_result = self.place_order(
+                    tradingsymbol=candidate_ts,
+                    transaction_type=transaction_type,
+                    price=0.0,
+                    quantity=quantity,
+                    order_type='SL-M',
+                    product_type=self.PRODUCT_NRML,
+                    trigger_price=trigger_price,
+                    exchange_segment=self.EXCHANGE_NFO
+                )
+                if isinstance(last_result, dict) and last_result.get('success'):
+                    last_result['successful_symbol'] = candidate_ts
+                    last_result['tried_symbols'] = candidates
+                    return last_result
+
+            if isinstance(last_result, dict):
+                last_result.setdefault('tried_symbols', candidates)
+                return last_result
+
+            return {'success': False, 'error': 'SL-M order failed for all symbol formats', 'tried_symbols': candidates}
         except Exception as e:
             return {'success': False, 'error': str(e)}

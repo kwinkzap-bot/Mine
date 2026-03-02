@@ -351,38 +351,62 @@ class DhanOrderService:
             Dict with order details and success status
         """
         try:
-            if not self.access_token or not self.client_id:
-                logging.error("[place_order] Not authenticated. Call verify_credentials() first.")
+            # Validate credentials FIRST before any API call
+            if not self.access_token:
+                logging.error("[place_order] Missing access_token. Set DHAN_ACCESS_TOKEN in environment.")
                 return {
                     'success': False,
-                    'error': 'Not authenticated - missing access_token or client_id'
+                    'error': 'Not authenticated - missing access_token'
+                }
+            
+            if not self.client_id:
+                logging.error("[place_order] Missing client_id. Set DHAN_CLIENT_ID in environment.")
+                return {
+                    'success': False,
+                    'error': 'Not authenticated - missing client_id'
+                }
+            
+            # Validate token format (should be non-empty string)
+            if not isinstance(self.access_token, str) or len(self.access_token.strip()) < 10:
+                logging.error(f"[place_order] Invalid access_token format: {type(self.access_token)}")
+                return {
+                    'success': False,
+                    'error': 'Invalid access_token format'
+                }
+            
+            # Validate client_id format
+            if not isinstance(self.client_id, str) or len(self.client_id.strip()) == 0:
+                logging.error(f"[place_order] Invalid client_id format: {type(self.client_id)}")
+                return {
+                    'success': False,
+                    'error': 'Invalid client_id format'
                 }
             
             order_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             url = f"{self.base_url}/orders"
             headers = {
-                "access-token": self.access_token,
+                "access-token": self.access_token.strip(),
                 "Content-Type": "application/json"
             }
             
             payload = {
-                "dhanClientId": self.client_id,
-                "transactionType": transaction_type,
+                "dhanClientId": self.client_id.strip(),
+                "transactionType": transaction_type.upper(),
                 "exchangeSegment": exchange_segment,
                 "productType": product_type,
                 "orderType": order_type,
                 "validity": validity,
-                "securityId": security_id,
-                "quantity": str(quantity),
-                "price": str(price) if order_type == 'LIMIT' else "",
-                "triggerPrice": str(trigger_price) if 'STOP_LOSS' in order_type else "",
-                "disclosedQuantity": str(disclosed_quantity) if disclosed_quantity > 0 else "",
+                "securityId": str(security_id),
+                "quantity": str(int(quantity)),
+                "price": str(float(price)) if order_type == 'LIMIT' else "0",
+                "triggerPrice": str(float(trigger_price)) if 'STOP_LOSS' in order_type else "0",
+                "disclosedQuantity": str(int(disclosed_quantity)) if disclosed_quantity > 0 else "0",
                 "afterMarketOrder": False
             }
             
             if correlation_id:
-                payload["correlationId"] = correlation_id
+                payload["correlationId"] = correlation_id.strip()
             
             logging.info(f"[place_order] Placing order: {payload}")
             
@@ -414,6 +438,74 @@ class DhanOrderService:
                 }
             else:
                 error_msg = data.get('errorMessage') or data.get('message') or 'Unknown error'
+
+                # Auto-renew and retry once for token-expiry/auth failures
+                auth_error = (
+                    response.status_code in (401, 403)
+                    or any(k in str(error_msg).lower() for k in ['invalid', 'expired', 'token', 'unauthorized'])
+                )
+                if auth_error:
+                    # First try syncing client_id from profile if token is valid but client_id is stale
+                    logging.warning(f"[place_order] Auth error detected ({error_msg}). Trying profile verification/client sync...")
+                    if self.verify_credentials():
+                        headers["access-token"] = self.access_token.strip()
+                        payload["dhanClientId"] = self.client_id.strip() if isinstance(self.client_id, str) else payload.get("dhanClientId", "")
+                        retry_resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                        retry_data = retry_resp.json()
+                        logging.info(f"[place_order] Verify+retry response ({retry_resp.status_code}): {retry_data}")
+
+                        if retry_resp.status_code in (200, 201):
+                            order_id = retry_data.get('orderId')
+                            order_status = retry_data.get('orderStatus')
+                            logging.info(f"✅ {order_time} Dhan Order placed successfully after client sync. Order ID: {order_id}")
+                            return {
+                                'success': True,
+                                'order_id': order_id,
+                                'order_status': order_status,
+                                'security_id': security_id,
+                                'price': price,
+                                'quantity': quantity,
+                                'transaction_type': transaction_type,
+                                'order_type': order_type,
+                                'product_type': product_type,
+                                'timestamp': order_time,
+                                'exchange': exchange_segment,
+                                'platform': 'DHAN'
+                            }
+
+                        error_msg = retry_data.get('errorMessage') or retry_data.get('message') or error_msg
+                        data = retry_data
+
+                    logging.warning(f"[place_order] Auth error detected ({error_msg}). Trying token renewal...")
+                    if self.renew_token():
+                        headers["access-token"] = self.access_token.strip()
+                        payload["dhanClientId"] = self.client_id.strip() if isinstance(self.client_id, str) else payload.get("dhanClientId", "")
+                        retry_resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                        retry_data = retry_resp.json()
+                        logging.info(f"[place_order] Retry response ({retry_resp.status_code}): {retry_data}")
+
+                        if retry_resp.status_code in (200, 201):
+                            order_id = retry_data.get('orderId')
+                            order_status = retry_data.get('orderStatus')
+                            logging.info(f"✅ {order_time} Dhan Order placed successfully after token renewal. Order ID: {order_id}")
+                            return {
+                                'success': True,
+                                'order_id': order_id,
+                                'order_status': order_status,
+                                'security_id': security_id,
+                                'price': price,
+                                'quantity': quantity,
+                                'transaction_type': transaction_type,
+                                'order_type': order_type,
+                                'product_type': product_type,
+                                'timestamp': order_time,
+                                'exchange': exchange_segment,
+                                'platform': 'DHAN'
+                            }
+
+                        error_msg = retry_data.get('errorMessage') or retry_data.get('message') or error_msg
+                        data = retry_data
+
                 logging.error(f"❌ {order_time} Order placement failed: {error_msg}")
                 return {
                     'success': False,
@@ -589,15 +681,25 @@ class DhanOrderService:
             Dict with success status, order_id, and details
         """
         try:
-            if not self.access_token or not self.client_id:
-                self.last_error = "Missing access_token or client_id"
-                return {'success': False, 'error': self.last_error}
+            # Validate credentials FIRST before any API call
+            if not self.access_token:
+                logging.error("[place_stoploss_order] Missing access_token. Set DHAN_ACCESS_TOKEN in environment.")
+                return {'success': False, 'error': 'Missing access_token - SL order cannot be placed'}
+            
+            if not self.client_id:
+                logging.error("[place_stoploss_order] Missing client_id. Set DHAN_CLIENT_ID in environment.")
+                return {'success': False, 'error': 'Missing client_id - SL order cannot be placed'}
+            
+            # Validate token format
+            if not isinstance(self.access_token, str) or len(self.access_token.strip()) < 10:
+                logging.error(f"[place_stoploss_order] Invalid access_token format")
+                return {'success': False, 'error': 'Invalid access_token format'}
             
             order_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             url = f"{self.base_url}/orders"
             headers = {
-                "access-token": self.access_token,
+                "access-token": self.access_token.strip(),
                 "Content-Type": "application/json"
             }
             
@@ -607,17 +709,17 @@ class DhanOrderService:
             limit_price = trigger_price
             
             payload = {
-                "dhanClientId": self.client_id,
+                "dhanClientId": self.client_id.strip(),
                 "transactionType": self.TRANSACTION_SELL,
                 "exchangeSegment": exchange_segment,
                 "productType": product_type,
                 "orderType": self.ORDER_TYPE_STOP_LOSS,  # STOP_LOSS with limit price
                 "validity": "DAY",
-                "securityId": security_id,
-                "quantity": str(quantity),
-                "price": str(limit_price),  # Limit price when trigger activates
-                "triggerPrice": str(trigger_price),  # Trigger price to activate the order
-                "disclosedQuantity": "",
+                "securityId": str(security_id),
+                "quantity": str(int(quantity)),
+                "price": str(float(limit_price)),  # Limit price when trigger activates
+                "triggerPrice": str(float(trigger_price)),  # Trigger price to activate the order
+                "disclosedQuantity": "0",
                 "afterMarketOrder": False
             }
             
@@ -647,6 +749,64 @@ class DhanOrderService:
                     }
             
             error_msg = data.get('errorMessage') or data.get('message') or data.get('error') or 'Unknown error'
+
+            # Auto-renew and retry once for token-expiry/auth failures
+            auth_error = (
+                response.status_code in (401, 403)
+                or any(k in str(error_msg).lower() for k in ['invalid', 'expired', 'token', 'unauthorized'])
+            )
+            if auth_error:
+                # First try syncing client_id from profile if token is valid but client_id is stale
+                logging.warning(f"[place_stoploss_order] Auth error detected ({error_msg}). Trying profile verification/client sync...")
+                if self.verify_credentials():
+                    headers["access-token"] = self.access_token.strip()
+                    payload["dhanClientId"] = self.client_id.strip() if isinstance(self.client_id, str) else payload.get("dhanClientId", "")
+                    retry_resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                    retry_data = retry_resp.json()
+                    logging.info(f"[place_stoploss_order] Verify+retry response ({retry_resp.status_code}): {retry_data}")
+
+                    if retry_resp.status_code in (200, 201):
+                        order_id = retry_data.get('orderId') or retry_data.get('data', {}).get('orderId')
+                        if order_id:
+                            logging.info(f"✅ SL Order placed after client sync: {order_id}")
+                            return {
+                                'success': True,
+                                'order_id': order_id,
+                                'symbol': security_id,
+                                'trigger_price': trigger_price,
+                                'limit_price': limit_price,
+                                'quantity': quantity,
+                                'order_type': 'STOP_LOSS'
+                            }
+
+                    error_msg = retry_data.get('errorMessage') or retry_data.get('message') or retry_data.get('error') or error_msg
+                    data = retry_data
+
+                logging.warning(f"[place_stoploss_order] Auth error detected ({error_msg}). Trying token renewal...")
+                if self.renew_token():
+                    headers["access-token"] = self.access_token.strip()
+                    payload["dhanClientId"] = self.client_id.strip() if isinstance(self.client_id, str) else payload.get("dhanClientId", "")
+                    retry_resp = requests.post(url, headers=headers, json=payload, timeout=30)
+                    retry_data = retry_resp.json()
+                    logging.info(f"[place_stoploss_order] Retry response ({retry_resp.status_code}): {retry_data}")
+
+                    if retry_resp.status_code in (200, 201):
+                        order_id = retry_data.get('orderId') or retry_data.get('data', {}).get('orderId')
+                        if order_id:
+                            logging.info(f"✅ SL Order placed after token renewal: {order_id}")
+                            return {
+                                'success': True,
+                                'order_id': order_id,
+                                'symbol': security_id,
+                                'trigger_price': trigger_price,
+                                'limit_price': limit_price,
+                                'quantity': quantity,
+                                'order_type': 'STOP_LOSS'
+                            }
+
+                    error_msg = retry_data.get('errorMessage') or retry_data.get('message') or retry_data.get('error') or error_msg
+                    data = retry_data
+
             logging.error(f"❌ SL Order failed: {error_msg}")
             logging.error(f"Full response: {data}")
             return {'success': False, 'error': error_msg, 'symbol': security_id, 'response': data}

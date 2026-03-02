@@ -823,6 +823,7 @@ class CPRFilterService:
             ltp_keys = [f"NSE:{s}" for s in stocks]
             stock_prices = {}
             stock_volumes = {}
+            stock_day_change_pct = {}
             
             batch_size = 250
             for i in range(0, len(ltp_keys), batch_size):
@@ -832,8 +833,16 @@ class CPRFilterService:
                     quote_data = self.kite.quote(batch)
                     for key, val in quote_data.items():
                         symbol = key.replace('NSE:', '')
-                        stock_prices[symbol] = val.get('last_price', 0)
+                        last_price = val.get('last_price', 0)
+                        stock_prices[symbol] = last_price
                         stock_volumes[symbol] = val.get('volume', 0)
+
+                        # Current day % change from previous close
+                        prev_close = val.get('ohlc', {}).get('close', 0)
+                        if prev_close and prev_close > 0:
+                            stock_day_change_pct[symbol] = round(((last_price - prev_close) / prev_close) * 100, 2)
+                        else:
+                            stock_day_change_pct[symbol] = 0.0
                 except Exception as e:
                     logger.warning(f"Batch quote fetch failed: {e}")
             
@@ -906,7 +915,8 @@ class CPRFilterService:
                         'strike': atm_strike,
                         'expiry': suitable_expiry,
                         'current_price': current_price,
-                        'volume': stock_volumes.get(symbol, 0)
+                        'volume': stock_volumes.get(symbol, 0),
+                        'day_change_pct': stock_day_change_pct.get(symbol, 0.0)
                     }
             
             logger.info(f"Built ATM option map for {len(atm_map)} stocks")
@@ -1035,6 +1045,7 @@ class CPRFilterService:
                 symbol = stock['symbol']
                 stock['atm_iv'] = round(atm_ivs.get(symbol, 0) * 100, 2)  # Convert to %
                 stock['volume'] = atm_map.get(symbol, {}).get('volume', 0)
+                stock['day_change_pct'] = atm_map.get(symbol, {}).get('day_change_pct', 0.0)
                 
                 enrich = enrichment.get(symbol, {})
                 stock['pcr'] = enrich.get('pcr', 0.0)
@@ -1051,6 +1062,7 @@ class CPRFilterService:
                 symbol = stock['symbol']
                 stock.setdefault('atm_iv', round(atm_ivs.get(symbol, 0) * 100, 2))
                 stock.setdefault('volume', atm_map.get(symbol, {}).get('volume', 0))
+                stock.setdefault('day_change_pct', atm_map.get(symbol, {}).get('day_change_pct', 0.0))
                 stock.setdefault('pcr', 0.0)
                 stock.setdefault('max_pain', 0.0)
                 stock.setdefault('oi_change_pct', 0.0)

@@ -62,15 +62,23 @@ class FyersOrderService:
         self.fyers_client = None
         if self.access_token and self.app_id:
             try:
-                # Extract token part (SDK expects just the token, not app_id:token format)
-                token_only = self.access_token.split(':')[-1] if ':' in self.access_token else self.access_token
-                self.fyers_client = fyersModel.FyersModel(
-                    token=token_only,  # Use only the token part, SDK handles app_id separately
-                    is_async=False,
-                    client_id=self.app_id,  # Type-safe: already checked for None
-                    log_path=""
-                )
-                logging.info("[FyersOrderService] ✓ Fyers SDK client initialized with token format: extracted")
+                # Validate token format before SDK init
+                if ':' not in str(self.access_token):
+                    logging.warning(f"[FyersOrderService] Access token missing app_id prefix. Expected format: 'appid:token'")
+                    # Don't fail - REST API will handle it
+                else:
+                    # Extract token part (SDK expects just the token, not app_id:token format)
+                    token_only = self.access_token.split(':')[-1] if ':' in self.access_token else self.access_token
+                    if not token_only or len(token_only.strip()) < 10:
+                        logging.warning(f"[FyersOrderService] Invalid token format extracted: {token_only[:20] if token_only else 'empty'}")
+                    else:
+                        self.fyers_client = fyersModel.FyersModel(
+                            token=token_only,
+                            is_async=False,
+                            client_id=self.app_id,
+                            log_path=""
+                        )
+                        logging.info("[FyersOrderService] ✓ Fyers SDK client initialized with token format: extracted")
             except Exception as e:
                 logging.warning(f"[FyersOrderService] Failed to init SDK client: {e}")
                 self.fyers_client = None
@@ -110,21 +118,30 @@ class FyersOrderService:
         Returns:
             Dict with parsed data or error dict
         """
+        import json
         try:
-            # Clean response text from possible trailing "extra data" (e.g., hidden characters)
             text = response.text.strip()
-            # If there is extra data after the last closing brace/bracket, truncate it
-            # This is a common issue with some API responses returning junk after JSON
-            last_brace = text.rfind('}')
-            last_bracket = text.rfind(']')
-            max_idx = max(last_brace, last_bracket)
-            if max_idx != -1 and max_idx < len(text) - 1:
-                logging.debug(f"[{method_name}] Truncating extra data after index {max_idx}")
-                text = text[:max_idx + 1]
-            
-            import json
-            data = json.loads(text)
-            return data
+            decoder = json.JSONDecoder()
+
+            # Fast path: clean JSON body
+            try:
+                data, end_idx = decoder.raw_decode(text)
+                if end_idx < len(text):
+                    logging.debug(f"[{method_name}] Ignoring trailing response data after index {end_idx}")
+                return data if isinstance(data, dict) else {'s': 'ok', 'data': data}
+            except json.JSONDecodeError:
+                # Recover if API prepends noise and then a valid JSON object/array
+                for idx, ch in enumerate(text):
+                    if ch not in '{[':
+                        continue
+                    try:
+                        data, end_idx = decoder.raw_decode(text[idx:])
+                        if idx > 0 or end_idx < len(text[idx:]):
+                            logging.debug(f"[{method_name}] Recovered JSON from noisy response (offset={idx})")
+                        return data if isinstance(data, dict) else {'s': 'ok', 'data': data}
+                    except json.JSONDecodeError:
+                        continue
+                raise
         except (ValueError, json.JSONDecodeError) as json_err:
             logging.error(f"[{method_name}] Failed to parse JSON response: {json_err}")
             logging.error(f"[{method_name}] Response status: {response.status_code}")
@@ -140,6 +157,40 @@ class FyersOrderService:
                 'raw_response': response.text[:200],
                 'parse_error': True
             }
+
+    def _place_order_via_sdk(self, payload: Dict[str, Any], method_name: str = "place_order") -> Dict[str, Any]:
+        """Fallback path using FYERS SDK client when REST returns auth/404/parse errors."""
+        if not self.fyers_client:
+            return {'success': False, 'error': 'Fyers SDK client not initialized'}
+
+        try:
+            # Different SDK versions accept either positional payload or data=payload
+            try:
+                sdk_resp = self.fyers_client.place_order(payload)  # type: ignore[misc]
+            except TypeError:
+                sdk_resp = self.fyers_client.place_order(data=payload)  # type: ignore[misc]
+
+            logging.info(f"[{method_name}] SDK response: {sdk_resp}")
+            if isinstance(sdk_resp, dict):
+                ok = str(sdk_resp.get('s', '')).lower() == 'ok' or bool(sdk_resp.get('id'))
+                if ok:
+                    return {
+                        'success': True,
+                        'order_id': sdk_resp.get('id') or sdk_resp.get('data', {}).get('id'),
+                        'response': sdk_resp,
+                        'source': 'sdk'
+                    }
+                return {
+                    'success': False,
+                    'error': sdk_resp.get('message') or sdk_resp.get('error') or str(sdk_resp),
+                    'response': sdk_resp,
+                    'source': 'sdk'
+                }
+
+            return {'success': False, 'error': f'Unexpected SDK response type: {type(sdk_resp).__name__}', 'source': 'sdk'}
+        except Exception as e:
+            logging.error(f"[{method_name}] SDK fallback failed: {e}", exc_info=True)
+            return {'success': False, 'error': str(e), 'source': 'sdk'}
     
     def generate_auth_code_url(self) -> str:
         """
@@ -397,74 +448,7 @@ class FyersOrderService:
             
             order_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # Try to use Fyers SDK first
-            if self.fyers_client:
-                try:
-                    logging.info(f"[place_order] Using Fyers SDK to place order for symbol: {symbol}")
-                    logging.debug(f"[place_order] SDK client initialized: {self.fyers_client is not None}")
-                    logging.debug(f"[place_order] Access token format: {self.access_token[:30]}..." if self.access_token else "No token")
-                    
-                    payload = {
-                        "symbol": symbol,
-                        "qty": quantity,
-                        "type": order_type,
-                        "side": side,
-                        "productType": product_type,
-                        "limitPrice": limit_price,
-                        "stopPrice": stop_price,
-                        "validity": validity,
-                        "disclosedQty": disclosed_qty,
-                        "offlineOrder": offline_order,
-                        "stopLoss": stop_loss,
-                        "takeProfit": take_profit
-                    }
-                    
-                    logging.debug(f"[place_order] SDK Payload: {payload}")
-                    
-                    # Use SDK to place order
-                    result = self.fyers_client.place_order(payload)
-                    
-                    logging.info(f"[place_order] SDK Response: {result}")
-                    
-                    # Handle SDK response
-                    if result and result.get('s') == 'ok':
-                        order_id = result.get('id')
-                        
-                        logging.info(f"✅ {order_time} Fyers Order placed successfully. Order ID: {order_id} | "
-                                   f"Symbol: {symbol} @ ₹{limit_price} | Qty: {quantity}")
-                        
-                        return {
-                            'success': True,
-                            'order_id': order_id,
-                            'symbol': symbol,
-                            'price': limit_price,
-                            'quantity': quantity,
-                            'side': 'BUY' if side == 1 else 'SELL',
-                            'order_type': order_type,
-                            'product_type': product_type,
-                            'timestamp': order_time,
-                            'platform': 'FYERS',
-                            'method': 'SDK'
-                        }
-                    else:
-                        error_msg = result.get('message') or result.get('error') or 'Unknown error from SDK'
-                        logging.error(f"[place_order] SDK returned error: {error_msg}")
-                        logging.error(f"[place_order] SDK response: {result}")
-                        logging.error(f"[place_order] Authentication check - app_id: {self.app_id}, token format: {'app_id:token' if ':' in self.access_token else 'token_only'}")
-                        
-                        return {
-                            'success': False,
-                            'error': error_msg,
-                            'symbol': symbol,
-                            'response': result,
-                            'method': 'SDK'
-                        }
-                        
-                except Exception as sdk_error:
-                    logging.warning(f"[place_order] SDK call failed: {sdk_error}")
-                    logging.warning(f"[place_order] Falling back to REST API")
-            
-            # Fallback to REST API if SDK not available or failed
+            # Use REST API directly (more reliable than SDK for authentication)
             logging.info(f"[place_order] Using REST API to place order for symbol: {symbol}")
             
             url = f"{self.base_url}/orders"
@@ -528,6 +512,33 @@ class FyersOrderService:
                     logging.error(f"[place_order] Response: {response.text[:200]}")
                 else:
                     error_msg = data.get('message') or data.get('error') or 'Unknown error'
+
+                # Fallback to SDK on likely REST/auth compatibility issues
+                should_try_sdk = (
+                    response.status_code in (401, 403, 404)
+                    or data.get('parse_error') is True
+                    or 'authenticate' in str(error_msg).lower()
+                    or 'unauthor' in str(error_msg).lower()
+                )
+                if should_try_sdk:
+                    logging.warning(f"[place_order] REST failed ({error_msg}). Trying SDK fallback...")
+                    sdk_result = self._place_order_via_sdk(payload, method_name="place_order")
+                    if sdk_result.get('success'):
+                        order_id = sdk_result.get('order_id')
+                        logging.info(f"✅ {order_time} Fyers Order placed successfully via SDK. Order ID: {order_id}")
+                        return {
+                            'success': True,
+                            'order_id': order_id,
+                            'symbol': symbol,
+                            'price': limit_price,
+                            'quantity': quantity,
+                            'side': 'BUY' if side == 1 else 'SELL',
+                            'order_type': order_type,
+                            'product_type': product_type,
+                            'timestamp': order_time,
+                            'platform': 'FYERS'
+                        }
+                    error_msg = sdk_result.get('error') or error_msg
                 
                 logging.error(f"❌ {order_time} Order placement failed: {error_msg}")
                 return {
@@ -754,32 +765,41 @@ class FyersOrderService:
             Dict with success status, order_id, and details
         """
         try:
+            # Validate credentials FIRST
             if not self.access_token:
-                return {'success': False, 'error': 'Access token not available'}
+                logging.error("[place_stoploss_order] Not authenticated. Missing access_token.")
+                return {'success': False, 'error': 'Not authenticated - missing access_token'}
+            
+            if not isinstance(self.access_token, str) or len(self.access_token.strip()) < 10:
+                logging.error(f"[place_stoploss_order] Invalid access_token format")
+                return {'success': False, 'error': 'Invalid access_token format'}
             
             url = f"{self.base_url}/orders"
             headers = {
-                "Authorization": self.access_token,
+                "Authorization": self.access_token.strip(),
                 "Content-Type": "application/json"
             }
             
             payload = {
                 "symbol": symbol,
-                "qty": quantity,
+                "qty": int(quantity),
                 "type": 4,  # 4 = STOP_LOSS_MARKET
                 "side": self.SIDE_SELL,  # -1 = SELL
                 "productType": product_type,
                 "limitPrice": 0,
-                "stopPrice": trigger_price,
+                "stopPrice": float(trigger_price),
                 "validity": "DAY",
                 "disclosedQty": 0,
                 "offlineOrder": False
             }
             
-            logging.info(f"[place_stoploss_order] Placing SL order: {symbol} @ {trigger_price:.2f}")
+            logging.info(f"[place_stoploss_order] Placing SL order: {symbol} @ {trigger_price:.2f}, Qty: {quantity}")
+            logging.debug(f"[place_stoploss_order] Payload: {payload}")
             
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             data = self._parse_response(response, "place_stoploss_order")
+            
+            logging.debug(f"[place_stoploss_order] Response: {data}")
             
             if response.status_code == 200 and data.get('s') == 'ok':
                 order_id = data.get('data', {}).get('id') if isinstance(data.get('data'), dict) else data.get('id')
@@ -794,7 +814,30 @@ class FyersOrderService:
                         'order_type': 'STOPLOSS'
                     }
             
-            error_msg = data.get('message') or 'Order placement failed'
+            error_msg = data.get('message') or data.get('error') or 'Order placement failed'
+
+            # Fallback to SDK on likely REST/auth compatibility issues
+            should_try_sdk = (
+                response.status_code in (401, 403, 404)
+                or data.get('parse_error') is True
+                or 'authenticate' in str(error_msg).lower()
+                or 'unauthor' in str(error_msg).lower()
+            )
+            if should_try_sdk:
+                logging.warning(f"[place_stoploss_order] REST failed ({error_msg}). Trying SDK fallback...")
+                sdk_result = self._place_order_via_sdk(payload, method_name="place_stoploss_order")
+                if sdk_result.get('success'):
+                    order_id = sdk_result.get('order_id')
+                    return {
+                        'success': True,
+                        'order_id': order_id,
+                        'symbol': symbol,
+                        'trigger_price': trigger_price,
+                        'quantity': quantity,
+                        'order_type': 'STOPLOSS'
+                    }
+                error_msg = sdk_result.get('error') or error_msg
+
             logging.error(f"❌ SL Order failed: {error_msg}")
             return {'success': False, 'error': error_msg, 'symbol': symbol}
             

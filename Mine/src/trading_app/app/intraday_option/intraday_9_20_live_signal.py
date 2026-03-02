@@ -1313,9 +1313,9 @@ class Intraday920LiveSignal:
         Place generic buy/sell order on extra brokers.
         Executes in a separate thread.
         """
+        txn_type = 'BUY' if transaction_type == 'BUY' else 'SELL'
         try:
             qty = self.kite_service.get_lot_size(self.symbol)
-            txn_type = 'BUY' if transaction_type == 'BUY' else 'SELL'
             logger.info(f"⚡ [{broker_name}] Attempting {txn_type} {side} {strike} x {qty}...")
             response = None
             # Credential checks
@@ -1331,6 +1331,11 @@ class Intraday920LiveSignal:
                         notes=f'[{broker_name}] Order Failed: Missing or expired credentials.'
                     )
                     return
+                # Try credential sync once (can refresh client_id from profile)
+                try:
+                    service.verify_credentials()
+                except Exception:
+                    pass
             if broker_name == 'FYERS':
                 if not getattr(service, 'access_token', None) or not getattr(service, 'app_id', None):
                     logger.error(f"❌ [{broker_name}] Missing or expired credentials. Skipping order.")
@@ -1343,8 +1348,14 @@ class Intraday920LiveSignal:
                         notes=f'[{broker_name}] Order Failed: Missing or expired credentials.'
                     )
                     return
+                # Validate token once before placing order
+                try:
+                    service.verify_token()
+                except Exception:
+                    pass
             if broker_name == 'KOTAK':
-                if not getattr(service, 'trading_token', None) or not getattr(service, 'base_url', None):
+                # base_url may be empty when gateway URL fallback is used in service layer
+                if not getattr(service, 'trading_token', None) or not getattr(service, 'trading_sid', None):
                     logger.error(f"❌ [{broker_name}] Missing or expired credentials. Skipping order.")
                     excel_logger.log_trade(
                         order_type=txn_type,

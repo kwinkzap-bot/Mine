@@ -5,6 +5,12 @@
 
 // Global state to track sort direction for each table
 let sortDirection = {};
+let cprRefreshIntervalId = null;
+let cprRequestInFlight = false;
+let cprLastRequestAt = 0;
+
+const CPR_MIN_REQUEST_GAP_MS = 60 * 1000; // hard throttle: 1 request/minute
+const CPR_AUTO_REFRESH_MS = 15 * 60 * 1000; // auto refresh every 15 minutes
 
 // Auto-load data when page loads
 window.addEventListener('load', function () {
@@ -80,9 +86,30 @@ window.addEventListener('load', function () {
         loadCPRData();
     }
 
-    // Set interval for continuous refresh - only if scheduler is not already running
+    // Set interval for controlled refresh - only if scheduler is not already running
+    // NOTE: Keep this conservative to avoid API call loops.
     if (!schedulerActive) {
-        setInterval(loadCPRData, CONSTANTS.TIMEOUTS.CPR_REFRESH_INTERVAL);
+        if (cprRefreshIntervalId) {
+            clearInterval(cprRefreshIntervalId);
+            cprRefreshIntervalId = null;
+        }
+
+        cprRefreshIntervalId = setInterval(() => {
+            if (document.visibilityState !== 'visible') {
+                return;
+            }
+
+            const picker = document.getElementById('cprDateFilter');
+            const selectedDate = picker ? picker.value : '';
+            const today = new Date().toISOString().split('T')[0];
+
+            // Do not poll historical dates repeatedly.
+            if (selectedDate && selectedDate !== today) {
+                return;
+            }
+
+            loadCPRData();
+        }, CPR_AUTO_REFRESH_MS);
     }
 
     // Add sort listeners to both tables
@@ -162,6 +189,17 @@ window.addEventListener('load', function () {
  * Fetches CPR data from the backend API using fetchJson utility.
  */
 async function loadCPRData() {
+    const now = Date.now();
+    if (cprRequestInFlight) {
+        return;
+    }
+    if (now - cprLastRequestAt < CPR_MIN_REQUEST_GAP_MS) {
+        return;
+    }
+
+    cprRequestInFlight = true;
+    cprLastRequestAt = now;
+
     let statusBar = document.getElementById('status-text');
     // Check if statusBar exists, fallback to status-bar container
     if (!statusBar) {
@@ -376,8 +414,17 @@ async function loadCPRData() {
     } catch (error) {
         console.error('Error fetching CPR data:', error);
         statusBar.textContent = `❌ Network Error: ${error.message}`;
+    } finally {
+        cprRequestInFlight = false;
     }
 }
+
+window.addEventListener('beforeunload', function () {
+    if (cprRefreshIntervalId) {
+        clearInterval(cprRefreshIntervalId);
+        cprRefreshIntervalId = null;
+    }
+});
 
 /**
  * Populates the results table with data.
@@ -437,10 +484,11 @@ function displayResults(type, results) {
         const symbolCell = `<a href="${tradingViewUrl}" target="_blank" rel="noopener noreferrer" class="symbol-link">${stock.symbol}</a>`;
 
         if (config.isHighIv) {
-            // High IV Percentile table - 8 columns
+            // High IV Percentile table - 9 columns
             const ivPercentile = Number(stock.iv_percentile || 0);
             const ivClass = ivPercentile >= 90 ? 'iv-very-high' : 'iv-high';
             const atmIv = Number(stock.atm_iv || 0);
+            const dayChangePct = Number(stock.day_change_pct || 0);
             const volume = stock.volume || 0;
             const oiChangePct = Number(stock.oi_change_pct || 0);
             const pcr = Number(stock.pcr || 0);
@@ -456,6 +504,8 @@ function displayResults(type, results) {
 
             // OI% change color
             const oiClass = oiChangePct > 0 ? 'gap-up' : (oiChangePct < 0 ? 'gap-down' : '');
+            // Day change color
+            const dayChgClass = dayChangePct > 0 ? 'gap-up' : (dayChangePct < 0 ? 'gap-down' : '');
             // PCR color
             const pcrClass = pcr > 1 ? 'gap-up' : (pcr < 0.7 ? 'gap-down' : '');
 
@@ -464,6 +514,7 @@ function displayResults(type, results) {
                 <td>${stock.current_price.toFixed(2)}</td>
                 <td class="${ivClass}">${ivPercentile.toFixed(1)}%</td>
                 <td>${atmIv.toFixed(1)}%</td>
+                <td class="${dayChgClass}">${dayChangePct.toFixed(2)}%</td>
                 <td>${formatVolume(volume)}</td>
                 <td class="${oiClass}">${oiChangePct.toFixed(1)}%</td>
                 <td class="${pcrClass}">${pcr.toFixed(2)}</td>

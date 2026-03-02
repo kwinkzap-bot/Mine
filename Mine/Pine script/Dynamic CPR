@@ -600,10 +600,25 @@ else
     ns_running_low := math.min(nz(ns_running_low, low), low)
 
 next_session_show = input.bool(false, "Show Next Session Pivot", group="Next Session")
+next_session_holidays = input.string("", "Holiday List (YYYY-MM-DD, comma separated)", group="Next Session", tooltip="Optional exchange holidays to skip for Daily next-session projection. Example: 2026-03-03,2026-03-18")
 
 var next_lines = array.new_line()
 var next_labels = array.new_label()
 var next_boxes = array.new_box()
+
+is_configured_holiday(ts) =>
+    bool is_holiday = false
+    if not na(ts)
+        int key = year(ts, "Asia/Kolkata") * 10000 + month(ts, "Asia/Kolkata") * 100 + dayofmonth(ts, "Asia/Kolkata")
+        holiday_tokens = str.split(next_session_holidays, ",")
+        for hi = 0 to array.size(holiday_tokens) - 1
+            token_raw = str.trim(array.get(holiday_tokens, hi))
+            token = str.replace_all(token_raw, "-", "")
+            if str.length(token) == 8
+                token_num = int(str.tonumber(token))
+                if token_num == key
+                    is_holiday := true
+    is_holiday
 
 // Clear and redraw on EVERY real-time update for dynamic levels
 if barstate.islast and next_session_show and array.size(arr_time) > 0
@@ -623,113 +638,155 @@ if barstate.islast and next_session_show and array.size(arr_time) > 0
     if not na(curr_high) and not na(curr_low) and not na(curr_close)
         // Calculate next session time range (dynamic per resolution)
         j = array.size(arr_time) - 2
-        int ns_start = 0
-        int ns_end = 0
+        int ns_start = na
+        int ns_end = na
         
         if resolution == "D"
-            // Daily: project to next trading day's market hours (9:00 AM - 3:30 PM IST)
-            // Skip weekends: Fri→Mon(+3), Sat→Mon(+2), else +1
-            curr_dow = dayofweek(time, "Asia/Kolkata")
-            curr_y = year(time, "Asia/Kolkata")
-            curr_m = month(time, "Asia/Kolkata")
-            curr_d = dayofmonth(time, "Asia/Kolkata")
-            int days_ahead = 1
-            if curr_dow == dayofweek.friday
-                days_ahead := 3
-            else if curr_dow == dayofweek.saturday
-                days_ahead := 2
-            ns_start := timestamp("Asia/Kolkata", curr_y, curr_m, curr_d + days_ahead, 9, 0, 0)
-            ns_end   := timestamp("Asia/Kolkata", curr_y, curr_m, curr_d + days_ahead, 15, 30, 0)
+            // Daily: project to next trading day and draw levels for market session window (09:00 - 15:30 IST)
+            // Build next date from current bar time, skipping weekends + configured holidays.
+            int one_day_ms = 24 * 60 * 60 * 1000
+            int candidate_day = nz(time("D"), time) + one_day_ms
+            int guard = 0
+
+            // Skip weekends and configured holidays (guarded loop)
+            while not na(candidate_day) and guard < 20 and (
+                 dayofweek(candidate_day, "Asia/Kolkata") == dayofweek.saturday or
+                 dayofweek(candidate_day, "Asia/Kolkata") == dayofweek.sunday or
+                 is_configured_holiday(candidate_day)
+                 )
+                candidate_day += one_day_ms
+                guard += 1
+
+            if not na(candidate_day)
+                next_y = year(candidate_day, "Asia/Kolkata")
+                next_m = month(candidate_day, "Asia/Kolkata")
+                next_d = dayofmonth(candidate_day, "Asia/Kolkata")
+
+                ns_start := timestamp("Asia/Kolkata", next_y, next_m, next_d, 9, 0, 0)
+                ns_end   := timestamp("Asia/Kolkata", next_y, next_m, next_d, 15, 30, 0)
+
+            // Safety fallback (if timezone/date extraction returns na for any reason)
+            if na(ns_start) or na(ns_end) or ns_end <= ns_start
+                int daily_start = time("D")
+                if not na(daily_start)
+                    // fallback projection: approximate next session window from next calendar day
+                    ns_start := daily_start + one_day_ms + (9 * 60) * 60 * 1000
+                    ns_end   := daily_start + one_day_ms + (15 * 60 + 30) * 60 * 1000
+            
+            // Final fallback to visible projection window to ensure drawing is not skipped
+            if na(ns_start) or na(ns_end) or ns_end <= ns_start
+                ns_start := time + one_day_ms
+                ns_end := ns_start + (6 * 60 + 30) * 60 * 1000
         else
             // Weekly/Monthly/Quarterly/etc: use actual session duration
             ns_duration = array.get(arr_time, j + 1) - array.get(arr_time, j)
             ns_start := array.get(arr_time, j + 1)
             ns_end   := ns_start + ns_duration
         
-        // === Calculate Next Session CPR ===
-        ns_pivot = (curr_high + curr_low + curr_close) / 3
-        ns_bc = (curr_high + curr_low) / 2
-        ns_tc = ns_pivot * 2 - ns_bc
-        if ns_bc > ns_tc
-            temp = ns_bc
-            ns_bc := ns_tc
-            ns_tc := temp
+        if not na(ns_start) and not na(ns_end) and ns_end > ns_start
+            // Daily: use bar_index for future projection (reliable on intraday charts).
+            // Others: keep bar_time projection.
+            bool use_index_projection = resolution == "D"
+            next_xloc = use_index_projection ? xloc.bar_index : xloc.bar_time
+
+            int x1_next = na
+            int x2_next = na
+            if use_index_projection
+                int tf_sec = int(math.max(timeframe.in_seconds(), 60))
+                int bars_per_session = int(math.max(1, math.round((6.5 * 60 * 60) / tf_sec)))
+                x1_next := bar_index + 1
+                x2_next := bar_index + bars_per_session
+                x2_next := math.min(x2_next, bar_index + 500)
+                if x2_next <= x1_next
+                    x2_next := x1_next + 1
+            else
+                x1_next := ns_start
+                x2_next := ns_end
+
+            // === Calculate Next Session CPR ===
+            ns_pivot = (curr_high + curr_low + curr_close) / 3
+            ns_bc = (curr_high + curr_low) / 2
+            ns_tc = ns_pivot * 2 - ns_bc
+            if ns_bc > ns_tc
+                temp = ns_bc
+                ns_bc := ns_tc
+                ns_tc := temp
         
-        // === R1, S1 (Traditional) ===
-        ns_r1 = ns_pivot * 2 - curr_low
-        ns_s1 = ns_pivot * 2 - curr_high
+            // === R1, S1 (Traditional) ===
+            ns_r1 = ns_pivot * 2 - curr_low
+            ns_s1 = ns_pivot * 2 - curr_high
         
-        // === Camarilla R3, S3 ===
-        ns_cam_range = curr_high - curr_low
-        ns_cam_r3 = curr_close + ns_cam_range * 1.1 / 4.0
-        ns_cam_s3 = curr_close - ns_cam_range * 1.1 / 4.0
+            // === Camarilla R3, S3 ===
+            ns_cam_range = curr_high - curr_low
+            ns_cam_r3 = curr_close + ns_cam_range * 1.1 / 4.0
+            ns_cam_s3 = curr_close - ns_cam_range * 1.1 / 4.0
         
-        // === R0.5, S0.5 ===
-        ns_r05 = (ns_pivot + ns_r1) / 2
-        ns_s05 = (ns_pivot + ns_s1) / 2
+            // === R0.5, S0.5 ===
+            ns_r05 = (ns_pivot + ns_r1) / 2
+            ns_s05 = (ns_pivot + ns_s1) / 2
         
-        // === R0.25, S0.25 (Quarter Lines) ===
-        ns_rq = ns_r05 + (curr_high - ns_r05) / 4
-        ns_sq = ns_s05 - (ns_s05 - curr_low) / 4
+            // === R0.25, S0.25 (Quarter Lines) ===
+            ns_rq = ns_r05 + (curr_high - ns_r05) / 4
+            ns_sq = ns_s05 - (ns_s05 - curr_low) / 4
         
-        // Dashed style for next session lines (same colors as current day)
-        ns_line_style = line.style_dashed
+            // Dashed style for next session lines (same colors as current day)
+            ns_line_style = line.style_dashed
         
-        // --- Draw CPR (P, TC, BC) --- same color as current CPR
-        l_p = line.new(ns_start, ns_pivot, ns_end, ns_pivot, color=cpr_color, xloc=xloc.bar_time, width=line_width, style=ns_line_style)
-        l_tc = line.new(ns_start, ns_tc, ns_end, ns_tc, color=cpr_color, xloc=xloc.bar_time, width=line_width, style=ns_line_style)
-        l_bc = line.new(ns_start, ns_bc, ns_end, ns_bc, color=cpr_color, xloc=xloc.bar_time, width=line_width, style=ns_line_style)
-        linefill.new(l_tc, l_bc, color.new(cpr_color, 95))
-        array.push(next_lines, l_p)
-        array.push(next_lines, l_tc)
-        array.push(next_lines, l_bc)
+            // --- Draw CPR (P, TC, BC) --- same color as current CPR
+            l_p = line.new(x1_next, ns_pivot, x2_next, ns_pivot, color=cpr_color, xloc=next_xloc, width=line_width, style=ns_line_style)
+            l_tc = line.new(x1_next, ns_tc, x2_next, ns_tc, color=cpr_color, xloc=next_xloc, width=line_width, style=ns_line_style)
+            l_bc = line.new(x1_next, ns_bc, x2_next, ns_bc, color=cpr_color, xloc=next_xloc, width=line_width, style=ns_line_style)
+            linefill.new(l_tc, l_bc, color.new(cpr_color, 95))
+            array.push(next_lines, l_p)
+            array.push(next_lines, l_tc)
+            array.push(next_lines, l_bc)
         
-        // CPR Labels
-        array.push(next_labels, label.new(x=ns_end, y=ns_pivot, text="  P*", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-        array.push(next_labels, label.new(x=ns_end, y=ns_tc, text="  TC*", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-        array.push(next_labels, label.new(x=ns_end, y=ns_bc, text="  BC*", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+            // CPR Labels
+            array.push(next_labels, label.new(x=x2_next, y=ns_pivot, text="  P*", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+            array.push(next_labels, label.new(x=x2_next, y=ns_tc, text="  TC*", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+            array.push(next_labels, label.new(x=x2_next, y=ns_bc, text="  BC*", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
         
-        // --- Draw R1 / Prev High Box --- same color as current R1 box
-        ns_r1_top = math.max(ns_r1, curr_high)
-        ns_r1_bot = math.min(ns_r1, curr_high)
-        ns_box_r1 = box.new(ns_start, ns_r1_top, ns_end, ns_r1_bot, border_color=r1_border_color, bgcolor=r1_bg_color, border_width=2, border_style=line.style_dashed, xloc=xloc.bar_time)
-        array.push(next_boxes, ns_box_r1)
-        if ns_r1 >= curr_high
-            array.push(next_labels, label.new(x=ns_end, y=ns_r1, text="  R1*", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-            array.push(next_labels, label.new(x=ns_end, y=curr_high, text="  Prev H*", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-        else
-            array.push(next_labels, label.new(x=ns_end, y=curr_high, text="  Prev H*", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-            array.push(next_labels, label.new(x=ns_end, y=ns_r1, text="  R1*", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+            // --- Draw R1 / Prev High Box --- same color as current R1 box
+            ns_r1_top = math.max(ns_r1, curr_high)
+            ns_r1_bot = math.min(ns_r1, curr_high)
+            ns_box_r1 = box.new(x1_next, ns_r1_top, x2_next, ns_r1_bot, border_color=r1_border_color, bgcolor=r1_bg_color, border_width=2, border_style=line.style_dashed, xloc=next_xloc)
+            array.push(next_boxes, ns_box_r1)
+            if ns_r1 >= curr_high
+                array.push(next_labels, label.new(x=x2_next, y=ns_r1, text="  R1*", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+                array.push(next_labels, label.new(x=x2_next, y=curr_high, text="  Prev H*", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+            else
+                array.push(next_labels, label.new(x=x2_next, y=curr_high, text="  Prev H*", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+                array.push(next_labels, label.new(x=x2_next, y=ns_r1, text="  R1*", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
         
-        // --- Draw S1 / Prev Low Box --- same color as current S1 box
-        ns_s1_top = math.max(ns_s1, curr_low)
-        ns_s1_bot = math.min(ns_s1, curr_low)
-        ns_box_s1 = box.new(ns_start, ns_s1_top, ns_end, ns_s1_bot, border_color=s1_border_color, bgcolor=s1_bg_color, border_width=2, border_style=line.style_dashed, xloc=xloc.bar_time)
-        array.push(next_boxes, ns_box_s1)
-        if ns_s1 <= curr_low
-            array.push(next_labels, label.new(x=ns_end, y=ns_s1, text="  S1*", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-            array.push(next_labels, label.new(x=ns_end, y=curr_low, text="  Prev L*", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-        else
-            array.push(next_labels, label.new(x=ns_end, y=curr_low, text="  Prev L*", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-            array.push(next_labels, label.new(x=ns_end, y=ns_s1, text="  S1*", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+            // --- Draw S1 / Prev Low Box --- same color as current S1 box
+            ns_s1_top = math.max(ns_s1, curr_low)
+            ns_s1_bot = math.min(ns_s1, curr_low)
+            ns_box_s1 = box.new(x1_next, ns_s1_top, x2_next, ns_s1_bot, border_color=s1_border_color, bgcolor=s1_bg_color, border_width=2, border_style=line.style_dashed, xloc=next_xloc)
+            array.push(next_boxes, ns_box_s1)
+            if ns_s1 <= curr_low
+                array.push(next_labels, label.new(x=x2_next, y=ns_s1, text="  S1*", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+                array.push(next_labels, label.new(x=x2_next, y=curr_low, text="  Prev L*", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+            else
+                array.push(next_labels, label.new(x=x2_next, y=curr_low, text="  Prev L*", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+                array.push(next_labels, label.new(x=x2_next, y=ns_s1, text="  S1*", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
         
-        // --- Draw C-R3, C-S3 Lines --- same color as current C-R3/C-S3
-        l_cr3 = line.new(ns_start, ns_cam_r3, ns_end, ns_cam_r3, color=cam_r3_color, xloc=xloc.bar_time, width=2, style=line.style_dashed)
-        l_cs3 = line.new(ns_start, ns_cam_s3, ns_end, ns_cam_s3, color=cam_s3_color, xloc=xloc.bar_time, width=2, style=line.style_dashed)
-        array.push(next_lines, l_cr3)
-        array.push(next_lines, l_cs3)
-        array.push(next_labels, label.new(x=ns_end, y=ns_cam_r3, text="  C-R3*", textcolor=cam_r3_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-        array.push(next_labels, label.new(x=ns_end, y=ns_cam_s3, text="  C-S3*", textcolor=cam_s3_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
+            // --- Draw C-R3, C-S3 Lines --- same color as current C-R3/C-S3
+            l_cr3 = line.new(x1_next, ns_cam_r3, x2_next, ns_cam_r3, color=cam_r3_color, xloc=next_xloc, width=2, style=line.style_dashed)
+            l_cs3 = line.new(x1_next, ns_cam_s3, x2_next, ns_cam_s3, color=cam_s3_color, xloc=next_xloc, width=2, style=line.style_dashed)
+            array.push(next_lines, l_cr3)
+            array.push(next_lines, l_cs3)
+            array.push(next_labels, label.new(x=x2_next, y=ns_cam_r3, text="  C-R3*", textcolor=cam_r3_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+            array.push(next_labels, label.new(x=x2_next, y=ns_cam_s3, text="  C-S3*", textcolor=cam_s3_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
         
-        // --- Draw Immediate S/R Boxes --- same color as current Immediate S/R
-        // Resistance box: R0.5 to R0.25
-        ns_ir_top = math.max(ns_r05, ns_rq)
-        ns_ir_bot = math.min(ns_r05, ns_rq)
-        ns_box_ir = box.new(ns_start, ns_ir_top, ns_end, ns_ir_bot, border_color=immediate_r_color, bgcolor=color.new(immediate_r_color, 85), border_style=line.style_dashed, xloc=xloc.bar_time)
-        array.push(next_boxes, ns_box_ir)
-        
-        // Support box: S0.5 to S0.25
-        ns_is_top = math.max(ns_s05, ns_sq)
-        ns_is_bot = math.min(ns_s05, ns_sq)
-        ns_box_is = box.new(ns_start, ns_is_top, ns_end, ns_is_bot, border_color=immediate_s_color, bgcolor=color.new(immediate_s_color, 85), border_style=line.style_dashed, xloc=xloc.bar_time)
-        array.push(next_boxes, ns_box_is)
+            // --- Draw Immediate S/R Boxes --- same color as current Immediate S/R
+            // Resistance box: R0.5 to R0.25
+            ns_ir_top = math.max(ns_r05, ns_rq)
+            ns_ir_bot = math.min(ns_r05, ns_rq)
+            ns_box_ir = box.new(x1_next, ns_ir_top, x2_next, ns_ir_bot, border_color=immediate_r_color, bgcolor=color.new(immediate_r_color, 85), border_style=line.style_dashed, xloc=next_xloc)
+            array.push(next_boxes, ns_box_ir)
+            
+            // Support box: S0.5 to S0.25
+            ns_is_top = math.max(ns_s05, ns_sq)
+            ns_is_bot = math.min(ns_s05, ns_sq)
+            ns_box_is = box.new(x1_next, ns_is_top, x2_next, ns_is_bot, border_color=immediate_s_color, bgcolor=color.new(immediate_s_color, 85), border_style=line.style_dashed, xloc=next_xloc)
+            array.push(next_boxes, ns_box_is)
