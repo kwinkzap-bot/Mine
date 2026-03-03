@@ -136,6 +136,7 @@ class MarketScheduler:
 
     def _run_oi_persistence_task(self):
         """Fetch and store Open Interest data."""
+        import os
         try:
             # Strict checks for production - Run only during market hours on trading days
             # Unless FORCE_OI_TASK env var is set (for testing)
@@ -147,7 +148,6 @@ class MarketScheduler:
             # Need to get Kite instance without session
             # This requires token to be available in environment or cache
             from trading_app.app.routes.api import get_kite
-            import os
             
             # Since we're in a background thread, get_kite needs to find token 
             # from file cache or environment variable
