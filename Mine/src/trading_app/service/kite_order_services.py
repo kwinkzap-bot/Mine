@@ -4,15 +4,150 @@ import pandas as pd
 from datetime import datetime, timedelta, date
 import os
 from dotenv import load_dotenv
-from typing import List, Dict, Any, Optional # Added typing imports
-import re # FIX: Moved 'import re' to the top for style and efficiency
+from typing import List, Dict, Any, Optional, Tuple, Union
+import re
+import threading
+import time
+import random
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 load_dotenv()
+
+# Global singleton cache for instruments (shared across all KiteService instances)
+_global_instruments_cache = {
+    'nse': None,
+    'nfo': None,
+    'tokens_by_symbol': {},
+    'tokens_by_name': {},
+    'cache_date': None,
+    'lock': threading.Lock()
+}
+
+# Global historical data cache with LRU eviction
+class HistoricalDataCache:
+    """Thread-safe LRU cache for historical data with TTL."""
+    
+    def __init__(self, max_size: int = 500, default_ttl: int = 300):
+        self._cache: OrderedDict[str, Tuple[Any, float, int]] = OrderedDict()  # key -> (data, timestamp, ttl)
+        self._lock = threading.Lock()
+        self._max_size = max_size
+        self._default_ttl = default_ttl
+        self._hits = 0
+        self._misses = 0
+    
+    def _make_key(self, token: int, from_date: str, to_date: str, interval: str) -> str:
+        return f"{token}:{from_date}:{to_date}:{interval}"
+    
+    def get(self, token: int, from_date: str, to_date: str, interval: str) -> Optional[pd.DataFrame]:
+        key = self._make_key(token, from_date, to_date, interval)
+        with self._lock:
+            if key not in self._cache:
+                self._misses += 1
+                return None
+            
+            data, timestamp, ttl = self._cache[key]
+            if time.time() - timestamp > ttl:
+                del self._cache[key]
+                self._misses += 1
+                return None
+            
+            # Move to end (LRU)
+            self._cache.move_to_end(key)
+            self._hits += 1
+            return data.copy() if isinstance(data, pd.DataFrame) else data
+    
+    def set(self, token: int, from_date: str, to_date: str, interval: str, 
+            data: pd.DataFrame, ttl: Optional[int] = None) -> None:
+        key = self._make_key(token, from_date, to_date, interval)
+        ttl = ttl or self._default_ttl
+        
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
+            
+            while len(self._cache) >= self._max_size:
+                self._cache.popitem(last=False)
+            
+            self._cache[key] = (data, time.time(), ttl)
+    
+    def get_stats(self) -> Dict[str, Any]:
+        with self._lock:
+            total = self._hits + self._misses
+            hit_rate = (self._hits / total * 100) if total > 0 else 0
+            return {
+                'size': len(self._cache),
+                'hits': self._hits,
+                'misses': self._misses,
+                'hit_rate': f'{hit_rate:.1f}%'
+            }
+    
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+            self._hits = 0
+            self._misses = 0
+
+
+# Global cache instance
+_historical_cache = HistoricalDataCache(max_size=500, default_ttl=300)
+
+# GLOBAL rate limiter (shared across ALL Kite API calls in entire application)
+# Kite Historical API limit: 3 requests/second
+class GlobalRateLimiter:
+    """
+    Thread-safe global rate limiter for Kite API.
+    
+    IMPORTANT: Kite Historical API allows only 3 requests/second.
+    This limiter ensures ALL API calls across the entire application
+    respect this limit by using a single shared instance.
+    """
+    _instance = None
+    _lock = threading.Lock()
+    
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._init()
+        return cls._instance
+    
+    def _init(self):
+        self._request_lock = threading.Lock()
+        self._last_request_ts = 0.0
+        self._min_gap = 0.5  # 0.5s = 2 req/sec (conservative, Kite limit is 3/sec)
+        self._request_count = 0
+    
+    def wait(self) -> None:
+        """Block until it's safe to make another request."""
+        with self._request_lock:
+            now = time.time()
+            elapsed = now - self._last_request_ts
+            if elapsed < self._min_gap:
+                sleep_time = self._min_gap - elapsed
+                time.sleep(sleep_time)
+            self._last_request_ts = time.time()
+            self._request_count += 1
+    
+    def get_stats(self) -> Dict[str, Any]:
+        return {
+            'total_requests': self._request_count,
+            'min_gap': self._min_gap,
+            'last_request': self._last_request_ts
+        }
+
+# Singleton instance - import this in other modules
+_global_rate_limiter = GlobalRateLimiter()
+
+def get_global_rate_limiter() -> GlobalRateLimiter:
+    """Get the global rate limiter instance. Use this in all Kite API calls."""
+    return _global_rate_limiter
 
 class KiteService:
     def __init__(self, kite_instance: Optional[KiteConnect] = None) -> None:
         """
-        Initializes the KiteService.
+        Initializes the KiteService with optimized caching.
         """
         self.kite: KiteConnect = kite_instance or self._create_kite_instance()
         self.instruments: Optional[List[Dict[str, Any]]] = None
@@ -23,11 +158,34 @@ class KiteService:
         self._nfo_option_symbol_cache: Dict[str, str] = {}  # Cache for option symbol lookups
         self._quote_cache: Dict[str, tuple] = {}  # Cache for quotes: {key: (price, timestamp)}
         self._quote_cache_ttl = 5  # Quote cache TTL in seconds
-        if self.instruments is None:
-            self._load_instruments()
+        self._quote_lock = threading.Lock()  # Thread-safe quote cache
+        
+        # Use global cache if available (optimization: avoid repeated API calls)
+        self._load_instruments_from_cache_or_api()
+    
+    def _load_instruments_from_cache_or_api(self):
+        """Load instruments from global cache or API (once per day)."""
+        global _global_instruments_cache
+        today = date.today()
+        
+        with _global_instruments_cache['lock']:
+            # Check if cache is valid (same day)
+            if _global_instruments_cache['cache_date'] == today and _global_instruments_cache['nse']:
+                # Use cached data
+                self.instruments = (_global_instruments_cache['nse'] or []) + (_global_instruments_cache['nfo'] or [])
+                self._instrument_tokens_by_symbol = _global_instruments_cache['tokens_by_symbol'].copy()
+                self._instrument_tokens_by_name = _global_instruments_cache['tokens_by_name'].copy()
+                self._nfo_instruments_cache = _global_instruments_cache['nfo']
+                self._nfo_cache_asof = today
+                logging.info(f"[KiteService] Using cached instruments ({len(self.instruments)} total)")
+                return
+        
+        # Cache miss - load from API
+        self._load_instruments()
     
     def _load_instruments(self):
         """Loads and processes instruments into lookup dictionaries. Includes both NSE and NFO."""
+        global _global_instruments_cache
         try:
             # Load NSE instruments (for indices like NIFTY, BANKNIFTY)
             nse_instruments = self.kite.instruments('NSE')
@@ -54,6 +212,16 @@ class KiteService:
                     self._instrument_tokens_by_name[name.lower()] = token
             
             logging.info(f"[_load_instruments] Built lookup: {len(self._instrument_tokens_by_symbol)} symbols, {len(self._instrument_tokens_by_name)} names")
+            
+            # Update global cache for sharing across instances
+            with _global_instruments_cache['lock']:
+                _global_instruments_cache['nse'] = nse_instruments
+                _global_instruments_cache['nfo'] = nfo_instruments
+                _global_instruments_cache['tokens_by_symbol'] = self._instrument_tokens_by_symbol.copy()
+                _global_instruments_cache['tokens_by_name'] = self._instrument_tokens_by_name.copy()
+                _global_instruments_cache['cache_date'] = date.today()
+                logging.info(f"[_load_instruments] Updated global cache")
+                
         except Exception as e:
             logging.error(f"Error loading instruments: {e}")
     
@@ -347,46 +515,270 @@ class KiteService:
             logging.error(f"Error getting F&O stocks: {e}")
             return []
     
-    def get_historical_data(self, symbol: str, from_date: datetime, to_date: datetime, interval: str = 'day') -> Optional[pd.DataFrame]:
-        """Fetches historical data, ensuring 'date' column is timezone-naive datetime."""
+    # ========== RATE LIMITING ==========
+    _rate_lock = threading.Lock()
+    _last_request_ts = 0.0
+    
+    def _respect_rate_limit(self, min_gap: float = 0.1) -> None:
+        """Ensure minimum gap between API requests to avoid rate limiting."""
+        with self._rate_lock:
+            now = time.time()
+            elapsed = now - self._last_request_ts
+            if elapsed < min_gap:
+                time.sleep(min_gap - elapsed)
+            self._last_request_ts = time.time()
+    
+    # ========== IMPROVED HISTORICAL DATA FETCHING ==========
+    
+    def _historical_with_retry(
+        self, 
+        instrument_token: int, 
+        from_date: datetime, 
+        to_date: datetime, 
+        interval: str, 
+        max_retries: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical data with exponential backoff retry.
+        
+        Features:
+        - Global rate limiting to prevent 429 errors
+        - Exponential backoff with jitter (longer for rate limits)
+        - Proper error categorization
+        """
+        global _global_rate_limiter
+        attempt = 0
+        
+        while True:
+            try:
+                # Use GLOBAL rate limiter (shared across all instances)
+                _global_rate_limiter.wait()
+                
+                data = self.kite.historical_data(
+                    instrument_token=int(instrument_token),
+                    from_date=from_date,
+                    to_date=to_date,
+                    interval=interval
+                )
+                return data or []
+                
+            except Exception as e:
+                msg = str(e) if e else "Unknown error"
+                is_rate_limit = 'Too many requests' in msg or '429' in msg
+                
+                if attempt >= max_retries:
+                    logging.error(f"historical_data failed after {max_retries} retries for token {instrument_token}: {msg}")
+                    return []
+                
+                # Longer backoff for rate limits, shorter for other errors
+                if is_rate_limit:
+                    # Rate limit: start at 2s, max 30s
+                    base = 2.0 * (2 ** attempt)
+                    sleep_seconds = min(30.0, base + random.uniform(0, 1.0))
+                    logging.warning(f"Rate limited (attempt {attempt+1}/{max_retries}). Backing off {sleep_seconds:.1f}s")
+                else:
+                    # Other errors: start at 0.5s, max 8s
+                    base = 0.5 * (2 ** attempt)
+                    sleep_seconds = min(8.0, base + random.uniform(0, 0.4))
+                    logging.warning(f"Error (attempt {attempt+1}/{max_retries}) for token {instrument_token}: {msg}. Backing off {sleep_seconds:.1f}s")
+                
+                time.sleep(sleep_seconds)
+                attempt += 1
+    
+    def get_historical_data(
+        self, 
+        symbol: str, 
+        from_date: Union[datetime, str], 
+        to_date: Union[datetime, str], 
+        interval: str = 'day',
+        use_cache: bool = True,
+        cache_ttl: Optional[int] = None
+    ) -> Optional[pd.DataFrame]:
+        """
+        Fetches historical data with caching and retry logic.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'NIFTY 50', 'RELIANCE')
+            from_date: Start date (datetime or 'YYYY-MM-DD' string)
+            to_date: End date (datetime or 'YYYY-MM-DD' string)
+            interval: Candle interval ('minute', '3minute', '5minute', '15minute', '30minute', '60minute', 'day')
+            use_cache: Whether to use cached data (default: True)
+            cache_ttl: Cache TTL in seconds (default: 300 for day, 60 for intraday)
+        
+        Returns:
+            DataFrame with columns: date, open, high, low, close, volume
+        """
+        global _historical_cache
+        
         try:
             token = self.get_instrument_token(symbol)
-            logging.debug(f"Token for {symbol}: {token}")
             if not token:
+                logging.warning(f"No token found for symbol: {symbol}")
                 return None
             
-            # Removed redundant datetime conversion checks since type hints suggest datetime objects
-            # Assuming callers pass datetime objects, or adding the check back if needed:
+            # Normalize dates
             if isinstance(from_date, str):
                 from_date = datetime.strptime(from_date, '%Y-%m-%d')
             if isinstance(to_date, str):
                 to_date = datetime.strptime(to_date, '%Y-%m-%d')
             
-            data = self.kite.historical_data(
-                instrument_token=token,
-                from_date=from_date,
-                to_date=to_date,
-                interval=interval
-            )
+            from_str = from_date.strftime('%Y-%m-%d')
+            to_str = to_date.strftime('%Y-%m-%d')
             
-            if data:
-                df = pd.DataFrame(data)
-                # FIX: Ensure 'date' column is a timezone-naive datetime for consistency
-                if 'date' in df.columns:
-                     try:
-                         df['date'] = pd.to_datetime(df['date'])
-                         # Use type: ignore to suppress false positive from Pylance
-                         if hasattr(df['date'], 'dt'):
-                             df['date'] = df['date'].dt.tz_localize(None)  # type: ignore
-                     except Exception:
-                         pass  # Keep original date format if conversion fails
-                return df
-            return None
+            # Determine cache TTL based on interval
+            if cache_ttl is None:
+                cache_ttl = 60 if 'minute' in interval else 300
+            
+            # Check cache
+            if use_cache:
+                cached = _historical_cache.get(token, from_str, to_str, interval)
+                if cached is not None:
+                    logging.debug(f"Cache hit for {symbol} ({interval})")
+                    return cached
+            
+            # Fetch from API with retry
+            data = self._historical_with_retry(token, from_date, to_date, interval)
+            
+            if not data:
+                return None
+            
+            df = pd.DataFrame(data)
+            
+            # Normalize date column
+            if 'date' in df.columns:
+                try:
+                    df['date'] = pd.to_datetime(df['date'])
+                    if hasattr(df['date'], 'dt'):
+                        df['date'] = df['date'].dt.tz_localize(None)
+                except Exception:
+                    pass
+            
+            # Cache the result
+            if use_cache:
+                _historical_cache.set(token, from_str, to_str, interval, df, cache_ttl)
+            
+            return df
+            
         except Exception as e:
             logging.error(f"Error fetching data for {symbol}: {e}")
-            import traceback
-            traceback.print_exc()
             return None
+    
+    def get_historical_data_batch(
+        self,
+        requests: List[Dict[str, Any]],
+        max_workers: int = 4
+    ) -> Dict[str, Optional[pd.DataFrame]]:
+        """
+        Fetch historical data for multiple symbols in parallel.
+        
+        Args:
+            requests: List of dicts with keys: symbol, from_date, to_date, interval (optional)
+                     Example: [{'symbol': 'RELIANCE', 'from_date': '2026-01-01', 'to_date': '2026-03-01'}]
+            max_workers: Number of parallel workers (default: 4)
+        
+        Returns:
+            Dict mapping symbol to DataFrame (or None if failed)
+        """
+        results: Dict[str, Optional[pd.DataFrame]] = {}
+        
+        def fetch_one(req: Dict[str, Any]) -> Tuple[str, Optional[pd.DataFrame]]:
+            symbol = req['symbol']
+            from_date = req['from_date']
+            to_date = req['to_date']
+            interval = req.get('interval', 'day')
+            
+            df = self.get_historical_data(symbol, from_date, to_date, interval)
+            return (symbol, df)
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(fetch_one, req): req['symbol'] for req in requests}
+            
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    sym, df = future.result()
+                    results[sym] = df
+                except Exception as e:
+                    logging.error(f"Batch fetch failed for {symbol}: {e}")
+                    results[symbol] = None
+        
+        return results
+    
+    def get_historical_data_by_token(
+        self,
+        token: int,
+        from_date: Union[datetime, str],
+        to_date: Union[datetime, str],
+        interval: str = 'day',
+        use_cache: bool = True,
+        cache_ttl: Optional[int] = None
+    ) -> Optional[pd.DataFrame]:
+        """
+        Fetch historical data directly by instrument token (faster, no symbol lookup).
+        
+        Use this when you already have the token from instruments cache.
+        """
+        global _historical_cache
+        
+        try:
+            # Normalize dates
+            if isinstance(from_date, str):
+                from_date = datetime.strptime(from_date, '%Y-%m-%d')
+            if isinstance(to_date, str):
+                to_date = datetime.strptime(to_date, '%Y-%m-%d')
+            
+            from_str = from_date.strftime('%Y-%m-%d')
+            to_str = to_date.strftime('%Y-%m-%d')
+            
+            # Determine cache TTL
+            if cache_ttl is None:
+                cache_ttl = 60 if 'minute' in interval else 300
+            
+            # Check cache
+            if use_cache:
+                cached = _historical_cache.get(token, from_str, to_str, interval)
+                if cached is not None:
+                    return cached
+            
+            # Fetch with retry
+            data = self._historical_with_retry(token, from_date, to_date, interval)
+            
+            if not data:
+                return None
+            
+            df = pd.DataFrame(data)
+            
+            # Normalize date column
+            if 'date' in df.columns:
+                try:
+                    df['date'] = pd.to_datetime(df['date'])
+                    if hasattr(df['date'], 'dt'):
+                        df['date'] = df['date'].dt.tz_localize(None)
+                except Exception:
+                    pass
+            
+            # Cache result
+            if use_cache:
+                _historical_cache.set(token, from_str, to_str, interval, df, cache_ttl)
+            
+            return df
+            
+        except Exception as e:
+            logging.error(f"Error fetching data for token {token}: {e}")
+            return None
+    
+    @staticmethod
+    def get_cache_stats() -> Dict[str, Any]:
+        """Get historical data cache statistics."""
+        global _historical_cache
+        return _historical_cache.get_stats()
+    
+    @staticmethod
+    def clear_historical_cache() -> None:
+        """Clear the historical data cache."""
+        global _historical_cache
+        _historical_cache.clear()
+        logging.info("Historical data cache cleared")
     
     def get_lot_size(self, symbol: str, exchange: str = 'NFO') -> int:
         """Get the lot size (quantity multiplier) for a symbol.

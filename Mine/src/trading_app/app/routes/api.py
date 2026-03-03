@@ -1933,6 +1933,9 @@ def get_intraday_920_symbol_payload() -> EndpointResponse:
     Returns:
         JSON with first_5min_high, first_5min_low, high_strike, low_strike data
     """
+    import time as time_module
+    start_time = time_module.time()
+    
     try:
         auth_error = check_auth()
         if auth_error:
@@ -1949,6 +1952,20 @@ def get_intraday_920_symbol_payload() -> EndpointResponse:
                 'success': False,
                 'error': f'Invalid symbol. Must be one of {valid_symbols}'
             }), 400
+        
+        # Check cache first (60 second TTL)
+        from trading_app.app.utils.cache import CacheManager
+        _intraday_920_cache = getattr(get_intraday_920_symbol_payload, '_cache', None)
+        if _intraday_920_cache is None:
+            _intraday_920_cache = CacheManager(ttl=60)
+            get_intraday_920_symbol_payload._cache = _intraday_920_cache
+        
+        cache_key = f"intraday920:{symbol}:{date_str or 'today'}"
+        cached = _intraday_920_cache.get(cache_key)
+        if cached:
+            elapsed = time_module.time() - start_time
+            logger.info(f"✓ intraday-920/data cache hit for {symbol} in {elapsed:.3f}s")
+            return jsonify(cached)
         
         # Get KiteConnect instance
         kite = get_kite()
@@ -1975,11 +1992,21 @@ def get_intraday_920_symbol_payload() -> EndpointResponse:
         else:
             payload = strategy.get_intraday_920_data(symbol)
         
-        return jsonify({
+        elapsed = time_module.time() - start_time
+        logger.info(f"✓ intraday-920/data for {symbol} completed in {elapsed:.2f}s")
+        
+        response = {
             'success': payload.get('success', False),
             'data': payload,
-            'timestamp': datetime.now().isoformat()
-        }), 200 if payload.get('success') else 400
+            'timestamp': datetime.now().isoformat(),
+            'response_time_ms': int(elapsed * 1000)
+        }
+        
+        # Cache successful responses
+        if payload.get('success'):
+            _intraday_920_cache.set(cache_key, response)
+        
+        return jsonify(response), 200 if payload.get('success') else 400
         
     except Exception as e:
         logger.error(f"Error in intraday-920 data endpoint: {str(e)}", exc_info=True)

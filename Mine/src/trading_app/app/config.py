@@ -33,8 +33,11 @@ class Config:
     # Rate Limiting - Disabled for development
     RATELIMIT_ENABLED = False  # No rate limiting in development
     
-    # Cache
+    # Cache - Optimized TTLs
     CACHE_DURATION = 60  # seconds
+    CACHE_DEFAULT_TTL = 60  # Default cache TTL for API responses
+    CACHE_CHART_TTL = 30  # Chart data cache TTL (frequent updates)
+    CACHE_CPR_TTL = 600  # CPR filter cache TTL (10 min - data doesn't change fast)
     
     # Logging
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -44,9 +47,18 @@ class Config:
     MARKET_OPEN = 9 * 60 + 15  # 9:15 AM in minutes
     MARKET_CLOSE = 15 * 60  # 3:00 PM in minutes
     
-    # Threading
-    MAX_WORKERS = 8
-    THREAD_POOL_WORKERS = 2
+    # Threading - Optimized for parallel API calls
+    MAX_WORKERS = 8  # Maximum thread pool workers
+    THREAD_POOL_WORKERS = 4  # Default workers for parallel operations
+    
+    # HTTP Client Optimization
+    HTTP_TIMEOUT = 15  # Default HTTP timeout in seconds
+    HTTP_POOL_CONNECTIONS = 10  # Connection pool size
+    HTTP_POOL_MAXSIZE = 20  # Max pool size
+    
+    # JSON Response Optimization
+    JSON_SORT_KEYS = False  # Don't sort keys (faster serialization)
+    JSONIFY_PRETTYPRINT_REGULAR = False  # Disable pretty printing (smaller response)
 
 class DevelopmentConfig(Config):
     """Development configuration."""
@@ -55,6 +67,13 @@ class DevelopmentConfig(Config):
 class ProductionConfig(Config):
     """Production configuration."""
     DEBUG = False
+    
+    # Production-specific optimizations
+    SESSION_COOKIE_SECURE = True  # Require HTTPS for cookies
+    PREFERRED_URL_SCHEME = 'https'
+    
+    # Stricter caching in production
+    SEND_FILE_MAX_AGE_DEFAULT = 31536000  # 1 year for static files
 
 class TestingConfig(Config):
     """Testing configuration."""

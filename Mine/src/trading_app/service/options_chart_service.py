@@ -2,13 +2,16 @@ import logging
 from datetime import datetime, timedelta
 import time
 import random
-from trading_app.service.kite_order_services import KiteService
+from trading_app.service.kite_order_services import KiteService, get_global_rate_limiter
 from typing import Tuple, Dict, Any, List, Optional, Union
 import pytz
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import json
 import os
+
+# Use global rate limiter for all Kite API calls
+_rate_limiter = get_global_rate_limiter()
 
 class OptionsChartService:
     def __init__(self, kite_instance):
@@ -23,25 +26,15 @@ class OptionsChartService:
         self._instruments_cache: Dict[str, List[Dict[str, Any]]] = {}
         self._instruments_lock = threading.Lock()
         self._instruments_expiry = 0  # Timestamp when instruments cache expires (1 hour)
-        # Simple request spacing to avoid hitting Kite rate limits across threads
-        self._rate_lock = threading.Lock()
-        self._last_request_ts = 0.0
         # Disk cache path
         self._nfo_cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', 'nfo_instruments.json')
         os.makedirs(os.path.dirname(self._nfo_cache_file), exist_ok=True)
         # Pre-cache timezone for repeated use
         self._ist = pytz.timezone('Asia/Kolkata')
 
-    def _respect_rate_limit(self, min_gap_seconds: float = 0.25):
-        """Ensure a minimum gap between outbound Kite API requests.
-        This is a coarse client-side throttle to reduce 429s.
-        """
-        with self._rate_lock:
-            now = time.time()
-            elapsed = now - self._last_request_ts
-            if elapsed < min_gap_seconds:
-                time.sleep(min_gap_seconds - elapsed)
-            self._last_request_ts = time.time()
+    def _respect_rate_limit(self, min_gap_seconds: float = 0.4):
+        """Use the global rate limiter to ensure 3 req/sec across entire application."""
+        _rate_limiter.wait()
     
     def _load_nfo_from_disk_cache(self) -> Optional[List[Dict[str, Any]]]:
         """Load NFO instruments from disk cache if available and recent."""
@@ -719,45 +712,47 @@ class OptionsChartService:
                         is_market_hours = market_open <= now <= market_close
                         
                         cache_age = time_module.time() - cache_timestamp
-                        cache_ttl = 300 if is_market_hours else 3600  # 5 min during market, 1 hour after
+                        cache_ttl = 60 if is_market_hours else 3600  # 1 min during market, 1 hour after
                         
                         if cache_age < cache_ttl:
                             logging.info(f"✓ Cache hit (age={cache_age:.1f}s, TTL={cache_ttl}s) for tokens {ce_token}, {pe_token} - {len(ce_data)} CE, {len(pe_data)} PE candles")
                             return (ce_data, pe_data)
             
-            # Determine date range based on timeframe (minimal lookback for speed)
+            # Determine date range based on timeframe (ULTRA minimal lookback for speed)
             to_date = datetime.now()
             if timeframe in ['1minute', 'minute']:
-                from_date = to_date - timedelta(days=7)  # ↓ 30 → 7 days: 1/4 API load
+                from_date = to_date - timedelta(days=3)  # 3 days only (~1,125 candles)
             elif timeframe in ['5minute', '5minute']:
-                from_date = to_date - timedelta(days=14)  # ↓ 60 → 14 days: 4x faster (~2,000 candles vs 17,280)
+                from_date = to_date - timedelta(days=5)  # 5 days only (~375 candles vs 2000)
+            elif timeframe in ['15minute']:
+                from_date = to_date - timedelta(days=10)  # 10 days
             elif timeframe in ['day', '1day']:
-                from_date = to_date - timedelta(days=180)  # 6 months daily
+                from_date = to_date - timedelta(days=90)  # 3 months daily
             elif timeframe in ['week', '1week']:
-                from_date = to_date - timedelta(days=365)  # 1 year weekly
+                from_date = to_date - timedelta(days=180)  # 6 months weekly
             elif timeframe in ['month', '1month']:
-                from_date = to_date - timedelta(days=730)  # 2 years monthly
+                from_date = to_date - timedelta(days=365)  # 1 year monthly
             else:
-                from_date = to_date - timedelta(days=30)  # Default fallback to 30 days
+                from_date = to_date - timedelta(days=5)  # Default 5 days
             
             logging.info(f"Fetching chart data for tokens {ce_token}, {pe_token} from {from_date.date()} to {to_date.date()} (timeframe={timeframe})")
             
-            # Fetch CE and PE data in parallel (2 API calls simultaneously)
+            # Fetch CE and PE data in TRUE parallel (no rate limiting between them)
             fetch_start = time_module.time()
             with ThreadPoolExecutor(max_workers=2, thread_name_prefix="chart_data") as executor:
+                # Submit both immediately - Kite allows concurrent requests
                 ce_future = executor.submit(
                     self._historical_with_retry,
                     int(ce_token), from_date, to_date, kite_timeframe
                 )
-                self._respect_rate_limit(min_gap_seconds=0.25)
                 pe_future = executor.submit(
                     self._historical_with_retry,
                     int(pe_token), from_date, to_date, kite_timeframe
                 )
                 
                 try:
-                    ce_data = ce_future.result(timeout=45) or []
-                    pe_data = pe_future.result(timeout=45) or []
+                    ce_data = ce_future.result(timeout=15) or []
+                    pe_data = pe_future.result(timeout=15) or []
                 except Exception as e:
                     logging.error(f"Timeout or error fetching futures for tokens {ce_token}, {pe_token}: {e}")
                     raise

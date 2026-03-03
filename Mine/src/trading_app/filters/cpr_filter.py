@@ -11,6 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from trading_app.service.cpr_service import CPRService
+from trading_app.service.kite_order_services import get_global_rate_limiter
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,6 +23,9 @@ _global_cache_lock = threading.Lock()
 
 # Global cache for per-stock Historical Volatility data (valid 24h)
 _global_hv_cache = {}
+
+# Use the global rate limiter from kite_order_services
+_rate_limiter = get_global_rate_limiter()
 
 @dataclass
 class CPRLevels:
@@ -59,8 +63,8 @@ FilterResult = Dict[str, Union[List[SignalPayload], WeeklyCrossPayload, Dict[str
 class CPRFilterService:
     PERCENTAGE_DIFF_THRESHOLD = 3.0
     INDEX_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
-    API_RATE_LIMIT_DELAY = 0.05  # Reduced from 0.1 - works better with thread pool
-    MAX_WORKERS = 4  # Reduced from 8 to avoid API throttling
+    API_RATE_LIMIT_DELAY = 0.34  # Using global rate limiter now
+    MAX_WORKERS = 4  # Workers queue behind global rate limiter (3 req/sec max)
 
     CROSS_ABOVE_WEEKLY = "↗ CROSSED ABOVE WEEKLY CPR"
     CROSS_BELOW_WEEKLY = "↘ CROSSED BELOW WEEKLY CPR"
@@ -81,17 +85,12 @@ class CPRFilterService:
         # Use global cache for persistence between requests
         self._historical_data_cache = _global_cache
         self._cache_lock = _global_cache_lock
-        self._last_api_call = 0.0
-        self._api_lock = threading.Lock()
         self._hv_cache = _global_hv_cache  # Shared HV cache across requests
         self._load_instruments()
 
     def _rate_limit(self):
-        with self._api_lock:
-            elapsed = time.time() - self._last_api_call
-            if elapsed < self.API_RATE_LIMIT_DELAY:
-                time.sleep(self.API_RATE_LIMIT_DELAY - elapsed)
-            self._last_api_call = time.time()
+        """Use the global rate limiter to ensure 3 req/sec across entire application."""
+        _rate_limiter.wait()
 
     def _load_instruments(self):
         if not self._instruments:
@@ -111,7 +110,8 @@ class CPRFilterService:
                 return inst.get('instrument_token')
         return None
 
-    def get_hist_data(self, symbol: str, days: int, interval='day', end_date: Optional[datetime] = None) -> Optional[pd.DataFrame]:
+    def get_hist_data(self, symbol: str, days: int = 300, interval='day', end_date: Optional[datetime] = None) -> Optional[pd.DataFrame]:
+        """Fetch historical data for a symbol. Default 300 days for CPR calculations."""
         end_dt = end_date if end_date else datetime.now()
         start_dt = end_dt - timedelta(days=days)
         
@@ -209,86 +209,94 @@ class CPRFilterService:
             return None
 
     def calc_cpr_levels(self, symbol: str, root_date: datetime) -> Optional[CPRLevels]:
-        # Daily CPR (prev day)
-        # We need historical data up strictly to root_date
-        # get_hist_data with 10 days ensuring we cover enough trading days
-        logger.debug(f"Fetching daily data for {symbol} up to {root_date.date()}...")
-        daily_df = self.get_hist_data(symbol, 10, end_date=root_date)
+        """
+        Calculate CPR levels using a SINGLE historical data fetch.
+        OPTIMIZED: Fetches 400 days of data once and slices locally for daily/weekly/monthly/yearly.
+        """
+        # Fetch 400 days of data in ONE API call (covers ~13 months for yearly calc)
+        cache_key = f"{symbol}_400d_{root_date.date()}"
         
-        if daily_df is None or daily_df.empty:
-            logger.debug(f"No daily data for {symbol}")
-            return None
+        with self._cache_lock:
+            if cache_key in self._historical_data_cache:
+                all_data = self._historical_data_cache[cache_key]
+            else:
+                all_data = None
+        
+        if all_data is None:
+            token = self.get_token(symbol)
+            if not token:
+                return None
             
-        # Filter to ensure we only look at data on or before root_date
-        # Convert index to date for comparison
-        daily_df = daily_df[daily_df.index.date <= root_date.date()]
+            self._rate_limit()
+            try:
+                end_date = root_date
+                start_date = root_date - timedelta(days=400)
+                data = self.kite.historical_data(token, start_date.strftime('%Y-%m-%d'), 
+                                                  end_date.strftime('%Y-%m-%d'), 'day')
+                if not data:
+                    return None
+                all_data = pd.DataFrame(data).set_index('date').astype(float)
+                all_data.index = pd.to_datetime(all_data.index)
+                
+                with self._cache_lock:
+                    self._historical_data_cache[cache_key] = all_data
+            except Exception as e:
+                logger.error(f"Hist data failed for {symbol}: {e}")
+                return None
         
-        if len(daily_df) < 2: 
-            logger.debug(f"Insufficient daily data for {symbol} (rows={len(daily_df)})")
+        # Filter to data on or before root_date
+        idx_dates = pd.to_datetime(all_data.index)
+        df = all_data[idx_dates.date <= root_date.date()]  # type: ignore
+        
+        if len(df) < 2:
+            logger.debug(f"Insufficient data for {symbol}")
             return None
-            
-        # The last row should be the 'current' candle (root_date)
-        # The second to last row should be the 'previous' candle (for Daily CPR)
         
-        # Check if the last row is actually the root_date
-        last_date = daily_df.index[-1].date()
-        if last_date != root_date.date():
-             # If root_date is a holiday/weekend, we might get data up to previous trading day.
-             # But the requirement is likely: "Filter as of root_date". 
-             # If root_date is not a trading day, we should probably use the last available trading day?
-             # For now, let's assume root_date is a valid trading day or we use the latest available.
-             pass
-
-        h, l, c = float(daily_df.iloc[-2]['high']), float(daily_df.iloc[-2]['low']), float(daily_df.iloc[-2]['close'])
+        # Daily CPR (prev day) - use last 2 rows
+        h, l, c = float(df.iloc[-2]['high']), float(df.iloc[-2]['low']), float(df.iloc[-2]['close'])
         d_pp, d_bc, d_tc = CPRService.calculate_cpr(h, l, c)
         
-        # Weekly CPR (prev week Mon-Fri relative to root_date)
-        logger.debug(f"Fetching weekly data for {symbol}...")
+        # Weekly CPR - slice for prev week Mon-Fri
         mon, fri = self.get_prev_week_range(root_date)
-        week_df = self.get_hist_range(symbol, mon, fri)
-        if week_df is None or week_df.empty: 
-            logger.debug(f"No weekly data for {symbol} ({mon.date()} to {fri.date()})")
+        week_mask = (idx_dates.date >= mon.date()) & (idx_dates.date <= fri.date())  # type: ignore
+        week_df = all_data[week_mask]
+        if week_df.empty:
             return None
         w_h, w_l, w_c = float(week_df['high'].max()), float(week_df['low'].min()), float(week_df['close'].iloc[-1])
         w_pp, w_bc, w_tc = CPRService.calculate_cpr(w_h, w_l, w_c)
         
-        # Monthly CPR (prev month relative to root_date)
-        logger.debug(f"Fetching monthly data for {symbol}...")
+        # Monthly CPR - slice for prev month
         mon_start, mon_end = self.get_prev_month_range(root_date)
-        month_df = self.get_hist_range(symbol, mon_start, mon_end)
-        if month_df is None or month_df.empty: 
-            logger.debug(f"No monthly data for {symbol} ({mon_start.date()} to {mon_end.date()})")
+        month_mask = (idx_dates.date >= mon_start.date()) & (idx_dates.date <= mon_end.date())  # type: ignore
+        month_df = all_data[month_mask]
+        if month_df.empty:
             return None
         m_h, m_l, m_c = float(month_df['high'].max()), float(month_df['low'].min()), float(month_df['close'].iloc[-1])
         m_pp, m_bc, m_tc = CPRService.calculate_cpr(m_h, m_l, m_c)
         
-        # Calculate Monthly S1 and R1
+        # Monthly S1, R1, S0.5, R0.5
         m_s1 = (2 * m_pp) - m_h
         m_r1 = (2 * m_pp) - m_l
-        
-        # Calculate Monthly S0.5 and R0.5
         m_s05 = (m_pp + m_s1) / 2
         m_r05 = (m_pp + m_r1) / 2
         
-        # Calculate Monthly Camarilla R3 and S3
+        # Monthly Camarilla R3 and S3
         m_cam_range = m_h - m_l
         m_cam_r3 = m_c + m_cam_range * 1.1 / 4.0
         m_cam_s3 = m_c - m_cam_range * 1.1 / 4.0
         
-        # Yearly CPR (prev year relative to root_date)
-        logger.debug(f"Fetching yearly data for {symbol}...")
+        # Yearly CPR - slice for prev year
         year_start, year_end = self.get_prev_year_range(root_date)
-        year_df = self.get_hist_range(symbol, year_start, year_end)
-        if year_df is None or year_df.empty: 
-            logger.debug(f"No yearly data for {symbol} ({year_start.date()} to {year_end.date()})")
+        year_mask = (idx_dates.date >= year_start.date()) & (idx_dates.date <= year_end.date())  # type: ignore
+        year_df = all_data[year_mask]
+        if year_df.empty:
             return None
         y_h, y_l, y_c = float(year_df['high'].max()), float(year_df['low'].min()), float(year_df['close'].iloc[-1])
         y_pp, y_bc, y_tc = CPRService.calculate_cpr(y_h, y_l, y_c)
         
         # Current candle (root_date)
-        curr_price, curr_open, curr_high, curr_low = [float(daily_df.iloc[-1][col]) for col in ['close', 'open', 'high', 'low']]
+        curr_price, curr_open, curr_high, curr_low = [float(df.iloc[-1][col]) for col in ['close', 'open', 'high', 'low']]
         
-        logger.debug(f"CPR levels calculated for {symbol}")
         return CPRLevels(d_pp, d_bc, d_tc, w_pp, w_bc, w_tc, m_pp, m_bc, m_tc, m_s1, m_r1, m_s05, m_r05,
                         m_cam_r3, m_cam_s3,
                         y_pp, y_bc, y_tc, curr_price, curr_open, curr_high, curr_low, c, m_h, m_l)
@@ -831,14 +839,14 @@ class CPRFilterService:
                 self._rate_limit()
                 try:
                     quote_data = self.kite.quote(batch)
-                    for key, val in quote_data.items():
-                        symbol = key.replace('NSE:', '')
-                        last_price = val.get('last_price', 0)
+                    for key, val in quote_data.items():  # type: ignore
+                        symbol = str(key).replace('NSE:', '')
+                        last_price = val.get('last_price', 0)  # type: ignore
                         stock_prices[symbol] = last_price
-                        stock_volumes[symbol] = val.get('volume', 0)
+                        stock_volumes[symbol] = val.get('volume', 0)  # type: ignore
 
                         # Current day % change from previous close
-                        prev_close = val.get('ohlc', {}).get('close', 0)
+                        prev_close = val.get('ohlc', {}).get('close', 0)  # type: ignore
                         if prev_close and prev_close > 0:
                             stock_day_change_pct[symbol] = round(((last_price - prev_close) / prev_close) * 100, 2)
                         else:
@@ -978,8 +986,8 @@ class CPRFilterService:
                 self._rate_limit()
                 try:
                     quote_data = self.kite.quote(batch)
-                    for key, val in quote_data.items():
-                        ts = key.replace('NFO:', '')
+                    for key, val in quote_data.items():  # type: ignore
+                        ts = str(key).replace('NFO:', '')
                         option_quotes[ts] = val
                 except Exception as e:
                     logger.warning(f"Option chain quote batch failed: {e}")
@@ -1134,9 +1142,9 @@ class CPRFilterService:
                 self._rate_limit()
                 try:
                     ltp_data = self.kite.ltp(batch)
-                    for key, val in ltp_data.items():
-                        ts = key.replace('NFO:', '')
-                        option_ltp_map[ts] = val.get('last_price', 0)
+                    for key, val in ltp_data.items():  # type: ignore
+                        ts = str(key).replace('NFO:', '')
+                        option_ltp_map[ts] = val.get('last_price', 0)  # type: ignore
                 except Exception as e:
                     logger.warning(f"Batch option LTP fetch failed for batch {i}: {e}")
             

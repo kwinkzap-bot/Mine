@@ -122,7 +122,7 @@ class Intraday920Strategy:
                 logger.info(f"Fetching first 5-minute candle for {symbol} starting from {current_check_date.date()}")
             
             # Try to fetch data, falling back to previous days if no data found
-            max_date_retries = 30  # Try up to 30 days back
+            max_date_retries = 5  # Try up to 5 days back (reduced from 30 for speed)
             for date_attempt in range(max_date_retries):
                 # Skip weekends
                 while current_check_date.weekday() in [5, 6]:  # Saturday=5, Sunday=6
@@ -290,9 +290,9 @@ class Intraday920Strategy:
                     logger.info(f"Fetching first 5-min candles starting from {current_check_date.date()}")
                     
                     # Try to fetch first 5-min candles, with fallback to previous days
-                    # OPTIMIZATION: Only try 3 days max (today + 2 previous trading days)
-                    # Most trades happen within last 2 days, further back is unlikely needed
-                    max_retries = 3
+                    # OPTIMIZATION: Only try 2 days max for speed
+                    from concurrent.futures import ThreadPoolExecutor
+                    max_retries = 2
                     for attempt in range(max_retries):
                         # Skip weekends
                         while current_check_date.weekday() in [5, 6]:  # Saturday=5, Sunday=6
@@ -302,49 +302,59 @@ class Intraday920Strategy:
                         from_time = current_check_date.replace(minute=15)
                         to_time = current_check_date
                         
-                        logger.info(f"Attempt {attempt + 1}: Fetching first 5-min candles from {from_time} to {to_time}")
+                        logger.info(f"Attempt {attempt + 1}: Fetching CE+PE candles in PARALLEL from {from_time} to {to_time}")
+                        
+                        def fetch_ce_candle():
+                            if not ce_token:
+                                return None
+                            try:
+                                candles = self.data_service.get_candlestick_data(
+                                    ce_token, interval='5minute', from_date=from_time, to_date=to_time
+                                )
+                                if candles and len(candles) > 0:
+                                    return candles[0]
+                            except Exception as e:
+                                logger.warning(f"CE candle fetch error: {e}")
+                            return None
+                        
+                        def fetch_pe_candle():
+                            if not pe_token:
+                                return None
+                            try:
+                                candles = self.data_service.get_candlestick_data(
+                                    pe_token, interval='5minute', from_date=from_time, to_date=to_time
+                                )
+                                if candles and len(candles) > 0:
+                                    return candles[0]
+                            except Exception as e:
+                                logger.warning(f"PE candle fetch error: {e}")
+                            return None
                         
                         try:
-                            if ce_token and not ce_high:
-                                logger.info(f"[FETCH] Fetching CE {ce_strike} candles for {current_check_date.date()}...")
-                                ce_candles = self.data_service.get_candlestick_data(
-                                    ce_token, 
-                                    interval='5minute',
-                                    from_date=from_time,
-                                    to_date=to_time
-                                )
-                                if ce_candles and len(ce_candles) > 0:
-                                    # Use ONLY first 5-min candle high/low
-                                    first_candle = ce_candles[0]
-                                    ce_high = first_candle.get('high', 0)
-                                    ce_low = first_candle.get('low', 0)
-                                    logger.info(f"✅ CE {ce_strike} first 5-min ({current_check_date.date()}): High={ce_high}, Low={ce_low}")
-                                else:
-                                    logger.warning(f"❌ No CE candles found for {ce_strike} on {current_check_date.date()}, trying previous day...")
+                            # PARALLEL fetch for CE and PE candles
+                            with ThreadPoolExecutor(max_workers=2) as executor:
+                                ce_future = executor.submit(fetch_ce_candle)
+                                pe_future = executor.submit(fetch_pe_candle)
+                                
+                                ce_candle = ce_future.result(timeout=10)
+                                pe_candle = pe_future.result(timeout=10)
                             
-                            if pe_token and not pe_high:
-                                logger.info(f"[FETCH] Fetching PE {pe_strike} candles for {current_check_date.date()}...")
-                                pe_candles = self.data_service.get_candlestick_data(
-                                    pe_token,
-                                    interval='5minute',
-                                    from_date=from_time,
-                                    to_date=to_time
-                                )
-                                if pe_candles and len(pe_candles) > 0:
-                                    # Use ONLY first 5-min candle high/low
-                                    first_candle = pe_candles[0]
-                                    pe_high = first_candle.get('high', 0)
-                                    pe_low = first_candle.get('low', 0)
-                                    logger.info(f"✅ PE {pe_strike} first 5-min ({current_check_date.date()}): High={pe_high}, Low={pe_low}")
-                                else:
-                                    logger.warning(f"❌ No PE candles found for {pe_strike} on {current_check_date.date()}, trying previous day...")
+                            if ce_candle and not ce_high:
+                                ce_high = ce_candle.get('high', 0)
+                                ce_low = ce_candle.get('low', 0)
+                                logger.info(f"✅ CE {ce_strike} first 5-min: High={ce_high}, Low={ce_low}")
+                            
+                            if pe_candle and not pe_high:
+                                pe_high = pe_candle.get('high', 0)
+                                pe_low = pe_candle.get('low', 0)
+                                logger.info(f"✅ PE {pe_strike} first 5-min: High={pe_high}, Low={pe_low}")
                             
                             # If we found data for both, break out of retry loop
                             if ce_high and pe_high:
                                 break
                         
                         except Exception as e:
-                            logger.error(f"❌ Error fetching candles for {current_check_date.date()}: {str(e)}, trying previous day...")
+                            logger.error(f"❌ Error fetching candles for {current_check_date.date()}: {str(e)}")
                         
                         # Move to previous day and retry
                         current_check_date -= timedelta(days=1)

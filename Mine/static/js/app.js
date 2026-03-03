@@ -1,63 +1,140 @@
 /**
  * app.js (Pure Vanilla JavaScript - Application Utility)
  * Defines a global utility for fetching data from API endpoints.
+ * OPTIMIZED: Added request deduplication, caching, and performance utilities.
  */
 (function () {
     "use strict";
 
+    // ===================== PERFORMANCE UTILITIES =====================
+    
+    /**
+     * Simple in-memory cache for API responses
+     */
+    const _responseCache = new Map();
+    const _pendingRequests = new Map();
+    const CACHE_DEFAULT_TTL = 30000; // 30 seconds default
+
+    /**
+     * Debounce utility - prevents rapid repeated calls
+     * @param {Function} func - Function to debounce
+     * @param {number} wait - Wait time in ms
+     * @returns {Function} - Debounced function
+     */
+    window.debounce = function(func, wait = 300) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    };
+
+    /**
+     * Throttle utility - limits function calls to once per interval
+     * @param {Function} func - Function to throttle
+     * @param {number} limit - Time limit in ms
+     * @returns {Function} - Throttled function
+     */
+    window.throttle = function(func, limit = 1000) {
+        let inThrottle;
+        return function(...args) {
+            if (!inThrottle) {
+                func.apply(this, args);
+                inThrottle = true;
+                setTimeout(() => inThrottle = false, limit);
+            }
+        };
+    };
+
+    /**
+     * Clear cache for a specific URL or all cache
+     * @param {string} url - Optional URL to clear, or clear all if omitted
+     */
+    window.clearFetchCache = function(url) {
+        if (url) {
+            _responseCache.delete(url);
+        } else {
+            _responseCache.clear();
+        }
+    };
+
     /**
      * Global utility function to fetch data and handle common API concerns:
      * session expiration (401/403), error messages, and JSON parsing.
-     * Includes automatic retry logic for transient 403 errors.
-     * Assumes showNotification is available (from notifications.js).
+     * OPTIMIZED: Added request deduplication and optional caching.
      * @param {string} url - The API endpoint URL.
      * @param {object} options - Fetch options (e.g., method, headers, body).
      * @param {number} maxRetries - Maximum retry attempts (default: 3).
+     * @param {object} cacheOptions - Optional {enabled: bool, ttl: number in ms}
      * @returns {Promise<object>} - The parsed JSON response object.
      */
-    window.fetchJson = async function (url, options = {}, maxRetries = 3) {
+    window.fetchJson = async function (url, options = {}, maxRetries = 3, cacheOptions = {}) {
+        const cacheEnabled = cacheOptions.enabled || false;
+        const cacheTTL = cacheOptions.ttl || CACHE_DEFAULT_TTL;
+        const cacheKey = `${options.method || 'GET'}:${url}:${JSON.stringify(options.body || '')}`;
+        
+        // Check cache first (only for GET requests)
+        if (cacheEnabled && (!options.method || options.method === 'GET')) {
+            const cached = _responseCache.get(cacheKey);
+            if (cached && (Date.now() - cached.timestamp < cacheTTL)) {
+                console.debug(`[Cache HIT] ${url}`);
+                return cached.data;
+            }
+        }
+        
+        // Request deduplication - if same request is in flight, wait for it
+        if (_pendingRequests.has(cacheKey)) {
+            console.debug(`[Dedup] Waiting for existing request: ${url}`);
+            return _pendingRequests.get(cacheKey);
+        }
+        
         let lastError;
         let lastResponse;
 
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                const response = await fetch(url, options);
-                lastResponse = response;
+        const requestPromise = (async () => {
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    const response = await fetch(url, options);
+                    lastResponse = response;
 
-                // Handle session expired / unauthorized (401 - permanent)
-                if (response.status === 401) {
-                    try {
-                        const data = await response.json();
-                        const errorMsg = data.error || 'Your session has expired or you are not authorized. Please login again.';
-                        if (typeof showNotification === 'function') {
-                            showNotification(errorMsg, 'error');
-                        }
-                    } catch (e) {
-                        if (typeof showNotification === 'function') {
-                            showNotification('Authentication error. Redirecting to login...', 'error');
-                        }
-                    }
-                    // Redirect to login after showing notification
-                    setTimeout(() => { window.location.href = '/auth/login'; }, 1500);
-                    return { success: false, message: 'Unauthorized', needs_login: true };
-                }
-
-                // Handle 403 Forbidden - retry up to maxRetries times with delay
-                if (response.status === 403) {
-                    if (attempt < maxRetries) {
-                        console.warn(`[Attempt ${attempt}/${maxRetries}] Got 403 Forbidden. Retrying in ${attempt * 500}ms...`);
-                        // Exponential backoff: 500ms, 1000ms, 1500ms
-                        await new Promise(resolve => setTimeout(resolve, attempt * 500));
-                        continue; // Retry the request
-                    } else {
-                        // Final attempt failed, show error
+                    // Handle session expired / unauthorized (401 - permanent)
+                    if (response.status === 401) {
                         try {
                             const data = await response.json();
-                            const errorMsg = data.error || 'Access forbidden. Please check your permissions and try again.';
+                            const errorMsg = data.error || 'Your session has expired or you are not authorized. Please login again.';
                             if (typeof showNotification === 'function') {
                                 showNotification(errorMsg, 'error');
                             }
                         } catch (e) {
+                            if (typeof showNotification === 'function') {
+                                showNotification('Authentication error. Redirecting to login...', 'error');
+                            }
+                        }
+                        // Redirect to login after showing notification
+                        setTimeout(() => { window.location.href = '/auth/login'; }, 1500);
+                        return { success: false, message: 'Unauthorized', needs_login: true };
+                    }
+
+                    // Handle 403 Forbidden - retry up to maxRetries times with delay
+                    if (response.status === 403) {
+                        if (attempt < maxRetries) {
+                            console.warn(`[Attempt ${attempt}/${maxRetries}] Got 403 Forbidden. Retrying in ${attempt * 500}ms...`);
+                            // Exponential backoff: 500ms, 1000ms, 1500ms
+                            await new Promise(resolve => setTimeout(resolve, attempt * 500));
+                            continue; // Retry the request
+                        } else {
+                            // Final attempt failed, show error
+                            try {
+                                const data = await response.json();
+                                const errorMsg = data.error || 'Access forbidden. Please check your permissions and try again.';
+                                if (typeof showNotification === 'function') {
+                                    showNotification(errorMsg, 'error');
+                                }
+                            } catch (e) {
                             if (typeof showNotification === 'function') {
                                 showNotification('Access denied (403). Please refresh the page and try again.', 'error');
                             }
@@ -97,6 +174,12 @@
                 if (attempt > 1) {
                     console.log(`[Success] Request succeeded after ${attempt} attempts`);
                 }
+                
+                // Cache successful response if caching is enabled
+                if (cacheEnabled && data.success !== false) {
+                    _responseCache.set(cacheKey, { data, timestamp: Date.now() });
+                }
+                
                 return data;
             } catch (error) {
                 lastError = error;
@@ -117,6 +200,16 @@
             showNotification(`Failed to load data. ${lastError?.message || 'Please refresh the page.'}`, 'error');
         }
         return { success: false, message: lastError?.message || 'Request failed' };
+        })();
+        
+        // Track pending request for deduplication
+        _pendingRequests.set(cacheKey, requestPromise);
+        
+        try {
+            return await requestPromise;
+        } finally {
+            _pendingRequests.delete(cacheKey);
+        }
     };
 
     /**

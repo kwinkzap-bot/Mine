@@ -1,23 +1,31 @@
-/* General Reset & Body */
-* {
+/* General Reset & Body - OPTIMIZED */
+*, *::before, *::after {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
 }
 
+/* Use system font stack for faster rendering */
 body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
     background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     font-size: 80%;
+    /* Enable GPU acceleration */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Optimize text rendering */
+    text-rendering: optimizeSpeed;
 }
 
+/* Content visibility for faster initial render */
 .container {
     max-width: 1800px;
     margin: 0 auto;
     padding: 10px;
+    content-visibility: auto;
 }
 
-/* Navigation Bar */
+/* Navigation Bar - Use will-change for animations */
 .navigation-bar {
     padding: 5px 5px 5px 10px;
     background: #f8f9fa;
