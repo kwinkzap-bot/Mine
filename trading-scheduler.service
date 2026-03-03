@@ -1,0 +1,49 @@
+[Unit]
+Description=Trading Application Background Scheduler
+Documentation=https://apscheduler.readthedocs.io
+After=trading-app.service
+Requires=trading-app.service
+
+[Service]
+Type=simple
+User=trading
+Group=trading
+WorkingDirectory=/home/trading/trading_app
+
+# Python virtual environment activation
+Environment="PATH=/home/trading/trading_app/venv/bin"
+EnvironmentFile=/home/trading/trading_app/.env
+
+# Start the background scheduler
+# Adjust the command based on your actual scheduler setup
+ExecStart=/home/trading/trading_app/venv/bin/python -m src.trading_app.app.scheduler
+
+# Process management
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=65535
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/home/trading/trading_app
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trading-scheduler
+
+# Shutdown behavior
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

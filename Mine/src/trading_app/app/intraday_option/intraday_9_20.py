@@ -1222,24 +1222,28 @@ class Intraday920Strategy:
                     
                     # If target was hit, implement trailing stop loss
                     if target_hit:
-                        # Calculate steps above target
+                        # IMPORTANT: Trailing SL should only activate after price goes 10 points ABOVE the target
+                        # This prevents getting stopped out immediately after target is hit
                         price_above_target = candle_high - initial_target
                         TRAIL_STEP = 10.0
                         
-                        if price_above_target >= 0:
-                            # Calculate how many full 10-point steps we are above the target
+                        # Only start trailing if we've moved at least 1 point above target
+                        if price_above_target > 0:
+                            # Calculate how many COMPLETE 10-point steps we are above the target
+                            # For example: if target=100 and high=105, we're 5 points above (0 complete steps)
+                            # if target=100 and high=110, we're 10 points above (1 complete step)
                             steps_above_target = int(price_above_target / TRAIL_STEP)
                             
-                            # New SL is Entry + (Steps * 10)
+                            # New trailed SL is Entry Price + (number of complete steps * 10)
+                            # This ensures we only move SL up for COMPLETE 10-point moves
                             new_trailed_sl = result['entry_price'] + (steps_above_target * TRAIL_STEP)
                             
+                            # Only update if new SL is higher than current trailed SL
                             if new_trailed_sl > trailed_sl:
                                 trailed_sl = new_trailed_sl
-                                logger.info(f"{side} Trailing SL updated: {trailed_sl} (price high: {candle_high}, target: {initial_target}, steps: {steps_above_target})")
-
-
+                                logger.info(f"{side} Trailing SL updated: {trailed_sl} (high: {candle_high}, target: {initial_target}, steps above target: {steps_above_target}, profit: {trailed_sl - result['entry_price']:.2f})")
                         
-                        # Check if trailed SL is hit
+                        # Check if trailed SL is hit - only check AFTER target has been hit
                         if candle_low <= trailed_sl:
                             raw_exit_time = candle_time
                             if raw_exit_time is None:
@@ -1274,8 +1278,8 @@ class Intraday920Strategy:
                         # Check if target is hit (activate trailing SL for trailing mode)
                         if candle_high >= initial_target:
                             target_hit = True
-                            trailed_sl = result['entry_price']  # Move SL to entry price when target hit
-                            logger.info(f"{side} Target hit at {candle_high}, trailing SL activated at {result['entry_price']}")
+                            trailed_sl = result['entry_price']  # Move SL to entry price when target hit (break-even)
+                            logger.info(f"{side} Target hit at {candle_high}, trailing SL activated at entry price {result['entry_price']}")
                             continue  # Don't exit yet, continue to look for trailing SL exit or better prices
                 
                 # Check if it's the last candle (3:20 PM) - exit at market close

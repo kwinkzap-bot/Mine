@@ -1,0 +1,253 @@
+//@version=5
+indicator("Options Strike Selector", shorttitle="Strike Selector", overlay=false, max_labels_count=50)
+
+// -----------------------------------------------------------------------------
+// NOTE:
+// TradingView option symbols can vary by broker/feed format.
+// This script builds symbols as: NSE:<UNDERLYING><YYMMDD><C/P><STRIKE>
+// Example: NSE:NIFTY260302C24850 (format: C=Call, P=Put)
+// If your feed uses a different format, update symbol_build() accordingly.
+// -----------------------------------------------------------------------------
+
+underlying = input.string("NIFTY", "Underlying", options=["NIFTY", "BANKNIFTY"])
+expiry_code = input.string("260302", "Expiry Code (example: 260302 format YYMMDD)")
+exchange_prefix = input.string("NSE:", "Exchange Prefix")
+auto_atm_strike = input.bool(true, "Auto ATM Strike (as per current spot price)")
+
+// Spot symbols used for ATM detection
+nifty_spot_symbol = input.string("NSE:NIFTY", "NIFTY Spot Symbol")
+
+// Current spot and ATM strike logic
+spot_symbol = nifty_spot_symbol
+spot_close = request.security(spot_symbol, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+
+strike_step = 50.0
+atm_strike_num = int(math.round(spot_close / strike_step) * strike_step)
+atm_strike = str.tostring(atm_strike_num)
+
+// IMPORTANT: Use manually input strikes for symbols (simple strings required by request.security)
+manual_ce_strike = input.string("24850", "CE Strike", options=["23500","23550","23600","23650","23700","23750","23800","23850","23900","23950","24000","24050","24100","24150","24200","24250","24300","24350","24400","24450","24500","24550","24600","24650","24700","24750","24800","24850","24900","24950","25000","25050","25100","25150","25200","25250","25300","25350","25400","25450","25500","25550","25600","25650","25700","25750","25800","25850","25900","25950","26000"])
+manual_pe_strike = input.string("24850", "PE Strike", options=["23500","23550","23600","23650","23700","23750","23800","23850","23900","23950","24000","24050","24100","24150","24200","24250","24300","24350","24400","24450","24500","24550","24600","24650","24700","24750","24800","24850","24900","24950","25000","25050","25100","25150","25200","25250","25300","25350","25400","25450","25500","25550","25600","25650","25700","25750","25800","25850","25900","25950","26000"])
+
+// Straddle input
+show_straddle = input.bool(false, "Show Straddle")
+straddle_strike = input.string("24850", "Straddle Strike", options=["23500","23550","23600","23650","23700","23750","23800","23850","23900","23950","24000","24050","24100","24150","24200","24250","24300","24350","24400","24450","24500","24550","24600","24650","24700","24750","24800","24850","24900","24950","25000","25050","25100","25150","25200","25250","25300","25350","25400","25450","25500","25550","25600","25650","25700","25750","25800","25850","25900","25950","26000"])
+
+// IMPORTANT (Pine limitation): request.security() requires a simple string symbol.
+// So CE/PE symbols must come from input values, not dynamic series values.
+ce_strike = manual_ce_strike
+pe_strike = manual_pe_strike
+
+symbol_build(_underlying, _expiry, _strike, _optType) =>
+    exchange_prefix + _underlying + _expiry + _optType + _strike
+
+ce_symbol = symbol_build(underlying, expiry_code, ce_strike, "C")
+pe_symbol = symbol_build(underlying, expiry_code, pe_strike, "P")
+
+straddle_ce_symbol = symbol_build(underlying, expiry_code, straddle_strike, "C")
+straddle_pe_symbol = symbol_build(underlying, expiry_code, straddle_strike, "P")
+
+// Load selected strike prices
+ce_close = request.security(ce_symbol, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+pe_close = request.security(pe_symbol, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+
+ce_open = request.security(ce_symbol, timeframe.period, open, barmerge.gaps_off, barmerge.lookahead_off)
+ce_high = request.security(ce_symbol, timeframe.period, high, barmerge.gaps_off, barmerge.lookahead_off)
+ce_low  = request.security(ce_symbol, timeframe.period, low, barmerge.gaps_off, barmerge.lookahead_off)
+
+pe_open = request.security(pe_symbol, timeframe.period, open, barmerge.gaps_off, barmerge.lookahead_off)
+pe_high = request.security(pe_symbol, timeframe.period, high, barmerge.gaps_off, barmerge.lookahead_off)
+pe_low  = request.security(pe_symbol, timeframe.period, low, barmerge.gaps_off, barmerge.lookahead_off)
+
+// Straddle data (CE + PE)
+straddle_ce_close = request.security(straddle_ce_symbol, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+straddle_pe_close = request.security(straddle_pe_symbol, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
+
+straddle_ce_open = request.security(straddle_ce_symbol, timeframe.period, open, barmerge.gaps_off, barmerge.lookahead_off)
+straddle_ce_high = request.security(straddle_ce_symbol, timeframe.period, high, barmerge.gaps_off, barmerge.lookahead_off)
+straddle_ce_low  = request.security(straddle_ce_symbol, timeframe.period, low, barmerge.gaps_off, barmerge.lookahead_off)
+
+straddle_pe_open = request.security(straddle_pe_symbol, timeframe.period, open, barmerge.gaps_off, barmerge.lookahead_off)
+straddle_pe_high = request.security(straddle_pe_symbol, timeframe.period, high, barmerge.gaps_off, barmerge.lookahead_off)
+straddle_pe_low  = request.security(straddle_pe_symbol, timeframe.period, low, barmerge.gaps_off, barmerge.lookahead_off)
+
+// Straddle combined OHLC (CE + PE)
+straddle_open = straddle_ce_open + straddle_pe_open
+straddle_high = straddle_ce_high + straddle_pe_high
+straddle_low = straddle_ce_low + straddle_pe_low
+straddle_close = straddle_ce_close + straddle_pe_close
+
+show_ce_candles = input.bool(true, "Show CE Candles")
+show_pe_candles = input.bool(true, "Show PE Candles")
+show_close_lines = input.bool(true, "Show CE/PE Close Lines")
+
+// Label controls (similar to Dynamic CPR)
+show_labels = input.bool(title="Show Labels", defval=true, group="labels")
+show_prices = input.bool(title="Show Prices", defval=false, group="labels")
+position_labels = input.string("Right", "Labels Position", options=["Left", "Right"], group="labels")
+
+// Candle label controls
+show_candle_labels = input.bool(title="Show Candle Labels", defval=true, group="labels")
+show_candle_prices = input.bool(title="Show Candle Prices", defval=true, group="labels")
+
+// Calculate VWAP for CE and PE strikes
+// VWAP requires proper OHLC data - using HLC3 (High+Low+Close)/3 for accurate weighting
+ce_vwap = ta.vwap((ce_high + ce_low + ce_close) / 3)
+pe_vwap = ta.vwap((pe_high + pe_low + pe_close) / 3)
+
+// Calculate VWAP for straddle (combined CE+PE)
+straddle_vwap = ta.vwap((straddle_high + straddle_low + straddle_close) / 3)
+
+// Label variables for persistent display (VWAP labels)
+var label ce_label = na
+var label pe_label = na
+var label straddle_label = na
+
+// Label variables for candles
+var label ce_candle_label = na
+var label pe_candle_label = na
+var label straddle_candle_label = na
+
+// Function to create labels with right side positioning
+draw_label(y, txt, txt_color) =>
+    if show_labels or show_prices
+        display_text = ""
+        if show_labels and show_prices and txt != ''
+            display_text := str.format("{0} - {1}", txt, math.round_to_mintick(y))
+        else if show_labels and txt != ''
+            display_text := txt
+        else
+            display_text := str.format("{0}", math.round_to_mintick(y))
+        
+        // Position VWAP label further away on the right side
+        x = bar_index + 25
+        label_obj = label.new(x=x, y=y, text="     " + display_text, textcolor=txt_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_index)
+        label_obj
+
+// Function to create candle labels (positioned on right side like VWAP)
+draw_candle_label(y, txt, txt_color) =>
+    if show_candle_labels or show_candle_prices
+        display_text = ""
+        if show_candle_labels and show_candle_prices and txt != ''
+            display_text := str.format("{0} - {1}", txt, math.round_to_mintick(y))
+        else if show_candle_labels and txt != ''
+            display_text := txt
+        else
+            display_text := str.format("{0}", math.round_to_mintick(y))
+        
+        // Position label very close to candle
+        x = bar_index + 6
+        label_obj = label.new(x=x, y=y, text="     " + display_text, textcolor=txt_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_index)
+        label_obj
+
+// Plot CE candles with conditional coloring
+// Green candle: Open < Close (Bullish) - Teal green #1b9981
+// Red candle: Open > Close (Bearish) - Vibrant red #f23645
+ce_color = ce_close >= ce_open ? color.new(#1b9981, 0) : color.new(#f23645, 0)
+plotcandle(
+     show_ce_candles ? ce_open : na,
+     show_ce_candles ? ce_high : na,
+     show_ce_candles ? ce_low : na,
+     show_ce_candles ? ce_close : na,
+     title="CE Candles",
+     color=ce_color,
+     wickcolor=ce_color,
+     bordercolor=ce_color)
+
+// Plot PE candles with conditional coloring
+// Green candle: Open < Close (Bullish) - Blue #1f77d2
+// Red candle: Open > Close (Bearish) - Black #000000
+pe_color = pe_close >= pe_open ? color.new(#1f77d2, 0) : color.new(#000000, 0)
+plotcandle(
+     show_pe_candles ? pe_open : na,
+     show_pe_candles ? pe_high : na,
+     show_pe_candles ? pe_low : na,
+     show_pe_candles ? pe_close : na,
+     title="PE Candles",
+     color=pe_color,
+     wickcolor=pe_color,
+     bordercolor=pe_color)
+
+plot(show_close_lines ? ce_vwap : na, "CE VWAP", color=color.new(color.green, 0), linewidth=2)
+plot(show_close_lines ? pe_vwap : na, "PE VWAP", color=color.new(#808080, 0), linewidth=2)
+
+// Plot Straddle candles with conditional coloring
+// Green candle: Open < Close (Bullish) - Violet #9b59b6
+// Red candle: Open > Close (Bearish) - Orange #ff9500
+straddle_color = straddle_close >= straddle_open ? color.new(#9b59b6, 0) : color.new(#ff9500, 0)
+plotcandle(
+     show_straddle ? straddle_open : na,
+     show_straddle ? straddle_high : na,
+     show_straddle ? straddle_low : na,
+     show_straddle ? straddle_close : na,
+     title="Straddle Candles",
+     color=straddle_color,
+     wickcolor=straddle_color,
+     bordercolor=straddle_color)
+
+// Plot Straddle VWAP
+plot(show_straddle ? straddle_vwap : na, "Straddle VWAP", color=color.new(#ffeb3b, 0), linewidth=2)
+
+// Display labels on right side on last bar
+if barstate.islast
+    // CE VWAP Label
+    if show_close_lines and show_ce_candles
+        if not na(ce_label)
+            label.delete(ce_label)
+        ce_label := draw_label(ce_vwap, "CE VWAP", color.new(color.green, 0))
+    else
+        if not na(ce_label)
+            label.delete(ce_label)
+            ce_label := na
+    
+    // PE VWAP Label
+    if show_close_lines and show_pe_candles
+        if not na(pe_label)
+            label.delete(pe_label)
+        pe_label := draw_label(pe_vwap, "PE VWAP", color.new(#808080, 0))
+    else
+        if not na(pe_label)
+            label.delete(pe_label)
+            pe_label := na
+    
+    // Straddle VWAP Label
+    if show_straddle
+        if not na(straddle_label)
+            label.delete(straddle_label)
+        straddle_label := draw_label(straddle_vwap, "STR VWAP", color.new(#ffeb3b, 0))
+    else
+        if not na(straddle_label)
+            label.delete(straddle_label)
+            straddle_label := na
+    
+    // CE Candle Label
+    if show_ce_candles
+        if not na(ce_candle_label)
+            label.delete(ce_candle_label)
+        ce_candle_label := draw_candle_label(ce_close, "CE", ce_color)
+    else
+        if not na(ce_candle_label)
+            label.delete(ce_candle_label)
+            ce_candle_label := na
+    
+    // PE Candle Label
+    if show_pe_candles
+        if not na(pe_candle_label)
+            label.delete(pe_candle_label)
+        pe_candle_label := draw_candle_label(pe_close, "PE", pe_color)
+    else
+        if not na(pe_candle_label)
+            label.delete(pe_candle_label)
+            pe_candle_label := na
+    
+    // Straddle Candle Label
+    if show_straddle
+        if not na(straddle_candle_label)
+            label.delete(straddle_candle_label)
+        straddle_candle_label := draw_candle_label(straddle_close, "STR", straddle_color)
+    else
+        if not na(straddle_candle_label)
+            label.delete(straddle_candle_label)
+            straddle_candle_label := na
+
+

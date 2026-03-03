@@ -73,6 +73,11 @@ immediate_sr_show = input.bool(false, "Immediate S/R", group="Immediate S/R")
 immediate_r_color = input.color(color.red, "Resistance Color", group="Immediate S/R")
 immediate_s_color = input.color(color.green, "Support Color", group="Immediate S/R")
 
+// VWAP Settings (Only for intraday timeframes below 1 hour)
+vwap_show = input.bool(true, "Show VWAP", inline="VWAP", group="VWAP")
+vwap_color = input.color(color.new(color.orange, 0), "VWAP Color", inline="VWAP", group="VWAP")
+vwap_width = input.int(2, "VWAP Width", minval=1, maxval=10, group="VWAP")
+
 // Higher Timeframe CPR
 htf_show = input.bool(false, "Show Higher Timeframe CPR", group="Higher Timeframe")
 htf_cpr_color = input.color(color.new(color.orange, 70), "HTF CPR Color", group="Higher Timeframe")
@@ -104,6 +109,11 @@ pivotX_prev_low = float(na)
 pivotX_prev_low := nz(pivotX_prev_low[1])
 pivotX_prev_close = float(na)
 pivotX_prev_close := nz(pivotX_prev_close[1])
+
+// VWAP Calculation
+// Only calculate and display VWAP for timeframes below 1 hour (intraday: 1, 5, 15, 30 minutes)
+is_intraday_below_1h = timeframe.isintraday and timeframe.in_seconds(timeframe.period) < 3600
+vwap_value = is_intraday_below_1h ? ta.vwap((high + low + close) / 3) : na
 
 // Higher timeframe pivot variables
 htf_open = float(na)
@@ -790,3 +800,7 @@ if barstate.islast and next_session_show and array.size(arr_time) > 0
             ns_is_bot = math.min(ns_s05, ns_sq)
             ns_box_is = box.new(x1_next, ns_is_top, x2_next, ns_is_bot, border_color=immediate_s_color, bgcolor=color.new(immediate_s_color, 85), border_style=line.style_dashed, xloc=next_xloc)
             array.push(next_boxes, ns_box_is)
+// ============================================================================
+// VWAP Plot (Only for timeframes below 1 hour)
+// ============================================================================
+plot(vwap_show and is_intraday_below_1h ? vwap_value : na, title="VWAP", color=vwap_color, linewidth=vwap_width, style=plot.style_line)

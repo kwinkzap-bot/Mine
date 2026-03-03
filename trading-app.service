@@ -1,0 +1,59 @@
+[Unit]
+Description=Trading Application Flask Server
+Documentation=https://flask.palletsprojects.com
+After=network.target
+
+[Service]
+Type=notify
+User=trading
+Group=www-data
+WorkingDirectory=/home/trading/trading_app
+
+# Python virtual environment activation
+Environment="PATH=/home/trading/trading_app/venv/bin"
+EnvironmentFile=/home/trading/trading_app/.env
+
+# Start the Flask application with Gunicorn
+ExecStart=/home/trading/trading_app/venv/bin/gunicorn \
+    --workers 4 \
+    --worker-class sync \
+    --bind 127.0.0.1:8000 \
+    --timeout 120 \
+    --keep-alive 5 \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
+    --access-logfile /home/trading/trading_app/logs/access.log \
+    --error-logfile /home/trading/trading_app/logs/error.log \
+    --log-level info \
+    wsgi:app
+
+# Process management
+Restart=always
+RestartSec=10
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=65535
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/home/trading/trading_app
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trading-app
+
+# Startup behavior
+Type=simple
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
