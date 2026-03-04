@@ -221,6 +221,106 @@ def health() -> EndpointResponse:
     return jsonify({'status': 'healthy'}), 200
 
 
+@api_bp.route('/broker-status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def get_broker_status() -> EndpointResponse:
+    """Check if brokers are logged in and tokens are valid.
+    
+    Returns:
+        JSON with broker login status for all configured brokers
+    """
+    try:
+        from trading_app.app.utils.user_env import UserEnvManager
+        
+        username = session.get('username')
+        
+        if not username:
+            return jsonify({
+                'success': True,
+                'brokers': {},
+                'message': 'User not authenticated'
+            })
+        
+        brokers_status = {}
+        
+        # Check Zerodha (Kite) status
+        try:
+            kite = get_kite()
+            if kite:
+                try:
+                    profile = kite.profile()
+                    if profile:
+                        brokers_status['zerodha'] = {
+                            'is_logged_in': True,
+                            'broker_name': 'Zerodha (Kite)',
+                            'message': 'Connected'
+                        }
+                except Exception as e:
+                    brokers_status['zerodha'] = {
+                        'is_logged_in': False,
+                        'broker_name': 'Zerodha (Kite)',
+                        'message': str(e)
+                    }
+        except Exception:
+            pass
+        
+        # Check Kotak Neo status - only session-based (actual login)
+        kotak_authenticated = session.get('kotak_authenticated')
+        kotak_token = session.get('kotak_trading_token')
+        logger.debug(f"Kotak status check - authenticated: {kotak_authenticated}, token exists: {bool(kotak_token)}")
+        if kotak_authenticated is True:  # Must be explicitly True, not just truthy
+            brokers_status['kotak'] = {
+                'is_logged_in': True,
+                'broker_name': 'Kotak Neo',
+                'message': 'Connected'
+            }
+        
+        # Check Dhan status - only session-based (actual login)
+        dhan_token = session.get('dhan_access_token')
+        dhan_authenticated = session.get('dhan_authenticated')
+        logger.debug(f"Dhan status check - authenticated: {dhan_authenticated}, token exists: {bool(dhan_token)}")
+        if dhan_authenticated is True:  # Must be explicitly True
+            brokers_status['dhan'] = {
+                'is_logged_in': True,
+                'broker_name': 'Dhan',
+                'message': 'Connected'
+            }
+        
+        # Check Fyers status - only session-based (actual login)
+        fyers_token = session.get('fyers_access_token')
+        fyers_authenticated = session.get('fyers_authenticated')
+        logger.debug(f"Fyers status check - authenticated: {fyers_authenticated}, token exists: {bool(fyers_token)}")
+        if fyers_authenticated is True:  # Must be explicitly True
+            brokers_status['fyers'] = {
+                'is_logged_in': True,
+                'broker_name': 'Fyers',
+                'message': 'Connected'
+            }
+        
+        # For backward compatibility, also return is_logged_in if ANY broker is connected
+        any_logged_in = any(b.get('is_logged_in') for b in brokers_status.values())
+        first_connected = next((b for b in brokers_status.values() if b.get('is_logged_in')), None)
+        
+        return jsonify({
+            'success': True,
+            'is_logged_in': any_logged_in,
+            'broker_name': first_connected['broker_name'] if first_connected else None,
+            'username': username,
+            'brokers': brokers_status,
+            'message': 'Broker(s) connected' if any_logged_in else 'No broker connected'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error checking broker status: {e}")
+        return jsonify({
+            'success': False,
+            'is_logged_in': False,
+            'brokers': {},
+            'error': str(e)
+        }), 500
+
+
 @api_bp.route('/available-brokers', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -1958,7 +2058,7 @@ def get_intraday_920_symbol_payload() -> EndpointResponse:
         _intraday_920_cache = getattr(get_intraday_920_symbol_payload, '_cache', None)
         if _intraday_920_cache is None:
             _intraday_920_cache = CacheManager(ttl=60)
-            get_intraday_920_symbol_payload._cache = _intraday_920_cache
+            get_intraday_920_symbol_payload._cache = _intraday_920_cache  # type: ignore[attr-defined]
         
         cache_key = f"intraday920:{symbol}:{date_str or 'today'}"
         cached = _intraday_920_cache.get(cache_key)

@@ -21,6 +21,28 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<style>
+    .broker-btn-wrapper {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+    }
+    .broker-status-label {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 10px;
+    }
+    .broker-status-label.online {
+        background: #d4edda;
+        color: #155724;
+    }
+    .broker-status-label.offline {
+        background: #f8d7da;
+        color: #721c24;
+    }
+</style>
 <script>
     /**
      * Load and display available brokers from the API
@@ -30,6 +52,21 @@
         try {
             const response = await fetch('/api/available-brokers');
             const data = await response.json();
+            
+            // Also fetch broker status
+            let brokerStatus = {};
+            try {
+                const statusResponse = await fetch('/api/broker-status');
+                const statusData = await statusResponse.json();
+                // New format: statusData.brokers contains status for each broker
+                if (statusData.brokers) {
+                    for (const [brokerType, status] of Object.entries(statusData.brokers)) {
+                        brokerStatus[brokerType] = status.is_logged_in === true;
+                    }
+                }
+            } catch (e) {
+                console.error('Error fetching broker status:', e);
+            }
             
             const container = document.getElementById('brokersContainer');
             
@@ -58,32 +95,44 @@
                 
                 const brokerColor = colorMap[broker.broker_type] || '#667eea';
                 
+                // Check if this broker is online
+                const isOnline = brokerStatus[broker.broker_type] === true;
+                const statusLabel = isOnline 
+                    ? '<span class="broker-status-label online">● Online</span>'
+                    : '<span class="broker-status-label offline">○ Offline</span>';
+                
                 // Determine if it's a URL-based login or action-based
                 if (broker.login_type === 'url' && broker.login_url) {
                     // Direct URL navigation
                     html += `
-                        <button 
-                            class="btn broker-login-btn" 
-                            id="${buttonId}"
-                            onclick="window.location.href='${broker.login_url}'"
-                            title="${broker.description}"
-                            style="background-color: ${brokerColor}; color: white; font-weight: 500;"
-                        >
-                            ${icon} ${broker.name}
-                        </button>
+                        <div class="broker-btn-wrapper">
+                            <button 
+                                class="btn broker-login-btn" 
+                                id="${buttonId}"
+                                onclick="window.location.href='${broker.login_url}'"
+                                title="${broker.description}"
+                                style="background-color: ${brokerColor}; color: white; font-weight: 500;"
+                            >
+                                ${icon} ${broker.name}
+                            </button>
+                            ${statusLabel}
+                        </div>
                     `;
                 } else if (broker.login_type === 'modal' && broker.login_action && broker.auth_endpoint) {
                     // JavaScript action (modal, etc.) - call function with endpoint
                     html += `
-                        <button 
-                            class="btn broker-login-btn" 
-                            id="${buttonId}"
-                            onclick="window.${broker.login_action}('${broker.auth_endpoint}')"
-                            title="${broker.description}"
-                            style="background-color: ${brokerColor}; color: white; font-weight: 500;"
-                        >
-                            ${icon} ${broker.name}
-                        </button>
+                        <div class="broker-btn-wrapper">
+                            <button 
+                                class="btn broker-login-btn" 
+                                id="${buttonId}"
+                                onclick="window.${broker.login_action}('${broker.auth_endpoint}')"
+                                title="${broker.description}"
+                                style="background-color: ${brokerColor}; color: white; font-weight: 500;"
+                            >
+                                ${icon} ${broker.name}
+                            </button>
+                            ${statusLabel}
+                        </div>
                     `;
                 }
             }

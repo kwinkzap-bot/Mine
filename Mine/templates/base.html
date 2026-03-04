@@ -81,6 +81,21 @@
                     return;
                 }
 
+                // Fetch broker status to show online/offline
+                let brokerStatus = {};
+                try {
+                    const statusResponse = await fetch('/api/broker-status');
+                    const statusData = await statusResponse.json();
+                    // New format: statusData.brokers contains status for each broker
+                    if (statusData.brokers) {
+                        for (const [brokerType, status] of Object.entries(statusData.brokers)) {
+                            brokerStatus[brokerType] = status.is_logged_in === true;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Error fetching broker status:', e);
+                }
+
                 // Create dropdown items for each broker
                 let html = '';
                 for (const broker of data.brokers) {
@@ -95,6 +110,12 @@
                     };
 
                     const brokerColor = colorMap[broker.broker_type] || '#666';
+                    
+                    // Check if this broker is online
+                    const isOnline = brokerStatus[broker.broker_type] === true;
+                    const statusBadge = isOnline 
+                        ? '<span class="broker-status-badge online">Online</span>'
+                        : '<span class="broker-status-badge offline">Offline</span>';
 
                     if (broker.login_url) {
                         html += `
@@ -102,9 +123,10 @@
                                 href="${broker.login_url}" 
                                 class="dropdown-item"
                                 title="${broker.description}"
-                                style="border-left: 4px solid ${brokerColor}; padding-left: 12px; font-weight: 500; color: ${brokerColor};"
+                                style="border-left: 4px solid ${brokerColor}; padding-left: 12px; font-weight: 500; color: ${brokerColor}; display: flex; align-items: center; justify-content: space-between;"
                             >
-                                ${icon} ${broker.name}
+                                <span>${icon} ${broker.name}</span>
+                                ${statusBadge}
                             </a>
                         `;
                     } else if (broker.login_action) {
@@ -114,9 +136,10 @@
                                 class="dropdown-item"
                                 onclick="event.preventDefault(); ${broker.login_action}"
                                 title="${broker.description}"
-                                style="border-left: 4px solid ${brokerColor}; padding-left: 12px; font-weight: 500; color: ${brokerColor};"
+                                style="border-left: 4px solid ${brokerColor}; padding-left: 12px; font-weight: 500; color: ${brokerColor}; display: flex; align-items: center; justify-content: space-between;"
                             >
-                                ${icon} ${broker.name}
+                                <span>${icon} ${broker.name}</span>
+                                ${statusBadge}
                             </a>
                         `;
                     }
