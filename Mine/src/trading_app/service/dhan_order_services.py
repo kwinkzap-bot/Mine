@@ -382,6 +382,15 @@ class DhanOrderService:
                     'error': 'Invalid client_id format'
                 }
             
+            # Validate SL order has trigger_price
+            order_type_upper = order_type.upper()
+            if 'STOP_LOSS' in order_type_upper and (not trigger_price or float(trigger_price) <= 0):
+                logging.error(f"[place_order] SL order requires trigger_price > 0, got: {trigger_price}")
+                return {
+                    'success': False,
+                    'error': f'Stop loss order requires trigger_price > 0, got: {trigger_price}'
+                }
+            
             order_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             url = f"{self.base_url}/orders"
@@ -390,17 +399,38 @@ class DhanOrderService:
                 "Content-Type": "application/json"
             }
             
+            # Normalize order type for consistency
+            is_stop_loss = 'STOP_LOSS' in order_type_upper
+            is_stop_loss_market = order_type_upper == 'STOP_LOSS_MARKET'
+            is_limit = order_type_upper == 'LIMIT'
+            
+            # Determine price field:
+            # - LIMIT: use provided price
+            # - STOP_LOSS: use trigger_price as limit price (or provided price if given)
+            # - STOP_LOSS_MARKET: price should be 0
+            # - MARKET: price should be 0
+            if is_limit:
+                order_price = str(float(price)) if price and float(price) > 0 else "0"
+            elif is_stop_loss and not is_stop_loss_market:
+                # For STOP_LOSS (limit), use price if provided, otherwise use trigger_price
+                order_price = str(float(price)) if price and float(price) > 0 else str(float(trigger_price))
+            else:
+                order_price = "0"
+            
+            # Determine trigger price (required for all SL orders)
+            order_trigger_price = str(float(trigger_price)) if is_stop_loss and trigger_price and float(trigger_price) > 0 else "0"
+            
             payload = {
                 "dhanClientId": self.client_id.strip(),
                 "transactionType": transaction_type.upper(),
                 "exchangeSegment": exchange_segment,
                 "productType": product_type,
-                "orderType": order_type,
+                "orderType": order_type_upper,
                 "validity": validity,
                 "securityId": str(security_id),
                 "quantity": str(int(quantity)),
-                "price": str(float(price)) if order_type == 'LIMIT' else "0",
-                "triggerPrice": str(float(trigger_price)) if 'STOP_LOSS' in order_type else "0",
+                "price": order_price,
+                "triggerPrice": order_trigger_price,
                 "disclosedQuantity": str(int(disclosed_quantity)) if disclosed_quantity > 0 else "0",
                 "afterMarketOrder": False
             }
