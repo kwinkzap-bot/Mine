@@ -652,10 +652,14 @@ if barstate.islast and next_session_show and array.size(arr_time) > 0
         int ns_end = na
         
         if resolution == "D"
-            // Daily: project to next trading day and draw levels for market session window (09:00 - 15:30 IST)
+            // Daily: project to next trading day and draw levels for FULL market session (09:00 - 15:30 IST)
+            // Example: If current day is March 4th, next session pivot should show for entire March 5th (or next working day)
             // Build next date from current bar time, skipping weekends + configured holidays.
             int one_day_ms = 24 * 60 * 60 * 1000
-            int candidate_day = nz(time("D"), time) + one_day_ms
+            
+            // Get current day's start time in IST
+            int current_day_start = nz(time("D"), time)
+            int candidate_day = current_day_start + one_day_ms
             int guard = 0
 
             // Skip weekends and configured holidays (guarded loop)
@@ -672,6 +676,7 @@ if barstate.islast and next_session_show and array.size(arr_time) > 0
                 next_m = month(candidate_day, "Asia/Kolkata")
                 next_d = dayofmonth(candidate_day, "Asia/Kolkata")
 
+                // Next session starts at 9:00 AM IST and ends at 3:30 PM IST (full trading session)
                 ns_start := timestamp("Asia/Kolkata", next_y, next_m, next_d, 9, 0, 0)
                 ns_end   := timestamp("Asia/Kolkata", next_y, next_m, next_d, 15, 30, 0)
 
@@ -694,24 +699,12 @@ if barstate.islast and next_session_show and array.size(arr_time) > 0
             ns_end   := ns_start + ns_duration
         
         if not na(ns_start) and not na(ns_end) and ns_end > ns_start
-            // Daily: use bar_index for future projection (reliable on intraday charts).
-            // Others: keep bar_time projection.
-            bool use_index_projection = resolution == "D"
-            next_xloc = use_index_projection ? xloc.bar_index : xloc.bar_time
+            // Always use bar_time for proper time-based projection
+            // This ensures Daily CPR next session lines appear at the actual next day's time (9:00 AM - 3:30 PM IST)
+            next_xloc = xloc.bar_time
 
-            int x1_next = na
-            int x2_next = na
-            if use_index_projection
-                int tf_sec = int(math.max(timeframe.in_seconds(), 60))
-                int bars_per_session = int(math.max(1, math.round((6.5 * 60 * 60) / tf_sec)))
-                x1_next := bar_index + 1
-                x2_next := bar_index + bars_per_session
-                x2_next := math.min(x2_next, bar_index + 500)
-                if x2_next <= x1_next
-                    x2_next := x1_next + 1
-            else
-                x1_next := ns_start
-                x2_next := ns_end
+            int x1_next = ns_start
+            int x2_next = ns_end
 
             // === Calculate Next Session CPR ===
             ns_pivot = (curr_high + curr_low + curr_close) / 3

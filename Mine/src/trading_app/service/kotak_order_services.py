@@ -520,18 +520,26 @@ class KotakOrderService:
             
             if has_edit_token and has_edit_sid:
                 try:
-                    logging.info(f"[Kotak] Attempting SDK order: {tradingsymbol} {neo_txn_type} {quantity} @ {price}")
+                    logging.info(f"[Kotak] Attempting SDK order: {tradingsymbol} {neo_txn_type} {quantity} @ {price}, trigger_price={trigger_price}")
                     logging.info(f"[Kotak] SDK credentials present: token={has_edit_token[:20] if isinstance(has_edit_token, str) else 'non-string'}..., sid={has_edit_sid[:20] if isinstance(has_edit_sid, str) else 'non-string'}...")
-                    sdk_result = self.client.place_order(
-                        transaction_type=neo_txn_type,
-                        order_type=order_type,
-                        price=str(float(price)) if price else "0",  # Price MUST be a string for SDK
-                        product=product_type,
-                        quantity=str(int(quantity)),  # Quantity MUST also be a string for SDK
-                        trading_symbol=tradingsymbol,
-                        validity='DAY',
-                        exchange_segment=exchange_segment
-                    )
+                    
+                    # Build SDK order params
+                    sdk_params = {
+                        'transaction_type': neo_txn_type,
+                        'order_type': order_type,
+                        'price': str(float(price)) if price else "0",  # Price MUST be a string for SDK
+                        'product': product_type,
+                        'quantity': str(int(quantity)),  # Quantity MUST also be a string for SDK
+                        'trading_symbol': tradingsymbol,
+                        'validity': 'DAY',
+                        'exchange_segment': exchange_segment
+                    }
+                    
+                    # Add trigger_price for SL orders
+                    if trigger_price and float(trigger_price) > 0:
+                        sdk_params['trigger_price'] = str(float(trigger_price))
+                    
+                    sdk_result = self.client.place_order(**sdk_params)
                     logging.info(f"[Kotak] SDK order response: {sdk_result}")
                     if sdk_result and isinstance(sdk_result, dict):
                         if 'nOrdNo' in sdk_result or sdk_result.get('stat') == 'Ok':
@@ -611,10 +619,27 @@ class KotakOrderService:
             # Body uses short keys; v2 API sends directly (no jData wrapper)
             # All values must be strings per x-www-form-urlencoded spec
             # Build body matching SDK defaults (from neo_api_client/api/order_api.py)
+            
+            # Normalize order_type for Kotak Neo
+            order_type_upper = str(order_type).upper()
+            
+            # For SL-M orders, Kotak requires:
+            # - pt = 'SL-M'
+            # - pr = '0' (no limit price)
+            # - tp = trigger price (MUST be > 0)
+            is_sl_market = order_type_upper in ['SL-M', 'SLM', 'STOP_LOSS_MARKET']
+            is_sl_limit = order_type_upper in ['SL', 'SL-L', 'STOP_LOSS']
+            is_limit = order_type_upper in ['L', 'LIMIT']
+            
+            # Validate trigger price for SL orders
+            if (is_sl_market or is_sl_limit) and (not trigger_price or float(trigger_price) <= 0):
+                logging.error(f"[place_order] SL order requires trigger_price > 0, got: {trigger_price}")
+                return {'success': False, 'error': f'Stop loss order requires trigger_price > 0, got: {trigger_price}'}
+            
             order_body = {
                 "es": str(exchange_segment).lower(),  # nse_fo
                 "pc": str(product_type).upper(),      # NRML, MIS, CNC
-                "pt": str(order_type).upper(),        # MKT, L (limit)
+                "pt": 'SL-M' if is_sl_market else ('SL' if is_sl_limit else order_type_upper),  # MKT, L, SL, SL-M
                 "qt": str(int(quantity)),             # quantity as string
                 "rt": "DAY",                          # return type (validity)
                 "ts": str(tradingsymbol),             # symbol AS-IS (don't uppercase - Kite format may be case-sensitive)
@@ -623,8 +648,8 @@ class KotakOrderService:
                 "dq": "0",                            # disclosed quantity - ALWAYS include (SDK default)
                 "mp": "0",                            # market protection - ALWAYS include (SDK default)
                 "pf": "N",                            # partial fill - ALWAYS include
-                "pr": str(float(price)) if order_type and order_type.upper() in ['L', 'LIMIT', 'SL'] and price and float(price) > 0 else "0",  # price (required for LIMIT/SL)
-                "tp": str(float(trigger_price)) if trigger_price and float(trigger_price) > 0 else "0",  # trigger price (for SL orders)
+                "pr": str(float(price)) if (is_limit or is_sl_limit) and price and float(price) > 0 else "0",  # price (required for LIMIT/SL, 0 for SL-M)
+                "tp": str(float(trigger_price)) if (is_sl_market or is_sl_limit) and trigger_price and float(trigger_price) > 0 else "0",  # trigger price (for SL orders)
             }
             
             # Validate critical fields

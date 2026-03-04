@@ -780,13 +780,16 @@ class FyersOrderService:
                 "Content-Type": "application/json"
             }
             
+            # For Stop Loss Market (type 4), Fyers requires limitPrice >= 0.0025
+            # Since it's a market order, we set limitPrice = stopPrice (trigger price)
+            # This ensures the order executes at market when trigger is hit
             payload = {
                 "symbol": symbol,
                 "qty": int(quantity),
                 "type": 4,  # 4 = STOP_LOSS_MARKET
                 "side": self.SIDE_SELL,  # -1 = SELL
                 "productType": product_type,
-                "limitPrice": 0,
+                "limitPrice": float(trigger_price),  # Must be >= 0.0025, use trigger_price
                 "stopPrice": float(trigger_price),
                 "validity": "DAY",
                 "disclosedQty": 0,

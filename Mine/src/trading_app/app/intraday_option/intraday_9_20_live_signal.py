@@ -263,28 +263,56 @@ class Intraday920LiveSignal:
         logger.info(f"Intraday 9:20 Live Signal Monitor initialized for {symbol} (live_trading={live_trading}, ratio={self.risk_reward_ratio}) [Instance ID: {id(self)}]")
     
     def _init_extra_brokers(self):
-        """Initialize additional broker services if credentials are present in env."""
+        """Initialize additional broker services if credentials are present in env or user config."""
+        from trading_app.app.utils.user_env import UserEnvManager
+        
+        # Helper to get credentials from session/env/user config
+        def get_credential(key: str) -> Optional[str]:
+            # First try environment variable
+            value = os.getenv(key)
+            if value and value not in ['', 'your_token', 'your_access_token']:
+                return value
+            # Then try user-specific config if username is available
+            if self.username:
+                user_value = UserEnvManager.get_user_var(self.username, key)
+                if user_value and user_value not in ['', 'your_token', 'your_access_token']:
+                    return user_value
+            return None
+        
         # 1. Kotak Neo
-        if os.getenv("KOTAK_CONSUMER_KEY") and os.getenv("KOTAK_MOBILE_NUMBER"):
+        kotak_consumer_key = get_credential("KOTAK_CONSUMER_KEY")
+        kotak_mobile = get_credential("KOTAK_MOBILE_NUMBER")
+        if kotak_consumer_key and kotak_mobile:
             try:
                 self.extra_brokers['KOTAK'] = KotakOrderService()
                 logger.info("✅ Kotak Neo Service Initialized")
             except Exception as e:
                 logger.error(f"❌ Failed to init Kotak Neo: {e}")
         
-        # 2. Dhan
-        if os.getenv("DHAN_ACCESS_TOKEN") and os.getenv("DHAN_CLIENT_ID"):
+        # 2. Dhan - explicitly pass tokens to DhanOrderService
+        dhan_access_token = get_credential("DHAN_ACCESS_TOKEN")
+        dhan_client_id = get_credential("DHAN_CLIENT_ID")
+        if dhan_access_token and dhan_client_id:
             try:
-                self.extra_brokers['DHAN'] = DhanOrderService()
-                logger.info("✅ Dhan Service Initialized")
+                self.extra_brokers['DHAN'] = DhanOrderService(
+                    access_token=dhan_access_token,
+                    client_id=dhan_client_id
+                )
+                logger.info(f"✅ Dhan Service Initialized (client_id: {dhan_client_id[:6]}...)")
             except Exception as e:
                 logger.error(f"❌ Failed to init Dhan: {e}")
 
-        # 3. Fyers
-        if os.getenv("FYERS_APP_ID") and (os.getenv("FYERS_ACCESS_TOKEN") or os.getenv("FYERS_SECRET_KEY")):
+        # 3. Fyers - explicitly pass tokens to FyersOrderService
+        fyers_app_id = get_credential("FYERS_APP_ID")
+        fyers_access_token = get_credential("FYERS_ACCESS_TOKEN")
+        fyers_secret_key = get_credential("FYERS_SECRET_KEY")
+        if fyers_app_id and (fyers_access_token or fyers_secret_key):
             try:
-                self.extra_brokers['FYERS'] = FyersOrderService()
-                logger.info("✅ Fyers Service Initialized")
+                self.extra_brokers['FYERS'] = FyersOrderService(
+                    app_id=fyers_app_id,
+                    access_token=fyers_access_token
+                )
+                logger.info(f"✅ Fyers Service Initialized (app_id: {fyers_app_id[:8]}...)")
             except Exception as e:
                 logger.error(f"❌ Failed to init Fyers: {e}")
                 
