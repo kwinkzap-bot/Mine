@@ -325,11 +325,16 @@ def get_broker_status() -> EndpointResponse:
 @csrf.exempt
 @limiter.exempt
 def get_available_brokers() -> EndpointResponse:
-    """Get list of available broker instances based on configured credentials
+    """Get list of available broker instances based on object-based configuration
     
-    Reads from user-specific .env file (e.g., Kavin.env) for per-user credentials.
-    Supports multiple instances of the same broker (e.g., Kite1, Kite2, Kite3).
-    Filters by ENABLED_BROKERS config if specified.
+    Reads from user-specific .env file using BROKER_{N}_{FIELD} format.
+    Each broker is an object with TYPE, NAME, and broker-specific credentials.
+    
+    Example .env format:
+        BROKER_1_TYPE=zerodha
+        BROKER_1_NAME=My Zerodha Account
+        BROKER_1_API_KEY=xxx
+        BROKER_1_API_SECRET=xxx
     
     Returns:
         JSON with list of available broker instances for the current user
@@ -347,193 +352,104 @@ def get_available_brokers() -> EndpointResponse:
                 'total_configured': 0
             }), 401
         
-        # Get ENABLED_BROKERS from user config (comma-separated list)
-        enabled_brokers_str = UserEnvManager.get_user_var(username, 'ENABLED_BROKERS', '').strip()
-        enabled_brokers_list = [b.strip().lower() for b in enabled_brokers_str.split(',') if b.strip()] if enabled_brokers_str else None
-        
-        logger.info(f"[available-brokers] User: {username}, ENABLED_BROKERS config: {enabled_brokers_list or 'ALL (no filter)'}")
-        
-        brokers = []
-        
-        # Broker configurations with field patterns
-        broker_configs = {
+        # Broker type configurations (icons, descriptions, required fields, login info)
+        broker_type_configs = {
             'zerodha': {
-                'name': 'Zerodha (Kite)',
                 'icon': '🪁',
                 'description': 'NSE/BSE stocks & F&O trading',
-                'fields': ['API_KEY', 'API_SECRET'],
-                'prefix': 'KITE',
+                'required_fields': ['API_KEY', 'API_SECRET'],
                 'login_type': 'url',
                 'login_url': '/auth/login'
             },
             'kotak': {
-                'name': 'Kotak Neo',
                 'icon': '🏦',
                 'description': 'Stocks, F&O & derivatives trading',
-                'fields': ['KOTAK_CONSUMER_KEY', 'KOTAK_UCC'],
-                'prefix': 'KOTAK',
+                'required_fields': ['CONSUMER_KEY', 'UCC'],
                 'login_type': 'modal',
                 'login_action': 'showKotakLoginModal()',
-                'login_url': '/auth/login/kotak'
+                'auth_endpoint': '/auth/login/kotak'
             },
             'dhan': {
-                'name': 'Dhan',
                 'icon': '📊',
                 'description': 'F&O, options & commodity trading',
-                'fields': ['DHAN_ACCESS_TOKEN', 'DHAN_CLIENT_ID'],
-                'prefix': 'DHAN',
+                'required_fields': ['ACCESS_TOKEN', 'CLIENT_ID'],
                 'login_type': 'modal',
                 'login_action': 'showDhanLoginModal()',
-                'login_url': '/auth/login/dhan'
+                'auth_endpoint': '/auth/login/dhan'
             },
             'fyers': {
-                'name': 'Fyers',
                 'icon': '⚡',
                 'description': 'Options & index trading',
-                'fields': ['FYERS_APP_ID', 'FYERS_SECRET_KEY'],
-                'prefix': 'FYERS',
+                'required_fields': ['APP_ID', 'SECRET_KEY'],
                 'login_type': 'modal',
                 'login_action': 'showFyersLoginModal()',
-                'login_url': '/auth/login/fyers'
+                'auth_endpoint': '/auth/login/fyers'
             }
         }
         
-        # For each broker type, scan for multiple instances
-        for broker_type, config in broker_configs.items():
-            # Skip broker if ENABLED_BROKERS is configured and this broker is not in the list
-            if enabled_brokers_list and broker_type not in enabled_brokers_list:
-                logger.debug(f"[available-brokers] Skipping {broker_type} - not in ENABLED_BROKERS list")
+        brokers = []
+        
+        # Scan for BROKER_{N}_TYPE entries (up to 20 brokers)
+        for instance_num in range(1, 21):
+            broker_type = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TYPE', '').strip().lower()
+            
+            if not broker_type:
+                continue  # No more brokers defined
+            
+            if broker_type not in broker_type_configs:
+                logger.warning(f"Unknown broker type: {broker_type} for BROKER_{instance_num}")
                 continue
             
-            instance_num = 1
+            type_config = broker_type_configs[broker_type]
             
-            # Try to find instances (up to 10 per broker type)
-            while instance_num <= 10:
-                # Check if all required fields exist for this instance
-                all_fields_present = True
-                
-                if broker_type == 'zerodha':
-                    # Special case: first Zerodha instance uses API_KEY, API_SECRET directly
-                    if instance_num == 1:
-                        api_key = UserEnvManager.get_user_var(username, 'API_KEY', '').strip()
-                        api_secret = UserEnvManager.get_user_var(username, 'API_SECRET', '').strip()
-                        if api_key and api_secret:
-                            broker_id = 'kite_1'
-                            brokers.append({
-                                'id': broker_id,
-                                'name': config['name'],
-                                'icon': config['icon'],
-                                'instance_num': 1,
-                                'broker_type': broker_type,
-                                'description': config['description'],
-                                'configured': True,
-                                'login_url': f"/auth/login?broker_id={broker_id}",
-                                'status': 'Configured and ready',
-                                'login_type': config['login_type']
-                            })
-                            instance_num += 1
-                            continue
-                    else:
-                        # Additional Zerodha instances use KITE_2_API_KEY, etc.
-                        api_key = UserEnvManager.get_user_var(username, f'KITE_{instance_num}_API_KEY', '').strip()
-                        api_secret = UserEnvManager.get_user_var(username, f'KITE_{instance_num}_API_SECRET', '').strip()
-                        if api_key and api_secret:
-                            broker_id = f'kite_{instance_num}'
-                            brokers.append({
-                                'id': broker_id,
-                                'name': config['name'],
-                                'icon': config['icon'],
-                                'instance_num': instance_num,
-                                'broker_type': broker_type,
-                                'description': config['description'],
-                                'configured': True,
-                                'login_url': f"/auth/login?broker_id={broker_id}",
-                                'status': 'Configured and ready',
-                                'login_type': config['login_type']
-                            })
-                        else:
-                            all_fields_present = False
-                
-                else:
-                    # For other brokers, use prefix-based naming
-                    if instance_num == 1:
-                        # First instance can use original field names or prefixed names
-                        field_values = []
-                        for field in config['fields']:
-                            value = UserEnvManager.get_user_var(username, field, '').strip()
-                            if value:
-                                field_values.append(value)
-                        
-                        if len(field_values) == len(config['fields']):
-                            broker_id = f"{broker_type}_1"
-                            broker_entry = {
-                                'id': broker_id,
-                                'name': config['name'],
-                                'icon': config['icon'],
-                                'instance_num': 1,
-                                'broker_type': broker_type,
-                                'description': config['description'],
-                                'configured': True,
-                                'status': 'Configured and ready',
-                                'login_type': config['login_type']
-                            }
-                            
-                            if config['login_type'] == 'url':
-                                broker_entry['login_url'] = f"/auth/login?broker_id={broker_id}"
-                            else:  # modal
-                                broker_entry['login_action'] = config.get('login_action')
-                                broker_entry['auth_endpoint'] = config.get('login_url')
-                            
-                            brokers.append(broker_entry)
-                            instance_num += 1
-                            continue
-                        else:
-                            all_fields_present = False
-                    else:
-                        # Additional instances use prefixed naming
-                        field_values = []
-                        for field in config['fields']:
-                            # Extract field name without broker prefix
-                            field_suffix = field.replace(f"{config['prefix']}_", '') if field.startswith(config['prefix']) else field
-                            value = UserEnvManager.get_user_var(username, f"{config['prefix']}_{instance_num}_{field_suffix}", '').strip()
-                            if value:
-                                field_values.append(value)
-                        
-                        if len(field_values) == len(config['fields']):
-                            broker_id = f"{broker_type}_{instance_num}"
-                            broker_entry = {
-                                'id': broker_id,
-                                'name': config['name'],
-                                'icon': config['icon'],
-                                'instance_num': instance_num,
-                                'broker_type': broker_type,
-                                'description': config['description'],
-                                'configured': True,
-                                'status': 'Configured and ready',
-                                'login_type': config['login_type']
-                            }
-                            
-                            if config['login_type'] == 'url':
-                                broker_entry['login_url'] = f"/auth/login?broker_id={broker_id}"
-                            else:  # modal
-                                broker_entry['login_action'] = config.get('login_action')
-                                broker_entry['auth_endpoint'] = config.get('login_url')
-                            
-                            brokers.append(broker_entry)
-                        else:
-                            all_fields_present = False
-                
-                # If this instance doesn't have all fields, stop looking for higher instances
-                if not all_fields_present:
+            # Get broker name (custom name from config)
+            broker_name = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_NAME', '').strip()
+            if not broker_name:
+                broker_name = broker_type.title()  # Fallback to type name
+            
+            # Check if required fields are present
+            all_fields_present = True
+            credentials = {}
+            for field in type_config['required_fields']:
+                value = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_{field}', '').strip()
+                if not value:
+                    all_fields_present = False
                     break
-                
-                instance_num += 1
+                credentials[field] = value
+            
+            if not all_fields_present:
+                logger.debug(f"BROKER_{instance_num} ({broker_type}) missing required fields")
+                continue
+            
+            # Build broker entry
+            broker_id = f"{broker_type}_{instance_num}"
+            broker_entry = {
+                'id': broker_id,
+                'instance_num': instance_num,
+                'broker_type': broker_type,
+                'name': broker_name,
+                'icon': type_config['icon'],
+                'description': type_config['description'],
+                'configured': True,
+                'status': 'Configured and ready',
+                'login_type': type_config['login_type']
+            }
+            
+            if type_config['login_type'] == 'url':
+                broker_entry['login_url'] = f"{type_config['login_url']}?broker_id={broker_id}"
+            else:  # modal
+                broker_entry['login_action'] = type_config.get('login_action')
+                broker_entry['auth_endpoint'] = type_config.get('auth_endpoint')
+            
+            brokers.append(broker_entry)
+            logger.info(f"[available-brokers] Found broker: {broker_name} ({broker_type}) - Instance {instance_num}")
+        
+        logger.info(f"[available-brokers] User: {username}, Total brokers found: {len(brokers)}")
         
         return jsonify({
             'success': True,
             'brokers': brokers,
             'total_configured': len(brokers),
-            'enabled_brokers_filter': enabled_brokers_list,
             'message': f'{len(brokers)} broker(s) available for login'
         }), 200
         
