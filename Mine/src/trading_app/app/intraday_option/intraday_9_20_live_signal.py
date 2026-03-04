@@ -2664,6 +2664,7 @@ class Intraday920LiveSignal:
                 current_time = datetime.now().time()
                 if current_time >= time(15, 20, 0) and not self.market_close_processed:  # 3:20 PM IST
                     logger.info(f"🔴 Market close time (3:20 PM) reached - Checking for active trades to square off")
+                    logger.info(f"🔴 Active brokers: Kite (primary) + {list(self.extra_brokers.keys()) if self.extra_brokers else 'None'}")
                     
                     if self.active_trades:
                         logger.info(f"Found {len(self.active_trades)} active trades to potentially close")
@@ -2704,12 +2705,18 @@ class Intraday920LiveSignal:
                                     
                                     logger.info(f"🔴 {side} Market Close Square Off: Entry {entry_price:.2f}, Exit {current_price:.2f}, P&L: {pnl:+.2f} | Order ID: {entry_order_id}")
                                     
-                                    # Place SELL order to close the position
+                                    # Place SELL order to close the position on ALL BROKERS
                                     if strike:
                                         try:
-                                            # Cancel pending SL orders before placing market sell
+                                            # Cancel pending SL orders on ALL brokers before placing market sell
+                                            logger.info(f"🔴 {side} Cancelling SL orders on all brokers before square-off...")
                                             self._cancel_pending_sl_orders(trade, side)
                                             
+                                            # Small delay to allow SL cancellations to process
+                                            time_module.sleep(0.5)
+                                            
+                                            # Place SELL order - this will place on Kite + all extra brokers
+                                            logger.info(f"🔴 {side} Placing SELL orders on ALL brokers (Kite + {list(self.extra_brokers.keys()) if self.extra_brokers else 'None'})...")
                                             sell_order_id = self.place_sell_order(
                                                 side=side,
                                                 strike=strike,
@@ -2718,11 +2725,11 @@ class Intraday920LiveSignal:
                                             )
                                             
                                             if sell_order_id:
-                                                logger.info(f"✅ {side} Square off order placed at market close | Exit Order ID: {sell_order_id}")
+                                                logger.info(f"✅ {side} Square off order placed at market close | Kite Exit Order ID: {sell_order_id}")
                                                 closed_trades.append(side)
                                             else:
-                                                logger.warning(f"⚠️ {side} Square off order returned no order ID - checking if order was placed")
-                                                closed_trades.append(f"{side} (order_id: None)")
+                                                logger.warning(f"⚠️ {side} Kite square off order returned no order ID - extra brokers may still have been triggered")
+                                                closed_trades.append(f"{side} (kite_order_id: None)")
                                                 
                                         except Exception as e:
                                             logger.error(f"Error placing sell order for {side} at market close: {e}", exc_info=True)
@@ -2773,9 +2780,10 @@ class Intraday920LiveSignal:
                                     skipped_trades.append(f"{side} (status: {trade.get('status')})")
                         
                         # Summary logging
-                        logger.info(f"🏁 Market close square off complete:")
+                        logger.info(f"🏁 Market close square off complete (ALL BROKERS):")
                         logger.info(f"   ✅ Closed: {closed_trades if closed_trades else 'None'}")
                         logger.info(f"   ⏭️  Skipped: {skipped_trades if skipped_trades else 'None'}")
+                        logger.info(f"   📋 Brokers processed: Kite + {list(self.extra_brokers.keys()) if self.extra_brokers else 'None'}")
                         
                         # Mark that market close has been processed
                         self.market_close_processed = True
