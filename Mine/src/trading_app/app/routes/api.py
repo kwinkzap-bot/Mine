@@ -329,6 +329,7 @@ def get_available_brokers() -> EndpointResponse:
     
     Reads from user-specific .env file (e.g., Kavin.env) for per-user credentials.
     Supports multiple instances of the same broker (e.g., Kite1, Kite2, Kite3).
+    Filters by ENABLED_BROKERS config if specified.
     
     Returns:
         JSON with list of available broker instances for the current user
@@ -345,6 +346,12 @@ def get_available_brokers() -> EndpointResponse:
                 'brokers': [],
                 'total_configured': 0
             }), 401
+        
+        # Get ENABLED_BROKERS from user config (comma-separated list)
+        enabled_brokers_str = UserEnvManager.get_user_var(username, 'ENABLED_BROKERS', '').strip()
+        enabled_brokers_list = [b.strip().lower() for b in enabled_brokers_str.split(',') if b.strip()] if enabled_brokers_str else None
+        
+        logger.info(f"[available-brokers] User: {username}, ENABLED_BROKERS config: {enabled_brokers_list or 'ALL (no filter)'}")
         
         brokers = []
         
@@ -393,6 +400,11 @@ def get_available_brokers() -> EndpointResponse:
         
         # For each broker type, scan for multiple instances
         for broker_type, config in broker_configs.items():
+            # Skip broker if ENABLED_BROKERS is configured and this broker is not in the list
+            if enabled_brokers_list and broker_type not in enabled_brokers_list:
+                logger.debug(f"[available-brokers] Skipping {broker_type} - not in ENABLED_BROKERS list")
+                continue
+            
             instance_num = 1
             
             # Try to find instances (up to 10 per broker type)
@@ -521,6 +533,7 @@ def get_available_brokers() -> EndpointResponse:
             'success': True,
             'brokers': brokers,
             'total_configured': len(brokers),
+            'enabled_brokers_filter': enabled_brokers_list,
             'message': f'{len(brokers)} broker(s) available for login'
         }), 200
         
