@@ -18,13 +18,14 @@ class FyersOrderService:
     Official Docs: https://myapi.fyers.in/docsv3
     """
     
-    def __init__(self, app_id: Optional[str] = None, access_token: Optional[str] = None):
+    def __init__(self, app_id: Optional[str] = None, access_token: Optional[str] = None, secret_key: Optional[str] = None):
         """
         Initialize FyersOrderService with Fyers credentials.
         
         Args:
             app_id: Fyers App ID (format: XXXXXXXXX-100)
             access_token: Access token (format: appid:accesstoken or just the token part)
+            secret_key: Fyers Secret Key (required for OAuth token generation)
         
         How to get credentials:
             1. Create APP at: https://myapi.fyers.in/dashboard/
@@ -32,7 +33,7 @@ class FyersOrderService:
             3. Generate access_token via OAuth flow or direct login
         """
         self.app_id = app_id or os.getenv("FYERS_APP_ID")
-        self.secret_key = os.getenv("FYERS_SECRET_KEY")
+        self.secret_key = secret_key or os.getenv("FYERS_SECRET_KEY")
         
         # Get redirect URI - use app's callback endpoint
         self.redirect_uri = os.getenv("FYERS_REDIRECT_URI") or "http://localhost:5000/auth/login/fyers/callback"

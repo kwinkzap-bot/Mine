@@ -10,6 +10,7 @@ import os
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 from trading_app.app.utils.logger import logger
 
 
@@ -21,12 +22,11 @@ class TokenManager:
         self.token_file = Path(os.path.dirname(__file__)) / '..' / '..' / '..' / '.token_cache'
         self.token_file = self.token_file.resolve()
     
-    def save_token(self, access_token: str, request_token: str = None) -> bool:
+    def save_token(self, access_token: str) -> bool:
         """Save access token to persistent storage.
         
         Args:
             access_token: The access token from Zerodha
-            request_token: Optional request token
             
         Returns:
             True if successful, False otherwise
@@ -34,7 +34,6 @@ class TokenManager:
         try:
             token_data = {
                 'access_token': access_token,
-                'request_token': request_token,
                 'saved_at': datetime.now().isoformat(),
                 'expires_at': None  # Zerodha tokens expire at end of day
             }
@@ -91,7 +90,7 @@ class TokenManager:
             logger.warning(f"Failed to clear token cache: {e}")
             return False
     
-    def get_valid_token(self) -> str:
+    def get_valid_token(self) -> Optional[str]:
         """Get a valid access token from environment, session, or cache.
         
         Priority order:
@@ -148,20 +147,19 @@ class TokenManager:
 _token_manager = TokenManager()
 
 
-def save_access_token(access_token: str, request_token: str = None) -> bool:
+def save_access_token(access_token: str) -> bool:
     """Save access token to persistent storage.
     
     Args:
         access_token: The access token from Zerodha
-        request_token: Optional request token
         
     Returns:
         True if successful
     """
-    return _token_manager.save_token(access_token, request_token)
+    return _token_manager.save_token(access_token)
 
 
-def get_access_token() -> str:
+def get_access_token() -> Optional[str]:
     """Get valid access token from environment, session, or cache.
     
     Returns:

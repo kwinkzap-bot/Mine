@@ -145,17 +145,14 @@ class MarketScheduler:
 
             logger.info("Starting OI Persistence Task...")
 
-            # Need to get Kite instance without session
-            # This requires token to be available in environment or cache
+            # Need to get Kite instance without session.
+            # Background thread has no Flask session, so we pass user + instance explicitly.
+            # instance=1 is the data account (Broker 1 = Zerodha Kite).
             from trading_app.app.routes.api import get_kite
-            
-            # Since we're in a background thread, get_kite needs to find token 
-            # from file cache or environment variable
-            # We assume the 'Mine' user or default env vars are set
-            kite = get_kite()
+            kite = get_kite(user='Mine', instance=1)
             
             if not kite:
-                logger.warning("OI Persistence: Could not get Kite instance. Check API_KEY/ACCESS_TOKEN in env.")
+                logger.warning("OI Persistence: Could not get Kite instance (Broker 1). Check BROKER_1_API_KEY/BROKER_1_ACCESS_TOKEN in env.")
                 return
                 
             from trading_app.service.open_interest_service import OpenInterestService

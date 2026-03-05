@@ -33,10 +33,9 @@ class Intraday920Strategy:
     def _refresh_kite_access_token(self) -> bool:
         """Refresh Kite access token and update clients.
 
-        Flow:
-        1) Use cached/env access token if available.
-        2) If missing/invalid, attempt to generate a new access token
-           using REQUEST_TOKEN + API_SECRET (if present).
+        Note: Zerodha request tokens are single-use. Once used to generate
+        an access token, they become invalid. Users must re-login via OAuth
+        to get a fresh access token when it expires.
         """
         try:
             new_token = get_access_token()
@@ -47,39 +46,8 @@ class Intraday920Strategy:
                 logger.info("Kite access token refreshed from cache/env")
                 return True
 
-            # Attempt to generate a new access token if request token is available
-            try:
-                from dotenv import load_dotenv  # type: ignore
-                from kiteconnect import KiteConnect  # type: ignore
-            except Exception:
-                logger.warning("python-dotenv or kiteconnect not available for auto token refresh")
-                return False
-
-            load_dotenv()
-            api_key = os.getenv("API_KEY")
-            api_secret = os.getenv("API_SECRET")
-            request_token = os.getenv("REQUEST_TOKEN")
-
-            if not api_key or not api_secret or not request_token:
-                logger.warning("REQUEST_TOKEN/API_SECRET not available for auto token refresh")
-                return False
-
-            kite = KiteConnect(api_key=api_key)
-            session = kite.generate_session(request_token, api_secret)
-            # session.generate_session returns a dict with access_token
-            access_token = session.get("access_token") if isinstance(session, dict) else None
-
-            if not access_token:
-                logger.warning("Failed to generate access token from request token")
-                return False
-
-            os.environ["ACCESS_TOKEN"] = access_token
-            save_access_token(access_token, request_token)
-
-            self.kite.set_access_token(access_token)
-            self.data_service.kite = self.kite
-            logger.info("Kite access token refreshed via request token")
-            return True
+            logger.warning("No access token available. Please login via Zerodha OAuth.")
+            return False
 
         except Exception as e:
             logger.warning(f"Failed to refresh Kite access token: {e}")

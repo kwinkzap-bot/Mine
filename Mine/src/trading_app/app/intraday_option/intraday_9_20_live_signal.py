@@ -225,6 +225,8 @@ class Intraday920LiveSignal:
         
         # Initialize Multi-Broker Support
         self.extra_brokers = {}  # Dictionary to hold active broker services
+        self.extra_broker_lot_sizes = {}  # broker_key -> number of lots (e.g. 1, 2…)
+        self.primary_lot_count = 1  # Lot multiplier for Broker 1 (primary)
         self._init_extra_brokers()
         
         # Initialize Excel logger for this user
@@ -265,6 +267,18 @@ class Intraday920LiveSignal:
     def _init_extra_brokers(self):
         """Initialize additional broker services if credentials are present in env or user config."""
         from trading_app.app.utils.user_env import UserEnvManager
+        _uname = self.username or 'Mine'
+
+        # Helper: read BROKER_N_LOT_SIZE as integer lots (default 1)
+        def _lot_count(n: int) -> int:
+            try:
+                return max(1, int(UserEnvManager.get_user_var(_uname, f'BROKER_{n}_LOT_SIZE', '1').strip() or '1'))
+            except (ValueError, TypeError):
+                return 1
+
+        # Load primary broker (Broker 1) lot count into instance variable
+        self.primary_lot_count = _lot_count(1)
+        logger.info(f"Primary broker (Broker 1) lot count: {self.primary_lot_count}x")
         
         # Helper to get credentials from session/env/user config
         def get_credential(key: str) -> Optional[str]:
@@ -283,41 +297,105 @@ class Intraday920LiveSignal:
         kotak_consumer_key = get_credential("KOTAK_CONSUMER_KEY")
         kotak_mobile = get_credential("KOTAK_MOBILE_NUMBER")
         if kotak_consumer_key and kotak_mobile:
-            try:
-                self.extra_brokers['KOTAK'] = KotakOrderService()
-                logger.info("✅ Kotak Neo Service Initialized")
-            except Exception as e:
-                logger.error(f"❌ Failed to init Kotak Neo: {e}")
+            # Find Kotak instance number for active check
+            kotak_instance = None
+            for _i in range(1, 21):
+                _bt = UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{_i}_TYPE', '').strip().lower()
+                if _bt == 'kotak':
+                    kotak_instance = _i
+                    break
+            if kotak_instance and not UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{kotak_instance}_ACTIVE', 'true').strip().lower() in ('false', '0', 'no'):
+                try:
+                    self.extra_brokers['KOTAK'] = KotakOrderService()
+                    self.extra_broker_lot_sizes['KOTAK'] = _lot_count(kotak_instance)
+                    logger.info(f"Kotak Neo Initialized | lot_count={self.extra_broker_lot_sizes['KOTAK']}x")
+                except Exception as e:
+                    logger.error(f"Failed to init Kotak Neo: {e}")
+            else:
+                logger.info(f"⏩ Kotak Neo SKIPPED — BROKER_{kotak_instance}_ACTIVE=false")
         
         # 2. Dhan - explicitly pass tokens to DhanOrderService
         dhan_access_token = get_credential("DHAN_ACCESS_TOKEN")
         dhan_client_id = get_credential("DHAN_CLIENT_ID")
         if dhan_access_token and dhan_client_id:
-            try:
-                self.extra_brokers['DHAN'] = DhanOrderService(
-                    access_token=dhan_access_token,
-                    client_id=dhan_client_id
-                )
-                logger.info(f"✅ Dhan Service Initialized (client_id: {dhan_client_id[:6]}...)")
-            except Exception as e:
-                logger.error(f"❌ Failed to init Dhan: {e}")
+            # Find Dhan instance number for active check
+            dhan_instance = None
+            for _i in range(1, 21):
+                _bt = UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{_i}_TYPE', '').strip().lower()
+                if _bt == 'dhan':
+                    dhan_instance = _i
+                    break
+            if dhan_instance and not UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{dhan_instance}_ACTIVE', 'true').strip().lower() in ('false', '0', 'no'):
+                try:
+                    self.extra_brokers['DHAN'] = DhanOrderService(
+                        access_token=dhan_access_token,
+                        client_id=dhan_client_id
+                    )
+                    self.extra_broker_lot_sizes['DHAN'] = _lot_count(dhan_instance)
+                    logger.info(f"Dhan Initialized | lot_count={self.extra_broker_lot_sizes['DHAN']}x")
+                except Exception as e:
+                    logger.error(f"Failed to init Dhan: {e}")
+            else:
+                logger.info(f"⏩ Dhan SKIPPED — BROKER_{dhan_instance}_ACTIVE=false")
 
         # 3. Fyers - explicitly pass tokens to FyersOrderService
         fyers_app_id = get_credential("FYERS_APP_ID")
         fyers_access_token = get_credential("FYERS_ACCESS_TOKEN")
         fyers_secret_key = get_credential("FYERS_SECRET_KEY")
         if fyers_app_id and (fyers_access_token or fyers_secret_key):
-            try:
-                self.extra_brokers['FYERS'] = FyersOrderService(
-                    app_id=fyers_app_id,
-                    access_token=fyers_access_token
-                )
-                logger.info(f"✅ Fyers Service Initialized (app_id: {fyers_app_id[:8]}...)")
-            except Exception as e:
-                logger.error(f"❌ Failed to init Fyers: {e}")
+            # Find Fyers instance number for active check
+            fyers_instance = None
+            for _i in range(1, 21):
+                _bt = UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{_i}_TYPE', '').strip().lower()
+                if _bt == 'fyers':
+                    fyers_instance = _i
+                    break
+            if fyers_instance and not UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{fyers_instance}_ACTIVE', 'true').strip().lower() in ('false', '0', 'no'):
+                try:
+                    self.extra_brokers['FYERS'] = FyersOrderService(
+                        app_id=fyers_app_id,
+                        access_token=fyers_access_token
+                    )
+                    self.extra_broker_lot_sizes['FYERS'] = _lot_count(fyers_instance)
+                    logger.info(f"Fyers Initialized | lot_count={self.extra_broker_lot_sizes['FYERS']}x")
+                except Exception as e:
+                    logger.error(f"Failed to init Fyers: {e}")
+            else:
+                logger.info(f"⏩ Fyers SKIPPED — BROKER_{fyers_instance}_ACTIVE=false")
                 
+        # 4. Additional Zerodha instances (instance != 1)
+        # Broker 1 is the primary data+order account (self.kite / self.kite_service).
+        # All other Zerodha instances (e.g. instance 5) are secondary order-only accounts.
+        try:
+            from trading_app.app.routes.api import get_kite
+            for instance_num in range(2, 21):
+                if self.username:
+                    broker_type = UserEnvManager.get_user_var(self.username, f'BROKER_{instance_num}_TYPE', '').strip().lower()
+                else:
+                    broker_type = ''
+                if broker_type != 'zerodha':
+                    continue
+                # Check ACTIVE flag — skip if explicitly disabled
+                is_active = UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{instance_num}_ACTIVE', 'true').strip().lower()
+                if is_active in ('false', '0', 'no'):
+                    logger.info(f"⏩ ZERODHA_{instance_num} SKIPPED — BROKER_{instance_num}_ACTIVE=false")
+                    continue
+                # Get a KiteConnect object for this secondary Zerodha instance
+                kite5 = get_kite(user=_uname, instance=instance_num)
+                if kite5:
+                    broker_key = f'ZERODHA_{instance_num}'
+                    self.extra_brokers[broker_key] = KiteService(kite_instance=kite5)
+                    self.extra_broker_lot_sizes[broker_key] = _lot_count(instance_num)
+                    broker_name_val = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_NAME', f'Zerodha {instance_num}')
+                    logger.info(f"{broker_key} ({broker_name_val}) Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x")
+                else:
+                    logger.warning(f"Could not initialize ZERODHA_{instance_num} - token not available.")
+        except Exception as e:
+            logger.error(f"❌ Failed to init secondary Zerodha instances: {e}")
+
         if self.extra_brokers:
-            logger.info(f"Active Extra Brokers: {list(self.extra_brokers.keys())}")
+            logger.info(f"Active Extra Brokers: {list(self.extra_brokers.keys())} | Lot sizes: {self.extra_broker_lot_sizes}")
+
 
     def _acquire_process_lock(self) -> bool:
         """
@@ -1224,12 +1302,16 @@ class Intraday920LiveSignal:
             }
             transaction_type_const = transaction_type_map.get(transaction_type, self.kite.TRANSACTION_TYPE_BUY)
             
-            # 1. Place order on Kite (Primary Broker)
+            # 1. Place order on Kite (Primary Broker) with broker-specific lot count
+            std_lot = self.kite_service.get_lot_size(self.symbol)
+            primary_qty = std_lot * getattr(self, 'primary_lot_count', 1)
+            logger.info(f"[Broker1] {transaction_type} {side} {strike} x {primary_qty} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
             result = self.kite_service.place_option_order(
                 symbol=self.symbol,
                 strike=strike,
                 option_type=side,
-                transaction_type=transaction_type_const
+                transaction_type=transaction_type_const,
+                quantity=primary_qty
             )
             
             # 2. Place COPY orders on Extra Brokers
@@ -1343,8 +1425,10 @@ class Intraday920LiveSignal:
         """
         txn_type = 'BUY' if transaction_type == 'BUY' else 'SELL'
         try:
-            qty = self.kite_service.get_lot_size(self.symbol)
-            logger.info(f"⚡ [{broker_name}] Attempting {txn_type} {side} {strike} x {qty}...")
+            standard_lot = self.kite_service.get_lot_size(self.symbol)
+            lot_count = self.extra_broker_lot_sizes.get(broker_name, 1)
+            qty = standard_lot * lot_count
+            logger.info(f"[{broker_name}] {txn_type} {side} {strike} x {qty} ({lot_count} lot(s))")
             response = None
             # Credential checks
             if broker_name == 'DHAN':
@@ -1451,6 +1535,16 @@ class Intraday920LiveSignal:
                         notes=f'[{broker_name}] Order Failed: Could not resolve symbol.'
                     )
                     return
+            elif broker_name.startswith('ZERODHA_'):
+                # Secondary Zerodha instance (e.g. ZERODHA_5) — uses KiteService exactly like primary
+                # KiteService.place_option_order handles instrument lookup and NRML/MIS product internally
+                kite_txn = service.kite.TRANSACTION_TYPE_BUY if txn_type == 'BUY' else service.kite.TRANSACTION_TYPE_SELL
+                response = service.place_option_order(
+                    symbol=self.symbol,
+                    strike=strike,
+                    option_type=side,
+                    transaction_type=kite_txn
+                )
             # --- Log result ---
             if response and isinstance(response, dict):
                 order_id_val = response.get('order_id') or response.get('nOrdNo') or response.get('id')
@@ -1504,8 +1598,11 @@ class Intraday920LiveSignal:
         Returns: (broker_name, order_id) or None
         """
         try:
-            qty = self.kite_service.get_lot_size(self.symbol)
-            logger.info(f"⚡ [{broker_name}] Attempting SL SELL {side} {strike} @ {trigger_price}...")
+            standard_lot = self.kite_service.get_lot_size(self.symbol)
+            lot_count = self.extra_broker_lot_sizes.get(broker_name, 1)
+            qty = standard_lot * lot_count
+            logger.info(f"[{broker_name}] SL SELL {side} {strike} @ {trigger_price} x {qty} ({lot_count} lot(s))")
+
             
             response = None
             order_id = None
@@ -1563,6 +1660,20 @@ class Intraday920LiveSignal:
                     )
                 else:
                     logger.error(f"❌ [{broker_name}] Could not resolve symbol for SL {side} {strike}")
+                    return None
+
+            elif broker_name.startswith('ZERODHA_'):
+                # Secondary Zerodha instance (e.g. ZERODHA_5) uses KiteService.place_stoploss_order
+                option_symbol_z = self._get_option_symbol(self.symbol, strike, side)
+                if option_symbol_z:
+                    response = service.place_stoploss_order(
+                        tradingsymbol=option_symbol_z,
+                        trigger_price=trigger_price,
+                        quantity=qty,
+                        product='NRML'
+                    )
+                else:
+                    logger.error(f"❌ [{broker_name}] Could not resolve option symbol for SL {side} {strike}")
                     return None
 
             # Log result
@@ -1686,6 +1797,39 @@ class Intraday920LiveSignal:
                 except Exception as fyers_e:
                     logger.error(f"[FYERS] Cancel+Replace SL failed: {fyers_e}")
                     response = {'success': False, 'error': str(fyers_e)}
+            
+            elif broker_name.startswith('ZERODHA_'):
+                # Secondary Zerodha instance — use KiteService.modify_sl_order
+                if hasattr(service, 'modify_sl_order'):
+                    response = service.modify_sl_order(
+                        order_id=order_id,
+                        trigger_price=new_trigger_price
+                    )
+                else:
+                    # Fallback: cancel old SL and re-place at new trigger price
+                    logger.warning(f"[{broker_name}] modify_sl_order not available, using cancel+replace for SL @ {new_trigger_price}")
+                    for side_key, trade_data in self.active_trades.items():
+                        if trade_data.get('extra_sl_ids', {}).get(broker_name) == order_id:
+                            z_strike = trade_data.get('strike')
+                            z_symbol = self._get_option_symbol(self.symbol, z_strike, side_key)
+                            if z_symbol:
+                                try:
+                                    service.kite.cancel_order(variety='regular', order_id=order_id)
+                                except Exception:
+                                    pass
+                                new_resp = service.place_stoploss_order(
+                                    tradingsymbol=z_symbol,
+                                    trigger_price=new_trigger_price,
+                                    quantity=qty,
+                                    product='NRML'
+                                )
+                                if new_resp and new_resp.get('success'):
+                                    new_oid = new_resp.get('order_id')
+                                    trade_data['extra_sl_ids'][broker_name] = str(new_oid)
+                                    response = new_resp
+                                else:
+                                    response = new_resp
+                            break
             
             # Check success
             if response and isinstance(response, dict):

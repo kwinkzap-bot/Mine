@@ -34,7 +34,43 @@ def check_user_authentication():
         }), 401
 
 
-def get_kite(user: Optional[str] = None) -> Optional[Any]:
+
+def is_broker_active(username: str, instance_num: int) -> bool:
+    """Check if a broker instance is active (BROKER_N_ACTIVE=true in .env).
+    
+    Defaults to True when the flag is missing so existing setups keep working.
+    Returns False only when explicitly set to 'false', '0', or 'no'.
+    """
+    from trading_app.app.utils.user_env import UserEnvManager
+    val = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACTIVE', 'true').strip().lower()
+    return val not in ('false', '0', 'no')
+
+
+def get_broker_lot_size(username: str, instance_num: int, standard_lot: int) -> int:
+    """Return absolute order quantity for a broker by applying its lot-size multiplier.
+    
+    BROKER_N_LOT_SIZE in .env expresses how many **lots** (not shares) to trade.
+    e.g.  BROKER_1_LOT_SIZE=1  => 1 × 65  = 65  units  (1 NIFTY lot)
+          BROKER_2_LOT_SIZE=2  => 2 × 65  = 130 units  (2 NIFTY lots)
+    
+    Args:
+        username: User whose .env to read
+        instance_num: Broker instance number (1-20)
+        standard_lot: The symbol's standard lot size (e.g. 65 for NIFTY)
+    
+    Returns:
+        Quantity to order (lots × standard_lot). Minimum is standard_lot (1 lot).
+    """
+    from trading_app.app.utils.user_env import UserEnvManager
+    try:
+        raw = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_LOT_SIZE', '1').strip()
+        lots = max(1, int(raw))
+    except (ValueError, TypeError):
+        lots = 1
+    return lots * standard_lot
+
+
+def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Optional[Any]:
     """Get authenticated KiteConnect instance from session or create new one.
     
     Provides multiple fallback layers to handle socket pool flushes and 
@@ -46,6 +82,8 @@ def get_kite(user: Optional[str] = None) -> Optional[Any]:
     
     Args:
         user (str, optional): Username to use if session is unavailable/background task
+        instance (int, optional): Specific Zerodha instance number to use (1, 5, etc.)
+                                  If not specified, uses the last logged-in or active instance
     """
     try:
         from kiteconnect import KiteConnect
@@ -57,45 +95,91 @@ def get_kite(user: Optional[str] = None) -> Optional[Any]:
         # Determine username and access_token source
         username = user
         access_token = None
+        api_key = None
         
         # Check session if in request context
         if has_request_context():
             if not username:
                 username = session.get('username')
-            access_token = session.get('access_token')
-        
-        # Get API_KEY - prefer user-specific first, then environment
-        api_key = None
-        if username:
-            api_key = UserEnvManager.get_user_var(username, 'API_KEY')
+
+            # If no specific instance provided, use the active instance from session.
+            # This ensures api_key and access_token always come from the same Zerodha
+            # instance — a mismatch (e.g. instance 5 api_key + instance 1 access_token)
+            # causes "Incorrect api_key or access_token" from Zerodha.
+            if instance is None:
+                instance = session.get('instance_num')
+
+            # If specific instance requested, get that instance's token
+            if instance is not None:
+                access_token = session.get(f'zerodha_{instance}_access_token')
+                api_key = session.get(f'zerodha_{instance}_api_key')
+                if access_token:
+                    logger.debug(f"Using instance-specific token for zerodha_{instance}")
+
+            # Otherwise use the shared/last-logged-in token
+            if not access_token:
+                access_token = session.get('access_token')
+
+        # Get API_KEY - prefer instance-specific, then user-specific, then environment
+        if not api_key and instance is not None and username:
+            api_key = UserEnvManager.get_user_var(username, f'BROKER_{instance}_API_KEY')
+        if not api_key and username:
+            # Try to find Zerodha instance from user config if applicable
+            for i in range(1, 21):
+                broker_type = UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '').strip().lower()
+                if broker_type == 'zerodha':
+                    candidate_key = UserEnvManager.get_user_var(username, f'BROKER_{i}_API_KEY')
+                    candidate_token = UserEnvManager.get_user_var(username, f'BROKER_{i}_ACCESS_TOKEN')
+                    # Use this instance's key only if we also have a matching access_token
+                    # OR if we have no key at all yet (take first zerodha key as last resort)
+                    if candidate_key and (candidate_token or not api_key):
+                        api_key = candidate_key
+                        if candidate_token and not access_token:
+                            access_token = candidate_token
+                        if candidate_token:
+                            break  # Prefer an instance that has both key and token
         if not api_key:
             api_key = os.getenv('API_KEY')
-        
+
         if not api_key:
             if has_request_context():
-                logger.warning(f"API_KEY not found in environment or user config (user: {username})")
+                logger.warning(f"API_KEY not found in environment or user config (user: {username}, instance: {instance})")
             return None
         
         # Get access token with multiple fallback layers
-        
-        # 1. Session check done above
-        
-        # 2. Check environment variable (restored after socket pool flush)
+        # IMPORTANT: always prefer tokens that match the api_key we're using.
+        # Generic env vars like ACCESS_TOKEN may belong to a different instance.
+
+        # 2. Check instance-specific environment variable
+        if not access_token and instance is not None:
+            access_token = os.getenv(f'ZERODHA_{instance}_ACCESS_TOKEN')
+            if access_token:
+                if has_request_context():
+                    logger.info(f"Access token restored from instance-specific env var (zerodha_{instance})")
+
+        # 3. Check UserEnvManager for instance-specific token (preferred over generic env var)
+        if not access_token and username and instance is not None:
+            access_token = UserEnvManager.get_user_var(username, f'BROKER_{instance}_ACCESS_TOKEN')
+            if access_token:
+                if has_request_context():
+                    logger.info(f"Access token restored from user config - instance {instance} ({username})")
+
+        # 4. Check generic environment variable — only if we couldn't find an instance-specific one.
+        # This avoids using a token leftover from a different instance with the wrong api_key.
         if not access_token:
             access_token = os.getenv('ACCESS_TOKEN')
             if access_token:
-                 # Only log if we're in a request context to avoid noise in logs
                 if has_request_context():
-                    logger.info("Access token restored from environment variable (socket pool flush recovery)")
-        
-        # 3. Check UserEnvManager for user-specific token
+                    logger.info("Access token restored from generic environment variable")
+
+        # 5. Check UserEnvManager for generic user token
         if not access_token and username:
             access_token = UserEnvManager.get_user_var(username, 'ACCESS_TOKEN')
             if access_token:
                 if has_request_context():
                     logger.info(f"Access token restored from user config ({username})")
-        
-        # 4. Check persistent token cache
+
+        # 6. Check persistent token cache
         if not access_token:
             access_token = get_access_token()
             if access_token:
@@ -104,12 +188,12 @@ def get_kite(user: Optional[str] = None) -> Optional[Any]:
                     # Update session and environment for future requests
                     session['access_token'] = access_token
                     session.permanent = True
-                
+
                 os.environ['ACCESS_TOKEN'] = access_token
         
         if not access_token:
             if has_request_context():
-                logger.warning(f"No access token available from any source (username: {username})")
+                logger.warning(f"No access token available from any source (username: {username}, instance: {instance})")
             return None
         
         # Ensure session is in sync (for future requests) if we are in one
@@ -228,7 +312,7 @@ def get_broker_status() -> EndpointResponse:
     """Check if brokers are logged in and tokens are valid.
     
     Returns:
-        JSON with broker login status for all configured brokers
+        JSON with broker login status for all configured brokers (per-instance)
     """
     try:
         from trading_app.app.utils.user_env import UserEnvManager
@@ -239,75 +323,106 @@ def get_broker_status() -> EndpointResponse:
             return jsonify({
                 'success': True,
                 'brokers': {},
+                'broker_instances': {},
                 'message': 'User not authenticated'
             })
         
-        brokers_status = {}
+        brokers_status = {}  # By type (legacy)
+        broker_instances = {}  # By instance ID (e.g., 'zerodha_1', 'zerodha_5')
         
-        # Check Zerodha (Kite) status
-        try:
-            kite = get_kite()
-            if kite:
-                try:
-                    profile = kite.profile()
-                    if profile:
-                        brokers_status['zerodha'] = {
-                            'is_logged_in': True,
-                            'broker_name': 'Zerodha (Kite)',
-                            'message': 'Connected'
-                        }
-                except Exception as e:
-                    brokers_status['zerodha'] = {
-                        'is_logged_in': False,
-                        'broker_name': 'Zerodha (Kite)',
-                        'message': str(e)
-                    }
-        except Exception:
-            pass
-        
-        # Check Kotak Neo status - only session-based (actual login)
-        kotak_authenticated = session.get('kotak_authenticated')
-        kotak_token = session.get('kotak_trading_token')
-        logger.debug(f"Kotak status check - authenticated: {kotak_authenticated}, token exists: {bool(kotak_token)}")
-        if kotak_authenticated is True:  # Must be explicitly True, not just truthy
-            brokers_status['kotak'] = {
-                'is_logged_in': True,
-                'broker_name': 'Kotak Neo',
-                'message': 'Connected'
+        # Scan for all configured brokers (BROKER_{N}_TYPE) - same as available-brokers
+        for instance_num in range(1, 21):
+            broker_type = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TYPE', '').strip().lower()
+            
+            if not broker_type:
+                continue  # No more brokers defined
+            
+            broker_name = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_NAME', '').strip()
+            if not broker_name:
+                broker_name = broker_type.title()
+            
+            broker_id = f"{broker_type}_{instance_num}"
+            
+            is_logged_in = False
+            message = 'Not connected'
+            
+            if broker_type == 'zerodha':
+                # Check session first (most reliable when active)
+                instance_authenticated = session.get(f'zerodha_{instance_num}_authenticated')
+                instance_token = session.get(f'zerodha_{instance_num}_access_token')
+                if instance_authenticated and instance_token:
+                    is_logged_in = True
+                    message = 'Connected'
+                else:
+                    # Fallback: check .env file for stored token (survives app restart)
+                    env_token = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
+                    if env_token:
+                        # Token exists in .env — restore it into session for this request
+                        # so broker-status and get_kite() agree on the state going forward
+                        env_api_key = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_API_KEY')
+                        session[f'zerodha_{instance_num}_authenticated'] = True
+                        session[f'zerodha_{instance_num}_access_token'] = env_token
+                        if env_api_key:
+                            session[f'zerodha_{instance_num}_api_key'] = env_api_key
+                        # Also update the active instance if not set
+                        if not session.get('instance_num'):
+                            session['instance_num'] = instance_num
+                            session['access_token'] = env_token
+                        session.permanent = True
+                        is_logged_in = True
+                        message = 'Connected (token restored from storage)'
+                        logger.info(f"[broker-status] Restored zerodha_{instance_num} token from .env for {username}")
+                    elif instance_authenticated and not instance_token:
+                        is_logged_in = False
+                        message = 'Token expired - please re-login'
+                    
+            elif broker_type == 'kotak':
+                kotak_authenticated = session.get('kotak_authenticated')
+                if kotak_authenticated is True:
+                    is_logged_in = True
+                    message = 'Connected'
+                    
+            elif broker_type == 'dhan':
+                dhan_authenticated = session.get('dhan_authenticated')
+                if dhan_authenticated is True:
+                    is_logged_in = True
+                    message = 'Connected'
+                    
+            elif broker_type == 'fyers':
+                fyers_authenticated = session.get('fyers_authenticated')
+                if fyers_authenticated is True:
+                    is_logged_in = True
+                    message = 'Connected'
+            
+            # Store per-instance status
+            broker_instances[broker_id] = {
+                'is_logged_in': is_logged_in,
+                'broker_name': broker_name,
+                'broker_type': broker_type,
+                'instance': instance_num,
+                'message': message
             }
-        
-        # Check Dhan status - only session-based (actual login)
-        dhan_token = session.get('dhan_access_token')
-        dhan_authenticated = session.get('dhan_authenticated')
-        logger.debug(f"Dhan status check - authenticated: {dhan_authenticated}, token exists: {bool(dhan_token)}")
-        if dhan_authenticated is True:  # Must be explicitly True
-            brokers_status['dhan'] = {
-                'is_logged_in': True,
-                'broker_name': 'Dhan',
-                'message': 'Connected'
-            }
-        
-        # Check Fyers status - only session-based (actual login)
-        fyers_token = session.get('fyers_access_token')
-        fyers_authenticated = session.get('fyers_authenticated')
-        logger.debug(f"Fyers status check - authenticated: {fyers_authenticated}, token exists: {bool(fyers_token)}")
-        if fyers_authenticated is True:  # Must be explicitly True
-            brokers_status['fyers'] = {
-                'is_logged_in': True,
-                'broker_name': 'Fyers',
-                'message': 'Connected'
-            }
+            
+            # Also update type-based status (for backward compatibility)
+            # Mark as logged in if ANY instance of this type is logged in
+            if is_logged_in:
+                brokers_status[broker_type] = {
+                    'is_logged_in': True,
+                    'broker_name': broker_name,
+                    'message': 'Connected'
+                }
         
         # For backward compatibility, also return is_logged_in if ANY broker is connected
-        any_logged_in = any(b.get('is_logged_in') for b in brokers_status.values())
-        first_connected = next((b for b in brokers_status.values() if b.get('is_logged_in')), None)
+        any_logged_in = any(b.get('is_logged_in') for b in broker_instances.values())
+        first_connected = next((b for b in broker_instances.values() if b.get('is_logged_in')), None)
         
         return jsonify({
             'success': True,
             'is_logged_in': any_logged_in,
             'broker_name': first_connected['broker_name'] if first_connected else None,
             'username': username,
-            'brokers': brokers_status,
+            'brokers': brokers_status,  # Legacy: by type
+            'broker_instances': broker_instances,  # New: by instance ID
             'message': 'Broker(s) connected' if any_logged_in else 'No broker connected'
         })
         
@@ -317,6 +432,7 @@ def get_broker_status() -> EndpointResponse:
             'success': False,
             'is_logged_in': False,
             'brokers': {},
+            'broker_instances': {},
             'error': str(e)
         }), 500
 
@@ -421,6 +537,9 @@ def get_available_brokers() -> EndpointResponse:
                 logger.debug(f"BROKER_{instance_num} ({broker_type}) missing required fields")
                 continue
             
+            # Check active flag
+            broker_active = is_broker_active(username, instance_num)
+
             # Build broker entry
             broker_id = f"{broker_type}_{instance_num}"
             broker_entry = {
@@ -431,7 +550,9 @@ def get_available_brokers() -> EndpointResponse:
                 'icon': type_config['icon'],
                 'description': type_config['description'],
                 'configured': True,
-                'status': 'Configured and ready',
+                'active': broker_active,
+                'lot_size': int(UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_LOT_SIZE', '1') or '1'),
+                'status': 'Configured and ready' if broker_active else 'Inactive — orders disabled',
                 'login_type': type_config['login_type']
             }
             
@@ -508,7 +629,8 @@ def get_underlying_price() -> EndpointResponse:
     if price_source not in ['ltp', 'previous_close']:
         price_source = 'ltp'
     
-    current_kite = get_kite()
+    # Data fetch always uses Broker 1 (data account)
+    current_kite = get_kite(instance=1)
     if not current_kite:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
@@ -572,7 +694,8 @@ def get_symbols() -> EndpointResponse:
     if auth_error:
         return auth_error
     
-    current_kite = get_kite()
+    # Data fetch always uses Broker 1 (data account)
+    current_kite = get_kite(instance=1)
     if not current_kite:
         return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
     
@@ -2348,7 +2471,7 @@ def place_intraday_920_order() -> EndpointResponse:
         strike = int(data['strike'])
         option_type = data['option_type'].upper()
         action = data['action'].upper()
-        broker = data.get('broker', 'kite').lower()
+        broker = data.get('broker', 'kite').lower().strip()
         quantity = data.get('quantity')
         tradingsymbol_override = data.get('tradingsymbol')
         expiry_override = data.get('expiry')  # ISO date string optional
@@ -2367,22 +2490,53 @@ def place_intraday_920_order() -> EndpointResponse:
                 'error': 'Invalid action. Must be BUY or SELL'
             }), 400
         
-        # Validate broker
+        # Validate broker — accept zerodha_N (e.g. zerodha_1, zerodha_5) as Zerodha instances
         valid_brokers = ['kite', 'kotak_neo', 'dhan', 'fyers']
-        if broker not in valid_brokers:
+        is_zerodha_instance = broker.startswith('zerodha_') and broker.split('_')[1].isdigit()
+        if broker not in valid_brokers and not is_zerodha_instance:
             return jsonify({
                 'success': False,
-                'error': f'Invalid broker. Must be one of: {", ".join(valid_brokers)}'
+                'error': f'Invalid broker. Must be one of: {", ".join(valid_brokers)} or zerodha_N (e.g. zerodha_1, zerodha_5)'
             }), 400
         
+        # ---- Check BROKER_N_ACTIVE flag ----
+        _username = session.get('username', 'Mine')
+        # Resolve instance number for active check
+        if is_zerodha_instance:
+            _active_instance = int(broker.split('_')[1])
+        elif broker == 'kite':
+            _active_instance = 1
+        else:
+            # For non-Zerodha lookup by broker type name
+            _active_instance = None
+            broker_type_map = {'kotak_neo': 'kotak', 'dhan': 'dhan', 'fyers': 'fyers'}
+            _broker_type = broker_type_map.get(broker, '')
+            for _i in range(1, 21):
+                _bt = UserEnvManager.get_user_var(_username, f'BROKER_{_i}_TYPE', '').strip().lower()
+                if _bt == _broker_type:
+                    _active_instance = _i
+                    break
+
+        if _active_instance is not None and not is_broker_active(_username, _active_instance):
+            logger.warning(f"[Order] Blocked: Broker {broker} (instance {_active_instance}) is INACTIVE (BROKER_{_active_instance}_ACTIVE=false)")
+            return jsonify({
+                'success': False,
+                'error': f'Broker {broker} is currently INACTIVE. Set BROKER_{_active_instance}_ACTIVE=true in .env to enable it.'
+            }), 403
+        # ------------------------------------
+        
         # Route to appropriate broker service
-        if broker == 'kite':
+        # 'kite' and 'zerodha_1' both use instance 1; 'zerodha_5' uses instance 5, etc.
+        if broker == 'kite' or is_zerodha_instance:
+            # Parse instance number: 'kite' → 1, 'zerodha_5' → 5
+            zerodha_instance = 1 if broker == 'kite' else int(broker.split('_')[1])
+            logger.info(f"[Order] Routing to Zerodha instance {zerodha_instance} (broker='{broker}')")
             # Get Kite instance
-            kite = get_kite()
+            kite = get_kite(instance=zerodha_instance)
             if not kite:
                 return jsonify({
                     'success': False,
-                    'error': 'Kite connection not available. Please login.'
+                    'error': f'Zerodha instance {zerodha_instance} not connected. Please login via the broker panel.'
                 }), 401
             
             # Place order using KiteService
@@ -3073,15 +3227,12 @@ def get_open_interest() -> EndpointResponse:
         
         from trading_app.service.open_interest_service import OpenInterestService
         
-        kite = get_kite()
-        # Note: If kite is None, we might still be able to read from DB if we don't need live fallback immediately
-        # But OpenInterestService currently requires kite instance. 
-        # TODO: Refactor Service to safely Init without kite for DB-only reads if needed.
-        # For now, we enforce kite connection as usual.
+        # Data fetch always uses Broker 1 (Zerodha Kite - data account)
+        kite = get_kite(instance=1)
         if not kite:
             return jsonify({
                 'success': False,
-                'error': 'Kite connection not available'
+                'error': 'Broker 1 (data account) is not connected. Please login with Zerodha Kite.'
             }), 400
         
         oi_service = OpenInterestService(kite)

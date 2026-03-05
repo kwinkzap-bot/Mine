@@ -78,6 +78,9 @@ class UserEnvManager:
         This loads variables from the user's .env file (e.g., Kavin.env)
         and makes them available via os.getenv().
         
+        Also sets legacy variable names (FYERS_SECRET_KEY, KOTAK_CONSUMER_KEY, etc.)
+        in os.environ for backward compatibility with services that use os.getenv().
+        
         Args:
             username: Username whose .env file to load
             
@@ -97,6 +100,58 @@ class UserEnvManager:
             
             # Clear cache for this user
             UserEnvManager._user_env_cache[username] = {}
+            
+            # Parse file to get all vars
+            env_vars = {}
+            with open(env_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        env_vars[key.strip()] = value.strip()
+            
+            # Cache all vars
+            UserEnvManager._user_env_cache[username] = env_vars
+            
+            # Set legacy variable names in os.environ for backward compatibility
+            # Services like FyersOrderService use os.getenv() directly
+            NEW_TO_LEGACY_MAP = {
+                ('zerodha', 'API_KEY'): 'API_KEY',
+                ('zerodha', 'API_SECRET'): 'API_SECRET',
+                ('zerodha', 'ACCESS_TOKEN'): 'ACCESS_TOKEN',
+                ('zerodha', 'REQUEST_TOKEN'): 'REQUEST_TOKEN',
+                ('kotak', 'CONSUMER_KEY'): 'KOTAK_CONSUMER_KEY',
+                ('kotak', 'UCC'): 'KOTAK_UCC',
+                ('kotak', 'MOBILE_NUMBER'): 'KOTAK_MOBILE_NUMBER',
+                ('kotak', 'MPIN'): 'KOTAK_MPIN',
+                ('kotak', 'TOTP_SECRET'): 'KOTAK_TOTP_SECRET',
+                ('kotak', 'TRADING_TOKEN'): 'KOTAK_TRADING_TOKEN',
+                ('kotak', 'TRADING_SID'): 'KOTAK_TRADING_SID',
+                ('kotak', 'BASE_URL'): 'KOTAK_BASE_URL',
+                ('dhan', 'ACCESS_TOKEN'): 'DHAN_ACCESS_TOKEN',
+                ('dhan', 'CLIENT_ID'): 'DHAN_CLIENT_ID',
+                ('fyers', 'APP_ID'): 'FYERS_APP_ID',
+                ('fyers', 'SECRET_KEY'): 'FYERS_SECRET_KEY',
+                ('fyers', 'ACCESS_TOKEN'): 'FYERS_ACCESS_TOKEN',
+                ('fyers', 'REDIRECT_URI'): 'FYERS_REDIRECT_URI',
+            }
+            
+            # Find all broker instances and set legacy names
+            for i in range(1, 21):
+                broker_type_key = f'BROKER_{i}_TYPE'
+                broker_type = env_vars.get(broker_type_key, '').strip().lower()
+                if not broker_type:
+                    continue
+                
+                # For each field of this broker, set legacy name in os.environ
+                for (btype, field), legacy_name in NEW_TO_LEGACY_MAP.items():
+                    if btype == broker_type:
+                        new_key = f'BROKER_{i}_{field}'
+                        if new_key in env_vars:
+                            os.environ[legacy_name] = env_vars[new_key]
+                            logger.debug(f"Set legacy env: {legacy_name} from {new_key}")
             
             return True
             
@@ -142,14 +197,19 @@ class UserEnvManager:
             Variable value or default
         """
         try:
+            # If username is None or empty, return default
+            if not username:
+                logger.warning(f"get_user_var called with empty username for {var_name}")
+                return default
+            
             # Check cache first
             if username not in UserEnvManager._user_env_cache:
                 UserEnvManager._user_env_cache[username] = {}
             
             cached = UserEnvManager._user_env_cache[username]
             
-            # If cache has data, check for the variable
-            if cached:
+            # If cache has data (check for non-empty dict), check for the variable
+            if cached:  # Non-empty dict
                 # Direct lookup first (for BROKER_{N}_{FIELD} format or cached legacy)
                 if var_name in cached:
                     return cached[var_name]
@@ -334,6 +394,8 @@ class UserEnvManager:
         """
         try:
             env_file = UserEnvManager.get_user_env_file(username)
+            logger.info(f"save_user_vars: username={username}, env_file={env_file}")
+            logger.info(f"save_user_vars: vars_dict keys={list(vars_dict.keys())}")
             
             # Read existing content
             lines = []
@@ -342,6 +404,9 @@ class UserEnvManager:
             if os.path.exists(env_file):
                 with open(env_file, 'r') as f:
                     lines = f.readlines()
+                logger.info(f"save_user_vars: Read {len(lines)} lines from {env_file}")
+            else:
+                logger.warning(f"save_user_vars: File does not exist: {env_file}")
             
             # Update existing or mark for addition
             updated_lines = []
@@ -352,6 +417,7 @@ class UserEnvManager:
                         updated_lines.append(f'{var_name}={vars_dict[var_name]}\n')
                         found_vars.add(var_name)
                         matched = True
+                        logger.info(f"save_user_vars: Found and updated {var_name}")
                         break
                 if not matched:
                     updated_lines.append(line)
@@ -360,10 +426,12 @@ class UserEnvManager:
             for var_name, value in vars_dict.items():
                 if var_name not in found_vars:
                     updated_lines.append(f'{var_name}={value}\n')
+                    logger.info(f"save_user_vars: Added new var {var_name}")
             
             # Write back
             with open(env_file, 'w') as f:
                 f.writelines(updated_lines)
+            logger.info(f"save_user_vars: Wrote {len(updated_lines)} lines to {env_file}")
             
             # Invalidate cache
             if username in UserEnvManager._user_env_cache:

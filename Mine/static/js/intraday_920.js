@@ -12,27 +12,27 @@ class Intraday920Tracker {
         this.symbol = 'NIFTY';
         this.timeFrame = '5minute';
         this.selectedDate = null; // Track selected date for data fetching
-        
+
         // Data storage
         this.strategyData = null;
         this.charts = {};
         this.candleSeries = {};
-        
+
         // API configuration
         this.apiBaseUrl = '/api';
         this.refreshDelay = 5000; // 5 seconds
-        
+
         // Market hours
         this.marketOpenTime = 9 * 60 + 15;    // 9:15 AM
         this.marketCloseTime = 15 * 60 + 20;  // 3:20 PM
         this.isMarketHours = false;
-        
+
         // Polling configuration
         this.autoUpdateInterval = null;
         this.isAutoUpdating = false;
         this.updateCount = 0;
         this.failedUpdateCount = 0;
-        
+
         // Chart update tracking
         this.lastCandles = {
             highCe: [],
@@ -40,7 +40,7 @@ class Intraday920Tracker {
             lowCe: [],
             lowPe: []
         };
-        
+
         this.initElements();
         this.initCharts();
         this.attachEventListeners();
@@ -135,10 +135,10 @@ class Intraday920Tracker {
     clearCharts() {
         try {
             console.log('[Charts] Clearing all chart data and reference lines');
-            
+
             // Reset the chart series data with refresh flag to clear price lines
             const chartKeys = ['highCe', 'highPe', 'lowCe', 'lowPe'];
-            
+
             chartKeys.forEach((key) => {
                 if (this.charts[key]) {
                     // Pass refresh=true to clear all existing price lines
@@ -146,7 +146,7 @@ class Intraday920Tracker {
                     this.charts[key].update([], null, true);
                 }
             });
-            
+
             // Reset lastCandles tracking
             this.lastCandles = {
                 highCe: [],
@@ -154,7 +154,7 @@ class Intraday920Tracker {
                 lowCe: [],
                 lowPe: []
             };
-            
+
             console.log('[Charts] All charts cleared successfully');
         } catch (e) {
             console.error('[Charts] Error clearing charts:', e);
@@ -204,8 +204,65 @@ class Intraday920Tracker {
         // Handle order button clicks
         this.attachOrderButtonListeners();
 
+        // Populate broker dropdown from API (reflects actual configured accounts)
+        this.populateBrokerSelect();
+
         // Load data on page load (initial only)
         this.loadData();
+    }
+
+    /**
+     * Dynamically populate the broker selector from /api/available-brokers.
+     * Maps broker_id (e.g. 'zerodha_1', 'zerodha_5', 'dhan') to display names.
+     * Falls back to static HTML options if the API call fails.
+     */
+    async populateBrokerSelect() {
+        const select = this.brokerSelect;
+        if (!select) return;
+
+        // Non-Zerodha broker IDs we support for orders
+        const nonZerodhaBrokers = {
+            'kotak_neo': 'Kotak Neo',
+            'dhan': 'Dhan',
+            'fyers': 'Fyers'
+        };
+
+        try {
+            const resp = await fetch('/api/available-brokers', { credentials: 'include' });
+            if (!resp.ok) return; // keep static fallback
+            const data = await resp.json();
+            if (!data.success || !data.brokers || data.brokers.length === 0) return;
+
+            // Clear existing static options
+            select.innerHTML = '';
+
+            // Add Zerodha instances first (from API), then other fixed brokers
+            let hasDhanDefault = false;
+            data.brokers.forEach(broker => {
+                if (broker.broker_type === 'zerodha') {
+                    const opt = document.createElement('option');
+                    opt.value = broker.id;  // e.g. 'zerodha_1', 'zerodha_5'
+                    opt.text = `🪁 ${broker.name}`;
+                    select.appendChild(opt);
+                }
+            });
+
+            // Add non-Zerodha brokers
+            for (const [id, name] of Object.entries(nonZerodhaBrokers)) {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.text = name;
+                if (id === 'dhan') {
+                    opt.selected = true;
+                    hasDhanDefault = true;
+                }
+                select.appendChild(opt);
+            }
+
+            console.log('[BrokerSelect] Populated from API:', Array.from(select.options).map(o => o.value));
+        } catch (e) {
+            console.warn('[BrokerSelect] Could not populate from API, using static fallback:', e.message);
+        }
     }
 
     /**
@@ -240,8 +297,8 @@ class Intraday920Tracker {
 
         try {
             // Get strike data based on side and strikeType
-            const strikeData = strikeType === 'high' 
-                ? this.strategyData.high_strike 
+            const strikeData = strikeType === 'high'
+                ? this.strategyData.high_strike
                 : this.strategyData.low_strike;
 
             if (!strikeData || !strikeData.success) {
@@ -250,8 +307,8 @@ class Intraday920Tracker {
             }
 
             // Get strike price based on side
-            const strike = side === 'CE' 
-                ? strikeData.ce_strike 
+            const strike = side === 'CE'
+                ? strikeData.ce_strike
                 : strikeData.pe_strike;
 
             if (!strike) {
@@ -324,14 +381,14 @@ class Intraday920Tracker {
      */
     isCurrentlyMarketHours() {
         const now = new Date();
-        
+
         // Check if today is a weekend (0=Sunday, 6=Saturday)
         const day = now.getDay();
         if (day === 0 || day === 6) {
             console.log(`[MarketHours] Today is ${day === 0 ? 'Sunday' : 'Saturday'} - market closed`);
             return false;
         }
-        
+
         // Convert current time to IST (UTC+5:30)
         // Create a date in IST timezone using toLocaleString
         const istFormatter = new Intl.DateTimeFormat('en-US', {
@@ -340,14 +397,14 @@ class Intraday920Tracker {
             minute: '2-digit',
             hour12: false
         });
-        
+
         const istTimeStr = istFormatter.format(now);
         const [hours, minutes] = istTimeStr.split(':').map(Number);
         const currentMinutes = hours * 60 + minutes;
 
         // Market hours: 9:15 AM (555 minutes) to 3:20 PM (920 minutes)
         const isWithinHours = currentMinutes >= this.marketOpenTime && currentMinutes <= this.marketCloseTime;
-        
+
         console.log(`[MarketHours] IST time: ${hours}:${String(minutes).padStart(2, '0')}, Within hours: ${isWithinHours}`);
         return isWithinHours;
     }
@@ -384,10 +441,10 @@ class Intraday920Tracker {
             // 2. forceInitial flag is true
             if (!this.strategyData || forceInitial) {
                 console.log(`[Load] Fetching 9:20 strategy data for ${this.symbol} (initial: ${!this.strategyData})`);
-                
+
                 // Clear charts when loading new data (e.g., different date selected)
                 this.clearCharts();
-                
+
                 // Build URL with optional date parameter
                 let url = `${this.apiBaseUrl}/intraday-920/data?symbol=${this.symbol}`;
                 if (this.selectedDate) {
@@ -395,7 +452,7 @@ class Intraday920Tracker {
                     url += `&date=${dateStr}`;
                     console.log(`[Load] Using selected date: ${dateStr}`);
                 }
-                
+
                 const response = await fetch(url, {
                     credentials: 'include'
                 });
@@ -413,7 +470,7 @@ class Intraday920Tracker {
 
                 this.strategyData = result.data;
                 this.updateUI();
-                
+
                 // Load chart data for all strikes
                 await this.loadChartsData();
 
@@ -437,26 +494,26 @@ class Intraday920Tracker {
 
         // Update last update time
         const now = new Date();
-        document.getElementById('lastUpdate').textContent = 
+        document.getElementById('lastUpdate').textContent =
             now.toLocaleTimeString('en-IN');
 
         // Update first 5-minute high/low
-        document.getElementById('first5MinHigh').textContent = 
+        document.getElementById('first5MinHigh').textContent =
             this.formatPrice(this.strategyData.first_5min_high);
-        document.getElementById('first5MinLow').textContent = 
+        document.getElementById('first5MinLow').textContent =
             this.formatPrice(this.strategyData.first_5min_low);
 
         // Update high strike data
         const highStrike = this.strategyData.high_strike || {};
         if (highStrike.success) {
-            document.getElementById('highStrikeLabel').textContent = 
+            document.getElementById('highStrikeLabel').textContent =
                 this.formatPrice(highStrike.strike_price);
-            
+
             document.getElementById('highCeStrike').textContent = highStrike.ce_strike;
             document.getElementById('highCeHigh').textContent = this.formatPrice(highStrike.ce_high);
             document.getElementById('highCeLow').textContent = this.formatPrice(highStrike.ce_low);
             document.getElementById('highCeStrikeChart').textContent = highStrike.ce_strike;
-            
+
             document.getElementById('highPeStrike').textContent = highStrike.pe_strike;
             document.getElementById('highPeHigh').textContent = this.formatPrice(highStrike.pe_high);
             document.getElementById('highPeLow').textContent = this.formatPrice(highStrike.pe_low);
@@ -466,14 +523,14 @@ class Intraday920Tracker {
         // Update low strike data
         const lowStrike = this.strategyData.low_strike || {};
         if (lowStrike.success) {
-            document.getElementById('lowStrikeLabel').textContent = 
+            document.getElementById('lowStrikeLabel').textContent =
                 this.formatPrice(lowStrike.strike_price);
-            
+
             document.getElementById('lowCeStrike').textContent = lowStrike.ce_strike;
             document.getElementById('lowCeHigh').textContent = this.formatPrice(lowStrike.ce_high);
             document.getElementById('lowCeLow').textContent = this.formatPrice(lowStrike.ce_low);
             document.getElementById('lowCeStrikeChart').textContent = lowStrike.ce_strike;
-            
+
             document.getElementById('lowPeStrike').textContent = lowStrike.pe_strike;
             document.getElementById('lowPeHigh').textContent = this.formatPrice(lowStrike.pe_high);
             document.getElementById('lowPeLow').textContent = this.formatPrice(lowStrike.pe_low);
@@ -492,7 +549,7 @@ class Intraday920Tracker {
     async fetchChartData(ceToken, peToken, label) {
         try {
             console.log(`[fetchChartData] 🚀 Loading data for ${label} (CE: ${ceToken}, PE: ${peToken})`);
-            
+
             // Build request payload with both CE and PE tokens
             const payload = {
                 ce_token: ceToken,
@@ -500,10 +557,10 @@ class Intraday920Tracker {
                 timeframe: this.timeFrame,
                 live: true
             };
-            
+
             console.log(`[fetchChartData] 📤 Sending payload:`, payload);
             this.addSignal(`📡 Fetching chart data for ${label}...`, 'INFO');
-            
+
             // Call the API endpoint using POST
             const response = await fetch('/api/options-chart-data', {
                 method: 'POST',
@@ -511,25 +568,25 @@ class Intraday920Tracker {
                 credentials: 'include',
                 body: JSON.stringify(payload)
             });
-            
+
             console.log(`[fetchChartData] ✓ Response received, status: ${response.status}`);
-            
+
             // CRITICAL: Handle 403 Forbidden - token expired or socket pool issue
             if (response.status === 403) {
                 console.error(`[fetchChartData] ❌ 403 FORBIDDEN - Token likely expired or socket pool issue`);
                 this.addSignal('❌ Access Denied (403) - Your session has expired. Redirecting to login...', 'ERROR');
-                
+
                 // Stop auto-updates immediately
                 this.stopAutoUpdate();
-                
+
                 // Redirect to login after brief delay
                 setTimeout(() => {
                     window.location.href = '/auth/login';
                 }, 2000);
-                
+
                 return { success: false, message: '403 Forbidden - Session expired', ceData: [], peData: [] };
             }
-            
+
             if (!response.ok) {
                 let errorMsg = 'Unknown error';
                 try {
@@ -541,10 +598,10 @@ class Intraday920Tracker {
                 console.error(`[fetchChartData] ❌ API Error: ${errorMsg}`);
                 return { success: false, message: errorMsg, ceData: [], peData: [] };
             }
-            
+
             // Parse response
             const data = await response.json();
-            
+
             if (data.needs_login) {
                 console.error('[fetchChartData] ❌ Login required');
                 this.addSignal('❌ Login required - Redirecting...', 'ERROR');
@@ -554,17 +611,17 @@ class Intraday920Tracker {
                 }, 2000);
                 return { success: false, message: 'Login required', ceData: [], peData: [] };
             }
-            
+
             if (data.success && data.data && Array.isArray(data.data)) {
                 // Separate CE and PE data from merged array (like intraday_option.js does)
                 const ceData = data.data.filter(candle => candle.type === 'CE');
                 const peData = data.data.filter(candle => candle.type === 'PE');
-                
+
                 console.log(`[fetchChartData] ✅ SUCCESS! Got ${ceData.length} CE candles and ${peData.length} PE candles`);
                 this.addSignal(`✅ Chart data loaded for ${label} (CE: ${ceData.length}, PE: ${peData.length})`, 'SUCCESS');
-                
-                return { 
-                    success: true, 
+
+                return {
+                    success: true,
                     ceData: ceData,
                     peData: peData,
                     message: ''
@@ -574,7 +631,7 @@ class Intraday920Tracker {
                 console.error(`[fetchChartData] ❌ ${errorMsg}`);
                 return { success: false, message: errorMsg, ceData: [], peData: [] };
             }
-            
+
         } catch (error) {
             console.error('[fetchChartData] 💥 Exception:', error);
             this.addSignal(`Network error: ${error.message}`, 'ERROR');
@@ -617,10 +674,10 @@ class Intraday920Tracker {
                 isPolling
             );
         } else {
-            console.warn('[loadChartsData] High strike data incomplete:', { 
-                ce_token: !!highStrike.ce_token, 
-                pe_token: !!highStrike.pe_token, 
-                success: highStrike.success 
+            console.warn('[loadChartsData] High strike data incomplete:', {
+                ce_token: !!highStrike.ce_token,
+                pe_token: !!highStrike.pe_token,
+                success: highStrike.success
             });
         }
 
@@ -637,10 +694,10 @@ class Intraday920Tracker {
                 isPolling
             );
         } else {
-            console.warn('[loadChartsData] Low strike data incomplete:', { 
-                ce_token: !!lowStrike.ce_token, 
-                pe_token: !!lowStrike.pe_token, 
-                success: lowStrike.success 
+            console.warn('[loadChartsData] Low strike data incomplete:', {
+                ce_token: !!lowStrike.ce_token,
+                pe_token: !!lowStrike.pe_token,
+                success: lowStrike.success
             });
         }
     }
@@ -662,7 +719,7 @@ class Intraday920Tracker {
         try {
             console.log(`[updateChartsData] Starting update for ${label} (isPolling: ${isPolling})`);
             console.log(`[updateChartsData] Tokens - CE: ${ceToken}, PE: ${peToken}`);
-            
+
             // Single API call with both CE and PE tokens
             const result = await this.fetchChartData(ceToken, peToken, label);
 
@@ -677,7 +734,7 @@ class Intraday920Tracker {
             // Get current high/low from strategy data for reference lines
             const strikeType = label.toLowerCase().replace(' strike', '');
             const strikeData = this.strategyData?.[strikeType === 'high' ? 'high_strike' : 'low_strike'];
-            
+
             if (!strikeData) {
                 console.warn(`[updateChartsData] No strike data found for ${label}`);
                 return;
@@ -687,17 +744,17 @@ class Intraday920Tracker {
             const ceLow = strikeData?.ce_low || 0;
             const peHigh = strikeData?.pe_high || 0;
             const peLow = strikeData?.pe_low || 0;
-            
+
             console.log(`[updateChartsData] Reference levels for ${label}:`);
             console.log(`  CE High: ${ceHigh}, CE Low: ${ceLow}`);
             console.log(`  PE High: ${peHigh}, PE Low: ${peLow}`);
-            
+
             // CE chart shows PE's high/low as reference (green/red lines)
             const ceReferenceLines = {
                 pe_payload_high: peHigh,
                 pe_payload_low: peLow
             };
-            
+
             // PE chart shows CE's high/low as reference (green/red lines)
             const peReferenceLines = {
                 ce_payload_high: ceHigh,
@@ -792,19 +849,19 @@ class Intraday920Tracker {
 
             console.log(`[setChartData] Updating ${label} with ${candles.length} candles (refresh: ${refresh}, isInitialLoad: ${isInitialLoad})`);
             console.log(`[setChartData] Sample candle:`, candles[0]);
-            
+
             // On initial load: update both candlesticks AND reference lines
             // On polling updates: only update candlesticks (pass null to skip reference lines)
             const linesToUse = isInitialLoad ? referenceLines : null;
-            
+
             if (!isInitialLoad) {
                 console.log(`[setChartData] Polling update: Updating ONLY candlestick data (NO reference lines)`);
             } else {
                 console.log(`[setChartData] Initial load: Updating candlesticks AND reference lines`);
             }
-            
+
             this.charts[key].update(candles, linesToUse, refresh);
-            
+
             // Store for tracking
             this.lastCandles[key] = candles;
 
@@ -888,7 +945,7 @@ class Intraday920Tracker {
             }
 
             const result = await response.json();
-            
+
             if (!result.success) {
                 console.warn(`[fetchEntrySignals] API returned failure for ${label}`);
                 return { success: false };
@@ -924,7 +981,7 @@ class Intraday920Tracker {
         // Don't call loadChartsData immediately - avoid duplicate API calls on page load
         // The initial strategy data and chart data were already loaded by loadData()
         // Only start the periodic polling interval
-        
+
         console.log('[AutoUpdate] Using cached strategy data, only refreshing charts periodically');
 
         // Set up periodic polling - only refresh chart data
@@ -1024,15 +1081,15 @@ class Intraday920Tracker {
             // Get strike prices from strategy data
             const cePriceKey = label.includes('High') ? 'high_strike' : 'low_strike';
             const strikeData = this.strategyData[cePriceKey] || {};
-            
+
             // Get selected risk/reward ratio
             const ratioSelect = document.getElementById('riskRewardRatio');
             const selectedRatio = ratioSelect ? ratioSelect.value : '1:2-trail';
-            
+
             // Get selected entry mode
             const entryModeSelect = document.getElementById('entryMode');
             const selectedEntryMode = entryModeSelect ? entryModeSelect.value : 'candle_open';
-            
+
             const payload = {
                 symbol: this.symbol,
                 ce_token: ceToken,
@@ -1064,7 +1121,7 @@ class Intraday920Tracker {
             }
 
             const result = await response.json();
-            
+
             if (!result.success) {
                 console.warn(`[runFullDayBacktest] API returned failure for ${label}`);
                 return { success: false };
@@ -1093,7 +1150,7 @@ class Intraday920Tracker {
         if (!resultsContainer) return;
 
         // Check if any signals exist (check has_entry, not has_signal)
-        const hasAnySignal = 
+        const hasAnySignal =
             (results.highCe && results.highCe.has_entry) ||
             (results.highPe && results.highPe.has_entry) ||
             (results.lowCe && results.lowCe.has_entry) ||
@@ -1108,7 +1165,7 @@ class Intraday920Tracker {
         // Calculate total P&L
         let totalPnL = 0;
         let pnlCount = 0;
-        
+
         if (results.highCe && results.highCe.has_entry && results.highCe.exit_time) {
             totalPnL += results.highCe.pnl || 0;
             pnlCount++;
@@ -1170,9 +1227,9 @@ class Intraday920Tracker {
         element.style.display = 'flex';
 
         // Determine strike type from element ID
-        const strikeType = elementId.includes('highCe') ? 'HIGH CE' : 
-                          elementId.includes('highPe') ? 'HIGH PE' :
-                          elementId.includes('lowCe') ? 'LOW CE' : 'LOW PE';
+        const strikeType = elementId.includes('highCe') ? 'HIGH CE' :
+            elementId.includes('highPe') ? 'HIGH PE' :
+                elementId.includes('lowCe') ? 'LOW CE' : 'LOW PE';
 
         // Calculate SL and Target points
         const slPoints = Math.abs(analysis.entry_price - analysis.sl);
@@ -1180,7 +1237,7 @@ class Intraday920Tracker {
 
         // Create compact backtest display with horizontal layout
         let html = `<div class="backtest-item-content">`;
-        
+
         // Header with strike type, SL, and Target
         html += `<div class="backtest-header">
                     <span class="strike-label">
@@ -1198,17 +1255,17 @@ class Intraday920Tracker {
                     </div>
                     <span class="entry-high">📌 ${this.formatPrice(analysis.strike_price)}</span>
                 </div>`;
-        
+
         // Compact horizontal layout - Entry and Exit only
         html += `<div class="backtest-compact-row">`;
-        
+
         // Entry - Compact format
         html += `<div class="compact-item">
                     <div class="compact-label">Entry</div>
                     <div class="compact-price">${this.formatPrice(analysis.entry_price)}</div>
                     <div class="compact-time">${this.formatTime(analysis.entry_time)}</div>
                 </div>`;
-        
+
         // Exit - Compact format
         html += `<div class="compact-item">`;
         if (analysis.exit_time) {
@@ -1222,7 +1279,7 @@ class Intraday920Tracker {
                     <div class="compact-empty">No Exit</div>`;
         }
         html += `</div>`;
-        
+
         html += `</div>`;
         html += `</div>`;
         element.innerHTML = html;
@@ -1237,7 +1294,7 @@ class Intraday920Tracker {
         if (!timeValue) return '--';
         try {
             let timestamp;
-            
+
             if (typeof timeValue === 'number') {
                 // KiteConnect returns timestamps in seconds
                 if (timeValue < 10000000000) {
@@ -1257,10 +1314,10 @@ class Intraday920Tracker {
             } else {
                 return '--';
             }
-            
+
             // Convert to milliseconds for Date constructor
             const date = new Date(timestamp * 1000);
-            
+
             // Format in IST timezone using Intl.DateTimeFormat (same as chart)
             const formatter = new Intl.DateTimeFormat('en-IN', {
                 timeZone: 'Asia/Kolkata',
@@ -1268,7 +1325,7 @@ class Intraday920Tracker {
                 minute: '2-digit',
                 hour12: false
             });
-            
+
             return formatter.format(date);
         } catch (e) {
             console.error('[formatTime] Error:', e);
