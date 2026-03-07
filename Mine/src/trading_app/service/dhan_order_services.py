@@ -152,11 +152,11 @@ class DhanOrderService:
                     if not security_id or not security_id.isdigit():
                         continue
                     
-                    # CRITICAL: Filter for WEEKLY expiries only (W), exclude MONTHLY (M)
-                    # This uses Dhan's official EXPIRY_FLAG column
-                    # Reference: https://dhanhq.co/docs/v2/instruments/#column-description
-                    expiry_flag = row.get('SEM_EXPIRY_FLAG', '').strip()  # W for Weekly, M for Monthly
-                    if expiry_flag != 'W':  # Only accept Weekly expiries
+                    # CRITICAL: Accept both Weekly (W) and Monthly (M) contracts.
+                    # On or after weekly-expiry rollover days the active contract may
+                    # carry flag 'M' (last Tuesday before the month end Thursday).
+                    expiry_flag = row.get('SEM_EXPIRY_FLAG', '').strip()
+                    if expiry_flag not in ('W', 'M'):  # Accept both; skip Unknown/NA
                         continue
                     
                     # Get trading symbols
@@ -1219,80 +1219,75 @@ class DhanOrderService:
     def get_option_security_id(self, symbol: str, strike: int, option_type: str, expiry_date=None) -> str:
         """
         Get the numeric security ID for an option on Dhan.
-        
-        Dhan API requires numeric security IDs for options. This method either:
-        1. Fetches from Dhan's symbol master API (if available), or
-        2. Constructs security ID based on known mappings
-        
-        Args:
-            symbol: Underlying symbol (NIFTY, BANKNIFTY, etc.)
-            strike: Strike price
-            option_type: 'CE' or 'PE'
-            expiry_date: Optional expiry date object
-            
-        Returns:
-            Numeric security ID as string (e.g., "29926000" for NIFTY options)
+
+        Looks up the Dhan scrip master CSV (downloaded at init) using the
+        Dhan trading symbol format: SYMBOL-MonthYEAR-STRIKE-TYPE
+        (e.g., NIFTY-Mar2026-25500-CE) and returns the numeric SEM_SMST_SECURITY_ID.
+
+        Falls back to search_symbol() which also queries the CSV, then last-resort
+        returns an empty string so the caller can log the failure cleanly.
         """
         try:
-            # Dhan symbol master mapping for current expiry options
-            # These are base security IDs; actual ID depends on expiry and strike
-            # Format: For options, the security ID is constructed from base + strike offset
-            
-            symbol_base_map = {
-                'NIFTY': 29926000,      # NIFTY options base ID
-                'BANKNIFTY': 29945008,  # BANKNIFTY options base ID
-                'FINNIFTY': 29974001,   # FINNIFTY options base ID
-                'MIDCPNIFTY': 99926000, # MIDCPNIFTY options base ID
-                'SENSEX': 99900000,     # SENSEX options base ID
-                'BANKEX': 99900100,     # BANKEX options base ID
-            }
-            
-            if symbol not in symbol_base_map:
-                logging.warning(f"[get_option_security_id] Unknown symbol: {symbol}")
-                # Fallback: use symbol name + strike
-                return f"{symbol}{strike}{option_type}"
-            
-            # Get base ID for the symbol
-            base_id = symbol_base_map[symbol]
-            
-            # For Dhan, we may need to query their symbol master
-            # For now, we'll use the trading symbol format as it's more reliable
-            # Dhan sometimes accepts the symbol string directly
             from datetime import datetime
-            
-            if expiry_date:
-                # Format: YYMMM (e.g., "26FEB" for Feb 2026, "26MAR" for Mar 2026)
-                year_yy = expiry_date.strftime('%y')
-                month_text = expiry_date.strftime('%b').upper()
-                expiry_str = f"{year_yy}{month_text}"
-            else:
-                # Get nearest weekly expiry (current or next Thursday)
-                nearest_expiry = self.get_nearest_weekly_expiry(symbol)
-                if nearest_expiry:
-                    # Format: YYMMM (e.g., "26FEB" for Feb 2026, "26MAR" for Mar 2026)
-                    year_yy = nearest_expiry.strftime('%y')
-                    month_text = nearest_expiry.strftime('%b').upper()
-                    expiry_str = f"{year_yy}{month_text}"
-                else:
-                    # Fallback to current date if calculation fails
-                    from datetime import datetime
-                    now = datetime.now()
-                    year_yy = now.strftime('%y')
-                    month_text = now.strftime('%b').upper()
-                    expiry_str = f"{year_yy}{month_text}"
-                    logging.warning(f"[get_option_security_id] Failed to get nearest expiry, using current date: {expiry_str}")
-            
-            # Try using trading symbol format as security ID
-            # Format: NIFTY26FEB25500CE (SYMBOL + YYMMM + STRIKE + TYPE)
-            # This matches the Kite trading symbol format exactly
-            trading_symbol = f"{symbol}{expiry_str}{strike}{option_type}"
-            
-            logging.info(f"[get_option_security_id] Using weekly expiry format - Symbol: {symbol}, Expiry: {expiry_str}, Strike: {strike}, Type: {option_type} -> {trading_symbol}")
-            return trading_symbol
-            
-        except Exception as e:
-            logging.error(f"[get_option_security_id] Error: {e}")
+
+            # ---- Step 1: determine the target expiry date ----
+            if expiry_date is None:
+                expiry_date = self.get_nearest_weekly_expiry(symbol)
+
+            if expiry_date is None:
+                logging.warning("[get_option_security_id] Could not determine expiry, giving up.")
+                return ""
+
+            # ---- Step 2: build Dhan CSV trading symbol format ----
+            # CSV format: NIFTY-Mar2026-25500-CE
+            #             BANKNIFTY-Mar2026-74300-PE
+            month_name = expiry_date.strftime('%b')          # 'Mar'
+            year_full  = expiry_date.strftime('%Y')          # '2026'
+            strike_str = str(int(strike))                    # '25500'
+            dhan_sym   = f"{symbol}-{month_name}{year_full}-{strike_str}-{option_type}"
+
+            logging.info(f"[get_option_security_id] Looking up: {dhan_sym} (expiry={expiry_date})")
+
+            # ---- Step 3: direct lookup in master dict ----
+            if self._symbol_master_data:
+                sec_id = self._symbol_master_data.get(dhan_sym)
+                if sec_id:
+                    logging.info(f"[get_option_security_id] Found: {dhan_sym} -> {sec_id}")
+                    return sec_id
+
+                # Brute-force search on key fields in case format slightly differs
+                for key, val in self._symbol_master_data.items():
+                    # key can be Dhan symbol, Kite format, or spaced format
+                    # match by ending pattern: -STRIKE-TYPE
+                    if (key.startswith(symbol) and
+                            str(int(strike)) in key and
+                            option_type in key and
+                            month_name in key):
+                        logging.info(f"[get_option_security_id] Fallback match: {key} -> {val}")
+                        return val
+
+            # ---- Step 4: try search_symbol() which also does CSV lookup ----
+            # Build a Kite-format symbol to pass to search_symbol
+            year_yy     = expiry_date.strftime('%y')
+            month_upper = month_name.upper()
+            kite_sym    = f"{symbol}{year_yy}{month_upper}{strike_str}{option_type}"
+            result = self.search_symbol(kite_sym)
+            if result.get('success') and result.get('security_id', '').isdigit():
+                sec_id = result['security_id']
+                logging.info(f"[get_option_security_id] search_symbol found: {kite_sym} -> {sec_id}")
+                return sec_id
+
+            logging.error(
+                f"[get_option_security_id] Could not find security_id for "
+                f"{symbol} {strike} {option_type} expiry={expiry_date}. "
+                f"Master size={len(self._symbol_master_data) if self._symbol_master_data else 0}"
+            )
             return ""
+
+        except Exception as e:
+            logging.error(f"[get_option_security_id] Error: {e}", exc_info=True)
+            return ""
+
     
     def search_symbol(self, symbol: str) -> Dict[str, Any]:
         """

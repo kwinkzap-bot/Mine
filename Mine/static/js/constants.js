@@ -11,7 +11,7 @@ window.CONSTANTS = {
         CPR_FILTER: '/api/cpr-filter',
         CPR_FILTER_ABOVE: '/api/cpr-filter/above',
         CPR_FILTER_BELOW: '/api/cpr-filter/below',
-        
+
         // Options Chart endpoints
         OPTIONS_INIT: '/api/options-init',
         UNDERLYING_PRICE: '/api/underlying-price',
@@ -19,18 +19,18 @@ window.CONSTANTS = {
         OPTIONS_DEFAULT_STRIKES: '/api/options-default-strikes',
         OPTIONS_CHART_DATA: '/api/options-chart-data',
         OPTIONS_PDH_PDL: '/api/options-pdh-pdl',
-        
+
         // Strategy endpoints
         STRATEGY_DATA: '/api/strategy-data',
         BACKTEST_RESULTS: '/api/backtest-results',
-        
+
         // Historical data endpoints
         HISTORICAL_DATA: '/api/historical-data',
-        
+
         // Authentication endpoints
         LOGIN: '/auth/login',
         LOGOUT: '/auth/logout',
-        
+
         // Multi CPR endpoint
         MULTI_CPR_LIVE: '/api/multi-cpr-live'
     },
@@ -50,7 +50,7 @@ window.CONSTANTS = {
         STATUS_BAR: 'status-bar',
         NOTIFICATION_CONTAINER: 'notification-container',
         API_LOADER: 'api-loader',
-        
+
         // CPR Filter elements
         ABOVE_RESULTS: 'aboveResults',
         ABOVE_BODY: 'aboveBody',
@@ -68,11 +68,21 @@ window.CONSTANTS = {
         CROSS_BELOW_BODY: 'crossBelowBody',
         CROSS_BELOW_COUNT: 'crossBelowCount',
         CROSS_BELOW_TABLE: 'crossBelowTable',
-        
+
+        // Delta-RSI Filter elements
+        DRSI_BULLISH_RESULTS: 'drsiBullishResults',
+        DRSI_BULLISH_BODY: 'drsiBullishBody',
+        DRSI_BULLISH_COUNT: 'drsiBullishCount',
+        DRSI_BULLISH_TABLE: 'drsiBullishTable',
+        DRSI_BEARISH_RESULTS: 'drsiBearishResults',
+        DRSI_BEARISH_BODY: 'drsiBearishBody',
+        DRSI_BEARISH_COUNT: 'drsiBearishCount',
+        DRSI_BEARISH_TABLE: 'drsiBearishTable',
+
         // Strategy elements
         STRATEGY_FORM: 'strategyForm',
         STRATEGY_RESULTS: 'strategyResults',
-        
+
         // Options Chart elements
         OPTIONS_CHART: 'optionsChart',
         UNDERLYING_INPUT: 'underlyingInput',
@@ -186,7 +196,7 @@ window.CONSTANTS = {
      * @param {*} defaultValue - Default value if path not found
      * @returns {*} - The value at the path or defaultValue
      */
-    get: function(path, defaultValue = null) {
+    get: function (path, defaultValue = null) {
         const keys = path.split('.');
         let result = this;
         for (let key of keys) {

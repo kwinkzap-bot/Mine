@@ -262,7 +262,7 @@ function startAutoRefresh() {
     autoRefreshInterval = setInterval(() => {
         if (isMarketOpen()) {
             console.log(`Auto-refreshing OI data for ${currentSymbol}...`);
-            refreshData(false, false);  // false = don't show loader, false = don't update summary stats (auto-refresh)
+            refreshData(false);  // No loader animation on auto-refresh, but update all blocks
         } else {
             console.log('Market hours closed. Auto-refresh paused.');
         }
@@ -335,17 +335,8 @@ async function refreshData(showLoader = true, updateSummary = true) {
         // Cache the data for later use when strike range changes
         cachedData = data;
 
-        // Update UI with data
-        // On auto-refresh (updateSummary=false), only update charts
-        // On manual refresh (updateSummary=true), update both summary and charts
-        if (updateSummary) {
-            updateSummaryStats(data);
-        } else {
-            // During auto-refresh, update only the OI summary table (not full summary stats)
-            const ceStats = data.ce_summary || {};
-            const peStats = data.pe_summary || {};
-            updateOISummaryTable(peStats, ceStats);
-        }
+        // Always update all UI blocks — Market Metrics, charts, and summary table
+        updateSummaryStats(data);
         updateCharts(data);
         updateLastUpdateTime(data.server_timestamp);
 

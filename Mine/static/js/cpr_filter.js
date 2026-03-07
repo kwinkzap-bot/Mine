@@ -183,6 +183,24 @@ window.addEventListener('load', function () {
             });
         });
     }
+
+    // Add sort listeners for D-RSI tables
+    const drsiBullTable = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE);
+    if (drsiBullTable) {
+        drsiBullTable.querySelectorAll('th').forEach(header => {
+            header.addEventListener('click', () => {
+                sortTable(CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE, header.dataset.columnIndex);
+            });
+        });
+    }
+    const drsiBearTable = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE);
+    if (drsiBearTable) {
+        drsiBearTable.querySelectorAll('th').forEach(header => {
+            header.addEventListener('click', () => {
+                sortTable(CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE, header.dataset.columnIndex);
+            });
+        });
+    }
 });
 
 /**
@@ -248,6 +266,10 @@ async function loadCPRData() {
             const cprTouchAboveResults = cprTouch.closed_above || [];
             const cprTouchBelowResults = cprTouch.closed_below || [];
 
+            const drsiFilter = response.drsi_filter || {};
+            const drsiBullishResults = drsiFilter.bullish || [];
+            const drsiBearishResults = drsiFilter.bearish || [];
+
             // Split data into above and below CPR
             const aboveResults = [];
             const belowResults = [];
@@ -286,8 +308,10 @@ async function loadCPRData() {
             const highIvCount = highIvResults.length;
             const cprTouchAboveCount = cprTouchAboveResults.length;
             const cprTouchBelowCount = cprTouchBelowResults.length;
+            const drsiBullishCount = drsiBullishResults.length;
+            const drsiBearishCount = drsiBearishResults.length;
 
-            console.log(`Data loaded - Above: ${aboveCount}, Below: ${belowCount}, Cross Above: ${crossAboveCount}, Cross Below: ${crossBelowCount}, Bullish Rev: ${bullishReversalCount}, Bearish Rev: ${bearishReversalCount}, CPR Touch Above: ${cprTouchAboveCount}, CPR Touch Below: ${cprTouchBelowCount}, High IV: ${highIvCount}`);
+            console.log(`Data loaded - Above: ${aboveCount}, Below: ${belowCount}, Cross Above: ${crossAboveCount}, Cross Below: ${crossBelowCount}, Bullish Rev: ${bullishReversalCount}, Bearish Rev: ${bearishReversalCount}, CPR Touch Above: ${cprTouchAboveCount}, CPR Touch Below: ${cprTouchBelowCount}, High IV: ${highIvCount}, D-RSI Bull: ${drsiBullishCount}, D-RSI Bear: ${drsiBearishCount}`);
 
             // Display results
             displayResults('above', aboveResults);
@@ -299,8 +323,10 @@ async function loadCPRData() {
             displayResults('cprTouchAbove', cprTouchAboveResults);
             displayResults('cprTouchBelow', cprTouchBelowResults);
             displayResults('highIv', highIvResults);
+            displayResults('drsiBullish', drsiBullishResults);
+            displayResults('drsiBearish', drsiBearishResults);
 
-            updateStats(aboveCount, belowCount, crossAboveCount, crossBelowCount, bullishReversalCount, bearishReversalCount, highIvCount);
+            updateStats(aboveCount, belowCount, crossAboveCount, crossBelowCount, bullishReversalCount, bearishReversalCount, highIvCount, drsiBullishCount, drsiBearishCount);
 
             // Hide the controls section if we have data to show results
             const controls = document.getElementById('controls');
@@ -404,7 +430,25 @@ async function loadCPRData() {
                 }
             }
 
-            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}, Cross↑: ${crossAboveCount}, Cross↓: ${crossBelowCount}, Bull Rev: ${bullishReversalCount}, Bear Rev: ${bearishReversalCount}, CPR Touch↑: ${cprTouchAboveCount}, CPR Touch↓: ${cprTouchBelowCount}, High IV: ${highIvCount}`;
+            // Show/hide D-RSI results
+            const drsiBullDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BULLISH_RESULTS);
+            if (drsiBullDiv) {
+                if (drsiBullishCount > 0) {
+                    drsiBullDiv.classList.remove('results-hidden');
+                } else {
+                    drsiBullDiv.classList.add('results-hidden');
+                }
+            }
+            const drsiBearDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BEARISH_RESULTS);
+            if (drsiBearDiv) {
+                if (drsiBearishCount > 0) {
+                    drsiBearDiv.classList.remove('results-hidden');
+                } else {
+                    drsiBearDiv.classList.add('results-hidden');
+                }
+            }
+
+            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}, Cross↑: ${crossAboveCount}, Cross↓: ${crossBelowCount}, Bull Rev: ${bullishReversalCount}, Bear Rev: ${bearishReversalCount}, CPR Touch↑: ${cprTouchAboveCount}, CPR Touch↓: ${cprTouchBelowCount}, High IV: ${highIvCount}, D-RSI Bull: ${drsiBullishCount}, D-RSI Bear: ${drsiBearishCount}`;
         } else if (response && !response.needs_login) {
             // Only show error if it's not a session expiration handled by fetchJson
             const errorMsg = response.message || 'Unknown error';
@@ -471,6 +515,8 @@ function displayResults(type, results) {
         bearishReversal: { col3: 'monthly_bc', col4: 'monthly_r1', col5: 'prev_month_high', showGaps: true },
         cprTouchAbove: { col3: 'monthly_tc', col4: 'monthly_pp', col5: 'monthly_bc', showGaps: true },
         cprTouchBelow: { col3: 'monthly_tc', col4: 'monthly_pp', col5: 'monthly_bc', showGaps: true },
+        drsiBullish: { isDrsi: true },
+        drsiBearish: { isDrsi: true },
         highIv: { isHighIv: true }
     };
     const config = tableConfig[type] || tableConfig.above;
@@ -519,6 +565,23 @@ function displayResults(type, results) {
                 <td class="${oiClass}">${oiChangePct.toFixed(1)}%</td>
                 <td class="${pcrClass}">${pcr.toFixed(2)}</td>
                 <td>${maxPain.toFixed(0)}</td>
+            `;
+        } else if (config.isDrsi) {
+            // Delta-RSI table - 6 columns
+            const rsi = Number(stock.rsi || 0);
+            const drsi = Number(stock.drsi || 0);
+            const signal = Number(stock.signal || 0);
+            const trigger = stock.trigger || "";
+
+            const triggerHtml = `<span style="color: #e11d48; font-weight: 700;">${trigger}</span>`;
+
+            rowHtml = `
+                <td>${symbolCell}</td>
+                <td>${stock.current_price.toFixed(2)}</td>
+                <td>${rsi.toFixed(1)}</td>
+                <td>${drsi.toFixed(4)}</td>
+                <td>${signal.toFixed(4)}</td>
+                <td>${triggerHtml}</td>
             `;
         } else if (type === 'bullishReversal' || type === 'bearishReversal' || type === 'cprTouchAbove' || type === 'cprTouchBelow') {
             const val3 = Number(stock[config.col3] || 0);
@@ -580,28 +643,22 @@ function displayResults(type, results) {
  * @param {number} aboveCount 
  * @param {number} belowCount 
  */
-function updateStats(aboveCount, belowCount, crossAboveCount = 0, crossBelowCount = 0, bullishReversalCount = 0, bearishReversalCount = 0, highIvCount = 0) {
+function updateStats(aboveCount, belowCount, crossAboveCount = 0, crossBelowCount = 0, bullishReversalCount = 0, bearishReversalCount = 0, highIvCount = 0, drsiBullishCount = 0, drsiBearishCount = 0) {
     const aboveCountEl = document.getElementById('aboveCount');
     const belowCountEl = document.getElementById('belowCount');
     const crossAboveCountEl = document.getElementById('crossAboveCount');
     const crossBelowCountEl = document.getElementById('crossBelowCount');
     const highIvCountEl = document.getElementById('highIvCount');
+    const drsiBullishCountEl = document.getElementById('drsiBullishCount');
+    const drsiBearishCountEl = document.getElementById('drsiBearishCount');
 
-    if (aboveCountEl) {
-        aboveCountEl.textContent = `(${aboveCount})`;
-    }
-    if (belowCountEl) {
-        belowCountEl.textContent = `(${belowCount})`;
-    }
-    if (crossAboveCountEl) {
-        crossAboveCountEl.textContent = `(${crossAboveCount})`;
-    }
-    if (crossBelowCountEl) {
-        crossBelowCountEl.textContent = `(${crossBelowCount})`;
-    }
-    if (highIvCountEl) {
-        highIvCountEl.textContent = `(${highIvCount})`;
-    }
+    if (aboveCountEl) aboveCountEl.textContent = `(${aboveCount})`;
+    if (belowCountEl) belowCountEl.textContent = `(${belowCount})`;
+    if (crossAboveCountEl) crossAboveCountEl.textContent = `(${crossAboveCount})`;
+    if (crossBelowCountEl) crossBelowCountEl.textContent = `(${crossBelowCount})`;
+    if (highIvCountEl) highIvCountEl.textContent = `(${highIvCount})`;
+    if (drsiBullishCountEl) drsiBullishCountEl.textContent = `(${drsiBullishCount})`;
+    if (drsiBearishCountEl) drsiBearishCountEl.textContent = `(${drsiBearishCount})`;
 }
 
 /**
@@ -649,7 +706,8 @@ function sortTable(tableId, columnIndexStr) {
 
     // Determine numeric column range based on table type (cross tables have fewer columns and no gaps)
     const isCrossTable = tableId === CONSTANTS.DOM_IDS.CROSS_ABOVE_TABLE || tableId === CONSTANTS.DOM_IDS.CROSS_BELOW_TABLE;
-    const numericMaxCol = isCrossTable ? 4 : 7; // indices 1..7 numeric for all tables (no Status column)
+    const isDrsiTable = tableId === CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE || tableId === CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE;
+    const numericMaxCol = isCrossTable || isDrsiTable ? 4 : 7; // indices 1..4 for small tables, 1..7 for large ones
 
     // Sort rows
     rows.sort((a, b) => {

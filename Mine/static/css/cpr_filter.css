@@ -357,3 +357,32 @@
     color: #dc2626;
     font-weight: 700;
 }
+/* Gap & Signal Highlighting */
+.gap-up {
+    color: #059669;
+    font-weight: 700;
+}
+
+.gap-down {
+    color: #dc2626;
+    font-weight: 700;
+}
+
+/* Delta-RSI Trigger Badge */
+.badge-new { 
+    background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+    color: white; 
+    padding: 2px 8px; 
+    border-radius: 4px; 
+    font-size: 10px; 
+    font-weight: 800;
+    text-transform: uppercase;
+    box-shadow: 0 2px 4px rgba(225, 29, 72, 0.3);
+    animation: pulse-signal 2s infinite;
+}
+
+@keyframes pulse-signal {
+    0% { transform: scale(1); opacity: 0.9; }
+    50% { transform: scale(1.05); opacity: 1; }
+    100% { transform: scale(1); opacity: 0.9; }
+}

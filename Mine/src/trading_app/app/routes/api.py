@@ -1183,6 +1183,7 @@ def get_cpr_filter_results() -> EndpointResponse:
         reversal = results.get('reversal', {}) if isinstance(results, dict) else {}
         high_iv_stocks = results.get('high_iv_stocks', []) if isinstance(results, dict) else []
         cpr_touch = results.get('cpr_touch', {}) if isinstance(results, dict) else {}
+        drsi_filter = results.get('drsi_filter', {}) if isinstance(results, dict) else {}
         
         # FILTER RESPONSE DATA before sending to frontend
         # Apply any data validation/filtering here if needed
@@ -1191,6 +1192,7 @@ def get_cpr_filter_results() -> EndpointResponse:
         reversal = reversal if isinstance(reversal, dict) else {}
         high_iv_stocks = high_iv_stocks if isinstance(high_iv_stocks, list) else []
         cpr_touch = cpr_touch if isinstance(cpr_touch, dict) else {}
+        drsi_filter = drsi_filter if isinstance(drsi_filter, dict) else {}
 
         # logger.info(
         #     "CPR filter completed. "
@@ -1207,6 +1209,7 @@ def get_cpr_filter_results() -> EndpointResponse:
             'weekly_cross': weekly_cross, 
             'reversal': reversal,
             'cpr_touch': cpr_touch,
+            'drsi_filter': drsi_filter,
             'high_iv_stocks': high_iv_stocks,
             'date': target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
         }
@@ -2511,6 +2514,7 @@ def place_intraday_920_order() -> EndpointResponse:
             _active_instance = None
             broker_type_map = {'kotak_neo': 'kotak', 'dhan': 'dhan', 'fyers': 'fyers'}
             _broker_type = broker_type_map.get(broker, '')
+            from trading_app.app.utils.user_env import UserEnvManager
             for _i in range(1, 21):
                 _bt = UserEnvManager.get_user_var(_username, f'BROKER_{_i}_TYPE', '').strip().lower()
                 if _bt == _broker_type:

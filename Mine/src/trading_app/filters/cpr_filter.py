@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import math
 from datetime import datetime, timedelta, date
 from kiteconnect import KiteConnect
@@ -213,36 +214,11 @@ class CPRFilterService:
         Calculate CPR levels using a SINGLE historical data fetch.
         OPTIMIZED: Fetches 400 days of data once and slices locally for daily/weekly/monthly/yearly.
         """
-        # Fetch 400 days of data in ONE API call (covers ~13 months for yearly calc)
-        cache_key = f"{symbol}_400d_{root_date.date()}"
-        
-        with self._cache_lock:
-            if cache_key in self._historical_data_cache:
-                all_data = self._historical_data_cache[cache_key]
-            else:
-                all_data = None
+        # Fetch exactly 400 days relying on the standard get_hist_data caching mechanism
+        all_data = self.get_hist_data(symbol, days=400, interval='day', end_date=root_date)
         
         if all_data is None:
-            token = self.get_token(symbol)
-            if not token:
-                return None
-            
-            self._rate_limit()
-            try:
-                end_date = root_date
-                start_date = root_date - timedelta(days=400)
-                data = self.kite.historical_data(token, start_date.strftime('%Y-%m-%d'), 
-                                                  end_date.strftime('%Y-%m-%d'), 'day')
-                if not data:
-                    return None
-                all_data = pd.DataFrame(data).set_index('date').astype(float)
-                all_data.index = pd.to_datetime(all_data.index)
-                
-                with self._cache_lock:
-                    self._historical_data_cache[cache_key] = all_data
-            except Exception as e:
-                logger.error(f"Hist data failed for {symbol}: {e}")
-                return None
+            return None
         
         # Filter to data on or before root_date
         idx_dates = pd.to_datetime(all_data.index)
@@ -300,6 +276,82 @@ class CPRFilterService:
         return CPRLevels(d_pp, d_bc, d_tc, w_pp, w_bc, w_tc, m_pp, m_bc, m_tc, m_s1, m_r1, m_s05, m_r05,
                         m_cam_r3, m_cam_s3,
                         y_pp, y_bc, y_tc, curr_price, curr_open, curr_high, curr_low, c, m_h, m_l)
+
+    def calculate_rsi(self, prices: List[float], period: int = 21) -> List[float]:
+        """Standard Wilder's RSI calculation."""
+        if len(prices) <= period:
+            return []
+        
+        deltas = np.diff(prices)
+        seed = deltas[:period]
+        up = seed[seed >= 0].sum() / period
+        down = -seed[seed < 0].sum() / period
+        
+        if down == 0:
+            rs = 100
+        else:
+            rs = up / down
+            
+        rsi = np.zeros_like(prices)
+        rsi[:period] = 100.0 - (100.0 / (1.0 + rs))
+        
+        for i in range(period, len(prices)):
+            delta = deltas[i-1]
+            if delta > 0:
+                up_val, down_val = delta, 0.0
+            else:
+                up_val, down_val = 0.0, -delta
+                
+            up = (up * (period - 1) + up_val) / period
+            down = (down * (period - 1) + down_val) / period
+            
+            if down == 0:
+                rs = 100
+            else:
+                rs = up / down
+            rsi[i] = 100.0 - (100.0 / (1.0 + rs))
+            
+        return rsi.tolist()
+
+    def calculate_delta_rsi(self, rsi: List[float], window: int = 21, degree: int = 2) -> Tuple[List[float], List[float]]:
+        """
+        Calculate Delta-RSI (polynomial derivative of RSI) and its signal line (EMA).
+        Matches the logic in Delta-RSI Oscillator: 
+        D = \sum_{i=1}^{degree} i * a_i * (window-1)^{i-1}
+        where [a_degree, ..., a_1, a_0] are the polynomial coefficients.
+        """
+        if len(rsi) < window:
+            return [], []
+            
+        drsi = [0.0] * len(rsi)
+        x = np.arange(window)
+        
+        # Calculate polynomial derivative at each point where we have enough window
+        for i in range(window - 1, len(rsi)):
+            y = np.array(rsi[i - window + 1 : i + 1])
+            # Polynomial fit: a2*x^2 + a1*x + a0 -> returns [a2, a1, a0]
+            poly = np.polyfit(x, y, degree)
+            # Derivative at the last point (x = window - 1)
+            # D = 2*a2*x + a1
+            d_val = 2 * poly[0] * (window - 1) + poly[1]
+            drsi[i] = d_val
+            
+        # Signal Line: 9-period EMA of D-RSI
+        signal_len = 9
+        signal = [0.0] * len(drsi)
+        alpha = 2 / (signal_len + 1)
+        
+        curr_ema = 0.0
+        # Start EMA after D-RSI window starts
+        start_idx = window - 1
+        for i in range(start_idx, len(drsi)):
+            if i == start_idx:
+                curr_ema = drsi[i]
+            else:
+                curr_ema = alpha * drsi[i] + (1 - alpha) * curr_ema
+            signal[i] = curr_ema
+            
+        return drsi, signal
 
     def get_fo_stocks(self) -> List[str]:
         if self._fo_stocks is not None:
@@ -713,8 +765,78 @@ class CPRFilterService:
                 'bullish_reversal': None,
                 'bearish_reversal': None,
                 'cpr_touch_above': None,
-                'cpr_touch_below': None
+                'cpr_touch_below': None,
+                'drsi_bullish': None,
+                'drsi_bearish': None
             }
+
+            # Phase D-RSI: Delta-RSI Filter (Daily) - Matches "Delta-RSI Oscillator" exactly
+            # Fetch 400 days to ensure RSI(21) and EMA(9) are fully stabilized
+            hist_prices = self.get_hist_data(symbol, days=400, interval='day', end_date=root_date)
+            if hist_prices is not None and len(hist_prices) > 50:
+                closes = hist_prices['close'].tolist()
+                rsi_vals = self.calculate_rsi(closes, period=21)
+                # degree=2 matches Oscillator's default
+                drsi_vals, sig_vals = self.calculate_delta_rsi(rsi_vals, window=21, degree=2)
+                
+                if len(drsi_vals) >= 3:
+                    in_long = False
+                    in_short = False
+                    trigger_type = ""
+                    trigger_today = False
+                    
+                    # Iterate through history to track Buy/Sell states (persistent)
+                    for i in range(2, len(drsi_vals)):
+                        d = drsi_vals[i]
+                        d1 = drsi_vals[i-1]
+                        
+                        # Conditions from Oscillator study (Sig-Cross and Direction Change Removed)
+                        crossup = (d1 <= 0 and d > 0)
+                        crossdw = (d1 >= 0 and d < 0)
+                        
+                        is_last = (i == len(drsi_vals) - 1)
+                        
+                        if crossup:
+                            in_long = True
+                            in_short = False
+                            if is_last:
+                                trigger_today = True
+                                trigger_type = "Zero-Cross"
+                        elif crossdw:
+                            in_short = True
+                            in_long = False
+                            if is_last:
+                                trigger_today = True 
+                                trigger_type = "Zero-Cross"
+                    # Watch list for debugging (User reported stocks)
+                    watch_stocks = ['DELHIVERY', 'SIEMENS', 'GLENMARK', 'LICHSGFIN', 'DIVISLAB', 
+                                    'APOLLOTYRE', 'PAGEIND', 'SRF', 'PERSISTENT', 'ABB', 'ANGELONE', 'BDL', 'MAZDOCK']
+                    if symbol in watch_stocks:
+                        logger.info(f"DEBUG D-RSI {symbol}: D={drsi_vals[-1]:.4f}, S={sig_vals[-1]:.4f}, RSI={rsi_vals[-1]:.2f}, Long={in_long}, Short={in_short}, TriggerToday={trigger_today} ({trigger_type})")
+
+                    # Strict filter: ONLY Add to payload if the signal triggered TODAY
+                    if in_long and trigger_today:
+                        payloads['drsi_bullish'] = {
+                            'symbol': symbol,
+                            'current_price': round(cpr.current_price, 2),
+                            'rsi': round(rsi_vals[-1], 2),
+                            'drsi': round(drsi_vals[-1], 4),
+                            'signal': round(sig_vals[-1], 4),
+                            'is_new': trigger_today,
+                            'trigger': trigger_type
+                        }
+                    
+                    if in_short and trigger_today:
+                        payloads['drsi_bearish'] = {
+                            'symbol': symbol,
+                            'current_price': round(cpr.current_price, 2),
+                            'rsi': round(rsi_vals[-1], 2),
+                            'drsi': round(drsi_vals[-1], 4),
+                            'signal': round(sig_vals[-1], 4),
+                            'is_new': trigger_today,
+                            'trigger': trigger_type
+                        }
+
 
             if primary_status != "🟡 IN CPR":
                 gaps = self.calc_gaps(cpr.current_price, primary_status, cpr)
@@ -1229,6 +1351,14 @@ class CPRFilterService:
         if root_date is None:
             root_date = datetime.now()
             
+        # Normalize weekend dates to Friday
+        if root_date.weekday() == 5:  # Saturday
+            root_date = root_date - timedelta(days=1)
+            logger.info(f"Normalized Saturday to Friday: {root_date.date()}")
+        elif root_date.weekday() == 6:  # Sunday
+            root_date = root_date - timedelta(days=2)
+            logger.info(f"Normalized Sunday to Friday: {root_date.date()}")
+            
         logger.info(f"Filtering {len(stocks)} F&O stocks for date {root_date.date()} (cache size: {len(self._historical_data_cache)})...")
         
         signals: List[Dict] = []
@@ -1238,6 +1368,8 @@ class CPRFilterService:
         bearish_reversal: List[Dict] = []
         cpr_touch_above: List[Dict] = []
         cpr_touch_below: List[Dict] = []
+        drsi_bullish: List[Dict] = []
+        drsi_bearish: List[Dict] = []
         processed = 0
         failed = 0
         start_time = time.time()
@@ -1270,6 +1402,12 @@ class CPRFilterService:
                         
                         if result.get('cpr_touch_below'):
                             cpr_touch_below.append(result['cpr_touch_below'])
+                            
+                        if result.get('drsi_bullish'):
+                            drsi_bullish.append(result['drsi_bullish'])
+                            
+                        if result.get('drsi_bearish'):
+                            drsi_bearish.append(result['drsi_bearish'])
                     processed += 1
                     if processed % 10 == 0:
                         elapsed = time.time() - start_time
@@ -1307,6 +1445,10 @@ class CPRFilterService:
             'cpr_touch': {
                 'closed_above': sorted(cpr_touch_above, key=lambda x: x['symbol']),
                 'closed_below': sorted(cpr_touch_below, key=lambda x: x['symbol'])
+            },
+            'drsi_filter': {
+                'bullish': sorted(drsi_bullish, key=lambda x: x['symbol']),
+                'bearish': sorted(drsi_bearish, key=lambda x: x['symbol'])
             },
             'high_iv_stocks': sorted(high_iv_stocks, key=lambda x: x['iv_percentile'], reverse=True)
         }
