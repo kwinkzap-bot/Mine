@@ -675,10 +675,16 @@ class KotakOrderService:
             logging.info(f"[Kotak] Full order body: {order_body}")
             
             # Use PreparedRequest to ensure proper form encoding
+            import json
+            jdata_payload = json.dumps(order_body)
+            # Kotak REST uses a single custom field 'jData' with the stringified JSON payload
+            # MUST NOT be urlencoded! Send as raw string body.
+            raw_body = 'jData=' + jdata_payload
+            
             req = http_requests.Request(
                 'POST',
                 order_url,
-                data=order_body,
+                data=raw_body,
                 headers=order_headers,
                 params=query_params
             )
@@ -1119,6 +1125,20 @@ class KotakOrderService:
                 product_type=self.PRODUCT_NRML,
                 exchange_segment=self.EXCHANGE_NFO
             )
+            
+            # Weekend/Illiquid option fallback: If Kotak rejects MARKET order due to no LTP, retry as LIMIT
+            if isinstance(result, dict) and not result.get('success') and 'Last Traded Price' in str(result.get('error', '')):
+                logging.warning(f"[KotakOrderService] Market order rejected due to missing LTP. Retrying '{candidate_ts}' as LIMIT order...")
+                result = self.place_order(
+                    tradingsymbol=candidate_ts,
+                    transaction_type=transaction_type,
+                    price=0.1,  # Minimum tick size fallback
+                    quantity=quantity,
+                    order_type='L',  # Limit order
+                    product_type=self.PRODUCT_NRML,
+                    exchange_segment=self.EXCHANGE_NFO
+                )
+            
             last_result = result if isinstance(result, dict) else {'success': False, 'error': 'Unknown error'}
             logging.info(f"[KotakOrderService] Result: success={last_result.get('success')}, error={last_result.get('error')}")
             if isinstance(result, dict) and result.get('success'):

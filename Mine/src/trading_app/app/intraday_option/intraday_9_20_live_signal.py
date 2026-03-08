@@ -280,88 +280,65 @@ class Intraday920LiveSignal:
         self.primary_lot_count = _lot_count(1)
         logger.info(f"Primary broker (Broker 1) lot count: {self.primary_lot_count}x")
         
-        # Helper to get credentials from session/env/user config
-        def get_credential(key: str) -> Optional[str]:
-            # First try environment variable
-            value = os.getenv(key)
-            if value and value not in ['', 'your_token', 'your_access_token']:
-                return value
-            # Then try user-specific config if username is available
-            if self.username:
-                user_value = UserEnvManager.get_user_var(self.username, key)
-                if user_value and user_value not in ['', 'your_token', 'your_access_token']:
-                    return user_value
-            return None
-        
-        # 1. Kotak Neo
-        kotak_consumer_key = get_credential("KOTAK_CONSUMER_KEY")
-        kotak_mobile = get_credential("KOTAK_MOBILE_NUMBER")
-        if kotak_consumer_key and kotak_mobile:
-            # Find Kotak instance number for active check
-            kotak_instance = None
-            for _i in range(1, 21):
-                _bt = UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{_i}_TYPE', '').strip().lower()
-                if _bt == 'kotak':
-                    kotak_instance = _i
-                    break
-            if kotak_instance and not UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{kotak_instance}_ACTIVE', 'true').strip().lower() in ('false', '0', 'no'):
-                try:
-                    self.extra_brokers['KOTAK'] = KotakOrderService()
-                    self.extra_broker_lot_sizes['KOTAK'] = _lot_count(kotak_instance)
-                    logger.info(f"Kotak Neo Initialized | lot_count={self.extra_broker_lot_sizes['KOTAK']}x")
-                except Exception as e:
-                    logger.error(f"Failed to init Kotak Neo: {e}")
-            else:
-                logger.info(f"⏩ Kotak Neo SKIPPED — BROKER_{kotak_instance}_ACTIVE=false")
-        
-        # 2. Dhan - explicitly pass tokens to DhanOrderService
-        dhan_access_token = get_credential("DHAN_ACCESS_TOKEN")
-        dhan_client_id = get_credential("DHAN_CLIENT_ID")
-        if dhan_access_token and dhan_client_id:
-            # Find Dhan instance number for active check
-            dhan_instance = None
-            for _i in range(1, 21):
-                _bt = UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{_i}_TYPE', '').strip().lower()
-                if _bt == 'dhan':
-                    dhan_instance = _i
-                    break
-            if dhan_instance and not UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{dhan_instance}_ACTIVE', 'true').strip().lower() in ('false', '0', 'no'):
-                try:
-                    self.extra_brokers['DHAN'] = DhanOrderService(
-                        access_token=dhan_access_token,
-                        client_id=dhan_client_id
-                    )
-                    self.extra_broker_lot_sizes['DHAN'] = _lot_count(dhan_instance)
-                    logger.info(f"Dhan Initialized | lot_count={self.extra_broker_lot_sizes['DHAN']}x")
-                except Exception as e:
-                    logger.error(f"Failed to init Dhan: {e}")
-            else:
-                logger.info(f"⏩ Dhan SKIPPED — BROKER_{dhan_instance}_ACTIVE=false")
+        # Iterate over 1 to 20 to discover and initialize Kotak, Dhan, and Fyers
+        # Broker 1 is usually Zerodha but could be configured as anything. We scan all.
+        for instance_num in range(1, 21):
+            broker_type = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_TYPE', '').strip().lower()
+            if not broker_type or broker_type == 'zerodha':
+                continue
+                
+            is_active = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_ACTIVE', 'true').strip().lower()
+            if is_active in ('false', '0', 'no'):
+                logger.info(f"⏩ {broker_type.upper()} {instance_num} SKIPPED — BROKER_{instance_num}_ACTIVE=false")
+                continue
+            
+            # Map back to generic keys (KOTAK, DHAN, FYERS) to match _place_extra_broker_order
+            broker_key = broker_type.upper() 
+            
+            try:
+                if broker_type == 'kotak':
+                    kotak_token = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_TRADING_TOKEN')
+                    consumer_key = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_CONSUMER_KEY')
+                    trading_sid = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_TRADING_SID')
+                    base_url = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_BASE_URL') or "https://e21.kotaksecurities.com"
+                    
+                    if kotak_token and consumer_key and trading_sid:
+                        ks = KotakOrderService()
+                        ks.base_url = base_url
+                        ks._order_base_url = base_url
+                        ks.trading_token = kotak_token
+                        ks.trading_sid = trading_sid
+                        ks.consumer_key = consumer_key
+                        self.extra_brokers[broker_key] = ks
+                        self.extra_broker_lot_sizes[broker_key] = _lot_count(instance_num)
+                        logger.info(f"{broker_key} Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x")
+                    else:
+                        logger.warning(f"Could not initialize {broker_key}_{instance_num} - Missing credentials in Env.")
+                        
+                elif broker_type == 'dhan':
+                    access_token = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_ACCESS_TOKEN')
+                    client_id = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_CLIENT_ID')
+                    if access_token and client_id:
+                        ds = DhanOrderService(access_token=access_token, client_id=client_id)
+                        self.extra_brokers[broker_key] = ds
+                        self.extra_broker_lot_sizes[broker_key] = _lot_count(instance_num)
+                        logger.info(f"{broker_key} Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x")
+                    else:
+                        logger.warning(f"Could not initialize {broker_key}_{instance_num} - Missing credentials in Env.")
 
-        # 3. Fyers - explicitly pass tokens to FyersOrderService
-        fyers_app_id = get_credential("FYERS_APP_ID")
-        fyers_access_token = get_credential("FYERS_ACCESS_TOKEN")
-        fyers_secret_key = get_credential("FYERS_SECRET_KEY")
-        if fyers_app_id and (fyers_access_token or fyers_secret_key):
-            # Find Fyers instance number for active check
-            fyers_instance = None
-            for _i in range(1, 21):
-                _bt = UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{_i}_TYPE', '').strip().lower()
-                if _bt == 'fyers':
-                    fyers_instance = _i
-                    break
-            if fyers_instance and not UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{fyers_instance}_ACTIVE', 'true').strip().lower() in ('false', '0', 'no'):
-                try:
-                    self.extra_brokers['FYERS'] = FyersOrderService(
-                        app_id=fyers_app_id,
-                        access_token=fyers_access_token
-                    )
-                    self.extra_broker_lot_sizes['FYERS'] = _lot_count(fyers_instance)
-                    logger.info(f"Fyers Initialized | lot_count={self.extra_broker_lot_sizes['FYERS']}x")
-                except Exception as e:
-                    logger.error(f"Failed to init Fyers: {e}")
-            else:
-                logger.info(f"⏩ Fyers SKIPPED — BROKER_{fyers_instance}_ACTIVE=false")
+                elif broker_type == 'fyers':
+                    app_id = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_APP_ID')
+                    access_token = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_ACCESS_TOKEN')
+                    if app_id and access_token:
+                        fs = FyersOrderService(app_id=app_id, access_token=access_token)
+                        self.extra_brokers[broker_key] = fs
+                        self.extra_broker_lot_sizes[broker_key] = _lot_count(instance_num)
+                        logger.info(f"{broker_key} Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x")
+                    else:
+                        logger.warning(f"Could not initialize {broker_key}_{instance_num} - Missing credentials in Env.")
+                        
+            except Exception as e:
+                logger.error(f"Failed to init {broker_key}_{instance_num}: {e}")
                 
         # 4. Additional Zerodha instances (instance != 1)
         # Broker 1 is the primary data+order account (self.kite / self.kite_service).

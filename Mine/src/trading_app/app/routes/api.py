@@ -305,138 +305,6 @@ def health() -> EndpointResponse:
     return jsonify({'status': 'healthy'}), 200
 
 
-@api_bp.route('/broker-status', methods=['GET'])
-@csrf.exempt
-@limiter.exempt
-def get_broker_status() -> EndpointResponse:
-    """Check if brokers are logged in and tokens are valid.
-    
-    Returns:
-        JSON with broker login status for all configured brokers (per-instance)
-    """
-    try:
-        from trading_app.app.utils.user_env import UserEnvManager
-        
-        username = session.get('username')
-        
-        if not username:
-            return jsonify({
-                'success': True,
-                'brokers': {},
-                'broker_instances': {},
-                'message': 'User not authenticated'
-            })
-        
-        brokers_status = {}  # By type (legacy)
-        broker_instances = {}  # By instance ID (e.g., 'zerodha_1', 'zerodha_5')
-        
-        # Scan for all configured brokers (BROKER_{N}_TYPE) - same as available-brokers
-        for instance_num in range(1, 21):
-            broker_type = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TYPE', '').strip().lower()
-            
-            if not broker_type:
-                continue  # No more brokers defined
-            
-            broker_name = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_NAME', '').strip()
-            if not broker_name:
-                broker_name = broker_type.title()
-            
-            broker_id = f"{broker_type}_{instance_num}"
-            
-            is_logged_in = False
-            message = 'Not connected'
-            
-            if broker_type == 'zerodha':
-                # Check session first (most reliable when active)
-                instance_authenticated = session.get(f'zerodha_{instance_num}_authenticated')
-                instance_token = session.get(f'zerodha_{instance_num}_access_token')
-                if instance_authenticated and instance_token:
-                    is_logged_in = True
-                    message = 'Connected'
-                else:
-                    # Fallback: check .env file for stored token (survives app restart)
-                    env_token = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
-                    if env_token:
-                        # Token exists in .env — restore it into session for this request
-                        # so broker-status and get_kite() agree on the state going forward
-                        env_api_key = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_API_KEY')
-                        session[f'zerodha_{instance_num}_authenticated'] = True
-                        session[f'zerodha_{instance_num}_access_token'] = env_token
-                        if env_api_key:
-                            session[f'zerodha_{instance_num}_api_key'] = env_api_key
-                        # Also update the active instance if not set
-                        if not session.get('instance_num'):
-                            session['instance_num'] = instance_num
-                            session['access_token'] = env_token
-                        session.permanent = True
-                        is_logged_in = True
-                        message = 'Connected (token restored from storage)'
-                        logger.info(f"[broker-status] Restored zerodha_{instance_num} token from .env for {username}")
-                    elif instance_authenticated and not instance_token:
-                        is_logged_in = False
-                        message = 'Token expired - please re-login'
-                    
-            elif broker_type == 'kotak':
-                kotak_authenticated = session.get('kotak_authenticated')
-                if kotak_authenticated is True:
-                    is_logged_in = True
-                    message = 'Connected'
-                    
-            elif broker_type == 'dhan':
-                dhan_authenticated = session.get('dhan_authenticated')
-                if dhan_authenticated is True:
-                    is_logged_in = True
-                    message = 'Connected'
-                    
-            elif broker_type == 'fyers':
-                fyers_authenticated = session.get('fyers_authenticated')
-                if fyers_authenticated is True:
-                    is_logged_in = True
-                    message = 'Connected'
-            
-            # Store per-instance status
-            broker_instances[broker_id] = {
-                'is_logged_in': is_logged_in,
-                'broker_name': broker_name,
-                'broker_type': broker_type,
-                'instance': instance_num,
-                'message': message
-            }
-            
-            # Also update type-based status (for backward compatibility)
-            # Mark as logged in if ANY instance of this type is logged in
-            if is_logged_in:
-                brokers_status[broker_type] = {
-                    'is_logged_in': True,
-                    'broker_name': broker_name,
-                    'message': 'Connected'
-                }
-        
-        # For backward compatibility, also return is_logged_in if ANY broker is connected
-        any_logged_in = any(b.get('is_logged_in') for b in broker_instances.values())
-        first_connected = next((b for b in broker_instances.values() if b.get('is_logged_in')), None)
-        
-        return jsonify({
-            'success': True,
-            'is_logged_in': any_logged_in,
-            'broker_name': first_connected['broker_name'] if first_connected else None,
-            'username': username,
-            'brokers': brokers_status,  # Legacy: by type
-            'broker_instances': broker_instances,  # New: by instance ID
-            'message': 'Broker(s) connected' if any_logged_in else 'No broker connected'
-        })
-        
-    except Exception as e:
-        logger.error(f"Error checking broker status: {e}")
-        return jsonify({
-            'success': False,
-            'is_logged_in': False,
-            'brokers': {},
-            'broker_instances': {},
-            'error': str(e)
-        }), 500
-
-
 @api_bp.route('/available-brokers', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -540,6 +408,111 @@ def get_available_brokers() -> EndpointResponse:
             # Check active flag
             broker_active = is_broker_active(username, instance_num)
 
+            # --- Check broker live online status ---
+            is_logged_in = False
+            msg_status = 'Not connected'
+
+            if broker_type == 'zerodha':
+                instance_token = session.get(f'zerodha_{instance_num}_access_token')
+                env_token = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
+                if not instance_token and env_token:
+                    instance_token = env_token
+                    env_api_key = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_API_KEY')
+                    session[f'zerodha_{instance_num}_authenticated'] = True
+                    session[f'zerodha_{instance_num}_access_token'] = env_token
+                    if env_api_key: session[f'zerodha_{instance_num}_api_key'] = env_api_key
+                    if not session.get('instance_num'):
+                        session['instance_num'] = instance_num
+                        session['access_token'] = env_token
+                    session.permanent = True
+                
+                if instance_token:
+                    try:
+                        k = get_kite(username, instance_num)
+                        if k:
+                            k.profile()
+                            is_logged_in = True
+                            msg_status = 'Connected'
+                        else:
+                            is_logged_in = False
+                            msg_status = 'Auth 401'
+                    except Exception:
+                        is_logged_in = False
+                        msg_status = 'Token expired'
+                        session.pop(f'zerodha_{instance_num}_authenticated', None)
+                        session.pop(f'zerodha_{instance_num}_access_token', None)
+
+            elif broker_type == 'kotak':
+                trading_token = session.get(f'kotak_{instance_num}_trading_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TRADING_TOKEN')
+                if trading_token:
+                    try:
+                        import requests
+                        import json
+                        consumer_key = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_CONSUMER_KEY')
+                        trading_sid = session.get(f'kotak_{instance_num}_trading_sid') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TRADING_SID')
+                        base_url = session.get(f'kotak_{instance_num}_base_url') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_BASE_URL') or "https://gw-napi.kotaksecurities.com"
+                        
+                        if consumer_key and trading_token and trading_sid:
+                            url = base_url.rstrip('/') + "/quick/user/limits"
+                            headers = {
+                                "Authorization": str(consumer_key),
+                                "Sid": str(trading_sid),
+                                "Auth": str(trading_token),
+                                "Content-Type": "application/x-www-form-urlencoded",
+                                "neo-fin-key": "neotradeapi"
+                            }
+                            # Send Kotak V2 payload with jData prefix
+                            jdata_payload = "jData=" + json.dumps({"seg": "CASH", "exch": "NSE"})
+                            
+                            resp = requests.post(url, headers=headers, data=jdata_payload, timeout=5)
+                            
+                            # A 401 Unauthorized or specific session token error means expired
+                            if resp.status_code == 401 or 'invalid session token' in resp.text.lower():
+                                session.pop(f'kotak_{instance_num}_trading_token', None)
+                                msg_status = 'Token expired'
+                                is_logged_in = False
+                            else:
+                                # Even if response is 404/400 validation error (like invalid exchangeSegment)
+                                # it means the request bypassed Auth layer, meaning token is fully alive!
+                                is_logged_in = True
+                                msg_status = 'Connected'
+                        else:
+                            msg_status = 'Not connected'
+                    except Exception: 
+                        msg_status = 'Connection error'
+
+            elif broker_type == 'dhan':
+                access_token = session.get(f'dhan_{instance_num}_access_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
+                client_id = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_CLIENT_ID')
+                if access_token and client_id:
+                    try:
+                        from trading_app.service.dhan_order_services import DhanOrderService
+                        dhan = DhanOrderService(access_token=access_token, client_id=client_id)
+                        if dhan.verify_credentials():
+                            is_logged_in = True
+                            msg_status = 'Connected'
+                        else:
+                            session.pop(f'dhan_{instance_num}_access_token', None)
+                            msg_status = 'Token expired'
+                    except Exception: pass
+
+            elif broker_type == 'fyers':
+                access_token = session.get(f'fyers_{instance_num}_access_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
+                app_id = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_APP_ID')
+                secret = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_SECRET_KEY')
+                if access_token and app_id:
+                    try:
+                        from trading_app.service.fyers_order_services import FyersOrderService
+                        fyers = FyersOrderService(app_id=app_id, access_token=access_token, secret_key=secret)
+                        if fyers.verify_token():
+                            is_logged_in = True
+                            msg_status = 'Connected'
+                        else:
+                            session.pop(f'fyers_{instance_num}_access_token', None)
+                            msg_status = 'Token expired'
+                    except Exception: pass
+            
+
             # Build broker entry
             broker_id = f"{broker_type}_{instance_num}"
             broker_entry = {
@@ -553,6 +526,8 @@ def get_available_brokers() -> EndpointResponse:
                 'active': broker_active,
                 'lot_size': int(UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_LOT_SIZE', '1') or '1'),
                 'status': 'Configured and ready' if broker_active else 'Inactive — orders disabled',
+                'is_logged_in': is_logged_in,
+                'msg_status': msg_status,
                 'login_type': type_config['login_type']
             }
             
@@ -2630,9 +2605,17 @@ def place_intraday_920_order() -> EndpointResponse:
             from trading_app.service.kotak_order_services import KotakOrderService
             
             # Get stored credentials from environment (set during login)
-            trading_token = os.getenv('KOTAK_TRADING_TOKEN')
-            trading_sid = os.getenv('KOTAK_TRADING_SID')
-            base_url = os.getenv('KOTAK_BASE_URL')
+            from trading_app.app.utils.user_env import UserEnvManager
+            
+            # Since _active_instance is computed above
+            if _active_instance is None:
+                return jsonify({'success': False, 'error': 'Kotak broker instance not found'}), 400
+                
+            trading_token = session.get(f'kotak_{_active_instance}_trading_token') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_TRADING_TOKEN')
+            trading_sid = session.get(f'kotak_{_active_instance}_trading_sid') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_TRADING_SID')
+            base_url = session.get(f'kotak_{_active_instance}_base_url') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_BASE_URL') or "https://gw-napi.kotaksecurities.com"
+            consumer_key = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_CONSUMER_KEY', '')
+            
             
             # Check if authenticated
             if not trading_token or not base_url:
@@ -2648,7 +2631,7 @@ def place_intraday_920_order() -> EndpointResponse:
             kotak_service.trading_sid = trading_sid
             kotak_service.base_url = base_url
             kotak_service._order_base_url = base_url  # Direct server URL for HTTP orders
-            kotak_service.consumer_key = os.getenv('KOTAK_CONSUMER_KEY', '')
+            kotak_service.consumer_key = consumer_key
             
             # DEBUG: Log what we're about to inject
             logger.info(f"[Kotak] About to inject tokens: token={trading_token[:30] if trading_token else 'NONE'}..., sid={trading_sid[:30] if trading_sid else 'NONE'}...")
@@ -2681,8 +2664,12 @@ def place_intraday_920_order() -> EndpointResponse:
             from trading_app.service.dhan_order_services import DhanOrderService
             
             # Get stored Dhan credentials from environment
-            dhan_access_token = os.getenv('DHAN_ACCESS_TOKEN')
-            dhan_client_id = os.getenv('DHAN_CLIENT_ID')
+            from trading_app.app.utils.user_env import UserEnvManager
+            if _active_instance is None:
+                return jsonify({'success': False, 'error': 'Dhan broker instance not found'}), 400
+                
+            dhan_access_token = session.get(f'dhan_{_active_instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_ACCESS_TOKEN')
+            dhan_client_id = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_CLIENT_ID')
             
             # Check if authenticated
             if not dhan_access_token or not dhan_client_id:
@@ -2852,8 +2839,12 @@ def place_intraday_920_order() -> EndpointResponse:
         
         elif broker == 'fyers':
             # Get stored Fyers credentials from environment
-            fyers_app_id = os.getenv('FYERS_APP_ID')
-            fyers_access_token = os.getenv('FYERS_ACCESS_TOKEN')
+            from trading_app.app.utils.user_env import UserEnvManager
+            if _active_instance is None:
+                return jsonify({'success': False, 'error': 'Fyers broker instance not found'}), 400
+                
+            fyers_access_token = session.get(f'fyers_{_active_instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_ACCESS_TOKEN')
+            fyers_app_id = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_APP_ID')
             
             # Check if authenticated
             if not fyers_app_id or not fyers_access_token:

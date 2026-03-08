@@ -11,12 +11,13 @@
     </div>
 
     <!-- Dynamic Login Buttons Section -->
-    <div id="brokersContainer" style="margin-top: 20px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+    <div id="brokersContainer"
+        style="margin-top: 20px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
         <p style="width: 100%; color: #666; font-size: 14px;">Loading available brokers...</p>
     </div>
-    
+
     <div style="margin-top: 20px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-        <button class="btn" id="refreshBtn" style="background: #28a745;">🔄 Refresh</button> 
+        <button class="btn" id="refreshBtn" style="background: #28a745;">🔄 Refresh</button>
     </div>
 </div>
 {% endblock %}
@@ -28,16 +29,19 @@
         align-items: center;
         gap: 4px;
     }
+
     .broker-status-label {
         font-size: 11px;
         font-weight: 600;
         padding: 2px 8px;
         border-radius: 10px;
     }
+
     .broker-status-label.online {
         background: #d4edda;
         color: #155724;
     }
+
     .broker-status-label.offline {
         background: #f8d7da;
         color: #721c24;
@@ -47,24 +51,24 @@
     // Popup window reference for tracking
     let loginPopup = null;
     let popupCheckInterval = null;
-    
+
     // Listen for messages from popup window
     window.addEventListener('message', (event) => {
         if (event.data && event.data.type === 'LOGIN_SUCCESS') {
             console.log(`✓ Login successful for broker: ${event.data.broker}`);
-            
+
             // Show success notification
             const notification = document.getElementById('successNotification');
             if (notification) {
                 notification.style.display = 'block';
                 setTimeout(() => notification.style.display = 'none', 5000);
             }
-            
+
             // Refresh broker status
             loadAvailableBrokers();
         }
     });
-    
+
     /**
      * Open Zerodha login in a popup window
      * Uses logout-then-login flow to handle multiple accounts in same browser
@@ -74,29 +78,29 @@
         if (loginPopup && !loginPopup.closed) {
             loginPopup.close();
         }
-        
+
         // Calculate popup position (center of screen)
         const width = 500;
         const height = 700;
         const left = (window.screen.width - width) / 2;
         const top = (window.screen.height - height) / 2;
-        
+
         // Use the logout-then-login URL to clear previous Kite session
         // This enables multiple Zerodha accounts in the same browser
         const logoutLoginUrl = `/auth/kite-logout-login?broker_id=${brokerId}`;
-        
+
         // Open popup
         loginPopup = window.open(
             logoutLoginUrl,
             `kite_login_${brokerId}`,
             `width=${width},height=${height},left=${left},top=${top},scrollbars=yes,resizable=yes`
         );
-        
+
         if (!loginPopup) {
             alert('Popup blocked! Please allow popups for this site.');
             return;
         }
-        
+
         // Show loading indicator on button
         const btn = document.querySelector(`#login-${brokerId}-btn`);
         if (btn) {
@@ -104,18 +108,18 @@
             btn.innerHTML = '⏳ Logging in...';
             btn.disabled = true;
         }
-        
+
         // Check if popup is closed (login completed or cancelled)
         popupCheckInterval = setInterval(() => {
             if (loginPopup.closed) {
                 clearInterval(popupCheckInterval);
-                
+
                 // Restore button
                 if (btn) {
                     btn.innerHTML = btn.dataset.originalText;
                     btn.disabled = false;
                 }
-                
+
                 // Refresh broker status after a short delay
                 setTimeout(() => {
                     loadAvailableBrokers();
@@ -123,7 +127,7 @@
             }
         }, 500);
     }
-    
+
     /**
      * Load and display available brokers from the API
      * Only shows brokers that have credentials configured in .env
@@ -132,29 +136,9 @@
         try {
             const response = await fetch('/api/available-brokers');
             const data = await response.json();
-            
-            // Also fetch broker status
-            let brokerStatus = {};  // Legacy: by type
-            let brokerInstances = {};  // New: by instance ID (e.g., 'zerodha_1')
-            try {
-                const statusResponse = await fetch('/api/broker-status');
-                const statusData = await statusResponse.json();
-                // New format: statusData.broker_instances contains status for each broker instance
-                if (statusData.broker_instances) {
-                    brokerInstances = statusData.broker_instances;
-                }
-                // Legacy format: statusData.brokers contains status by type
-                if (statusData.brokers) {
-                    for (const [brokerType, status] of Object.entries(statusData.brokers)) {
-                        brokerStatus[brokerType] = status.is_logged_in === true;
-                    }
-                }
-            } catch (e) {
-                console.error('Error fetching broker status:', e);
-            }
-            
+
             const container = document.getElementById('brokersContainer');
-            
+
             if (!data.success || !data.brokers || data.brokers.length === 0) {
                 container.innerHTML = `
                     <p style="width: 100%; color: #dc3545; font-size: 14px;">
@@ -163,13 +147,13 @@
                 `;
                 return;
             }
-            
+
             // Create a button for each available broker
             let html = '';
             for (const broker of data.brokers) {
                 const buttonId = `login-${broker.id}-btn`;
                 const icon = broker.icon || '🔐';
-                
+
                 // Color mapping for brokers
                 const colorMap = {
                     'zerodha': '#FF8C00',    // Orange
@@ -177,16 +161,15 @@
                     'dhan': '#28A745',       // Green
                     'fyers': '#007BFF'       // Blue
                 };
-                
+
                 const brokerColor = colorMap[broker.broker_type] || '#667eea';
-                
+
                 // Check if this specific broker instance is online (use broker.id like 'zerodha_1')
-                const instanceStatus = brokerInstances[broker.id];
-                const isOnline = instanceStatus ? instanceStatus.is_logged_in === true : false;
-                const statusLabel = isOnline 
+                const isOnline = broker.is_logged_in === true;
+                const statusLabel = isOnline
                     ? '<span class="broker-status-label online">● Online</span>'
                     : '<span class="broker-status-label offline">○ Offline</span>';
-                
+
                 // Determine if it's a URL-based login or action-based
                 if (broker.login_type === 'url' && broker.login_url) {
                     // For Zerodha, use popup window to handle multiple accounts in same browser
@@ -240,9 +223,9 @@
                     `;
                 }
             }
-            
+
             container.innerHTML = html;
-            
+
             // Remove previous info message if exists
             const prevInfoMsgs = Array.from(document.querySelectorAll('.broker-info-msg'));
             prevInfoMsgs.forEach(msg => msg.parentElement && msg.parentElement.removeChild(msg));
@@ -255,7 +238,7 @@
             container.parentElement.insertBefore(infoMsg, container.nextSibling);
 
             console.log(`✓ Loaded ${data.total_configured} available brokers`);
-            
+
         } catch (error) {
             console.error(`Error loading brokers: ${error}`);
             const container = document.getElementById('brokersContainer');
@@ -266,19 +249,19 @@
             `;
         }
     }
-    
+
     // Load brokers on page load
     document.addEventListener('DOMContentLoaded', () => {
         loadAvailableBrokers();
     });
-    
+
     // Refresh button handler
     document.getElementById('refreshBtn').addEventListener('click', () => {
         const button = document.getElementById('refreshBtn');
         button.disabled = true;
         button.style.opacity = '0.5';
         button.innerHTML = '⏳ Refreshing...';
-        
+
         setTimeout(() => {
             loadAvailableBrokers();
             button.disabled = false;

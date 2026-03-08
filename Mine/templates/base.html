@@ -81,26 +81,6 @@
                     return;
                 }
 
-                // Fetch broker status to show online/offline
-                let brokerStatus = {};  // Legacy: by type
-                let brokerInstances = {};  // New: by instance ID
-                try {
-                    const statusResponse = await fetch('/api/broker-status');
-                    const statusData = await statusResponse.json();
-                    // New format: statusData.broker_instances contains status for each broker instance
-                    if (statusData.broker_instances) {
-                        brokerInstances = statusData.broker_instances;
-                    }
-                    // Legacy format: statusData.brokers contains status by type
-                    if (statusData.brokers) {
-                        for (const [brokerType, status] of Object.entries(statusData.brokers)) {
-                            brokerStatus[brokerType] = status.is_logged_in === true;
-                        }
-                    }
-                } catch (e) {
-                    console.error('Error fetching broker status:', e);
-                }
-
                 // Create dropdown items for each broker
                 let html = '';
                 for (const broker of data.brokers) {
@@ -115,11 +95,10 @@
                     };
 
                     const brokerColor = colorMap[broker.broker_type] || '#666';
-                    
+
                     // Check if this specific broker instance is online
-                    const instanceStatus = brokerInstances[broker.id];
-                    const isOnline = instanceStatus ? instanceStatus.is_logged_in === true : false;
-                    const statusBadge = isOnline 
+                    const isOnline = broker.is_logged_in === true;
+                    const statusBadge = isOnline
                         ? '<span class="broker-status-badge online">Online</span>'
                         : '<span class="broker-status-badge offline">Offline</span>';
 

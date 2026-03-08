@@ -1139,6 +1139,22 @@ class KiteService:
             # Place the order with all parameters
             order_id = self.kite.place_order(**order_params)
             
+            # Fetch execution price for MARKET orders
+            if not trigger_price and order_type_const == self.kite.ORDER_TYPE_MARKET:
+                try:
+                    import time
+                    time.sleep(0.5)  # allow Kite to match the order
+                    history = self.kite.order_history(order_id)
+                    if history and len(history) > 0:
+                        last_state = history[-1]
+                        if last_state.get('status') == 'COMPLETE':
+                            exec_price = last_state.get('average_price')
+                            if exec_price and exec_price > 0:
+                                price = float(exec_price)
+                                logging.info(f"Retrieved actual execution price: ₹{price:.2f}")
+                except Exception as e:
+                    logging.warning(f"Failed to fetch execution price for order {order_id}: {e}")
+            
             if trigger_price:
                 logging.info(f"✅ {order_time} Stoploss Order placed successfully. Order ID: {order_id} | {tradingsymbol} @ Execute: ₹{price:.2f}, Trigger: ₹{trigger_price:.2f}")
             else:
@@ -1348,11 +1364,8 @@ class KiteService:
             price = get_price_for_symbol(tradingsymbol)
             
             if not price:
-                return {
-                    'success': False,
-                    'error': f'Could not determine price for {tradingsymbol}',
-                    'symbol': tradingsymbol
-                }
+                logging.warning(f"Could not fetch price for {tradingsymbol} from Kite. Using price 0.0 for MARKET order.")
+                price = 0.0
             
             # Ensure quantity is set
             if quantity is None:
