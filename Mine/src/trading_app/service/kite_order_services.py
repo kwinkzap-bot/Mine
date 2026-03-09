@@ -1199,7 +1199,9 @@ class KiteService:
                 return price
         
         try:
-            quote = self.kite.quote(instrument_key)
+            # Use ltp() instead of quote() to avoid "Insufficient permission" errors
+            # ltp() is safer and only returns the last traded price, which is all we need
+            quote = self.kite.ltp([instrument_key])
             if isinstance(quote, dict) and instrument_key in quote:
                 quote_item = quote[instrument_key]
                 if isinstance(quote_item, dict):
@@ -1247,7 +1249,10 @@ class KiteService:
             try:
                 # Format tokens for Kite API (NFO:token_number)
                 quote_keys = [f"NFO:{token}" for token in tokens]
-                quotes = self.kite.quote(quote_keys)
+                
+                # Use ltp() instead of quote() to avoid "Insufficient permission" errors
+                # ltp() is safer and only returns the last traded price, which is all we need
+                quotes = self.kite.ltp(quote_keys)
                 
                 result = {}
                 for key, quote_data in quotes.items():
@@ -1314,7 +1319,8 @@ class KiteService:
         return prices.get(token)
     
     def place_option_order(self, symbol: str, strike: int, option_type: str, 
-                          transaction_type: str, quantity: Optional[int] = None) -> Dict[str, Any]:
+                          transaction_type: str, quantity: Optional[int] = None,
+                          product: str = 'NRML') -> Dict[str, Any]:
         """Place an order for an option contract.
         
         Convenience method that combines option symbol lookup and order placement.
@@ -1377,7 +1383,7 @@ class KiteService:
                 transaction_type=transaction_type,
                 price=price,
                 quantity=quantity,
-                product='NRML',
+                product=product,
                 order_type='MARKET',
                 exchange='NFO'
             )

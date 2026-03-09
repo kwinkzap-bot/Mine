@@ -74,153 +74,176 @@ class DhanOrderService:
     
     def _build_symbol_master_dict(self):
         """
-        Download and cache Dhan's symbol master CSV file.
-        Creates a dict mapping trading_symbol -> security_id for fast lookups.
+        Download and cache Dhan's symbol master per segment using DhanHQ API.
+        Creates a combined dict mapping trading_symbol -> security_id for fast lookups.
         
-        Dhan provides static CSV master files at:
-        - Compact: https://images.dhan.co/api-data/api-scrip-master.csv
-        - Detailed: https://images.dhan.co/api-data/api-scrip-master-detailed.csv
+        Uses segment-wise API (as per DhanHQ docs):
+        https://api.dhan.co/v2/instrument/{exchangeSegment}
+        
+        Valid Segments: NSE_FNO, NSE_EQ, IDX_I, MCX_COMM, BSE_FNO
         """
         try:
-            # Use temp directory for cache file
+            # We primarily need FNO for options, IDX_I for indices, and NSE_EQ for equities
+            segments = ['NSE_FNO', 'IDX_I', 'NSE_EQ']
+            self._symbol_master_data = {}
             cache_dir = Path(tempfile.gettempdir())
-            cache_file = cache_dir / "dhan_scrip_master.csv"
-            self._symbol_master_cache_path = cache_file
             
-            # Check if cached file is recent (less than 24 hours old)
-            if cache_file.exists():
-                file_age = datetime.now().timestamp() - cache_file.stat().st_mtime
-                if file_age < 86400:  # 24 hours
-                    logging.info("[_build_symbol_master_dict] Using cached Dhan scrip master")
-                    self._symbol_master_data = self._load_csv_to_dict(cache_file)
-                    return
-            
-            # Download fresh CSV from Dhan
-            logging.info("[_build_symbol_master_dict] Downloading Dhan scrip master CSV...")
-            csv_url = "https://images.dhan.co/api-data/api-scrip-master.csv"
-            
-            response = requests.get(csv_url, timeout=30)
-            if response.status_code == 200:
-                # Save to cache file
-                with open(cache_file, 'w', encoding='utf-8') as f:
-                    f.write(response.text)
+            for segment in segments:
+                cache_file = cache_dir / f"dhan_scrip_master_{segment.lower()}.csv"
                 
-                # Parse CSV into dict
-                self._symbol_master_data = self._load_csv_to_dict(cache_file)
-                logging.info(f"[_build_symbol_master_dict] ✓ Cached {len(self._symbol_master_data)} symbols from Dhan")
-            else:
-                logging.warning(f"[_build_symbol_master_dict] Failed to download CSV: {response.status_code}")
-                self._symbol_master_data = {}
+                # Check if cached file is recent (less than 24 hours old)
+                recent_cache = False
+                if cache_file.exists():
+                    file_age = datetime.now().timestamp() - cache_file.stat().st_mtime
+                    if file_age < 86400:  # 24 hours
+                        recent_cache = True
+                
+                if recent_cache:
+                    logging.info(f"[_build_symbol_master_dict] Using cached Dhan scrip master for {segment}")
+                    segment_data = self._load_csv_to_dict(cache_file, segment)
+                    if segment_data:
+                        self._symbol_master_data.update(segment_data)
+                    continue
+
+                # Fetch from DhanHQ API (requires access_token)
+                if not self.access_token:
+                    logging.warning(f"[_build_symbol_master_dict] No access token for {segment} fetch, checking old cache...")
+                    if cache_file.exists():
+                        segment_data = self._load_csv_to_dict(cache_file, segment)
+                        self._symbol_master_data.update(segment_data)
+                    continue
+
+                logging.info(f"[_build_symbol_master_dict] Fetching {segment} from DhanHQ API...")
+                url = f"https://api.dhan.co/v2/instrument/{segment}"
+                headers = {
+                    "access-token": self.access_token,
+                    "Content-Type": "application/json"
+                }
+                
+                try:
+                    response = requests.get(url, headers=headers, timeout=60)
+                    if response.status_code == 200:
+                        # The response is CSV text
+                        with open(cache_file, 'w', encoding='utf-8') as f:
+                            f.write(response.text)
+                        
+                        segment_data = self._load_csv_to_dict(cache_file, segment)
+                        if segment_data:
+                            self._symbol_master_data.update(segment_data)
+                            logging.info(f"[_build_symbol_master_dict] ✓ Loaded {len(segment_data)} symbols from {segment}")
+                    else:
+                        logging.warning(f"[_build_symbol_master_dict] API {segment} failed ({response.status_code}). Using old cache if exists.")
+                        if cache_file.exists():
+                            segment_data = self._load_csv_to_dict(cache_file, segment)
+                            self._symbol_master_data.update(segment_data)
+                except Exception as api_err:
+                    logging.error(f"[_build_symbol_master_dict] API Error for {segment}: {api_err}")
+                    if cache_file.exists():
+                        segment_data = self._load_csv_to_dict(cache_file, segment)
+                        self._symbol_master_data.update(segment_data)
+            
+            logging.info(f"[_build_symbol_master_dict] Total symbols in master: {len(self._symbol_master_data)}")
                 
         except Exception as e:
-            logging.warning(f"[_build_symbol_master_dict] Error building symbol master: {e}")
-            self._symbol_master_data = {}
+            logging.warning(f"[_build_symbol_master_dict] Unexpected error building symbol master: {e}")
+            if not self._symbol_master_data:
+                self._symbol_master_data = {}
     
-    def _load_csv_to_dict(self, csv_file: Path) -> Dict[str, Dict[str, str]]:
+    def _load_csv_to_dict(self, csv_file: Path, segment_name: str = "") -> Dict[str, str]:
         """
-        Load CSV file and create lookup dicts for symbol mapping.
+        Load CSV segment file and create lookup dicts for symbol mapping.
         
-        Dhan CSV columns:
+        Dhan CSV columns typically include:
             SEM_EXM_EXCH_ID: Exchange (NSE, BSE, MCX)
-            SEM_SEGMENT: Segment (C=Currency, D=Derivatives, E=Equity, M=Commodity)
-            SEM_SMST_SECURITY_ID: Numeric security ID (what we need!)
-            SEM_INSTRUMENT_NAME: Instrument type (OPTIDX, FUTIDX, etc)
+            SEM_SEGMENT: Segment (C=Currency, D=Derivatives, E=Equity, M=Commodity, I=Index)
+            SEM_SMST_SECURITY_ID: Numeric security ID
             SEM_TRADING_SYMBOL: Trading symbol (e.g., NIFTY-Mar2026-25550-CE)
-            SEM_CUSTOM_SYMBOL: Display name (e.g., NIFTY 02 MAR 25550 CALL)
-            SEM_STRIKE_PRICE: Strike price
-            SEM_OPTION_TYPE: CE/PE
-            
-        Returns:
-            Dict mapping Kite-format symbols -> security_id
+            ...
         """
         try:
             symbol_dict = {}
-            kite_format_dict = {}  # Maps Kite format -> Dhan format + security_id
+            is_derivative_segment = segment_name == "NSE_FNO" or "fno" in str(csv_file).lower()
             
             with open(csv_file, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
-                    # Only process NSE derivatives (options)
-                    exch = row.get('SEM_EXM_EXCH_ID', '').strip()
-                    segment = row.get('SEM_SEGMENT', '').strip()
-                    
-                    if exch != 'NSE' or segment != 'D':
-                        continue
-                    
-                    # Extract security ID (numeric)
+                    # Extract security ID
                     security_id = row.get('SEM_SMST_SECURITY_ID', '').strip()
                     if not security_id or not security_id.isdigit():
                         continue
                     
-                    # CRITICAL: Accept both Weekly (W) and Monthly (M) contracts.
-                    # On or after weekly-expiry rollover days the active contract may
-                    # carry flag 'M' (last Tuesday before the month end Thursday).
-                    expiry_flag = row.get('SEM_EXPIRY_FLAG', '').strip()
-                    if expiry_flag not in ('W', 'M'):  # Accept both; skip Unknown/NA
-                        continue
+                    # Process Trading Symbol (Primary Key)
+                    dhan_symbol = row.get('SEM_TRADING_SYMBOL', '').strip()
+                    if dhan_symbol:
+                        symbol_dict[dhan_symbol] = security_id
                     
-                    # Get trading symbols
-                    dhan_symbol = row.get('SEM_TRADING_SYMBOL', '').strip()  # NIFTY-Mar2026-25550-CE
-                    display_name = row.get('SEM_CUSTOM_SYMBOL', '').strip()  # NIFTY 02 MAR 25550 CALL
-                    
-                    if not dhan_symbol:
-                        continue
-                    
-                    # Extract underlying symbol (e.g., "NIFTY" from "NIFTY-Mar2026-25550-CE")
-                    # Get from SM_SYMBOL_NAME or extract from dhan_symbol
-                    symbol_name = row.get('SM_SYMBOL_NAME', '').strip()
-                    underlying = symbol_name.split()[0] if symbol_name else 'NIFTY'  # Default to NIFTY
-                    
-                    # Extract option details for Kite format conversion
-                    strike = row.get('SEM_STRIKE_PRICE', '0').strip()
-                    opt_type = row.get('SEM_OPTION_TYPE', '').strip()  # CE or PE
-                    expiry_date = row.get('SEM_EXPIRY_DATE', '').strip()
-                    
-                    # Try to build Kite format: NIFTY26FEB25550CE, NIFTY2630225550CE, etc
-                    if strike and opt_type and expiry_date:
-                        # Parse expiry date: "2026-03-02 14:30:00" -> "26FEB" or "2630225"
-                        try:
-                            exp_dt = datetime.strptime(expiry_date.split()[0], '%Y-%m-%d')
-                            # Two common Kite formats:
-                            # 1. Text month: NIFTY26FEB25550CE (year+month+strike+type)
-                            # 2. Numeric: NIFTY2630225550CE (year+month+date+strike+type)
-                            
-                            year_short = exp_dt.strftime('%y')
-                            month_short = exp_dt.strftime('%b').upper()
-                            day = exp_dt.strftime('%d')
-                            
-                            kite_text_format = f"NIFTY{year_short}{month_short}{strike.split('.')[0]}{opt_type}"
-                            kite_numeric_format = f"NIFTY{year_short}{month_short.replace('JAN','01').replace('FEB','02').replace('MAR','03').replace('APR','04').replace('MAY','05').replace('JUN','06').replace('JUL','07').replace('AUG','08').replace('SEP','09').replace('OCT','10').replace('NOV','11').replace('DEC','12')}{day}{strike.split('.')[0]}{opt_type}"
-                            
-                            # Store both formats
-                            for fmt in [kite_text_format, kite_numeric_format, dhan_symbol]:
-                                if fmt:
-                                    symbol_dict[fmt] = security_id
-                            
-                            # CRITICAL: Also store with proper spacing format used in CSV lookups
-                            # Dhan CSV format: "NIFTY 02MAR26 25550 CE" (with spaces)
-                            strike_clean = strike.split('.')[0] if strike else ''
-                            # Build: NIFTY 02MAR26 25550 CE
-                            spaced_format = f"{underlying} {day}{month_short}{year_short} {strike_clean} {opt_type}"
-                            if spaced_format:
-                                symbol_dict[spaced_format] = security_id
-                                logging.debug(f"Stored spaced format: {spaced_format} -> {security_id}")
-                                    
-                        except Exception as e:
-                            logging.debug(f"Could not convert expiry for {dhan_symbol}: {e}")
-                    
-                    # Also store by direct Dhan symbol format
-                    symbol_dict[dhan_symbol] = security_id
-                    
-                    # Store by display name (e.g., "NIFTY 02 MAR 25550 CALL")
+                    # Process Custom/Display Symbol
+                    display_name = row.get('SEM_CUSTOM_SYMBOL', '').strip()
                     if display_name:
                         symbol_dict[display_name] = security_id
+
+                    # If no trading symbol, try Instrument Name (some API returns this)
+                    if not dhan_symbol:
+                        instrument_name = row.get('SEM_INSTRUMENT_NAME', '').strip()
+                        if instrument_name:
+                            symbol_dict[instrument_name] = security_id
+                            dhan_symbol = instrument_name
+
+                    # For NSE Derivatives (Options), generate Kite-style formats for fallback
+                    seg = row.get('SEM_SEGMENT', '').strip()
+                    # If it's the FNO segment file, assume it's derivative even if SEM_SEGMENT flag is missing
+                    if seg == 'D' or is_derivative_segment:
+                        # Expiry flag filter for weekly/monthly (skip unknown if flag exists)
+                        expiry_flag = row.get('SEM_EXPIRY_FLAG', '').strip()
+                        if expiry_flag and expiry_flag not in ('W', 'M', 'D'): # D for Derivatives
+                            pass # Still continue if it looks like an option
+
+                        # Extract underlying and option info
+                        symbol_name = row.get('SM_SYMBOL_NAME', '').strip() or row.get('SEM_INSTRUMENT_NAME', '').strip()
+                        underlying = symbol_name.split()[0] if symbol_name else 'NIFTY'
+                        if '-' in underlying: # Handle NIFTY-MAR-2026
+                            underlying = underlying.split('-')[0]
+                            
+                        strike = row.get('SEM_STRIKE_PRICE', '0').strip()
+                        opt_type = row.get('SEM_OPTION_TYPE', '').strip()
+                        expiry_date = row.get('SEM_EXPIRY_DATE', '').strip()
+
+                        if strike and opt_type and expiry_date:
+                            try:
+                                # Parse date format: 2026-03-02 or 02-MAR-2026
+                                date_str = expiry_date.split()[0]
+                                if '-' in date_str:
+                                    parts = date_str.split('-')
+                                    if len(parts[0]) == 4: # YYYY-MM-DD
+                                        exp_dt = datetime.strptime(date_str, '%Y-%m-%d')
+                                    else: # DD-MM-YYYY or DD-MON-YYYY
+                                        try:
+                                            exp_dt = datetime.strptime(date_str, '%d-%b-%Y')
+                                        except:
+                                            exp_dt = datetime.strptime(date_str, '%d-%m-%Y')
+                                else:
+                                    exp_dt = datetime.strptime(date_str, '%Y%m%d')
+
+                                year_short = exp_dt.strftime('%y')
+                                month_short = exp_dt.strftime('%b').upper()
+                                day = exp_dt.strftime('%d')
+                                strike_clean = strike.split('.')[0]
+
+                                # 1. Kite text: NIFTY26FEB25550CE
+                                kite_text = f"{underlying}{year_short}{month_short}{strike_clean}{opt_type}"
+                                symbol_dict[kite_text] = security_id
+
+                                # 2. Spaced: NIFTY 02MAR26 25550 CE
+                                spaced = f"{underlying} {day}{month_short}{year_short} {strike_clean} {opt_type}"
+                                symbol_dict[spaced] = security_id
+                                
+                            except Exception:
+                                pass
             
-            logging.info(f"[_load_csv_to_dict] Loaded {len(symbol_dict)} symbol mappings from CSV")
             return symbol_dict
             
         except Exception as e:
-            logging.error(f"[_load_csv_to_dict] Error parsing CSV: {e}")
+            logging.error(f"[_load_csv_to_dict] Error parsing {csv_file}: {e}")
             return {}
     
     def verify_credentials(self) -> bool:
@@ -694,156 +717,39 @@ class DhanOrderService:
                             entry_price: float = 0.0) -> Dict[str, Any]:
         """
         Place a stop loss (sell) order on Dhan platform.
-        
-        Creates a sell order with a trigger price that automatically executes
-        when the price drops to the trigger level.
-        
-        Args:
-            security_id: Exchange standard ID for the scrip
-            trigger_price: SL trigger price (price at which SL is activated)
-            quantity: Order quantity
-            product_type: 'INTRADAY', 'CNC', 'MARGIN', etc. (default: INTRADAY)
-            exchange_segment: 'NSE_EQ', 'NSE_FNO', 'BSE_EQ', 'BSE_FNO' (default: NSE_FNO)
-            price: Execution price (optional, used for STOP_LOSS limit orders)
-            entry_price: Entry price for calculating SL limit price
-            
-        Returns:
-            Dict with success status, order_id, and details
+        Wraps place_order with specific SL logic.
         """
         try:
-            # Validate credentials FIRST before any API call
-            if not self.access_token:
-                logging.error("[place_stoploss_order] Missing access_token. Set DHAN_ACCESS_TOKEN in environment.")
-                return {'success': False, 'error': 'Missing access_token - SL order cannot be placed'}
+            # Determine best SL order type:
+            # If price is 0, use STOP_LOSS_MARKET (safer for fast moves)
+            # If price > 0, use STOP_LOSS (limit)
+            if price and float(price) > 0:
+                final_order_type = self.ORDER_TYPE_STOP_LOSS
+                final_price = float(price)
+            else:
+                # Default to SL-Market for better reliability in options
+                final_order_type = self.ORDER_TYPE_STOP_LOSS_MARKET
+                final_price = 0.0
+                
+            logging.info(f"[place_stoploss_order] Preparing {final_order_type}: sec_id={security_id}, "
+                        f"trigger={trigger_price:.2f}, qty={quantity}")
             
-            if not self.client_id:
-                logging.error("[place_stoploss_order] Missing client_id. Set DHAN_CLIENT_ID in environment.")
-                return {'success': False, 'error': 'Missing client_id - SL order cannot be placed'}
-            
-            # Validate token format
-            if not isinstance(self.access_token, str) or len(self.access_token.strip()) < 10:
-                logging.error(f"[place_stoploss_order] Invalid access_token format")
-                return {'success': False, 'error': 'Invalid access_token format'}
-            
-            order_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            url = f"{self.base_url}/orders"
-            headers = {
-                "access-token": self.access_token.strip(),
-                "Content-Type": "application/json"
-            }
-            
-            # Use STOP_LOSS with limit price equal to trigger price
-            # When price drops to trigger_price, sell at trigger_price or better
-            # Example: Entry 200 → SL trigger 180 → sell at 180 or better
-            limit_price = trigger_price
-            
-            payload = {
-                "dhanClientId": self.client_id.strip(),
-                "transactionType": self.TRANSACTION_SELL,
-                "exchangeSegment": exchange_segment,
-                "productType": product_type,
-                "orderType": self.ORDER_TYPE_STOP_LOSS,  # STOP_LOSS with limit price
-                "validity": "DAY",
-                "securityId": str(security_id),
-                "quantity": str(int(quantity)),
-                "price": str(float(limit_price)),  # Limit price when trigger activates
-                "triggerPrice": str(float(trigger_price)),  # Trigger price to activate the order
-                "disclosedQuantity": "0",
-                "afterMarketOrder": False
-            }
-            
-            logging.info(f"[place_stoploss_order] Placing SL order: security_id={security_id}, "
-                        f"trigger_price={trigger_price:.2f}, limit_price={limit_price:.4f}, "
-                        f"qty={quantity}, order_type=STOP_LOSS")
-            logging.info(f"[place_stoploss_order] Full payload: {payload}")
-            
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            data = response.json()
-            
-            logging.info(f"[place_stoploss_order] Response status: {response.status_code}, data: {data}")
-            
-            if response.status_code == 200 or response.status_code == 201:
-                # Check both possible response structures
-                order_id = data.get('orderId') or data.get('data', {}).get('orderId')
-                if order_id:
-                    logging.info(f"✅ SL Order placed: {order_id} | {security_id} @ Trigger {trigger_price:.2f}, Limit {limit_price:.4f}")
-                    return {
-                        'success': True,
-                        'order_id': order_id,
-                        'symbol': security_id,
-                        'trigger_price': trigger_price,
-                        'limit_price': limit_price,
-                        'quantity': quantity,
-                        'order_type': 'STOP_LOSS'
-                    }
-            
-            error_msg = data.get('errorMessage') or data.get('message') or data.get('error') or 'Unknown error'
-
-            # Auto-renew and retry once for token-expiry/auth failures
-            auth_error = (
-                response.status_code in (401, 403)
-                or any(k in str(error_msg).lower() for k in ['invalid', 'expired', 'token', 'unauthorized'])
+            # Delegate to main place_order for full auth/retry support
+            return self.place_order(
+                security_id=str(security_id),
+                transaction_type=self.TRANSACTION_SELL,
+                quantity=int(quantity),
+                order_type=final_order_type,
+                product_type=product_type,
+                exchange_segment=exchange_segment,
+                price=final_price,
+                trigger_price=float(trigger_price)
             )
-            if auth_error:
-                # First try syncing client_id from profile if token is valid but client_id is stale
-                logging.warning(f"[place_stoploss_order] Auth error detected ({error_msg}). Trying profile verification/client sync...")
-                if self.verify_credentials():
-                    headers["access-token"] = self.access_token.strip()
-                    payload["dhanClientId"] = self.client_id.strip() if isinstance(self.client_id, str) else payload.get("dhanClientId", "")
-                    retry_resp = requests.post(url, headers=headers, json=payload, timeout=30)
-                    retry_data = retry_resp.json()
-                    logging.info(f"[place_stoploss_order] Verify+retry response ({retry_resp.status_code}): {retry_data}")
-
-                    if retry_resp.status_code in (200, 201):
-                        order_id = retry_data.get('orderId') or retry_data.get('data', {}).get('orderId')
-                        if order_id:
-                            logging.info(f"✅ SL Order placed after client sync: {order_id}")
-                            return {
-                                'success': True,
-                                'order_id': order_id,
-                                'symbol': security_id,
-                                'trigger_price': trigger_price,
-                                'limit_price': limit_price,
-                                'quantity': quantity,
-                                'order_type': 'STOP_LOSS'
-                            }
-
-                    error_msg = retry_data.get('errorMessage') or retry_data.get('message') or retry_data.get('error') or error_msg
-                    data = retry_data
-
-                logging.warning(f"[place_stoploss_order] Auth error detected ({error_msg}). Trying token renewal...")
-                if self.renew_token():
-                    headers["access-token"] = self.access_token.strip()
-                    payload["dhanClientId"] = self.client_id.strip() if isinstance(self.client_id, str) else payload.get("dhanClientId", "")
-                    retry_resp = requests.post(url, headers=headers, json=payload, timeout=30)
-                    retry_data = retry_resp.json()
-                    logging.info(f"[place_stoploss_order] Retry response ({retry_resp.status_code}): {retry_data}")
-
-                    if retry_resp.status_code in (200, 201):
-                        order_id = retry_data.get('orderId') or retry_data.get('data', {}).get('orderId')
-                        if order_id:
-                            logging.info(f"✅ SL Order placed after token renewal: {order_id}")
-                            return {
-                                'success': True,
-                                'order_id': order_id,
-                                'symbol': security_id,
-                                'trigger_price': trigger_price,
-                                'limit_price': limit_price,
-                                'quantity': quantity,
-                                'order_type': 'STOP_LOSS'
-                            }
-
-                    error_msg = retry_data.get('errorMessage') or retry_data.get('message') or retry_data.get('error') or error_msg
-                    data = retry_data
-
-            logging.error(f"❌ SL Order failed: {error_msg}")
-            logging.error(f"Full response: {data}")
-            return {'success': False, 'error': error_msg, 'symbol': security_id, 'response': data}
-            
+                
         except Exception as e:
-            logging.error(f"❌ Exception placing SL order: {e}", exc_info=True)
-            return {'success': False, 'error': str(e), 'symbol': security_id}
+            logging.error(f"❌ Exception in place_stoploss_order wrapper: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+    
     
     def modify_stoploss_order(self, order_id: str, new_trigger_price: float,
                              quantity: Optional[int] = None) -> Dict[str, Any]:
@@ -1174,42 +1080,47 @@ class DhanOrderService:
             today = datetime.now()
             current_date = today.date()
             
+            # March 2026 Expiries (including Tuesdays for FINNIFTY)
             special_expiries = [
-                datetime(2026, 2, 26).date(),
-                datetime(2026, 3, 2).date(),
-                datetime(2026, 3, 5).date(),
-                datetime(2026, 3, 12).date(),
-                datetime(2026, 3, 19).date(),
-                datetime(2026, 3, 26).date(),
+                datetime(2026, 2, 26).date(), # Thu
+                datetime(2026, 3, 3).date(),  # Tue
+                datetime(2026, 3, 5).date(),  # Thu
+                datetime(2026, 3, 10).date(), # Tue
+                datetime(2026, 3, 12).date(), # Thu
+                datetime(2026, 3, 17).date(), # Tue
+                datetime(2026, 3, 19).date(), # Thu
+                datetime(2026, 3, 24).date(), # Tue
+                datetime(2026, 3, 26).date(), # Thu
             ]
             
-            # Prefer weekly expiries (exclude 24th which is monthly)
-            weekly_expiries = [exp for exp in special_expiries if exp.day != 24]
+            # Select relevant expiries based on index type
+            is_tuesday_index = any(s in symbol.upper() for s in ['FINNIFTY', 'FIN SERVICE'])
             
+            # Target day: 1=Tuesday, 3=Thursday
+            target_weekday = 1 if is_tuesday_index else 3
+            
+            # Filter the list for candidates
+            candidates = [exp for exp in special_expiries if exp.weekday() == target_weekday]
+            if not candidates:
+                candidates = special_expiries
+                
             nearest_expiry = None
-            for exp_date in weekly_expiries:
-                if exp_date > current_date:
+            for exp_date in sorted(candidates):
+                if exp_date >= current_date: # Include today if market hours
                     nearest_expiry = exp_date
                     break
             
-            # If no weekly expiry found, fall back to all expiries (including monthly)
-            if not nearest_expiry:
-                for exp_date in special_expiries:
-                    if exp_date > current_date:
-                        nearest_expiry = exp_date
-                        break
-            
             if nearest_expiry:
                 result = datetime.combine(nearest_expiry, datetime.min.time())
-                logging.info(f"[get_nearest_weekly_expiry] Using hardcoded expiry: {nearest_expiry}")
+                logging.info(f"[get_nearest_weekly_expiry] Using hardcoded expiry for {symbol}: {nearest_expiry}")
                 return result
             
-            # Last fallback: next Thursday
-            days_until_thursday = (3 - today.weekday()) % 7
-            if days_until_thursday == 0:
-                days_until_thursday = 7
+            # Last fallback: calculate next target day
+            days_until = (target_weekday - today.weekday()) % 7
+            if days_until == 0 and today.hour >= 15: # If expiry day after 3 PM, move to next week
+                days_until = 7
             
-            return today + timedelta(days=days_until_thursday)
+            return today + timedelta(days=days_until)
             
         except Exception as e:
             logging.error(f"[get_nearest_weekly_expiry] Error: {e}. Using today as fallback.")
@@ -1239,30 +1150,37 @@ class DhanOrderService:
                 return ""
 
             # ---- Step 2: build Dhan CSV trading symbol format ----
-            # CSV format: NIFTY-Mar2026-25500-CE
-            #             BANKNIFTY-Mar2026-74300-PE
+            # Weekly format:  NIFTY-11Mar26-23950-PE
+            # Monthly format: NIFTY-Mar2026-23950-PE
+            day_str    = expiry_date.strftime('%d')          # '10'
             month_name = expiry_date.strftime('%b')          # 'Mar'
             year_full  = expiry_date.strftime('%Y')          # '2026'
+            year_short = expiry_date.strftime('%y')          # '26'
             strike_str = str(int(strike))                    # '25500'
-            dhan_sym   = f"{symbol}-{month_name}{year_full}-{strike_str}-{option_type}"
+            
+            # Construct both possible formats for lookup
+            dhan_sym_weekly  = f"{symbol}-{day_str}{month_name}{year_short}-{strike_str}-{option_type}"
+            dhan_sym_monthly = f"{symbol}-{month_name}{year_full}-{strike_str}-{option_type}"
 
-            logging.info(f"[get_option_security_id] Looking up: {dhan_sym} (expiry={expiry_date})")
+            logging.info(f"[get_option_security_id] Looking up: {dhan_sym_weekly} or {dhan_sym_monthly}")
 
             # ---- Step 3: direct lookup in master dict ----
             if self._symbol_master_data:
-                sec_id = self._symbol_master_data.get(dhan_sym)
+                # Try weekly format first, then monthly
+                sec_id = self._symbol_master_data.get(dhan_sym_weekly) or self._symbol_master_data.get(dhan_sym_monthly)
                 if sec_id:
-                    logging.info(f"[get_option_security_id] Found: {dhan_sym} -> {sec_id}")
+                    logging.info(f"[get_option_security_id] Direct match found: {sec_id}")
                     return sec_id
 
                 # Brute-force search on key fields in case format slightly differs
+                # MUST include day check to avoid matching wrong weekly/monthly contract
                 for key, val in self._symbol_master_data.items():
-                    # key can be Dhan symbol, Kite format, or spaced format
-                    # match by ending pattern: -STRIKE-TYPE
+                    # Check if all components match
                     if (key.startswith(symbol) and
                             str(int(strike)) in key and
                             option_type in key and
-                            month_name in key):
+                            month_name in key and
+                            day_str in key):
                         logging.info(f"[get_option_security_id] Fallback match: {key} -> {val}")
                         return val
 

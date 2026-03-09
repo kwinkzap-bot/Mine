@@ -389,16 +389,18 @@ class Intraday920Strategy:
             
             for attempt in range(max_retries):
                 try:
-                    quote = self.kite.quote([instrument_key])
+                    # Use ltp() instead of quote() to avoid "Insufficient permission" errors
+                    # ltp() is safer and only returns the last traded price, which is all we need
+                    quote = self.kite.ltp([instrument_key])
                     break  # Success, exit retry loop
                 except TokenException:
                     logger.warning(f"Access token invalid (attempt {attempt + 1}/{max_retries}). Attempting refresh and retry...")
                     if self._refresh_kite_access_token():
                         try:
-                            quote = self.kite.quote([instrument_key])
+                            quote = self.kite.ltp([instrument_key])
                             break
                         except Exception as e:
-                            logger.warning(f"Quote fetch failed after token refresh: {e}")
+                            logger.warning(f"LTP fetch failed after token refresh: {e}")
                             if attempt < max_retries - 1:
                                 time.sleep(retry_delay)
                     else:
@@ -409,13 +411,13 @@ class Intraday920Strategy:
                             'success': False
                         }
                 except NetworkException as e:
-                    logger.warning(f"Network error fetching quote (attempt {attempt + 1}/{max_retries}): {e}")
+                    logger.warning(f"Network error fetching LTP (attempt {attempt + 1}/{max_retries}): {e}")
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
                     else:
                         return {
                             'symbol': symbol,
-                            'error': f'Network error fetching quote after {max_retries} retries: {str(e)}',
+                            'error': f'Network error fetching LTP after {max_retries} retries: {str(e)}',
                             'timestamp': datetime.now().isoformat(),
                             'success': False
                         }
@@ -429,7 +431,7 @@ class Intraday920Strategy:
                     ])
                     
                     if is_retriable:
-                        logger.warning(f"Retriable error fetching quote (attempt {attempt + 1}/{max_retries}): {e}")
+                        logger.warning(f"Retriable error fetching LTP (attempt {attempt + 1}/{max_retries}): {e}")
                         if attempt < max_retries - 1:
                             # Use longer delay for server timeouts
                             delay = retry_delay * (attempt + 1) if any(k in error_str for k in ["504", "503"]) else retry_delay
@@ -437,12 +439,13 @@ class Intraday920Strategy:
                         else:
                             return {
                                 'symbol': symbol,
-                                'error': f'Error fetching quote after {max_retries} retries: {str(e)}',
+                                'error': f'Error fetching LTP after {max_retries} retries: {str(e)}',
                                 'timestamp': datetime.now().isoformat(),
                                 'success': False
                             }
                     else:
-                        logger.error(f"Error fetching quote (non-retriable): {e}")
+                        # Log the specific error to help debug "Insufficient permission" or similar
+                        logger.error(f"Error fetching LTP (non-retriable): {e}")
                         return {
                             'symbol': symbol,
                             'error': f'Error fetching quote: {str(e)}',

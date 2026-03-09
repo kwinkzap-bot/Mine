@@ -153,7 +153,9 @@ class KiteDataFetchService:
                 self._respect_rate_limit(min_gap_seconds=0.2)
                 logger.debug(f"Fetching quotes for tokens: {tokens}")
                 
-                quotes = self.kite.quote(tokens)
+                # Use ltp() instead of quote() to avoid "Insufficient permission" errors
+                # ltp() only returns last traded price, which is usually all we need
+                quotes = self.kite.ltp(tokens)
                 logger.debug(f"Raw quotes response: {quotes}")
                 logger.debug(f"✓ Successfully fetched quotes for {len(quotes)} tokens")
                 return quotes

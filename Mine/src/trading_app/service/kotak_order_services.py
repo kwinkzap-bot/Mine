@@ -877,7 +877,8 @@ class KotakOrderService:
                           sl_price: Optional[float] = None,
                           target_price: Optional[float] = None,
                           tradingsymbol: Optional[str] = None,
-                          target_expiry: Optional[str] = None) -> Dict[str, Any]:
+                          target_expiry: Optional[str] = None,
+                          product_type: str = 'NRML') -> Dict[str, Any]:
         """
         Place an options order in Kotak Neo platform.
         
@@ -1122,7 +1123,7 @@ class KotakOrderService:
                 price=0.0,
                 quantity=quantity,
                 order_type=self.ORDER_TYPE_MARKET,
-                product_type=self.PRODUCT_NRML,
+                product_type=product_type,
                 exchange_segment=self.EXCHANGE_NFO
             )
             
@@ -1135,7 +1136,7 @@ class KotakOrderService:
                     price=0.1,  # Minimum tick size fallback
                     quantity=quantity,
                     order_type='L',  # Limit order
-                    product_type=self.PRODUCT_NRML,
+                    product_type=product_type,
                     exchange_segment=self.EXCHANGE_NFO
                 )
             

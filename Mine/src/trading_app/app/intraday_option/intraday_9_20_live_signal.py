@@ -225,8 +225,10 @@ class Intraday920LiveSignal:
         
         # Initialize Multi-Broker Support
         self.extra_brokers = {}  # Dictionary to hold active broker services
-        self.extra_broker_lot_sizes = {}  # broker_key -> number of lots (e.g. 1, 2…)
-        self.primary_lot_count = 1  # Lot multiplier for Broker 1 (primary)
+        self.extra_broker_lot_sizes = {}  # broker_key -> number of lots
+        self.extra_broker_product_types = {}  # broker_key -> product type (MIS, NRML, etc.)
+        self.primary_lot_count = 1
+        self.primary_product_type = 'MIS'
         self._init_extra_brokers()
         
         # Initialize Excel logger for this user
@@ -276,9 +278,10 @@ class Intraday920LiveSignal:
             except (ValueError, TypeError):
                 return 1
 
-        # Load primary broker (Broker 1) lot count into instance variable
+        # Load primary broker (Broker 1) lot count and product type
         self.primary_lot_count = _lot_count(1)
-        logger.info(f"Primary broker (Broker 1) lot count: {self.primary_lot_count}x")
+        self.primary_product_type = UserEnvManager.get_user_var(_uname, 'BROKER_1_PRODUCT_TYPE', 'MIS').strip().upper()
+        logger.info(f"Primary broker (Broker 1) lot count: {self.primary_lot_count}x | Product: {self.primary_product_type}")
         
         # Iterate over 1 to 20 to discover and initialize Kotak, Dhan, and Fyers
         # Broker 1 is usually Zerodha but could be configured as anything. We scan all.
@@ -311,7 +314,8 @@ class Intraday920LiveSignal:
                         ks.consumer_key = consumer_key
                         self.extra_brokers[broker_key] = ks
                         self.extra_broker_lot_sizes[broker_key] = _lot_count(instance_num)
-                        logger.info(f"{broker_key} Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x")
+                        self.extra_broker_product_types[broker_key] = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_PRODUCT_TYPE', 'INTRADAY').strip().upper()
+                        logger.info(f"{broker_key} Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x | product={self.extra_broker_product_types[broker_key]}")
                     else:
                         logger.warning(f"Could not initialize {broker_key}_{instance_num} - Missing credentials in Env.")
                         
@@ -322,7 +326,8 @@ class Intraday920LiveSignal:
                         ds = DhanOrderService(access_token=access_token, client_id=client_id)
                         self.extra_brokers[broker_key] = ds
                         self.extra_broker_lot_sizes[broker_key] = _lot_count(instance_num)
-                        logger.info(f"{broker_key} Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x")
+                        self.extra_broker_product_types[broker_key] = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_PRODUCT_TYPE', 'INTRADAY').strip().upper()
+                        logger.info(f"{broker_key} Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x | product={self.extra_broker_product_types[broker_key]}")
                     else:
                         logger.warning(f"Could not initialize {broker_key}_{instance_num} - Missing credentials in Env.")
 
@@ -333,7 +338,8 @@ class Intraday920LiveSignal:
                         fs = FyersOrderService(app_id=app_id, access_token=access_token)
                         self.extra_brokers[broker_key] = fs
                         self.extra_broker_lot_sizes[broker_key] = _lot_count(instance_num)
-                        logger.info(f"{broker_key} Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x")
+                        self.extra_broker_product_types[broker_key] = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_PRODUCT_TYPE', 'INTRADAY').strip().upper()
+                        logger.info(f"{broker_key} Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x | product={self.extra_broker_product_types[broker_key]}")
                     else:
                         logger.warning(f"Could not initialize {broker_key}_{instance_num} - Missing credentials in Env.")
                         
@@ -363,8 +369,9 @@ class Intraday920LiveSignal:
                     broker_key = f'ZERODHA_{instance_num}'
                     self.extra_brokers[broker_key] = KiteService(kite_instance=kite5)
                     self.extra_broker_lot_sizes[broker_key] = _lot_count(instance_num)
+                    self.extra_broker_product_types[broker_key] = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_PRODUCT_TYPE', 'MIS').strip().upper()
                     broker_name_val = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_NAME', f'Zerodha {instance_num}')
-                    logger.info(f"{broker_key} ({broker_name_val}) Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x")
+                    logger.info(f"{broker_key} ({broker_name_val}) Initialized | lot_count={self.extra_broker_lot_sizes[broker_key]}x | product={self.extra_broker_product_types[broker_key]}")
                 else:
                     logger.warning(f"Could not initialize ZERODHA_{instance_num} - token not available.")
         except Exception as e:
@@ -1288,7 +1295,8 @@ class Intraday920LiveSignal:
                 strike=strike,
                 option_type=side,
                 transaction_type=transaction_type_const,
-                quantity=primary_qty
+                quantity=primary_qty,
+                product=self.primary_product_type
             )
             
             # 2. Place COPY orders on Extra Brokers
@@ -1463,7 +1471,8 @@ class Intraday920LiveSignal:
                     strike=strike,
                     option_type=side,
                     transaction_type=k_txn,
-                    quantity=qty
+                    quantity=qty,
+                    product_type=self.extra_broker_product_types.get(broker_name, 'NRML')
                 )
             elif broker_name == 'DHAN':
                 sec_id = service.get_option_security_id(self.symbol, strike, side)
@@ -1474,7 +1483,7 @@ class Intraday920LiveSignal:
                         transaction_type=txn_type,
                         quantity=qty,
                         order_type='MARKET',
-                        product_type='INTRADAY',
+                        product_type=self.extra_broker_product_types.get(broker_name, 'INTRADAY'),
                         exchange_segment='NSE_FNO',
                         price=0
                     )
@@ -1499,7 +1508,7 @@ class Intraday920LiveSignal:
                         side=f_side,
                         quantity=qty,
                         order_type=2, # MARKET
-                        product_type='INTRADAY'
+                        product_type=self.extra_broker_product_types.get(broker_name, 'INTRADAY')
                     )
                 else:
                     logger.error(f"❌ [{broker_name}] Could not resolve symbol for {side} {strike}")
@@ -1520,7 +1529,8 @@ class Intraday920LiveSignal:
                     symbol=self.symbol,
                     strike=strike,
                     option_type=side,
-                    transaction_type=kite_txn
+                    transaction_type=kite_txn,
+                    product=self.extra_broker_product_types.get(broker_name, 'MIS')
                 )
             # --- Log result ---
             if response and isinstance(response, dict):
@@ -1617,7 +1627,7 @@ class Intraday920LiveSignal:
                         security_id=sec_id,
                         trigger_price=trigger_price,
                         quantity=qty,
-                        product_type='INTRADAY',
+                        product_type=self.extra_broker_product_types.get(broker_name, 'INTRADAY'),
                         exchange_segment='NSE_FNO'
                     )
                 else:
@@ -1633,7 +1643,7 @@ class Intraday920LiveSignal:
                         symbol=fyers_symbol,
                         trigger_price=trigger_price,
                         quantity=qty,
-                        product_type='INTRADAY'
+                        product_type=self.extra_broker_product_types.get(broker_name, 'INTRADAY')
                     )
                 else:
                     logger.error(f"❌ [{broker_name}] Could not resolve symbol for SL {side} {strike}")
@@ -1647,7 +1657,7 @@ class Intraday920LiveSignal:
                         tradingsymbol=option_symbol_z,
                         trigger_price=trigger_price,
                         quantity=qty,
-                        product='NRML'
+                        product=self.extra_broker_product_types.get(broker_name, 'MIS')
                     )
                 else:
                     logger.error(f"❌ [{broker_name}] Could not resolve option symbol for SL {side} {strike}")
@@ -2086,49 +2096,11 @@ class Intraday920LiveSignal:
                                             new_trigger_price=trailed_sl
                                         )
                                         if modify_result['success']:
-                                            logger.info(f"✅ {side} SL order modified on broker: {sl_order_id} -> Trigger: {trailed_sl:.2f}")
-                                            # Log SL update to Trade sheet
-                                            excel_logger.log_trade(
-                                                order_type='SL_UPDATE',
-                                                option_type=side,
-                                                strike=strike,
-                                                entry_price=entry_price,
-                                                current_price=current_price,
-                                                target=target,
-                                                stop_loss=trailed_sl,
-                                                pnl=current_price - entry_price,
-                                                status='SL_TRAILED',
-                                                order_id=sl_order_id,
-                                                notes=f'SL Trailed from {old_sl:.2f} to {trailed_sl:.2f}'
-                                            )
+                                            logger.info(f"✅ {side} Kite SL modified: {sl_order_id} -> {trailed_sl:.2f}")
                                         else:
-                                            logger.error(f"❌ Failed to modify {side} SL order: {modify_result.get('error')}")
-                                            # Log Kite SL modification failure to Excel
-                                            excel_logger.log_trade(
-                                                order_type='SL_UPDATE',
-                                                option_type=side,
-                                                strike=strike,
-                                                entry_price=entry_price,
-                                                current_price=current_price,
-                                                stop_loss=trailed_sl,
-                                                status='FAILED',
-                                                order_id=sl_order_id,
-                                                notes=f'[KITE] SL Trailing Modify Failed: {modify_result.get("error")}'
-                                            )
+                                            logger.error(f"❌ Failed to modify {side} Kite SL: {modify_result.get('error')}")
                                     except Exception as e:
-                                        logger.error(f"Error modifying {side} SL order: {e}", exc_info=True)
-                                        # Log Kite SL modification exception to Excel
-                                        excel_logger.log_trade(
-                                            order_type='SL_UPDATE',
-                                            option_type=side,
-                                            strike=strike,
-                                            entry_price=entry_price,
-                                            current_price=current_price,
-                                            stop_loss=trailed_sl,
-                                            status='ERROR',
-                                            order_id=sl_order_id,
-                                            notes=f'[KITE] SL Trailing Modify Exception: {str(e)}'
-                                        )
+                                        logger.error(f"Error modifying {side} Kite SL: {e}")
                                 
                                 # 2. Modify Extra Broker SLs
                                 if trade.get('extra_sl_ids'):
@@ -2144,29 +2116,18 @@ class Intraday920LiveSignal:
                                             except Exception as e:
                                                 logger.error(f"Failed to trigger {b_name} SL modification: {e}")
                             
-                            # Log to Signal Checks sheet
-                            excel_logger.log_sl_target_check(
-                                timestamp=check_timestamp,
-                                side=side,
-                                strike=strike,
-                                current_price=current_price,
-                                entry_price=entry_price,
-                                initial_sl=initial_sl,
-                                target=target,
-                                target_hit=True,
-                                trailed_sl=trailed_sl,
-                                check_reason="TRAILING"
-                            )
-                            
-                            # Log to Excel
-                            profit = current_price - entry_price
-                            excel_logger.log_trailing_sl_update(
+                            # Log the update ONCE to Excel after all brokers were handled
+                            excel_logger.log_trade(
+                                order_type='SL_TRAIL',
                                 option_type=side,
                                 strike=strike,
-                                old_sl=old_sl,
-                                new_sl=trailed_sl,
+                                entry_price=entry_price,
                                 current_price=current_price,
-                                profit=profit
+                                target=target,
+                                stop_loss=trailed_sl,
+                                pnl=current_price - entry_price,
+                                status='TRAILED',
+                                notes=f'SL moved from {old_sl:.2f} to {trailed_sl:.2f} (+{steps_above_target} steps above target)'
                             )
                     else:
                         # Price pulled back below entry - ensure SL stays at entry (lock in gain)
