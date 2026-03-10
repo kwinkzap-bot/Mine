@@ -106,38 +106,38 @@ def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Opti
             # This ensures api_key and access_token always come from the same Zerodha
             # instance — a mismatch (e.g. instance 5 api_key + instance 1 access_token)
             # causes "Incorrect api_key or access_token" from Zerodha.
+            # If no specific instance provided, default to Broker 1 (Zerodha Primary)
+            # if it's a Zerodha account. This is usually the account with paid API subscription.
             if instance is None:
-                instance = session.get('instance_num')
+                instance = session.get('instance_num') or 1
 
-            # If specific instance requested, get that instance's token
+            # If specific instance requested or determined, get that instance's token and key
             if instance is not None:
-                access_token = session.get(f'zerodha_{instance}_access_token')
                 api_key = session.get(f'zerodha_{instance}_api_key')
+                access_token = session.get(f'zerodha_{instance}_access_token')
+                
+                # If not in session, pull from UserEnvManager
+                if not api_key and username:
+                    api_key = UserEnvManager.get_user_var(username, f'BROKER_{instance}_API_KEY')
+                if not access_token and username:
+                    access_token = UserEnvManager.get_user_var(username, f'BROKER_{instance}_ACCESS_TOKEN')
+                    
                 if access_token:
-                    logger.debug(f"Using instance-specific token for zerodha_{instance}")
+                    logger.debug(f"Using paired key/token for zerodha_{instance}")
 
-            # Otherwise use the shared/last-logged-in token
-            if not access_token:
-                access_token = session.get('access_token')
-
-        # Get API_KEY - prefer instance-specific, then user-specific, then environment
-        if not api_key and instance is not None and username:
-            api_key = UserEnvManager.get_user_var(username, f'BROKER_{instance}_API_KEY')
-        if not api_key and username:
-            # Try to find Zerodha instance from user config if applicable
-            for i in range(1, 21):
+        # Fallback loop: if still no api_key/access_token, find the first available Zerodha pair in .env
+        if (not api_key or not access_token) and username:
+            for i in [1, 5, 2, 3, 4] + list(range(6, 21)):
                 broker_type = UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '').strip().lower()
                 if broker_type == 'zerodha':
                     candidate_key = UserEnvManager.get_user_var(username, f'BROKER_{i}_API_KEY')
                     candidate_token = UserEnvManager.get_user_var(username, f'BROKER_{i}_ACCESS_TOKEN')
-                    # Use this instance's key only if we also have a matching access_token
-                    # OR if we have no key at all yet (take first zerodha key as last resort)
-                    if candidate_key and (candidate_token or not api_key):
+                    if candidate_key and candidate_token:
                         api_key = candidate_key
-                        if candidate_token and not access_token:
-                            access_token = candidate_token
-                        if candidate_token:
-                            break  # Prefer an instance that has both key and token
+                        access_token = candidate_token
+                        instance = i
+                        logger.debug(f"Fallback: Using matching pair from BROKER_{i} (.env)")
+                        break
         if not api_key:
             api_key = os.getenv('API_KEY')
 

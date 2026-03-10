@@ -446,9 +446,18 @@ class Intraday920Strategy:
                     else:
                         # Log the specific error to help debug "Insufficient permission" or similar
                         logger.error(f"Error fetching LTP (non-retriable): {e}")
+                        
+                        # Handle specific "Insufficient permission" error
+                        if "Insufficient permission" in str(e):
+                            logger.warning("Detected 'Insufficient permission'. This usually means the API key and Access Token belong to different Zerodha accounts, or the account lacks a paid API subscription.")
+                            # Try one last-ditch refresh
+                            if attempt < max_retries - 1 and self._refresh_kite_access_token():
+                                logger.info("Token refreshed after permission error, retrying...")
+                                continue
+                                
                         return {
                             'symbol': symbol,
-                            'error': f'Error fetching quote: {str(e)}',
+                            'error': f'Error fetching quote: {str(e)}. Please ensure you are logged in to the correct Zerodha account with a valid API subscription.',
                             'timestamp': datetime.now().isoformat(),
                             'success': False
                         }

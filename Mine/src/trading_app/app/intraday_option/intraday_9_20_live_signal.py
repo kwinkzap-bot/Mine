@@ -352,14 +352,11 @@ class Intraday920LiveSignal:
         try:
             from trading_app.app.routes.api import get_kite
             for instance_num in range(2, 21):
-                if self.username:
-                    broker_type = UserEnvManager.get_user_var(self.username, f'BROKER_{instance_num}_TYPE', '').strip().lower()
-                else:
-                    broker_type = ''
+                broker_type = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_TYPE', '').strip().lower()
                 if broker_type != 'zerodha':
                     continue
                 # Check ACTIVE flag — skip if explicitly disabled
-                is_active = UserEnvManager.get_user_var(self.username or 'Mine', f'BROKER_{instance_num}_ACTIVE', 'true').strip().lower()
+                is_active = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_ACTIVE', 'true').strip().lower()
                 if is_active in ('false', '0', 'no'):
                     logger.info(f"⏩ ZERODHA_{instance_num} SKIPPED — BROKER_{instance_num}_ACTIVE=false")
                     continue
@@ -967,17 +964,18 @@ class Intraday920LiveSignal:
                     extra_sl_ids = {}  # Always initialize before SL logic
                     if order_id and self.live_trading and strike_data and ce_strike:
                         try:
-                            # Get lot size for this symbol (same as entry order quantity)
-                            entry_quantity = self.kite_service.get_lot_size(self.symbol)
+                            # Get lot size for this symbol and multiply by primary lot count
+                            std_lot = self.kite_service.get_lot_size(self.symbol)
+                            entry_quantity = std_lot * getattr(self, 'primary_lot_count', 1)
                             # Get option trading symbol for SL order
                             option_symbol = self._get_option_symbol(self.symbol, ce_strike, 'CE')
                             if option_symbol:
-                                logger.info(f"Placing CE SL order with symbol: {option_symbol}, quantity: {entry_quantity}")
+                                logger.info(f"Placing CE SL order with symbol: {option_symbol}, quantity: {entry_quantity} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
                                 sl_result = self.kite_service.place_stoploss_order(
                                     tradingsymbol=option_symbol,
                                     trigger_price=ce_signal.get('sl'),
                                     quantity=entry_quantity,
-                                    product='NRML'
+                                    product=self.primary_product_type
                                 )
                                 # --- Multi-Broker SL Order ---
                                 if self.extra_brokers and self.live_trading:
@@ -1098,18 +1096,19 @@ class Intraday920LiveSignal:
                     extra_sl_ids = {}  # Always initialize before SL logic
                     if order_id and self.live_trading and strike_data and pe_strike:
                         try:
-                            # Get lot size for this symbol (same as entry order quantity)
-                            entry_quantity = self.kite_service.get_lot_size(self.symbol)
+                            # Get lot size for this symbol and multiply by primary lot count
+                            std_lot = self.kite_service.get_lot_size(self.symbol)
+                            entry_quantity = std_lot * getattr(self, 'primary_lot_count', 1)
                             
                             # Get option trading symbol for SL order
                             option_symbol = self._get_option_symbol(self.symbol, pe_strike, 'PE')
                             if option_symbol:
-                                logger.info(f"Placing PE SL order with symbol: {option_symbol}, quantity: {entry_quantity}")
+                                logger.info(f"Placing PE SL order with symbol: {option_symbol}, quantity: {entry_quantity} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
                                 sl_result = self.kite_service.place_stoploss_order(
                                     tradingsymbol=option_symbol,
                                     trigger_price=pe_signal.get('sl'),
                                     quantity=entry_quantity,
-                                    product='NRML'
+                                    product=self.primary_product_type
                                 )
                                 
                                 # --- Multi-Broker SL Order ---
@@ -1530,6 +1529,7 @@ class Intraday920LiveSignal:
                     strike=strike,
                     option_type=side,
                     transaction_type=kite_txn,
+                    quantity=qty,
                     product=self.extra_broker_product_types.get(broker_name, 'MIS')
                 )
             # --- Log result ---
@@ -1612,7 +1612,8 @@ class Intraday920LiveSignal:
                         option_type=side,
                         trigger_price=trigger_price,
                         quantity=qty,
-                        transaction_type='S'
+                        transaction_type='S',
+                        product_type=self.extra_broker_product_types.get(broker_name, 'NRML')
                     )
                 else:
                     # Fallback if service not reloaded yet in memory (should be though)
@@ -1730,7 +1731,9 @@ class Intraday920LiveSignal:
             logger.info(f"⚡ [{broker_name}] Modifying SL Order {order_id} -> {new_trigger_price}...")
             
             response = None
-            qty = self.kite_service.get_lot_size(self.symbol) # Sometimes needed
+            lot_mult = self.extra_broker_lot_sizes.get(broker_name, 1)
+            base_qty = self.kite_service.get_lot_size(self.symbol)
+            qty = max(1, base_qty) * lot_mult
             
             if broker_name == 'KOTAK':
                 # Kotak modify_order(order_id, price, quantity, trigger_price)
@@ -1769,7 +1772,7 @@ class Intraday920LiveSignal:
                                         symbol=fyers_symbol,
                                         trigger_price=new_trigger_price,
                                         quantity=qty,
-                                        product_type='INTRADAY'
+                                        product_type=self.extra_broker_product_types.get(broker_name, 'INTRADAY')
                                     )
                                     if new_resp and new_resp.get('success'):
                                         new_oid = new_resp.get('order_id') or new_resp.get('id')
@@ -1786,15 +1789,15 @@ class Intraday920LiveSignal:
                     response = {'success': False, 'error': str(fyers_e)}
             
             elif broker_name.startswith('ZERODHA_'):
-                # Secondary Zerodha instance — use KiteService.modify_sl_order
-                if hasattr(service, 'modify_sl_order'):
-                    response = service.modify_sl_order(
+                # Secondary Zerodha instance — use KiteService.modify_stoploss_order
+                if hasattr(service, 'modify_stoploss_order'):
+                    response = service.modify_stoploss_order(
                         order_id=order_id,
-                        trigger_price=new_trigger_price
+                        new_trigger_price=new_trigger_price
                     )
                 else:
                     # Fallback: cancel old SL and re-place at new trigger price
-                    logger.warning(f"[{broker_name}] modify_sl_order not available, using cancel+replace for SL @ {new_trigger_price}")
+                    logger.warning(f"[{broker_name}] modify_stoploss_order not available, using cancel+replace for SL @ {new_trigger_price}")
                     for side_key, trade_data in self.active_trades.items():
                         if trade_data.get('extra_sl_ids', {}).get(broker_name) == order_id:
                             z_strike = trade_data.get('strike')
@@ -1808,7 +1811,7 @@ class Intraday920LiveSignal:
                                     tradingsymbol=z_symbol,
                                     trigger_price=new_trigger_price,
                                     quantity=qty,
-                                    product='NRML'
+                                    product=self.extra_broker_product_types.get(broker_name, 'MIS')
                                 )
                                 if new_resp and new_resp.get('success'):
                                     new_oid = new_resp.get('order_id')
@@ -2414,12 +2417,17 @@ class Intraday920LiveSignal:
                 'SELL': self.kite.TRANSACTION_TYPE_SELL
             }
             transaction_type_const = transaction_type_map.get(transaction_type, self.kite.TRANSACTION_TYPE_SELL)
-            
+            std_lot = self.kite_service.get_lot_size(self.symbol)
+            primary_qty = std_lot * getattr(self, 'primary_lot_count', 1)
+            logger.info(f"[Broker1] {transaction_type} {side} {strike} exit order x {primary_qty} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
+
             result = self.kite_service.place_option_order(
                 symbol=self.symbol,
                 strike=strike,
                 option_type=side,
-                transaction_type=transaction_type_const
+                transaction_type=transaction_type_const,
+                quantity=primary_qty,
+                product=self.primary_product_type
             )
             
             # --- Multi-Broker EXIT Order ---

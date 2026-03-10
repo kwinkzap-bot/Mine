@@ -1402,7 +1402,8 @@ class KotakOrderService:
             
     def place_option_stoploss_order(self, symbol: str, strike: int, option_type: str,
                                    trigger_price: float, quantity: int,
-                                   transaction_type: str = 'S') -> Dict[str, Any]:
+                                   transaction_type: str = 'S',
+                                   product_type: str = 'NRML') -> Dict[str, Any]:
         """
         Helper to place SL-M for an option contract by constructing symbol.
         """
@@ -1438,7 +1439,7 @@ class KotakOrderService:
                     price=0.0,
                     quantity=quantity,
                     order_type='SL-M',
-                    product_type=self.PRODUCT_NRML,
+                    product_type=product_type,
                     trigger_price=trigger_price,
                     exchange_segment=self.EXCHANGE_NFO
                 )
