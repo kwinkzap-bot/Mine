@@ -403,6 +403,13 @@ class Intraday920Strategy:
                             logger.warning(f"LTP fetch failed after token refresh: {e}")
                             if attempt < max_retries - 1:
                                 time.sleep(retry_delay)
+                            else:
+                                return {
+                                    'symbol': symbol,
+                                    'error': f'LTP fetch failed after token refresh on final attempt: {str(e)}',
+                                    'timestamp': datetime.now().isoformat(),
+                                    'success': False
+                                }
                     else:
                         return {
                             'symbol': symbol,
@@ -444,15 +451,12 @@ class Intraday920Strategy:
                                 'success': False
                             }
                     else:
-                        # Log the specific error to help debug "Insufficient permission" or similar
-                        logger.error(f"Error fetching LTP (non-retriable): {e}")
-                        
-                        # Handle specific "Insufficient permission" error
-                        if "Insufficient permission" in str(e):
-                            logger.warning("Detected 'Insufficient permission'. This usually means the API key and Access Token belong to different Zerodha accounts, or the account lacks a paid API subscription.")
+                        # Handle specific "Insufficient permission" or Token expiration errors
+                        if "Insufficient permission" in str(e) or "Invalid `api_key` or `access_token`" in str(e) or "Invalid api_key or access_token" in str(e):
+                            logger.warning(f"Detected token permission/invalidation error: {e}. Attempting recovery refresh.")
                             # Try one last-ditch refresh
                             if attempt < max_retries - 1 and self._refresh_kite_access_token():
-                                logger.info("Token refreshed after permission error, retrying...")
+                                logger.info("Token refreshed after permission/invalidation error, retrying...")
                                 continue
                                 
                         return {
