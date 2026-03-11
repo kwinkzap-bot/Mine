@@ -366,9 +366,21 @@ def callback():
             broker_id = f'zerodha_{instance_num}'
         
         # Store in session with broker_id context - INSTANCE-SPECIFIC to support multiple Zerodha logins
-        session['access_token'] = access_token  # Keep for backward compatibility (last logged-in)
-        session['broker_id'] = broker_id
-        session['instance_num'] = instance_num
+        if instance_num == 1:
+            session['access_token'] = access_token  # Keep for backward compatibility (last logged-in)
+            session['broker_id'] = broker_id
+            session['instance_num'] = instance_num
+            
+            # Store in environment for immediate use (with broker context)
+            os.environ['ACCESS_TOKEN'] = access_token
+            os.environ['ACTIVE_BROKER_ID'] = broker_id
+            os.environ['ACTIVE_INSTANCE'] = str(instance_num)
+            os.environ['ACTIVE_USER'] = username
+            
+            # Store in persistent cache to survive socket pool flushes
+            save_access_token(access_token)
+            logger.info(f"Token saved to persistent cache for {username} - {broker_id}")
+
         session[f'zerodha_{instance_num}_authenticated'] = True  # Mark this specific instance as authenticated
         session[f'zerodha_{instance_num}_access_token'] = access_token  # Store per-instance token
         session[f'zerodha_{instance_num}_api_key'] = api_key  # Keep api_key for this instance
@@ -377,57 +389,50 @@ def callback():
         logger.info(f"Session generated successfully for {username} - {broker_id}, access_token stored")
         logger.info(f"User authenticated with access_token: {access_token[:20]}...")
         
-        # Store in environment for immediate use (with broker context)
-        os.environ['ACCESS_TOKEN'] = access_token
-        os.environ['ACTIVE_BROKER_ID'] = broker_id
-        os.environ['ACTIVE_INSTANCE'] = str(instance_num)
-        os.environ['ACTIVE_USER'] = username
         os.environ[f'ZERODHA_{instance_num}_ACCESS_TOKEN'] = access_token  # Per-instance env var
-        
-        # Store in persistent cache to survive socket pool flushes
-        save_access_token(access_token)
-        logger.info(f"Token saved to persistent cache for {username} - {broker_id}")
         
         # Update user-specific .env file with new token (instance-specific if needed)
         logger.info(f"Calling _update_user_env_tokens with username={username}, broker_id={broker_id}, instance_num={instance_num}")
         update_result = _update_user_env_tokens(username, access_token, broker_id, instance_num)
         logger.info(f"_update_user_env_tokens returned: {update_result}")
-        os.environ['ACCESS_TOKEN'] = access_token
+        if instance_num == 1:
+            os.environ['ACCESS_TOKEN'] = access_token
         
-        # Auto-start live monitoring after successful Kite authentication
-        try:
-            from trading_app.app.intraday_option.intraday_9_20_live_signal import Intraday920LiveSignal
-            import threading
-            
-            # Capture values for closure
-            final_api_key = api_key
-            final_access_token = access_token
-            
-            def start_monitoring_async():
-                """Start monitoring in background thread."""
-                try:
-                    kite_instance = KiteConnect(api_key=final_api_key)
-                    kite_instance.set_access_token(final_access_token)
-                    
-                    monitor = Intraday920LiveSignal(kite_instance, symbol='NIFTY', username=username)
-                    
-                    # Check if it's a market day and start monitoring
-                    if monitor.is_market_day():
-                        if monitor.start_monitoring():
-                            logger.info(f"✅ Auto-started live monitoring for {username}")
+        # Auto-start live monitoring after successful Kite authentication ONLY for Broker_1
+        if instance_num == 1:
+            try:
+                from trading_app.app.intraday_option.intraday_9_20_live_signal import Intraday920LiveSignal
+                import threading
+                
+                # Capture values for closure
+                final_api_key = api_key
+                final_access_token = access_token
+                
+                def start_monitoring_async():
+                    """Start monitoring in background thread."""
+                    try:
+                        kite_instance = KiteConnect(api_key=final_api_key)
+                        kite_instance.set_access_token(final_access_token)
+                        
+                        monitor = Intraday920LiveSignal(kite_instance, symbol='NIFTY', username=username)
+                        
+                        # Check if it's a market day and start monitoring
+                        if monitor.is_market_day():
+                            if monitor.start_monitoring():
+                                logger.info(f"✅ Auto-started live monitoring for {username}")
+                            else:
+                                logger.warning(f"Could not auto-start monitoring for {username}")
                         else:
-                            logger.warning(f"Could not auto-start monitoring for {username}")
-                    else:
-                        logger.info(f"Not a market day - skipping monitoring for {username}")
-                except Exception as e:
-                    logger.error(f"Error auto-starting monitoring: {e}")
-            
-            # Start monitoring in background thread
-            monitor_thread = threading.Thread(target=start_monitoring_async, daemon=True)
-            monitor_thread.start()
-            
-        except Exception as e:
-            logger.warning(f"Could not auto-start monitoring: {e}")
+                            logger.info(f"Not a market day - skipping monitoring for {username}")
+                    except Exception as e:
+                        logger.error(f"Error auto-starting monitoring: {e}")
+                
+                # Start monitoring in background thread
+                monitor_thread = threading.Thread(target=start_monitoring_async, daemon=True)
+                monitor_thread.start()
+                
+            except Exception as e:
+                logger.warning(f"Could not auto-start monitoring: {e}")
         
         # Check if this is a popup window login (has opener)
         # Return a page that closes the popup and refreshes the parent
