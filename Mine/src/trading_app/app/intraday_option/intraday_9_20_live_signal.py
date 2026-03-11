@@ -229,6 +229,8 @@ class Intraday920LiveSignal:
         self.extra_broker_product_types = {}  # broker_key -> product type (MIS, NRML, etc.)
         self.primary_lot_count = 1
         self.primary_product_type = 'MIS'
+        self.primary_strategy_allowed = True
+        self.extra_broker_allowed = {}
         self._init_extra_brokers()
         
         # Initialize Excel logger for this user
@@ -286,7 +288,7 @@ class Intraday920LiveSignal:
             strategy_str = UserEnvManager.get_user_var(_uname, f'BROKER_{n}_ALLOW_STRATEGY', '').strip()
             if not strategy_str:
                 return True
-            return 'intraday_9_20' in strategy_str
+            return '9_20_STRATEGY' in strategy_str
 
         self.primary_strategy_allowed = _is_strategy_allowed(1)
         logger.info(f"Primary broker (Broker 1) lot count: {self.primary_lot_count}x | Product: {self.primary_product_type} | Allowed: {self.primary_strategy_allowed}")
@@ -303,12 +305,9 @@ class Intraday920LiveSignal:
                 logger.info(f"⏩ {broker_type.upper()} {instance_num} SKIPPED — BROKER_{instance_num}_ACTIVE=false")
                 continue
             
-            if not _is_strategy_allowed(instance_num):
-                logger.info(f"⏩ {broker_type.upper()} {instance_num} SKIPPED — 'intraday_9_20' not in BROKER_{instance_num}_ALLOW_STRATEGY")
-                continue
-            
             # Map back to generic keys (KOTAK, DHAN, FYERS) to match _place_extra_broker_order
             broker_key = broker_type.upper() 
+            self.extra_broker_allowed[broker_key] = _is_strategy_allowed(instance_num)
             
             try:
                 if broker_type == 'kotak':
@@ -373,13 +372,11 @@ class Intraday920LiveSignal:
                     logger.info(f"⏩ ZERODHA_{instance_num} SKIPPED — BROKER_{instance_num}_ACTIVE=false")
                     continue
                     
-                if not _is_strategy_allowed(instance_num):
-                    logger.info(f"⏩ ZERODHA_{instance_num} SKIPPED — 'intraday_9_20' not in BROKER_{instance_num}_ALLOW_STRATEGY")
-                    continue
                 # Get a KiteConnect object for this secondary Zerodha instance
                 kite5 = get_kite(user=_uname, instance=instance_num)
                 if kite5:
                     broker_key = f'ZERODHA_{instance_num}'
+                    self.extra_broker_allowed[broker_key] = _is_strategy_allowed(instance_num)
                     self.extra_brokers[broker_key] = KiteService(kite_instance=kite5)
                     self.extra_broker_lot_sizes[broker_key] = _lot_count(instance_num)
                     self.extra_broker_product_types[broker_key] = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_PRODUCT_TYPE', 'MIS').strip().upper()
@@ -1443,6 +1440,11 @@ class Intraday920LiveSignal:
         Executes in a separate thread.
         """
         txn_type = 'BUY' if transaction_type == 'BUY' else 'SELL'
+        
+        if not self.extra_broker_allowed.get(broker_name, True):
+            logger.info(f"[{broker_name}] SKIPPED {txn_type} ORDER (Strategy '9_20_STRATEGY' not enabled in config)")
+            return
+            
         try:
             standard_lot = self.kite_service.get_lot_size(self.symbol)
             lot_count = self.extra_broker_lot_sizes.get(broker_name, 1)
@@ -1619,6 +1621,10 @@ class Intraday920LiveSignal:
         Place generic SL (Sell) order on extra brokers.
         Returns: (broker_name, order_id) or None
         """
+        if not self.extra_broker_allowed.get(broker_name, True):
+            logger.info(f"[{broker_name}] SKIPPED SL ORDER (Strategy '9_20_STRATEGY' not enabled in config)")
+            return None
+            
         try:
             standard_lot = self.kite_service.get_lot_size(self.symbol)
             lot_count = self.extra_broker_lot_sizes.get(broker_name, 1)
@@ -1762,6 +1768,9 @@ class Intraday920LiveSignal:
         """
         Modify SL order on extra broker.
         """
+        if not self.extra_broker_allowed.get(broker_name, True):
+            return False
+            
         try:
             logger.info(f"⚡ [{broker_name}] Modifying SL Order {order_id} -> {new_trigger_price}...")
             
