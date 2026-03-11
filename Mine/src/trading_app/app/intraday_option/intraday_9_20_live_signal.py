@@ -281,7 +281,15 @@ class Intraday920LiveSignal:
         # Load primary broker (Broker 1) lot count and product type
         self.primary_lot_count = _lot_count(1)
         self.primary_product_type = UserEnvManager.get_user_var(_uname, 'BROKER_1_PRODUCT_TYPE', 'MIS').strip().upper()
-        logger.info(f"Primary broker (Broker 1) lot count: {self.primary_lot_count}x | Product: {self.primary_product_type}")
+        
+        def _is_strategy_allowed(n: int) -> bool:
+            strategy_str = UserEnvManager.get_user_var(_uname, f'BROKER_{n}_ALLOW_STRATEGY', '').strip()
+            if not strategy_str:
+                return True
+            return 'intraday_9_20' in strategy_str
+
+        self.primary_strategy_allowed = _is_strategy_allowed(1)
+        logger.info(f"Primary broker (Broker 1) lot count: {self.primary_lot_count}x | Product: {self.primary_product_type} | Allowed: {self.primary_strategy_allowed}")
         
         # Iterate over 1 to 20 to discover and initialize Kotak, Dhan, and Fyers
         # Broker 1 is usually Zerodha but could be configured as anything. We scan all.
@@ -293,6 +301,10 @@ class Intraday920LiveSignal:
             is_active = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_ACTIVE', 'true').strip().lower()
             if is_active in ('false', '0', 'no'):
                 logger.info(f"⏩ {broker_type.upper()} {instance_num} SKIPPED — BROKER_{instance_num}_ACTIVE=false")
+                continue
+            
+            if not _is_strategy_allowed(instance_num):
+                logger.info(f"⏩ {broker_type.upper()} {instance_num} SKIPPED — 'intraday_9_20' not in BROKER_{instance_num}_ALLOW_STRATEGY")
                 continue
             
             # Map back to generic keys (KOTAK, DHAN, FYERS) to match _place_extra_broker_order
@@ -359,6 +371,10 @@ class Intraday920LiveSignal:
                 is_active = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_ACTIVE', 'true').strip().lower()
                 if is_active in ('false', '0', 'no'):
                     logger.info(f"⏩ ZERODHA_{instance_num} SKIPPED — BROKER_{instance_num}_ACTIVE=false")
+                    continue
+                    
+                if not _is_strategy_allowed(instance_num):
+                    logger.info(f"⏩ ZERODHA_{instance_num} SKIPPED — 'intraday_9_20' not in BROKER_{instance_num}_ALLOW_STRATEGY")
                     continue
                 # Get a KiteConnect object for this secondary Zerodha instance
                 kite5 = get_kite(user=_uname, instance=instance_num)
@@ -970,13 +986,19 @@ class Intraday920LiveSignal:
                             # Get option trading symbol for SL order
                             option_symbol = self._get_option_symbol(self.symbol, ce_strike, 'CE')
                             if option_symbol:
-                                logger.info(f"Placing CE SL order with symbol: {option_symbol}, quantity: {entry_quantity} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
-                                sl_result = self.kite_service.place_stoploss_order(
-                                    tradingsymbol=option_symbol,
-                                    trigger_price=ce_signal.get('sl'),
-                                    quantity=entry_quantity,
-                                    product=self.primary_product_type
-                                )
+                                if getattr(self, 'primary_strategy_allowed', True):
+                                    logger.info(f"Placing CE SL order with symbol: {option_symbol}, quantity: {entry_quantity} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
+                                    sl_result = self.kite_service.place_stoploss_order(
+                                        tradingsymbol=option_symbol,
+                                        trigger_price=ce_signal.get('sl'),
+                                        quantity=entry_quantity,
+                                        product=self.primary_product_type
+                                    )
+                                else:
+                                    import time
+                                    sim_sl = f"SIM_SL_CE_{int(time.time())}"
+                                    logger.info(f"[Broker1] SKIPPED CE SL order (Strategy unallowed). Mock ID: {sim_sl}")
+                                    sl_result = {'success': True, 'order_id': sim_sl}
                                 # --- Multi-Broker SL Order ---
                                 if self.extra_brokers and self.live_trading:
                                     logger.info(f"⚡ Placing COPY SL orders on {len(self.extra_brokers)} extra brokers...")
@@ -1103,13 +1125,19 @@ class Intraday920LiveSignal:
                             # Get option trading symbol for SL order
                             option_symbol = self._get_option_symbol(self.symbol, pe_strike, 'PE')
                             if option_symbol:
-                                logger.info(f"Placing PE SL order with symbol: {option_symbol}, quantity: {entry_quantity} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
-                                sl_result = self.kite_service.place_stoploss_order(
-                                    tradingsymbol=option_symbol,
-                                    trigger_price=pe_signal.get('sl'),
-                                    quantity=entry_quantity,
-                                    product=self.primary_product_type
-                                )
+                                if getattr(self, 'primary_strategy_allowed', True):
+                                    logger.info(f"Placing PE SL order with symbol: {option_symbol}, quantity: {entry_quantity} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
+                                    sl_result = self.kite_service.place_stoploss_order(
+                                        tradingsymbol=option_symbol,
+                                        trigger_price=pe_signal.get('sl'),
+                                        quantity=entry_quantity,
+                                        product=self.primary_product_type
+                                    )
+                                else:
+                                    import time
+                                    sim_sl = f"SIM_SL_PE_{int(time.time())}"
+                                    logger.info(f"[Broker1] SKIPPED PE SL order (Strategy unallowed). Mock ID: {sim_sl}")
+                                    sl_result = {'success': True, 'order_id': sim_sl}
                                 
                                 # --- Multi-Broker SL Order ---
                                 if self.extra_brokers and self.live_trading:
@@ -1288,15 +1316,22 @@ class Intraday920LiveSignal:
             # 1. Place order on Kite (Primary Broker) with broker-specific lot count
             std_lot = self.kite_service.get_lot_size(self.symbol)
             primary_qty = std_lot * getattr(self, 'primary_lot_count', 1)
-            logger.info(f"[Broker1] {transaction_type} {side} {strike} x {primary_qty} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
-            result = self.kite_service.place_option_order(
-                symbol=self.symbol,
-                strike=strike,
-                option_type=side,
-                transaction_type=transaction_type_const,
-                quantity=primary_qty,
-                product=self.primary_product_type
-            )
+            
+            if getattr(self, 'primary_strategy_allowed', True):
+                logger.info(f"[Broker1] {transaction_type} {side} {strike} x {primary_qty} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
+                result = self.kite_service.place_option_order(
+                    symbol=self.symbol,
+                    strike=strike,
+                    option_type=side,
+                    transaction_type=transaction_type_const,
+                    quantity=primary_qty,
+                    product=self.primary_product_type
+                )
+            else:
+                import time
+                sim_id = f"SIM_{side}_{strike}_{int(time.time())}"
+                logger.info(f"[Broker1] SKIPPED ENTRY (Strategy unallowed). Mock ID: {sim_id}")
+                result = {'success': True, 'order_id': sim_id}
             
             # 2. Place COPY orders on Extra Brokers
             if self.extra_brokers and self.live_trading:
@@ -1901,7 +1936,10 @@ class Intraday920LiveSignal:
         sl_order_id = trade.get('sl_order_id')
         if sl_order_id and self.live_trading:
             try:
-                cancel_result = self.kite_service.cancel_order(order_id=sl_order_id)
+                if getattr(self, 'primary_strategy_allowed', True):
+                    cancel_result = self.kite_service.cancel_order(order_id=sl_order_id)
+                else:
+                    cancel_result = {'success': True}
                 if cancel_result.get('success', False):
                     logger.info(f"✅ {side} Kite SL order cancelled: {sl_order_id}")
                 else:
@@ -2094,10 +2132,13 @@ class Intraday920LiveSignal:
                                 # 1. Modify Kite SL
                                 if sl_order_id:
                                     try:
-                                        modify_result = self.kite_service.modify_stoploss_order(
-                                            order_id=sl_order_id,
-                                            new_trigger_price=trailed_sl
-                                        )
+                                        if getattr(self, 'primary_strategy_allowed', True):
+                                            modify_result = self.kite_service.modify_stoploss_order(
+                                                order_id=sl_order_id,
+                                                new_trigger_price=trailed_sl
+                                            )
+                                        else:
+                                            modify_result = {'success': True}
                                         if modify_result['success']:
                                             logger.info(f"✅ {side} Kite SL modified: {sl_order_id} -> {trailed_sl:.2f}")
                                         else:
@@ -2285,10 +2326,13 @@ class Intraday920LiveSignal:
                             # 1. Update Kite SL
                             if sl_order_id:
                                 try:
-                                    modify_result = self.kite_service.modify_stoploss_order(
-                                        order_id=sl_order_id,
-                                        new_trigger_price=entry_price
-                                    )
+                                    if getattr(self, 'primary_strategy_allowed', True):
+                                        modify_result = self.kite_service.modify_stoploss_order(
+                                            order_id=sl_order_id,
+                                            new_trigger_price=entry_price
+                                        )
+                                    else:
+                                        modify_result = {'success': True}
                                     if modify_result['success']:
                                         logger.info(f"✅ {side} Broker SL moved to Entry: {sl_order_id} -> Trigger: {entry_price:.2f}")
                                         
@@ -2419,16 +2463,22 @@ class Intraday920LiveSignal:
             transaction_type_const = transaction_type_map.get(transaction_type, self.kite.TRANSACTION_TYPE_SELL)
             std_lot = self.kite_service.get_lot_size(self.symbol)
             primary_qty = std_lot * getattr(self, 'primary_lot_count', 1)
-            logger.info(f"[Broker1] {transaction_type} {side} {strike} exit order x {primary_qty} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
-
-            result = self.kite_service.place_option_order(
-                symbol=self.symbol,
-                strike=strike,
-                option_type=side,
-                transaction_type=transaction_type_const,
-                quantity=primary_qty,
-                product=self.primary_product_type
-            )
+            
+            if getattr(self, 'primary_strategy_allowed', True):
+                logger.info(f"[Broker1] {transaction_type} {side} {strike} exit order x {primary_qty} ({getattr(self, 'primary_lot_count', 1)} lot(s))")
+                result = self.kite_service.place_option_order(
+                    symbol=self.symbol,
+                    strike=strike,
+                    option_type=side,
+                    transaction_type=transaction_type_const,
+                    quantity=primary_qty,
+                    product=self.primary_product_type
+                )
+            else:
+                import time
+                sim_id = f"SIM_SELL_{side}_{strike}_{int(time.time())}"
+                logger.info(f"[Broker1] SKIPPED EXIT (Strategy unallowed). Mock ID: {sim_id}")
+                result = {'success': True, 'order_id': sim_id}
             
             # --- Multi-Broker EXIT Order ---
             # NOTE: SL cancellation is handled by _cancel_pending_sl_orders() which is
