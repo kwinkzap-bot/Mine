@@ -1,0 +1,235 @@
+//@version=6
+indicator("Intrinsic Value Levels", overlay=true)
+
+// ----- Inputs -----
+ceStrike = input.int(23200, "CE Strike Price")
+peStrike = input.int(23400, "PE Strike Price")
+
+spotHigh = input.float(23500, "Spot High")
+spotLow  = input.float(23400, "Spot Low")
+
+stepValue = input.int(50, "Step Size (25/50/100)")
+multiplier = input.int(0, "Multiplier")
+
+showTradePopup = input.bool(true, "Show Entry")
+showSLHit = input.bool(true, "Enable SL Hit")
+showTargetHit = input.bool(true, "Enable Target Hit")
+
+showLastTrades = input.int(1, "Show Last Entry Levels", minval=1, maxval=20)
+
+showITMDashboard = input.bool(true, "Show ITM Dashboard")
+
+// ----- Trade Variables -----
+var float activeSL = na
+var float activeTarget = na
+var bool tradeActive = false
+
+// ----- Label Arrays -----
+var label[] entryLabels = array.new_label()
+var label[] slLabels = array.new_label()
+var label[] targetLabels = array.new_label()
+
+// ----- Intrinsic Calculation -----
+ceIntrinsic = spotHigh - ceStrike
+ceIntrinsic := ceIntrinsic < 0 ? 0 : ceIntrinsic
+
+peIntrinsic = peStrike - spotLow
+peIntrinsic := peIntrinsic < 0 ? 0 : peIntrinsic
+
+// ----- CE Levels -----
+ce_l1 = multiplier >= 1 ? ceIntrinsic + stepValue * 1 : na
+ce_l2 = multiplier >= 2 ? ceIntrinsic + stepValue * 2 : na
+ce_l3 = multiplier >= 3 ? ceIntrinsic + stepValue * 3 : na
+ce_l4 = multiplier >= 4 ? ceIntrinsic + stepValue * 4 : na
+ce_l5 = multiplier >= 5 ? ceIntrinsic + stepValue * 5 : na
+ce_l6 = multiplier >= 6 ? ceIntrinsic + stepValue * 6 : na
+ce_l7 = multiplier >= 7 ? ceIntrinsic + stepValue * 7 : na
+ce_l8 = multiplier >= 8 ? ceIntrinsic + stepValue * 8 : na
+ce_l9 = multiplier >= 9 ? ceIntrinsic + stepValue * 9 : na
+ce_l10 = multiplier >= 10 ? ceIntrinsic + stepValue * 10 : na
+
+// ----- PE Levels -----
+pe_l1 = multiplier >= 1 ? peIntrinsic + stepValue * 1 : na
+pe_l2 = multiplier >= 2 ? peIntrinsic + stepValue * 2 : na
+pe_l3 = multiplier >= 3 ? peIntrinsic + stepValue * 3 : na
+pe_l4 = multiplier >= 4 ? peIntrinsic + stepValue * 4 : na
+pe_l5 = multiplier >= 5 ? peIntrinsic + stepValue * 5 : na
+pe_l6 = multiplier >= 6 ? peIntrinsic + stepValue * 6 : na
+pe_l7 = multiplier >= 7 ? peIntrinsic + stepValue * 7 : na
+pe_l8 = multiplier >= 8 ? peIntrinsic + stepValue * 8 : na
+pe_l9 = multiplier >= 9 ? peIntrinsic + stepValue * 9 : na
+pe_l10 = multiplier >= 10 ? peIntrinsic + stepValue * 10 : na
+
+float breakLevel = na
+float targetLevel = na
+string signalType = ""
+
+// CE Crossovers
+if ta.crossover(close, ce_l1)
+    breakLevel := ce_l1
+    targetLevel := ce_l2
+    signalType := "CE"
+else if ta.crossover(close, ce_l2)
+    breakLevel := ce_l2
+    targetLevel := ce_l3
+    signalType := "CE"
+else if ta.crossover(close, ce_l3)
+    breakLevel := ce_l3
+    targetLevel := ce_l4
+    signalType := "CE"
+else if ta.crossover(close, ce_l4)
+    breakLevel := ce_l4
+    targetLevel := ce_l5
+    signalType := "CE"
+else if ta.crossover(close, ce_l5)
+    breakLevel := ce_l5
+    targetLevel := ce_l6
+    signalType := "CE"
+else if ta.crossover(close, ce_l6)
+    breakLevel := ce_l6
+    targetLevel := ce_l7
+    signalType := "CE"
+else if ta.crossover(close, ce_l7)
+    breakLevel := ce_l7
+    targetLevel := ce_l8
+    signalType := "CE"
+else if ta.crossover(close, ce_l8)
+    breakLevel := ce_l8
+    targetLevel := ce_l9
+    signalType := "CE"
+else if ta.crossover(close, ce_l9)
+    breakLevel := ce_l9
+    targetLevel := ce_l10
+    signalType := "CE"
+
+// PE Crossovers
+if ta.crossover(close, pe_l1)
+    breakLevel := pe_l1
+    targetLevel := pe_l2
+    signalType := "PE"
+else if ta.crossover(close, pe_l2)
+    breakLevel := pe_l2
+    targetLevel := pe_l3
+    signalType := "PE"
+else if ta.crossover(close, pe_l3)
+    breakLevel := pe_l3
+    targetLevel := pe_l4
+    signalType := "PE"
+else if ta.crossover(close, pe_l4)
+    breakLevel := pe_l4
+    targetLevel := pe_l5
+    signalType := "PE"
+else if ta.crossover(close, pe_l5)
+    breakLevel := pe_l5
+    targetLevel := pe_l6
+    signalType := "PE"
+else if ta.crossover(close, pe_l6)
+    breakLevel := pe_l6
+    targetLevel := pe_l7
+    signalType := "PE"
+else if ta.crossover(close, pe_l7)
+    breakLevel := pe_l7
+    targetLevel := pe_l8
+    signalType := "PE"
+else if ta.crossover(close, pe_l8)
+    breakLevel := pe_l8
+    targetLevel := pe_l9
+    signalType := "PE"
+else if ta.crossover(close, pe_l9)
+    breakLevel := pe_l9
+    targetLevel := pe_l10
+    signalType := "PE"
+
+// ----- ENTRY -----
+if showTradePopup and not na(breakLevel) and not na(targetLevel)
+
+    entryPrice = close
+    slPrice = low[1]
+
+    activeSL := slPrice
+    activeTarget := targetLevel
+    tradeActive := true
+
+    txt = signalType + " Entry : " + str.tostring(entryPrice) + "\nSL : " + str.tostring(slPrice) + "\nTarget : " + str.tostring(activeTarget)
+
+    entryLabel = label.new(bar_index, low, txt, style=label.style_label_up, color=signalType == "CE" ? color.green : color.red, textcolor=color.white)
+
+    array.push(entryLabels, entryLabel)
+
+    if array.size(entryLabels) > showLastTrades
+        label.delete(array.shift(entryLabels))
+
+// ----- TARGET HIT -----
+if showTargetHit and tradeActive and not na(activeTarget)
+
+    if high >= activeTarget
+
+        targetLabel = label.new(bar_index, high, "TARGET HIT 🎯", style=label.style_label_down, color=color.purple, textcolor=color.white)
+
+        array.push(targetLabels, targetLabel)
+
+        if array.size(targetLabels) > showLastTrades
+            label.delete(array.shift(targetLabels))
+
+        tradeActive := false
+        activeTarget := na
+        activeSL := na
+
+// ----- SL HIT -----
+if showSLHit and tradeActive and not na(activeSL)
+
+    if close <= activeSL
+
+        slLabel = label.new(bar_index, low, "SL HIT ❌", style=label.style_label_upper_right, color=color.red, textcolor=color.white)
+
+        array.push(slLabels, slLabel)
+
+        if array.size(slLabels) > showLastTrades
+            label.delete(array.shift(slLabels))
+
+        tradeActive := false
+        activeSL := na
+        activeTarget := na
+
+// ----- Plots CE (Green) -----
+plot(ceIntrinsic, "CE Intrinsic", color=color.green, linewidth=3)
+plot(ce_l1, "CE Level 1", color=color.green, style=plot.style_stepline)
+plot(ce_l2, "CE Level 2", color=color.green, style=plot.style_stepline)
+plot(ce_l3, "CE Level 3", color=color.green, style=plot.style_stepline)
+plot(ce_l4, "CE Level 4", color=color.green, style=plot.style_stepline)
+plot(ce_l5, "CE Level 5", color=color.green, style=plot.style_stepline)
+plot(ce_l6, "CE Level 6", color=color.green, style=plot.style_stepline)
+plot(ce_l7, "CE Level 7", color=color.green, style=plot.style_stepline)
+plot(ce_l8, "CE Level 8", color=color.green, style=plot.style_stepline)
+plot(ce_l9, "CE Level 9", color=color.green, style=plot.style_stepline)
+plot(ce_l10, "CE Level 10", color=color.green, style=plot.style_stepline)
+
+// ----- Plots PE (Red) -----
+plot(peIntrinsic, "PE Intrinsic", color=color.red, linewidth=3)
+plot(pe_l1, "PE Level 1", color=color.red, style=plot.style_stepline)
+plot(pe_l2, "PE Level 2", color=color.red, style=plot.style_stepline)
+plot(pe_l3, "PE Level 3", color=color.red, style=plot.style_stepline)
+plot(pe_l4, "PE Level 4", color=color.red, style=plot.style_stepline)
+plot(pe_l5, "PE Level 5", color=color.red, style=plot.style_stepline)
+plot(pe_l6, "PE Level 6", color=color.red, style=plot.style_stepline)
+plot(pe_l7, "PE Level 7", color=color.red, style=plot.style_stepline)
+plot(pe_l8, "PE Level 8", color=color.red, style=plot.style_stepline)
+plot(pe_l9, "PE Level 9", color=color.red, style=plot.style_stepline)
+plot(pe_l10, "PE Level 10", color=color.red, style=plot.style_stepline)
+
+// ----- ITM Strike Calculation (100 strikes only) -----
+itmCallStrike = math.floor((spotHigh - 100) / 100) * 100
+itmPutStrike  = math.floor((spotLow + 100) / 100) * 100
+
+// ----- Dashboard -----
+var table dashboard = table.new(position.top_right, 1, 3, border_width=1)
+
+if showITMDashboard and barstate.islast
+
+    table.cell(dashboard, 0, 0, "ITM Dashboard", bgcolor=color.blue, text_color=color.white)
+
+    callText = str.tostring(itmCallStrike) + " CALL ITM"
+    putText  = str.tostring(itmPutStrike) + " PUT ITM"
+
+    table.cell(dashboard, 0, 1, callText, bgcolor=color.green, text_color=color.white)
+    table.cell(dashboard, 0, 2, putText, bgcolor=color.red, text_color=color.white)

@@ -207,7 +207,7 @@ class Intraday920LiveSignal:
     MARKET_CLOSE = time(15, 20, 0)    # 3:20 PM (market closes at 3:30 but last candle is 3:20)
     MONITORING_INTERVAL = 3  # seconds
     
-    def __init__(self, kite_instance, symbol: str = 'NIFTY', live_trading: bool = True, username: Optional[str] = None):
+    def __init__(self, kite_instance, symbol: str = 'NIFTY', live_trading: bool = True, username: Optional[str] = None, risk_reward_ratio: str = '1:2-trail'):
         """
         Initialize live signal monitor.
         
@@ -254,7 +254,7 @@ class Intraday920LiveSignal:
         
         # Trading configuration
         self.live_trading = live_trading  # False=demo mode, True=live orders
-        self.risk_reward_ratio = '1:2-trail'  # Use 1:2 with trailing SL
+        self.risk_reward_ratio = risk_reward_ratio  # Use selected risk/reward ratio
         
         # Configuration constants
         self.LIVE_DATA_FETCH_TIMEOUT = 10  # seconds
@@ -541,13 +541,20 @@ class Intraday920LiveSignal:
                             row_date_str = str(row_date)[:10] if row_date else ""
                             
                             if (row_date_str == today_str and 
-                                row_option_type == side and 
-                                row_strike == strike and
-                                row_order_type == 'BUY'):
-                                logger.info(f"⛔ {side} {strike} found in Excel Trade sheet for today ({today_str})")
-                                # Mark in memory for faster lookup next time
-                                with self.daily_entries_lock:
-                                    self.daily_entries[entry_key] = today
+                                row_option_type == side):
+                                # Check for all possible BUY order status variations
+                                # 'BUY', 'BUY CE', 'BUY PE', 'BUY_DEMO', etc.
+                                row_order_upper = str(row_order_type).upper()
+                                if any(kw in row_order_upper for kw in ['BUY', 'SUCCESS']):
+                                    # EXCLUDE FAILED or CANCELED orders from blocking today's entries
+                                    if not any(kw in row_order_upper for kw in ['FAIL', 'REJECT', 'CANCEL']):
+                                        # Final Check: Strike match
+                                        if row_strike == strike:
+                                            logger.info(f"⛔ {side} {strike} found in Excel Trade sheet for today ({today_str}) as '{row_order_type}'")
+                                            # Mark in memory for faster lookup next time
+                                            with self.daily_entries_lock:
+                                                self.daily_entries[entry_key] = today
+                                            return True
                                 return True
         except Exception as e:
             logger.warning(f"Could not check Excel Trade sheet for duplicates: {e}")
@@ -906,7 +913,10 @@ class Intraday920LiveSignal:
         
         # Update trades if there are signals
         if result['has_ce_signal'] or result['has_pe_signal']:
-            self.update_active_trades(signals, strike_data=strike_data)
+            try:
+                self.update_active_trades(signals, strike_data=strike_data)
+            except Exception as e:
+                logger.error(f"Error updating active trades for {strike_name}: {e}", exc_info=True)
             self.log_signal(signals)
         
         return result
@@ -960,13 +970,15 @@ class Intraday920LiveSignal:
                 elif 'CE' not in self.active_trades or self.active_trades['CE'].get('status') == 'CLOSED':
                     # Place order FIRST, only mark as entered if successful
                     order_id = None
-                    if strike_data and ce_strike:
+                    if strike_data and ce_strike and strike_data.get('ce_token'):
                         order_id = self.place_buy_order(
                             side='CE',
                             token=strike_data.get('ce_token'),  # type: ignore
                             strike=ce_strike,
                             entry_price=ce_signal.get('entry_price')
                         )
+                    else:
+                        logger.error(f"Cannot place CE order: Missing data (Strike: {ce_strike}, Token: {strike_data.get('ce_token') if strike_data else 'N/A'})")
                         
                         # Mark entry ONLY if order was successfully placed
                         if order_id:
@@ -1098,13 +1110,15 @@ class Intraday920LiveSignal:
                 elif 'PE' not in self.active_trades or self.active_trades['PE'].get('status') == 'CLOSED':
                     # Place order FIRST, only mark as entered if successful
                     order_id = None
-                    if strike_data and pe_strike:
+                    if strike_data and pe_strike and strike_data.get('pe_token'):
                         order_id = self.place_buy_order(
                             side='PE',
                             token=strike_data.get('pe_token'),  # type: ignore
                             strike=pe_strike,
                             entry_price=pe_signal.get('entry_price')
                         )
+                    else:
+                        logger.error(f"Cannot place PE order: Missing data (Strike: {pe_strike}, Token: {strike_data.get('pe_token') if strike_data else 'N/A'})")
                         
                         # Mark entry ONLY if order was successfully placed
                         if order_id:
@@ -1261,7 +1275,8 @@ class Intraday920LiveSignal:
                 pe_token=pe_token,
                 ce_high=ce_high,
                 pe_high=pe_high,
-                symbol=self.symbol
+                symbol=self.symbol,
+                ratio=self.risk_reward_ratio
             )
             return signals
             
@@ -2109,11 +2124,11 @@ class Intraday920LiveSignal:
                 trailed_sl = trade.get('trailed_sl', initial_sl)
                 sl_distance = trade.get('sl_distance', entry_price - initial_sl)
                 
-                # === 1:2 WITH TRAILING SL LOGIC ===
+                # === TRAILING SL LOGIC (1:1, 1:2, etc.) ===
                 if target_hit:
                     # Target already hit - implement trailing SL
                     
-                    # === NEW 1:2 TRAILING LOGIC (10 POINT STEP) ===
+                    # === TRAILING LOGIC (10 POINT STEP) ===
                     # Formula: New_SL = Entry + int((Price - Target) / 10) * 10
                     # At Target (Price=Target): Diff=0, SL = Entry + 0 = Entry
                     # At Target+10 (Price=Target+10): Diff=10, SL = Entry + 10
@@ -2193,34 +2208,8 @@ class Intraday920LiveSignal:
                     if current_price <= trailed_sl:
                         logger.info(f"🔴 TRAILED SL HIT for {side}: Current {current_price:.2f} <= Trailed SL {trailed_sl:.2f}")
                         
-                        # Log to Signal Checks sheet
-                        excel_logger.log_sl_target_check(
-                            timestamp=check_timestamp,
-                            side=side,
-                            strike=strike,
-                            current_price=current_price,
-                            entry_price=entry_price,
-                            initial_sl=initial_sl,
-                            target=target,
-                            target_hit=True,
-                            trailed_sl=trailed_sl,
-                            check_reason="SL_HIT"
-                        )
-                        
-                        # Log to Excel
-                        pnl = current_price - entry_price
-                        excel_logger.log_trade(
-                            order_type='SELL',
-                            option_type=side,
-                            strike=strike,
-                            entry_price=entry_price,
-                            current_price=current_price,
-                            target=target,
-                            stop_loss=trailed_sl,
-                            pnl=pnl,
-                            status='TRAILED_SL_HIT',
-                            notes=f"Trailed SL Hit at {trailed_sl:.2f} | Entry: {entry_price:.2f} | P&L: {pnl:+.2f}"
-                        )
+                        # Log to Signal Checks and Trades will happen inside close_trade
+                        pass
                         
                         # Cancel pending SL orders before placing market sell
                         self._cancel_pending_sl_orders(trade, side)
@@ -2249,33 +2238,8 @@ class Intraday920LiveSignal:
                     if current_price <= initial_sl:
                         logger.info(f"🔴 SL HIT for {side}: Current {current_price:.2f} <= SL {initial_sl:.2f}")
                         
-                        # Log to Signal Checks sheet
-                        excel_logger.log_sl_target_check(
-                            timestamp=check_timestamp,
-                            side=side,
-                            strike=strike,
-                            current_price=current_price,
-                            entry_price=entry_price,
-                            initial_sl=initial_sl,
-                            target=target,
-                            target_hit=False,
-                            check_reason="SL_HIT"
-                        )
-                        
-                        # Log to Excel
-                        pnl = current_price - entry_price
-                        excel_logger.log_trade(
-                            order_type='SELL',
-                            option_type=side,
-                            strike=strike,
-                            entry_price=entry_price,
-                            current_price=current_price,
-                            target=target,
-                            stop_loss=initial_sl,
-                            pnl=pnl,
-                            status='SL_HIT',
-                            notes=f"Initial SL Hit at {initial_sl:.2f} | Entry: {entry_price:.2f} | P&L: {pnl:+.2f}"
-                        )
+                        # Log to Signal Checks and Trades will happen inside close_trade
+                        pass
                         
                         # Cancel pending SL orders before placing market sell
                         self._cancel_pending_sl_orders(trade, side)
@@ -2632,7 +2596,7 @@ class Intraday920LiveSignal:
                         pe_high_val = high_strike.get('pe_high')
                         
                         if high_strike.get('success') and low_strike.get('success'):
-                            # Check signals for high strike
+                            # 1. Check signals for high strike
                             high_signals = self.check_entry_signal_live(
                                 high_strike.get('ce_token'),
                                 high_strike.get('pe_token'),
@@ -2640,43 +2604,37 @@ class Intraday920LiveSignal:
                                 high_strike.get('pe_high')
                             )
                             
-                            if high_signals.get('success'):
-                                ce_sig = high_signals.get('ce_signal', {})
-                                pe_sig = high_signals.get('pe_signal', {})
-                                
-                                # Log what was received
-                                logger.info(f"HIGH STRIKE Signals - CE has_signal: {ce_sig.get('has_signal')}, PE has_signal: {pe_sig.get('has_signal')}")
-                                if not ce_sig.get('has_signal'):
-                                    logger.info(f"CE No Signal Reason: {ce_sig.get('reason', 'Unknown')}")
-                                if not pe_sig.get('has_signal'):
-                                    logger.info(f"PE No Signal Reason: {pe_sig.get('reason', 'Unknown')}")
-                                
-                                # Update Excel logging data if signals exist
-                                if ce_sig.get('has_signal'):
-                                    has_ce_signal = True
-                                    ce_entry_price = ce_sig.get('entry_price')
-                                    ce_sl = ce_sig.get('sl')
-                                    ce_target = ce_sig.get('target')
-                                
-                                if pe_sig.get('has_signal'):
-                                    has_pe_signal = True
-                                    pe_entry_price = pe_sig.get('entry_price')
-                                    pe_sl = pe_sig.get('sl')
-                                    pe_target = pe_sig.get('target')
-                                
-                                # Only update trades if there are actual signals
-                                if ce_sig.get('has_signal') or pe_sig.get('has_signal'):
-                                    self.update_active_trades(high_signals, strike_data=high_strike)
-                                    self.log_signal(high_signals)
-                                
-                                if ce_sig.get('has_signal'):
-                                    logger.info(f"📊 HIGH STRIKE CE SIGNAL: Entry {ce_sig.get('entry_price')}, SL {ce_sig.get('sl')}, Target {ce_sig.get('target')} | ✅ Order placed")
-                                
-                                if pe_sig.get('has_signal'):
-                                    logger.info(f"📊 HIGH STRIKE PE SIGNAL: Entry {pe_sig.get('entry_price')}, SL {pe_sig.get('sl')}, Target {pe_sig.get('target')} | ✅ Order placed")
+                            high_result = self._process_strike_signals(high_signals, high_strike, "HIGH STRIKE")
                             
-                            # Check signals for low strike (only if high strike didn't have signals)
-                            if not has_ce_signal and not has_pe_signal:
+                            # Update local logging vars
+                            has_ce_signal = high_result['has_ce_signal']
+                            has_pe_signal = high_result['has_pe_signal']
+                            ce_entry_price = high_result['ce_entry_price']
+                            pe_entry_price = high_result['pe_entry_price']
+                            ce_sl = high_result['ce_sl']
+                            pe_sl = high_result['pe_sl']
+                            ce_target = high_result['ce_target']
+                            pe_target = high_result['pe_target']
+                            
+                            # Log HIGH STRIKE check results
+                            excel_logger.log_signal_check(
+                                timestamp=check_timestamp,
+                                ce_prev_high=high_strike.get('ce_high'),
+                                pe_prev_high=high_strike.get('pe_high'),
+                                ce_signal=high_result['has_ce_signal'],
+                                pe_signal=high_result['has_pe_signal'],
+                                ce_entry_price=high_result['ce_entry_price'],
+                                pe_entry_price=high_result['pe_entry_price'],
+                                ce_sl=high_result['ce_sl'],
+                                pe_sl=high_result['pe_sl'],
+                                ce_target=high_result['ce_target'],
+                                pe_target=high_result['pe_target'],
+                                notes="High Strike Check | " + (high_signals.get('ce_signal', {}).get('reason', '') or "No CE Sig") + " | " + (high_signals.get('pe_signal', {}).get('reason', '') or "No PE Sig")
+                            )
+
+                            # 2. Check signals for low strike (only if high strike didn't have signals to avoid double entries)
+                            # Match backtest logic: High strike takes precedence
+                            if not high_result['has_ce_signal'] and not high_result['has_pe_signal']:
                                 low_signals = self.check_entry_signal_live(
                                     low_strike.get('ce_token'),
                                     low_strike.get('pe_token'),
@@ -2684,80 +2642,42 @@ class Intraday920LiveSignal:
                                     low_strike.get('pe_high')
                                 )
                                 
-                                if low_signals.get('success'):
-                                    ce_sig = low_signals.get('ce_signal', {})
-                                    pe_sig = low_signals.get('pe_signal', {})
-                                    
-                                    # Log what was received
-                                    logger.info(f"LOW STRIKE Signals - CE has_signal: {ce_sig.get('has_signal')}, PE has_signal: {pe_sig.get('has_signal')}")
-                                    if not ce_sig.get('has_signal'):
-                                        logger.info(f"CE No Signal Reason: {ce_sig.get('reason', 'Unknown')}")
-                                    if not pe_sig.get('has_signal'):
-                                        logger.info(f"PE No Signal Reason: {pe_sig.get('reason', 'Unknown')}")
-                                    
-                                    # Update Excel logging data if signals exist
-                                    if ce_sig.get('has_signal'):
-                                        has_ce_signal = True
-                                        ce_entry_price = ce_sig.get('entry_price')
-                                        ce_sl = ce_sig.get('sl')
-                                        ce_target = ce_sig.get('target')
-                                        ce_high_val = low_strike.get('ce_high')
-                                    
-                                    if pe_sig.get('has_signal'):
-                                        has_pe_signal = True
-                                        pe_entry_price = pe_sig.get('entry_price')
-                                        pe_sl = pe_sig.get('sl')
-                                        pe_target = pe_sig.get('target')
-                                        pe_high_val = low_strike.get('pe_high')
-                                    
-                                    # Only update trades if there are actual signals
-                                    if ce_sig.get('has_signal') or pe_sig.get('has_signal'):
-                                        self.update_active_trades(low_signals, strike_data=low_strike)
-                                        self.log_signal(low_signals)
-                                    
-                                    if ce_sig.get('has_signal'):
-                                        logger.info(f"📊 LOW STRIKE CE SIGNAL: Entry {ce_sig.get('entry_price')}, SL {ce_sig.get('sl')}, Target {ce_sig.get('target')} | ✅ Order placed")
-                                    
-                                    if pe_sig.get('has_signal'):
-                                        logger.info(f"📊 LOW STRIKE PE SIGNAL: Entry {pe_sig.get('entry_price')}, SL {pe_sig.get('sl')}, Target {pe_sig.get('target')} | ✅ Order placed")
-                        
-                        # LOG EVERY 5-MINUTE CHECK TO EXCEL (both High + Low strike)
-                        excel_logger.log_signal_check(
-                            timestamp=check_timestamp,
-                            ce_prev_high=ce_high_val,
-                            ce_prev_low=None,  # Not tracked currently
-                            pe_prev_high=pe_high_val,
-                            pe_prev_low=None,  # Not tracked currently
-                            ce_signal=has_ce_signal,
-                            pe_signal=has_pe_signal,
-                            ce_entry_price=ce_entry_price,
-                            pe_entry_price=pe_entry_price,
-                            ce_sl=ce_sl,
-                            pe_sl=pe_sl,
-                            ce_target=ce_target,
-                            pe_target=pe_target,
-                            notes="High Strike Check" if high_strike.get('success') else "High Strike data unavailable"
-                        )
+                                low_result = self._process_strike_signals(low_signals, low_strike, "LOW STRIKE")
+                                
+                                # Update global has_signal for loop state if Low strike triggered
+                                if low_result['has_ce_signal'] or low_result['has_pe_signal']:
+                                    has_ce_signal = low_result['has_ce_signal']
+                                    has_pe_signal = low_result['has_pe_signal']
+                                    ce_entry_price = low_result['ce_entry_price']
+                                    pe_entry_price = low_result['pe_entry_price']
+                                    ce_sl = low_result['ce_sl']
+                                    pe_sl = low_result['pe_sl']
+                                    ce_target = low_result['ce_target']
+                                    pe_target = low_result['pe_target']
 
-                        # Low strike log (even if no signals)
-                        low_ce_high = low_strike.get('ce_high')
-                        low_pe_high = low_strike.get('pe_high')
-                        excel_logger.log_signal_check(
-                            timestamp=check_timestamp,
-                            ce_prev_high=low_ce_high,
-                            ce_prev_low=None,  # Not tracked currently
-                            pe_prev_high=low_pe_high,
-                            pe_prev_low=None,  # Not tracked currently
-                            ce_signal=has_ce_signal,
-                            pe_signal=has_pe_signal,
-                            ce_entry_price=ce_entry_price,
-                            pe_entry_price=pe_entry_price,
-                            ce_sl=ce_sl,
-                            pe_sl=pe_sl,
-                            ce_target=ce_target,
-                            pe_target=pe_target,
-                            notes="Low Strike Check" if low_strike.get('success') else "Low Strike data unavailable"
-                        )
+                                # Log LOW STRIKE check results
+                                excel_logger.log_signal_check(
+                                    timestamp=check_timestamp,
+                                    ce_prev_high=low_strike.get('ce_high'),
+                                    pe_prev_high=low_strike.get('pe_high'),
+                                    ce_signal=low_result['has_ce_signal'],
+                                    pe_signal=low_result['has_pe_signal'],
+                                    ce_entry_price=low_result['ce_entry_price'],
+                                    pe_entry_price=low_result['pe_entry_price'],
+                                    ce_sl=low_result['ce_sl'],
+                                    pe_sl=low_result['pe_sl'],
+                                    ce_target=low_result['ce_target'],
+                                    pe_target=low_result['pe_target'],
+                                    notes="Low Strike Check | " + (low_signals.get('ce_signal', {}).get('reason', '') or "No CE Sig") + " | " + (low_signals.get('pe_signal', {}).get('reason', '') or "No PE Sig")
+                                )
+                            else:
+                                # Low strike skipped because High strike triggered
+                                excel_logger.log_signal_check(
+                                    timestamp=check_timestamp,
+                                    ce_prev_high=low_strike.get('ce_high'),
+                                    pe_prev_high=low_strike.get('pe_high'),
+                                    notes="Low Strike skipped (High strike matched)"
+                                )
                         
                     else:
                         logger.warning(f"Failed to fetch live data: {live_data.get('error')}")
@@ -2884,37 +2804,8 @@ class Intraday920LiveSignal:
                                             logger.error(f"Error placing sell order for {side} at market close: {e}", exc_info=True)
                                             skipped_trades.append(f"{side} (order error: {str(e)})")
                                         
-                                        # Log to Excel sheets
-                                        try:
-                                            entry_time = trade.get('entry_time', 'N/A')
-                                            
-                                            excel_logger.log_sl_target_check(
-                                                timestamp=market_close_timestamp,
-                                                side=side,
-                                                strike=strike,
-                                                current_price=current_price,
-                                                entry_price=entry_price,
-                                                initial_sl=trade.get('sl'),
-                                                target=trade.get('target'),
-                                                target_hit=trade.get('target_hit'),
-                                                check_reason="MARKET_CLOSE"
-                                            )
-                                            
-                                            excel_logger.log_trade(
-                                                order_type='SELL',
-                                                option_type=side,
-                                                strike=strike,
-                                                entry_price=entry_price,
-                                                current_price=current_price,
-                                                target=trade.get('target'),
-                                                stop_loss=trade.get('sl'),
-                                                pnl=pnl,
-                                                status='MARKET_CLOSE',
-                                                notes=f"Market Close Square-Off (3:20 PM) | Entry Time: {entry_time} | Entry Order ID: {entry_order_id} | Entry Price: {entry_price:.2f} | Stop Loss: {trade.get('sl', 'N/A')} | Exit Price: {current_price:.2f} | P&L: {pnl:+.2f}"
-                                            )
-                                            logger.info(f"✅ {side} trade logged to Excel")
-                                        except Exception as e:
-                                            logger.warning(f"Error logging trade to Excel for {side}: {e}")
+                                        # Log to Signal Checks and Trades will happen inside close_trade
+                                        pass
                                         
                                         # Close the trade in system
                                         try:
@@ -3057,12 +2948,12 @@ class Intraday920LiveSignal:
     
     def close_trade(self, side: str, exit_price: float, exit_reason: str = "Manual") -> Dict[str, Any]:
         """
-        Close an active trade.
+        Close an active trade and log to Excel.
         
         Args:
             side: 'CE' or 'PE'
             exit_price: Exit price
-            exit_reason: Reason for exit
+            exit_reason: Reason for exit (SL Hit, Target Hit, Manual, etc.)
             
         Returns:
             Trade summary
@@ -3073,6 +2964,9 @@ class Intraday920LiveSignal:
             
             trade = self.active_trades[side]
             entry_price = trade.get('entry_price', 0)
+            strike = trade.get('strike')
+            initial_sl = trade.get('sl')
+            target = trade.get('target')
             pnl = exit_price - entry_price
             pnl_pct = (pnl / entry_price * 100) if entry_price else 0
             
@@ -3084,6 +2978,39 @@ class Intraday920LiveSignal:
             trade['status'] = 'CLOSED'
             
             logger.info(f"🔴 {side} trade closed: Entry {entry_price}, Exit {exit_price}, PnL {pnl} ({pnl_pct}%)")
+            
+            # --- Excel Logging ---
+            try:
+                # 1. Log to Signal Checks (Exit Log)
+                excel_logger.log_sl_target_check(
+                    timestamp=datetime.now(),
+                    side=side,
+                    strike=strike,
+                    current_price=exit_price,
+                    entry_price=entry_price,
+                    initial_sl=initial_sl,
+                    target=target,
+                    target_hit=trade.get('target_hit', False),
+                    trailed_sl=trade.get('trailed_sl'),
+                    check_reason=f"SQUARE_OFF ({exit_reason})"
+                )
+                
+                # 2. Log to Trades sheet
+                excel_logger.log_trade(
+                    order_type='SELL',
+                    option_type=side,
+                    strike=strike,
+                    entry_price=entry_price,
+                    current_price=exit_price,
+                    target=target,
+                    stop_loss=trade.get('trailed_sl') or initial_sl,
+                    pnl=pnl,
+                    status=exit_reason.upper().replace(" ", "_"),
+                    notes=f"Exit: {exit_reason} | P&L: {pnl:+.2f} ({pnl_pct:+.2f}%)"
+                )
+                logger.info(f"✅ Square off logged to Excel for {side}")
+            except Exception as e:
+                logger.error(f"Error logging square off to Excel: {e}")
             
             return {
                 'success': True,

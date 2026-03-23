@@ -426,7 +426,9 @@ window.TradingViewChart = (function () {
                     borderDownColor: '#ef4444',
                     wickUpColor: '#10b981',
                     wickDownColor: '#ef4444',
-                    title: 'CE'
+                    title: 'CE',
+                    priceLineStyle: 1, // Dotted
+                    priceLineWidth: 1
                 });
 
                 // Create PE series (secondary series - violet/black)
@@ -437,7 +439,9 @@ window.TradingViewChart = (function () {
                     borderDownColor: '#1f2937',
                     wickUpColor: '#8b5cf6',
                     wickDownColor: '#1f2937',
-                    title: 'PE'
+                    title: 'PE',
+                    priceLineStyle: 1, // Dotted
+                    priceLineWidth: 1
                 });
 
                 series = ceSeries; // Primary series for backward compatibility
@@ -456,7 +460,9 @@ window.TradingViewChart = (function () {
                     borderUpColor: borderUpColor,
                     borderDownColor: borderDownColor,
                     wickUpColor: wickUpColor,
-                    wickDownColor: wickDownColor
+                    wickDownColor: wickDownColor,
+                    priceLineStyle: 1,
+                    priceLineWidth: 1
                 });
             }
 
@@ -619,6 +625,22 @@ window.TradingViewChart = (function () {
                 chartType: type,  // Store chart type for status calculation
 
                 /**
+                 * Sets markers (signals) on the chart series
+                 */
+                setMarkers: function(ceMarkers, peMarkers = []) {
+                    try {
+                        if (this.isCombined) {
+                            if (this.ceSeries) this.ceSeries.setMarkers(ceMarkers || []);
+                            if (this.peSeries) this.peSeries.setMarkers(peMarkers || []);
+                        } else if (this.series) {
+                            this.series.setMarkers(ceMarkers || peMarkers || []);
+                        }
+                    } catch (e) {
+                        console.warn('[Chart] Error setting markers:', e);
+                    }
+                },
+
+                /**
                  * Updates chart with new data and reference lines
                  * For combined charts: update(ceData, peData)
                  * For single charts: update(data, referenceLines)
@@ -640,8 +662,15 @@ window.TradingViewChart = (function () {
                         console.log('[Chart] Refresh mode: clearing existing price lines');
                         // Remove all existing price lines
                         if (priceLinesArray && priceLinesArray.length > 0) {
+                            // Find and remove lines that look like PDH/PDL
+                            // In a real implementation we might keep track of these specifically
+
+                            // For a simpler approach, we'll just remove all lines for now and recreate them
+                            // Since this is specifically for PDH/PDL update
                             priceLinesArray.forEach(line => {
-                                series ? series.removePriceLine(line) : (ceSeries && ceSeries.removePriceLine(line));
+                                try { if (series) series.removePriceLine(line); } catch(e) {}
+                                try { if (ceSeries) ceSeries.removePriceLine(line); } catch(e) {}
+                                try { if (peSeries) peSeries.removePriceLine(line); } catch(e) {}
                             });
                             // Clear the array without reassigning (avoid const violation)
                             priceLinesArray.splice(0, priceLinesArray.length);

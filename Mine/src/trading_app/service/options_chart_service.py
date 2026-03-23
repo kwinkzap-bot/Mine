@@ -183,7 +183,7 @@ class OptionsChartService:
         Automatically selects the nearest future expiry date to handle expired options.
         This ensures we always get the active trading expiry even after expiry days.
         """
-        from datetime import datetime
+        from datetime import datetime, date
         
         symbol_upper = symbol.upper()
         
@@ -207,13 +207,17 @@ class OptionsChartService:
         today = datetime.now().date()
         valid_expiries = []
         
-        for expiry_str in expiries:
+        for expiry_val in expiries:
             try:
-                # Expiry format is typically YYYY-MM-DD
-                expiry_date = datetime.strptime(expiry_str, '%Y-%m-%d').date()
-                # Only consider expiries that are today or in the future
+                if isinstance(expiry_val, date):
+                    expiry_date = expiry_val
+                elif isinstance(expiry_val, str):
+                    expiry_date = datetime.strptime(expiry_val, '%Y-%m-%d').date()
+                else:
+                    continue
+                
                 if expiry_date >= today:
-                    valid_expiries.append((expiry_date, expiry_str))
+                    valid_expiries.append((expiry_date, expiry_val))
             except ValueError:
                 # If parsing fails, still include it as fallback
                 valid_expiries.append((None, expiry_str))
@@ -413,30 +417,42 @@ class OptionsChartService:
         Automatically selects the current/next expiry to handle expired options.
         """
         try:
-            from datetime import datetime
+            from datetime import datetime, date
             
-            instruments = self.kite_service.kite.instruments("NFO")
+            # USE CACHED INSTRUMENTS instead of fetching 10MB on every request
+            instruments = self._load_or_fetch_nfo_instruments()
             
             symbol_instruments = [
                 inst for inst in instruments
                 if inst['name'].upper() == symbol.upper() and inst['instrument_type'] in ['CE', 'PE']
             ]
             
+            if not symbol_instruments:
+                logging.warning(f"get_tokens_for_strikes: No instruments found for symbol {symbol}")
+                return None, None
+
             expiries = sorted(list(set(inst['expiry'] for inst in symbol_instruments)))
             if not expiries:
+                logging.warning(f"get_tokens_for_strikes: No expiries found for symbol {symbol}")
                 return None, None
             
             # Get the nearest future expiry (current or next)
             today = datetime.now().date()
             valid_expiries = []
             
-            for expiry_str in expiries:
+            for expiry_val in expiries:
                 try:
-                    expiry_date = datetime.strptime(expiry_str, '%Y-%m-%d').date()
+                    if isinstance(expiry_val, date):
+                        expiry_date = expiry_val
+                    elif isinstance(expiry_val, str):
+                        expiry_date = datetime.strptime(expiry_val, '%Y-%m-%d').date()
+                    else:
+                        continue
+                        
                     if expiry_date >= today:
-                        valid_expiries.append((expiry_date, expiry_str))
+                        valid_expiries.append((expiry_date, expiry_val))
                 except ValueError:
-                    valid_expiries.append((None, expiry_str))
+                    valid_expiries.append((None, expiry_val))
             
             if valid_expiries:
                 valid_expiries.sort(key=lambda x: x[0] if x[0] else datetime.max.date())
@@ -444,21 +460,32 @@ class OptionsChartService:
             else:
                 current_expiry = expiries[0]
             
-            logging.info(f"get_tokens_for_strikes: Selected expiry {current_expiry} for {symbol} (available: {expiries})")
+            logging.info(f"get_tokens_for_strikes: Selected expiry {current_expiry} for {symbol} (Target: {ce_strike}C / {pe_strike}P)")
             
             ce_token = None
             pe_token = None
 
+            # Ensure strikes are compared as floats
+            ce_strike_f = float(ce_strike)
+            pe_strike_f = float(pe_strike)
+
             for inst in symbol_instruments:
                 if inst['expiry'] == current_expiry:
-                    if inst['instrument_type'] == 'CE' and inst['strike'] == ce_strike:
+                    # Robust float comparison
+                    if inst['instrument_type'] == 'CE' and abs(float(inst['strike']) - ce_strike_f) < 0.1:
                         ce_token = inst['instrument_token']
-                    if inst['instrument_type'] == 'PE' and inst['strike'] == pe_strike:
+                    if inst['instrument_type'] == 'PE' and abs(float(inst['strike']) - pe_strike_f) < 0.1:
                         pe_token = inst['instrument_token']
                 if ce_token and pe_token:
                     break
             
+            if not ce_token or not pe_token:
+                logging.warning(f"get_tokens_for_strikes: Could not find both tokens. CE={ce_token}, PE={pe_token} for strikes {ce_strike}/{pe_strike}")
+            
             return ce_token, pe_token
+        except Exception as e:
+            logging.error(f"Error getting tokens for strikes: {e}", exc_info=True)
+            return None, None
         except Exception as e:
             logging.error(f"Error getting tokens for strikes: {e}", exc_info=True)
             return None, None
@@ -695,7 +722,9 @@ class OptionsChartService:
         from datetime import time as dt_time
         
         # Normalize timeframe for KiteConnect API
-        kite_timeframe = timeframe.replace('1minute', 'minute').replace('1day', 'day').replace('1week', 'week').replace('1month', 'month')
+        # Handle 2m aggregation by fetching 1m
+        fetch_tf = 'minute' if timeframe == '2minute' else timeframe
+        kite_timeframe = fetch_tf.replace('1minute', 'minute').replace('1day', 'day').replace('1week', 'week').replace('1month', 'month')
         cache_key = (ce_token, pe_token, timeframe)
         
         try:
@@ -720,7 +749,7 @@ class OptionsChartService:
             
             # Determine date range based on timeframe (ULTRA minimal lookback for speed)
             to_date = datetime.now()
-            if timeframe in ['1minute', 'minute']:
+            if timeframe in ['1minute', 'minute', '2minute']:
                 from_date = to_date - timedelta(days=3)  # 3 days only (~1,125 candles)
             elif timeframe in ['5minute', '5minute']:
                 from_date = to_date - timedelta(days=5)  # 5 days only (~375 candles vs 2000)
@@ -774,10 +803,47 @@ class OptionsChartService:
             
             logging.info(f"✓ Filtered to market hours: CE={len(ce_market_hours)} candles, PE={len(pe_market_hours)} candles")
             
-            # Format candles efficiently using list comprehension
+            # Standard formatting for all timeframes
             ce_formatted = [self._convert_candle_to_dict(c) for c in ce_market_hours] if ce_market_hours else []
             pe_formatted = [self._convert_candle_to_dict(c) for c in pe_market_hours] if pe_market_hours else []
-            
+
+            # Handle 2minute aggregation if needed
+            if timeframe == '2minute':
+                def merge_batch_local(batch):
+                    if not batch: return None
+                    # Use converted candles already in dict form
+                    return {
+                        'date':   batch[0]['date'],
+                        'open':   batch[0]['open'],
+                        'high':   max(x['high'] for x in batch),
+                        'low':    min(x['low'] for x in batch),
+                        'close':  batch[-1]['close'],
+                        'volume': sum(x['volume'] for x in batch)
+                    }
+
+                def aggregate_list(data_list):
+                    if not data_list: return []
+                    agg = []
+                    batch = []
+                    last_day = None
+                    # Note: 'date' here is adjusted timestamp (Unix)
+                    market_open_offset = int(5.5 * 3600)
+                    for c in data_list:
+                        c_date = datetime.fromtimestamp(c['date'] - market_open_offset).date()
+                        if last_day and c_date != last_day and batch:
+                            agg.append(merge_batch_local(batch))
+                            batch = []
+                        last_day = c_date
+                        batch.append(c)
+                        if len(batch) == 2:
+                            agg.append(merge_batch_local(batch))
+                            batch = []
+                    if batch: agg.append(merge_batch_local(batch))
+                    return agg
+
+                ce_formatted = aggregate_list(ce_formatted)
+                pe_formatted = aggregate_list(pe_formatted)
+
             result = (ce_formatted, pe_formatted)
             
             # Cache the result with timestamp if allowed

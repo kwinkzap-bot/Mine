@@ -228,9 +228,8 @@ class Intraday920Tracker {
         };
 
         try {
-            const resp = await fetch('/api/available-brokers', { credentials: 'include' });
-            if (!resp.ok) return; // keep static fallback
-            const data = await resp.json();
+            // Use centralized utility from app.js
+            const data = await window.getAvailableBrokers();
             if (!data.success || !data.brokers || data.brokers.length === 0) return;
 
             // Clear existing static options

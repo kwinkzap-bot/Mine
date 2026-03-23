@@ -343,15 +343,22 @@ class ExcelLogger:
             
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
-                # Determine color based on status
-                status_color = {
-                    'OPEN': 'FFEB9C',      # Yellow
-                    'BUY': 'B4C7E7',       # Light blue
-                    'SELL': 'C6EFCE',      # Green
-                    'TARGET_HIT': 'C6EFCE', # Green
-                    'SL_HIT': 'F8CBAD',    # Orange
-                    'CLOSED': 'A9D08E',    # Green
-                }.get(status, 'FFFFFF')
+                # Determine color based on status (with partial matching for variants)
+                status_upper = status.upper()
+                if 'TARGET_HIT' in status_upper:
+                    status_color = 'C6EFCE'  # Green
+                elif 'SL_HIT' in status_upper:
+                    status_color = 'F8CBAD'  # Orange
+                elif 'MARKET_CLOSE' in status_upper:
+                    status_color = 'E2EFDA'  # Light green
+                elif 'BUY' in status_upper:
+                    status_color = 'B4C7E7'  # Light blue
+                elif 'SELL' in status_upper or 'CLOSED' in status_upper:
+                    status_color = 'A9D08E'  # Green
+                elif 'OPEN' in status_upper:
+                    status_color = 'FFEB9C'  # Yellow
+                else:
+                    status_color = 'FFFFFF'
             
                 # Prepare row
                 row_data = [
@@ -432,23 +439,7 @@ class ExcelLogger:
                            target_hit: bool = False,
                            trailed_sl: Optional[float] = None,
                            check_reason: str = "Monitoring") -> bool:
-        """Log SL/Target check to Signal Checks sheet.
-        
-        Args:
-            timestamp: Timestamp of check
-            side: 'CE' or 'PE'
-            strike: Strike price
-            current_price: Current market price
-            entry_price: Entry price
-            initial_sl: Initial stop loss
-            target: Target price
-            target_hit: Whether target has been hit
-            trailed_sl: Trailed SL if active (None if not trailing yet)
-            check_reason: Reason for logging (e.g., "SL_HIT", "TARGET_HIT", "TRAILING", "Monitoring")
-            
-        Returns:
-            True if logged successfully, False otherwise
-        """
+        """Log SL/Target check to Signal Checks sheet."""
         if not self.available:
             return False
         
@@ -470,22 +461,39 @@ class ExcelLogger:
                 effective_sl = trailed_sl if target_hit and trailed_sl is not None else initial_sl
             
                 # Notes with check details
-                notes = f"{side} {check_reason} | Strike: {strike} | Price: {current_price:.2f} | Entry: {entry_price:.2f} | SL: {effective_sl:.2f} | Target: {target:.2f} | PnL: {pnl:+.2f} ({pnl_pct:+.2f}%)"
+                notes = f"{side} {check_reason} | P&L: {pnl:+.2f} ({pnl_pct:+.2f}%) | Price: {current_price:.2f}"
             
-                if target_hit and trailed_sl is not None:
-                    notes += f" | Trailed SL: {trailed_sl:.2f}"
+                # Color code based on reason
+                if "SL_HIT" in check_reason:
+                    cell_color = 'FF0000'  # Red
+                    font_color = 'FFFFFF'  # White text
+                elif "TARGET_HIT" in check_reason:
+                    cell_color = '00B050'  # Green
+                    font_color = 'FFFFFF'  # White text
+                elif "SQUARE_OFF" in check_reason or "MARKET_CLOSE" in check_reason:
+                    cell_color = 'FF8C00'  # Dark Orange
+                    font_color = 'FFFFFF'  # White text
+                elif check_reason == "TRAILING":
+                    cell_color = 'FFC7CE'  # Light red
+                    font_color = '000000'  # Black text
+                else:
+                    cell_color = 'E7E6E6'  # Light gray
+                    font_color = '000000'  # Black text
             
-                # Prepare row - reuse signal check structure
+                # Update Signal columns to show EXIT
+                is_exit = any(x in check_reason for x in ["SL_HIT", "SQUARE_OFF", "MARKET_CLOSE"])
+                signal_text = "✓ EXIT" if is_exit else "✓ YES"
+                
                 row_data = [
                     timestamp_str,
                     time_str,
                     market_hour,
-                    strike if side == 'CE' else "",
+                    "" if side == 'PE' else strike,
                     "",
-                    strike if side == 'PE' else "",
+                    "" if side == 'CE' else strike,
                     "",
-                    "YES" if side == 'CE' and check_reason != "Monitoring" else "",
-                    "YES" if side == 'PE' and check_reason != "Monitoring" else "",
+                    signal_text if side == 'CE' else "",
+                    signal_text if side == 'PE' else "",
                     entry_price if side == 'CE' else "",
                     entry_price if side == 'PE' else "",
                     effective_sl if side == 'CE' else "",
@@ -504,20 +512,6 @@ class ExcelLogger:
                     top=Side(style='thin'),
                     bottom=Side(style='thin')
                 )
-            
-                # Color code based on reason
-                if check_reason == "SL_HIT":
-                    cell_color = 'FF0000'  # Red
-                    font_color = 'FFFFFF'  # White text
-                elif check_reason == "TARGET_HIT":
-                    cell_color = '00B050'  # Green
-                    font_color = 'FFFFFF'  # White text
-                elif check_reason == "TRAILING":
-                    cell_color = 'FFC7CE'  # Light red
-                    font_color = '000000'  # Black text
-                else:
-                    cell_color = 'E7E6E6'  # Light gray
-                    font_color = '000000'  # Black text
             
                 fill = PatternFill(start_color=cell_color, end_color=cell_color, fill_type='solid')
                 font = Font(color=font_color, size=10)

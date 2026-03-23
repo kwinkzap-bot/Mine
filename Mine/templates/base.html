@@ -30,6 +30,8 @@
                 Intraday 9:20</a>
             <a href="/open-interest" class="nav-link {% if request.path == '/open-interest' %}active{% endif %}">📊 Open
                 Interest</a>
+            <a href="/oi-profile" class="nav-link {% if request.path == '/oi-profile' %}active{% endif %}">📉 OI
+                Profile</a>
             <div class="login-dropdown">
                 <button class="nav-link-login" id="loginToggle">🔑</button>
                 <!-- {% if session.username %}
@@ -65,10 +67,10 @@
         /**
          * Load available brokers into the dropdown menu
          */
-        async function loadBrokersIntoDropdown() {
+        async function loadBrokersIntoDropdown(forceRefresh = false) {
             try {
-                const response = await fetch('/api/available-brokers');
-                const data = await response.json();
+                // Use centralized utility from app.js (handles deduping/caching)
+                const data = await window.getAvailableBrokers(forceRefresh);
 
                 const container = document.getElementById('dynamicBrokersList');
 

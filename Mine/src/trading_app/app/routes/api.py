@@ -125,8 +125,15 @@ def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Opti
                 if access_token:
                     logger.debug(f"Using paired key/token for zerodha_{instance}")
 
-        # Fallback loop: if still no api_key/access_token, find the first available Zerodha pair in .env
-        if (not api_key or not access_token) and username:
+        # If specific instance is passed, load its keys directly
+        if instance is not None and username:
+            if not api_key:
+                api_key = UserEnvManager.get_user_var(username, f'BROKER_{instance}_API_KEY')
+            if not access_token:
+                access_token = UserEnvManager.get_user_var(username, f'BROKER_{instance}_ACCESS_TOKEN')
+                
+        # Fallback loop: if still no api_key/access_token and NO explicit instance requested, find the first available Zerodha pair in .env
+        if (not api_key or not access_token) and username and instance is None:
             for i in [1, 5, 2, 3, 4] + list(range(6, 21)):
                 broker_type = UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '').strip().lower()
                 if broker_type == 'zerodha':
@@ -372,13 +379,13 @@ def get_available_brokers() -> EndpointResponse:
         }
         
         brokers = []
+        broker_configs = []
         
         # Scan for BROKER_{N}_TYPE entries (up to 20 brokers)
         for instance_num in range(1, 21):
             broker_type = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TYPE', '').strip().lower()
-            
             if not broker_type:
-                continue  # No more brokers defined
+                continue
             
             if broker_type not in broker_type_configs:
                 logger.warning(f"Unknown broker type: {broker_type} for BROKER_{instance_num}")
@@ -386,146 +393,189 @@ def get_available_brokers() -> EndpointResponse:
             
             type_config = broker_type_configs[broker_type]
             
-            # Get broker name (custom name from config)
             broker_name = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_NAME', '').strip()
             if not broker_name:
-                broker_name = broker_type.title()  # Fallback to type name
+                broker_name = broker_type.title()
             
-            # Check if required fields are present
             all_fields_present = True
-            credentials = {}
             for field in type_config['required_fields']:
                 value = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_{field}', '').strip()
                 if not value:
                     all_fields_present = False
                     break
-                credentials[field] = value
             
             if not all_fields_present:
                 logger.debug(f"BROKER_{instance_num} ({broker_type}) missing required fields")
                 continue
             
-            # Check active flag
             broker_active = is_broker_active(username, instance_num)
+            
+            config = {
+                'instance_num': instance_num,
+                'broker_type': broker_type,
+                'broker_name': broker_name,
+                'type_config': type_config,
+                'broker_active': broker_active,
+                'username': username
+            }
+            
+            # Pre-extract session strings in MAIN THREAD to avoid Flask RequestContext issues
+            if broker_type == 'zerodha':
+                config['session_token'] = session.get(f'zerodha_{instance_num}_access_token')
+                config['env_token'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
+                config['env_api_key'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_API_KEY')
+                config['has_inst'] = bool(session.get('instance_num'))
+                
+            elif broker_type == 'kotak':
+                config['trading_token'] = session.get(f'kotak_{instance_num}_trading_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TRADING_TOKEN')
+                config['consumer_key'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_CONSUMER_KEY')
+                config['trading_sid'] = session.get(f'kotak_{instance_num}_trading_sid') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TRADING_SID')
+                config['base_url'] = session.get(f'kotak_{instance_num}_base_url') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_BASE_URL') or "https://gw-napi.kotaksecurities.com"
+                
+            elif broker_type == 'dhan':
+                config['access_token'] = session.get(f'dhan_{instance_num}_access_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
+                config['client_id'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_CLIENT_ID')
+                
+            elif broker_type == 'fyers':
+                config['access_token'] = session.get(f'fyers_{instance_num}_access_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
+                config['app_id'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_APP_ID')
+                config['secret'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_SECRET_KEY')
 
-            # --- Check broker live online status ---
+            broker_configs.append(config)
+            
+        def verify_broker_status(b_conf):
+            # Pure Python Thread worker without Flask proxy side-effects
+            instance_num = b_conf['instance_num']
+            broker_type = b_conf['broker_type']
+            
             is_logged_in = False
             msg_status = 'Not connected'
+            s_updates = {}
+            s_pops = []
 
-            if broker_type == 'zerodha':
-                instance_token = session.get(f'zerodha_{instance_num}_access_token')
-                env_token = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
-                if not instance_token and env_token:
-                    instance_token = env_token
-                    env_api_key = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_API_KEY')
-                    session[f'zerodha_{instance_num}_authenticated'] = True
-                    session[f'zerodha_{instance_num}_access_token'] = env_token
-                    if env_api_key: session[f'zerodha_{instance_num}_api_key'] = env_api_key
-                    if not session.get('instance_num'):
-                        session['instance_num'] = instance_num
-                        session['access_token'] = env_token
-                    session.permanent = True
-                
-                if instance_token:
-                    try:
-                        k = get_kite(username, instance_num)
-                        if k:
+            try:
+                if broker_type == 'zerodha':
+                    instance_token = b_conf.get('session_token')
+                    env_token = b_conf.get('env_token')
+                    
+                    if not instance_token and env_token:
+                        instance_token = env_token
+                        env_api_key = b_conf.get('env_api_key')
+                        s_updates[f'zerodha_{instance_num}_authenticated'] = True
+                        s_updates[f'zerodha_{instance_num}_access_token'] = env_token
+                        if env_api_key: s_updates[f'zerodha_{instance_num}_api_key'] = env_api_key
+                        if not b_conf.get('has_inst'):
+                            s_updates['instance_num'] = instance_num
+                            s_updates['access_token'] = env_token
+                    
+                    if instance_token:
+                        try:
+                            from kiteconnect import KiteConnect
+                            api_key = b_conf.get('env_api_key') or os.getenv('API_KEY') or "dummy"
+                            k = KiteConnect(api_key=api_key)
+                            k.set_access_token(instance_token)
                             k.profile()
                             is_logged_in = True
                             msg_status = 'Connected'
-                        else:
-                            is_logged_in = False
-                            msg_status = 'Auth 401'
-                    except Exception:
-                        is_logged_in = False
-                        msg_status = 'Token expired'
-                        session.pop(f'zerodha_{instance_num}_authenticated', None)
-                        session.pop(f'zerodha_{instance_num}_access_token', None)
-
-            elif broker_type == 'kotak':
-                trading_token = session.get(f'kotak_{instance_num}_trading_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TRADING_TOKEN')
-                if trading_token:
-                    try:
-                        import requests
-                        import json
-                        consumer_key = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_CONSUMER_KEY')
-                        trading_sid = session.get(f'kotak_{instance_num}_trading_sid') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TRADING_SID')
-                        base_url = session.get(f'kotak_{instance_num}_base_url') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_BASE_URL') or "https://gw-napi.kotaksecurities.com"
-                        
-                        if consumer_key and trading_token and trading_sid:
-                            url = base_url.rstrip('/') + "/quick/user/limits"
-                            headers = {
-                                "Authorization": str(consumer_key),
-                                "Sid": str(trading_sid),
-                                "Auth": str(trading_token),
-                                "Content-Type": "application/x-www-form-urlencoded",
-                                "neo-fin-key": "neotradeapi"
-                            }
-                            # Send Kotak V2 payload with jData prefix
-                            jdata_payload = "jData=" + json.dumps({"seg": "CASH", "exch": "NSE"})
+                        except Exception:
+                            msg_status = 'Token expired'
+                            s_pops.append(f'zerodha_{instance_num}_authenticated')
+                            s_pops.append(f'zerodha_{instance_num}_access_token')
                             
-                            resp = requests.post(url, headers=headers, data=jdata_payload, timeout=5)
+                elif broker_type == 'kotak':
+                    trading_token = b_conf.get('trading_token')
+                    if trading_token:
+                        try:
+                            import requests
+                            import json
+                            consumer_key = b_conf.get('consumer_key')
+                            trading_sid = b_conf.get('trading_sid')
+                            base_url = b_conf.get('base_url')
                             
-                            # A 401 Unauthorized or specific session token error means expired
-                            if resp.status_code == 401 or 'invalid session token' in resp.text.lower():
-                                session.pop(f'kotak_{instance_num}_trading_token', None)
-                                msg_status = 'Token expired'
-                                is_logged_in = False
-                            else:
-                                # Even if response is 404/400 validation error (like invalid exchangeSegment)
-                                # it means the request bypassed Auth layer, meaning token is fully alive!
-                                is_logged_in = True
-                                msg_status = 'Connected'
-                        else:
-                            msg_status = 'Not connected'
-                    except Exception: 
-                        msg_status = 'Connection error'
-
-            elif broker_type == 'dhan':
-                access_token = session.get(f'dhan_{instance_num}_access_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
-                client_id = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_CLIENT_ID')
-                if access_token and client_id:
-                    try:
+                            if consumer_key and trading_token and trading_sid:
+                                url = base_url.rstrip('/') + "/quick/user/limits"
+                                headers = {
+                                    "Authorization": str(consumer_key),
+                                    "Sid": str(trading_sid),
+                                    "Auth": str(trading_token),
+                                    "Content-Type": "application/x-www-form-urlencoded",
+                                    "neo-fin-key": "neotradeapi"
+                                }
+                                jdata_payload = "jData=" + json.dumps({"seg": "CASH", "exch": "NSE"})
+                                resp = requests.post(url, headers=headers, data=jdata_payload, timeout=5)
+                                
+                                if resp.status_code == 401 or 'invalid session token' in resp.text.lower():
+                                    s_pops.append(f'kotak_{instance_num}_trading_token')
+                                    msg_status = 'Token expired'
+                                else:
+                                    is_logged_in = True
+                                    msg_status = 'Connected'
+                        except Exception: 
+                            msg_status = 'Connection error'
+                            
+                elif broker_type == 'dhan':
+                    access_token = b_conf.get('access_token')
+                    client_id = b_conf.get('client_id')
+                    if access_token and client_id:
                         from trading_app.service.dhan_order_services import DhanOrderService
                         dhan = DhanOrderService(access_token=access_token, client_id=client_id)
                         if dhan.verify_credentials():
                             is_logged_in = True
                             msg_status = 'Connected'
                         else:
-                            session.pop(f'dhan_{instance_num}_access_token', None)
+                            s_pops.append(f'dhan_{instance_num}_access_token')
                             msg_status = 'Token expired'
-                    except Exception: pass
-
-            elif broker_type == 'fyers':
-                access_token = session.get(f'fyers_{instance_num}_access_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
-                app_id = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_APP_ID')
-                secret = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_SECRET_KEY')
-                if access_token and app_id:
-                    try:
+                            
+                elif broker_type == 'fyers':
+                    access_token = b_conf.get('access_token')
+                    app_id = b_conf.get('app_id')
+                    secret = b_conf.get('secret')
+                    if access_token and app_id:
                         from trading_app.service.fyers_order_services import FyersOrderService
                         fyers = FyersOrderService(app_id=app_id, access_token=access_token, secret_key=secret)
                         if fyers.verify_token():
                             is_logged_in = True
                             msg_status = 'Connected'
                         else:
-                            session.pop(f'fyers_{instance_num}_access_token', None)
+                            s_pops.append(f'fyers_{instance_num}_access_token')
                             msg_status = 'Token expired'
-                    except Exception: pass
-            
+            except Exception as e:
+                logger.error(f"Error checking broker {broker_type} instance {instance_num}: {e}")
+                msg_status = 'Check error'
+                
+            return b_conf, is_logged_in, msg_status, s_updates, s_pops
 
+        # Run verification checks concurrently
+        if broker_configs:
+            with ThreadPoolExecutor(max_workers=min(10, len(broker_configs))) as executor:
+                results = list(executor.map(verify_broker_status, broker_configs))
+        else:
+            results = []
+
+        # Process results sequentially to build list and safely apply session mutations
+        for b_conf, is_logged_in, msg_status, s_updates, s_pops in results:
+            instance_num = b_conf['instance_num']
+            broker_type = b_conf['broker_type']
+            type_config = b_conf['type_config']
+            
+            # Apply session changes safely in main thread (thread-safe, persists cookie securely)
+            for k, v in s_updates.items(): session[k] = v
+            for k in s_pops: session.pop(k, None)
+            if s_updates: session.permanent = True
+            
             # Build broker entry
             broker_id = f"{broker_type}_{instance_num}"
             broker_entry = {
                 'id': broker_id,
                 'instance_num': instance_num,
                 'broker_type': broker_type,
-                'name': broker_name,
+                'name': b_conf['broker_name'],
                 'icon': type_config['icon'],
                 'description': type_config['description'],
                 'configured': True,
-                'active': broker_active,
+                'active': b_conf['broker_active'],
                 'lot_size': int(UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_LOT_SIZE', '1') or '1'),
-                'status': 'Configured and ready' if broker_active else 'Inactive — orders disabled',
+                'status': 'Configured and ready' if b_conf['broker_active'] else 'Inactive — orders disabled',
                 'is_logged_in': is_logged_in,
                 'msg_status': msg_status,
                 'login_type': type_config['login_type']
@@ -533,7 +583,7 @@ def get_available_brokers() -> EndpointResponse:
             
             if type_config['login_type'] == 'url':
                 broker_entry['login_url'] = f"{type_config['login_url']}?broker_id={broker_id}"
-            else:  # modal
+            else:
                 broker_entry['login_action'] = type_config.get('login_action')
                 broker_entry['auth_endpoint'] = type_config.get('auth_endpoint')
             
@@ -2417,21 +2467,11 @@ def debug_token_status() -> EndpointResponse:
             'details': str(e)
         }), 500
 
-
 @api_bp.route('/intraday-920/place-order', methods=['POST'])
 def place_intraday_920_order() -> EndpointResponse:
     """Place an option order for Intraday 9:20 strategy.
     
-    Request JSON:
-        symbol: str - Trading symbol (NIFTY, BANKNIFTY, etc.)
-        strike: int - Strike price
-        option_type: str - 'CE' or 'PE'
-        action: str - 'BUY' or 'SELL'
-        broker: str (optional) - 'kite', 'kotak_neo', 'dhan', 'fyers' (default: 'kite')
-        quantity: int (optional) - Order quantity (default: lot size)
-    
-    Returns:
-        JSON response with order details
+    If broker is None or missing, places on ALL active brokers.
     """
     try:
         data = request.get_json()
@@ -2440,506 +2480,177 @@ def place_intraday_920_order() -> EndpointResponse:
         required_fields = ['symbol', 'strike', 'option_type', 'action']
         for field in required_fields:
             if field not in data:
-                return jsonify({
-                    'success': False,
-                    'error': f'Missing required field: {field}'
-                }), 400
+                return jsonify({'success': False, 'error': f'Missing required field: {field}'}), 400
         
         symbol = data['symbol']
         strike = int(data['strike'])
         option_type = data['option_type'].upper()
         action = data['action'].upper()
-        broker = data.get('broker', 'kite').lower().strip()
+        broker_input = data.get('broker')
         quantity = data.get('quantity')
         tradingsymbol_override = data.get('tradingsymbol')
-        expiry_override = data.get('expiry')  # ISO date string optional
-        
-        # Validate option_type
-        if option_type not in ['CE', 'PE']:
-            return jsonify({
-                'success': False,
-                'error': 'Invalid option_type. Must be CE or PE'
-            }), 400
-        
-        # Validate action
-        if action not in ['BUY', 'SELL']:
-            return jsonify({
-                'success': False,
-                'error': 'Invalid action. Must be BUY or SELL'
-            }), 400
-        
-        # Validate broker — accept zerodha_N (e.g. zerodha_1, zerodha_5) as Zerodha instances
-        valid_brokers = ['kite', 'kotak_neo', 'dhan', 'fyers']
-        is_zerodha_instance = broker.startswith('zerodha_') and broker.split('_')[1].isdigit()
-        if broker not in valid_brokers and not is_zerodha_instance:
-            return jsonify({
-                'success': False,
-                'error': f'Invalid broker. Must be one of: {", ".join(valid_brokers)} or zerodha_N (e.g. zerodha_1, zerodha_5)'
-            }), 400
-        
-        # ---- Check BROKER_N_ACTIVE flag ----
+        expiry_override = data.get('expiry')
         _username = session.get('username', 'Mine')
-        # Resolve instance number for active check
-        if is_zerodha_instance:
-            _active_instance = int(broker.split('_')[1])
-        elif broker == 'kite':
-            _active_instance = 1
-        else:
-            # For non-Zerodha lookup by broker type name
-            _active_instance = None
-            broker_type_map = {'kotak_neo': 'kotak', 'dhan': 'dhan', 'fyers': 'fyers'}
-            _broker_type = broker_type_map.get(broker, '')
-            from trading_app.app.utils.user_env import UserEnvManager
-            for _i in range(1, 21):
-                _bt = UserEnvManager.get_user_var(_username, f'BROKER_{_i}_TYPE', '').strip().lower()
-                if _bt == _broker_type:
-                    _active_instance = _i
-                    break
 
-        if _active_instance is not None and not is_broker_active(_username, _active_instance):
-            logger.warning(f"[Order] Blocked: Broker {broker} (instance {_active_instance}) is INACTIVE (BROKER_{_active_instance}_ACTIVE=false)")
-            return jsonify({
-                'success': False,
-                'error': f'Broker {broker} is currently INACTIVE. Set BROKER_{_active_instance}_ACTIVE=true in .env to enable it.'
-            }), 403
-        # ------------------------------------
-        
-        # Route to appropriate broker service
-        # 'kite' and 'zerodha_1' both use instance 1; 'zerodha_5' uses instance 5, etc.
-        if broker == 'kite' or is_zerodha_instance:
-            # Parse instance number: 'kite' → 1, 'zerodha_5' → 5
-            zerodha_instance = 1 if broker == 'kite' else int(broker.split('_')[1])
-            logger.info(f"[Order] Routing to Zerodha instance {zerodha_instance} (broker='{broker}')")
-            # Get Kite instance
-            kite = get_kite(instance=zerodha_instance)
-            if not kite:
-                return jsonify({
-                    'success': False,
-                    'error': f'Zerodha instance {zerodha_instance} not connected. Please login via the broker panel.'
-                }), 401
+        from trading_app.app.utils.user_env import UserEnvManager
+
+        # Identify target brokers
+        targets = []
+        is_all = not broker_input or str(broker_input).lower() in ['all', 'null', 'none']
+
+        if is_all:
+            for i in range(1, 21):
+                if is_broker_active(_username, i):
+                    b_type = UserEnvManager.get_user_var(_username, f'BROKER_{i}_TYPE', '').strip().lower()
+                    if b_type == 'zerodha': targets.append({'type': f'zerodha_{i}', 'instance': i})
+                    elif b_type in ['kotak', 'kotak_neo']: targets.append({'type': 'kotak_neo', 'instance': i})
+                    elif b_type == 'dhan': targets.append({'type': 'dhan', 'instance': i})
+                    elif b_type == 'fyers': targets.append({'type': 'fyers', 'instance': i})
+        else:
+            broker = broker_input.lower().strip()
+            is_zerodha_instance = broker.startswith('zerodha_') and broker.split('_')[1].isdigit()
+            _active_instance = None
+            if is_zerodha_instance:
+                _active_instance = int(broker.split('_')[1])
+            elif broker == 'kite':
+                _active_instance = 1
+            else:
+                broker_type_map = {'kotak_neo': 'kotak', 'dhan': 'dhan', 'fyers': 'fyers'}
+                _broker_type = broker_type_map.get(broker, '')
+                for _i in range(1, 21):
+                    if UserEnvManager.get_user_var(_username, f'BROKER_{_i}_TYPE', '').strip().lower() == _broker_type:
+                        _active_instance = _i
+                        break
             
-            # Place order using KiteService
-            from trading_app.service.kite_order_services import KiteService
-            kite_service = KiteService(kite_instance=kite)
+            if _active_instance:
+                targets.append({'type': broker, 'instance': _active_instance})
+
+        if not targets:
+            return jsonify({'success': False, 'error': 'No active broker(s) found'}), 400
+
+        def _execute_single(broker, _active_instance):
+            is_zerodha_instance = broker.startswith('zerodha_') and broker.split('_')[1].isdigit()
             
-            # Map action to transaction type
-            transaction_type = kite.TRANSACTION_TYPE_BUY if action == 'BUY' else kite.TRANSACTION_TYPE_SELL
-            
-            result = kite_service.place_option_order(
-                symbol=symbol,
-                strike=strike,
-                option_type=option_type,
-                transaction_type=transaction_type,
-                quantity=quantity
-            )
-            
-            if result['success']:
-                logger.info(f"Kite - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
+            if _active_instance is not None and not is_broker_active(_username, _active_instance):
+                return {'success': False, 'error': f'Broker {broker} is INACTIVE'}, 403
+
+            # Zerodha / Kite
+            if broker == 'kite' or is_zerodha_instance:
+                zerodha_instance = 1 if broker == 'kite' else int(broker.split('_')[1])
+                kite = get_kite(instance=zerodha_instance)
+                if not kite:
+                    return {'success': False, 'error': f'Zerodha {zerodha_instance} not connected'}, 401
                 
-                # **AUTO-PLACE SL ORDER** - If BUY order was successful
-                if action == 'BUY':
+                from trading_app.service.kite_order_services import KiteService
+                kite_service = KiteService(kite_instance=kite)
+                transaction_type = kite.TRANSACTION_TYPE_BUY if action == 'BUY' else kite.TRANSACTION_TYPE_SELL
+                
+                result = kite_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=transaction_type, quantity=quantity)
+                if result['success'] and action == 'BUY':
                     try:
-                        # Get entry price from the order result
-                        entry_price = result.get('price')  # This is the execution price
-                        
-                        if not entry_price or entry_price <= 0:
-                            logger.warning(f"Invalid entry price from order result: {entry_price}")
-                            result['sl_success'] = False
-                            result['sl_error'] = 'Could not determine entry price'
-                            return jsonify(result), 200
-                        
-                        sl_price = entry_price - 20  # SL at entry - 20 points
-                        
-                        logger.info(f"[SL] Auto-placing SL order: Entry={entry_price:.2f}, SL Trigger={sl_price:.2f}")
-                        
-                        # Get KiteService instance
-                        from trading_app.service.kite_order_services import KiteService
-                        kite_service = KiteService(kite_instance=kite)
-                        
-                        # Get option symbol for SL order
-                        option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
-                        
-                        if not option_symbol:
-                            logger.error(f"[SL] Could not get option symbol: {symbol} {strike} {option_type}")
-                            result['sl_success'] = False
-                            result['sl_error'] = f'Could not determine option symbol for {symbol} {strike} {option_type}'
-                            return jsonify(result), 200
-                        
-                        logger.info(f"[SL] Got option symbol: {option_symbol}")
-                        
-                        # Get lot size
-                        lot_size = kite_service.get_lot_size(symbol)
-                        logger.info(f"[SL] Got lot size: {lot_size}")
-                        
-                        # Place SL order
-                        logger.info(f"[SL] Placing stoploss order: symbol={option_symbol}, trigger={sl_price:.2f}, qty={lot_size}")
-                        sl_result = kite_service.place_stoploss_order(
-                            tradingsymbol=option_symbol,
-                            trigger_price=sl_price,
-                            quantity=lot_size
-                        )
-                        
-                        logger.info(f"[SL] SL order result: {sl_result}")
-                        
-                        if sl_result['success']:
-                            logger.info(f"✅ SL order auto-placed: {option_symbol} @ Trigger {sl_price:.2f} | SL Order ID: {sl_result['order_id']}")
-                            result['sl_order_id'] = sl_result['order_id']
-                            result['sl_trigger_price'] = sl_price
-                            result['sl_success'] = True
-                        else:
-                            logger.error(f"❌ SL order auto-placement failed: {sl_result.get('error')}")
-                            result['sl_success'] = False
-                            result['sl_error'] = sl_result.get('error', 'Unknown error')
-                            
-                    except Exception as e:
-                        logger.error(f"[SL] Exception while auto-placing SL: {e}", exc_info=True)
-                        result['sl_success'] = False
-                        result['sl_error'] = str(e)
-                
-                return jsonify(result), 200
-            else:
-                logger.warning(f"Kite - Order placement failed: {result.get('error')}")
-                return jsonify(result), 400
-        
-        elif broker == 'kotak_neo':
-            from trading_app.service.kotak_order_services import KotakOrderService
-            
-            # Get stored credentials from environment (set during login)
-            from trading_app.app.utils.user_env import UserEnvManager
-            
-            # Since _active_instance is computed above
-            if _active_instance is None:
-                return jsonify({'success': False, 'error': 'Kotak broker instance not found'}), 400
-                
-            trading_token = session.get(f'kotak_{_active_instance}_trading_token') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_TRADING_TOKEN')
-            trading_sid = session.get(f'kotak_{_active_instance}_trading_sid') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_TRADING_SID')
-            base_url = session.get(f'kotak_{_active_instance}_base_url') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_BASE_URL') or "https://gw-napi.kotaksecurities.com"
-            consumer_key = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_CONSUMER_KEY', '')
-            
-            
-            # Check if authenticated
-            if not trading_token or not base_url:
-                logger.warning("[Kotak Neo] Not authenticated - trading_token or base_url missing")
-                return jsonify({
-                    'success': False,
-                    'error': 'Kotak Neo not authenticated. Please login via the Kotak Neo login page first (Settings > Brokers > Kotak Neo).'
-                }), 401
-            
-            # Create service with authenticated credentials
-            kotak_service = KotakOrderService(access_token=trading_token)
-            kotak_service.trading_token = trading_token
-            kotak_service.trading_sid = trading_sid
-            kotak_service.base_url = base_url
-            kotak_service._order_base_url = base_url  # Direct server URL for HTTP orders
-            kotak_service.consumer_key = consumer_key
-            
-            # DEBUG: Log what we're about to inject
-            logger.info(f"[Kotak] About to inject tokens: token={trading_token[:30] if trading_token else 'NONE'}..., sid={trading_sid[:30] if trading_sid else 'NONE'}...")
-            
-            # RE-INJECT TOKENS INTO SDK CLIENT (critical: tokens were set after init)
-            inject_success = kotak_service.inject_trading_tokens()
-            logger.info(f"[Kotak] Token injection result: {inject_success}")
-            
-            # Map action to transaction_type for Kotak
-            transaction_type = 'BUY' if action == 'BUY' else 'SELL'
-            
-            result = kotak_service.place_option_order(
-                symbol=symbol,
-                strike=strike,
-                option_type=option_type,
-                transaction_type=transaction_type,
-                quantity=quantity,
-                tradingsymbol=tradingsymbol_override,
-                target_expiry=expiry_override
-            )
-            
-            if result['success']:
-                logger.info(f"Kotak Neo - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
-                return jsonify(result), 200
-            else:
-                logger.warning(f"Kotak Neo - Order placement failed: {result.get('error')}")
-                return jsonify(result), 400
-        
-        elif broker == 'dhan':
-            from trading_app.service.dhan_order_services import DhanOrderService
-            
-            # Get stored Dhan credentials from environment
-            from trading_app.app.utils.user_env import UserEnvManager
-            if _active_instance is None:
-                return jsonify({'success': False, 'error': 'Dhan broker instance not found'}), 400
-                
-            dhan_access_token = session.get(f'dhan_{_active_instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_ACCESS_TOKEN')
-            dhan_client_id = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_CLIENT_ID')
-            
-            # Check if authenticated
-            if not dhan_access_token or not dhan_client_id:
-                logger.warning("[Dhan] Credentials not found - user must login first")
-                return jsonify({
-                    'success': False,
-                    'error': 'Dhan not authenticated. Please login via Settings > Brokers > Dhan first.'
-                }), 401
-            
-            try:
-                # Create Dhan service with credentials
-                dhan_service = DhanOrderService(
-                    access_token=dhan_access_token,
-                    client_id=dhan_client_id
-                )
-                
-                # First, validate the option exists using Kite
-                # This gives us a reference point and ensures the option is valid
-                kite = get_kite()
-                if not kite:
-                    return jsonify({
-                        'success': False,
-                        'error': 'Kite connection required for Dhan option validation'
-                    }), 401
-                
-                from trading_app.service.kite_order_services import KiteService
-                kite_service = KiteService(kite_instance=kite)
-                
-                # Get the Kite option symbol (validates the option exists)
-                # Format: NIFTY26FEB25600CE
-                kite_option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
-                if not kite_option_symbol:
-                    return jsonify({
-                        'success': False,
-                        'error': f'Option {symbol} {strike} {option_type} not found in Kite master'
-                    }), 400
-                
-                logger.info(f"[Dhan] Validated option symbol via Kite: {kite_option_symbol}")
-                
-                # For Dhan, we need the security ID
-                # Try two approaches:
-                # 1. Search for numeric security ID via API
-                # 2. Fall back to using the trading symbol directly (many Dhan endpoints accept this)
-                
-                logger.info(f"[Dhan] Attempting to find security ID for {kite_option_symbol}...")
-                security_id = None
-                search_result = dhan_service.search_symbol(kite_option_symbol)
-                
-                if search_result.get('security_id'):
-                    security_id = str(search_result.get('security_id', ''))
-                    logger.info(f"[Dhan] Converted to Dhan format: {security_id}")
-                else:
-                    # Fallback: Use Kite symbol as-is
-                    logger.warning(f"[Dhan] Could not convert symbol, using Kite format: {kite_option_symbol}")
-                    security_id = kite_option_symbol
-                
-                lot_size = dhan_service.get_lot_size(symbol)
-                order_quantity = (quantity or 1) * lot_size
-                
-                # Map action to transaction type
-                transaction_type = 'BUY' if action == 'BUY' else 'SELL'
-                
-                logger.info(f"[Dhan] Placing {transaction_type} order: symbol={kite_option_symbol}, security_id={security_id}, qty={order_quantity}")
-                
-                # Place order using the converted symbol ID
-                result = dhan_service.place_order(
-                    security_id=security_id,
-                    transaction_type=transaction_type,
-                    quantity=order_quantity,
-                    order_type='MARKET',
-                    product_type='INTRADAY',
-                    exchange_segment='NSE_FNO'
-                )
-                
-                if result['success']:
-                    logger.info(f"Dhan - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
-                    # Debug why SL block may not trigger
-                    logger.info(f"[Dhan-SL] DEBUG: action='{action}', action=='BUY'={action == 'BUY'}, result['success']={result['success']}, type={type(action)}")
-                    if action != 'BUY':
-                        logger.error(f"[Dhan-SL] SL block skipped: action='{action}' (should be 'BUY')")
-                    if not result['success']:
-                        logger.error(f"[Dhan-SL] SL block skipped: entry order not successful")
-                    # **AUTO-PLACE SL ORDER** - If BUY order was successful
-                    if action == 'BUY':
-                        try:
-                            # 1. Try Dhan fill price
-                            entry_price = result.get('price', 0)
-                            # 2. If not available, fetch LTP from Kite
-                            if not entry_price or entry_price == 0:
-                                logger.warning(f"[Dhan-SL] Entry price from Dhan response is zero. Attempting to fetch LTP from Kite.")
-                                try:
-                                    kite = get_kite()
-                                    from trading_app.service.kite_order_services import KiteService
-                                    kite_service = KiteService(kite_instance=kite)
-                                    option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
-                                    ltp = None
-                                    if kite and option_symbol:
-                                        ltp_data = kite.ltp([f'NSE:{option_symbol}'])
-                                        ltp = ltp_data.get(f'NSE:{option_symbol}', {}).get('last_price', 0)
-                                        if ltp and ltp > 0:
-                                            entry_price = ltp
-                                            logger.info(f"[Dhan-SL] Got LTP from Kite: {ltp}")
-                                except Exception as e:
-                                    logger.error(f"[Dhan-SL] Failed to fetch LTP from Kite: {e}")
-                            # 3. If still not available, fallback to strike, but ensure SL trigger is below LTP
-                            if not entry_price or entry_price == 0:
-                                logger.warning(f"[Dhan-SL] Could not get entry price from Dhan or Kite. Using strike as fallback.")
-                                entry_price = strike
-                                # Try to get LTP for safety margin
-                                ltp = None
-                                try:
-                                    kite = get_kite()
-                                    from trading_app.service.kite_order_services import KiteService
-                                    kite_service = KiteService(kite_instance=kite)
-                                    option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
-                                    if kite and option_symbol:
-                                        ltp_data = kite.ltp([f'NSE:{option_symbol}'])
-                                        ltp = ltp_data.get(f'NSE:{option_symbol}', {}).get('last_price', 0)
-                                except Exception as e:
-                                    logger.error(f"[Dhan-SL] Could not fetch LTP for safety margin: {e}")
-                                # If LTP is available and strike is above LTP, set SL just below LTP
-                                if ltp and ltp > 0 and entry_price > ltp:
-                                    entry_price = ltp
-                                    logger.info(f"[Dhan-SL] Adjusted entry price to LTP for SL safety: {ltp}")
-                            # Now set SL trigger price
+                        entry_price = result.get('price')
+                        if entry_price and entry_price > 0:
                             sl_price = entry_price - 20
-                            # Dhan requires trigger price < price for SL SELL (for BUY order)
-                            # Ensure sl_price < entry_price
-                            if sl_price >= entry_price:
-                                sl_price = entry_price - 1
-                                logger.warning(f"[Dhan-SL] Adjusted SL trigger to be below entry price: {sl_price}")
-                            logger.info(f"[Dhan-SL] Auto-placing SL order: Entry={entry_price:.2f}, SL Trigger={sl_price:.2f}")
-                            # Place SL order using Dhan service
-                            sl_result = dhan_service.place_stoploss_order(
-                                security_id=security_id,
-                                trigger_price=sl_price,
-                                quantity=order_quantity,
-                                product_type='INTRADAY',
-                                exchange_segment='NSE_FNO',
-                                entry_price=entry_price
-                            )
-                            logger.info(f"[Dhan-SL] SL order result: {sl_result}")
-                            if sl_result['success']:
-                                logger.info(f"✅ [Dhan] SL order auto-placed: {kite_option_symbol} @ Trigger {sl_price:.2f} | SL Order ID: {sl_result.get('order_id')}")
-                                result['sl_order_id'] = sl_result.get('order_id')
-                                result['sl_trigger_price'] = sl_price
-                                result['sl_success'] = True
-                            else:
-                                logger.error(f"❌ [Dhan] SL order auto-placement failed: {sl_result.get('error')}")
-                                result['sl_success'] = False
-                                result['sl_error'] = sl_result.get('error', 'Unknown error')
-                        except Exception as e:
-                            logger.error(f"[Dhan-SL] Exception while auto-placing SL: {e}", exc_info=True)
-                            result['sl_success'] = False
-                            result['sl_error'] = str(e)
-                    return jsonify(result), 200
-                else:
-                    logger.warning(f"Dhan - Order placement failed: {result.get('error')}")
-                    return jsonify(result), 400
-                    
-            except Exception as e:
-                logger.error(f"[Dhan] Error during order placement: {e}", exc_info=True)
-                return jsonify({
-                    'success': False,
-                    'error': f'Dhan order error: {str(e)}'
-                }), 400
-        
-        elif broker == 'fyers':
-            # Get stored Fyers credentials from environment
-            from trading_app.app.utils.user_env import UserEnvManager
-            if _active_instance is None:
-                return jsonify({'success': False, 'error': 'Fyers broker instance not found'}), 400
+                            option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+                            if option_symbol:
+                                lot_size = kite_service.get_lot_size(symbol)
+                                sl_res = kite_service.place_stoploss_order(tradingsymbol=option_symbol, trigger_price=sl_price, quantity=lot_size)
+                                if sl_res['success']:
+                                    result.update({'sl_order_id': sl_res['order_id'], 'sl_trigger_price': sl_price, 'sl_success': True})
+                    except Exception as e: logger.error(f"[SL] Kite Err: {e}")
+                return result, (200 if result['success'] else 400)
+
+            # Kotak Neo
+            elif broker == 'kotak_neo':
+                from trading_app.service.kotak_order_services import KotakOrderService
+                trading_token = session.get(f'kotak_{_active_instance}_trading_token') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_TRADING_TOKEN')
+                trading_sid = session.get(f'kotak_{_active_instance}_trading_sid') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_TRADING_SID')
+                base_url = session.get(f'kotak_{_active_instance}_base_url') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_BASE_URL') or "https://gw-napi.kotaksecurities.com"
+                if not trading_token: return {'success': False, 'error': 'Kotak not authenticated'}, 401
                 
-            fyers_access_token = session.get(f'fyers_{_active_instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_ACCESS_TOKEN')
-            fyers_app_id = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_APP_ID')
-            
-            # Check if authenticated
-            if not fyers_app_id or not fyers_access_token:
-                logger.warning("[Fyers] Credentials not found - user must login first")
-                return jsonify({
-                    'success': False,
-                    'error': 'Fyers not authenticated. Please login via Settings > Brokers > Fyers first.'
-                }), 401
-            
-            try:
-                from trading_app.service.fyers_order_services import FyersOrderService
+                kotak_service = KotakOrderService(access_token=trading_token)
+                kotak_service.trading_token = trading_token; kotak_service.trading_sid = trading_sid; kotak_service.base_url = base_url
+                kotak_service.inject_trading_tokens()
                 
-                # Create Fyers service with credentials
-                fyers_service = FyersOrderService(app_id=fyers_app_id, access_token=fyers_access_token)
+                result = kotak_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=action, quantity=quantity, tradingsymbol=tradingsymbol_override, target_expiry=expiry_override)
+                return result, (200 if result['success'] else 400)
+
+            # Dhan
+            elif broker == 'dhan':
+                from trading_app.service.dhan_order_services import DhanOrderService
+                dhan_access_token = session.get(f'dhan_{_active_instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_ACCESS_TOKEN')
+                dhan_client_id = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_CLIENT_ID')
+                if not dhan_access_token: return {'success': False, 'error': 'Dhan not authenticated'}, 401
                 
-                # Get the Kite service to look up option symbol
+                dhan_service = DhanOrderService(access_token=dhan_access_token, client_id=dhan_client_id)
                 kite = get_kite()
-                if not kite:
-                    return jsonify({
-                        'success': False,
-                        'error': 'Kite connection required for Fyers symbol lookup'
-                    }), 401
-                
+                if not kite: return {'success': False, 'error': 'Kite required for Dhan'}, 401
                 from trading_app.service.kite_order_services import KiteService
                 kite_service = KiteService(kite_instance=kite)
+                kite_opt_sym = kite_service.get_option_symbol(symbol, strike, option_type)
+                if not kite_opt_sym: return {'success': False, 'error': 'Option not found'}, 400
                 
-                # Get option symbol using Kite (trading symbol like NIFTY24JAN25000CE)
-                option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+                sec_id = str(dhan_service.search_symbol(kite_opt_sym).get('security_id', kite_opt_sym))
+                lot = dhan_service.get_lot_size(symbol)
+                qty = (quantity or 1) * lot
+                result = dhan_service.place_order(security_id=sec_id, transaction_type=action, quantity=qty, order_type='MARKET', product_type='INTRADAY', exchange_segment='NSE_FNO')
                 
-                if not option_symbol:
-                    return jsonify({
-                        'success': False,
-                        'error': f'Could not find option symbol for {symbol} {strike} {option_type}'
-                    }), 400
+                if result['success'] and action == 'BUY':
+                    try:
+                        entry = result.get('price', 0)
+                        if not entry or entry == 0:
+                            ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
+                            entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
+                        sl_p = entry - 20
+                        sl_res = dhan_service.place_stoploss_order(security_id=sec_id, trigger_price=sl_p, quantity=qty, product_type='INTRADAY', exchange_segment='NSE_FNO', entry_price=entry)
+                        if sl_res['success']: result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
+                    except Exception as e: logger.error(f"[SL] Dhan Err: {e}")
+                return result, (200 if result['success'] else 400)
+
+            # Fyers
+            elif broker == 'fyers':
+                fyers_at = session.get(f'fyers_{_active_instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_ACCESS_TOKEN')
+                fyers_id = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_APP_ID')
+                if not fyers_at: return {'success': False, 'error': 'Fyers not authenticated'}, 401
                 
-                # Convert to Fyers format (e.g., NSE:NIFTY24JAN25000CE)
-                fyers_symbol = f"NSE:{option_symbol}"
+                from trading_app.service.fyers_order_services import FyersOrderService
+                f_service = FyersOrderService(app_id=fyers_id, access_token=fyers_at)
+                kite = get_kite()
+                if not kite: return {'success': False, 'error': 'Kite required for Fyers'}, 401
+                from trading_app.service.kite_order_services import KiteService
+                kite_service = KiteService(kite_instance=kite)
+                opt_sym = kite_service.get_option_symbol(symbol, strike, option_type)
+                if not opt_sym: return {'success': False, 'error': 'Option not found'}, 400
                 
-                lot_size = fyers_service.get_lot_size(symbol)
-                order_quantity = (quantity or 1) * lot_size
-                
-                # Map action to side (1=BUY, -1=SELL)
-                side = 1 if action == 'BUY' else -1
-                
-                # Determine product type based on current time
-                # Fyers disallows MIS orders after 3:20 PM IST (system square-off time)
-                # Switch to CNC (Cash and Carry) after square-off time
+                f_sym = f"NSE:{opt_sym}"
+                qty = (quantity or 1) * f_service.get_lot_size(symbol)
                 from datetime import datetime, time
-                current_time = datetime.now().time()
-                FYERS_SQUARE_OFF_TIME = time(15, 20)  # 3:20 PM IST
-                
-                if current_time >= FYERS_SQUARE_OFF_TIME:
-                    # After square-off time, use CNC (Cash and Carry) for positional trades
-                    product_type = 'CNC'
-                    logger.info(f"[Fyers] After square-off time ({FYERS_SQUARE_OFF_TIME}), using CNC instead of INTRADAY")
-                else:
-                    # Before square-off time, use INTRADAY (MIS)
-                    product_type = 'INTRADAY'
-                
-                logger.info(f"[Fyers] Placing order for {fyers_symbol} with side={side}, quantity={order_quantity}, product_type={product_type}")
-                
-                # Use place_order with the Fyers symbol format
-                result = fyers_service.place_order(
-                    symbol=fyers_symbol,
-                    side=side,
-                    quantity=order_quantity,
-                    order_type=2,  # 2=MARKET
-                    product_type=product_type
-                )
-                
-                if result['success']:
-                    logger.info(f"Fyers - Order placed successfully: {action} {option_type} {symbol} {strike} - Order ID: {result.get('order_id')}")
-                    return jsonify(result), 200
-                else:
-                    logger.warning(f"Fyers - Order placement failed: {result.get('error')}")
-                    return jsonify(result), 400
-                    
-            except Exception as e:
-                logger.error(f"[Fyers] Error during order placement: {e}", exc_info=True)
-                return jsonify({
-                    'success': False,
-                    'error': f'Fyers order error: {str(e)}'
-                }), 400
-        
-        # Should never reach here if validation is correct
-        return jsonify({
-            'success': False,
-            'error': 'Invalid broker selection'
-        }), 400
-    
+                prod = 'CNC' if datetime.now().time() >= time(15, 20) else 'INTRADAY'
+                result = f_service.place_order(symbol=f_sym, side=(1 if action == 'BUY' else -1), quantity=qty, order_type=2, product_type=prod)
+                return result, (200 if result['success'] else 400)
+
+            return {'success': False, 'error': 'Invalid broker'}, 400
+
+        # Execute all
+        final_responses = []
+        for target in targets:
+            res, code = _execute_single(target['type'], target['instance'])
+            final_responses.append({'broker': target['type'], 'instance': target['instance'], 'result': res, 'status': code})
+
+        if not is_all:
+            return jsonify(final_responses[0]['result']), final_responses[0]['status']
+        else:
+            any_success = any(r['result'].get('success') for r in final_responses)
+            return jsonify({
+                'success': any_success,
+                'summary': final_responses
+            }), (200 if any_success else 400)
+
     except Exception as e:
-        logger.error(f"Error placing intraday 920 order: {e}", exc_info=True)
+        logger.error(f"Error in multi-order: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'error': f'Error placing order: {str(e)}'
+            'error': f'Error in multi-order: {str(e)}'
         }), 500
 
 
@@ -2973,8 +2684,11 @@ def start_monitoring() -> EndpointResponse:
                 'error': 'User not authenticated'
             }), 401
         
-        # Get monitoring type
+        # Get monitoring type and parameters
         monitor_type = request.args.get('type', 'ALL').upper()
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        ratio = request.args.get('ratio', '1:2-trail')
+        
         if monitor_type not in ['ENTRY', 'SL', 'ALL']:
             return jsonify({
                 'success': False,
@@ -2991,6 +2705,10 @@ def start_monitoring() -> EndpointResponse:
         with _monitor_lock:
             monitor = _live_signal_monitors.get(username)
             
+            # If monitor exists but parameters changed, we might need to recreate or update it
+            # For now, let's keep it simple: if monitor exists, use it. 
+            # If we want to support changing symbol/ratio without restarting, we'd need more logic.
+            
             if not monitor:
                 # Get KiteConnect instance
                 kite = get_kite()
@@ -3001,11 +2719,14 @@ def start_monitoring() -> EndpointResponse:
                     }), 400
                 
                 # Create new monitor
-                logger.info(f"Creating new Intraday920LiveSignal instance for {username}")
-                monitor = Intraday920LiveSignal(kite, symbol='NIFTY', username=username)
+                logger.info(f"Creating new Intraday920LiveSignal instance for {username} (Symbol: {symbol}, Ratio: {ratio})")
+                monitor = Intraday920LiveSignal(kite, symbol=symbol, username=username, risk_reward_ratio=ratio)
                 _live_signal_monitors[username] = monitor
             else:
                 logger.info(f"Using existing Intraday920LiveSignal instance for {username} (ID: {id(monitor)})")
+                # Optional: Update existing monitor's ratio/symbol if we want
+                # monitor.symbol = symbol
+                # monitor.risk_reward_ratio = ratio
 
         
         # Check if it's a market day
@@ -3275,6 +2996,310 @@ def get_open_interest() -> EndpointResponse:
             'success': False,
             'error': str(e)
         }), 500
+
+
+@api_bp.route('/oi-profile/candles', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def oi_profile_candles() -> EndpointResponse:
+    """
+    Fetch intraday OHLC candle data for a symbol (default NIFTY).
+
+    Uses hardcoded Kite instrument tokens so the endpoint responds in < 1 s
+    instead of 10-30 s waiting for kite.instruments('NSE') to download.
+
+    Query Parameters:
+        symbol   (str): NIFTY | BANKNIFTY | FINNIFTY  (default: NIFTY)
+        interval (str): minute | 5minute | 15minute | 30minute | 60minute | day  (default: 5minute)
+        days     (int): Calendar days of history to return 1-100  (default: 1)
+
+    Returns:
+        JSON { success, candles: [{time, open, high, low, close, volume}], count }
+        'time' values are Unix timestamps adjusted for IST display (same convention as
+        the rest of the codebase – IST offset added so Lightweight Charts shows correct time).
+    """
+    # Stable Zerodha/Kite NSE index instrument tokens – never change.
+    NSE_INDEX_TOKENS = {
+        'NIFTY':      256265,   # NSE:NIFTY 50
+        'BANKNIFTY':  260105,   # NSE:NIFTY BANK
+        'FINNIFTY':   257801,   # NSE:NIFTY FIN SERVICE
+        'MIDCPNIFTY': 288009,   # NSE:NIFTY MIDCAP SELECT
+    }
+
+    try:
+        symbol   = request.args.get('symbol',   'NIFTY').upper()
+        interval = request.args.get('interval', '5minute')
+        days     = request.args.get('days', 1, type=int)
+
+        valid_intervals = ['minute', '2minute', '3minute', '5minute', '10minute',
+                           '15minute', '30minute', '60minute', 'day']
+
+        if symbol not in NSE_INDEX_TOKENS:
+            return jsonify({'success': False,
+                            'error': f'Invalid symbol. Use one of {list(NSE_INDEX_TOKENS.keys())}'}), 400
+        if interval not in valid_intervals:
+            return jsonify({'success': False,
+                            'error': f'Invalid interval. Use one of {valid_intervals}'}), 400
+        days = min(max(int(days), 1), 100)
+
+        kite = get_kite(instance=1)
+        if not kite:
+            return jsonify({'success': False,
+                            'error': 'Kite (Broker 1) not connected. Please login.'}), 401
+
+        # ── Instant token lookup – no network call ──────────────────────
+        token = NSE_INDEX_TOKENS[symbol]
+        logger.info(f'[OI-Profile] Using hardcoded token {token} for {symbol}')
+
+        # ── Date range: from market-open today (or N-1 days back) ───────
+        from datetime import datetime as _dt, timedelta as _td
+        import time as _time
+        import random as _random
+
+        now       = _dt.now()
+        # Fetch extra calendar days to account for weekends and holidays
+        fetch_back = days + 5
+        from_date = (now - _td(days=fetch_back)).replace(hour=9, minute=0, second=0, microsecond=0)
+        to_date   = now
+
+        ist_offset = int(5.5 * 3600)  # 19 800 s – same as rest of codebase
+
+        # ── Fetch with retry ────────────────────────────────────────────
+        candles    = []
+        max_retry  = 3
+        # Handle natively unsupported 2minute interval by fetching 1minute and aggregating
+        fetch_interval = 'minute' if interval == '2minute' else interval
+        
+        for attempt in range(max_retry):
+            try:
+                raw = kite.historical_data(
+                    instrument_token=token,
+                    from_date=from_date,
+                    to_date=to_date,
+                    interval=fetch_interval
+                )
+                
+                # Filter strictly by the last N actual trading days
+                if raw:
+                    unique_dates = sorted(list(set(c['date'].date() for c in raw)))
+                    target_dates = unique_dates[-days:] if len(unique_dates) >= days else unique_dates
+                    raw = [c for c in raw if c['date'].date() in target_dates]
+                
+                # Format to standard dicts
+                temp_candles = []
+                for c in raw:
+                    try:
+                        temp_candles.append({
+                            'time':   int(c['date'].timestamp()) + ist_offset,
+                            'open':   c['open'],
+                            'high':   c['high'],
+                            'low':    c['low'],
+                            'close':  c['close'],
+                            'volume': c.get('volume', 0)
+                        })
+                    except Exception:
+                        pass
+                
+                # Aggregate if 2minute requested for either index or options
+                def merge_batch(batch):
+                    if not batch: return None
+                    return {
+                        'time':   batch[0]['time'],
+                        'open':   batch[0]['open'],
+                        'high':   max(x['high'] for x in batch),
+                        'low':    min(x['low'] for x in batch),
+                        'close':  batch[-1]['close'],
+                        'volume': sum(x['volume'] for x in batch)
+                    }
+
+                if interval == '2minute' and temp_candles:
+                    aggregated = []
+                    batch = []
+                    last_day = None
+                    for c in temp_candles:
+                        current_dt = _dt.fromtimestamp(c['time'] - ist_offset)
+                        current_day = current_dt.date()
+                        
+                        # Reset batch on new day to prevent merging across days
+                        if last_day and current_day != last_day:
+                            if batch: 
+                                aggregated.append(merge_batch(batch))
+                                batch = []
+                        last_day = current_day
+                        
+                        batch.append(c)
+                        # Group every 2 candles (2 x 1m = 2m)
+                        if len(batch) == 2:
+                            aggregated.append(merge_batch(batch))
+                            batch = []
+                    if batch: 
+                        aggregated.append(merge_batch(batch))
+                    candles = aggregated
+                else:
+                    candles = temp_candles
+                    
+                break  # success – exit retry loop
+            except Exception as e:
+                if attempt < max_retry - 1:
+                    sleep = 0.5 * (2 ** attempt) + _random.uniform(0, 0.3)
+                    logger.warning(f'[OI-Profile] Retry {attempt+1}: {e} – sleeping {sleep:.1f}s')
+                    _time.sleep(sleep)
+                else:
+                    raise
+
+        logger.info(f'[OI-Profile] Returned {len(candles)} {interval} candles for {symbol}')
+
+        # ── Fetch official daily OHLC mapping for accurate CPR ────────
+        daily_ohlc = {}
+        try:
+            d_from = (now - _td(days=fetch_back + 10)).replace(hour=0, minute=0, second=0, microsecond=0)
+            daily_raw = kite.historical_data(instrument_token=token, from_date=d_from, to_date=to_date, interval='day')
+            for d in daily_raw:
+                dt_str = (d['date'] + _td(seconds=ist_offset)).strftime('%Y-%m-%d')
+                daily_ohlc[dt_str] = {
+                    'close': d['close'],
+                    'high': d['high'],
+                    'low': d['low']
+                }
+        except Exception as e:
+            logger.warning(f"[OI-Profile] Failed to fetch true daily OHLC: {e}")
+
+        # ── Intrinsic Levels Calculation & Option Candle Fetch ────────
+        try:
+            spot_high  = request.args.get('spot_high', type=float)
+            spot_low   = request.args.get('spot_low',  type=float)
+            step_value = request.args.get('step', 50,  type=int)
+            multiplier = request.args.get('multiplier', 2, type=int)
+            auto_hl    = request.args.get('auto_hl', 'false').lower() == 'true'
+
+            intrinsic_data = None
+            ce_candles = []
+            pe_candles = []
+
+            if auto_hl and candles:
+                lookbacks = {'minute': 60, '2minute': 30, '3minute': 20, '5minute': 12, '15minute': 4, '30minute': 2}
+                lookback = lookbacks.get(interval, 10)
+                subset = candles[-lookback:] if len(candles) >= lookback else candles
+                spot_high = round(max(c['high'] for c in subset), 2)
+                spot_low = round(min(c['low'] for c in subset), 2)
+
+            if spot_high is not None and spot_low is not None:
+                import math as _math
+                # itmCallStrike = math.round(math.ceil((spotLow - 150) / 100) * 100)
+                # itmPutStrike  = math.round(math.floor((spotHigh + 150) / 100) * 100)
+                itm_ce_strike = round(_math.ceil((spot_low - 150) / 100) * 100)
+                itm_pe_strike = round(_math.floor((spot_high + 150) / 100) * 100)
+
+                # ceIntrinsic = spotHigh - ce_strike_val (itm_ce_strike)
+                ce_intrinsic = max(spot_high - itm_ce_strike, 0)
+                pe_intrinsic = max(itm_pe_strike - spot_low, 0)
+
+                ce_levels = []
+                pe_levels = []
+                for i in range(1, multiplier + 1):
+                    ce_levels.append(ce_intrinsic + (step_value * i))
+                    pe_levels.append(pe_intrinsic + (step_value * i))
+
+                intrinsic_data = {
+                    'spot_high':     spot_high,
+                    'spot_low':      spot_low,
+                    'itm_ce_strike': itm_ce_strike,
+                    'itm_pe_strike': itm_pe_strike,
+                    'ce_intrinsic':  ce_intrinsic,
+                    'pe_intrinsic':  pe_intrinsic,
+                    'ce_levels':     ce_levels,
+                    'pe_levels':     pe_levels,
+                    'multiplier':    multiplier
+                }
+
+                # ── Fetch Option Candles for identified strikes ────────
+                try:
+                    from trading_app.service.kite_order_services import KiteService
+                    kite_service = KiteService(kite_instance=kite)
+                    
+                    ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                    pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+                    
+                    fetch_interval = 'minute' if interval == '2minute' else interval
+                    if ce_symbol:
+                        ce_token = kite_service.get_instrument_token(ce_symbol)
+                        if ce_token:
+                            raw_ce = kite.historical_data(int(ce_token), from_date, to_date, fetch_interval)
+                            temp_ce = [{
+                                'time': int(c['date'].timestamp()) + ist_offset,
+                                'open': c['open'], 'high': c['high'], 'low': c['low'], 'close': c['close'], 'volume': c.get('volume', 0)
+                            } for c in raw_ce]
+                            
+                            if interval == '2minute' and temp_ce:
+                                ce_candles = []
+                                batch = []
+                                last_day = None
+                                for c in temp_ce:
+                                    current_day = _dt.fromtimestamp(c['time'] - ist_offset).date()
+                                    if last_day and current_day != last_day and batch:
+                                        ce_candles.append(merge_batch(batch))
+                                        batch = []
+                                    last_day = current_day
+                                    batch.append(c)
+                                    if len(batch) == 2:
+                                        ce_candles.append(merge_batch(batch))
+                                        batch = []
+                                if batch: ce_candles.append(merge_batch(batch))
+                            else:
+                                ce_candles = temp_ce
+                            intrinsic_data['ce_symbol'] = ce_symbol
+
+                    if pe_symbol:
+                        pe_token = kite_service.get_instrument_token(pe_symbol)
+                        if pe_token:
+                            raw_pe = kite.historical_data(int(pe_token), from_date, to_date, fetch_interval)
+                            temp_pe = [{
+                                'time': int(c['date'].timestamp()) + ist_offset,
+                                'open': c['open'], 'high': c['high'], 'low': c['low'], 'close': c['close'], 'volume': c.get('volume', 0)
+                            } for c in raw_pe]
+                            
+                            if interval == '2minute' and temp_pe:
+                                pe_candles = []
+                                batch = []
+                                last_day = None
+                                for c in temp_pe:
+                                    current_day = _dt.fromtimestamp(c['time'] - ist_offset).date()
+                                    if last_day and current_day != last_day and batch:
+                                        pe_candles.append(merge_batch(batch))
+                                        batch = []
+                                    last_day = current_day
+                                    batch.append(c)
+                                    if len(batch) == 2:
+                                        pe_candles.append(merge_batch(batch))
+                                        batch = []
+                                if batch: pe_candles.append(merge_batch(batch))
+                            else:
+                                pe_candles = temp_pe
+                            intrinsic_data['pe_symbol'] = pe_symbol
+                            
+                except Exception as opt_e:
+                    logger.warning(f"[OI-Profile] Option candle fetch failed: {opt_e}")
+
+        except Exception as e:
+            logger.warning(f"[OI-Profile] Intrinsic calculation failed: {e}")
+            intrinsic_data = None
+
+        return jsonify({
+            'success':   True,
+            'symbol':    symbol,
+            'interval':  interval,
+            'candles':   candles,
+            'ce_opt_candles': ce_candles,
+            'pe_opt_candles': pe_candles,
+            'count':     len(candles),
+            'intrinsic': intrinsic_data,
+            'daily_ohlc': daily_ohlc,
+            'timestamp': datetime.now().isoformat()
+        })
+
+    except Exception as exc:
+        logger.error(f'[OI-Profile] Candle fetch error: {exc}', exc_info=True)
+        return jsonify({'success': False, 'error': str(exc)}), 500
 
 
 @api_bp.errorhandler(404)

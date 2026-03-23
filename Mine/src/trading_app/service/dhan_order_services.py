@@ -168,45 +168,58 @@ class DhanOrderService:
                 reader = csv.DictReader(f)
                 for row in reader:
                     # Extract security ID
-                    security_id = row.get('SEM_SMST_SECURITY_ID', '').strip()
+                    security_id = row.get('SEM_SMST_SECURITY_ID') or row.get('SECURITY_ID', '')
+                    security_id = security_id.strip()
                     if not security_id or not security_id.isdigit():
                         continue
                     
                     # Process Trading Symbol (Primary Key)
-                    dhan_symbol = row.get('SEM_TRADING_SYMBOL', '').strip()
+                    dhan_symbol = row.get('SEM_TRADING_SYMBOL') or row.get('SYMBOL_NAME', '')
+                    dhan_symbol = dhan_symbol.strip()
                     if dhan_symbol:
                         symbol_dict[dhan_symbol] = security_id
                     
                     # Process Custom/Display Symbol
-                    display_name = row.get('SEM_CUSTOM_SYMBOL', '').strip()
+                    display_name = row.get('SEM_CUSTOM_SYMBOL') or row.get('DISPLAY_NAME', '')
+                    display_name = display_name.strip()
                     if display_name:
                         symbol_dict[display_name] = security_id
 
                     # If no trading symbol, try Instrument Name (some API returns this)
                     if not dhan_symbol:
-                        instrument_name = row.get('SEM_INSTRUMENT_NAME', '').strip()
+                        instrument_name = row.get('SEM_INSTRUMENT_NAME') or row.get('INSTRUMENT', '')
+                        instrument_name = instrument_name.strip()
                         if instrument_name:
                             symbol_dict[instrument_name] = security_id
                             dhan_symbol = instrument_name
 
                     # For NSE Derivatives (Options), generate Kite-style formats for fallback
-                    seg = row.get('SEM_SEGMENT', '').strip()
+                    seg = row.get('SEM_SEGMENT') or row.get('SEGMENT', '')
+                    seg = seg.strip()
+                    
                     # If it's the FNO segment file, assume it's derivative even if SEM_SEGMENT flag is missing
                     if seg == 'D' or is_derivative_segment:
                         # Expiry flag filter for weekly/monthly (skip unknown if flag exists)
-                        expiry_flag = row.get('SEM_EXPIRY_FLAG', '').strip()
+                        expiry_flag = row.get('SEM_EXPIRY_FLAG') or row.get('EXPIRY_FLAG', '')
+                        expiry_flag = expiry_flag.strip()
                         if expiry_flag and expiry_flag not in ('W', 'M', 'D'): # D for Derivatives
                             pass # Still continue if it looks like an option
 
                         # Extract underlying and option info
-                        symbol_name = row.get('SM_SYMBOL_NAME', '').strip() or row.get('SEM_INSTRUMENT_NAME', '').strip()
+                        symbol_name = row.get('SM_SYMBOL_NAME') or row.get('UNDERLYING_SYMBOL') or row.get('SEM_INSTRUMENT_NAME') or row.get('INSTRUMENT', '')
+                        symbol_name = symbol_name.strip()
                         underlying = symbol_name.split()[0] if symbol_name else 'NIFTY'
                         if '-' in underlying: # Handle NIFTY-MAR-2026
                             underlying = underlying.split('-')[0]
                             
-                        strike = row.get('SEM_STRIKE_PRICE', '0').strip()
-                        opt_type = row.get('SEM_OPTION_TYPE', '').strip()
-                        expiry_date = row.get('SEM_EXPIRY_DATE', '').strip()
+                        strike = row.get('SEM_STRIKE_PRICE') or row.get('STRIKE_PRICE', '')
+                        strike = strike.strip()
+                        
+                        opt_type = row.get('SEM_OPTION_TYPE') or row.get('OPTION_TYPE', '')
+                        opt_type = opt_type.strip()
+                        
+                        expiry_date = row.get('SEM_EXPIRY_DATE') or row.get('SM_EXPIRY_DATE', '')
+                        expiry_date = expiry_date.strip()
 
                         if strike and opt_type and expiry_date:
                             try:
@@ -229,13 +242,17 @@ class DhanOrderService:
                                 day = exp_dt.strftime('%d')
                                 strike_clean = strike.split('.')[0]
 
-                                # 1. Kite text: NIFTY26FEB25550CE
+                                # 1. Kite short text: NIFTY26FEB25550CE (Overwrites weeklies, used for monthlies/guess)
                                 kite_text = f"{underlying}{year_short}{month_short}{strike_clean}{opt_type}"
                                 symbol_dict[kite_text] = security_id
 
                                 # 2. Spaced: NIFTY 02MAR26 25550 CE
                                 spaced = f"{underlying} {day}{month_short}{year_short} {strike_clean} {opt_type}"
                                 symbol_dict[spaced] = security_id
+                                
+                                # 3. Full Kite exact: NIFTY02MAR2625550CE
+                                full_kite = f"{underlying}{day}{month_short}{year_short}{strike_clean}{opt_type}"
+                                symbol_dict[full_kite] = security_id
                                 
                             except Exception:
                                 pass
@@ -430,21 +447,42 @@ class DhanOrderService:
             # Determine price field:
             # - LIMIT: use provided price
             # - STOP_LOSS: use trigger_price as limit price (or provided price if given)
-            # - STOP_LOSS_MARKET: price should be 0
-            # - MARKET: price should be 0
+            # - STOP_LOSS_MARKET: price should be 0.0
+            # - MARKET: price should be 0.0
             if is_limit:
-                order_price = str(float(price)) if price and float(price) > 0 else "0"
+                order_price = float(price) if price and float(price) > 0 else 0.0
             elif is_stop_loss and not is_stop_loss_market:
                 # For STOP_LOSS (limit), use price if provided, otherwise use trigger_price
-                order_price = str(float(price)) if price and float(price) > 0 else str(float(trigger_price))
+                order_price = float(price) if price and float(price) > 0 else float(trigger_price)
             else:
-                order_price = "0"
+                order_price = 0.0
             
             # Determine trigger price (required for all SL orders)
-            order_trigger_price = str(float(trigger_price)) if is_stop_loss and trigger_price and float(trigger_price) > 0 else "0"
+            order_trigger_price = float(trigger_price) if is_stop_loss and trigger_price and float(trigger_price) > 0 else 0.0
+            
+            # CRITICAL: Dhan V2 API requires specific string formatting.
+            # From official docs (https://dhanhq.co/docs/v2/orders/):
+            #   - quantity, price, triggerPrice, disclosedQuantity are ALL strings
+            #   - Empty string "" for fields that are not applicable
+            #   - MARKET orders: price="" and triggerPrice=""
+            #   - STOP_LOSS_MARKET: price="0", triggerPrice="<value>"
+            #   - STOP_LOSS (limit): price="<limit>", triggerPrice="<trigger>"
+            #   - LIMIT: price="<value>", triggerPrice=""
+            
+            # Format price string based on order type
+            if is_stop_loss_market:
+                price_str = "0"
+            elif is_limit or (is_stop_loss and not is_stop_loss_market):
+                price_str = str(order_price)
+            else:
+                # MARKET order
+                price_str = ""
+            
+            # Format trigger price string
+            trigger_str = str(order_trigger_price) if is_stop_loss and order_trigger_price > 0 else ""
             
             payload = {
-                "dhanClientId": self.client_id.strip(),
+                "dhanClientId": str(self.client_id).strip(),
                 "transactionType": transaction_type.upper(),
                 "exchangeSegment": exchange_segment,
                 "productType": product_type,
@@ -452,9 +490,9 @@ class DhanOrderService:
                 "validity": validity,
                 "securityId": str(security_id),
                 "quantity": str(int(quantity)),
-                "price": order_price,
-                "triggerPrice": order_trigger_price,
-                "disclosedQuantity": str(int(disclosed_quantity)) if disclosed_quantity > 0 else "0",
+                "price": price_str,
+                "triggerPrice": trigger_str,
+                "disclosedQuantity": "",
                 "afterMarketOrder": False
             }
             
@@ -608,19 +646,19 @@ class DhanOrderService:
             }
             
             payload = {
-                "dhanClientId": self.client_id,
+                "dhanClientId": str(self.client_id).strip(),
                 "orderId": order_id,
                 "validity": validity
             }
             
             if quantity is not None:
-                payload["quantity"] = str(quantity)
+                payload["quantity"] = str(int(quantity))
             if price is not None:
-                payload["price"] = str(price)
+                payload["price"] = str(float(price))
             if order_type is not None:
                 payload["orderType"] = order_type
             if trigger_price is not None:
-                payload["triggerPrice"] = str(trigger_price)
+                payload["triggerPrice"] = str(float(trigger_price))
             
             logging.info(f"[modify_order] Modifying order {order_id}: {payload}")
             
@@ -778,13 +816,13 @@ class DhanOrderService:
             }
             
             payload = {
-                "dhanClientId": self.client_id,
+                "dhanClientId": str(self.client_id).strip(),
                 "orderId": order_id,
-                "triggerPrice": str(new_trigger_price)
+                "triggerPrice": str(float(new_trigger_price))
             }
             
             if quantity is not None:
-                payload["quantity"] = str(quantity)
+                payload["quantity"] = str(int(quantity))
             
             logging.info(f"[modify_stoploss_order] Modifying SL order {order_id} to {new_trigger_price:.2f}")
             
@@ -1158,18 +1196,31 @@ class DhanOrderService:
             year_short = expiry_date.strftime('%y')          # '26'
             strike_str = str(int(strike))                    # '25500'
             
-            # Construct both possible formats for lookup
+            # Construct all possible formats used by Dhan in their CSV masters
+            # 1. SYMBOL-DDMMMYY-STRIKE-TYPE (Weekly Hyphenated)
             dhan_sym_weekly  = f"{symbol}-{day_str}{month_name}{year_short}-{strike_str}-{option_type}"
+            # 2. SYMBOL-MMMYYYY-STRIKE-TYPE (Monthly Hyphenated)
             dhan_sym_monthly = f"{symbol}-{month_name}{year_full}-{strike_str}-{option_type}"
+            # 3. SYMBOL DDMMMYY STRIKE OPTION (Standard Spaced)
+            dhan_sym_spaced = f"{symbol} {day_str}{month_name.upper()}{year_short} {strike_str} {option_type}"
+            # 4. SYMBOL MMMYY STRIKE OPTION (Monthly Spaced)
+            dhan_sym_monthly_spaced = f"{symbol} {month_name.upper()}{year_short} {strike_str} {option_type}"
+            # 5. SYMBOL DD-MMM-YY STRIKE OPTION (Alternative Spaced)
+            dhan_sym_alt = f"{symbol} {day_str}-{month_name}-{year_short} {strike_str} {option_type}"
 
             logging.info(f"[get_option_security_id] Looking up: {dhan_sym_weekly} or {dhan_sym_monthly}")
 
             # ---- Step 3: direct lookup in master dict ----
             if self._symbol_master_data:
-                # Try weekly format first, then monthly
-                sec_id = self._symbol_master_data.get(dhan_sym_weekly) or self._symbol_master_data.get(dhan_sym_monthly)
+                # Try all common formats
+                sec_id = (self._symbol_master_data.get(dhan_sym_weekly) or 
+                         self._symbol_master_data.get(dhan_sym_monthly) or
+                         self._symbol_master_data.get(dhan_sym_spaced) or
+                         self._symbol_master_data.get(dhan_sym_monthly_spaced) or
+                         self._symbol_master_data.get(dhan_sym_alt))
+                
                 if sec_id:
-                    logging.info(f"[get_option_security_id] Direct match found: {sec_id}")
+                    logging.info(f"[get_option_security_id] Match found in master dict: {sec_id}")
                     return sec_id
 
                 # Brute-force search on key fields in case format slightly differs

@@ -132,10 +132,10 @@
      * Load and display available brokers from the API
      * Only shows brokers that have credentials configured in .env
      */
-    async function loadAvailableBrokers() {
+    async function loadAvailableBrokers(forceRefresh = false) {
         try {
-            const response = await fetch('/api/available-brokers');
-            const data = await response.json();
+            // Use centralized utility from app.js
+            const data = await window.getAvailableBrokers(forceRefresh);
 
             const container = document.getElementById('brokersContainer');
 
@@ -263,7 +263,9 @@
         button.innerHTML = '⏳ Refreshing...';
 
         setTimeout(() => {
-            loadAvailableBrokers();
+            loadAvailableBrokers(true);
+            if (window.loadBrokersIntoDropdown) window.loadBrokersIntoDropdown(true);
+            
             button.disabled = false;
             button.style.opacity = '1';
             button.innerHTML = '🔄 Refresh';

@@ -164,37 +164,75 @@ class KiteService:
         self._load_instruments_from_cache_or_api()
     
     def _load_instruments_from_cache_or_api(self):
-        """Load instruments from global cache or API (once per day)."""
+        """Load instruments from global cache, disk cache, or API (once per day)."""
         global _global_instruments_cache
-        today = date.today()
+        import pickle
+        import os
         
+        today = date.today()
+        cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', 'kite_instruments.pkl')
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        
+        # 1. Check Global Memory Cache
         with _global_instruments_cache['lock']:
-            # Check if cache is valid (same day)
             if _global_instruments_cache['cache_date'] == today and _global_instruments_cache['nse']:
-                # Use cached data
                 self.instruments = (_global_instruments_cache['nse'] or []) + (_global_instruments_cache['nfo'] or [])
                 self._instrument_tokens_by_symbol = _global_instruments_cache['tokens_by_symbol'].copy()
                 self._instrument_tokens_by_name = _global_instruments_cache['tokens_by_name'].copy()
                 self._nfo_instruments_cache = _global_instruments_cache['nfo']
                 self._nfo_cache_asof = today
-                logging.info(f"[KiteService] Using cached instruments ({len(self.instruments)} total)")
+                logging.info(f"[KiteService] Using global memory cache ({len(self.instruments)} total)")
                 return
         
-        # Cache miss - load from API
+        # 2. Check Disk Cache (Persistent across restarts)
+        if os.path.exists(cache_file):
+            try:
+                # Check file age (must be from today)
+                mtime = datetime.fromtimestamp(os.path.getmtime(cache_file)).date()
+                if mtime == today:
+                    with open(cache_file, 'rb') as f:
+                        disk_cache = pickle.load(f)
+                    
+                    self.instruments = disk_cache['instruments']
+                    self._instrument_tokens_by_symbol = disk_cache['tokens_by_symbol']
+                    self._instrument_tokens_by_name = disk_cache['tokens_by_name']
+                    self._nfo_instruments_cache = disk_cache['nfo']
+                    self._nfo_cache_asof = today
+                    
+                    # Update global memory cache as well
+                    with _global_instruments_cache['lock']:
+                        _global_instruments_cache['nse'] = [i for i in self.instruments if i.get('exchange') == 'NSE']
+                        _global_instruments_cache['nfo'] = self._nfo_instruments_cache
+                        _global_instruments_cache['tokens_by_symbol'] = self._instrument_tokens_by_symbol.copy()
+                        _global_instruments_cache['tokens_by_name'] = self._instrument_tokens_by_name.copy()
+                        _global_instruments_cache['cache_date'] = today
+                        
+                    logging.info(f"[KiteService] Using persistent DISK cache ({len(self.instruments)} instruments)")
+                    return
+                else:
+                    logging.info("[KiteService] Disk cache is STALE (not from today). Needs refresh.")
+            except Exception as e:
+                logging.warning(f"[KiteService] Error loading disk cache: {e}")
+        
+        # 3. Cache miss - load from API
         self._load_instruments()
-    
+
     def _load_instruments(self):
         """Loads and processes instruments into lookup dictionaries. Includes both NSE and NFO."""
         global _global_instruments_cache
+        import pickle
+        import os
+        
+        cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', 'kite_instruments.pkl')
+        
         try:
             # Load NSE instruments (for indices like NIFTY, BANKNIFTY)
+            logging.info("[KiteService] Fetching instruments from Kite API (NSE+NFO)...")
             nse_instruments = self.kite.instruments('NSE')
-            logging.info(f"[_load_instruments] Loaded {len(nse_instruments) if nse_instruments else 0} NSE instruments")
             
-            # Load NFO instruments (for futures and options) - also cache separately for option lookups
+            # Load NFO instruments (for futures and options)
             nfo_instruments = self.kite.instruments('NFO')
-            logging.info(f"[_load_instruments] Loaded {len(nfo_instruments) if nfo_instruments else 0} NFO instruments")
-            self._nfo_instruments_cache = nfo_instruments  # Cache for fast option symbol lookups
+            self._nfo_instruments_cache = nfo_instruments
             self._nfo_cache_asof = date.today()
             
             # Combine both
@@ -202,6 +240,8 @@ class KiteService:
             self.instruments = all_instruments
             
             # Build lookup dictionaries
+            self._instrument_tokens_by_symbol = {}
+            self._instrument_tokens_by_name = {}
             for instrument in all_instruments:
                 symbol = instrument.get('tradingsymbol')
                 name = instrument.get('name')
@@ -211,19 +251,32 @@ class KiteService:
                 if name and token:
                     self._instrument_tokens_by_name[name.lower()] = token
             
-            logging.info(f"[_load_instruments] Built lookup: {len(self._instrument_tokens_by_symbol)} symbols, {len(self._instrument_tokens_by_name)} names")
+            # 4. Save to Disk Cache
+            try:
+                disk_data = {
+                    'instruments': all_instruments,
+                    'nfo': nfo_instruments,
+                    'tokens_by_symbol': self._instrument_tokens_by_symbol,
+                    'tokens_by_name': self._instrument_tokens_by_name
+                }
+                with open(cache_file, 'wb') as f:
+                    pickle.dump(disk_data, f)
+                logging.info(f"[KiteService] Saved instruments to disk cache ({len(all_instruments)} items)")
+            except Exception as se:
+                logging.warning(f"[KiteService] Could not save to disk cache: {se}")
             
-            # Update global cache for sharing across instances
+            # 5. Update global memory cache for sharing across instances
             with _global_instruments_cache['lock']:
                 _global_instruments_cache['nse'] = nse_instruments
                 _global_instruments_cache['nfo'] = nfo_instruments
                 _global_instruments_cache['tokens_by_symbol'] = self._instrument_tokens_by_symbol.copy()
                 _global_instruments_cache['tokens_by_name'] = self._instrument_tokens_by_name.copy()
                 _global_instruments_cache['cache_date'] = date.today()
-                logging.info(f"[_load_instruments] Updated global cache")
+                
+            logging.info(f"[KiteService] Built lookup for {len(self.instruments)} instruments")
                 
         except Exception as e:
-            logging.error(f"Error loading instruments: {e}")
+            logging.error(f"[KiteService] Error loading instruments from API: {e}")
     
 
     
@@ -981,26 +1034,38 @@ class KiteService:
                 # Sort by expiry and get the nearest
                 matching_instruments.sort(key=lambda x: x['expiry'])
                 
-                # Prefer weekly/special expiries over monthly expiries
-                # Weekly: Thursdays, Special Mondays like March 2
-                # Monthly: 24th of months (avoid these)
-                from datetime import datetime as dt_class
+                # Prefer weekly expiries over monthly expiries
+                # Monthly expiry = last Thursday of the month
+                import calendar
+                def _is_monthly_expiry(exp_date):
+                    """Check if date is the last Thursday of its month."""
+                    year, month = exp_date.year, exp_date.month
+                    last_day = calendar.monthrange(year, month)[1]
+                    from datetime import date as _d
+                    for d in range(last_day, last_day - 7, -1):
+                        if _d(year, month, d).weekday() == 3:  # Thursday
+                            return exp_date.day == d
+                    return False
+
                 weekly_instruments = []
                 for inst in matching_instruments:
                     exp = inst['expiry']
                     if hasattr(exp, 'date'):
                         exp = exp.date()
-                    # Exclude 24th (monthly expiry)
-                    if exp.day != 24:
+                    if not _is_monthly_expiry(exp):
                         weekly_instruments.append(inst)
                 
                 # Use weekly if available, otherwise fall back to all matches
                 instruments_to_use = weekly_instruments if weekly_instruments else matching_instruments
                 
                 tradingsymbol = instruments_to_use[0]['tradingsymbol']
+                selected_exp = instruments_to_use[0]['expiry']
+                if hasattr(selected_exp, 'date'):
+                    selected_exp = selected_exp.date()
+                is_weekly = bool(weekly_instruments)
+                logging.info(f"[get_option_symbol] Selected: {tradingsymbol} | Expiry: {selected_exp} (weekday={selected_exp.weekday()}, {'weekly' if is_weekly else 'monthly fallback'}) for {symbol} {option_type} {strike}")
                 # Cache the result for future lookups
                 self._nfo_option_symbol_cache[cache_key] = tradingsymbol
-                logging.debug(f"Found option symbol: {tradingsymbol} for {symbol} {option_type} {strike}")
                 return tradingsymbol
             
             # If not found, force-refresh instruments once and retry to avoid stale cache
@@ -1029,15 +1094,13 @@ class KiteService:
                 if matching_instruments:
                     matching_instruments.sort(key=lambda x: x['expiry'])
                     
-                    # Prefer weekly/special expiries over monthly expiries
-                    from datetime import date as date_class
+                    # Prefer weekly expiries over monthly expiries
                     weekly_instruments = []
                     for inst in matching_instruments:
                         exp = inst['expiry']
                         if hasattr(exp, 'date'):
                             exp = exp.date()
-                        # Exclude 24th (monthly expiry)
-                        if exp.day != 24:
+                        if not _is_monthly_expiry(exp):
                             weekly_instruments.append(inst)
                     
                     # Use weekly if available, otherwise fall back to all matches

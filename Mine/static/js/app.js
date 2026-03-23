@@ -213,6 +213,20 @@
     };
 
     /**
+     * Dedicated utility to get available brokers with built-in deduplication 
+     * and caching across ALL app components.
+     * Prevents multiple concurrent API calls (e.g., from base.html and child pages).
+     */
+    let _brokersPromise = null;
+    window.getAvailableBrokers = function (forceRefresh = false) {
+        if (forceRefresh || !_brokersPromise) {
+            console.debug(`[Brokers] Starting fetch (force=${forceRefresh})`);
+            _brokersPromise = window.fetchJson('/api/available-brokers', {}, 3, { enabled: true, ttl: 5000 });
+        }
+        return _brokersPromise;
+    };
+
+    /**
      * Show modal to collect Kotak Neo TOTP secret and authenticate
      * @param {string} loginUrl - The URL to post authentication data to (default: /auth/login/kotak)
      */

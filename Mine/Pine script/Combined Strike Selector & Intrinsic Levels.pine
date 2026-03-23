@@ -1,0 +1,329 @@
+//@version=6
+indicator("Strike Selector & Intrinsic Levels", overlay=false, max_labels_count=500, scale=scale.right)
+
+// ==========================================
+// ----- Option Strike Selector Section -----
+// ==========================================
+underlying = input.string("NIFTY", "Underlying", options=["NIFTY", "BANKNIFTY"], group="Strike Selector")
+expiry_code = input.string("260317", "Expiry Code (YYMMDD)", group="Strike Selector")
+exchange_prefix = input.string("NSE:", "Exchange Prefix", group="Strike Selector")
+
+spotHigh = input.float(23500, "Spot High", group="Intrinsic Levels")
+spotLow  = input.float(23400, "Spot Low", group="Intrinsic Levels")
+
+// Strings for symbol construction
+ce_strike_s = input.string("Auto", "CE Strike (Auto/Manual)", options=["Auto","20000","20050","20100","20150","20200","20250","20300","20350","20400","20450","20500","20550","20600","20650","20700","20750","20800","20850","20900","20950","21000","21050","21100","21150","21200","21250","21300","21350","21400","21450","21500","21550","21600","21650","21700","21750","21800","21850","21900","21950","22000","22050","22100","22150","22200","22250","22300","22350","22400","22450","22500","22550","22600","22650","22700","22750","22800","22850","22900","22950","23000","23050","23100","23150","23200","23250","23300","23350","23400","23450","23500","23550","23600","23650","23700","23750","23800","23850","23900","23950","24000","24050","24100","24150","24200","24250","24300","24350","24400","24450","24500","24550","24600","24650","24700","24750","24800","24850","24900","24950","25000","25050","25100","25150","25200","25250","25300","25350","25400","25450","25500","25550","25600","25650","25700","25750","25800","25850","25900","25950","26000","26050","26100","26150","26200","26250","26300","26350","26400","26450","26500","26550","26600","26650","26700","26750","26800","26850","26900","26950","27000","27050","27100","27150","27200","27250","27300","27350","27400","27450","27500","27550","27600","27650","27700","27750","27800","27850","27900","27950","28000","28050","28100","28150","28200","28250","28300","28350","28400","28450","28500","28550","28600","28650","28700","28750","28800","28850","28900","28950","29000","29050","29100","29150","29200","29250","29300","29350","29400","29450","29500","29550","29600","29650","29700","29800","29850","29900","29950","30000"], group="Strike Selector")
+pe_strike_s = input.string("Auto", "PE Strike (Auto/Manual)", options=["Auto","20000","20050","20100","20150","20200","20250","20300","20350","20400","20450","20500","20550","20600","20650","20700","20750","20800","20850","20900","20950","21000","21050","21100","21150","21200","21250","21300","21350","21400","21450","21500","21550","21600","21650","21700","21750","21800","21850","21900","21950","22000","22050","22100","22150","22200","22250","22300","22350","22400","22450","22500","22550","22600","22650","22700","22750","22800","22850","22900","22950","23000","23050","23100","23150","23200","23250","23300","23350","23400","23450","23500","23550","23600","23650","23700","23750","23800","23850","23900","23950","24000","24050","24100","24150","24200","24250","24300","24350","24400","24450","24500","24550","24600","24650","24700","24750","24800","24850","24900","24950","25000","25050","25100","25150","25200","25250","25300","25350","25400","25450","25500","25550","25600","25650","25700","25750","25800","25850","25900","25950","26000","26050","26100","26150","26200","26250","26300","26350","26400","26450","26500","26550","26600","26650","26700","26750","26800","26850","26900","26950","27000","27050","27100","27150","27200","27250","27300","27350","27400","27450","27500","27550","27600","27650","27700","27750","27800","27850","27900","27950","28000","28050","28100","28150","28200","28250","28300","28350","28400","28450","28500","28550","28600","28650","28700","28750","28800","28850","28900","28950","29000","29050","29100","29150","29200","29250","29300","29350","29400","29450","29500","29550","29600","29650","29700","29800","29850","29900","29950","30000"], group="Strike Selector")
+
+itmCallStrike = math.round(math.ceil((spotLow - 150) / 100) * 100)
+itmPutStrike  = math.round(math.floor((spotHigh + 150) / 100) * 100)
+
+// Integers for intrinsic calculation
+ce_strike_val = ce_strike_s == "Auto" ? itmCallStrike : math.round(str.tonumber(ce_strike_s))
+pe_strike_val = pe_strike_s == "Auto" ? itmPutStrike : math.round(str.tonumber(pe_strike_s))
+
+ce_strike_str = str.tostring(ce_strike_val)
+pe_strike_str = str.tostring(pe_strike_val)
+
+// Symbols build
+symbol_build(_underlying, _expiry, _strike_str, _optType) =>
+    exchange_prefix + _underlying + _expiry + _optType + _strike_str
+
+ce_symbol = symbol_build(underlying, expiry_code, ce_strike_str, "C")
+pe_symbol = symbol_build(underlying, expiry_code, pe_strike_str, "P")
+
+// Load actual option data
+[ce_open, ce_high, ce_low, ce_close] = request.security(ce_symbol, timeframe.period, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+[pe_open, pe_high, pe_low, pe_close] = request.security(pe_symbol, timeframe.period, [open, high, low, close], barmerge.gaps_off, barmerge.lookahead_off)
+
+// Straddle logic
+show_straddle = input.bool(false, "Show Straddle", group="Strike Selector")
+straddle_strike_s = input.string("24850", "Straddle Strike", options=["20000","20050","20100","20150","20200","20250","20300","20350","20400","20450","20500","20550","20600","20650","20700","20750","20800","20850","20900","20950","21000","21050","21100","21150","21200","21250","21300","21350","21400","21450","21500","21550","21600","21650","21700","21750","21800","21850","21900","21950","22000","22050","22100","22150","22200","22250","22300","22350","22400","22450","22500","22550","22600","22650","22700","22750","22800","22850","22900","22950","23000","23050","23100","23150","23200","23250","23300","23350","23400","23450","23500","23550","23600","23650","23700","23750","23800","23850","23900","23950","24000","24050","24100","24150","24200","24250","24300","24350","24400","24450","24500","24550","24600","24650","24700","24750","24800","24850","24900","24950","25000","25050","25100","25150","25200","25250","25300","25350","25400","25450","25500","25550","25600","25650","25700","25750","25800","25850","25900","25950","26000","26050","26100","26150","26200","26250","26300","26350","26400","26450","26500","26550","26600","26650","26700","26750","26800","26850","26900","26950","27000","27050","27100","27150","27200","27250","27300","27350","27400","27450","27500","27550","27600","27650","27700","27750","27800","27850","27900","27950","28000","28050","28100","28150","28200","28250","28300","28350","28400","28450","28500","28550","28600","28650","28700","28750","28800","28850","28900","28950","29000","29050","29100","29150","29200","29250","29300","29350","29400","29450","29500","29550","29600","29650","29700","29800","29850","29900","29950","30000"], group="Strike Selector")
+str_ce_sym = symbol_build(underlying, expiry_code, straddle_strike_s, "C")
+str_pe_sym = symbol_build(underlying, expiry_code, straddle_strike_s, "P")
+
+[s_ce_o, s_ce_h, s_ce_l, s_ce_c] = request.security(str_ce_sym, timeframe.period, [open, high, low, close])
+[s_pe_o, s_pe_h, s_pe_l, s_pe_c] = request.security(str_pe_sym, timeframe.period, [open, high, low, close])
+
+str_open  = s_ce_o + s_pe_o
+str_high  = s_ce_h + s_pe_h
+str_low   = s_ce_l + s_pe_l
+str_close = s_ce_c + s_pe_c
+
+// ==========================================
+// ----- Intrinsic Value Levels Section -----
+// ==========================================
+// Spot High and Low declarations were moved slightly higher up to calculate strikes
+
+stepValue = input.int(50, "Step Size (25/50/100)", group="Intrinsic Levels")
+multiplier = input.int(2, "Level Multiplier (0-5)", minval=0, maxval=5, group="Intrinsic Levels")
+
+// Intrinsic Calc
+ceIntrinsic = spotHigh - ce_strike_val
+ceIntrinsic := ceIntrinsic < 0 ? 0 : ceIntrinsic
+
+peIntrinsic = pe_strike_val - spotLow
+peIntrinsic := peIntrinsic < 0 ? 0 : peIntrinsic
+
+// CE Levels (max 5)
+ce_l1 = multiplier >= 1 ? ceIntrinsic + stepValue * 1 : na
+ce_l2 = multiplier >= 2 ? ceIntrinsic + stepValue * 2 : na
+ce_l3 = multiplier >= 3 ? ceIntrinsic + stepValue * 3 : na
+ce_l4 = multiplier >= 4 ? ceIntrinsic + stepValue * 4 : na
+ce_l5 = multiplier >= 5 ? ceIntrinsic + stepValue * 5 : na
+
+// PE Levels (max 5)
+pe_l1 = multiplier >= 1 ? peIntrinsic + stepValue * 1 : na
+pe_l2 = multiplier >= 2 ? peIntrinsic + stepValue * 2 : na
+pe_l3 = multiplier >= 3 ? peIntrinsic + stepValue * 3 : na
+pe_l4 = multiplier >= 4 ? peIntrinsic + stepValue * 4 : na
+pe_l5 = multiplier >= 5 ? peIntrinsic + stepValue * 5 : na
+
+// ==========================================
+// ----- Strategy & Signal Logic  -----------
+// ==========================================
+showTradePopup = input.bool(true, "Show Entry Signal", group="Signals")
+showSLHit = input.bool(true, "Enable SL Hit", group="Signals")
+showTargetHit = input.bool(true, "Enable Target Hit", group="Signals")
+showLastTrades = input.int(1, "Show Last N Trades", minval=1, maxval=20, group="Signals")
+
+var float activeSL = na
+var float activeTarget = na
+var bool tradeActive = false
+var string signalType = ""
+
+var label[] entryLabels = array.new_label()
+var label[] slLabels = array.new_label()
+var label[] targetLabels = array.new_label()
+
+float breakLevel = na
+float targetLevel = na
+
+// Check CE crossover (L1-L5 only)
+if ta.crossover(ce_close, ce_l1)
+    breakLevel := ce_l1, targetLevel := ce_l2, signalType := "CE"
+else if ta.crossover(ce_close, ce_l2)
+    breakLevel := ce_l2, targetLevel := ce_l3, signalType := "CE"
+else if ta.crossover(ce_close, ce_l3)
+    breakLevel := ce_l3, targetLevel := ce_l4, signalType := "CE"
+else if ta.crossover(ce_close, ce_l4)
+    breakLevel := ce_l4, targetLevel := ce_l5, signalType := "CE"
+else if ta.crossover(ce_close, ce_l5)
+    breakLevel := ce_l5, targetLevel := na,    signalType := "CE"
+
+// Check PE crossover (L1-L5 only)
+if ta.crossover(pe_close, pe_l1)
+    breakLevel := pe_l1, targetLevel := pe_l2, signalType := "PE"
+else if ta.crossover(pe_close, pe_l2)
+    breakLevel := pe_l2, targetLevel := pe_l3, signalType := "PE"
+else if ta.crossover(pe_close, pe_l3)
+    breakLevel := pe_l3, targetLevel := pe_l4, signalType := "PE"
+else if ta.crossover(pe_close, pe_l4)
+    breakLevel := pe_l4, targetLevel := pe_l5, signalType := "PE"
+else if ta.crossover(pe_close, pe_l5)
+    breakLevel := pe_l5, targetLevel := na,    signalType := "PE"
+
+// ENTRY LOGIC
+if showTradePopup and not na(breakLevel) and not na(targetLevel)
+    entryPrice = close // price on chart
+    slPrice = low[1]
+    activeSL := slPrice
+    activeTarget := targetLevel
+    tradeActive := true
+    
+    txt = signalType + " Entry: " + str.tostring(entryPrice) + "\nSL: " + str.tostring(slPrice) + "\nTGT: " + str.tostring(activeTarget)
+    entryLabel = label.new(bar_index, low, txt, style=label.style_label_up, color=signalType == "CE" ? color.green : color.red, textcolor=color.white)
+    array.push(entryLabels, entryLabel)
+    if array.size(entryLabels) > showLastTrades
+        label.delete(array.shift(entryLabels))
+
+// EXIT LOGIC
+if tradeActive and not na(activeTarget) and high >= activeTarget and showTargetHit
+    label.new(bar_index, high, "TARGET HIT \ud83c\udfaf", style=label.style_label_down, color=color.purple, textcolor=color.white)
+    tradeActive := false, activeTarget := na, activeSL := na
+
+if tradeActive and not na(activeSL) and close <= activeSL and showSLHit
+    label.new(bar_index, low, "SL HIT \u274c", style=label.style_label_upper_right, color=color.red, textcolor=color.white)
+    tradeActive := false, activeSL := na, activeTarget := na
+
+
+// ==========================================
+// ----- Visualization Section --------------
+// ==========================================
+// TWAP — daily-reset cumulative average of (H+L+C)/3
+// Replaces VWAP since option volume is no longer fetched.
+f_daily_twap(src) =>
+    var float cum_p  = 0.0
+    var int   bar_ct = 0
+    if ta.change(time("D")) != 0
+        cum_p  := 0.0
+        bar_ct := 0
+    if not na(src)
+        cum_p  += src
+        bar_ct += 1
+    bar_ct > 0 ? cum_p / bar_ct : na
+
+ce_vwap       = f_daily_twap((ce_high + ce_low + ce_close) / 3)
+pe_vwap       = f_daily_twap((pe_high + pe_low + pe_close) / 3)
+
+// TWAP for straddle
+straddle_vwap = f_daily_twap((s_ce_h + s_ce_l + s_ce_c) / 3) + f_daily_twap((s_pe_h + s_pe_l + s_pe_c) / 3)
+
+// Label variables for persistent display
+var label ce_label = na
+var label pe_label = na
+var label straddle_label = na
+var label ce_candle_label = na
+var label pe_candle_label = na
+var label straddle_candle_label = na
+
+// Label controls
+show_labels = input.bool(true, "Show Axis Labels", group="Visuals")
+show_prices = input.bool(true, "Show Axis Prices", group="Visuals")
+show_close_lines = input.bool(true, "Show VWAP Lines", group="Visuals")
+
+// Function to create labels with right side positioning
+draw_axis_label(y, txt, txt_color) =>
+    if show_labels or show_prices
+        display_text = ""
+        if show_labels and show_prices and txt != ''
+            display_text := str.format("{0} - {1}", txt, math.round_to_mintick(y))
+        else if show_labels and txt != ''
+            display_text := txt
+        else
+            display_text := str.format("{0}", math.round_to_mintick(y))
+        
+        x = bar_index + 25
+        label.new(x=x, y=y, text="     " + display_text, textcolor=txt_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_index)
+
+draw_candle_axis_label(y, txt, txt_color) =>
+    if show_labels or show_prices
+        display_text = ""
+        if show_labels and show_prices and txt != ''
+            display_text := str.format("{0} - {1}", txt, math.round_to_mintick(y))
+        else if show_labels and txt != ''
+            display_text := txt
+        else
+            display_text := str.format("{0}", math.round_to_mintick(y))
+        
+        x = bar_index + 6
+        label.new(x=x, y=y, text="     " + display_text, textcolor=txt_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_index)
+
+// Plot Options Candles
+show_ce_can = input.bool(true, "Show CE Candles", group="Visuals")
+show_pe_can = input.bool(true, "Show PE Candles", group="Visuals")
+
+ce_c = ce_close >= ce_open ? color.new(#1b9981, 0) : color.new(#f23645, 0)
+pe_c = pe_close >= pe_open ? color.new(#1f77d2, 0) : color.new(#000000, 0)
+
+plotcandle(show_ce_can ? ce_open : na, show_ce_can ? ce_high : na, show_ce_can ? ce_low : na, show_ce_can ? ce_close : na, "CE Candles", ce_c, ce_c, bordercolor=ce_c)
+plotcandle(show_pe_can ? pe_open : na, show_pe_can ? pe_high : na, show_pe_can ? pe_low : na, show_pe_can ? pe_close : na, "PE Candles", pe_c, pe_c, bordercolor=pe_c)
+
+s_c = str_close >= str_open ? color.new(#9b59b6, 0) : color.new(#ff9500, 0)
+plotcandle(show_straddle ? str_open : na, show_straddle ? str_high : na, show_straddle ? str_low : na, show_straddle ? str_close : na, "Straddle Candles", s_c, s_c, bordercolor=s_c)
+
+// Plot VWAP
+plot(show_close_lines and show_ce_can ? ce_vwap : na, "CE VWAP", color=color.new(color.green, 0), linewidth=2)
+plot(show_close_lines and show_pe_can ? pe_vwap : na, "PE VWAP", color=color.new(color.blue, 0), linewidth=2)
+plot(show_close_lines and show_straddle ? straddle_vwap : na, "Straddle VWAP", color=color.new(#ffeb3b, 0), linewidth=2)
+
+// Labels on last bar
+if barstate.islast
+    if not na(ce_label)
+        label.delete(ce_label)
+    if not na(pe_label)
+        label.delete(pe_label)
+    if not na(straddle_label)
+        label.delete(straddle_label)
+    if not na(ce_candle_label)
+        label.delete(ce_candle_label)
+    if not na(pe_candle_label)
+        label.delete(pe_candle_label)
+    if not na(straddle_candle_label)
+        label.delete(straddle_candle_label)
+
+    if show_close_lines and show_ce_can
+        ce_label := draw_axis_label(ce_vwap, "CE VWAP", color.new(color.green, 0))
+    if show_close_lines and show_pe_can
+        pe_label := draw_axis_label(pe_vwap, "PE VWAP", color.new(color.blue, 0))
+    if show_straddle and show_close_lines
+        straddle_label := draw_axis_label(straddle_vwap, "STR VWAP", color.new(#ffeb3b, 0))
+    
+    if show_ce_can
+        ce_candle_label := draw_candle_axis_label(ce_close, "CE", ce_c)
+    if show_pe_can
+        pe_candle_label := draw_candle_axis_label(pe_close, "PE", pe_c)
+    if show_straddle
+        straddle_candle_label := draw_candle_axis_label(str_close, "STR", s_c)
+
+// Plot Intrinsic Levels
+plot(ceIntrinsic, "CE Intrinsic", color.green, 3)
+plot(ce_l1, "CE L1", color.green)
+plot(ce_l2, "CE L2", color.green)
+plot(ce_l3, "CE L3", color.green)
+plot(ce_l4, "CE L4", color.green)
+plot(ce_l5, "CE L5", color.green)
+
+plot(peIntrinsic, "PE Intrinsic", color.blue, 3)
+plot(pe_l1, "PE L1", color.blue)
+plot(pe_l2, "PE L2", color.blue)
+plot(pe_l3, "PE L3", color.blue)
+plot(pe_l4, "PE L4", color.blue)
+plot(pe_l5, "PE L5", color.blue)
+
+// Price labels for intrinsic levels
+show_level_labels = input.bool(true, "Show Level Price Labels", group="Visuals")
+
+// Persistent label variables (one per level line, max L5)
+var label lbl_ce_iv = na, var label lbl_ce_1 = na, var label lbl_ce_2 = na, var label lbl_ce_3 = na
+var label lbl_ce_4 = na, var label lbl_ce_5 = na
+var label lbl_pe_iv = na, var label lbl_pe_1 = na, var label lbl_pe_2 = na, var label lbl_pe_3 = na
+var label lbl_pe_4 = na, var label lbl_pe_5 = na
+
+if show_level_labels and barstate.islast
+    // Delete old CE labels
+    label.delete(lbl_ce_iv), label.delete(lbl_ce_1), label.delete(lbl_ce_2), label.delete(lbl_ce_3)
+    label.delete(lbl_ce_4), label.delete(lbl_ce_5)
+    // Delete old PE labels
+    label.delete(lbl_pe_iv), label.delete(lbl_pe_1), label.delete(lbl_pe_2), label.delete(lbl_pe_3)
+    label.delete(lbl_pe_4), label.delete(lbl_pe_5)
+
+    // CE level labels (green)
+    if not na(ceIntrinsic)
+        lbl_ce_iv := label.new(bar_index + 10, ceIntrinsic, "CE IV " + str.tostring(math.round(ceIntrinsic, 2)), style=label.style_none, textcolor=color.green, size=size.small)
+    if not na(ce_l1)
+        lbl_ce_1 := label.new(bar_index + 10, ce_l1, "CE L1 " + str.tostring(math.round(ce_l1, 2)), style=label.style_none, textcolor=color.green, size=size.small)
+    if not na(ce_l2)
+        lbl_ce_2 := label.new(bar_index + 10, ce_l2, "CE L2 " + str.tostring(math.round(ce_l2, 2)), style=label.style_none, textcolor=color.green, size=size.small)
+    if not na(ce_l3)
+        lbl_ce_3 := label.new(bar_index + 10, ce_l3, "CE L3 " + str.tostring(math.round(ce_l3, 2)), style=label.style_none, textcolor=color.green, size=size.small)
+    if not na(ce_l4)
+        lbl_ce_4 := label.new(bar_index + 10, ce_l4, "CE L4 " + str.tostring(math.round(ce_l4, 2)), style=label.style_none, textcolor=color.green, size=size.small)
+    if not na(ce_l5)
+        lbl_ce_5 := label.new(bar_index + 10, ce_l5, "CE L5 " + str.tostring(math.round(ce_l5, 2)), style=label.style_none, textcolor=color.green, size=size.small)
+
+    // PE level labels (blue)
+    if not na(peIntrinsic)
+        lbl_pe_iv := label.new(bar_index + 10, peIntrinsic, "PE IV " + str.tostring(math.round(peIntrinsic, 2)), style=label.style_none, textcolor=color.blue, size=size.small)
+    if not na(pe_l1)
+        lbl_pe_1 := label.new(bar_index + 10, pe_l1, "PE L1 " + str.tostring(math.round(pe_l1, 2)), style=label.style_none, textcolor=color.blue, size=size.small)
+    if not na(pe_l2)
+        lbl_pe_2 := label.new(bar_index + 10, pe_l2, "PE L2 " + str.tostring(math.round(pe_l2, 2)), style=label.style_none, textcolor=color.blue, size=size.small)
+    if not na(pe_l3)
+        lbl_pe_3 := label.new(bar_index + 10, pe_l3, "PE L3 " + str.tostring(math.round(pe_l3, 2)), style=label.style_none, textcolor=color.blue, size=size.small)
+    if not na(pe_l4)
+        lbl_pe_4 := label.new(bar_index + 10, pe_l4, "PE L4 " + str.tostring(math.round(pe_l4, 2)), style=label.style_none, textcolor=color.blue, size=size.small)
+    if not na(pe_l5)
+        lbl_pe_5 := label.new(bar_index + 10, pe_l5, "PE L5 " + str.tostring(math.round(pe_l5, 2)), style=label.style_none, textcolor=color.blue, size=size.small)
+
+// Dashboard
+showITM = input.bool(true, "Show ITM Dashboard", group="Visuals")
+// The itm calculations were moved slightly higher up
+
+var table dash = table.new(position.top_right, 1, 3, border_width=1)
+if showITM and barstate.islast
+    table.cell(dash, 0, 0, "ITM Dashboard", bgcolor=color.blue, text_color=color.white)
+    table.cell(dash, 0, 1, str.tostring(ce_strike_val) + " CALL ITM", bgcolor=color.green, text_color=color.white)
+    table.cell(dash, 0, 2, str.tostring(pe_strike_val) + " PUT ITM", bgcolor=color.red, text_color=color.white)
+
+

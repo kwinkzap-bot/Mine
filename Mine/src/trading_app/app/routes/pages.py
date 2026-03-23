@@ -113,6 +113,13 @@ def intraday_920():
     """Intraday 9:20 strategy page."""
     return render_template('intraday_920.html')
 
+@pages_bp.route('/oi-profile')
+@require_user_auth
+@login_required
+def oi_profile():
+    """OI Profile – NIFTY candlestick chart + OI profile bars."""
+    return render_template('oi_profile.html')
+
 @pages_bp.route('/login')
 def login():
     """Login page - redirects to user login."""

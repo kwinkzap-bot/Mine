@@ -623,7 +623,7 @@ class Intraday920Strategy:
         Args:
             entry_price: Price at which entry occurred
             reference_high: Reference high (PE high for CE entry, CE high for PE entry)
-            ratio: Risk/reward ratio ('1:2', '1:3', or '1:2-trail')
+            ratio: Risk/reward ratio ('1:1', '1:2', '1:3', '1:1-trail', or '1:2-trail')
             
         Returns:
             Dictionary with SL, target, and entry details
@@ -642,6 +642,9 @@ class Intraday920Strategy:
             if ratio == '1:3':
                 # 1:3 ratio: profit is 3x the risk
                 target = entry_price + (3 * profit)
+            elif ratio == '1:1' or ratio == '1:1-trail':
+                # 1:1 ratio: profit is 1x the risk
+                target = entry_price + profit
             else:
                 # Default to 1:2 ratio (both '1:2' and '1:2-trail' use 1:2)
                 target = entry_price + (2 * profit)
@@ -667,7 +670,7 @@ class Intraday920Strategy:
             }
 
     def check_entry_signal(self, ce_token: int, pe_token: int, ce_high: float, pe_high: float, 
-                          symbol: str = 'NIFTY', target_date: Optional[datetime] = None) -> Dict[str, Any]:
+                          symbol: str = 'NIFTY', target_date: Optional[datetime] = None, ratio: str = '1:2') -> Dict[str, Any]:
         """
         Check for entry signals on CE and PE sides.
         
@@ -723,7 +726,7 @@ class Intraday920Strategy:
                 
                 if ce_low < pe_high and ce_close > (pe_high + 5) and (ce_close - pe_high) < 20:
                     # CE Entry Signal - Price crossed above PE High + 5 points
-                    sl_data = self.calculate_sl_for_entry(ce_close, pe_high)
+                    sl_data = self.calculate_sl_for_entry(ce_close, pe_high, ratio=ratio)
                     if sl_data.get('success'):
                         ce_signal = {
                             'side': 'CE',
@@ -746,7 +749,7 @@ class Intraday920Strategy:
                 
                 if pe_low < ce_high and pe_close > (ce_high + 5) and (pe_close - ce_high) < 20:
                     # PE Entry Signal - Price crossed above CE High + 5 points
-                    sl_data = self.calculate_sl_for_entry(pe_close, ce_high)
+                    sl_data = self.calculate_sl_for_entry(pe_close, ce_high, ratio=ratio)
                     if sl_data.get('success'):
                         pe_signal = {
                             'side': 'PE',
@@ -1066,7 +1069,12 @@ class Intraday920Strategy:
                     result['entry_time'] = close_time
                     result['entry_price'] = candle_close
                     
-                    ratio_type = '1:2' if risk_reward_ratio in ['1:2', '1:2-trail'] else '1:3'
+                    if risk_reward_ratio in ['1:1', '1:1-trail']:
+                        ratio_type = risk_reward_ratio
+                    elif risk_reward_ratio in ['1:2', '1:2-trail']:
+                        ratio_type = risk_reward_ratio
+                    else:
+                        ratio_type = '1:3'
                     sl_data = self.calculate_sl_for_entry(candle_close, reference_high, ratio=ratio_type)
                     result['sl'] = sl_data.get('sl')
                     result['target'] = sl_data.get('target')
@@ -1140,7 +1148,12 @@ class Intraday920Strategy:
                     result['entry_time'] = close_time
                     result['entry_price'] = candle_close  # Entry at current candle close
                     
-                    ratio_type = '1:2' if risk_reward_ratio in ['1:2', '1:2-trail'] else '1:3'
+                    if risk_reward_ratio in ['1:1', '1:1-trail']:
+                        ratio_type = risk_reward_ratio
+                    elif risk_reward_ratio in ['1:2', '1:2-trail']:
+                        ratio_type = risk_reward_ratio
+                    else:
+                        ratio_type = '1:3'
                     sl_data = self.calculate_sl_for_entry(candle_close, reference_high, ratio=ratio_type)
                     result['sl'] = sl_data.get('sl')
                     result['target'] = sl_data.get('target')
@@ -1166,7 +1179,7 @@ class Intraday920Strategy:
             sl_distance = result['entry_price'] - initial_sl  # Distance between entry and SL
             target_hit = False  # Track if target was hit for trailing SL (only for trailing mode)
             trailed_sl = initial_sl  # Current trailed SL value
-            use_trailing_sl = (risk_reward_ratio == '1:2-trail')  # Only use trailing SL for '1:2-trail' mode
+            use_trailing_sl = (risk_reward_ratio in ['1:1-trail', '1:2-trail'])  # Use trailing SL for 'trail' modes
             
             for idx in range(entry_candle_idx + 1, len(candles)):
                 candle = candles[idx]
