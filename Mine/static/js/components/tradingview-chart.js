@@ -625,6 +625,18 @@ window.TradingViewChart = (function () {
                 chartType: type,  // Store chart type for status calculation
 
                 /**
+                 * Controls visibility of series
+                 */
+                setVisibleSeries: function(ceVisible, peVisible) {
+                    if (this.ceSeries) this.ceSeries.applyOptions({ visible: ceVisible });
+                    if (this.peSeries) this.peSeries.applyOptions({ visible: peVisible });
+                    // If not separate series, handle the main series
+                    if (!this.ceSeries && this.series) {
+                         this.series.applyOptions({ visible: ceVisible || peVisible });
+                    }
+                },
+
+                /**
                  * Sets markers (signals) on the chart series
                  */
                 setMarkers: function(ceMarkers, peMarkers = []) {
@@ -677,17 +689,17 @@ window.TradingViewChart = (function () {
                         }
                     }
 
-                    if (isCombinedUpdate) {
+                    if (this.isCombined) {
                         // Combined chart: update both CE and PE series
-                        const ceFormattedData = formatChartData(newData);
-                        const peFormattedData = formatChartData(referenceOrPeData);
+                        const ceFormatted = newData ? formatChartData(newData) : [];
+                        const peFormatted = (referenceOrPeData && Array.isArray(referenceOrPeData)) ? formatChartData(referenceOrPeData) : [];
 
-                        if (ceFormattedData.length > 0) {
-                            ceSeries.setData(ceFormattedData);
-                            this.data = ceFormattedData;
+                        if (ceSeries) {
+                            ceSeries.setData(ceFormatted);
+                            if (ceFormatted.length > 0) this.data = ceFormatted;
                         }
-                        if (peFormattedData.length > 0) {
-                            peSeries.setData(peFormattedData);
+                        if (peSeries) {
+                            peSeries.setData(peFormatted);
                         }
 
                     } else if (type === 'LINE') {

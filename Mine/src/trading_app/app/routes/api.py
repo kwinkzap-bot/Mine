@@ -1,16 +1,28 @@
 """API routes for trading data endpoints."""
-from flask import Blueprint, request, jsonify, session, Response
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-from typing import Dict, Any, Optional, Union
+import logging
+import math
 import os
+import threading
+import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, Tuple, Union
 
+import pandas as pd
+from flask import Blueprint, request, jsonify, session, Response
 from trading_app.app.utils.logger import logger
 from trading_app.app.extensions import csrf, limiter
 from trading_app.app.utils.user_auth import require_user_auth
 
 
 api_bp = Blueprint('api', __name__)
+
+# Cache for candle responses to handle high-frequency polling
+# key: (symbol, interval, days, spot_high, spot_low, auto_hl), value: (response_data, timestamp)
+_candle_response_cache = {}
+# Cache for daily OHLC mapping (valid for 5 minutes)
+_daily_ohlc_cache = {}
+_candle_cache_lock = threading.Lock()
 
 # Type alias for API responses
 # Flask's jsonify returns Response, optionally with status code tuple
@@ -3004,21 +3016,8 @@ def get_open_interest() -> EndpointResponse:
 def oi_profile_candles() -> EndpointResponse:
     """
     Fetch intraday OHLC candle data for a symbol (default NIFTY).
-
-    Uses hardcoded Kite instrument tokens so the endpoint responds in < 1 s
-    instead of 10-30 s waiting for kite.instruments('NSE') to download.
-
-    Query Parameters:
-        symbol   (str): NIFTY | BANKNIFTY | FINNIFTY  (default: NIFTY)
-        interval (str): minute | 5minute | 15minute | 30minute | 60minute | day  (default: 5minute)
-        days     (int): Calendar days of history to return 1-100  (default: 1)
-
-    Returns:
-        JSON { success, candles: [{time, open, high, low, close, volume}], count }
-        'time' values are Unix timestamps adjusted for IST display (same convention as
-        the rest of the codebase – IST offset added so Lightweight Charts shows correct time).
+    Optimized version with parallel execution and caching.
     """
-    # Stable Zerodha/Kite NSE index instrument tokens – never change.
     NSE_INDEX_TOKENS = {
         'NIFTY':      256265,   # NSE:NIFTY 50
         'BANKNIFTY':  260105,   # NSE:NIFTY BANK
@@ -3030,77 +3029,67 @@ def oi_profile_candles() -> EndpointResponse:
         symbol   = request.args.get('symbol',   'NIFTY').upper()
         interval = request.args.get('interval', '5minute')
         days     = request.args.get('days', 1, type=int)
+        spot_high  = request.args.get('spot_high', type=float)
+        spot_low   = request.args.get('spot_low',  type=float)
+        step_value = request.args.get('step', 50,  type=int)
+        multiplier = request.args.get('multiplier', 2, type=int)
+        auto_hl    = request.args.get('auto_hl', 'false').lower() == 'true'
+
+        # ── 1. Check Response Cache ───────────────────────────────────
+        # Use request parameters as cache key (ignore _t timestamp)
+        cache_key = (symbol, interval, days, spot_high, spot_low, auto_hl)
+        with _candle_cache_lock:
+            if cache_key in _candle_response_cache:
+                data, ts = _candle_response_cache[cache_key]
+                # Cache for 1.5 seconds to balance freshness and speed
+                if datetime.now().timestamp() - ts < 1.5:
+                    return jsonify(data)
 
         valid_intervals = ['minute', '2minute', '3minute', '5minute', '10minute',
                            '15minute', '30minute', '60minute', 'day']
 
-        if symbol not in NSE_INDEX_TOKENS:
-            return jsonify({'success': False,
-                            'error': f'Invalid symbol. Use one of {list(NSE_INDEX_TOKENS.keys())}'}), 400
+        # Allow all symbols (indices + F&O stocks)
+        # Validation happens during token resolution below
         if interval not in valid_intervals:
-            return jsonify({'success': False,
-                            'error': f'Invalid interval. Use one of {valid_intervals}'}), 400
+            return jsonify({'success': False, 'error': f'Invalid interval. Use one of {valid_intervals}'}), 400
+        
         days = min(max(int(days), 1), 100)
-
         kite = get_kite(instance=1)
         if not kite:
-            return jsonify({'success': False,
-                            'error': 'Kite (Broker 1) not connected. Please login.'}), 401
-
-        # ── Instant token lookup – no network call ──────────────────────
-        token = NSE_INDEX_TOKENS[symbol]
-        logger.info(f'[OI-Profile] Using hardcoded token {token} for {symbol}')
-
-        # ── Date range: from market-open today (or N-1 days back) ───────
-        from datetime import datetime as _dt, timedelta as _td
-        import time as _time
-        import random as _random
-
-        now       = _dt.now()
-        # Fetch extra calendar days to account for weekends and holidays
-        fetch_back = days + 5
-        from_date = (now - _td(days=fetch_back)).replace(hour=9, minute=0, second=0, microsecond=0)
-        to_date   = now
-
-        ist_offset = int(5.5 * 3600)  # 19 800 s – same as rest of codebase
-
-        # ── Fetch with retry ────────────────────────────────────────────
-        candles    = []
-        max_retry  = 3
-        # Handle natively unsupported 2minute interval by fetching 1minute and aggregating
-        fetch_interval = 'minute' if interval == '2minute' else interval
+            return jsonify({'success': False, 'error': 'Kite (Broker 1) not connected. Please login.'}), 401
         
-        for attempt in range(max_retry):
-            try:
-                raw = kite.historical_data(
-                    instrument_token=token,
-                    from_date=from_date,
-                    to_date=to_date,
-                    interval=fetch_interval
-                )
-                
-                # Filter strictly by the last N actual trading days
-                if raw:
-                    unique_dates = sorted(list(set(c['date'].date() for c in raw)))
-                    target_dates = unique_dates[-days:] if len(unique_dates) >= days else unique_dates
-                    raw = [c for c in raw if c['date'].date() in target_dates]
-                
-                # Format to standard dicts
-                temp_candles = []
-                for c in raw:
-                    try:
-                        temp_candles.append({
-                            'time':   int(c['date'].timestamp()) + ist_offset,
-                            'open':   c['open'],
-                            'high':   c['high'],
-                            'low':    c['low'],
-                            'close':  c['close'],
-                            'volume': c.get('volume', 0)
-                        })
-                    except Exception:
-                        pass
-                
-                # Aggregate if 2minute requested for either index or options
+        from trading_app.service.kite_order_services import KiteService
+        kite_service = KiteService(kite_instance=kite)
+        
+        ist_offset = int(5.5 * 3600)  # 19 800 s
+        now = datetime.now()
+        fetch_back = days + 5
+        from_date = (now - timedelta(days=fetch_back)).replace(hour=9, minute=0, second=0, microsecond=0)
+        to_date = now
+
+        fetch_interval = 'minute' if interval == '2minute' else interval
+        # ── Resolve Token ──────────────────────────────────────────
+        token = NSE_INDEX_TOKENS.get(symbol)
+        if not token:
+            # For non-indices, look up in instrument cache
+            token = kite_service.get_instrument_token(symbol)
+            
+        if not token:
+            return jsonify({'success': False, 'error': f'Invalid or unknown symbol: {symbol}'}), 400
+
+        # Shared aggregation/formatting logic
+        def format_candles(raw_data, ist_offset, requested_interval):
+            if not raw_data: return []
+            
+            temp = []
+            for c in raw_data:
+                temp.append({
+                    'time':   int(c['date'].timestamp()) + ist_offset,
+                    'open':   c['open'], 'high':   c['high'], 'low':    c['low'],
+                    'close':  c['close'], 'volume': c.get('volume', 0)
+                })
+            
+            if requested_interval == '2minute':
                 def merge_batch(batch):
                     if not batch: return None
                     return {
@@ -3111,194 +3100,192 @@ def oi_profile_candles() -> EndpointResponse:
                         'close':  batch[-1]['close'],
                         'volume': sum(x['volume'] for x in batch)
                     }
+                
+                aggregated = []
+                batch = []
+                last_day = None
+                for c in temp:
+                    current_day = datetime.fromtimestamp(c['time'] - ist_offset).date()
+                    if last_day and current_day != last_day and batch:
+                        aggregated.append(merge_batch(batch)); batch = []
+                    last_day = current_day
+                    batch.append(c)
+                    if len(batch) == 2:
+                        aggregated.append(merge_batch(batch)); batch = []
+                if batch: aggregated.append(merge_batch(batch))
+                return aggregated
+            return temp
 
-                if interval == '2minute' and temp_candles:
-                    aggregated = []
-                    batch = []
-                    last_day = None
-                    for c in temp_candles:
-                        current_dt = _dt.fromtimestamp(c['time'] - ist_offset)
-                        current_day = current_dt.date()
-                        
-                        # Reset batch on new day to prevent merging across days
-                        if last_day and current_day != last_day:
-                            if batch: 
-                                aggregated.append(merge_batch(batch))
-                                batch = []
-                        last_day = current_day
-                        
-                        batch.append(c)
-                        # Group every 2 candles (2 x 1m = 2m)
-                        if len(batch) == 2:
-                            aggregated.append(merge_batch(batch))
-                            batch = []
-                    if batch: 
-                        aggregated.append(merge_batch(batch))
-                    candles = aggregated
-                else:
-                    candles = temp_candles
-                    
-                break  # success – exit retry loop
+        def fetch_task(token, from_dt, to_dt, inter):
+            try:
+                # Use KiteService's retry logic and rate limiting
+                res = kite_service._historical_with_retry(instrument_token=int(token), from_date=from_dt, to_date=to_dt, interval=inter)
+                return res
             except Exception as e:
-                if attempt < max_retry - 1:
-                    sleep = 0.5 * (2 ** attempt) + _random.uniform(0, 0.3)
-                    logger.warning(f'[OI-Profile] Retry {attempt+1}: {e} – sleeping {sleep:.1f}s')
-                    _time.sleep(sleep)
-                else:
-                    raise
+                logger.error(f"[OI-Profile] Fetch error for token {token}: {e}")
+                return []
 
-        logger.info(f'[OI-Profile] Returned {len(candles)} {interval} candles for {symbol}')
+        # ── Parallel execution ──────────────────────────────────────
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            # 1. Start fetching index intraday and index daily
+            future_index = executor.submit(fetch_task, token, from_date, to_date, fetch_interval)
+            
+            # Use daily OHLC cache if available (TTL 5 mins)
+            daily_cache_key = (symbol, days)
+            cached_daily = None
+            with _candle_cache_lock:
+                if daily_cache_key in _daily_ohlc_cache:
+                    _d_data, _d_ts = _daily_ohlc_cache[daily_cache_key]
+                    if datetime.now().timestamp() - _d_ts < 300:
+                        cached_daily = _d_data
 
-        # ── Fetch official daily OHLC mapping for accurate CPR ────────
-        daily_ohlc = {}
-        try:
-            d_from = (now - _td(days=fetch_back + 10)).replace(hour=0, minute=0, second=0, microsecond=0)
-            daily_raw = kite.historical_data(instrument_token=token, from_date=d_from, to_date=to_date, interval='day')
-            for d in daily_raw:
-                dt_str = (d['date'] + _td(seconds=ist_offset)).strftime('%Y-%m-%d')
-                daily_ohlc[dt_str] = {
-                    'close': d['close'],
-                    'high': d['high'],
-                    'low': d['low']
-                }
-        except Exception as e:
-            logger.warning(f"[OI-Profile] Failed to fetch true daily OHLC: {e}")
+            future_daily = None
+            if not cached_daily:
+                d_from = (now - timedelta(days=fetch_back + 10)).replace(hour=0, minute=0, second=0, microsecond=0)
+                future_daily = executor.submit(fetch_task, token, d_from, to_date, 'day')
+            
+            # 2. Identify strikes if spot provided, otherwise wait for index
+            itm_ce_strike, itm_pe_strike = None, None
+            ce_symbol, pe_symbol = None, None
+            ce_token, pe_token = None, None
+            
+            if not auto_hl and spot_high is not None and spot_low is not None:
+                # Identify initial ITM strikes based on Provided Step
+                offset = 3 * step_value
+                itm_ce_strike = int(math.ceil((spot_low - offset) / step_value) * step_value)
+                itm_pe_strike = int(math.floor((spot_high + offset) / step_value) * step_value)
 
-        # ── Intrinsic Levels Calculation & Option Candle Fetch ────────
-        try:
-            spot_high  = request.args.get('spot_high', type=float)
-            spot_low   = request.args.get('spot_low',  type=float)
-            step_value = request.args.get('step', 50,  type=int)
-            multiplier = request.args.get('multiplier', 2, type=int)
-            auto_hl    = request.args.get('auto_hl', 'false').lower() == 'true'
+                # Robust Strike Discovery: Some stocks have non-standard steps (e.g. 2.5, 7.5)
+                # If the calculated strike isn't found, find the nearest ACTUAL strike.
+                ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
 
-            intrinsic_data = None
-            ce_candles = []
-            pe_candles = []
+                if not ce_symbol or not pe_symbol:
+                    all_options = [i for i in getattr(kite_service, '_nfo_instruments_cache', []) if i.get('name') == symbol]
+                    available_strikes = sorted(list(set([i['strike'] for i in all_options])))
+                    if available_strikes:
+                        if not ce_symbol:
+                            itm_ce_strike = min(available_strikes, key=lambda x: abs(x - (spot_low - offset)))
+                            ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                        if not pe_symbol:
+                            itm_pe_strike = min(available_strikes, key=lambda x: abs(x - (spot_high + offset)))
+                            pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
 
-            if auto_hl and candles:
+                if ce_symbol: ce_token = kite_service.get_instrument_token(ce_symbol)
+                if pe_symbol: pe_token = kite_service.get_instrument_token(pe_symbol)
+
+            # 3. Fetch Option Candles if tokens known
+            future_ce = None
+            future_pe = None
+            if ce_token: future_ce = executor.submit(fetch_task, ce_token, from_date, to_date, fetch_interval)
+            if pe_token: future_pe = executor.submit(fetch_task, pe_token, from_date, to_date, fetch_interval)
+
+            # 4. Wait for Index to finish if auto_hl is true
+            index_raw = future_index.result()
+            
+            # Filter strictly by the last N actual trading days
+            if index_raw:
+                unique_dates = sorted(list(set(c['date'].date() for c in index_raw)))
+                target_dates = unique_dates[-days:] if len(unique_dates) >= days else unique_dates
+                index_raw = [c for c in index_raw if c['date'].date() in target_dates]
+            
+            candles = format_candles(index_raw, ist_offset, interval)
+
+            if auto_hl and candles and not (ce_token and pe_token):
                 lookbacks = {'minute': 60, '2minute': 30, '3minute': 20, '5minute': 12, '15minute': 4, '30minute': 2}
                 lookback = lookbacks.get(interval, 10)
                 subset = candles[-lookback:] if len(candles) >= lookback else candles
                 spot_high = round(max(c['high'] for c in subset), 2)
                 spot_low = round(min(c['low'] for c in subset), 2)
+                
+                # Identify initial ITM strikes based on Provided Step
+                offset = 3 * step_value
+                itm_ce_strike = int(math.ceil((spot_low - offset) / step_value) * step_value)
+                itm_pe_strike = int(math.floor((spot_high + offset) / step_value) * step_value)
 
-            if spot_high is not None and spot_low is not None:
-                import math as _math
-                # itmCallStrike = math.round(math.ceil((spotLow - 150) / 100) * 100)
-                # itmPutStrike  = math.round(math.floor((spotHigh + 150) / 100) * 100)
-                itm_ce_strike = round(_math.ceil((spot_low - 150) / 100) * 100)
-                itm_pe_strike = round(_math.floor((spot_high + 150) / 100) * 100)
+                # Robust Strike Discovery: If calculated strike isn't found, use nearest valid one
+                ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
 
-                # ceIntrinsic = spotHigh - ce_strike_val (itm_ce_strike)
-                ce_intrinsic = max(spot_high - itm_ce_strike, 0)
-                pe_intrinsic = max(itm_pe_strike - spot_low, 0)
+                if not ce_symbol or not pe_symbol:
+                    all_options = [i for i in getattr(kite_service, '_nfo_instruments_cache', []) if i.get('name') == symbol]
+                    available_strikes = sorted(list(set([i['strike'] for i in all_options])))
+                    if available_strikes:
+                        if not ce_symbol:
+                            itm_ce_strike = min(available_strikes, key=lambda x: abs(x - (spot_low - offset)))
+                            ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                        if not pe_symbol:
+                            itm_pe_strike = min(available_strikes, key=lambda x: abs(x - (spot_high + offset)))
+                            pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+                
+                if ce_symbol: 
+                    ce_token = kite_service.get_instrument_token(ce_symbol)
+                    if ce_token: future_ce = executor.submit(fetch_task, ce_token, from_date, to_date, fetch_interval)
+                if pe_symbol: 
+                    pe_token = kite_service.get_instrument_token(pe_symbol)
+                    if pe_token: future_pe = executor.submit(fetch_task, pe_token, from_date, to_date, fetch_interval)
 
-                ce_levels = []
-                pe_levels = []
-                for i in range(1, multiplier + 1):
-                    ce_levels.append(ce_intrinsic + (step_value * i))
-                    pe_levels.append(pe_intrinsic + (step_value * i))
+            # 5. Collect remaining results
+            daily_raw = cached_daily if cached_daily else (future_daily.result() if future_daily else [])
+            if not cached_daily and daily_raw:
+                with _candle_cache_lock:
+                    _daily_ohlc_cache[daily_cache_key] = (daily_raw, datetime.now().timestamp())
+            
+            ce_raw = future_ce.result() if future_ce else []
+            pe_raw = future_pe.result() if future_pe else []
 
-                intrinsic_data = {
-                    'spot_high':     spot_high,
-                    'spot_low':      spot_low,
-                    'itm_ce_strike': itm_ce_strike,
-                    'itm_pe_strike': itm_pe_strike,
-                    'ce_intrinsic':  ce_intrinsic,
-                    'pe_intrinsic':  pe_intrinsic,
-                    'ce_levels':     ce_levels,
-                    'pe_levels':     pe_levels,
-                    'multiplier':    multiplier
-                }
+        # ── Data Formatting ──────────────────────────────────────────
+        daily_ohlc = {}
+        if daily_raw:
+            for d in daily_raw:
+                dt_str = (d['date'] + timedelta(seconds=ist_offset)).strftime('%Y-%m-%d')
+                daily_ohlc[dt_str] = {'close': d['close'], 'high': d['high'], 'low': d['low']}
 
-                # ── Fetch Option Candles for identified strikes ────────
-                try:
-                    from trading_app.service.kite_order_services import KiteService
-                    kite_service = KiteService(kite_instance=kite)
-                    
-                    ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                    pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-                    
-                    fetch_interval = 'minute' if interval == '2minute' else interval
-                    if ce_symbol:
-                        ce_token = kite_service.get_instrument_token(ce_symbol)
-                        if ce_token:
-                            raw_ce = kite.historical_data(int(ce_token), from_date, to_date, fetch_interval)
-                            temp_ce = [{
-                                'time': int(c['date'].timestamp()) + ist_offset,
-                                'open': c['open'], 'high': c['high'], 'low': c['low'], 'close': c['close'], 'volume': c.get('volume', 0)
-                            } for c in raw_ce]
-                            
-                            if interval == '2minute' and temp_ce:
-                                ce_candles = []
-                                batch = []
-                                last_day = None
-                                for c in temp_ce:
-                                    current_day = _dt.fromtimestamp(c['time'] - ist_offset).date()
-                                    if last_day and current_day != last_day and batch:
-                                        ce_candles.append(merge_batch(batch))
-                                        batch = []
-                                    last_day = current_day
-                                    batch.append(c)
-                                    if len(batch) == 2:
-                                        ce_candles.append(merge_batch(batch))
-                                        batch = []
-                                if batch: ce_candles.append(merge_batch(batch))
-                            else:
-                                ce_candles = temp_ce
-                            intrinsic_data['ce_symbol'] = ce_symbol
+        ce_candles = format_candles(ce_raw, ist_offset, interval)
+        pe_candles = format_candles(pe_raw, ist_offset, interval)
 
-                    if pe_symbol:
-                        pe_token = kite_service.get_instrument_token(pe_symbol)
-                        if pe_token:
-                            raw_pe = kite.historical_data(int(pe_token), from_date, to_date, fetch_interval)
-                            temp_pe = [{
-                                'time': int(c['date'].timestamp()) + ist_offset,
-                                'open': c['open'], 'high': c['high'], 'low': c['low'], 'close': c['close'], 'volume': c.get('volume', 0)
-                            } for c in raw_pe]
-                            
-                            if interval == '2minute' and temp_pe:
-                                pe_candles = []
-                                batch = []
-                                last_day = None
-                                for c in temp_pe:
-                                    current_day = _dt.fromtimestamp(c['time'] - ist_offset).date()
-                                    if last_day and current_day != last_day and batch:
-                                        pe_candles.append(merge_batch(batch))
-                                        batch = []
-                                    last_day = current_day
-                                    batch.append(c)
-                                    if len(batch) == 2:
-                                        pe_candles.append(merge_batch(batch))
-                                        batch = []
-                                if batch: pe_candles.append(merge_batch(batch))
-                            else:
-                                pe_candles = temp_pe
-                            intrinsic_data['pe_symbol'] = pe_symbol
-                            
-                except Exception as opt_e:
-                    logger.warning(f"[OI-Profile] Option candle fetch failed: {opt_e}")
+        # ── Intrinsic Levels ─────────────────────────────────────────
+        intrinsic_data = None
+        if spot_high is not None and spot_low is not None:
+            ce_intrinsic = max(spot_high - itm_ce_strike, 0)
+            pe_intrinsic = max(itm_pe_strike - spot_low, 0)
+            ce_levels = [ce_intrinsic + (step_value * i) for i in range(1, multiplier + 1)]
+            pe_levels = [pe_intrinsic + (step_value * i) for i in range(1, multiplier + 1)]
+            
+            intrinsic_data = {
+                'spot_high': spot_high, 'spot_low': spot_low,
+                'itm_ce_strike': itm_ce_strike, 'itm_pe_strike': itm_pe_strike,
+                'ce_intrinsic': ce_intrinsic, 'pe_intrinsic': pe_intrinsic,
+                'ce_levels': ce_levels, 'pe_levels': pe_levels,
+                'ce_symbol': ce_symbol, 'pe_symbol': pe_symbol,
+                'multiplier': multiplier
+            }
 
-        except Exception as e:
-            logger.warning(f"[OI-Profile] Intrinsic calculation failed: {e}")
-            intrinsic_data = None
-
-        return jsonify({
-            'success':   True,
-            'symbol':    symbol,
-            'interval':  interval,
-            'candles':   candles,
+        # ── 6. Update Cache and Return ────────────────────────────────
+        response_data = {
+            'success': True,
+            'symbol': symbol,
+            'interval': interval,
+            'candles': candles,
             'ce_opt_candles': ce_candles,
             'pe_opt_candles': pe_candles,
-            'count':     len(candles),
+            'count': len(candles),
             'intrinsic': intrinsic_data,
             'daily_ohlc': daily_ohlc,
-            'timestamp': datetime.now().isoformat()
-        })
+            'timestamp': datetime.now().isoformat(),
+            'optimized': True,
+            'cached': False
+        }
+        
+        with _candle_cache_lock:
+            _candle_response_cache[cache_key] = (response_data, datetime.now().timestamp())
+            # Basic cleanup: if cache grows too large, clear it
+            if len(_candle_response_cache) > 100: _candle_response_cache.clear()
+
+        return jsonify(response_data)
 
     except Exception as exc:
-        logger.error(f'[OI-Profile] Candle fetch error: {exc}', exc_info=True)
+        logger.error(f'[OI-Profile] Optimized fetch error: {exc}', exc_info=True)
         return jsonify({'success': False, 'error': str(exc)}), 500
 
 

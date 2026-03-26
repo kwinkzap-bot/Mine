@@ -116,7 +116,7 @@ class GlobalRateLimiter:
     def _init(self):
         self._request_lock = threading.Lock()
         self._last_request_ts = 0.0
-        self._min_gap = 0.5  # 0.5s = 2 req/sec (conservative, Kite limit is 3/sec)
+        self._min_gap = 0.34  # 0.34s ≈ 3 req/sec (Kite limit is 3/sec)
         self._request_count = 0
     
     def wait(self) -> None:
@@ -176,12 +176,14 @@ class KiteService:
         # 1. Check Global Memory Cache
         with _global_instruments_cache['lock']:
             if _global_instruments_cache['cache_date'] == today and _global_instruments_cache['nse']:
+                # Optimisation: Share reference instead of copying large lists/dicts 
+                # (100k+ items). We assume these are READ-ONLY after loading.
                 self.instruments = (_global_instruments_cache['nse'] or []) + (_global_instruments_cache['nfo'] or [])
-                self._instrument_tokens_by_symbol = _global_instruments_cache['tokens_by_symbol'].copy()
-                self._instrument_tokens_by_name = _global_instruments_cache['tokens_by_name'].copy()
+                self._instrument_tokens_by_symbol = _global_instruments_cache['tokens_by_symbol']
+                self._instrument_tokens_by_name = _global_instruments_cache['tokens_by_name']
                 self._nfo_instruments_cache = _global_instruments_cache['nfo']
                 self._nfo_cache_asof = today
-                logging.info(f"[KiteService] Using global memory cache ({len(self.instruments)} total)")
+                # logging.debug(f"[KiteService] Using global memory cache ({len(self.instruments)} total)")
                 return
         
         # 2. Check Disk Cache (Persistent across restarts)
@@ -203,11 +205,10 @@ class KiteService:
                     with _global_instruments_cache['lock']:
                         _global_instruments_cache['nse'] = [i for i in self.instruments if i.get('exchange') == 'NSE']
                         _global_instruments_cache['nfo'] = self._nfo_instruments_cache
-                        _global_instruments_cache['tokens_by_symbol'] = self._instrument_tokens_by_symbol.copy()
-                        _global_instruments_cache['tokens_by_name'] = self._instrument_tokens_by_name.copy()
+                        _global_instruments_cache['tokens_by_symbol'] = self._instrument_tokens_by_symbol
+                        _global_instruments_cache['tokens_by_name'] = self._instrument_tokens_by_name
                         _global_instruments_cache['cache_date'] = today
                         
-                    logging.info(f"[KiteService] Using persistent DISK cache ({len(self.instruments)} instruments)")
                     return
                 else:
                     logging.info("[KiteService] Disk cache is STALE (not from today). Needs refresh.")
@@ -269,8 +270,8 @@ class KiteService:
             with _global_instruments_cache['lock']:
                 _global_instruments_cache['nse'] = nse_instruments
                 _global_instruments_cache['nfo'] = nfo_instruments
-                _global_instruments_cache['tokens_by_symbol'] = self._instrument_tokens_by_symbol.copy()
-                _global_instruments_cache['tokens_by_name'] = self._instrument_tokens_by_name.copy()
+                _global_instruments_cache['tokens_by_symbol'] = self._instrument_tokens_by_symbol
+                _global_instruments_cache['tokens_by_name'] = self._instrument_tokens_by_name
                 _global_instruments_cache['cache_date'] = date.today()
                 
             logging.info(f"[KiteService] Built lookup for {len(self.instruments)} instruments")
@@ -300,34 +301,26 @@ class KiteService:
     def get_instrument_token(self, symbol: str) -> Optional[int]:
         """Get instrument token for NSE equity or indices, including FINNIFTY."""
         try:
-            # Hardcoded tokens for indices (in case lookup fails)
-            HARDCODED_TOKENS = {
-                'NIFTY': 256265.0,      # NIFTY 50
-                'BANKNIFTY': 260105.0,  # NIFTY Bank
-                'FINNIFTY': 257801.0    # NIFTY FIN SERVICE
-            }
-            
-            # First try to get from loaded instruments
+            # 1. Try direct symbol lookup (Primary)
             token = self._instrument_tokens_by_symbol.get(symbol)
-            if token:
-                return token
+            if token: return int(token)
 
-            # Improved index lookup including FINNIFTY
-            if symbol in ['NIFTY', 'BANKNIFTY', 'FINNIFTY']:
-                search_name = symbol.lower().replace('nifty', 'nifty ').strip()
-                if symbol == 'NIFTY': search_name = 'nifty 50'
-                elif symbol == 'BANKNIFTY': search_name = 'nifty bank'
-                elif symbol == 'FINNIFTY': search_name = 'nifty fin service'
-                
+            # 2. Try by name (Secondary - useful for some NFO to NSE mappings)
+            token = self._instrument_tokens_by_name.get(symbol.lower())
+            if token: return int(token)
+
+            # 3. Normalized index lookup
+            indices_map = {
+                'NIFTY': 'nifty 50',
+                'BANKNIFTY': 'nifty bank',
+                'FINNIFTY': 'nifty fin service',
+                'MIDCPNIFTY': 'nifty midcap select',
+                'SENSEX': 'sensex'
+            }
+            if symbol in indices_map:
+                search_name = indices_map[symbol]
                 token = self._instrument_tokens_by_name.get(search_name)
-                if token:
-                    return token
-                
-                # Fallback to hardcoded token for known indices
-                if symbol in HARDCODED_TOKENS:
-                    hardcoded_token = HARDCODED_TOKENS[symbol]
-                    logging.warning(f"[get_instrument_token] {symbol}: Lookup failed, using hardcoded token: {hardcoded_token}")
-                    return int(hardcoded_token)
+                if token: return int(token)
             
             logging.warning(f"No instrument found for {symbol}")
             return None

@@ -78,6 +78,14 @@ window.CONSTANTS = {
         DRSI_BEARISH_BODY: 'drsiBearishBody',
         DRSI_BEARISH_COUNT: 'drsiBearishCount',
         DRSI_BEARISH_TABLE: 'drsiBearishTable',
+        DRSI_REVERSAL_BULLISH_RESULTS: 'drsiReversalBullishResults',
+        DRSI_REVERSAL_BULLISH_BODY: 'drsiReversalBullishBody',
+        DRSI_REVERSAL_BULLISH_COUNT: 'drsiReversalBullishCount',
+        DRSI_REVERSAL_BULLISH_TABLE: 'drsiReversalBullishTable',
+        DRSI_REVERSAL_BEARISH_RESULTS: 'drsiReversalBearishResults',
+        DRSI_REVERSAL_BEARISH_BODY: 'drsiReversalBearishBody',
+        DRSI_REVERSAL_BEARISH_COUNT: 'drsiReversalBearishCount',
+        DRSI_REVERSAL_BEARISH_TABLE: 'drsiReversalBearishTable',
 
         // Strategy elements
         STRATEGY_FORM: 'strategyForm',

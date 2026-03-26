@@ -25,11 +25,12 @@
 
                 <div class="oip-controls">
                     <span class="oip-label">Symbol</span>
-                    <select id="oipSymbol" class="oip-select">
-                        <option value="NIFTY" selected>NIFTY</option>
-                        <option value="BANKNIFTY">BANKNIFTY</option>
-                        <option value="FINNIFTY">FINNIFTY</option>
-                    </select>
+                    <div class="search-container">
+                        <input type="text" id="symbolSelect" class="oip-input symbol-dropdown"
+                            placeholder="Search Symbol..." value="NIFTY" autocomplete="off"
+                            style="width: 100px; height: 22px;">
+                        <ul id="symbolDropdownList" class="custom-dropdown-list hidden"></ul>
+                    </div>
 
                     <span class="oip-label">TF</span>
                     <select id="oipInterval" class="oip-select">
@@ -42,14 +43,6 @@
                         <option value="60minute">1h</option>
                     </select>
 
-                    <span class="oip-label">Strikes ±</span>
-                    <select id="oipStrikes" class="oip-select">
-                        <option value="10">10</option>
-                        <option value="15" selected>15</option>
-                        <option value="20">20</option>
-                        <option value="30">30</option>
-                        <option value="999">All</option>
-                    </select>
 
                     <div class="oip-control-item">
                         <label class="oip-checkbox">

@@ -38,20 +38,67 @@ let oipMode = 'change';   // 'total' or 'change'
 let oipIsBusy = false;
 let oipRafId = null;
 let oipIsFirstLoad = true;       // flag to control auto-rescaling
+let oipAllSymbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'];
 
 /* ── Bootstrap ────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('oipSymbol').addEventListener('change', e => {
-        oipSymbol = e.target.value;
-        oipFullRefresh(true);
+    // Symbol Dropdown Listeners
+    const symbolInput = document.getElementById('symbolSelect');
+    const symbolList = document.getElementById('symbolDropdownList');
+
+    // Input: Filter list
+    symbolInput.addEventListener('input', (e) => oipRenderDropdown(e.target.value.toUpperCase(), symbolList));
+
+    // Input: Toggle on click
+    symbolInput.addEventListener('click', function (e) {
+        e.stopPropagation(); // Prevent document click from closing it immediately
+        if (symbolList.classList.contains('show')) {
+            symbolList.classList.remove('show');
+            symbolList.classList.add('hidden');
+        } else {
+            this.value = '';
+            oipRenderDropdown('', symbolList);
+        }
     });
+
+    // Focus: Just clear (click will handle show)
+    symbolInput.addEventListener('focus', function () {
+        this.value = '';
+    });
+
+    // Blur: Restore if empty & Hide list
+    symbolInput.addEventListener('blur', function () {
+        setTimeout(() => {
+            symbolList.classList.remove('show');
+            symbolList.classList.add('hidden');
+            if (!this.value.trim()) this.value = oipSymbol;
+        }, 200);
+    });
+
+    // Keydown: Enter to select
+    symbolInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            const val = e.target.value.trim().toUpperCase();
+            if (val) oipSelectSymbol(val);
+            symbolInput.blur();
+        }
+    });
+
+    // Click outside to close
+    document.addEventListener('click', (e) => {
+        if (symbolInput && symbolList && !symbolInput.contains(e.target) && !symbolList.contains(e.target)) {
+            symbolList.classList.remove('show');
+        }
+    });
+
+    // Fetch initial symbols
+    fetch('/api/symbols')
+        .then(r => r.json())
+        .then(d => { if (d.success) oipAllSymbols = d.symbols; })
+        .catch(console.warn);
     document.getElementById('oipInterval').addEventListener('change', e => {
         oipInterval = e.target.value;
         oipLoadCandles();
-    });
-    document.getElementById('oipStrikes').addEventListener('change', e => {
-        oipStrikeCount = parseInt(e.target.value);
-        oipRequestDraw();
     });
 
     // OI vs CHG mode listener
@@ -66,6 +113,14 @@ document.addEventListener('DOMContentLoaded', () => {
     ['oipSpotHigh', 'oipSpotLow'].forEach(id => {
         document.getElementById(id).addEventListener('change', () => oipLoadCandles(true));
     });
+
+    if (document.getElementById('oipAutoHL')) {
+        document.getElementById('oipAutoHL').addEventListener('click', () => {
+            oipAutoFillHighLow();
+            oipLoadCandles(true); // Trigger fetch with new H/L
+        });
+    }
+
 
     // Step/Multiplier/View changes: Only need local re-render (instant)
     ['oipStep', 'oipMultiplier', 'oipIntrinsicView'].forEach(id => {
@@ -528,9 +583,18 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
 
                         if (view === 'combined') {
                             console.log(`[OIP] Setting Combined view with ${ceData.length} CE / ${peData.length} PE candles`);
+                            oipIntrinsicChart.setVisibleSeries(true, true);
                             oipIntrinsicChart.update(ceData, peData, true);
-                            if (oipVwapIntSeries) oipVwapIntSeries.setData(oipCalculateVWAP(ceData));
-                            if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(oipCalculateVWAP(peData));
+
+                            const vwapEnabled = document.getElementById('oipShowVwapInt')?.checked;
+                            if (oipVwapIntSeries) {
+                                oipVwapIntSeries.applyOptions({ visible: vwapEnabled && true });
+                                oipVwapIntSeries.setData(oipCalculateVWAP(ceData));
+                            }
+                            if (oipVwapIntPeSeries) {
+                                oipVwapIntPeSeries.applyOptions({ visible: vwapEnabled && true });
+                                oipVwapIntPeSeries.setData(oipCalculateVWAP(peData));
+                            }
 
                             // Calculate and set Pine Signals (Markers)
                             const ceSignals = oipCalculatePineSignals(ceData, data.intrinsic.ce_levels, 'CE');
@@ -538,22 +602,39 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                             oipIntrinsicChart.setMarkers(ceSignals, peSignals);
                         } else if (view === 'ce') {
                             console.log(`[OIP] Setting CE view with ${ceData.length} candles`);
+                            oipIntrinsicChart.setVisibleSeries(true, false);
                             oipIntrinsicChart.update(ceData, null, true);
-                            if (oipVwapIntSeries) oipVwapIntSeries.setData(oipCalculateVWAP(ceData));
-                            if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData([]);
+
+                            const vwapEnabled = document.getElementById('oipShowVwapInt')?.checked;
+                            if (oipVwapIntSeries) {
+                                oipVwapIntSeries.applyOptions({ visible: vwapEnabled && true });
+                                oipVwapIntSeries.setData(oipCalculateVWAP(ceData));
+                            }
+                            if (oipVwapIntPeSeries) {
+                                oipVwapIntPeSeries.applyOptions({ visible: false });
+                            }
 
                             const ceSignals = oipCalculatePineSignals(ceData, data.intrinsic.ce_levels, 'CE');
                             oipIntrinsicChart.setMarkers(ceSignals, []);
                         } else {
                             console.log(`[OIP] Setting PE view with ${peData.length} candles`);
+                            oipIntrinsicChart.setVisibleSeries(false, true);
                             oipIntrinsicChart.update(null, peData, true);
-                            if (oipVwapIntSeries) oipVwapIntSeries.setData([]);
-                            if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(oipCalculateVWAP(peData));
+
+                            const vwapEnabled = document.getElementById('oipShowVwapInt')?.checked;
+                            if (oipVwapIntSeries) {
+                                oipVwapIntSeries.applyOptions({ visible: false });
+                            }
+                            if (oipVwapIntPeSeries) {
+                                oipVwapIntPeSeries.applyOptions({ visible: vwapEnabled && true });
+                                oipVwapIntPeSeries.setData(oipCalculateVWAP(peData));
+                            }
 
                             const peSignals = oipCalculatePineSignals(peData, data.intrinsic.pe_levels, 'PE');
+                            oipIntrinsicChart.setMarkers([], peSignals);
                         }
                     }
-                } // End if (ceStrike && peStrike)
+                }
 
                 // Draw intrinsic levels AFTER the chart updates from fetch
                 if (data.intrinsic) {
@@ -640,12 +721,47 @@ function oipDrawIntrinsicLines(intrinsic, view = 'index') {
     const step = parseInt(document.getElementById('oipStep').value) || 50;
     const mult = parseInt(document.getElementById('oipMultiplier').value) || 10;
 
-    // Calculate levels locally to allow manual adding without API fetch
+    // 1. Identify the highest price specifically for the CURRENT DAY
+    let highestChartPrice = 0;
+    const candlesCE = (intrinsic.ce_opt_candles || oipOIData?.ce_opt_candles || []);
+    const candlesPE = (intrinsic.pe_opt_candles || oipOIData?.pe_opt_candles || []);
+
+    // Find the date of the most recent candle to focus on "Today"
+    const lastCandle = candlesCE.length ? candlesCE[candlesCE.length - 1] : (candlesPE.length ? candlesPE[candlesPE.length - 1] : null);
+
+    if (lastCandle) {
+        const lastDateObj = new Date(lastCandle.time * 1000);
+        const startOfToday = new Date(lastDateObj.getFullYear(), lastDateObj.getMonth(), lastDateObj.getDate()).getTime() / 1000;
+
+        const todayCE = candlesCE.filter(c => c.time >= startOfToday);
+        const todayPE = candlesPE.filter(c => c.time >= startOfToday);
+
+        if (view === 'ce' && todayCE.length) highestChartPrice = Math.max(...todayCE.map(c => c.high));
+        else if (view === 'pe' && todayPE.length) highestChartPrice = Math.max(...todayPE.map(c => c.high));
+        else if (view === 'combined' && (todayCE.length || todayPE.length)) {
+            const ceH = todayCE.length ? Math.max(...todayCE.map(c => c.high)) : 0;
+            const peH = todayPE.length ? Math.max(...todayPE.map(c => c.high)) : 0;
+            highestChartPrice = Math.max(ceH, peH);
+        }
+    }
+
+    // 2. Calculate levels dynamically: Show at least 'mult' lines, 
+    // but ALWAYS ensure 2 lines (2 * step) above the highest price
     const ceLevels = [];
     const peLevels = [];
-    for (let i = 1; i <= mult; i++) {
+
+    let i = 1;
+    while (i <= mult || (ce_intrinsic + step * i) < highestChartPrice + (2 * step)) {
         ceLevels.push(ce_intrinsic + step * i);
-        peLevels.push(pe_intrinsic + step * i);
+        i++;
+        if (i > 60) break; // Safety limit
+    }
+
+    let j = 1;
+    while (j <= mult || (pe_intrinsic + step * j) < highestChartPrice + (2 * step)) {
+        peLevels.push(pe_intrinsic + step * j);
+        j++;
+        if (j > 60) break; // Safety limit
     }
 
     // Filter levels based on current view
@@ -663,7 +779,7 @@ function oipDrawIntrinsicLines(intrinsic, view = 'index') {
         ceLevels.forEach((lvl, i) => {
             const line = oipIntrinsicSeries.createPriceLine({
                 price: lvl, color: '#10b981', lineWidth: 1, lineStyle: 0,
-                axisLabelVisible: true, title: `CE L${i + 1}`
+                axisLabelVisible: true, title: ``
             });
             oipLevelLines.push(line);
         });
@@ -681,7 +797,7 @@ function oipDrawIntrinsicLines(intrinsic, view = 'index') {
         peLevels.forEach((lvl, i) => {
             const line = peS.createPriceLine({
                 price: lvl, color: '#8b5cf6', lineWidth: 1, lineStyle: 0,
-                axisLabelVisible: true, title: `PE L${i + 1}`
+                axisLabelVisible: true, title: ``
             });
             oipLevelLines.push(line);
         });
@@ -1173,4 +1289,71 @@ async function oipPlaceOrder(side, action, buttonElement) {
         buttonElement.disabled = false;
         buttonElement.title = originalTitle;
     }
+}
+
+/* ── Searchable Dropdown Helpers ──────────────────────────── */
+function oipRenderDropdown(filter, list) {
+    if (!list) return;
+    list.innerHTML = '';
+
+    const indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX'];
+    const displayMap = {
+        'NIFTY': 'NIFTY 50', 'BANKNIFTY': 'NIFTY BANK',
+        'FINNIFTY': 'NIFTY FIN SERVICE', 'MIDCPNIFTY': 'NIFTY MIDCAP',
+        'SENSEX': 'SENSEX'
+    };
+
+    // Advanced search: check symbol code AND display name
+    const matches = oipAllSymbols.filter(s => {
+        if (!filter) return true;
+        const disp = (displayMap[s] || s).toUpperCase();
+        return s.includes(filter) || disp.includes(filter);
+    }).sort((a, b) => {
+        const ai = indices.indexOf(a), bi = indices.indexOf(b);
+        if (ai !== -1 && bi !== -1) return ai - bi;
+        if (ai !== -1) return -1;
+        if (bi !== -1) return 1;
+        return a.localeCompare(b);
+    });
+
+    if (!matches.length) {
+        list.classList.remove('show');
+        list.classList.add('hidden');
+        return;
+    }
+
+    matches.forEach(symbol => {
+        const li = document.createElement('li');
+        const disp = displayMap[symbol] || symbol;
+
+        li.innerHTML = `<strong>${disp}</strong> ${disp !== symbol ? `<span style="font-size:0.8em; color:#888; margin-left:4px;">(${symbol})</span>` : ''}`;
+
+        if (symbol === oipSymbol) {
+            li.classList.add('highlighted');
+        }
+
+        li.addEventListener('click', () => {
+            oipSelectSymbol(symbol);
+            list.classList.remove('show');
+        });
+        list.appendChild(li);
+    });
+    list.classList.add('show');
+    list.classList.remove('hidden');
+}
+
+function oipSelectSymbol(symbol) {
+    oipSymbol = symbol;
+    document.getElementById('symbolSelect').value = symbol;
+
+    // Auto-adjust step for common indices
+    const stepEl = document.getElementById('oipStep');
+    if (stepEl) {
+        if (symbol === 'BANKNIFTY') stepEl.value = '100';
+        else if (symbol === 'NIFTY' || symbol === 'FINNIFTY') stepEl.value = '50';
+        else if (symbol === 'MIDCPNIFTY') stepEl.value = '25';
+        else if (symbol === 'SENSEX') stepEl.value = '100';
+    }
+
+    oipFullRefresh(true);
 }

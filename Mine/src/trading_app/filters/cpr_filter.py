@@ -767,7 +767,9 @@ class CPRFilterService:
                 'cpr_touch_above': None,
                 'cpr_touch_below': None,
                 'drsi_bullish': None,
-                'drsi_bearish': None
+                'drsi_bearish': None,
+                'drsi_reversal_bullish': None,
+                'drsi_reversal_bearish': None
             }
 
             # Phase D-RSI: Delta-RSI Filter (Daily) - Matches "Delta-RSI Oscillator" exactly
@@ -782,8 +784,14 @@ class CPRFilterService:
                 if len(drsi_vals) >= 3:
                     in_long = False
                     in_short = False
+                    prev_long = False
+                    prev_short = False
                     trigger_type = ""
                     trigger_today = False
+                    trigger_prev = False
+                    trigger_type_prev = ""
+                    state_t1 = "neutral"
+                    state_t2 = "neutral"
                     
                     # Iterate through history to track Buy/Sell states (persistent)
                     for i in range(2, len(drsi_vals)):
@@ -795,6 +803,10 @@ class CPRFilterService:
                         crossdw = (d1 >= 0 and d < 0)
                         
                         is_last = (i == len(drsi_vals) - 1)
+                        is_prev = (i == len(drsi_vals) - 2)
+                        
+                        if is_last:
+                            state_today = "long" if in_long else ("short" if in_short else "neutral")
                         
                         if crossup:
                             in_long = True
@@ -802,17 +814,53 @@ class CPRFilterService:
                             if is_last:
                                 trigger_today = True
                                 trigger_type = "Zero-Cross"
+                            if is_prev:
+                                trigger_prev = True
+                                trigger_type_prev = "Zero-Cross"
                         elif crossdw:
                             in_short = True
                             in_long = False
                             if is_last:
                                 trigger_today = True 
                                 trigger_type = "Zero-Cross"
+                            if is_prev:
+                                trigger_prev = True
+                                trigger_type_prev = "Zero-Cross"
+                        
+                        # Capture state at T-2 (day before previous)
+                        if i == len(drsi_vals) - 3:
+                            state_t2 = "long" if in_long else ("short" if in_short else "neutral")
+                        # Capture state at T-1 (previous day)
+                        if i == len(drsi_vals) - 2:
+                            state_t1 = "long" if in_long else ("short" if in_short else "neutral")
                     # Watch list for debugging (User reported stocks)
                     watch_stocks = ['DELHIVERY', 'SIEMENS', 'GLENMARK', 'LICHSGFIN', 'DIVISLAB', 
                                     'APOLLOTYRE', 'PAGEIND', 'SRF', 'PERSISTENT', 'ABB', 'ANGELONE', 'BDL', 'MAZDOCK']
                     if symbol in watch_stocks:
                         logger.info(f"DEBUG D-RSI {symbol}: D={drsi_vals[-1]:.4f}, S={sig_vals[-1]:.4f}, RSI={rsi_vals[-1]:.2f}, Long={in_long}, Short={in_short}, TriggerToday={trigger_today} ({trigger_type})")
+
+                    # D-RSI Reversal Logic: Detect flip from yesterday's state to today's state
+                    # Bullish Flip-UP: Yesterday (T-1) was Sell (short), Today (T-0) is Buy (long, triggered now)
+                    if trigger_today and state_today == "long" and state_t1 == "short":
+                        payloads['drsi_reversal_bullish'] = {
+                            'symbol': symbol,
+                            'current_price': round(cpr.current_price, 2),
+                            'rsi': round(rsi_vals[-1], 2),
+                            'drsi': round(drsi_vals[-1], 4),
+                            'signal': round(sig_vals[-1], 4),
+                            'trigger': "Flip-UP"
+                        }
+                    
+                    # Bearish Flip-DOWN: Yesterday (T-1) was Buy (long), Today (T-0) is Sell (short, triggered now)
+                    if trigger_today and state_today == "short" and state_t1 == "long":
+                        payloads['drsi_reversal_bearish'] = {
+                            'symbol': symbol,
+                            'current_price': round(cpr.current_price, 2),
+                            'rsi': round(rsi_vals[-1], 2),
+                            'drsi': round(drsi_vals[-1], 4),
+                            'signal': round(sig_vals[-1], 4),
+                            'trigger': "Flip-DOWN"
+                        }
 
                     # Strict filter: ONLY Add to payload if the signal triggered TODAY
                     if in_long and trigger_today:
@@ -1370,6 +1418,8 @@ class CPRFilterService:
         cpr_touch_below: List[Dict] = []
         drsi_bullish: List[Dict] = []
         drsi_bearish: List[Dict] = []
+        drsi_reversal_bullish: List[Dict] = []
+        drsi_reversal_bearish: List[Dict] = []
         processed = 0
         failed = 0
         start_time = time.time()
@@ -1408,6 +1458,12 @@ class CPRFilterService:
                             
                         if result.get('drsi_bearish'):
                             drsi_bearish.append(result['drsi_bearish'])
+                            
+                        if result.get('drsi_reversal_bullish'):
+                            drsi_reversal_bullish.append(result['drsi_reversal_bullish'])
+                            
+                        if result.get('drsi_reversal_bearish'):
+                            drsi_reversal_bearish.append(result['drsi_reversal_bearish'])
                     processed += 1
                     if processed % 10 == 0:
                         elapsed = time.time() - start_time
@@ -1448,7 +1504,9 @@ class CPRFilterService:
             },
             'drsi_filter': {
                 'bullish': sorted(drsi_bullish, key=lambda x: x['symbol']),
-                'bearish': sorted(drsi_bearish, key=lambda x: x['symbol'])
+                'bearish': sorted(drsi_bearish, key=lambda x: x['symbol']),
+                'reversal_bullish': sorted(drsi_reversal_bullish, key=lambda x: x['symbol']),
+                'reversal_bearish': sorted(drsi_reversal_bearish, key=lambda x: x['symbol'])
             },
             'high_iv_stocks': sorted(high_iv_stocks, key=lambda x: x['iv_percentile'], reverse=True)
         }
