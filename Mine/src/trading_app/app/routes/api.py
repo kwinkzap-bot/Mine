@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple, Union
 
 import pandas as pd
+from collections import OrderedDict
+import gc
 from flask import Blueprint, request, jsonify, session, Response
 from trading_app.app.utils.logger import logger
 from trading_app.app.extensions import csrf, limiter
@@ -17,12 +19,77 @@ from trading_app.app.utils.user_auth import require_user_auth
 
 api_bp = Blueprint('api', __name__)
 
-# Cache for candle responses to handle high-frequency polling
-# key: (symbol, interval, days, spot_high, spot_low, auto_hl), value: (response_data, timestamp)
-_candle_response_cache = {}
-# Cache for daily OHLC mapping (valid for 5 minutes)
-_daily_ohlc_cache = {}
+# LRU Cache to prevent memory growth (OOM 247 Fix)
+class LruCache:
+    def __init__(self, max_size=50):
+        self.cache = OrderedDict()
+        self.max_size = max_size
+        self.lock = threading.Lock()
+    def __contains__(self, key):
+        with self.lock: return key in self.cache
+    def __getitem__(self, key):
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+                return self.cache[key]
+            raise KeyError(key)
+    def __setitem__(self, key, value):
+        with self.lock:
+            if key in self.cache: del self.cache[key]
+            self.cache[key] = value
+            if len(self.cache) > self.max_size: self.cache.popitem(last=False)
+    def __len__(self):
+        with self.lock: return len(self.cache)
+    def clear(self):
+        with self.lock: self.cache.clear()
+    def pop(self, key, default=None):
+        with self.lock: return self.cache.pop(key, default)
+    def keys(self):
+        with self.lock: return list(self.cache.keys())
+# Limits for LRU Caches (OOM 247 Fix)
+_MAX_CACHE_ENTRIES = 50
+
+_candle_response_cache = LruCache(max_size=_MAX_CACHE_ENTRIES)
+_daily_ohlc_cache = LruCache(max_size=_MAX_CACHE_ENTRIES)
 _candle_cache_lock = threading.Lock()
+
+# Global executor for background data fetching (prevents thread-per-request OOM)
+_api_executor = ThreadPoolExecutor(max_workers=10)
+
+# Broker type configurations (icons, descriptions, required fields, login info)
+BROKER_TYPE_CONFIGS = {
+    'zerodha': {
+        'icon': '🪁',
+        'description': 'NSE/BSE stocks & F&O trading',
+        'required_fields': ['API_KEY', 'API_SECRET'],
+        'login_type': 'url',
+        'login_url': '/auth/login'
+    },
+    'kotak': {
+        'icon': '🏦',
+        'description': 'Stocks, F&O & derivatives trading',
+        'required_fields': ['CONSUMER_KEY', 'UCC'],
+        'login_type': 'modal',
+        'login_action': 'showKotakLoginModal()',
+        'auth_endpoint': '/auth/login/kotak'
+    },
+    'dhan': {
+        'icon': '📊',
+        'description': 'F&O, options & commodity trading',
+        'required_fields': ['ACCESS_TOKEN', 'CLIENT_ID'],
+        'login_type': 'modal',
+        'login_action': 'showDhanLoginModal()',
+        'auth_endpoint': '/auth/login/dhan'
+    },
+    'fyers': {
+        'icon': '⚡',
+        'description': 'Options & index trading',
+        'required_fields': ['APP_ID', 'SECRET_KEY'],
+        'login_type': 'modal',
+        'login_action': 'showFyersLoginModal()',
+        'auth_endpoint': '/auth/login/fyers'
+    }
+}
 
 # Type alias for API responses
 # Flask's jsonify returns Response, optionally with status code tuple
@@ -332,15 +399,6 @@ def get_available_brokers() -> EndpointResponse:
     
     Reads from user-specific .env file using BROKER_{N}_{FIELD} format.
     Each broker is an object with TYPE, NAME, and broker-specific credentials.
-    
-    Example .env format:
-        BROKER_1_TYPE=zerodha
-        BROKER_1_NAME=My Zerodha Account
-        BROKER_1_API_KEY=xxx
-        BROKER_1_API_SECRET=xxx
-    
-    Returns:
-        JSON with list of available broker instances for the current user
     """
     try:
         from trading_app.app.utils.user_env import UserEnvManager
@@ -355,64 +413,33 @@ def get_available_brokers() -> EndpointResponse:
                 'total_configured': 0
             }), 401
         
-        # Broker type configurations (icons, descriptions, required fields, login info)
-        broker_type_configs = {
-            'zerodha': {
-                'icon': '🪁',
-                'description': 'NSE/BSE stocks & F&O trading',
-                'required_fields': ['API_KEY', 'API_SECRET'],
-                'login_type': 'url',
-                'login_url': '/auth/login'
-            },
-            'kotak': {
-                'icon': '🏦',
-                'description': 'Stocks, F&O & derivatives trading',
-                'required_fields': ['CONSUMER_KEY', 'UCC'],
-                'login_type': 'modal',
-                'login_action': 'showKotakLoginModal()',
-                'auth_endpoint': '/auth/login/kotak'
-            },
-            'dhan': {
-                'icon': '📊',
-                'description': 'F&O, options & commodity trading',
-                'required_fields': ['ACCESS_TOKEN', 'CLIENT_ID'],
-                'login_type': 'modal',
-                'login_action': 'showDhanLoginModal()',
-                'auth_endpoint': '/auth/login/dhan'
-            },
-            'fyers': {
-                'icon': '⚡',
-                'description': 'Options & index trading',
-                'required_fields': ['APP_ID', 'SECRET_KEY'],
-                'login_type': 'modal',
-                'login_action': 'showFyersLoginModal()',
-                'auth_endpoint': '/auth/login/fyers'
-            }
-        }
+        # Batch fetch all environment variables for the user to avoid repeated disk I/O
+        user_vars = UserEnvManager.get_all_user_vars(username)
         
         brokers = []
         broker_configs = []
         
         # Scan for BROKER_{N}_TYPE entries (up to 20 brokers)
         for instance_num in range(1, 21):
-            broker_type = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TYPE', '').strip().lower()
+            broker_prefix = f'BROKER_{instance_num}_'
+            broker_type = user_vars.get(f'{broker_prefix}TYPE', '').strip().lower()
             if not broker_type:
                 continue
             
-            if broker_type not in broker_type_configs:
+            if broker_type not in BROKER_TYPE_CONFIGS:
                 logger.warning(f"Unknown broker type: {broker_type} for BROKER_{instance_num}")
                 continue
             
-            type_config = broker_type_configs[broker_type]
+            type_config = BROKER_TYPE_CONFIGS[broker_type]
             
-            broker_name = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_NAME', '').strip()
+            broker_name = user_vars.get(f'{broker_prefix}NAME', '').strip()
             if not broker_name:
                 broker_name = broker_type.title()
             
+            # Check for required fields using the pre-fetched user_vars
             all_fields_present = True
             for field in type_config['required_fields']:
-                value = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_{field}', '').strip()
-                if not value:
+                if not user_vars.get(f'{broker_prefix}{field}', '').strip():
                     all_fields_present = False
                     break
             
@@ -420,7 +447,9 @@ def get_available_brokers() -> EndpointResponse:
                 logger.debug(f"BROKER_{instance_num} ({broker_type}) missing required fields")
                 continue
             
-            broker_active = is_broker_active(username, instance_num)
+            # Check if active using pre-fetched user_vars
+            active_val = user_vars.get(f'{broker_prefix}ACTIVE', 'true').strip().lower()
+            broker_active = active_val not in ('false', '0', 'no')
             
             config = {
                 'instance_num': instance_num,
@@ -428,31 +457,28 @@ def get_available_brokers() -> EndpointResponse:
                 'broker_name': broker_name,
                 'type_config': type_config,
                 'broker_active': broker_active,
-                'username': username
+                'username': username,
+                'lot_size': int(user_vars.get(f'{broker_prefix}LOT_SIZE', '1') or '1')
             }
             
             # Pre-extract session strings in MAIN THREAD to avoid Flask RequestContext issues
             if broker_type == 'zerodha':
                 config['session_token'] = session.get(f'zerodha_{instance_num}_access_token')
-                config['env_token'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
-                config['env_api_key'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_API_KEY')
+                config['env_token'] = user_vars.get(f'{broker_prefix}ACCESS_TOKEN')
+                config['env_api_key'] = user_vars.get(f'{broker_prefix}API_KEY')
                 config['has_inst'] = bool(session.get('instance_num'))
-                
             elif broker_type == 'kotak':
-                config['trading_token'] = session.get(f'kotak_{instance_num}_trading_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TRADING_TOKEN')
-                config['consumer_key'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_CONSUMER_KEY')
-                config['trading_sid'] = session.get(f'kotak_{instance_num}_trading_sid') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_TRADING_SID')
-                config['base_url'] = session.get(f'kotak_{instance_num}_base_url') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_BASE_URL') or "https://gw-napi.kotaksecurities.com"
-                
+                config['trading_token'] = session.get(f'kotak_{instance_num}_trading_token') or user_vars.get(f'{broker_prefix}TRADING_TOKEN')
+                config['consumer_key'] = user_vars.get(f'{broker_prefix}CONSUMER_KEY')
+                config['trading_sid'] = session.get(f'kotak_{instance_num}_trading_sid') or user_vars.get(f'{broker_prefix}TRADING_SID')
+                config['base_url'] = session.get(f'kotak_{instance_num}_base_url') or user_vars.get(f'{broker_prefix}BASE_URL') or "https://gw-napi.kotaksecurities.com"
             elif broker_type == 'dhan':
-                config['access_token'] = session.get(f'dhan_{instance_num}_access_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
-                config['client_id'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_CLIENT_ID')
-                
+                config['access_token'] = session.get(f'dhan_{instance_num}_access_token') or user_vars.get(f'{broker_prefix}ACCESS_TOKEN')
+                config['client_id'] = user_vars.get(f'{broker_prefix}CLIENT_ID')
             elif broker_type == 'fyers':
-                config['access_token'] = session.get(f'fyers_{instance_num}_access_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_ACCESS_TOKEN')
-                config['app_id'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_APP_ID')
-                config['secret'] = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_SECRET_KEY')
-
+                config['access_token'] = session.get(f'fyers_{instance_num}_access_token') or user_vars.get(f'{broker_prefix}ACCESS_TOKEN')
+                config['app_id'] = user_vars.get(f'{broker_prefix}APP_ID')
+                config['secret'] = user_vars.get(f'{broker_prefix}SECRET_KEY')
             broker_configs.append(config)
             
         def verify_broker_status(b_conf):
@@ -576,9 +602,8 @@ def get_available_brokers() -> EndpointResponse:
             if s_updates: session.permanent = True
             
             # Build broker entry
-            broker_id = f"{broker_type}_{instance_num}"
             broker_entry = {
-                'id': broker_id,
+                'id': f"{broker_type}_{instance_num}",
                 'instance_num': instance_num,
                 'broker_type': broker_type,
                 'name': b_conf['broker_name'],
@@ -586,7 +611,7 @@ def get_available_brokers() -> EndpointResponse:
                 'description': type_config['description'],
                 'configured': True,
                 'active': b_conf['broker_active'],
-                'lot_size': int(UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_LOT_SIZE', '1') or '1'),
+                'lot_size': b_conf.get('lot_size', 1),
                 'status': 'Configured and ready' if b_conf['broker_active'] else 'Inactive — orders disabled',
                 'is_logged_in': is_logged_in,
                 'msg_status': msg_status,
@@ -594,13 +619,13 @@ def get_available_brokers() -> EndpointResponse:
             }
             
             if type_config['login_type'] == 'url':
-                broker_entry['login_url'] = f"{type_config['login_url']}?broker_id={broker_id}"
+                broker_entry['login_url'] = f"{type_config['login_url']}?broker_id={broker_entry['id']}"
             else:
                 broker_entry['login_action'] = type_config.get('login_action')
                 broker_entry['auth_endpoint'] = type_config.get('auth_endpoint')
             
             brokers.append(broker_entry)
-            logger.info(f"[available-brokers] Found broker: {broker_name} ({broker_type}) - Instance {instance_num}")
+            logger.info(f"[available-brokers] Found broker: {broker_entry['name']} ({broker_type}) - Instance {instance_num}")
         
         logger.info(f"[available-brokers] User: {username}, Total brokers found: {len(brokers)}")
         
@@ -3010,6 +3035,33 @@ def get_open_interest() -> EndpointResponse:
         }), 500
 
 
+def resolve_itm_strikes(kite_service, symbol, spot_high, spot_low, step_value, offset_multiplier=3):
+    """Refactored helper for robust strike discovery."""
+    offset = offset_multiplier * step_value
+    itm_ce_strike = int(math.ceil((spot_low - offset) / step_value) * step_value)
+    itm_pe_strike = int(math.floor((spot_high + offset) / step_value) * step_value)
+
+    ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+    pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+
+    if not ce_symbol or not pe_symbol:
+        # Fallback to nearest actual strikes if step calculation doesn't match exchange rules
+        # Using memory-efficient O(1) indexed lookup from new KiteService
+        all_options = kite_service.get_nfo_instruments(symbol)
+        available_strikes = sorted(list(set([i['strike'] for i in all_options if i.get('strike') is not None])))
+        if available_strikes:
+            if not ce_symbol:
+                itm_ce_strike = min(available_strikes, key=lambda x: abs(x - (spot_low - offset)))
+                ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+            if not pe_symbol:
+                itm_pe_strike = min(available_strikes, key=lambda x: abs(x - (spot_high + offset)))
+                pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+    
+    ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
+    pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+    
+    return itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token
+
 @api_bp.route('/oi-profile/candles', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -3044,6 +3096,15 @@ def oi_profile_candles() -> EndpointResponse:
                 # Cache for 1.5 seconds to balance freshness and speed
                 if datetime.now().timestamp() - ts < 1.5:
                     return jsonify(data)
+            
+            # Prune cache if it exceeds max size (FIFO approximate)
+            if len(_candle_response_cache) > _MAX_CACHE_ENTRIES:
+                # Remove oldest entries to prevent OOM (exit code 247)
+                entries_to_remove = len(_candle_response_cache) - (_MAX_CACHE_ENTRIES // 2)
+                # Sort by timestamp and remove oldest half
+                sorted_keys = sorted(_candle_response_cache.keys(), key=lambda k: _candle_response_cache[k][1])
+                for k in sorted_keys[:entries_to_remove]:
+                    _candle_response_cache.pop(k, None)
 
         valid_intervals = ['minute', '2minute', '3minute', '5minute', '10minute',
                            '15minute', '30minute', '60minute', 'day']
@@ -3126,113 +3187,72 @@ def oi_profile_candles() -> EndpointResponse:
                 return []
 
         # ── Parallel execution ──────────────────────────────────────
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            # 1. Start fetching index intraday and index daily
-            future_index = executor.submit(fetch_task, token, from_date, to_date, fetch_interval)
+        executor = _api_executor # Use shared global executor
+        # 1. Start fetching index intraday and index daily
+        future_index = executor.submit(fetch_task, token, from_date, to_date, fetch_interval)
+        
+        # Use daily OHLC cache if available (TTL 5 mins)
+        daily_cache_key = (symbol, days)
+        cached_daily = None
+        with _candle_cache_lock:
+            if daily_cache_key in _daily_ohlc_cache:
+                _d_data, _d_ts = _daily_ohlc_cache[daily_cache_key]
+                if datetime.now().timestamp() - _d_ts < 300:
+                    cached_daily = _d_data
+
+        future_daily = None
+        if not cached_daily:
+            d_from = (now - timedelta(days=fetch_back + 10)).replace(hour=0, minute=0, second=0, microsecond=0)
+            future_daily = executor.submit(fetch_task, token, d_from, to_date, 'day')
+        
+        # 2. Identify strikes if spot provided, otherwise wait for index
+        itm_ce_strike, itm_pe_strike = None, None
+        ce_symbol, pe_symbol, ce_token, pe_token = None, None, None, None
+        
+        if not auto_hl and spot_high is not None and spot_low is not None:
+            itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
+                kite_service, symbol, spot_high, spot_low, step_value
+            )
+
+        # 3. Fetch Option Candles if tokens known
+        future_ce = None
+        future_pe = None
+        if ce_token: future_ce = executor.submit(fetch_task, ce_token, from_date, to_date, fetch_interval)
+        if pe_token: future_pe = executor.submit(fetch_task, pe_token, from_date, to_date, fetch_interval)
+
+        # 4. Wait for Index to finish if auto_hl is true
+        index_raw = future_index.result()
+        
+        # Filter strictly by the last N actual trading days
+        if index_raw:
+            unique_dates = sorted(list(set(c['date'].date() for c in index_raw)))
+            target_dates = unique_dates[-days:] if len(unique_dates) >= days else unique_dates
+            index_raw = [c for c in index_raw if c['date'].date() in target_dates]
+        
+        candles = format_candles(index_raw, ist_offset, interval)
+
+        if auto_hl and candles and not (ce_token and pe_token):
+            lookbacks = {'minute': 60, '2minute': 30, '3minute': 20, '5minute': 12, '15minute': 4, '30minute': 2}
+            lookback = lookbacks.get(interval, 10)
+            subset = candles[-lookback:] if len(candles) >= lookback else candles
+            spot_high = round(max(c['high'] for c in subset), 2)
+            spot_low = round(min(c['low'] for c in subset), 2)
             
-            # Use daily OHLC cache if available (TTL 5 mins)
-            daily_cache_key = (symbol, days)
-            cached_daily = None
-            with _candle_cache_lock:
-                if daily_cache_key in _daily_ohlc_cache:
-                    _d_data, _d_ts = _daily_ohlc_cache[daily_cache_key]
-                    if datetime.now().timestamp() - _d_ts < 300:
-                        cached_daily = _d_data
-
-            future_daily = None
-            if not cached_daily:
-                d_from = (now - timedelta(days=fetch_back + 10)).replace(hour=0, minute=0, second=0, microsecond=0)
-                future_daily = executor.submit(fetch_task, token, d_from, to_date, 'day')
+            itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
+                kite_service, symbol, spot_high, spot_low, step_value
+            )
             
-            # 2. Identify strikes if spot provided, otherwise wait for index
-            itm_ce_strike, itm_pe_strike = None, None
-            ce_symbol, pe_symbol = None, None
-            ce_token, pe_token = None, None
-            
-            if not auto_hl and spot_high is not None and spot_low is not None:
-                # Identify initial ITM strikes based on Provided Step
-                offset = 3 * step_value
-                itm_ce_strike = int(math.ceil((spot_low - offset) / step_value) * step_value)
-                itm_pe_strike = int(math.floor((spot_high + offset) / step_value) * step_value)
-
-                # Robust Strike Discovery: Some stocks have non-standard steps (e.g. 2.5, 7.5)
-                # If the calculated strike isn't found, find the nearest ACTUAL strike.
-                ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-
-                if not ce_symbol or not pe_symbol:
-                    all_options = [i for i in getattr(kite_service, '_nfo_instruments_cache', []) if i.get('name') == symbol]
-                    available_strikes = sorted(list(set([i['strike'] for i in all_options])))
-                    if available_strikes:
-                        if not ce_symbol:
-                            itm_ce_strike = min(available_strikes, key=lambda x: abs(x - (spot_low - offset)))
-                            ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                        if not pe_symbol:
-                            itm_pe_strike = min(available_strikes, key=lambda x: abs(x - (spot_high + offset)))
-                            pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-
-                if ce_symbol: ce_token = kite_service.get_instrument_token(ce_symbol)
-                if pe_symbol: pe_token = kite_service.get_instrument_token(pe_symbol)
-
-            # 3. Fetch Option Candles if tokens known
-            future_ce = None
-            future_pe = None
             if ce_token: future_ce = executor.submit(fetch_task, ce_token, from_date, to_date, fetch_interval)
             if pe_token: future_pe = executor.submit(fetch_task, pe_token, from_date, to_date, fetch_interval)
 
-            # 4. Wait for Index to finish if auto_hl is true
-            index_raw = future_index.result()
-            
-            # Filter strictly by the last N actual trading days
-            if index_raw:
-                unique_dates = sorted(list(set(c['date'].date() for c in index_raw)))
-                target_dates = unique_dates[-days:] if len(unique_dates) >= days else unique_dates
-                index_raw = [c for c in index_raw if c['date'].date() in target_dates]
-            
-            candles = format_candles(index_raw, ist_offset, interval)
-
-            if auto_hl and candles and not (ce_token and pe_token):
-                lookbacks = {'minute': 60, '2minute': 30, '3minute': 20, '5minute': 12, '15minute': 4, '30minute': 2}
-                lookback = lookbacks.get(interval, 10)
-                subset = candles[-lookback:] if len(candles) >= lookback else candles
-                spot_high = round(max(c['high'] for c in subset), 2)
-                spot_low = round(min(c['low'] for c in subset), 2)
-                
-                # Identify initial ITM strikes based on Provided Step
-                offset = 3 * step_value
-                itm_ce_strike = int(math.ceil((spot_low - offset) / step_value) * step_value)
-                itm_pe_strike = int(math.floor((spot_high + offset) / step_value) * step_value)
-
-                # Robust Strike Discovery: If calculated strike isn't found, use nearest valid one
-                ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-
-                if not ce_symbol or not pe_symbol:
-                    all_options = [i for i in getattr(kite_service, '_nfo_instruments_cache', []) if i.get('name') == symbol]
-                    available_strikes = sorted(list(set([i['strike'] for i in all_options])))
-                    if available_strikes:
-                        if not ce_symbol:
-                            itm_ce_strike = min(available_strikes, key=lambda x: abs(x - (spot_low - offset)))
-                            ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                        if not pe_symbol:
-                            itm_pe_strike = min(available_strikes, key=lambda x: abs(x - (spot_high + offset)))
-                            pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-                
-                if ce_symbol: 
-                    ce_token = kite_service.get_instrument_token(ce_symbol)
-                    if ce_token: future_ce = executor.submit(fetch_task, ce_token, from_date, to_date, fetch_interval)
-                if pe_symbol: 
-                    pe_token = kite_service.get_instrument_token(pe_symbol)
-                    if pe_token: future_pe = executor.submit(fetch_task, pe_token, from_date, to_date, fetch_interval)
-
-            # 5. Collect remaining results
-            daily_raw = cached_daily if cached_daily else (future_daily.result() if future_daily else [])
-            if not cached_daily and daily_raw:
-                with _candle_cache_lock:
-                    _daily_ohlc_cache[daily_cache_key] = (daily_raw, datetime.now().timestamp())
-            
-            ce_raw = future_ce.result() if future_ce else []
-            pe_raw = future_pe.result() if future_pe else []
+        # 5. Collect remaining results
+        daily_raw = cached_daily if cached_daily else (future_daily.result() if future_daily else [])
+        if not cached_daily and daily_raw:
+            with _candle_cache_lock:
+                _daily_ohlc_cache[daily_cache_key] = (daily_raw, datetime.now().timestamp())
+        
+        ce_raw = future_ce.result() if future_ce else []
+        pe_raw = future_pe.result() if future_pe else []
 
         # ── Data Formatting ──────────────────────────────────────────
         daily_ohlc = {}
@@ -3279,8 +3299,8 @@ def oi_profile_candles() -> EndpointResponse:
         
         with _candle_cache_lock:
             _candle_response_cache[cache_key] = (response_data, datetime.now().timestamp())
-            # Basic cleanup: if cache grows too large, clear it
-            if len(_candle_response_cache) > 100: _candle_response_cache.clear()
+            # Basic cleanup: if cache somehow grows too large, clear it (extra OOM protection)
+            if len(_candle_response_cache) > (_MAX_CACHE_ENTRIES * 2): _candle_response_cache.clear()
 
         return jsonify(response_data)
 

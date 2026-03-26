@@ -8,6 +8,8 @@ OPTIMIZED: Reduced from 20s to ~2-3s by:
 4. Batch historical fetch only when absolutely needed
 """
 import logging
+import threading
+import gc
 import math
 from datetime import datetime, timedelta, time
 from typing import Dict, List, Any, Optional
@@ -22,6 +24,13 @@ import os
 
 
 logger = logging.getLogger(__name__)
+
+# Global cache to prevent downloading 100MB of instruments on every API request
+_global_nfo_cache = {
+    'instruments': None,
+    'timestamp': None,
+    'lock': threading.Lock()
+}
 
 # Get global rate limiter for historical API calls
 _rate_limiter = get_global_rate_limiter()
@@ -737,14 +746,41 @@ class OpenInterestService:
             
             # Step 2: Get all instruments for the exchange and find available strikes
             exchange = config.get('exchange', 'NFO')
-            try:
-                instruments = self.kite.instruments(exchange)
-            except Exception as e:
-                logger.error(f"Failed to get instruments for {exchange}: {e}")
-                return {
-                    'success': False,
-                    'error': f'Failed to get instruments: {str(e)}'
-                }
+            instruments = None
+            
+            # Memory Optimization: Check global cache first to avoid 100MB download
+            with _global_nfo_cache['lock']:
+                now = datetime.now()
+                if (_global_nfo_cache['instruments'] and _global_nfo_cache['timestamp'] and 
+                    (now - _global_nfo_cache['timestamp']).total_seconds() < 3600):
+                    instruments = _global_nfo_cache['instruments']
+            
+            if not instruments:
+                try:
+                    logger.info(f"Downloading heavy {exchange} instruments list (first time or stale)...")
+                    raw_inst = self.kite.instruments(exchange)
+                    # Prune instruments to save memory (~80% saved)
+                    instruments = []
+                    for r in raw_inst:
+                        if r.get('instrument_type') in ['CE', 'PE', 'FUT']:
+                            instruments.append({
+                                'name': r.get('name'),
+                                'tradingsymbol': r.get('tradingsymbol'),
+                                'instrument_token': r.get('instrument_token'),
+                                'strike': r.get('strike'),
+                                'instrument_type': r.get('instrument_type'),
+                                'expiry': r.get('expiry')
+                            })
+                    with _global_nfo_cache['lock']:
+                        _global_nfo_cache['instruments'] = instruments
+                        _global_nfo_cache['timestamp'] = now
+                    logger.info(f"Cached {len(instruments)} pruned {exchange} instruments.")
+                    # Clear raw list and collect GC
+                    raw_inst = None
+                    gc.collect()
+                except Exception as e:
+                    logger.error(f"Failed to get instruments for {exchange}: {e}")
+                    return {'success': False, 'error': f'Failed to get instruments: {str(e)}'}
             
             # Step 3: Get available strikes for symbol using KiteService method pattern
             strikes_data = self._get_available_strikes(instruments, symbol, current_price, config)
