@@ -273,10 +273,15 @@ class Intraday920LiveSignal:
         from trading_app.app.utils.user_env import UserEnvManager
         _uname = self.username or 'Mine'
 
-        # Helper: read BROKER_N_LOT_SIZE as integer lots (default 1)
+        # Helper: read BROKER_N_920_LOTS as integer lots (default 1)
         def _lot_count(n: int) -> int:
             try:
-                return max(1, int(UserEnvManager.get_user_var(_uname, f'BROKER_{n}_LOT_SIZE', '1').strip() or '1'))
+                # 1. Strategy specific lots
+                val = UserEnvManager.get_user_var(_uname, f'BROKER_{n}_920_LOTS')
+                if not val:
+                    # 2. Fallback to generic lots
+                    val = UserEnvManager.get_user_var(_uname, f'BROKER_{n}_LOT_SIZE', '1')
+                return max(1, int(str(val).strip() or '1'))
             except (ValueError, TypeError):
                 return 1
 
@@ -302,7 +307,13 @@ class Intraday920LiveSignal:
                 
             is_active = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_ACTIVE', 'true').strip().lower()
             if is_active in ('false', '0', 'no'):
-                logger.info(f"⏩ {broker_type.upper()} {instance_num} SKIPPED — BROKER_{instance_num}_ACTIVE=false")
+                logger.info(f"⏩ {broker_type.upper()} {instance_num} SKIPPED — MASTER BROKER_{instance_num}_ACTIVE=false")
+                continue
+
+            # Strategy-specific active flag
+            is_920_active = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_920_ACTIVE', 'true').strip().lower()
+            if is_920_active in ('false', '0', 'no'):
+                logger.info(f"⏩ {broker_type.upper()} {instance_num} SKIPPED — 9:20 STRATEGY DISABLED (BROKER_{instance_num}_920_ACTIVE=false)")
                 continue
             
             # Map back to generic keys (KOTAK, DHAN, FYERS) to match _place_extra_broker_order
@@ -366,10 +377,16 @@ class Intraday920LiveSignal:
                 broker_type = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_TYPE', '').strip().lower()
                 if broker_type != 'zerodha':
                     continue
-                # Check ACTIVE flag — skip if explicitly disabled
+                # Check master ACTIVE flag
                 is_active = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_ACTIVE', 'true').strip().lower()
                 if is_active in ('false', '0', 'no'):
-                    logger.info(f"⏩ ZERODHA_{instance_num} SKIPPED — BROKER_{instance_num}_ACTIVE=false")
+                    logger.info(f"⏩ ZERODHA_{instance_num} SKIPPED — MASTER BROKER_{instance_num}_ACTIVE=false")
+                    continue
+                
+                # Strategy-specific active flag
+                is_920_active = UserEnvManager.get_user_var(_uname, f'BROKER_{instance_num}_920_ACTIVE', 'true').strip().lower()
+                if is_920_active in ('false', '0', 'no'):
+                    logger.info(f"⏩ ZERODHA_{instance_num} SKIPPED — 9:20 STRATEGY DISABLED (BROKER_{instance_num}_920_ACTIVE=false)")
                     continue
                     
                 # Get a KiteConnect object for this secondary Zerodha instance

@@ -2558,7 +2558,6 @@ def place_intraday_920_order() -> EndpointResponse:
                     if UserEnvManager.get_user_var(_username, f'BROKER_{_i}_TYPE', '').strip().lower() == _broker_type:
                         _active_instance = _i
                         break
-            
             if _active_instance:
                 targets.append({'type': broker, 'instance': _active_instance})
 
@@ -2571,6 +2570,43 @@ def place_intraday_920_order() -> EndpointResponse:
             if _active_instance is not None and not is_broker_active(_username, _active_instance):
                 return {'success': False, 'error': f'Broker {broker} is INACTIVE'}, 403
 
+            # Check for Intrinsic-specific Active flag
+            intrinsic_active = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_INTRINSIC_ACTIVE', 'true').lower().strip() == 'true'
+            if not intrinsic_active:
+                logger.info(f"[Intrinsic] Skipping broker {_active_instance} ({broker}) because BROKER_N_INTRINSIC_ACTIVE is FALSE")
+                return {'success': False, 'error': f'Intrinsic Orders for {broker} is DISABLED in config'}, 403
+
+            # Determine order lots (Priority: 1. Request qty, 2. Broker-specific Intrinsic config, 3. Global Intrinsic config, 4. Default broker config)
+            # Use order_lots to represent the number of lots configured in .env
+            order_lots = quantity  # value from data.get('quantity')
+            if not order_lots:
+                # Check for broker-specific intrinsic lots first
+                raw_broker_intrinsic = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_INTRINSIC_LOTS')
+                if raw_broker_intrinsic:
+                    try:
+                        order_lots = int(str(raw_broker_intrinsic))
+                        logger.info(f"[Intrinsic] Using broker {_active_instance} specific lots: {order_lots}")
+                    except (ValueError, TypeError):
+                        pass
+            
+            if not order_lots:
+                # Use global strategy-specific configuration from .env if available
+                raw_intrinsic = UserEnvManager.get_user_var(_username, 'INTRINSIC_ORDER_LOTS')
+                if raw_intrinsic:
+                    try:
+                        order_lots = int(str(raw_intrinsic))
+                        logger.info(f"[Intrinsic] Using global configured lots: {order_lots}")
+                    except (ValueError, TypeError):
+                        pass
+            
+            if not order_lots:
+                # Fallback to general broker lot size from .env
+                raw_broker_lot = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_LOT_SIZE', '1')
+                try:
+                    order_lots = int(str(raw_broker_lot))
+                except (ValueError, TypeError):
+                    order_lots = 1
+
             # Zerodha / Kite
             if broker == 'kite' or is_zerodha_instance:
                 zerodha_instance = 1 if broker == 'kite' else int(broker.split('_')[1])
@@ -2582,7 +2618,11 @@ def place_intraday_920_order() -> EndpointResponse:
                 kite_service = KiteService(kite_instance=kite)
                 transaction_type = kite.TRANSACTION_TYPE_BUY if action == 'BUY' else kite.TRANSACTION_TYPE_SELL
                 
-                result = kite_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=transaction_type, quantity=quantity)
+                # Calculate absolute quantity for Zerodha (units = lots * lot_size)
+                lot_size = kite_service.get_lot_size(symbol)
+                final_qty = order_lots * lot_size
+                
+                result = kite_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=transaction_type, quantity=final_qty)
                 if result['success'] and action == 'BUY':
                     try:
                         entry_price = result.get('price')
@@ -2590,8 +2630,7 @@ def place_intraday_920_order() -> EndpointResponse:
                             sl_price = entry_price - 20
                             option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
                             if option_symbol:
-                                lot_size = kite_service.get_lot_size(symbol)
-                                sl_res = kite_service.place_stoploss_order(tradingsymbol=option_symbol, trigger_price=sl_price, quantity=lot_size)
+                                sl_res = kite_service.place_stoploss_order(tradingsymbol=option_symbol, trigger_price=sl_price, quantity=final_qty)
                                 if sl_res['success']:
                                     result.update({'sl_order_id': sl_res['order_id'], 'sl_trigger_price': sl_price, 'sl_success': True})
                     except Exception as e: logger.error(f"[SL] Kite Err: {e}")
@@ -2609,7 +2648,18 @@ def place_intraday_920_order() -> EndpointResponse:
                 kotak_service.trading_token = trading_token; kotak_service.trading_sid = trading_sid; kotak_service.base_url = base_url
                 kotak_service.inject_trading_tokens()
                 
-                result = kotak_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=action, quantity=quantity, tradingsymbol=tradingsymbol_override, target_expiry=expiry_override)
+                # Determine absolute quantity for Kotak (using Kite service for lot size resolution if possible)
+                lot_size = 1
+                try:
+                    kite = get_kite()
+                    if kite:
+                        from trading_app.service.kite_order_services import KiteService
+                        ks = KiteService(kite_instance=kite)
+                        lot_size = ks.get_lot_size(symbol)
+                except Exception: pass
+                
+                final_qty = order_lots * lot_size
+                result = kotak_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=action, quantity=final_qty, tradingsymbol=tradingsymbol_override, target_expiry=expiry_override)
                 return result, (200 if result['success'] else 400)
 
             # Dhan
@@ -2629,7 +2679,7 @@ def place_intraday_920_order() -> EndpointResponse:
                 
                 sec_id = str(dhan_service.search_symbol(kite_opt_sym).get('security_id', kite_opt_sym))
                 lot = dhan_service.get_lot_size(symbol)
-                qty = (quantity or 1) * lot
+                qty = order_lots * lot
                 result = dhan_service.place_order(security_id=sec_id, transaction_type=action, quantity=qty, order_type='MARKET', product_type='INTRADAY', exchange_segment='NSE_FNO')
                 
                 if result['success'] and action == 'BUY':
@@ -2651,19 +2701,31 @@ def place_intraday_920_order() -> EndpointResponse:
                 if not fyers_at: return {'success': False, 'error': 'Fyers not authenticated'}, 401
                 
                 from trading_app.service.fyers_order_services import FyersOrderService
-                f_service = FyersOrderService(app_id=fyers_id, access_token=fyers_at)
+                fyers_service = FyersOrderService(app_id=fyers_id, access_token=fyers_at)
                 kite = get_kite()
                 if not kite: return {'success': False, 'error': 'Kite required for Fyers'}, 401
                 from trading_app.service.kite_order_services import KiteService
                 kite_service = KiteService(kite_instance=kite)
-                opt_sym = kite_service.get_option_symbol(symbol, strike, option_type)
-                if not opt_sym: return {'success': False, 'error': 'Option not found'}, 400
+                kite_opt_sym = kite_service.get_option_symbol(symbol, strike, option_type)
+                if not kite_opt_sym: return {'success': False, 'error': 'Option not found'}, 400
                 
-                f_sym = f"NSE:{opt_sym}"
-                qty = (quantity or 1) * f_service.get_lot_size(symbol)
-                from datetime import datetime, time
-                prod = 'CNC' if datetime.now().time() >= time(15, 20) else 'INTRADAY'
-                result = f_service.place_order(symbol=f_sym, side=(1 if action == 'BUY' else -1), quantity=qty, order_type=2, product_type=prod)
+                lot = fyers_service.get_lot_size(symbol)
+                qty = order_lots * lot
+                
+                # Fyers side: 1 for BUY, -1 for SELL; order_type: 2 for MARKET
+                fyers_side = 1 if action == 'BUY' else -1
+                result = fyers_service.place_order(symbol=f'NSE:{kite_opt_sym}', side=fyers_side, quantity=qty, order_type=2, product_type='INTRADAY')
+                
+                if result['success'] and action == 'BUY':
+                    try:
+                        entry = result.get('price', 0)
+                        if not entry or entry == 0:
+                            ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
+                            entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
+                        sl_p = entry - 20
+                        sl_res = fyers_service.place_stoploss_order(symbol=f'NSE:{kite_opt_sym}', trigger_price=sl_p, quantity=qty, product_type='INTRADAY', entry_price=entry)
+                        if sl_res['success']: result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
+                    except Exception as e: logger.error(f"[SL] Fyers Err: {e}")
                 return result, (200 if result['success'] else 400)
 
             return {'success': False, 'error': 'Invalid broker'}, 400

@@ -41,7 +41,8 @@ const oipElems = {
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
     hdrPrice: null, hdrPcr: null, hdrMaxPain: null, hdrRes: null,
     hdrSupp: null, hdrCeOI: null, hdrCeChg: null, hdrPeOI: null,
-    hdrPeChg: null, hdrTrend: null, hdrAtm: null, brokerSelect: null
+    hdrPeChg: null, hdrTrend: null, hdrAtm: null, brokerSelect: null,
+    showPremium: null
 };
 
 function oipInitElems() {
@@ -76,6 +77,7 @@ function oipInitElems() {
     oipElems.hdrTrend = document.getElementById('hdrTrend');
     oipElems.hdrAtm = document.getElementById('hdrAtm');
     oipElems.brokerSelect = document.getElementById('oipBrokerSelect');
+    oipElems.showPremium   = document.getElementById('oipShowPremium');
 }
 
 /* ── Bootstrap ────────────────────────────────────────────── */
@@ -166,6 +168,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (oipOIData && oipOIData.candles) oipDrawCpr(oipOIData.candles);
     });
 
+    oipElems.showPremium?.addEventListener('change', () => {
+        if (oipOIData && oipOIData.intrinsic) oipDrawPremiumLines(oipOIData.intrinsic, oipElems.view.value);
+    });
+
     // Order buttons
     document.querySelectorAll('.oip-order-btn').forEach(btn => {
         btn.addEventListener('click', () => oipPlaceOrder(btn.dataset.side, btn.dataset.action, btn));
@@ -250,6 +256,7 @@ function oipInitCharts() {
             color: '#8b5cf6', lineWidth: 2, title: '', visible: showV,
             priceLineVisible: false, lastValueVisible: false
         });
+        oipInitPremiumSeries();
     }
 }
 
@@ -410,6 +417,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                 oipIntrinsicChart.update(indexCandles, null, true);
                 oipElems.itmCE.textContent = 'NIFTY'; oipElems.itmPE.textContent = 'Index';
                 if (data.intrinsic) oipDrawIntrinsicLines(data.intrinsic, view);
+                if (data.intrinsic) oipDrawPremiumLines(data.intrinsic, view);
             } else {
                 const ceStrike = data.intrinsic?.itm_ce_strike, peStrike = data.intrinsic?.itm_pe_strike;
                 oipCurrentCEStrike = ceStrike; oipCurrentPEStrike = peStrike;
@@ -439,6 +447,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                     }
                 }
                 if (data.intrinsic) oipDrawIntrinsicLines(data.intrinsic, view);
+                if (data.intrinsic) oipDrawPremiumLines(data.intrinsic, view);
             }
             oipRequestDraw();
         }
@@ -503,6 +512,104 @@ function oipDrawIntrinsicLines(intrinsic, view = 'index') {
     }
 }
 
+/* ── Premium Line SERIES (Entry / Current / Target 1 / Target 2) ──
+ *  These are TIME-SERIES line plots (like VWAP), NOT static horizontal lines.
+ *  Formula: All values = (CE_premium + PE_premium) / 2 per candle.
+ */
+const oipPremiumSeries = { entry: null, current: null, t1: null, t2: null };
+
+/** Create the 4 premium addLineSeries on the intrinsic chart. Called once in oipInitCharts. */
+function oipInitPremiumSeries() {
+    const chart = oipIntrinsicChart?.chart;
+    if (!chart) return;
+    const base = { priceLineVisible: false, lastValueVisible: true,
+                   crosshairMarkerVisible: false, visible: false };
+    oipPremiumSeries.entry   = chart.addLineSeries({ ...base, color: '#10b981', lineWidth: 2 });  // Green
+    oipPremiumSeries.current = chart.addLineSeries({ ...base, color: '#3b82f6', lineWidth: 2, lineStyle: 2 });  // Blue dashed
+    oipPremiumSeries.t1      = chart.addLineSeries({ ...base, color: '#ec4899', lineWidth: 1 });  // Pink
+    oipPremiumSeries.t2      = chart.addLineSeries({ ...base, color: '#eab308', lineWidth: 1 });  // Yellow
+}
+
+/**
+ * Draws 4 premium line series using the combined (CE+PE)/2 formula.
+ *
+ *   Entry Premium   = (CE_open  + PE_open ) / 2 at first candle of each day  [flat line per day]
+ *   Current Premium = (CE_close + PE_close) / 2 at each candle               [dynamic, VWAP-like]
+ *   Target Premium1 = Entry + step                                             [flat line per day]
+ *   Target Premium2 = Entry + 2 × step                                        [flat line per day]
+ */
+function oipDrawPremiumLines(intrinsic, view = 'index') {
+    const show = oipElems.showPremium?.checked && intrinsic && view !== 'index';
+
+    // Hide all if disabled / no data / index view
+    if (!show) {
+        Object.values(oipPremiumSeries).forEach(s => { try { s?.applyOptions({ visible: false }); } catch(e){} });
+        return;
+    }
+
+    // Lazy init if series not yet created
+    if (!oipPremiumSeries.entry) oipInitPremiumSeries();
+    if (!oipPremiumSeries.entry) return;          // chart not ready
+
+    const allCE = oipOIData?.ce_opt_candles || [];
+    const allPE = oipOIData?.pe_opt_candles || [];
+    const step  = parseInt(oipElems.step.value) || 50;
+
+    if (!allCE.length && !allPE.length) return;
+
+    // ── Build lookup maps: time → candle
+    const ceMap = {}, peMap = {};
+    allCE.forEach(c => { ceMap[c.time] = c; });
+    allPE.forEach(c => { peMap[c.time] = c; });
+
+    // ── Merged & sorted timestamps
+    const allTimes = [...new Set([...Object.keys(ceMap), ...Object.keys(peMap)])]
+        .map(Number).sort((a, b) => a - b);
+
+    // ── Compute day-entry values: (CE_first_open + PE_first_open) / 2 per calendar day
+    const dayEntry = {};   // 'YYYY-MM-DD' → entry_value
+    allTimes.forEach(t => {
+        const key = new Date(t * 1000).toDateString();
+        if (dayEntry[key] !== undefined) return;          // already set for this day
+        const ceO = ceMap[t]?.open ?? 0;
+        const peO = peMap[t]?.open ?? 0;
+        if (ceO > 0 || peO > 0) {
+            // Use average if both available, otherwise whichever is present
+            if (ceO > 0 && peO > 0)  dayEntry[key] = (ceO + peO) / 2;
+            else                      dayEntry[key] = ceO || peO;
+        }
+    });
+
+    // ── Build time-series data arrays
+    const entryData = [], currentData = [], t1Data = [], t2Data = [];
+
+    allTimes.forEach(t => {
+        const key   = new Date(t * 1000).toDateString();
+        const entry = dayEntry[key];
+        if (!entry) return;
+
+        const ceC = ceMap[t]?.close ?? null;
+        const peC = peMap[t]?.close ?? null;
+
+        // Current Premium = (CE_close + PE_close) / 2  (or whichever is available)
+        let cur = null;
+        if (ceC != null && peC != null) cur = (ceC + peC) / 2;
+        else if (ceC != null)            cur = ceC;
+        else if (peC != null)            cur = peC;
+
+        entryData.push  ({ time: t, value: entry });
+        t1Data.push     ({ time: t, value: entry + step });
+        t2Data.push     ({ time: t, value: entry + 2 * step });
+        if (cur != null) currentData.push({ time: t, value: cur });
+    });
+
+    // ── Push data and make visible
+    try { oipPremiumSeries.entry.setData(entryData);     oipPremiumSeries.entry.applyOptions({ visible: true }); } catch(e){}
+    try { oipPremiumSeries.current.setData(currentData); oipPremiumSeries.current.applyOptions({ visible: true }); } catch(e){}
+    try { oipPremiumSeries.t1.setData(t1Data);           oipPremiumSeries.t1.applyOptions({ visible: true }); } catch(e){}
+    try { oipPremiumSeries.t2.setData(t2Data);           oipPremiumSeries.t2.applyOptions({ visible: true }); } catch(e){}
+}
+
 function fmtL(n) {
     if (n == null) return '--';
     const abs = Math.abs(n), sign = n < 0 ? '-' : '+';
@@ -544,7 +651,9 @@ function oipRefreshLocalView(view, resetZoom = false) {
         }
     }
     if (oipOIData.intrinsic) oipDrawIntrinsicLines(oipOIData.intrinsic, view);
+    if (oipOIData.intrinsic) oipDrawPremiumLines(oipOIData.intrinsic, view);
 }
+
 
 function oipCalculatePineSignals(candles, levels, type) {
     if (!candles || candles.length < 2 || !levels) return [];
