@@ -278,39 +278,40 @@ class CPRFilterService:
                         y_pp, y_bc, y_tc, curr_price, curr_open, curr_high, curr_low, c, m_h, m_l)
 
     def calculate_rsi(self, prices: List[float], period: int = 21) -> List[float]:
-        """Standard Wilder's RSI calculation."""
+        """Standard Wilder's RSI calculation - Aligned exactly with Pine Script RMA."""
         if len(prices) <= period:
             return []
-        
-        deltas = np.diff(prices)
-        seed = deltas[:period]
-        up = seed[seed >= 0].sum() / period
-        down = -seed[seed < 0].sum() / period
-        
-        if down == 0:
-            rs = 100
-        else:
-            rs = up / down
             
-        rsi = np.zeros_like(prices)
-        rsi[:period] = 100.0 - (100.0 / (1.0 + rs))
+        diffs = np.diff(prices)
+        gains = np.where(diffs > 0, diffs, 0.0)
+        losses = np.where(diffs < 0, -diffs, 0.0)
         
-        for i in range(period, len(prices)):
-            delta = deltas[i-1]
-            if delta > 0:
-                up_val, down_val = delta, 0.0
+        up_rma = np.zeros(len(prices))
+        dn_rma = np.zeros(len(prices))
+        
+        start_idx = period
+        
+        up_rma[start_idx] = np.mean(gains[:period])
+        dn_rma[start_idx] = np.mean(losses[:period])
+        
+        alpha = 1.0 / period
+        
+        for i in range(start_idx + 1, len(prices)):
+            # diffs[i-1] aligns with prices[i]
+            up_rma[i] = alpha * gains[i-1] + (1 - alpha) * up_rma[i-1]
+            dn_rma[i] = alpha * losses[i-1] + (1 - alpha) * dn_rma[i-1]
+            
+        rsi = np.zeros(len(prices))
+        for i in range(start_idx, len(prices)):
+            if dn_rma[i] == 0:
+                rsi[i] = 100.0
             else:
-                up_val, down_val = 0.0, -delta
+                rs = up_rma[i] / dn_rma[i]
+                rsi[i] = 100.0 - (100.0 / (1.0 + rs))
                 
-            up = (up * (period - 1) + up_val) / period
-            down = (down * (period - 1) + down_val) / period
-            
-            if down == 0:
-                rs = 100
-            else:
-                rs = up / down
-            rsi[i] = 100.0 - (100.0 / (1.0 + rs))
-            
+        # Fill previously unset indices (TradingView convention)
+        rsi[:start_idx] = 0.0
+        
         return rsi.tolist()
 
     def calculate_delta_rsi(self, rsi: List[float], window: int = 21, degree: int = 2) -> Tuple[List[float], List[float]]:
@@ -777,6 +778,18 @@ class CPRFilterService:
             hist_prices = self.get_hist_data(symbol, days=400, interval='day', end_date=root_date)
             if hist_prices is not None and len(hist_prices) > 50:
                 closes = hist_prices['close'].tolist()
+                
+                # Ensure the CURRENT day's live price is accurately represented
+                target_dt = root_date.date() if root_date else datetime.now().date()
+                last_dt = hist_prices.index[-1].date()
+                
+                if last_dt == target_dt:
+                    # Override today's incomplete candle with live price
+                    closes[-1] = cpr.current_price
+                elif last_dt < target_dt:
+                    # Append new daily candle for today using live price
+                    closes.append(cpr.current_price)
+                
                 rsi_vals = self.calculate_rsi(closes, period=21)
                 # degree=2 matches Oscillator's default
                 drsi_vals, sig_vals = self.calculate_delta_rsi(rsi_vals, window=21, degree=2)
@@ -784,29 +797,30 @@ class CPRFilterService:
                 if len(drsi_vals) >= 3:
                     in_long = False
                     in_short = False
-                    prev_long = False
-                    prev_short = False
                     trigger_type = ""
                     trigger_today = False
-                    trigger_prev = False
-                    trigger_type_prev = ""
-                    state_t1 = "neutral"
-                    state_t2 = "neutral"
+                    flip_up_today = False
+                    flip_down_today = False
                     
-                    # Iterate through history to track Buy/Sell states (persistent)
+                    # Iterate through history to track Zero-cross states and Whipsaw Flips
                     for i in range(2, len(drsi_vals)):
                         d = drsi_vals[i]
                         d1 = drsi_vals[i-1]
+                        d2 = drsi_vals[i-2]
                         
-                        # Conditions from Oscillator study (Sig-Cross and Direction Change Removed)
+                        # Primary oscillator crossovers (Zero-Cross) Today
                         crossup = (d1 <= 0 and d > 0)
                         crossdw = (d1 >= 0 and d < 0)
                         
-                        is_last = (i == len(drsi_vals) - 1)
-                        is_prev = (i == len(drsi_vals) - 2)
+                        # Oscillator crossovers Yesterday
+                        prev_crossup = (d2 <= 0 and d1 > 0)
+                        prev_crossdw = (d2 >= 0 and d1 < 0)
                         
-                        if is_last:
-                            state_today = "long" if in_long else ("short" if in_short else "neutral")
+                        # 1-Bar Whipsaw (Back-to-back opposite Zero-Crosses)
+                        flip_up_today_cond = (prev_crossdw and crossup)
+                        flip_down_today_cond = (prev_crossup and crossdw)
+                        
+                        is_last = (i == len(drsi_vals) - 1)
                         
                         if crossup:
                             in_long = True
@@ -814,34 +828,27 @@ class CPRFilterService:
                             if is_last:
                                 trigger_today = True
                                 trigger_type = "Zero-Cross"
-                            if is_prev:
-                                trigger_prev = True
-                                trigger_type_prev = "Zero-Cross"
                         elif crossdw:
                             in_short = True
                             in_long = False
                             if is_last:
                                 trigger_today = True 
                                 trigger_type = "Zero-Cross"
-                            if is_prev:
-                                trigger_prev = True
-                                trigger_type_prev = "Zero-Cross"
-                        
-                        # Capture state at T-2 (day before previous)
-                        if i == len(drsi_vals) - 3:
-                            state_t2 = "long" if in_long else ("short" if in_short else "neutral")
-                        # Capture state at T-1 (previous day)
-                        if i == len(drsi_vals) - 2:
-                            state_t1 = "long" if in_long else ("short" if in_short else "neutral")
+                                
+                        if is_last:
+                            if flip_up_today_cond:
+                                flip_up_today = True
+                            if flip_down_today_cond:
+                                flip_down_today = True
+
                     # Watch list for debugging (User reported stocks)
                     watch_stocks = ['DELHIVERY', 'SIEMENS', 'GLENMARK', 'LICHSGFIN', 'DIVISLAB', 
                                     'APOLLOTYRE', 'PAGEIND', 'SRF', 'PERSISTENT', 'ABB', 'ANGELONE', 'BDL', 'MAZDOCK']
                     if symbol in watch_stocks:
-                        logger.info(f"DEBUG D-RSI {symbol}: D={drsi_vals[-1]:.4f}, S={sig_vals[-1]:.4f}, RSI={rsi_vals[-1]:.2f}, Long={in_long}, Short={in_short}, TriggerToday={trigger_today} ({trigger_type})")
+                        logger.info(f"DEBUG D-RSI {symbol}: D={drsi_vals[-1]:.4f}, S={sig_vals[-1]:.4f}, RSI={rsi_vals[-1]:.2f}, Long={in_long}, Short={in_short}, TriggerToday={trigger_today} ({trigger_type}), FlipUp={flip_up_today}, FlipDw={flip_down_today}")
 
-                    # D-RSI Reversal Logic: Detect flip from yesterday's state to today's state
-                    # Bullish Flip-UP: Yesterday (T-1) was Sell (short), Today (T-0) is Buy (long, triggered now)
-                    if trigger_today and state_today == "long" and state_t1 == "short":
+                    # D-RSI Reversal Logic: Direction Change (Flip-Up / Flip-Down)
+                    if flip_up_today:
                         payloads['drsi_reversal_bullish'] = {
                             'symbol': symbol,
                             'current_price': round(cpr.current_price, 2),
@@ -851,8 +858,7 @@ class CPRFilterService:
                             'trigger': "Flip-UP"
                         }
                     
-                    # Bearish Flip-DOWN: Yesterday (T-1) was Buy (long), Today (T-0) is Sell (short, triggered now)
-                    if trigger_today and state_today == "short" and state_t1 == "long":
+                    if flip_down_today:
                         payloads['drsi_reversal_bearish'] = {
                             'symbol': symbol,
                             'current_price': round(cpr.current_price, 2),
@@ -862,7 +868,7 @@ class CPRFilterService:
                             'trigger': "Flip-DOWN"
                         }
 
-                    # Strict filter: ONLY Add to payload if the signal triggered TODAY
+                    # Strict filter: ONLY Add to payload if the Zero-Cross signal triggered TODAY
                     if in_long and trigger_today:
                         payloads['drsi_bullish'] = {
                             'symbol': symbol,
