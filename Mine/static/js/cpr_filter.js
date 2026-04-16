@@ -345,8 +345,8 @@ async function loadCPRData() {
             displayResults('cprTouchAbove', cprTouchAboveResults);
             displayResults('cprTouchBelow', cprTouchBelowResults);
             displayResults('highIv', highIvResults);
-            displayResults('drsiBullish', drsiBullishResults);
-            displayResults('drsiBearish', drsiBearishResults);
+            // displayResults('drsiBullish', drsiBullishResults);
+            // displayResults('drsiBearish', drsiBearishResults);
             displayResults('drsiReversalBullish', drsiReversalBullishResults);
             displayResults('drsiReversalBearish', drsiReversalBearishResults);
 
@@ -455,22 +455,22 @@ async function loadCPRData() {
             }
 
             // Show/hide D-RSI results
-            const drsiBullDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BULLISH_RESULTS);
-            if (drsiBullDiv) {
-                if (drsiBullishCount > 0) {
-                    drsiBullDiv.classList.remove('results-hidden');
-                } else {
-                    drsiBullDiv.classList.add('results-hidden');
-                }
-            }
-            const drsiBearDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BEARISH_RESULTS);
-            if (drsiBearDiv) {
-                if (drsiBearishCount > 0) {
-                    drsiBearDiv.classList.remove('results-hidden');
-                } else {
-                    drsiBearDiv.classList.add('results-hidden');
-                }
-            }
+            // const drsiBullDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BULLISH_RESULTS);
+            // if (drsiBullDiv) {
+            //     if (drsiBullishCount > 0) {
+            //         drsiBullDiv.classList.remove('results-hidden');
+            //     } else {
+            //         drsiBullDiv.classList.add('results-hidden');
+            //     }
+            // }
+            // const drsiBearDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BEARISH_RESULTS);
+            // if (drsiBearDiv) {
+            //     if (drsiBearishCount > 0) {
+            //         drsiBearDiv.classList.remove('results-hidden');
+            //     } else {
+            //         drsiBearDiv.classList.add('results-hidden');
+            //     }
+            // }
             const drsiRevBullDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_RESULTS);
             if (drsiRevBullDiv) {
                 if (drsiReversalBullishCount > 0) {
@@ -488,7 +488,7 @@ async function loadCPRData() {
                 }
             }
 
-            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}, Cross↑: ${crossAboveCount}, Cross↓: ${crossBelowCount}, Bull Rev: ${bullishReversalCount}, Bear Rev: ${bearishReversalCount}, CPR Touch↑: ${cprTouchAboveCount}, CPR Touch↓: ${cprTouchBelowCount}, High IV: ${highIvCount}, D-RSI Bull: ${drsiBullishCount}, D-RSI Bear: ${drsiBearishCount}, D-RSI Flip↑: ${drsiReversalBullishCount}, D-RSI Flip↓: ${drsiReversalBearishCount}`;
+            statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | Above: ${aboveCount}, Below: ${belowCount}, Cross↑: ${crossAboveCount}, Cross↓: ${crossBelowCount}, Bull Rev: ${bullishReversalCount}, Bear Rev: ${bearishReversalCount}, CPR Touch↑: ${cprTouchAboveCount}, CPR Touch↓: ${cprTouchBelowCount}, High IV: ${highIvCount}, D-RSI Flip↑: ${drsiReversalBullishCount}, D-RSI Flip↓: ${drsiReversalBearishCount}`;
         } else if (response && !response.needs_login) {
             // Only show error if it's not a session expiration handled by fetchJson
             const errorMsg = response.message || 'Unknown error';
@@ -555,8 +555,8 @@ function displayResults(type, results) {
         bearishReversal: { col3: 'monthly_bc', col4: 'monthly_r1', col5: 'prev_month_high', showGaps: true },
         cprTouchAbove: { col3: 'monthly_tc', col4: 'monthly_pp', col5: 'monthly_bc', showGaps: true },
         cprTouchBelow: { col3: 'monthly_tc', col4: 'monthly_pp', col5: 'monthly_bc', showGaps: true },
-        drsiBullish: { isDrsi: true },
-        drsiBearish: { isDrsi: true },
+        // drsiBullish: { isDrsi: true },
+        // drsiBearish: { isDrsi: true },
         drsiReversalBullish: { isDrsi: true },
         drsiReversalBearish: { isDrsi: true },
         highIv: { isHighIv: true }
@@ -691,16 +691,16 @@ function updateStats(aboveCount, belowCount, crossAboveCount = 0, crossBelowCoun
     const crossAboveCountEl = document.getElementById('crossAboveCount');
     const crossBelowCountEl = document.getElementById('crossBelowCount');
     const highIvCountEl = document.getElementById('highIvCount');
-    const drsiBullishCountEl = document.getElementById('drsiBullishCount');
-    const drsiBearishCountEl = document.getElementById('drsiBearishCount');
+    // const drsiBullishCountEl = document.getElementById('drsiBullishCount');
+    // const drsiBearishCountEl = document.getElementById('drsiBearishCount');
 
     if (aboveCountEl) aboveCountEl.textContent = `(${aboveCount})`;
     if (belowCountEl) belowCountEl.textContent = `(${belowCount})`;
     if (crossAboveCountEl) crossAboveCountEl.textContent = `(${crossAboveCount})`;
     if (crossBelowCountEl) crossBelowCountEl.textContent = `(${crossBelowCount})`;
     if (highIvCountEl) highIvCountEl.textContent = `(${highIvCount})`;
-    if (drsiBullishCountEl) drsiBullishCountEl.textContent = `(${drsiBullishCount})`;
-    if (drsiBearishCountEl) drsiBearishCountEl.textContent = `(${drsiBearishCount})`;
+    // if (drsiBullishCountEl) drsiBullishCountEl.textContent = `(${drsiBullishCount})`;
+    // if (drsiBearishCountEl) drsiBearishCountEl.textContent = `(${drsiBearishCount})`;
 
     const drsiRevBullishCountEl = document.getElementById(CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_COUNT);
     const drsiRevBearishCountEl = document.getElementById(CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_COUNT);

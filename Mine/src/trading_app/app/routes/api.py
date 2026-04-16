@@ -1290,6 +1290,65 @@ def get_cpr_filter_results() -> EndpointResponse:
         return jsonify({'success': False, 'error': f'CPR filter error: {str(e)}'}), 500
 
 
+# ====================== EMA/RSI 208 FILTER ======================
+
+@api_bp.route('/ema-rsi-filter', methods=['GET'])
+@limiter.exempt
+def get_ema_rsi_filter_results() -> EndpointResponse:
+    """Scan F&O stocks for Weekly EMA/RSI-208 and Daily EMA/RSI-88 touches."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    current_kite = get_kite()
+    if not current_kite:
+        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+
+    # ── Parse optional date param (same as CPR filter) ────────────────────────
+    date_str    = request.args.get('date')
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    # ── Cache key per date + 10-min bucket ────────────────────────────────────
+    from trading_app.app.utils.cache import cpr_filter_cache  # reuse same cache backend
+    cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
+    cache_key  = f"ema_rsi_filter:{cache_date}:{datetime.now().minute // 10}"
+
+    cached = cpr_filter_cache.get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
+
+    try:
+        from trading_app.filters.ema_rsi_filter import EmaRsiFilterService
+        svc    = EmaRsiFilterService(kite_instance=current_kite)
+        result = svc.run_filter(root_date=target_date)
+
+        payload = {
+            'success':         True,
+            'weekly_ema':      result.get('weekly_ema', []),
+            'daily_ema':       result.get('daily_ema', []),
+            'nearest_weekly':  result.get('nearest_weekly', []),  # top-10 closest to EMA-208
+            'date':            cache_date,
+            'generated_at':    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        cpr_filter_cache.set(cache_key, payload)
+        return jsonify(payload)
+    except Exception as e:
+        logger.error(f"EMA/RSI filter error: {type(e).__name__}: {e}", exc_info=True)
+        err_str = str(e).lower()
+        if 'access_token' in err_str or 'unauthorized' in err_str:
+            return jsonify({
+                'success': False,
+                'error': 'Authentication failed. Please login again.',
+                'auth_error': True
+            }), 401
+        return jsonify({'success': False, 'error': f'EMA/RSI filter error: {str(e)}'}), 500
+
+
 @api_bp.route('/notify-whatsapp', methods=['POST'])
 @csrf.exempt
 def notify_whatsapp() -> EndpointResponse:
@@ -2527,6 +2586,7 @@ def place_intraday_920_order() -> EndpointResponse:
         quantity = data.get('quantity')
         tradingsymbol_override = data.get('tradingsymbol')
         expiry_override = data.get('expiry')
+        strategy = data.get('strategy', '')
         _username = session.get('username', 'Mine')
 
         from trading_app.app.utils.user_env import UserEnvManager
@@ -2571,15 +2631,16 @@ def place_intraday_920_order() -> EndpointResponse:
                 return {'success': False, 'error': f'Broker {broker} is INACTIVE'}, 403
 
             # Check for Intrinsic-specific Active flag
-            intrinsic_active = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_INTRINSIC_ACTIVE', 'true').lower().strip() == 'true'
-            if not intrinsic_active:
-                logger.info(f"[Intrinsic] Skipping broker {_active_instance} ({broker}) because BROKER_N_INTRINSIC_ACTIVE is FALSE")
-                return {'success': False, 'error': f'Intrinsic Orders for {broker} is DISABLED in config'}, 403
+            if strategy == 'intrinsic':
+                intrinsic_active = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_INTRINSIC_ACTIVE', 'true').lower().strip() == 'true'
+                if not intrinsic_active:
+                    logger.info(f"[Intrinsic] Skipping broker {_active_instance} ({broker}) because BROKER_N_INTRINSIC_ACTIVE is FALSE")
+                    return {'success': False, 'error': f'Intrinsic Orders for {broker} is DISABLED in config'}, 403
 
             # Determine order lots (Priority: 1. Request qty, 2. Broker-specific Intrinsic config, 3. Global Intrinsic config, 4. Default broker config)
             # Use order_lots to represent the number of lots configured in .env
             order_lots = quantity  # value from data.get('quantity')
-            if not order_lots:
+            if strategy == 'intrinsic' and not order_lots:
                 # Check for broker-specific intrinsic lots first
                 raw_broker_intrinsic = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_INTRINSIC_LOTS')
                 if raw_broker_intrinsic:
@@ -2589,7 +2650,7 @@ def place_intraday_920_order() -> EndpointResponse:
                     except (ValueError, TypeError):
                         pass
             
-            if not order_lots:
+            if strategy == 'intrinsic' and not order_lots:
                 # Use global strategy-specific configuration from .env if available
                 raw_intrinsic = UserEnvManager.get_user_var(_username, 'INTRINSIC_ORDER_LOTS')
                 if raw_intrinsic:
@@ -2670,14 +2731,18 @@ def place_intraday_920_order() -> EndpointResponse:
                 if not dhan_access_token: return {'success': False, 'error': 'Dhan not authenticated'}, 401
                 
                 dhan_service = DhanOrderService(access_token=dhan_access_token, client_id=dhan_client_id)
-                kite = get_kite()
-                if not kite: return {'success': False, 'error': 'Kite required for Dhan'}, 401
-                from trading_app.service.kite_order_services import KiteService
-                kite_service = KiteService(kite_instance=kite)
-                kite_opt_sym = kite_service.get_option_symbol(symbol, strike, option_type)
-                if not kite_opt_sym: return {'success': False, 'error': 'Option not found'}, 400
+                kite_opt_sym = tradingsymbol_override
+                sec_id = data.get('sec_id')
                 
-                sec_id = str(dhan_service.search_symbol(kite_opt_sym).get('security_id', kite_opt_sym))
+                if not sec_id or not kite_opt_sym:
+                    kite = get_kite()
+                    if not kite: return {'success': False, 'error': 'Kite required for Dhan fallback resolution'}, 401
+                    from trading_app.service.kite_order_services import KiteService
+                    kite_service = KiteService(kite_instance=kite)
+                    kite_opt_sym = kite_service.get_option_symbol(symbol, strike, option_type)
+                    if not kite_opt_sym: return {'success': False, 'error': 'Option not found'}, 400
+                    sec_id = str(dhan_service.search_symbol(kite_opt_sym).get('security_id', kite_opt_sym))
+                
                 lot = dhan_service.get_lot_size(symbol)
                 qty = order_lots * lot
                 result = dhan_service.place_order(security_id=sec_id, transaction_type=action, quantity=qty, order_type='MARKET', product_type='INTRADAY', exchange_segment='NSE_FNO')
@@ -2686,7 +2751,8 @@ def place_intraday_920_order() -> EndpointResponse:
                     try:
                         entry = result.get('price', 0)
                         if not entry or entry == 0:
-                            ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
+                            kite = get_kite()
+                            ltp_data = kite.ltp([f'NSE:{kite_opt_sym}']) if kite and kite_opt_sym else {}
                             entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
                         sl_p = entry - 20
                         sl_res = dhan_service.place_stoploss_order(security_id=sec_id, trigger_price=sl_p, quantity=qty, product_type='INTRADAY', exchange_segment='NSE_FNO', entry_price=entry)
@@ -3148,10 +3214,12 @@ def oi_profile_candles() -> EndpointResponse:
         step_value = request.args.get('step', 50,  type=int)
         multiplier = request.args.get('multiplier', 2, type=int)
         auto_hl    = request.args.get('auto_hl', 'false').lower() == 'true'
+        first_5m_atm = request.args.get('first_5m_atm', 'false').lower() == 'true'
+        custom_strike = request.args.get('custom_strike', type=int)
 
         # ── 1. Check Response Cache ───────────────────────────────────
         # Use request parameters as cache key (ignore _t timestamp)
-        cache_key = (symbol, interval, days, spot_high, spot_low, auto_hl)
+        cache_key = (symbol, interval, days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike)
         with _candle_cache_lock:
             if cache_key in _candle_response_cache:
                 data, ts = _candle_response_cache[cache_key]
@@ -3271,10 +3339,18 @@ def oi_profile_candles() -> EndpointResponse:
         itm_ce_strike, itm_pe_strike = None, None
         ce_symbol, pe_symbol, ce_token, pe_token = None, None, None, None
         
-        if not auto_hl and spot_high is not None and spot_low is not None:
-            itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
-                kite_service, symbol, spot_high, spot_low, step_value
-            )
+        if not auto_hl and not first_5m_atm and spot_high is not None and spot_low is not None:
+            if custom_strike:
+                itm_ce_strike = custom_strike
+                itm_pe_strike = custom_strike
+                ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+                ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
+                pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+            else:
+                itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
+                    kite_service, symbol, spot_high, spot_low, step_value
+                )
 
         # 3. Fetch Option Candles if tokens known
         future_ce = None
@@ -3293,16 +3369,61 @@ def oi_profile_candles() -> EndpointResponse:
         
         candles = format_candles(index_raw, ist_offset, interval)
 
-        if auto_hl and candles and not (ce_token and pe_token):
-            lookbacks = {'minute': 60, '2minute': 30, '3minute': 20, '5minute': 12, '15minute': 4, '30minute': 2}
-            lookback = lookbacks.get(interval, 10)
-            subset = candles[-lookback:] if len(candles) >= lookback else candles
-            spot_high = round(max(c['high'] for c in subset), 2)
-            spot_low = round(min(c['low'] for c in subset), 2)
+        if (auto_hl or first_5m_atm) and candles and not (ce_token and pe_token):
+            last_candle_date = datetime.fromtimestamp(candles[-1]['time'] - ist_offset).date()
+            subset = [c for c in candles if datetime.fromtimestamp(c['time'] - ist_offset).date() == last_candle_date]
             
-            itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
-                kite_service, symbol, spot_high, spot_low, step_value
-            )
+            if subset:
+                spot_high = round(max(c['high'] for c in subset), 2)
+                spot_low = round(min(c['low'] for c in subset), 2)
+            else:
+                spot_high = round(max(c['high'] for c in candles[-10:]), 2)
+                spot_low = round(min(c['low'] for c in candles[-10:]), 2)
+            
+            # Re-fetch subset for first candle calculation if needed
+            if not subset: subset = candles[-10:]
+
+            if first_5m_atm and subset:
+                # Find the 5-minute close specifically
+                # Market starts at 09:15. First 5m candle ends at 09:20.
+                five_m_close_candle = None
+                for c in subset:
+                    dt = datetime.fromtimestamp(c['time'] - ist_offset)
+                    # For 1m interval, 09:20 is the 5th candle (starts 09:19 ends 09:20 usually, or labeled 09:19)
+                    # Kite labels candles by their start time. So 09:15 1m is 09:15-09:16.
+                    # 09:19 1m is 09:19-09:20.
+                    # 09:15 5m is 09:15-09:20.
+                    if dt.hour == 9 and dt.minute == 19 and interval == 'minute':
+                        five_m_close_candle = c
+                        break
+                    if dt.hour == 9 and dt.minute == 15 and interval == '5minute':
+                        five_m_close_candle = c
+                        break
+                
+                # Fallback to first available if not found exactly
+                if not five_m_close_candle: five_m_close_candle = subset[0]
+                
+                close_p = five_m_close_candle['close']
+                # Round to nearest 100
+                atm_strike = int(round(close_p / 100.0) * 100)
+                itm_ce_strike, itm_pe_strike = atm_strike, atm_strike
+                ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+                ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
+                pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+                logger.info(f"[OI-Profile] First 5m ATM: 5m Mark close {close_p} (at {datetime.fromtimestamp(five_m_close_candle['time'] - ist_offset).strftime('%H:%M')}) -> Strike {atm_strike}")
+            else:
+                if custom_strike:
+                    itm_ce_strike = custom_strike
+                    itm_pe_strike = custom_strike
+                    ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                    pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+                    ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
+                    pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+                else:
+                    itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
+                        kite_service, symbol, spot_high, spot_low, step_value
+                    )
             
             if ce_token: future_ce = executor.submit(fetch_task, ce_token, from_date, to_date, fetch_interval)
             if pe_token: future_pe = executor.submit(fetch_task, pe_token, from_date, to_date, fetch_interval)
@@ -3334,12 +3455,24 @@ def oi_profile_candles() -> EndpointResponse:
             ce_levels = [ce_intrinsic + (step_value * i) for i in range(1, multiplier + 1)]
             pe_levels = [pe_intrinsic + (step_value * i) for i in range(1, multiplier + 1)]
             
+            # Pre-resolve broker-specific security keys for ultra-fast execution
+            ce_sec_id = None
+            pe_sec_id = None
+            try:
+                from trading_app.service.dhan_order_services import DhanOrderService
+                dhan_service = DhanOrderService()
+                ce_sec_id = dhan_service.search_symbol(ce_symbol).get('security_id', ce_symbol) if ce_symbol else None
+                pe_sec_id = dhan_service.search_symbol(pe_symbol).get('security_id', pe_symbol) if pe_symbol else None
+            except Exception as e:
+                logger.error(f"[Pre-Resolve] Dhan sec_id error: {e}")
+            
             intrinsic_data = {
                 'spot_high': spot_high, 'spot_low': spot_low,
                 'itm_ce_strike': itm_ce_strike, 'itm_pe_strike': itm_pe_strike,
                 'ce_intrinsic': ce_intrinsic, 'pe_intrinsic': pe_intrinsic,
                 'ce_levels': ce_levels, 'pe_levels': pe_levels,
                 'ce_symbol': ce_symbol, 'pe_symbol': pe_symbol,
+                'ce_sec_id': ce_sec_id, 'pe_sec_id': pe_sec_id,
                 'multiplier': multiplier
             }
 

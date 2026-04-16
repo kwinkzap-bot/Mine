@@ -34,10 +34,10 @@
 
                     <span class="oip-label">TF</span>
                     <select id="oipInterval" class="oip-select">
-                        <option value="minute">1m</option>
+                        <option value="minute" selected>1m</option>
                         <option value="2minute">2m</option>
                         <option value="3minute">3m</option>
-                        <option value="5minute" selected>5m</option>
+                        <option value="5minute">5m</option>
                         <option value="15minute">15m</option>
                         <option value="30minute">30m</option>
                         <option value="60minute">1h</option>
@@ -52,8 +52,20 @@
                     </div>
                     <div class="oip-control-item">
                         <label class="oip-checkbox">
-                            <input type="checkbox" id="oipShowCpr" checked>
+                            <input type="checkbox" id="oipShowCpr">
                             <span>CPR</span>
+                        </label>
+                    </div>
+                    <div class="oip-control-item">
+                        <label class="oip-checkbox">
+                            <input type="checkbox" id="oipShowEMA" checked>
+                            <span>EMA</span>
+                        </label>
+                    </div>
+                    <div class="oip-control-item">
+                        <label class="oip-checkbox">
+                            <input type="checkbox" id="oipShowRSI" checked>
+                            <span>RSI S&R</span>
                         </label>
                     </div>
                     <div class="oip-mode-group">
@@ -238,19 +250,43 @@
                 </div>
                 <div class="oip-control-item">
                     <label class="oip-checkbox">
-                        <input type="checkbox" id="oipShowLevels" checked>
+                        <input type="checkbox" id="oipShowLevels">
                         <span>Levels</span>
                     </label>
                 </div>
                 <div class="oip-control-item">
                     <label class="oip-checkbox">
-                        <input type="checkbox" id="oipShowVwapInt" checked>
+                        <input type="checkbox" id="oipShowVwapInt">
                         <span>VWAP</span>
                     </label>
                 </div>
                 <div class="oip-control-item">
                     <label class="oip-checkbox">
-                        <input type="checkbox" id="oipShowPremium">
+                        <input type="checkbox" id="oipFirst5mATM" checked>
+                        <span>Premium Strike</span>
+                    </label>
+                </div>
+                <div class="oip-control-item">
+                    <label class="oip-checkbox">
+                        <input type="checkbox" id="oipCustomStrikeCheck">
+                        <span>Custom Str.</span>
+                    </label>
+                    <select id="oipCustomStrikeDropdown" class="oip-select" style="margin-left: 4px;">
+                        <!-- Options generated in JS -->
+                    </select>
+                </div>
+                <div class="oip-control-item">
+                    <span class="oip-label">Tgt Dist</span>
+                    <select id="oipTargetDistance" class="oip-select">
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                        <option value="150">150</option>
+                        <option value="200">200</option>
+                    </select>
+                </div>
+                <div class="oip-control-item">
+                    <label class="oip-checkbox">
+                        <input type="checkbox" id="oipShowPremium" checked>
                         <span>Premium</span>
                     </label>
                 </div>

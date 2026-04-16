@@ -1,0 +1,292 @@
+/*
+ * ema_rsi_filter.css
+ * Premium dark-tinted design for EMA/RSI 208 Filter page
+ */
+
+/* ─── Status Bar ─────────────────────────────────────────────────── */
+.ema-status-bar {
+    background: linear-gradient(135deg, #1e3a5f 0%, #0f2744 100%);
+    color: #e2e8f0;
+    padding: 7px 12px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    box-shadow: 0 3px 12px rgba(30, 58, 95, 0.35);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    letter-spacing: 0.3px;
+}
+
+.ema-refresh-btn {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #e2e8f0;
+    padding: 4px 12px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.ema-refresh-btn:hover {
+    background: rgba(255, 255, 255, 0.22);
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* ─── Controls wrapper (date picker + refresh button) ────────────────────── */
+.ema-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ─── Section Labels ─────────────────────────────────────────────── */
+.ema-section-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.ema-tf-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.weekly-badge {
+    background: linear-gradient(135deg, #4338ca, #6366f1);
+    color: white;
+    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+}
+
+.daily-badge {
+    background: linear-gradient(135deg, #0f766e, #14919b);
+    color: white;
+    box-shadow: 0 2px 8px rgba(20, 145, 155, 0.35);
+}
+
+.ema-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #475569;
+    letter-spacing: 0.2px;
+}
+
+/* ─── Results Row (grid) ─────────────────────────────────────────── */
+.results-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin-top: 4px;
+}
+
+/* ─── Results Block ──────────────────────────────────────────────── */
+.results-block {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.07);
+    overflow: hidden;
+    transition: all 0.2s ease;
+    border: 1px solid #e2e8f0;
+    animation: slideInUp 0.35s ease backwards;
+}
+
+.results-block:hover {
+    box-shadow: 0 8px 24px rgba(30, 58, 95, 0.12);
+    transform: translateY(-2px);
+}
+
+@keyframes slideInUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.results {
+    margin-top: 0;
+}
+
+/* Table header (weekly = indigo, daily = teal) */
+.results h3 {
+    padding: 7px 12px;
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: white;
+    letter-spacing: 0.2px;
+    text-transform: uppercase;
+}
+
+#weeklyEmaResults h3 {
+    background: linear-gradient(135deg, #4338ca 0%, #6366f1 100%);
+}
+
+#dailyEmaResults h3 {
+    background: linear-gradient(135deg, #0f766e 0%, #14919b 100%);
+}
+
+.results h3 span {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 3px 10px;
+    border-radius: 16px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+/* ─── Scroll Table ───────────────────────────────────────────────── */
+.results-scroll {
+    max-height: 420px;
+    overflow-y: auto;
+    background: white;
+}
+
+.results-scroll::-webkit-scrollbar { width: 5px; }
+.results-scroll::-webkit-scrollbar-track { background: #f0f0f0; }
+.results-scroll::-webkit-scrollbar-thumb { background: #4338ca; border-radius: 3px; }
+
+#dailyEmaResults .results-scroll::-webkit-scrollbar-thumb { background: #0f766e; }
+
+.results-scroll table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0;
+}
+
+.results-scroll table thead {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.results-scroll table th {
+    padding: 8px 10px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    border-bottom: 2px solid #e2e8f0;
+    cursor: pointer;
+    transition: background 0.15s;
+    text-align: left;
+}
+
+#weeklyEmaResults .results-scroll table th {
+    background: #eef2ff;
+    color: #4338ca;
+}
+
+#weeklyEmaResults .results-scroll table th:hover  { background: #e0e7ff; }
+
+#dailyEmaResults .results-scroll table th {
+    background: #f0fffe;
+    color: #0f766e;
+}
+
+#dailyEmaResults .results-scroll table th:hover { background: #e0f2f1; }
+
+.results-scroll table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 12px;
+    color: #334155;
+    transition: background 0.15s;
+}
+
+.results-scroll table tbody tr:hover { background: #f8fafc; }
+.results-scroll table tbody tr:nth-child(even) { background: #fafbfe; }
+.results-scroll table tbody tr:nth-child(even):hover { background: #eef2ff; }
+
+/* ─── Hidden ─────────────────────────────────────────────────────── */
+.results-hidden { display: none; }
+.ema-hidden { display: none; }
+
+/* ─── Trigger Badges ─────────────────────────────────────────────── */
+.trigger-ema {
+    display: inline-block;
+    background: linear-gradient(135deg, #7c3aed, #6d28d9);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 5px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+.trigger-rsi {
+    display: inline-block;
+    background: linear-gradient(135deg, #d97706, #b45309);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 5px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+.trigger-both {
+    display: inline-block;
+    background: linear-gradient(135deg, #dc2626, #b91c1c);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 5px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    animation: pulse-badge 2s infinite;
+}
+
+@keyframes pulse-badge {
+    0%,100% { transform: scale(1); opacity: 0.9; }
+    50%      { transform: scale(1.04); opacity: 1; }
+}
+
+/* ─── RSI value colouring ─────────────────────────────────────────── */
+.rsi-in-range { color: #d97706; font-weight: 700; }
+.rsi-neutral  { color: #64748b; }
+
+/* ─── EMA proximity ──────────────────────────────────────────────── */
+.ema-close  { color: #7c3aed; font-weight: 700; }
+
+/* ─── Symbol Link ────────────────────────────────────────────────── */
+.symbol-link {
+    color: #1e3a5f;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 12px;
+    transition: color 0.15s;
+}
+
+.symbol-link:hover { color: #4338ca; text-decoration: underline; }
+
+/* ─── Empty State ────────────────────────────────────────────────── */
+.ema-empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #94a3b8;
+}
+
+.ema-empty-icon  { font-size: 48px; margin-bottom: 12px; }
+.ema-empty-title { font-size: 18px; font-weight: 700; color: #64748b; margin-bottom: 6px; }
+.ema-empty-sub   { font-size: 13px; }
+
+/* ─── Sort indicators ────────────────────────────────────────────── */
+.sort-asc::after  { content: " ▲"; font-size: 9px; }
+.sort-desc::after { content: " ▼"; font-size: 9px; }
+
+/* ─── Responsive ─────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    .results-scroll table th,
+    .results-scroll table td { padding: 5px 6px; font-size: 11px; }
+    .results-scroll { max-height: 300px; }
+}

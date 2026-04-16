@@ -1,0 +1,47 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © KK
+
+//@version=5
+indicator(title="Dynamic RSI by KK", shorttitle="Dyn RSI", overlay=false)
+
+// Function to automatically determine RSI length based on current chart timeframe
+get_dynamic_rsi_length() =>
+    int len = 14 // Default fallback length
+    if timeframe.isminutes
+        if timeframe.multiplier == 1
+            len := 60
+        else if timeframe.multiplier == 2
+            len := 187
+        else if timeframe.multiplier == 3
+            len := 125
+        else if timeframe.multiplier == 5
+            len := 75
+        else if timeframe.multiplier == 15
+            len := 125
+        else if timeframe.multiplier >= 60
+            len := 137
+    else if timeframe.isdaily
+        len := 88
+    else if timeframe.isweekly
+        len := 208
+    else if timeframe.ismonthly
+        len := 48
+    len
+
+// Get dynamic length
+rsi_length = get_dynamic_rsi_length()
+
+// Calculate dynamic RSI
+src = input(close, title="Source")
+rsi_val = ta.rsi(src, rsi_length)
+
+// Plot the main RSI Line
+plot(rsi_val, title="Dynamic RSI", color=color.purple, linewidth=2, style=plot.style_line)
+
+// Define Horizontal Bands
+h51 = hline(51, title="Upper Band (51)", color=color.green, linestyle=hline.style_solid, linewidth=1)
+h50 = hline(50, title="Middle Band (50)", color=color.gray, linestyle=hline.style_dashed, linewidth=1)
+h49 = hline(49, title="Lower Band (49)", color=color.red, linestyle=hline.style_solid, linewidth=1)
+
+// Optional aesthetics: Fill background between the tight 49-51 zone
+fill(h51, h49, title="Neutral Zone Background", color=color.new(color.gray, 90))

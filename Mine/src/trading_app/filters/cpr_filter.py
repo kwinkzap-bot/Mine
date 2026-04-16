@@ -869,27 +869,27 @@ class CPRFilterService:
                         }
 
                     # Strict filter: ONLY Add to payload if the Zero-Cross signal triggered TODAY
-                    if in_long and trigger_today:
-                        payloads['drsi_bullish'] = {
-                            'symbol': symbol,
-                            'current_price': round(cpr.current_price, 2),
-                            'rsi': round(rsi_vals[-1], 2),
-                            'drsi': round(drsi_vals[-1], 4),
-                            'signal': round(sig_vals[-1], 4),
-                            'is_new': trigger_today,
-                            'trigger': trigger_type
-                        }
-                    
-                    if in_short and trigger_today:
-                        payloads['drsi_bearish'] = {
-                            'symbol': symbol,
-                            'current_price': round(cpr.current_price, 2),
-                            'rsi': round(rsi_vals[-1], 2),
-                            'drsi': round(drsi_vals[-1], 4),
-                            'signal': round(sig_vals[-1], 4),
-                            'is_new': trigger_today,
-                            'trigger': trigger_type
-                        }
+                    # if in_long and trigger_today:
+                    #     payloads['drsi_bullish'] = {
+                    #         'symbol': symbol,
+                    #         'current_price': round(cpr.current_price, 2),
+                    #         'rsi': round(rsi_vals[-1], 2),
+                    #         'drsi': round(drsi_vals[-1], 4),
+                    #         'signal': round(sig_vals[-1], 4),
+                    #         'is_new': trigger_today,
+                    #         'trigger': trigger_type
+                    #     }
+                    # 
+                    # if in_short and trigger_today:
+                    #     payloads['drsi_bearish'] = {
+                    #         'symbol': symbol,
+                    #         'current_price': round(cpr.current_price, 2),
+                    #         'rsi': round(rsi_vals[-1], 2),
+                    #         'drsi': round(drsi_vals[-1], 4),
+                    #         'signal': round(sig_vals[-1], 4),
+                    #         'is_new': trigger_today,
+                    #         'trigger': trigger_type
+                    #     }
 
 
             if primary_status != "🟡 IN CPR":

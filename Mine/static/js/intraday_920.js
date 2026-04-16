@@ -337,7 +337,8 @@ class Intraday920Tracker {
                     option_type: side,
                     action: action,
                     broker: broker,
-                    tradingsymbol: tradingsymbol
+                    tradingsymbol: tradingsymbol,
+                    strategy: 'intraday_920'
                 })
             });
 

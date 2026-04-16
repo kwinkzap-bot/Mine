@@ -797,3 +797,203 @@ if barstate.islast and next_session_show and array.size(arr_time) > 0
 // VWAP Plot (Only for timeframes below 1 hour)
 // ============================================================================
 plot(vwap_show and is_intraday_below_1h ? vwap_value : na, title="VWAP", color=vwap_color, linewidth=vwap_width, style=plot.style_line)
+
+// ============================================================================
+// Dynamic EMA Plot
+// ============================================================================
+ema_show = input.bool(true, "Show Dynamic EMA", group="Dynamic EMA")
+ema_color = input.color(color.new(color.blue, 0), "EMA Color", group="Dynamic EMA")
+ema_width = input.int(2, "EMA Width", minval=1, maxval=10, group="Dynamic EMA")
+
+get_dynamic_ema_length() =>
+    int len = na
+    if timeframe.isminutes
+        if timeframe.multiplier == 1
+            len := 60
+        else if timeframe.multiplier == 2
+            len := 187
+        else if timeframe.multiplier == 3
+            len := 125
+        else if timeframe.multiplier == 5
+            len := 75
+        else if timeframe.multiplier == 15
+            len := 125
+        else if timeframe.multiplier == 60
+            len := 137
+    else if timeframe.isdaily
+        len := 88
+    else if timeframe.isweekly
+        len := 208
+    else if timeframe.ismonthly
+        len := 48
+    len
+
+dynamic_ema_len = get_dynamic_ema_length()
+dynamic_ema_val = not na(dynamic_ema_len) ? ta.ema(close, dynamic_ema_len) : na
+
+plot(ema_show ? dynamic_ema_val : na, title="Dynamic EMA", color=ema_color, linewidth=ema_width, style=plot.style_line)
+
+// ============================================================================
+// Delta RSI Plot
+// ============================================================================
+drsi_show = input.bool(title="Show Delta RSI", group="Delta RSI", defval=true)
+
+drsi_degree = input.int(title="Polynomial Order", group = "Delta RSI", inline = "drsi_l1", defval=2, minval = 1)
+drsi_rsi_l = input.int(title = "RSI Length", group = "Delta RSI", inline = "drsi_l1", defval = 21, minval = 1, tooltip="The period length of RSI that is used as input.")
+drsi_window = input.int(title="Length ( > Order)", group = "Delta RSI", inline = "drsi_l2", defval=21, minval = 2)
+drsi_signalLength = input.int(title="Signal Length", group = "Delta RSI", inline = "drsi_l2", defval=9, tooltip="The signal line is a EMA of the D-RSI time series.")
+
+drsi_islong = input.bool(title = "Buy", group = "Delta RSI", inline = "drsi_ent", defval = true)
+drsi_isshort = input.bool(title = "Sell", group = "Delta RSI", inline = "drsi_ent", defval= true)
+drsi_showendlabels = input.bool(title = "Exit", group = "Delta RSI", inline = "drsi_ent", defval= true)
+
+drsi_buycond = input.string(title="Buy Cond", group = "Delta RSI", inline = "drsi_cond", defval="Zero-Crossing", options=["Zero-Crossing", "Signal Line Crossing","Direction Change"])
+drsi_sellcond = input.string(title="Sell Cond", group = "Delta RSI", inline = "drsi_cond", defval="Zero-Crossing", options=["Zero-Crossing", "Signal Line Crossing","Direction Change"])
+drsi_endcond = input.string(title="Exit Cond", group = "Delta RSI", inline = "drsi_cond", defval="Zero-Crossing", options=["Zero-Crossing", "Signal Line Crossing","Direction Change"])
+
+drsi_usenrmse = input.bool(title = "Use NRMSE Target", group = "Delta RSI", inline = "drsi_rmse", defval = false)
+drsi_rmse_thrs = input.float(title = "RSI fitting Error Threshold, %", group = "Delta RSI", inline = "drsi_rmse", defval = 10, minval = 0.0) / 100
+
+// ---Subroutines for Delta RSI---
+drsi_matrix_get(_A,_i,_j,_nrows) =>
+    array.get(_A,_i+_nrows*_j)
+
+drsi_matrix_set(_A,_value,_i,_j,_nrows) =>
+    array.set(_A,_i+_nrows*_j,_value)
+
+drsi_transpose(_A,_nrows,_ncolumns) =>
+    var _AT = array.new_float(_nrows*_ncolumns,0)
+    for i = 0 to _nrows-1
+        for j = 0 to _ncolumns-1
+            drsi_matrix_set(_AT, drsi_matrix_get(_A,i,j,_nrows),j,i,_ncolumns)
+    _AT
+
+drsi_multiply(_A,_B,_nrowsA,_ncolumnsA,_ncolumnsB) => 
+    var _C = array.new_float(_nrowsA*_ncolumnsB,0)
+    int _nrowsB = _ncolumnsA
+    float elementC= 0.0
+    for i = 0 to _nrowsA-1
+        for j = 0 to _ncolumnsB-1
+            elementC := 0
+            for k = 0 to _ncolumnsA-1
+                elementC := elementC + drsi_matrix_get(_A,i,k,_nrowsA)*drsi_matrix_get(_B,k,j,_nrowsB)
+            drsi_matrix_set(_C,elementC,i,j,_nrowsA)
+    _C
+
+drsi_vnorm(_X,_n) =>
+    float _norm = 0.0
+    for i = 0 to _n-1
+        _norm := _norm + math.pow(array.get(_X,i),2)
+    math.sqrt(_norm)
+
+drsi_qr_diag(_A,_nrows,_ncolumns) => 
+    var _Q = array.new_float(_nrows*_ncolumns,0)
+    var _R = array.new_float(_ncolumns*_ncolumns,0)
+    var _a = array.new_float(_nrows,0)
+    // _q not used directly but keep for consistency, wait, in orig it's unused.
+    float _r = 0.0
+    float _aux = 0.0
+    for i = 0 to _nrows-1
+        array.set(_a,i,drsi_matrix_get(_A,i,0,_nrows))
+    _r := drsi_vnorm(_a,_nrows)
+    drsi_matrix_set(_R,_r,0,0,_ncolumns)
+    for i = 0 to _nrows-1
+        drsi_matrix_set(_Q,array.get(_a,i)/_r,i,0,_nrows)
+    if _ncolumns != 1
+        for k = 1 to _ncolumns-1
+            for i = 0 to _nrows-1
+                array.set(_a,i,drsi_matrix_get(_A,i,k,_nrows))
+            for j = 0 to k-1
+                _r := 0
+                for i = 0 to _nrows-1
+                    _r := _r + drsi_matrix_get(_Q,i,j,_nrows)*array.get(_a,i)
+                drsi_matrix_set(_R,_r,j,k,_ncolumns)
+                for i = 0 to _nrows-1
+                    _aux := array.get(_a,i) - _r*drsi_matrix_get(_Q,i,j,_nrows)
+                    array.set(_a,i,_aux)
+            _r := drsi_vnorm(_a,_nrows)
+            drsi_matrix_set(_R,_r,k,k,_ncolumns)
+            for i = 0 to _nrows-1
+                drsi_matrix_set(_Q,array.get(_a,i)/_r,i,k,_nrows)
+    [_Q,_R]
+    
+drsi_pinv(_A,_nrows,_ncolumns) =>
+    [_Q,_R] = drsi_qr_diag(_A,_nrows,_ncolumns)
+    _QT = drsi_transpose(_Q,_nrows,_ncolumns)
+    var _Rinv = array.new_float(_ncolumns*_ncolumns,0)
+    float _r = 0.0
+    drsi_matrix_set(_Rinv,1/drsi_matrix_get(_R,0,0,_ncolumns),0,0,_ncolumns)
+    if _ncolumns != 1
+        for j = 1 to _ncolumns-1
+            for i = 0 to j-1
+                _r := 0.0
+                for k = i to j-1
+                    _r := _r + drsi_matrix_get(_Rinv,i,k,_ncolumns)*drsi_matrix_get(_R,k,j,_ncolumns)
+                drsi_matrix_set(_Rinv,_r,i,j,_ncolumns)
+            for k = 0 to j-1
+                drsi_matrix_set(_Rinv,-drsi_matrix_get(_Rinv,k,j,_ncolumns)/drsi_matrix_get(_R,j,j,_ncolumns),k,j,_ncolumns)
+            drsi_matrix_set(_Rinv,1/drsi_matrix_get(_R,j,j,_ncolumns),j,j,_ncolumns)
+    _Ainv = drsi_multiply(_Rinv,_QT,_ncolumns,_ncolumns,_nrows)
+    _Ainv
+
+drsi_norm_rmse(_x, _xhat) =>
+    float _nrmse = 0.0
+    if array.size(_x) != array.size(_xhat)
+        _nrmse := na
+    else
+        int _N = array.size(_x)
+        float _mse = 0.0
+        for i = 0 to _N-1
+            _mse := _mse + math.pow(array.get(_x,i) - array.get(_xhat,i),2)/_N
+        _xmean = array.sum(_x)/_N
+        _nrmse := math.sqrt(_mse) /_xmean
+    _nrmse
+
+drsi_diff(_src,_window,_degree) =>
+    var _J = array.new_float(_window*(_degree+1),0)
+    for i = 0 to _window-1 
+        for j = 0 to _degree
+            drsi_matrix_set(_J,math.pow(i,j),i,j,_window)
+    var _Y_raw = array.new_float(_window,na)
+    for j = 0 to _window-1
+        array.set(_Y_raw,j,_src[_window-1-j]) 
+    _C = drsi_pinv(_J,_window,_degree+1)
+    _a_coef = drsi_multiply(_C,_Y_raw,_degree+1,_window,1)
+    float _diff = 0.0
+    for i = 1 to _degree
+        _diff := _diff + i*array.get(_a_coef,i)*math.pow(_window-1,i-1)
+    _Y_hat = drsi_multiply(_J,_a_coef,_window,_degree+1,1)
+    float _nrmse = drsi_norm_rmse(_Y_raw,_Y_hat)
+    [_diff,_nrmse]
+
+drsi_src = ta.rsi(close, drsi_rsi_l)
+[drsi_val, drsi_nrmse] = drsi_diff(drsi_src, drsi_window, drsi_degree)
+drsi_signalline = ta.ema(drsi_val, drsi_signalLength)
+
+// Conditions and filters
+drsi_filter_rmse = drsi_usenrmse ? drsi_nrmse < drsi_rmse_thrs : true
+drsi_dirchangeup = (drsi_val > drsi_val[1]) and (drsi_val[1] < drsi_val[2]) and drsi_val[1] < 0.0
+drsi_dirchangedw = (drsi_val < drsi_val[1]) and (drsi_val[1] > drsi_val[2]) and drsi_val[1] > 0.0
+drsi_crossup = ta.crossover(drsi_val, 0.0)
+drsi_crossdw = ta.crossunder(drsi_val, 0.0)
+drsi_crosssignalup = ta.crossover(drsi_val, drsi_signalline)
+drsi_crosssignaldw = ta.crossunder(drsi_val, drsi_signalline)
+
+// Signals
+drsi_valid_tf = timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly
+drsi_active = drsi_show and drsi_valid_tf
+
+drsi_golong_sig = drsi_active and (drsi_buycond == "Direction Change" ? drsi_dirchangeup : (drsi_buycond == "Zero-Crossing" ? drsi_crossup : drsi_crosssignalup)) and drsi_filter_rmse
+drsi_goshort_sig = drsi_active and (drsi_sellcond == "Direction Change" ? drsi_dirchangedw : (drsi_sellcond == "Zero-Crossing" ? drsi_crossdw : drsi_crosssignaldw)) and drsi_filter_rmse
+drsi_endlong_sig = drsi_active and (drsi_endcond == "Direction Change" ? drsi_dirchangedw : (drsi_endcond == "Zero-Crossing" ? drsi_crossdw : drsi_crosssignaldw)) and drsi_filter_rmse
+drsi_endshort_sig = drsi_active and (drsi_endcond == "Direction Change" ? drsi_dirchangeup : (drsi_endcond == "Zero-Crossing" ? drsi_crossup : drsi_crosssignalup)) and drsi_filter_rmse
+
+plotshape(drsi_golong_sig and drsi_islong ? low : na, location=location.belowbar, style=shape.labelup, color=color.new(#2E7C13, 0), size=size.small, title='Buy') 
+plotshape(drsi_goshort_sig and drsi_isshort ? high : na, location=location.abovebar, style=shape.labeldown, color=color.new(#BF217C, 0), size=size.small, title='Sell')
+plotshape(drsi_showendlabels and drsi_endlong_sig and drsi_islong ? high : na, location=location.abovebar, style=shape.xcross, color=color.new(#2E7C13, 0), size=size.tiny, title='Exit Long') 
+plotshape(drsi_showendlabels and drsi_endshort_sig and drsi_isshort ? low : na, location=location.belowbar, style=shape.xcross, color=color.new(#BF217C, 0), size=size.tiny, title='Exit Short')
+
+alertcondition(drsi_golong_sig, title='D-RSI: Long Signal', message='D-RSI: Long Signal')
+alertcondition(drsi_goshort_sig, title='D-RSI: Short Signal', message='D-RSI: Short Signal')
+alertcondition(drsi_endlong_sig, title='D-RSI: Exit Long', message='D-RSI: Exit Long')
+alertcondition(drsi_endshort_sig, title='D-RSI: Exit Short', message='D-RSI: Exit Short')

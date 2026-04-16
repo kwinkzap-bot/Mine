@@ -8,8 +8,15 @@ import csv
 from io import StringIO
 import tempfile
 from pathlib import Path
+import threading
 
 load_dotenv()
+
+_global_dhan_sym_cache = {
+    'data': None,
+    'date': None,
+    'lock': threading.Lock()
+}
 
 class DhanOrderService:
     """
@@ -83,6 +90,14 @@ class DhanOrderService:
         Valid Segments: NSE_FNO, NSE_EQ, IDX_I, MCX_COMM, BSE_FNO
         """
         try:
+            global _global_dhan_sym_cache
+            today_date = datetime.now().date()
+            
+            with _global_dhan_sym_cache['lock']:
+                if _global_dhan_sym_cache['data'] is not None and _global_dhan_sym_cache['date'] == today_date:
+                    self._symbol_master_data = _global_dhan_sym_cache['data']
+                    return
+            
             # We primarily need FNO for options, IDX_I for indices, and NSE_EQ for equities
             segments = ['NSE_FNO', 'IDX_I', 'NSE_EQ']
             self._symbol_master_data = {}
@@ -142,11 +157,16 @@ class DhanOrderService:
                         segment_data = self._load_csv_to_dict(cache_file, segment)
                         self._symbol_master_data.update(segment_data)
             
+            # Set memory cache after successfully building the dictionary
+            with _global_dhan_sym_cache['lock']:
+                _global_dhan_sym_cache['data'] = self._symbol_master_data
+                _global_dhan_sym_cache['date'] = today_date
+            
             logging.info(f"[_build_symbol_master_dict] Total symbols in master: {len(self._symbol_master_data)}")
                 
         except Exception as e:
             logging.warning(f"[_build_symbol_master_dict] Unexpected error building symbol master: {e}")
-            if not self._symbol_master_data:
+            if getattr(self, '_symbol_master_data', None) is None:
                 self._symbol_master_data = {}
     
     def _load_csv_to_dict(self, csv_file: Path, segment_name: str = "") -> Dict[str, str]:
@@ -1075,44 +1095,51 @@ class DhanOrderService:
             try:
                 from trading_app.service.kite_order_services import KiteService
                 kite_service = KiteService()
-                kite = kite_service.kite
                 
-                if kite:
-                    # Fetch all instruments
-                    instruments = kite.instruments()
-                    df = pd.DataFrame(instruments)
+                symbol_options = kite_service.get_nfo_instruments(symbol)
+                
+                if symbol_options:
+                    today = datetime.now().date()
+                    future_expiries = []
                     
-                    # Filter for the specified symbol options
-                    symbol_options = df[
-                        (df['name'] == symbol) & 
-                        (df['segment'] == 'NFO-OPT')
-                    ]
+                    for opt in symbol_options:
+                        exp = opt.get('expiry')
+                        if exp:
+                            if hasattr(exp, 'date'):
+                                exp_date = exp.date()
+                            elif isinstance(exp, str):
+                                try:
+                                    exp_date_str = exp.split('T')[0]
+                                    exp_date = datetime.fromisoformat(exp_date_str).date()
+                                except Exception: continue
+                            else:
+                                continue
+                                
+                            if exp_date > today:
+                                future_expiries.append(exp_date)
+                                
+                    if future_expiries:
+                        nearest_expiry = min(future_expiries)
+                        logging.info(f"[get_nearest_weekly_expiry] Fetched from Kite Memory - Symbol: {symbol}, Expiry: {nearest_expiry}")
+                        return datetime.combine(nearest_expiry, datetime.min.time())
                     
-                    if not symbol_options.empty:
-                        # Get the NEXT expiry (skip current day if it's expiry day)
-                        today = datetime.now().date()
-                        future_expiries = symbol_options[
-                            symbol_options['expiry'].apply(
-                                lambda x: (x.date() if hasattr(x, 'date') else x) > today
-                            )
-                        ]
-                        
-                        if not future_expiries.empty:
-                            nearest_expiry = future_expiries['expiry'].min()
-                            if hasattr(nearest_expiry, 'date'):
-                                nearest_expiry = nearest_expiry.date()
-                            logging.info(f"[get_nearest_weekly_expiry] Fetched from Kite API - Symbol: {symbol}, Expiry: {nearest_expiry}")
-                            return datetime.combine(nearest_expiry, datetime.min.time())
-                        else:
-                            # No future expiries, use minimum available
-                            nearest_expiry = symbol_options['expiry'].min()
-                            if hasattr(nearest_expiry, 'date'):
-                                nearest_expiry = nearest_expiry.date()
-                            logging.info(f"[get_nearest_weekly_expiry] Using current expiry (no future) - Expiry: {nearest_expiry}")
-                            return datetime.combine(nearest_expiry, datetime.min.time())
-                    
+                    # If no strictly future expiries, try to find today's expiry
+                    today_expiries = []
+                    for opt in symbol_options:
+                        exp = opt.get('expiry')
+                        if exp:
+                            if hasattr(exp, 'date'): exp_date = exp.date()
+                            elif isinstance(exp, str):
+                                try: exp_date = datetime.fromisoformat(exp.split('T')[0]).date()
+                                except Exception: continue
+                            else: continue
+                            if exp_date == today:
+                                today_expiries.append(exp_date)
+                    if today_expiries:
+                        logging.info(f"[get_nearest_weekly_expiry] Using current expiry - Expiry: {today}")
+                        return datetime.combine(today, datetime.min.time())
             except Exception as e:
-                logging.debug(f"[get_nearest_weekly_expiry] Could not fetch from Kite API: {e}. Using fallback.")
+                logging.debug(f"[get_nearest_weekly_expiry] Could not fetch from Kite Memory: {e}. Using fallback.")
             
             # Fallback: use hardcoded expiry calendar
             today = datetime.now()

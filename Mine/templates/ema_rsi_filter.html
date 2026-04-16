@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}EMA/RSI 208 Filter - Stock Scanner{% endblock %}
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ema_rsi_filter.css') }}">
+{% endblock %}
+{% block content %}
+<div id="ema-status-bar" class="ema-status-bar">
+    <span id="ema-status-text">⏳ Loading data...</span>
+    <div class="ema-controls">
+        <input type="date" id="emaDateFilter" class="date-picker" title="Select analysis date">
+        <button id="ema-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
+    </div>
+</div>
+
+<!-- WEEKLY GRID -->
+<div class="ema-section-label">
+    <span class="ema-tf-badge weekly-badge">📅 Weekly</span>
+    <span class="ema-section-title">EMA 208 Touch &amp; RSI 208 (Crossed &gt; 51)</span>
+</div>
+<div class="results-row" id="weeklyGrid">
+    <div id="weeklyEmaResults" class="results results-hidden results-block">
+        <h3>📈 Weekly EMA 208 Touch <span id="weeklyEmaCount">(0)</span></h3>
+        <div class="results-scroll">
+            <table id="weeklyEmaTable">
+                <thead>
+                    <tr>
+                        <th data-col="0">Symbol</th>
+                        <th data-col="1">Price</th>
+                        <th data-col="2">W Close</th>
+                        <th data-col="3">EMA 208</th>
+                        <th data-col="4">RSI 208</th>
+                        <th data-col="5">Trigger</th>
+                    </tr>
+                </thead>
+                <tbody id="weeklyEmaBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Shown only when 0 weekly matches — nearest stocks to EMA-208 -->
+    <div id="nearestWeeklySection" class="results results-block ema-hidden">
+        <h3>🎯 Nearest to Weekly EMA 208 <span class="nearest-count"></span>
+            <small style="font-weight:400;font-size:0.75rem;opacity:0.7;"> — no touch yet, showing closest stocks</small>
+        </h3>
+        <div class="results-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Price</th>
+                        <th>W Close</th>
+                        <th>EMA 208</th>
+                        <th>RSI 208</th>
+                        <th>EMA Distance</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+
+<!-- DAILY GRID -->
+<div class="ema-section-label" style="margin-top:18px;">
+    <span class="ema-tf-badge daily-badge">📆 Daily</span>
+    <span class="ema-section-title">EMA 88 Touch &amp; RSI 88 (Crossed &gt; 51)</span>
+</div>
+<div class="results-row" id="dailyGrid">
+    <div id="dailyEmaResults" class="results results-hidden results-block">
+        <h3>📉 Daily EMA 88 Touch <span id="dailyEmaCount">(0)</span></h3>
+        <div class="results-scroll">
+            <table id="dailyEmaTable">
+                <thead>
+                    <tr>
+                        <th data-col="0">Symbol</th>
+                        <th data-col="1">Price</th>
+                        <th data-col="2">D Close</th>
+                        <th data-col="3">EMA 88</th>
+                        <th data-col="4">RSI 88</th>
+                        <th data-col="5">Trigger</th>
+                    </tr>
+                </thead>
+                <tbody id="dailyEmaBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Empty State -->
+<div id="ema-empty-state" class="ema-empty-state ema-hidden">
+    <div class="ema-empty-icon">🔍</div>
+    <div class="ema-empty-title">No matches found</div>
+    <div class="ema-empty-sub">No F&amp;O stocks currently touch EMA 208 or have RSI 208 crossed above 51.</div>
+</div>
+{% endblock %}
+{% block scripts %}
+{{ super() }}
+<script src="{{ url_for('static', filename='js/ema_rsi_filter.js') }}"></script>
+{% endblock %}

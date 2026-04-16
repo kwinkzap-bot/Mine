@@ -18,7 +18,7 @@ atm_strike = input.int(23300,    "ATM Strike",            group=grp)
 show_t1    = input.bool(true,     "Show Target Premium 1", group=grp)
 show_t2    = input.bool(true,     "Show Target Premium 2", group=grp)
 
-tgt_strike = input.int(5,         "Target Strike Distance", group=grp, tooltip="Used to calculate the dynamic premium target offset")
+tgt_strike = input.int(50,        "Target Strike Distance", group=grp, tooltip="Used to calculate the dynamic premium target offset (e.g., 50 for T1, 100 for T2)")
 
 show_lbl   = input.bool(true,     "Show Labels",           group=grp)
 
@@ -59,27 +59,11 @@ pe_vwap = f_dvwap(pe_c, pe_v)
 live_prem = (ce_c + pe_c) / 2.0
 entry_curve = (ce_vwap + pe_vwap) / 2.0
 
-// Dynamic Targets based on Underlying Step value and Target Strike offset
-step = unl == "BANKNIFTY" ? 100.0 : 50.0
-offset_unit = float(tgt_strike) * step
-
-// --- OPTION PREMIUM, INTRINSIC, AND TIME VALUE DYNAMIC LOGIC ---
-// To avoid jagged visual "collapse" caused by raw 1-minute candle price variance, 
-// the Target lines MUST be calculated off the beautifully smoothed VWAP paths.
-// We apply specific Proportional Scaling of the pure VWAP Greeks to perfectly hit targets.
-
-// 1. Calculate Option Premium, Intrinsic Value, and Time Value purely via VWAP curves!
-avg_premium   = entry_curve
-avg_intrinsic = math.abs(ce_vwap - pe_vwap) / 2
-avg_time_val  = avg_premium - avg_intrinsic
-
-// 2. The Time Value Logic: Positive Proportional Options Geometry
-// This algebraic fit dynamically traces the positive movements without flattening out the lines
-// AND uses the inherently smooth VWAP basis to prevent the visual chart lines from collapsing into zigzag noise.
-// Generates ~35 on the 25th, and ~50 on the 27th!
-
-t1_offset = (avg_time_val * 0.11818) + (avg_intrinsic * 0.4734)
-t2_offset = (avg_time_val * 0.2968) + (avg_intrinsic * 0.8913)
+// --- OPTION PREMIUM DYNAMIC TARGET LOGIC ---
+// The targets are derived directly from the user-defined Target Strike Distance.
+// If the input is 50, Target 1 is at Entry + 50, and Target 2 is at Entry + 100.
+t1_offset = float(tgt_strike)
+t2_offset = float(tgt_strike) * 2.0
 
 // The target flawlessly and stably mirrors the VWAP curve.
 t1_val = entry_curve + t1_offset
@@ -109,7 +93,7 @@ plot(pe_c, "PE Axis", color=color.new(#e91e63, 100), display=display.price_scale
 plot(enable_sys ? entry_curve : na, "Entry Premium", color=#4caf50, linewidth=2, display=display.all)
 plot(enable_sys ? live_prem : na,  "Current Premium", color=#2196f3, linewidth=2, display=display.all)
 plot(enable_sys and show_t1 ? t1_val : na, "Target Premium 1", color=#e040fb, linewidth=1, display=display.all)
-plot(enable_sys and show_t2 ? t2_val : na, "Target Premium 2", color=#ffeb3b, linewidth=1, display=display.all)
+plot(enable_sys and show_t2 ? t2_val : na, "Target Premium 2", color=color.orange, linewidth=1, display=display.all)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ◆ LABELS
@@ -127,4 +111,30 @@ if barstate.islast and enable_sys and show_lbl
     if show_t1
         l1 := f_lbl(t1_val,  "Target Premium 1", #e040fb, color.white)
     if show_t2
-        l2 := f_lbl(t2_val,  "Target Premium 2", #ffeb3b, color.black)
+        l2 := f_lbl(t2_val,  "Target Premium 2", color.orange, color.white)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// ◆ STRIKE PRICE STAMP (BOTTOM RIGHT)
+// ─────────────────────────────────────────────────────────────────────────────
+
+f_bold_unicode(txt) =>
+    s = txt
+    s := str.replace_all(s, "A", "𝗔"), s := str.replace_all(s, "B", "𝗕"), s := str.replace_all(s, "C", "𝗖")
+    s := str.replace_all(s, "D", "𝗗"), s := str.replace_all(s, "E", "𝗘"), s := str.replace_all(s, "F", "𝗙")
+    s := str.replace_all(s, "G", "𝗚"), s := str.replace_all(s, "H", "𝗛"), s := str.replace_all(s, "I", "𝗜")
+    s := str.replace_all(s, "J", "𝗝"), s := str.replace_all(s, "K", "𝗞"), s := str.replace_all(s, "L", "𝗟")
+    s := str.replace_all(s, "M", "𝗠"), s := str.replace_all(s, "N", "𝗡"), s := str.replace_all(s, "O", "𝗢")
+    s := str.replace_all(s, "P", "𝗣"), s := str.replace_all(s, "Q", "𝗤"), s := str.replace_all(s, "R", "𝗥")
+    s := str.replace_all(s, "S", "𝗦"), s := str.replace_all(s, "T", "𝗧"), s := str.replace_all(s, "U", "𝗨")
+    s := str.replace_all(s, "V", "𝗩"), s := str.replace_all(s, "W", "𝗪"), s := str.replace_all(s, "X", "𝗫")
+    s := str.replace_all(s, "Y", "𝗬"), s := str.replace_all(s, "Z", "𝗭"), s := str.replace_all(s, "0", "𝟬")
+    s := str.replace_all(s, "1", "𝟭"), s := str.replace_all(s, "2", "𝟮"), s := str.replace_all(s, "3", "𝟯")
+    s := str.replace_all(s, "4", "𝟰"), s := str.replace_all(s, "5", "𝟱"), s := str.replace_all(s, "6", "𝟲")
+    s := str.replace_all(s, "7", "𝟳"), s := str.replace_all(s, "8", "𝟴"), s := str.replace_all(s, "9", "𝟵")
+    s
+
+var table stamp_tbl = table.new(position.bottom_right, 1, 1, bgcolor=color.new(color.black, 0), frame_color=color.gray, frame_width=1)
+if barstate.islast
+    stamp_txt = f_bold_unicode(unl + " " + str.tostring(atm_strike))
+    table.cell(stamp_tbl, 0, 0, stamp_txt, text_color=color.white, text_size=size.normal)

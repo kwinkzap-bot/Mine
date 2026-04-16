@@ -203,6 +203,156 @@ class KiteService:
                 return o.get('tradingsymbol')
         return None
 
+    def get_lot_size(self, symbol: str) -> int:
+        """
+        Get the lot size (quantity multiplier) for a symbol.
+        """
+        default_lots = {
+            'NIFTY': 65,
+            'BANKNIFTY': 25,
+            'FINNIFTY': 40,
+            'MIDCPNIFTY': 50,
+            'SENSEX': 10,
+            'BANKEX': 15
+        }
+        return default_lots.get(symbol, 1)
+
+    def get_nearest_option_expiry(self, symbol: str, strike: int, option_type: str) -> Optional[date]:
+        """Get the expiry date of the nearest available option matching criteria."""
+        options = self.get_nfo_instruments(symbol)
+        if not options:
+            return None
+        valid_expiries = []
+        today = date.today()
+        for o in options:
+            if o.get('strike') == strike and o.get('instrument_type') == option_type:
+                exp = o.get('expiry')
+                if exp:
+                    if hasattr(exp, 'date'):
+                        d = exp.date()
+                    elif isinstance(exp, str):
+                        try:
+                            d = datetime.fromisoformat(exp.split('T')[0]).date()
+                        except:
+                            continue
+                    else:
+                        d = exp
+                    if d >= today:
+                        valid_expiries.append(d)
+        if valid_expiries:
+            return min(valid_expiries)
+        return None
+
+    def place_option_order(self, symbol: str, strike: int, option_type: str, transaction_type: str, quantity: int, product: str = 'NRML', tradingsymbol: Optional[str] = None) -> Dict[str, Any]:
+        try:
+            ts = tradingsymbol or self.get_option_symbol(symbol, strike, option_type)
+            if not ts:
+                return {'success': False, 'error': f'Could not resolve option symbol for {symbol} {strike} {option_type}'}
+            
+            logging.info(f"[KiteService] Placing option order: {transaction_type} {ts} x {quantity} ({product})")
+            # Map string transaction_type to Kite constants if necessary
+            txn_const = transaction_type
+            if transaction_type.upper() == 'BUY': txn_const = self.kite.TRANSACTION_TYPE_BUY
+            elif transaction_type.upper() == 'SELL': txn_const = self.kite.TRANSACTION_TYPE_SELL
+            
+            mapped_product = self.kite.PRODUCT_NRML if product.upper() in ['NRML', 'CARRYFORWARD'] else self.kite.PRODUCT_MIS
+            
+            try:
+                # Use internal _safe_place_order to include market_protection parameter
+                order_id = self._safe_place_order(
+                    tradingsymbol=ts,
+                    exchange=self.kite.EXCHANGE_NFO,
+                    transaction_type=txn_const,
+                    quantity=quantity,
+                    order_type=self.kite.ORDER_TYPE_MARKET,
+                    product=mapped_product,
+                    variety=self.kite.VARIETY_REGULAR,
+                    market_protection=-1  # -1 enables automatic market protection
+                )
+                return {'success': True, 'order_id': order_id, 'price': 0, 'response': {'order_id': order_id}}
+            except Exception as e:
+                err_str = str(e).lower()
+                if "market protection" in err_str or "limit order" in err_str or "market orders are not allowed" in err_str:
+                    logging.warning(f"[KiteService] Market order blocked for NFO. Falling back to padded LIMIT order. Error: {e}")
+                    
+                    # Fetch LTP to calculate padded limit price
+                    ltp_res = self.kite.ltp(f"NFO:{ts}")
+                    if f"NFO:{ts}" in ltp_res:
+                        current_price = ltp_res[f"NFO:{ts}"]['last_price']
+                        
+                        # Pad by 5% to practically act as a market order safely
+                        if txn_const == self.kite.TRANSACTION_TYPE_BUY:
+                            safe_price = round(current_price * 1.05, 1)  # Buy up to 5% higher
+                        else:
+                            safe_price = round(current_price * 0.95, 1)  # Sell down to 5% lower
+                            
+                        logging.info(f"[KiteService] Retrying as LIMIT. LTP: {current_price}, Safe Padded Price: {safe_price}")
+                        order_id = self.kite.place_order(
+                            tradingsymbol=ts,
+                            exchange=self.kite.EXCHANGE_NFO,
+                            transaction_type=txn_const,
+                            quantity=quantity,
+                            order_type=self.kite.ORDER_TYPE_LIMIT,
+                            price=safe_price,
+                            product=mapped_product,
+                            variety=self.kite.VARIETY_REGULAR
+                        )
+                        return {'success': True, 'order_id': order_id, 'price': safe_price, 'response': {'order_id': order_id, 'note': 'Executed as padded LIMIT due to NSE Market block'}}
+                    else:
+                        raise ValueError(f"Could not fetch LTP for fallback pricing on {ts}")
+                else:
+                    raise e
+                    
+        except Exception as e:
+            logging.error(f"[KiteService] Failed to place option order: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def place_stoploss_order(self, tradingsymbol: str, trigger_price: float, quantity: int, product: str = 'NRML') -> Dict[str, Any]:
+        try:
+            logging.info(f"[KiteService] Placing SL order: SELL {tradingsymbol} x {quantity} @ trigger {trigger_price} ({product})")
+            mapped_product = self.kite.PRODUCT_NRML if product.upper() in ['NRML', 'CARRYFORWARD'] else self.kite.PRODUCT_MIS
+            # Use internal _safe_place_order to include market_protection parameter
+            order_id = self._safe_place_order(
+                tradingsymbol=tradingsymbol,
+                exchange=self.kite.EXCHANGE_NFO,
+                transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+                quantity=int(quantity),
+                order_type=self.kite.ORDER_TYPE_SLM,
+                trigger_price=float(trigger_price),
+                product=mapped_product,
+                variety=self.kite.VARIETY_REGULAR,
+                market_protection=-1  # -1 enables automatic market protection
+            )
+            return {'success': True, 'order_id': order_id, 'response': {'order_id': order_id}}
+        except Exception as e:
+            logging.error(f"[KiteService] Failed to place SL order: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def _safe_place_order(self, variety: str, exchange: str, tradingsymbol: str, transaction_type: str, quantity: int, product: str, order_type: str, price: Optional[float] = None, trigger_price: Optional[float] = None, tag: Optional[str] = None, market_protection: int = -1) -> str:
+        """
+        Internal helper to place orders with market_protection parameter.
+        Bypasses the standard library's place_order if the version doesn't support the parameter.
+        """
+        params = {
+            "variety": variety,
+            "exchange": exchange,
+            "tradingsymbol": tradingsymbol,
+            "transaction_type": transaction_type,
+            "quantity": quantity,
+            "product": product,
+            "order_type": order_type,
+            "price": price,
+            "trigger_price": trigger_price,
+            "tag": tag,
+            "market_protection": market_protection
+        }
+        # Remove None values
+        params = {k: v for k, v in params.items() if v is not None}
+        
+        # Access the private _post method to inject market_protection
+        # variety is passed in url_args for the /orders/{variety} route
+        return self.kite._post("order.place", url_args={"variety": variety}, params=params)
+
     def _create_kite_instance(self) -> KiteConnect:
         api_key = os.getenv("API_KEY")
         access_token = os.getenv("ACCESS_TOKEN")

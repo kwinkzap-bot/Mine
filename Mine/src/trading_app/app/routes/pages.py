@@ -120,6 +120,13 @@ def oi_profile():
     """OI Profile – NIFTY candlestick chart + OI profile bars."""
     return render_template('oi_profile.html')
 
+@pages_bp.route('/ema-rsi-filter')
+@require_user_auth
+@login_required
+def ema_rsi_filter():
+    """EMA/RSI 208 Filter – Weekly & Daily candle touch scanner."""
+    return render_template('ema_rsi_filter.html')
+
 @pages_bp.route('/login')
 def login():
     """Login page - redirects to user login."""

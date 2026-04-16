@@ -1,0 +1,227 @@
+//@version=6
+// ══════════════════════════════════════════════════════════════════════════════════════════════════ //
+//# * ══════════════════════════════════════════════════════════════════════════════════════════════
+//# *
+//# * Study       : RSI Support & Resistance Zones
+//# * Author      : © dgtrd
+//# *
+//# * Revision History
+//# *  Release    : Mar 09, 2021
+//# *  Update     : Mar 13, 2021 : Alert functionality added 
+//# *  Update     : Mar 22, 2021 : Source selection extended by adding On Balance Volume (OBV) option
+//# *  Update     : Mar 08, 2022 : added RSI oscillator overlay display 
+//# *  Update     : Apr 04, 2026 : Reverse RSI labels
+//# *
+//# * ══════════════════════════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════════════════════════ //
+
+indicator('RSI Support & Resistance by KK', 'RSI S&R ☼☾ by KK', true, max_lines_count = 500, max_bars_back = 500)
+
+display = display.all - display.status_line
+
+i_source = input.string('Price (close)', 'Source', options = ['Price (close)', 'On Balance Volume (OBV)'], inline = 'RSI', group = 'RSI Settings', display = display,
+    tooltip = 'Select the data source used to compute RSI.\n' +
+         '• Price (close): Classic RSI based on price action\n' +
+         '• OBV: Volume-weighted momentum using On Balance Volume')
+
+i_length = input.int(14, '   Length', minval = 1, inline = 'RSI', group = 'RSI Settings', display = display)
+i_obThreshold = input.int(70, 'Overbought', minval = 50, maxval = 100, inline = 'Thresh1', group = 'RSI Settings', display = display)
+
+i_bullZone = input.int(60, 'Bull Zone', minval = 50, maxval = 65, inline = 'Thresh1', group = 'RSI Settings', display = display,
+    tooltip = 'Overbought:\nOverbought threshold.\n' +
+         'Crosses above this level may indicate exhaustion and potential resistance formation.\n\n' + 
+         'Bull Zone:\nBullish momentum zone.\n' +
+         'RSI holding above this level indicates sustained bullish pressure.')
+
+i_bearZone = input.int(40, 'Bear Zone ', minval = 35, maxval = 50, inline = 'Thresh2', group = 'RSI Settings', display = display)
+
+i_osThreshold = input.int(30, 'Oversold', minval = 1, maxval = 50, inline = 'Thresh2', group = 'RSI Settings', display = display,
+    tooltip = 'Bear Zone:\nBearish momentum zone.\n' +
+         'RSI holding below this level indicates sustained bearish pressure.\n\n' +
+         'Oversold:\nOversold threshold.\n' +
+         'Crosses below this level may indicate capitulation and potential support formation.')
+
+bullColor  = input.color(color.teal, 'Bullish', inline = 'ob', group = 'RSI Settings')
+midColor = input.color(color.gray, 'Neutral', inline = 'ob', group = 'RSI Settings')
+bearColor  = input.color(color.red, 'Bearish', inline = 'ob', group = 'RSI Settings')
+
+showSR = input.bool(true, 'Show RSI S&R Zones', group = 'RSI S&R Zones', display = display, inline = 'RSI',
+     tooltip = 'Displays dynamic support and resistance zones derived from RSI threshold crossings.\n\n' +
+               'Zones are plotted directly on price — each level marks where RSI crossed a key threshold in the past, translating oscillator conditions into actionable price levels.\n\n' +
+               '• Overbought crossover → potential resistance zone\n' +
+               '• Overbought exit (crossunder back below) → resistance weakening\n' +
+               '• Bull Zone (RSI 60) cross → dynamic support in uptrends\n' +
+               '• Bear Zone (RSI 40) cross → dynamic resistance in downtrends\n' +
+               '• Oversold crossunder → potential support zone\n' +
+               '• Oversold exit (crossover back above) → support strengthening')
+
+i_fill = input.bool(true, 'Zone Fills', group = 'RSI S&R Zones', inline = 'RSI')
+
+i_obos = input.bool(false, 'RSI Overbought/Oversold Bar Marks', group = 'RSI S&R Zones',
+    tooltip = 'Marks price bars when RSI is in overbought or oversold conditions.')
+
+show_entry = input.bool(true, 'Show Entry Signals', group = 'Trade Visuals')
+show_target = input.bool(true, 'Show Target Signals', group = 'Trade Visuals')
+show_sl = input.bool(true, 'Show SL Signals', group = 'Trade Visuals')
+
+group_rsi_osc = 'RSI Overlay Display'
+rsi_osc = input.bool(true, 'Enable RSI Overlay', group = group_rsi_osc,
+    tooltip = 'Displays RSI oscillator directly on the price chart.')
+oscPlacement = input.string('Top', 'Placement', options = ['Top', 'Bottom'], inline = 'VOL', group = group_rsi_osc, display = display,
+    tooltip = 'Choose where the RSI overlay is projected:\n' +
+         '• Top: Above price\n' +
+         '• Bottom: Below price')
+
+oscHight = 11 - input.int(7, ' Height', minval = 3, maxval = 10, inline = 'VOL', group = group_rsi_osc, display = display)
+lookbackLength = input.int(200, 'Overlay Display Length', minval = 10, maxval = 495, group = group_rsi_osc, display = display) // max lines allowed is 500, where 5 of them to be used for zone definitions 
+
+// ---------------------------------------------------------------------------------------------- //
+// Functions  
+
+f_getPrice(_osc, _thresh, _cross) =>
+    avgHigh = math.avg(high, close)
+    avgLow  = math.avg(low , close)
+
+    var return_1 = 0.
+
+    if _cross == 'over' or _cross == 'both'
+        if ta.crossover(_osc, _thresh)
+            return_1 := avgHigh
+    if _cross == 'under' or _cross == 'both'
+        if ta.crossunder(_osc, _thresh)
+            return_1 := avgLow
+    return_1
+
+// ---------------------------------------------------------------------------------------------- //
+// Calculations
+
+rsiSrc     = i_source == 'Price (close)' ? close : ta.obv
+oscillator = ta.rsi(rsiSrc, i_length)
+
+crossover_overbought = f_getPrice(oscillator, i_obThreshold, 'over')
+crossunder_overbought = f_getPrice(oscillator, i_obThreshold, 'under')
+bullZone = f_getPrice(oscillator, i_bullZone, 'both')
+bearZone = f_getPrice(oscillator, i_bearZone, 'both')
+crossover_oversold = f_getPrice(oscillator, i_osThreshold, 'over')
+crossunder_oversold = f_getPrice(oscillator, i_osThreshold, 'under')
+
+// -Plotting ════════════════════════════════════════════════════════════════════════════════════ //
+
+plot_crossover_overbought = plot(showSR and crossover_overbought > 0 ? crossover_overbought : na, 'RSI Overbought Crossover Level', crossover_overbought == crossover_overbought[1] ? bullColor : na, 2, display = display)
+plot_bullZone = plot(showSR and bullZone > 0 ? bullZone : na, 'RSI Bullish Threshold Level', bullZone == bullZone[1] ? bullColor : na, 1, display = display.none)
+fill(plot_crossover_overbought, plot_bullZone, i_fill ? color.new(bullColor, 90) : na, title = 'RSI Bullish Momentum Zone')
+
+plot_bearZone = plot(showSR and bearZone > 0 ? bearZone : na, 'RSI Bearish Threshold Level', bearZone == bearZone[1] ? bearColor : na, 1, display = display.none)
+plot_crossunder_oversold = plot(showSR and crossunder_oversold > 0 ? crossunder_oversold : na, 'RSI Oversold Breakdown Level', crossunder_oversold == crossunder_oversold[1] ? bearColor : na, 2, display = display)
+fill(plot_crossunder_oversold, plot_bearZone, i_fill ? color.new(bearColor, 90) : na, title = 'RSI Bearish Momentum Zone')
+
+// --- Entry Logic ---
+// Short Setup: Previous candle closed below the Overbought Level (after either testing it with its high, or crossing under it)
+setup_ob_rejection = (close[1] < crossover_overbought[1]) and (high[1] >= crossover_overbought[1] or close[2] >= crossover_overbought[2])
+
+// Short Trigger: Current candle crosses below the low of the setup candle
+short_entry = setup_ob_rejection and (close < low[1])
+
+plotshape(show_entry and short_entry, title='Short Entry OB Rejection', style=shape.labeldown, location=location.abovebar, color=color.red, size=size.small, text='ENTRY', textcolor=color.white)
+alertcondition(short_entry, title='Short Entry Signal', message='Short Entry triggered: Candle rejected/closed below RSI OB line and next candle broke its low.')
+
+// Long Setup: Previous candle closed above the Oversold Level (after either testing it with its low, or crossing over it)
+setup_os_rejection = (close[1] > crossunder_oversold[1]) and (low[1] <= crossunder_oversold[1] or close[2] <= crossunder_oversold[2])
+
+// Long Trigger: Current candle crosses above the high of the setup candle
+long_entry = setup_os_rejection and (close > high[1])
+
+plotshape(show_entry and long_entry, title='Long Entry OS Rejection', style=shape.labelup, location=location.belowbar, color=color.teal, size=size.small, text='ENTRY', textcolor=color.white)
+alertcondition(long_entry, title='Long Entry Signal', message='Long Entry triggered: Candle rejected/closed above RSI OS line and next candle broke its high.')
+
+// --- Trade State & Exit Logic ---
+var bool in_short = false
+var bool in_long = false
+var float short_sl = na
+var float long_sl = na
+
+// Set trade states & SL on entry
+if short_entry
+    in_short := true
+    in_long := false
+    short_sl := high[1] // High of the setup (crossover) candle
+
+if long_entry
+    in_long := true
+    in_short := false
+    long_sl := low[1]   // Low of the setup (crossdown) candle
+
+// Check targets and SL for active short trade
+short_target_hit = in_short and (low <= bearZone)
+short_sl_hit = in_short and (high >= short_sl)
+
+if short_target_hit or short_sl_hit
+    in_short := false
+
+// Check targets and SL for active long trade
+long_target_hit = in_long and (high >= bullZone)
+long_sl_hit = in_long and (low <= long_sl)
+
+if long_target_hit or long_sl_hit
+    in_long := false
+
+// Plots and Alerts for Targets
+plotshape(show_target and short_target_hit, title='Short Target Hit', style=shape.flag, location=location.belowbar, color=color.orange, size=size.small, text='🎯', textcolor=color.white)
+alertcondition(short_target_hit, title='Short Target Hit', message='Short Trade Target Hit: Price reached the RSI Bearish Threshold Level.')
+
+plotshape(show_target and long_target_hit, title='Long Target Hit', style=shape.flag, location=location.abovebar, color=color.orange, size=size.small, text='🎯', textcolor=color.white)
+alertcondition(long_target_hit, title='Long Target Hit', message='Long Trade Target Hit: Price reached the RSI Bullish Threshold Level.')
+
+// Plots and Alerts for Stop Loss
+plotshape(show_sl and short_sl_hit, title='Short SL Hit', style=shape.xcross, location=location.abovebar, color=color.maroon, size=size.small, text='SL', textcolor=color.white)
+alertcondition(short_sl_hit, title='Short SL Hit', message='Short Trade SL Hit: Price broke above the setup candle high.')
+
+plotshape(show_sl and long_sl_hit, title='Long SL Hit', style=shape.xcross, location=location.belowbar, color=color.maroon, size=size.small, text='SL', textcolor=color.white)
+alertcondition(long_sl_hit, title='Long SL Hit', message='Long Trade SL Hit: Price broke below the setup candle low.')
+
+// ---------------------------------------------------------------------------------------------- //
+// RSI OSC  ------------------------------------------------------------------------------------- //
+
+
+var a_lines = array.new_line()
+var a_fill = array.new_linefill()
+
+priceHighest = ta.highest(high, lookbackLength)
+priceLowest = ta.lowest(low, lookbackLength)
+
+if barstate.islast and rsi_osc
+    if array.size(a_lines) > 0
+        while array.size(a_lines) > 0
+            line.delete(array.shift(a_lines))
+
+    if array.size(a_fill) > 0
+        while array.size(a_fill) > 0
+            linefill.delete(array.shift(a_fill))
+
+    priceChangeRate = (priceHighest - priceLowest) / priceHighest / oscHight / 100
+
+    obLevel = (oscPlacement == 'Top' ? priceHighest : priceLowest) * (1 + (oscPlacement == 'Top' ? i_obThreshold : -1 * (100 - i_obThreshold)) * priceChangeRate)
+    bullLevel = (oscPlacement == 'Top' ? priceHighest : priceLowest) * (1 + (oscPlacement == 'Top' ? i_bullZone : -1 * (100 - i_bullZone)) * priceChangeRate)
+    midLevel = (oscPlacement == 'Top' ? priceHighest : priceLowest) * (1 + (oscPlacement == 'Top' ? 50 : -1 * (100 - 50)) * priceChangeRate)
+    bearLevel = (oscPlacement == 'Top' ? priceHighest : priceLowest) * (1 + (oscPlacement == 'Top' ? i_bearZone : -1 * (100 - i_bearZone)) * priceChangeRate)
+    osLevel = (oscPlacement == 'Top' ? priceHighest : priceLowest) * (1 + (oscPlacement == 'Top' ? i_osThreshold : -1 * (100 - i_osThreshold)) * priceChangeRate)
+
+    array.push(a_lines, line.new(bar_index[lookbackLength], obLevel, bar_index, obLevel, xloc.bar_index, extend.none, bullColor, line.style_dotted, 2))
+    array.push(a_lines, line.new(bar_index[lookbackLength], bullLevel, bar_index, bullLevel, xloc.bar_index, extend.none, bullColor, line.style_dotted, 1))
+    array.push(a_fill, linefill.new(array.get(a_lines, 0), array.get(a_lines, 1), color.new(bullColor, 90)))
+
+    array.push(a_lines, line.new(bar_index[lookbackLength], bearLevel, bar_index, bearLevel, xloc.bar_index, extend.none, bearColor, line.style_dotted, 1))
+    array.push(a_lines, line.new(bar_index[lookbackLength], osLevel, bar_index, osLevel, xloc.bar_index, extend.none, bearColor, line.style_dotted, 2))
+    array.push(a_fill, linefill.new(array.get(a_lines, 2), array.get(a_lines, 3), color.new(bearColor, 90)))
+
+    array.push(a_lines, line.new(bar_index[lookbackLength], midLevel, bar_index, midLevel, xloc.bar_index, extend.none, midColor, line.style_dotted, 1))
+
+    for barIndex = 0 to lookbackLength - 1 by 1
+        array.push(a_lines, line.new(bar_index[barIndex], (oscPlacement == 'Top' ? priceHighest : priceLowest) * (1 + (oscPlacement == 'Top' ? oscillator[barIndex] : -1 * (100 - oscillator[barIndex])) * priceChangeRate), bar_index[barIndex + 1], (oscPlacement == 'Top' ? priceHighest : priceLowest) * (1 + (oscPlacement == 'Top' ? oscillator[barIndex + 1] : -1 * (100 - oscillator[barIndex + 1])) * priceChangeRate), xloc.bar_index, extend.none, #7e57c2, line.style_solid, 2))
+
+// RSI OSC  ------------------------------------------------------------------------------------- //
+// ---------------------------------------------------------------------------------------------- //
+
+var table logo = table.new(position.bottom_right, 1, 1)
+if barstate.islast
+    table.cell(logo, 0, 0, '☼☾  ', text_size = size.normal, text_color = color.teal, tooltip = 'SoleMare Analytics')

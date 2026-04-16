@@ -126,24 +126,24 @@ else if ta.crossover(pe_close, pe_l5)
 // ENTRY LOGIC
 if showTradePopup and not na(breakLevel) and not na(targetLevel)
     entryPrice = close // price on chart
-    slPrice = low[1]
+    slPrice = breakLevel
     activeSL := slPrice
     activeTarget := targetLevel
     tradeActive := true
     
     txt = signalType + " Entry: " + str.tostring(entryPrice) + "\nSL: " + str.tostring(slPrice) + "\nTGT: " + str.tostring(activeTarget)
-    entryLabel = label.new(bar_index, low, txt, style=label.style_label_up, color=signalType == "CE" ? color.green : color.red, textcolor=color.white)
+    entryLabel = label.new(bar_index, signalType == "CE" ? ce_l : pe_l, txt, style=label.style_label_up, color=signalType == "CE" ? color.green : color.red, textcolor=color.white)
     array.push(entryLabels, entryLabel)
     if array.size(entryLabels) > showLastTrades
         label.delete(array.shift(entryLabels))
 
 // EXIT LOGIC
-if tradeActive and not na(activeTarget) and high >= activeTarget and showTargetHit
-    label.new(bar_index, high, "TARGET HIT \ud83c\udfaf", style=label.style_label_down, color=color.purple, textcolor=color.white)
+if tradeActive and not na(activeTarget) and (signalType == "CE" ? ce_h : pe_h) >= activeTarget and showTargetHit
+    label.new(bar_index, signalType == "CE" ? ce_h : pe_h, "TARGET HIT \ud83c\udfaf", style=label.style_label_down, color=color.purple, textcolor=color.white)
     tradeActive := false, activeTarget := na, activeSL := na
 
-if tradeActive and not na(activeSL) and close <= activeSL and showSLHit
-    label.new(bar_index, low, "SL HIT \u274c", style=label.style_label_upper_right, color=color.red, textcolor=color.white)
+if tradeActive and not na(activeSL) and (signalType == "CE" ? ce_c : pe_c) < activeSL and showSLHit
+    label.new(bar_index, signalType == "CE" ? ce_l : pe_l, "SL HIT \u274c", style=label.style_label_upper_right, color=color.red, textcolor=color.white)
     tradeActive := false, activeSL := na, activeTarget := na
 
 

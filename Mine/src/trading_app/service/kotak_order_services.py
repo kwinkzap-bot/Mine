@@ -897,8 +897,7 @@ class KotakOrderService:
                 logging.info(f"[KotakOrderService]   → SDK client.config.edit_token: {getattr(config, 'edit_token', 'NOT SET')[:30] if getattr(config, 'edit_token', None) else 'NONE'}...")
                 logging.info(f"[KotakOrderService]   → SDK client.config.edit_sid: {getattr(config, 'edit_sid', 'NOT SET')[:30] if getattr(config, 'edit_sid', None) else 'NONE'}...")
         
-        # IGNORE any passed-in tradingsymbol - always rebuild from current Kite data
-        tradingsymbol = None
+        # Use the passed-in tradingsymbol if provided, otherwise fallback to rebuild later
         resolved_expiry = None
         resolved_quantity = quantity
         kite_option_symbol = tradingsymbol
@@ -911,89 +910,93 @@ class KotakOrderService:
         # Initialize variables
         default_expiry_str: Optional[str] = None
         
-        # PRIORITY: Always try to get nearest expiry from Kite first (most reliable)
-        # This handles past expiries, market hours, and gets exact date
-        resolved_expiry = None
-        try:
-            # Try to create a fresh KiteService instance from env tokens
-            from trading_app.service.kite_order_services import KiteService
+        # Only initialize Kite if we absolutely need to resolve tradingsymbol, expiry, or quantity
+        if not tradingsymbol or not quantity or not target_expiry:
+            # PRIORITY: Always try to get nearest expiry from Kite first (most reliable)
+            # This handles past expiries, market hours, and gets exact date
             try:
-                kite_service = KiteService()  # Creates Kite from env tokens
-                resolver_service = kite_service
-                # Get nearest valid expiry directly from Kite
-                resolved_expiry = kite_service.get_nearest_option_expiry(symbol, strike, option_type)
-                if resolved_expiry:
-                    logging.info(f"[KotakOrderService] Got nearest valid expiry from Kite: {resolved_expiry} (weekday={resolved_expiry.weekday()})")
-                else:
-                    logging.warning(f"[KotakOrderService] Kite returned no expiry for {symbol} {strike} {option_type}")
-            except Exception as kite_e:
-                logging.warning(f"[KotakOrderService] Failed to get expiry from fresh KiteService: {kite_e}")
+                # Try to create a fresh KiteService instance from env tokens
+                from trading_app.service.kite_order_services import KiteService
+                try:
+                    kite_service = KiteService()  # Creates Kite from env tokens
+                    resolver_service = kite_service
+                    # Get nearest valid expiry directly from Kite
+                    resolved_expiry = kite_service.get_nearest_option_expiry(symbol, strike, option_type)
+                    if resolved_expiry:
+                        logging.info(f"[KotakOrderService] Got nearest valid expiry from Kite: {resolved_expiry} (weekday={resolved_expiry.weekday()})")
+                    else:
+                        logging.warning(f"[KotakOrderService] Kite returned no expiry for {symbol} {strike} {option_type}")
+                except Exception as kite_e:
+                    logging.warning(f"[KotakOrderService] Failed to get expiry from fresh KiteService: {kite_e}")
+                    resolved_expiry = None
+            except Exception as import_e:
+                logging.warning(f"[KotakOrderService] Could not import KiteService: {import_e}")
                 resolved_expiry = None
-        except Exception as import_e:
-            logging.warning(f"[KotakOrderService] Could not import KiteService: {import_e}")
-            resolved_expiry = None
-        
-        # Fallback to env only if Kite lookup failed
-        if not resolved_expiry:
-            default_expiry_str = os.getenv("KOTAK_DEFAULT_EXPIRY") or os.getenv("DEFAULT_OPTION_EXPIRY")
+            
+            # Fallback to env only if Kite lookup failed
+            if not resolved_expiry:
+                default_expiry_str = os.getenv("KOTAK_DEFAULT_EXPIRY") or os.getenv("DEFAULT_OPTION_EXPIRY")
+                if target_expiry:
+                    try:
+                        env_expiry = date.fromisoformat(target_expiry)
+                        if env_expiry >= today:  # Only use if not in past
+                            resolved_expiry = env_expiry
+                            logging.info(f"[KotakOrderService] Using target expiry: {resolved_expiry}")
+                    except Exception:
+                        pass
+                elif default_expiry_str:
+                    try:
+                        env_expiry = date.fromisoformat(default_expiry_str)
+                        if env_expiry >= today:
+                            resolved_expiry = env_expiry
+                            logging.info(f"[KotakOrderService] Using default expiry from env: {resolved_expiry}")
+                    except Exception:
+                        pass
+            
+            # Further attempt: if we still don't have resolver_service, try fresh KiteService
+            if not resolver_service:
+                try:
+                    from trading_app.service.kite_order_services import KiteService
+                    kite_service = KiteService()  # Fresh instance from env tokens
+                    resolver_service = kite_service
+                    try:
+                        # Ensure fresh instruments
+                        kite_service._refresh_nfo_cache_if_stale()
+                    except Exception:
+                        pass
+                except Exception as ks_e:
+                    logging.warning(f"[KotakOrderService] Could not create fresh KiteService: {ks_e}")
+            
+            if resolver_service:
+                try:
+                    kite_service = resolver_service
+                    if not quantity:
+                        quantity = kite_service.get_lot_size(symbol)
+                        resolved_quantity = quantity
+                        logging.info(f"[KotakOrderService] Fetched dynamic lot size for {symbol} from Kite: {quantity}")
+                    
+                    # Fetch exact expiry if not already resolved
+                    if not resolved_expiry:
+                        kite_expiry_date = kite_service.get_nearest_option_expiry(symbol, strike, option_type)
+                        if kite_expiry_date:
+                            logging.info(f"[KotakOrderService] Fetched exact expiry from Kite for {symbol}: {kite_expiry_date}")
+                            resolved_expiry = kite_expiry_date
+                    
+                    # Fetch trading symbol if not already set
+                    if not tradingsymbol:
+                        kite_option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+                        if kite_option_symbol:
+                            # Log it for reference but DON'T use it for Kotak
+                            logging.info(f"[KotakOrderService] Kite has option symbol: {kite_option_symbol} (but building our own for Kotak)")
+                except Exception as e:
+                    logging.warning(f"[KotakOrderService] Failed to fetch from resolver_service: {e}")
+        else:
+            logging.info(f"[KotakOrderService] Bypassed KiteService init - using Provided tradingsymbol: {tradingsymbol}, qty: {quantity}")
             if target_expiry:
                 try:
-                    env_expiry = date.fromisoformat(target_expiry)
-                    if env_expiry >= today:  # Only use if not in past
-                        resolved_expiry = env_expiry
-                        logging.info(f"[KotakOrderService] Using target expiry: {resolved_expiry}")
+                    resolved_expiry = date.fromisoformat(target_expiry)
                 except Exception:
                     pass
-            elif default_expiry_str:
-                try:
-                    env_expiry = date.fromisoformat(default_expiry_str)
-                    if env_expiry >= today:
-                        resolved_expiry = env_expiry
-                        logging.info(f"[KotakOrderService] Using default expiry from env: {resolved_expiry}")
-                except Exception:
-                    pass
-        
-        # Further attempt: if we still don't have resolver_service, try fresh KiteService
-        if not resolver_service:
-            try:
-                from trading_app.service.kite_order_services import KiteService
-                kite_service = KiteService()  # Fresh instance from env tokens
-                resolver_service = kite_service
-                try:
-                    # Ensure fresh instruments
-                    kite_service._refresh_nfo_cache_if_stale()
-                except Exception:
-                    pass
-            except Exception as ks_e:
-                logging.warning(f"[KotakOrderService] Could not create fresh KiteService: {ks_e}")
-        
-        if resolver_service:
-            try:
-                kite_service = resolver_service
-                if not quantity:
-                    quantity = kite_service.get_lot_size(symbol)
-                    resolved_quantity = quantity
-                    logging.info(f"[KotakOrderService] Fetched dynamic lot size for {symbol} from Kite: {quantity}")
-                
-                # Fetch exact expiry if not already resolved
-                if not resolved_expiry:
-                    kite_expiry_date = kite_service.get_nearest_option_expiry(symbol, strike, option_type)
-                    if kite_expiry_date:
-                        logging.info(f"[KotakOrderService] Fetched exact expiry from Kite for {symbol}: {kite_expiry_date}")
-                        resolved_expiry = kite_expiry_date
-                
-                # Fetch trading symbol if not already set
-                # NOTE: Kite symbols may use numeric date format (e.g., NIFTY26032625550CE)
-                # which is different from Kotak's expected format (e.g., NIFTY26MAR2625550CE)
-                # So we don't use Kite's symbol directly; we'll build it ourselves below
-                if not tradingsymbol:
-                    kite_option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
-                    if kite_option_symbol:
-                        # Log it for reference but DON'T use it for Kotak
-                        logging.info(f"[KotakOrderService] Kite has option symbol: {kite_option_symbol} (but building our own for Kotak)")
-                        # tradingsymbol = kite_option_symbol  # DISABLED - will build our own below
-            except Exception as e:
-                logging.warning(f"[KotakOrderService] Failed to fetch from resolver_service: {e}")
         
         # Ultimate fallback if Kite fails - set quantity if not already set
         if not quantity:
