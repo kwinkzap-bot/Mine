@@ -30,6 +30,17 @@ window.addEventListener('load', () => {
         });
     }
 
+    const tfPicker = document.getElementById('emaTimeframeFilter');
+    if (tfPicker) {
+        tfPicker.addEventListener('change', () => {
+            _emaLastAt = 0;
+            updateTimeframeLabels(tfPicker.value);
+            loadEmaData();
+        });
+        // Set initial labels
+        updateTimeframeLabels(tfPicker.value);
+    }
+
     setStatus('⏳ Loading initial data...');
     loadEmaData();
 
@@ -89,38 +100,55 @@ async function loadEmaData() {
     if (btn) btn.disabled = true;
 
     try {
-        // Build URL with optional ?date= param — identical to CPR filter pattern
+        // Build URL with optional ?date= and ?timeframe= params
         const picker      = document.getElementById('emaDateFilter');
         const selectedDate = picker ? picker.value : null;
+        
+        const tfPicker    = document.getElementById('emaTimeframeFilter');
+        const tf          = tfPicker ? tfPicker.value : 'daily';
 
-        let url = '/api/ema-rsi-filter';
-        if (selectedDate) url += `?date=${selectedDate}`;
+        let url = `/api/ema-rsi-filter?timeframe=${tf}`;
+        if (selectedDate) url += `&date=${selectedDate}`;
+
+        // Clear UI tables immediately while waiting for API
+        const tbody = document.getElementById('weeklyEmaBody');
+        if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding: 2rem; color: var(--text-muted);"><div class="loading-spinner" style="display:inline-block; margin-right: 8px;"></div> Scanning market data... This may take up to a minute.</td></tr>`;
+        
+        const countEl = document.getElementById('weeklyEmaCount');
+        if (countEl) countEl.textContent = '(...)';
+        
+        const nearestTbody = document.getElementById('nearestWeeklyBody');
+        if (nearestTbody) nearestTbody.innerHTML = '';
+        
+        const nearestContainer = document.getElementById('nearest-weekly-container');
+        if (nearestContainer) nearestContainer.classList.add('ema-hidden');
+
+        const emptyState = document.getElementById('ema-empty-state');
+        if (emptyState) emptyState.classList.add('ema-hidden');
 
         const response = await fetchJson(url);
 
-        if (response && response.success) {
-            const weekly  = response.weekly_ema       || [];
-            const daily   = response.daily_ema        || [];
-            const nearest = response.nearest_weekly   || [];
+        if (response && (response.success || response.results)) {
+            const results = response.results || [];
+            const nearest = response.nearest || [];
 
-            renderTable('weeklyEma', weekly, 'weekly');
-            renderTable('dailyEma',  daily,  'daily');
+            renderTable('weeklyEma', results);
 
-            // Show nearest-weekly section when there are 0 matches
-            renderNearestWeekly(nearest, weekly.length === 0);
+            // Show nearest section when there are 0 matches
+            renderNearestWeekly(nearest, results.length === 0);
 
-            const totalMatches = weekly.length + daily.length;
+            const totalMatches = results.length;
             const emptyState   = document.getElementById('ema-empty-state');
             if (emptyState) {
                 // hide main empty state if there are nearest stocks to show
                 emptyState.classList.toggle('ema-hidden', totalMatches > 0 || nearest.length > 0);
             }
 
+            const titleStr = document.getElementById('primary-results-title')?.textContent?.split(' Touch')[0] || tf;
             const dateLabel = selectedDate ? ` [${selectedDate}]` : '';
             setStatus(
                 `✅ Last update: ${new Date().toLocaleTimeString()}${dateLabel} | ` +
-                `Weekly (EMA/RSI 208): ${weekly.length} match${weekly.length !== 1 ? 'es' : ''} | ` +
-                `Daily (EMA/RSI 88): ${daily.length} match${daily.length !== 1 ? 'es' : ''}`
+                `${titleStr}: ${results.length} match${results.length !== 1 ? 'es' : ''}`
             );
         } else if (response && !response.needs_login) {
             setStatus(`❌ Error: ${response.message || response.error || 'Unknown error'}`);
@@ -136,7 +164,7 @@ async function loadEmaData() {
 
 
 // ─── Render Table ─────────────────────────────────────────────────────────────
-function renderTable(type, results, timeframe) {
+function renderTable(type, results) {
     const tbody     = document.getElementById(`${type}Body`);
     const container = document.getElementById(`${type}Results`);
     const countEl   = document.getElementById(`${type}Count`);
@@ -157,10 +185,9 @@ function renderTable(type, results, timeframe) {
         const tvUrl   = `https://in.tradingview.com/chart/?symbol=NSE:${stock.symbol}`;
         const symCell = `<a href="${tvUrl}" target="_blank" rel="noopener noreferrer" class="symbol-link">${stock.symbol}</a>`;
 
-        const closeKey = timeframe === 'weekly' ? 'weekly_close' : 'daily_close';
-        const closeVal = stock[closeKey]       != null ? Number(stock[closeKey]).toFixed(2)  : '—';
-        const emaVal   = stock.ema_208         != null ? Number(stock.ema_208).toFixed(2)    : '—';
-        const rsiVal   = stock.rsi_208         != null ? Number(stock.rsi_208).toFixed(2)    : '—';
+        const closeVal = stock.close           != null ? Number(stock.close).toFixed(2)      : '—';
+        const emaVal   = stock.ema             != null ? Number(stock.ema).toFixed(2)        : '—';
+        const rsiVal   = stock.rsi             != null ? Number(stock.rsi).toFixed(2)        : '—';
         const price    = stock.current_price   != null ? Number(stock.current_price).toFixed(2) : '—';
 
         const rsiClass = stock.rsi_in_range
@@ -252,9 +279,9 @@ function renderNearestWeekly(nearest, show) {
         const tvUrl   = `https://in.tradingview.com/chart/?symbol=NSE:${stock.symbol}`;
         const symCell = `<a href="${tvUrl}" target="_blank" rel="noopener noreferrer" class="symbol-link">${stock.symbol}</a>`;
         const price   = stock.current_price != null ? Number(stock.current_price).toFixed(2) : '—';
-        const close   = stock.weekly_close  != null ? Number(stock.weekly_close).toFixed(2)  : '—';
-        const ema     = stock.ema_208       != null ? Number(stock.ema_208).toFixed(2)        : '—';
-        const rsi     = stock.rsi_208       != null ? Number(stock.rsi_208).toFixed(2)        : '—';
+        const close   = stock.close         != null ? Number(stock.close).toFixed(2)         : '—';
+        const ema     = stock.ema           != null ? Number(stock.ema).toFixed(2)           : '—';
+        const rsi     = stock.rsi           != null ? Number(stock.rsi).toFixed(2)           : '—';
         const dist    = stock.ema_pct_diff  != null ? Number(stock.ema_pct_diff).toFixed(1) + '%' : '—';
         const row = document.createElement('tr');
         row.innerHTML = `
@@ -267,4 +294,50 @@ function renderNearestWeekly(nearest, show) {
         `;
         tbody.appendChild(row);
     });
+}
+
+// ─── Update UI Labels ────────────────────────────────────────────────────────
+function updateTimeframeLabels(timeframe) {
+    let titleStr, badgeStr, colStr, badgeClass;
+    
+    if (timeframe === '1minute') {
+        titleStr = '1Min EMA 60'; badgeStr = '⏱️ 1 Min'; colStr = 'Close'; badgeClass = 'daily-badge';
+    } else if (timeframe === '5minute') {
+        titleStr = '5Min EMA 75'; badgeStr = '⏱️ 5 Min'; colStr = 'Close'; badgeClass = 'daily-badge';
+    } else if (timeframe === '15minute') {
+        titleStr = '15Min EMA 125'; badgeStr = '⏱️ 15 Min'; colStr = 'Close'; badgeClass = 'daily-badge';
+    } else if (timeframe === '60minute') {
+        titleStr = '1Hour EMA 137'; badgeStr = '⏱️ 1 Hour'; colStr = 'Close'; badgeClass = 'daily-badge';
+    } else if (timeframe === 'daily') {
+        titleStr = 'Daily EMA 88'; badgeStr = '📆 Daily'; colStr = 'Close'; badgeClass = 'daily-badge';
+    } else if (timeframe === 'weekly') {
+        titleStr = 'Weekly EMA 208'; badgeStr = '📅 Weekly'; colStr = 'Close'; badgeClass = 'weekly-badge';
+    } else if (timeframe === 'monthly') {
+        titleStr = 'Monthly EMA 48'; badgeStr = '📅 Monthly'; colStr = 'Close'; badgeClass = 'monthly-badge';
+    } else {
+        titleStr = 'EMA Touch'; badgeStr = '⏱️'; colStr = 'Close'; badgeClass = 'weekly-badge';
+    }
+    
+    const badge = document.getElementById('primary-tf-badge');
+    if (badge) {
+        badge.textContent = badgeStr;
+        badge.className = `ema-tf-badge ${badgeClass}`;
+    }
+    
+    const title = document.getElementById('primary-results-title');
+    if (title) {
+        title.innerHTML = `📈 ${titleStr} Touch <span id="weeklyEmaCount">(0)</span>`;
+    }
+    
+    const nearestTitle = document.getElementById('nearest-primary-title');
+    if (nearestTitle) {
+        nearestTitle.innerHTML = `🎯 Nearest to ${titleStr} <span class="nearest-count"></span>
+            <small style="font-weight:400;font-size:0.75rem;opacity:0.7;"> — no touch yet, showing closest stocks</small>`;
+    }
+    
+    const primaryCol = document.getElementById('primary-close-col');
+    if (primaryCol) primaryCol.textContent = colStr;
+    
+    const nearestCol = document.getElementById('nearest-close-col');
+    if (nearestCol) nearestCol.textContent = colStr;
 }

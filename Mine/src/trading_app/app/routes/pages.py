@@ -127,6 +127,13 @@ def ema_rsi_filter():
     """EMA/RSI 208 Filter – Weekly & Daily candle touch scanner."""
     return render_template('ema_rsi_filter.html')
 
+@pages_bp.route('/backtest')
+@require_user_auth
+@login_required
+def backtest():
+    """Backtest page for various strategies."""
+    return render_template('backtest.html')
+
 @pages_bp.route('/login')
 def login():
     """Login page - redirects to user login."""

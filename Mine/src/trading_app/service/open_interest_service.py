@@ -285,14 +285,12 @@ def _calculate_iv_from_price(S: float, K: float, T: float, r: float, market_pric
 class OpenInterestService:
     """Service to fetch and process open interest data for options."""
     
-    def __init__(self, kite_instance: KiteConnect):
+    def __init__(self, kite_instance=None):
         """
-        Initialize OpenInterestService.
-        
-        Args:
-            kite_instance: KiteConnect instance
+        Initialize OpenInterestService with specific or auto-resolved provider.
         """
-        self.kite = kite_instance
+        from trading_app.service.provider_logic import get_data_provider
+        self.kite = kite_instance or get_data_provider()
         # Simple in-memory cache for historical data (no ThreadPoolExecutor overhead)
         self._hist_cache = {}
         # Cache for India VIX 52-week high/low
@@ -305,28 +303,40 @@ class OpenInterestService:
         }
         
         # Symbol configuration
+        # Detect if provider is Fyers adapter (vs KiteConnect)
+        from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+        self._is_fyers = isinstance(kite_instance, FyersDataServiceAdapter)
+        
+        # When switching to Fyers, clear the global NFO cache so it re-fetches
+        # with Fyers instruments (different format/tokens vs Kite)
+        if self._is_fyers:  # Always clear NFO cache on Fyers init to avoid stale 0-record cache
+            with _global_nfo_cache['lock']:
+                _global_nfo_cache['instruments'] = None
+                _global_nfo_cache['timestamp'] = None
+            logger.info("[OI] Fyers provider detected — cleared global NFO cache for fresh Fyers instruments download")
+        
         self.SYMBOL_CONFIG = {
             'NIFTY': {
                 'name': 'NIFTY',  # Direct name from instruments list
-                'instrument_key': 'NSE:NIFTY 50',  # For price quote
+                'instrument_key': 'NSE:NIFTY50-INDEX' if self._is_fyers else 'NSE:NIFTY 50',
                 'lot_size': 50,
                 'strike_diff': 50
             },
             'BANKNIFTY': {
                 'name': 'BANKNIFTY',  # Direct name from instruments list
-                'instrument_key': 'NSE:NIFTY BANK',  # For price quote
+                'instrument_key': 'NSE:NIFTYBANK-INDEX' if self._is_fyers else 'NSE:NIFTY BANK',
                 'lot_size': 25,
                 'strike_diff': 100
             },
             'FINNIFTY': {
                 'name': 'FINNIFTY',  # Direct name from instruments list
-                'instrument_key': 'NSE:NIFTY FIN SERVICE',  # For price quote
+                'instrument_key': 'NSE:FINNIFTY-INDEX' if self._is_fyers else 'NSE:NIFTY FIN SERVICE',
                 'lot_size': 40,
                 'strike_diff': 50
             },
             'SENSEX': {
                 'name': 'SENSEX',  # Direct name from instruments list (BSE)
-                'instrument_key': 'BSE:SENSEX',  # For price quote
+                'instrument_key': 'BSE:SENSEX-INDEX' if self._is_fyers else 'BSE:SENSEX',
                 'lot_size': 10,
                 'strike_diff': 100,
                 'exchange': 'BFO'  # BSE F&O segment
@@ -866,28 +876,34 @@ class OpenInterestService:
             # Normalize proper_name
             proper_name_target = proper_name.strip().upper()
             
-            # Filter to symbol options only - use direct key access like options_chart_service does
+            # Filter to symbol options only
             symbol_options = []
             for inst in instruments:
                 try:
-                    inst_name = inst['name']
-                    inst_type = inst['instrument_type']
-                    
-                    if not inst_name or not inst_type: 
+                    inst_name = inst.get('name', '') or ''
+                    inst_type = inst.get('instrument_type', '') or ''
+                    inst_ts   = inst.get('tradingsymbol', '') or ''
+
+                    if not inst_type or inst_type not in ['CE', 'PE']:
                         continue
-                        
-                    # Normalize instrument name
+
+                    # Normalize
                     inst_name_norm = inst_name.strip().upper()
-                    
-                    # Debug: log mismatches for debugging
-                    if inst_name_norm != proper_name_target and proper_name_target in inst_name_norm:
-                         # e.g. inst_name="ABB LTD" vs target="ABB" (just in case)
-                         # logger.debug(f"[DEBUG] Partial match ignored: {inst_name} vs {proper_name}")
-                         pass
-                    
-                    if inst_name_norm == proper_name_target and inst_type in ['CE', 'PE']:
+                    inst_ts_norm   = inst_ts.strip().upper()
+
+                    # Primary match: name == 'NIFTY' (Kite format / correct Fyers parse)
+                    name_match = (inst_name_norm == proper_name_target)
+
+                    # Fallback match: tradingsymbol starts with 'NIFTY' + digit
+                    # e.g. 'NIFTY26APR2424200CE'.startswith('NIFTY') — covers Fyers CSV column shifts
+                    ts_prefix_match = inst_ts_norm.startswith(proper_name_target) and (
+                        len(inst_ts_norm) > len(proper_name_target) and
+                        not inst_ts_norm[len(proper_name_target)].isalpha()
+                    )
+
+                    if name_match or ts_prefix_match:
                         symbol_options.append(inst)
-                except (KeyError, TypeError) as e:
+                except (KeyError, TypeError):
                     continue
             
             logger.info(f"Found {len(symbol_options)} total options for {symbol} (looking for name='{proper_name}')")
@@ -947,7 +963,12 @@ class OpenInterestService:
                         
                     strike = float(inst['strike'])
                     option_type = inst['instrument_type']
-                    token = int(inst['instrument_token'])
+                    # Kite uses integer tokens; Fyers uses string symbols as tokens
+                    raw_token = inst['instrument_token']
+                    try:
+                        token = int(raw_token)
+                    except (ValueError, TypeError):
+                        token = str(raw_token)  # Fyers string symbol token
                     
                     if strike not in strikes_dict:
                         strikes_dict[strike] = {
@@ -1029,14 +1050,22 @@ class OpenInterestService:
             batch_size = 50
             all_quotes = {}
             
+            # Log sample tokens so we can verify format
+            if all_tokens:
+                logger.info(f"[OI-Quotes] Sample tokens (first 3): {all_tokens[:3]}")
+            
             for i in range(0, len(all_tokens), batch_size):
                 batch = all_tokens[i:i + batch_size]
                 try:
                     logger.info(f"Fetching batch {i//batch_size + 1} with {len(batch)} tokens...")
-                    # Request quote data - Kite API returns oi, oi_day_low, oi_day_high by default
                     quotes = self.kite.quote(batch)  # Standard quote includes OI fields
                     if quotes:
                         all_quotes.update(quotes)
+                        # Log sample quote key to confirm symbol match
+                        if i == 0:
+                            sample_key = next(iter(quotes))
+                            sample_oi = quotes[sample_key].get('oi', 'MISSING')
+                            logger.info(f"[OI-Quotes] Sample response key={sample_key!r}, oi={sample_oi}")
                         logger.info(f"✓ Batch {i//batch_size + 1}: Fetched {len(quotes)} quotes")
                     else:
                         logger.warning(f"Empty response for batch {i//batch_size + 1}")
@@ -1102,49 +1131,36 @@ class OpenInterestService:
                                 
                                 # Get opening OI value - try multiple sources
                                 # IMPORTANT: opening_oi should be the OI at market open (9:15 AM)
-                                # which is yesterday's closing OI from historical data
                                 oi_day_low = ce_quote.get('oi_day_low', 0) or 0
                                 oi_day_low = int(oi_day_low) if oi_day_low else 0
                                 
-                                # Try to get opening OI from any available source
-                                # OPTIMIZED: Prioritize sources that don't require API calls
+                                # Check if adapter natively populated change in OI
+                                native_oich = ce_quote.get('change_in_oi')
+                                
                                 opening_oi = None
                                 source = "unknown"
                                 
-                                # Source 1: Cache from 9:15 AM (best if available)
-                                if cached_opening_oi is not None:
-                                    opening_oi = cached_opening_oi
-                                    source = "cache"
-                                
-                                # Source 2: Use oi_day_low from quote (already fetched, no API call)
-                                # This is usually the day's lowest OI which approximates opening
-                                elif oi_day_low > 0:
-                                    opening_oi = oi_day_low
-                                    source = "oi_day_low"
-                                
-                                # Source 3: Historical data - DISABLED for performance
-                                # Historical API calls take 0.5s each due to rate limiting
-                                # With 100 strikes, that's 50+ seconds!
-                                # Only enable if opening_oi_cache is absolutely required
-                                # elif opening_oi is None:
-                                #     try:
-                                #         if ce_token not in self._hist_cache:
-                                #             self._hist_cache[ce_token] = _get_oi_from_historical_data(self.kite, ce_token)
-                                #         hist_oi_data = self._hist_cache[ce_token]
-                                #         if hist_oi_data and hist_oi_data.get('opening_oi') is not None:
-                                #             opening_oi = hist_oi_data['opening_oi']
-                                #             source = "historical_data"
-                                #     except Exception as e:
-                                #         logger.debug(f"Historical data failed for CE {strike}: {e}")
-                                
-                                # Calculate OI change: current - opening (can be negative if OI decreased)
-                                if opening_oi is not None:
-                                    change_in_oi = current_ce_oi - opening_oi
+                                if native_oich is not None and native_oich != 0:
+                                    change_in_oi = native_oich
+                                    source = "native_quote"
                                 else:
-                                    # No opening OI data available
-                                    change_in_oi = 0
-                                    source = "no_opening_data"
-                                
+                                    # Source 1: Cache from 9:15 AM (best if available)
+                                    if cached_opening_oi is not None:
+                                        opening_oi = cached_opening_oi
+                                        source = "cache"
+                                    # Source 2: Use oi_day_low from quote (already fetched, no API call)
+                                    elif oi_day_low > 0:
+                                        opening_oi = oi_day_low
+                                        source = "oi_day_low"
+                                        
+                                    # Calculate OI change: current - opening
+                                    if opening_oi is not None:
+                                        change_in_oi = current_ce_oi - opening_oi
+                                    else:
+                                        # No opening OI data available
+                                        change_in_oi = 0
+                                        source = "no_opening_data"
+                                        
                                 strikes_oi[strike]['ce_change_in_oi'] = change_in_oi
                                 
                                 # Calculate IV from option price using Black-Scholes
@@ -1194,49 +1210,36 @@ class OpenInterestService:
                                 
                                 # Get opening OI value - try multiple sources
                                 # IMPORTANT: opening_oi should be the OI at market open (9:15 AM)
-                                # which is yesterday's closing OI from historical data
                                 oi_day_low = pe_quote.get('oi_day_low', 0) or 0
                                 oi_day_low = int(oi_day_low) if oi_day_low else 0
                                 
-                                # Try to get opening OI from any available source
-                                # OPTIMIZED: Prioritize sources that don't require API calls
+                                # Check if adapter natively populated change in OI
+                                native_oich = pe_quote.get('change_in_oi')
+                                
                                 opening_oi = None
                                 source = "unknown"
                                 
-                                # Source 1: Cache from 9:15 AM (best if available)
-                                if cached_opening_oi is not None:
-                                    opening_oi = cached_opening_oi
-                                    source = "cache"
-                                
-                                # Source 2: Use oi_day_low from quote (already fetched, no API call)
-                                # This is usually the day's lowest OI which approximates opening
-                                elif oi_day_low > 0:
-                                    opening_oi = oi_day_low
-                                    source = "oi_day_low"
-                                
-                                # Source 3: Historical data - DISABLED for performance
-                                # Historical API calls take 0.5s each due to rate limiting
-                                # With 100 strikes, that's 50+ seconds!
-                                # Only enable if opening_oi_cache is absolutely required
-                                # elif opening_oi is None:
-                                #     try:
-                                #         if pe_token not in self._hist_cache:
-                                #             self._hist_cache[pe_token] = _get_oi_from_historical_data(self.kite, pe_token)
-                                #         hist_oi_data = self._hist_cache[pe_token]
-                                #         if hist_oi_data and hist_oi_data.get('opening_oi') is not None:
-                                #             opening_oi = hist_oi_data['opening_oi']
-                                #             source = "historical_data"
-                                #     except Exception as e:
-                                #         logger.debug(f"Historical data failed for PE {strike}: {e}")
-                                
-                                # Calculate OI change: current - opening (can be negative if OI decreased)
-                                if opening_oi is not None:
-                                    change_in_oi = current_pe_oi - opening_oi
+                                if native_oich is not None and native_oich != 0:
+                                    change_in_oi = native_oich
+                                    source = "native_quote"
                                 else:
-                                    # No opening OI data available
-                                    change_in_oi = 0
-                                    source = "no_opening_data"
-                                
+                                    # Source 1: Cache from 9:15 AM (best if available)
+                                    if cached_opening_oi is not None:
+                                        opening_oi = cached_opening_oi
+                                        source = "cache"
+                                    # Source 2: Use oi_day_low from quote (already fetched, no API call)
+                                    elif oi_day_low > 0:
+                                        opening_oi = oi_day_low
+                                        source = "oi_day_low"
+                                        
+                                    # Calculate OI change: current - opening
+                                    if opening_oi is not None:
+                                        change_in_oi = current_pe_oi - opening_oi
+                                    else:
+                                        # No opening OI data available
+                                        change_in_oi = 0
+                                        source = "no_opening_data"
+                                        
                                 strikes_oi[strike]['pe_change_in_oi'] = change_in_oi
                                 
                                 # Calculate IV from option price using Black-Scholes

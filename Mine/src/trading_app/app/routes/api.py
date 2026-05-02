@@ -15,6 +15,9 @@ from flask import Blueprint, request, jsonify, session, Response
 from trading_app.app.utils.logger import logger
 from trading_app.app.extensions import csrf, limiter
 from trading_app.app.utils.user_auth import require_user_auth
+from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+from trading_app.service.fyers_order_services import FyersOrderService
+from trading_app.service.kite_order_services import KiteService
 
 
 api_bp = Blueprint('api', __name__)
@@ -52,6 +55,7 @@ _MAX_CACHE_ENTRIES = 50
 _candle_response_cache = LruCache(max_size=_MAX_CACHE_ENTRIES)
 _daily_ohlc_cache = LruCache(max_size=_MAX_CACHE_ENTRIES)
 _candle_cache_lock = threading.Lock()
+_daily_5m_atm_cache = LruCache(max_size=20)
 
 # Global executor for background data fetching (prevents thread-per-request OOM)
 _api_executor = ThreadPoolExecutor(max_workers=10)
@@ -149,183 +153,22 @@ def get_broker_lot_size(username: str, instance_num: int, standard_lot: int) -> 
     return lots * standard_lot
 
 
-def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Optional[Any]:
-    """Get authenticated KiteConnect instance from session or create new one.
-    
-    Provides multiple fallback layers to handle socket pool flushes and 
-    debug session resets that clear Flask session data:
-    1. Session storage (immediate access) - only if in request context
-    2. Environment variable (restored after socket pool flush)
-    3. UserEnvManager (user-specific .env file)
-    4. Persistent token cache file (survives process restart)
-    
-    Args:
-        user (str, optional): Username to use if session is unavailable/background task
-        instance (int, optional): Specific Zerodha instance number to use (1, 5, etc.)
-                                  If not specified, uses the last logged-in or active instance
-    """
-    try:
-        from kiteconnect import KiteConnect
-        from trading_app.app.utils.token_manager import get_access_token
-        from trading_app.app.utils.user_env import UserEnvManager
-        import os
-        from flask import has_request_context
-        
-        # Determine username and access_token source
-        username = user
-        access_token = None
-        api_key = None
-        
-        # Check session if in request context
-        if has_request_context():
-            if not username:
-                username = session.get('username')
+from trading_app.service.provider_logic import get_kite, get_data_provider
 
-            # If no specific instance provided, use the active instance from session.
-            # This ensures api_key and access_token always come from the same Zerodha
-            # instance — a mismatch (e.g. instance 5 api_key + instance 1 access_token)
-            # causes "Incorrect api_key or access_token" from Zerodha.
-            # If no specific instance provided, default to Broker 1 (Zerodha Primary)
-            # if it's a Zerodha account. This is usually the account with paid API subscription.
-            if instance is None:
-                instance = session.get('instance_num') or 1
-
-            # If specific instance requested or determined, get that instance's token and key
-            if instance is not None:
-                api_key = session.get(f'zerodha_{instance}_api_key')
-                access_token = session.get(f'zerodha_{instance}_access_token')
-                
-                # If not in session, pull from UserEnvManager
-                if not api_key and username:
-                    api_key = UserEnvManager.get_user_var(username, f'BROKER_{instance}_API_KEY')
-                if not access_token and username:
-                    access_token = UserEnvManager.get_user_var(username, f'BROKER_{instance}_ACCESS_TOKEN')
-                    
-                if access_token:
-                    logger.debug(f"Using paired key/token for zerodha_{instance}")
-
-        # If specific instance is passed, load its keys directly
-        if instance is not None and username:
-            if not api_key:
-                api_key = UserEnvManager.get_user_var(username, f'BROKER_{instance}_API_KEY')
-            if not access_token:
-                access_token = UserEnvManager.get_user_var(username, f'BROKER_{instance}_ACCESS_TOKEN')
-                
-        # Fallback loop: if still no api_key/access_token and NO explicit instance requested, find the first available Zerodha pair in .env
-        if (not api_key or not access_token) and username and instance is None:
-            for i in [1, 5, 2, 3, 4] + list(range(6, 21)):
-                broker_type = UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '').strip().lower()
-                if broker_type == 'zerodha':
-                    candidate_key = UserEnvManager.get_user_var(username, f'BROKER_{i}_API_KEY')
-                    candidate_token = UserEnvManager.get_user_var(username, f'BROKER_{i}_ACCESS_TOKEN')
-                    if candidate_key and candidate_token:
-                        api_key = candidate_key
-                        access_token = candidate_token
-                        instance = i
-                        logger.debug(f"Fallback: Using matching pair from BROKER_{i} (.env)")
-                        break
-        if not api_key:
-            api_key = os.getenv('API_KEY')
-
-        if not api_key:
-            if has_request_context():
-                logger.warning(f"API_KEY not found in environment or user config (user: {username}, instance: {instance})")
-            return None
-        
-        # Get access token with multiple fallback layers
-        # IMPORTANT: always prefer tokens that match the api_key we're using.
-        # Generic env vars like ACCESS_TOKEN may belong to a different instance.
-
-        # 2. Check instance-specific environment variable
-        if not access_token and instance is not None:
-            access_token = os.getenv(f'ZERODHA_{instance}_ACCESS_TOKEN')
-            if access_token:
-                if has_request_context():
-                    logger.info(f"Access token restored from instance-specific env var (zerodha_{instance})")
-
-        # 3. Check UserEnvManager for instance-specific token (preferred over generic env var)
-        if not access_token and username and instance is not None:
-            access_token = UserEnvManager.get_user_var(username, f'BROKER_{instance}_ACCESS_TOKEN')
-            if access_token:
-                if has_request_context():
-                    logger.info(f"Access token restored from user config - instance {instance} ({username})")
-
-        # 4. Check generic environment variable — only if we couldn't find an instance-specific one.
-        # This avoids using a token leftover from a different instance with the wrong api_key.
-        if not access_token:
-            access_token = os.getenv('ACCESS_TOKEN')
-            if access_token:
-                if has_request_context():
-                    logger.info("Access token restored from generic environment variable")
-
-        # 5. Check UserEnvManager for generic user token
-        if not access_token and username:
-            access_token = UserEnvManager.get_user_var(username, 'ACCESS_TOKEN')
-            if access_token:
-                if has_request_context():
-                    logger.info(f"Access token restored from user config ({username})")
-
-        # 6. Check persistent token cache
-        if not access_token:
-            access_token = get_access_token()
-            if access_token:
-                if has_request_context():
-                    logger.info("Access token restored from persistent cache")
-                    # Update session and environment for future requests
-                    session['access_token'] = access_token
-                    session.permanent = True
-
-                os.environ['ACCESS_TOKEN'] = access_token
-        
-        if not access_token:
-            if has_request_context():
-                logger.warning(f"No access token available from any source (username: {username}, instance: {instance})")
-            return None
-        
-        # Ensure session is in sync (for future requests) if we are in one
-        if has_request_context() and 'access_token' not in session:
-            session['access_token'] = access_token
-            session.permanent = True
-        
-        # Initialize KiteConnect with the access token
-        kite = KiteConnect(api_key=api_key)
-        kite.set_access_token(access_token)
-        
-        # Only log debug in request context or if specifically requested
-        if has_request_context() or user:
-            logger.debug(f"KiteConnect initialized successfully for user {username} (token: {access_token[:20]}...)")
-            
-        return kite
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize KiteConnect: {e}", exc_info=True)
-        return None
 
 
 def check_auth() -> Optional[tuple]:
-    """Check if user is authenticated. Returns error tuple if not.
+    """Check if user is authenticated via active data provider (Zerodha/Fyers)."""
+    # Verify we can get a valid data provider (handles all token logic internally)
+    provider = get_data_provider()
     
-    Falls back to environment variable to handle socket pool flushes
-    and debug session resets that clear Flask session data.
-    """
-    # Check session first, then fallback to environment variable
-    # This provides continuity when socket pools are flushed during debugging
-    access_token = session.get('access_token') or os.getenv('ACCESS_TOKEN')
-    
-    if not access_token:
-        logger.warning("Authentication check failed: no access token available")
+    if not provider:
+        logger.warning("Authentication check failed: no data provider available")
         return jsonify({
             'success': False,
             'error': 'Authentication required. Please login first at /auth/login',
             'auth_error': True
         }), 401
-    
-    # Ensure session has the token for consistency
-    # This restores the session from environment after socket pool flush
-    if 'access_token' not in session and access_token:
-        session['access_token'] = access_token
-        session.permanent = True
-        logger.info("Session token restored from environment")
     
     return None
 
@@ -674,7 +517,7 @@ def token_status() -> EndpointResponse:
                 'length': len(cached_token) if cached_token else 0
             }
         },
-        'kite_available': get_kite() is not None,
+        'kite_available': get_data_provider() is not None,
         'message': 'Token is available from all sources' if (session_token or env_token or cached_token) else 'No token found - login required'
     }), 200
 
@@ -692,9 +535,9 @@ def get_underlying_price() -> EndpointResponse:
         price_source = 'ltp'
     
     # Data fetch always uses Broker 1 (data account)
-    current_kite = get_kite(instance=1)
-    if not current_kite:
-        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+    current_provider = get_data_provider()
+    if not current_provider:
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
     
     try:
         instrument_key = get_instrument_key(symbol)
@@ -702,13 +545,13 @@ def get_underlying_price() -> EndpointResponse:
         previous_close = None
         
         try:
-            ltp_data = current_kite.ltp([instrument_key])
+            ltp_data = current_provider.ltp([instrument_key])
             ltp = float(ltp_data.get(instrument_key, {}).get('last_price', 0.0))
         except Exception as e:
             logger.warning(f"Error fetching LTP for {symbol}: {e}")
         
         try:
-            quote_data = current_kite.quote([instrument_key])
+            quote_data = current_provider.quote([instrument_key])
             previous_close = float(quote_data.get(instrument_key, {}).get('ohlc', {}).get('close', 0.0))
         except Exception as e:
             logger.warning(f"Error fetching previous close for {symbol}: {e}")
@@ -757,15 +600,15 @@ def get_symbols() -> EndpointResponse:
         return auth_error
     
     # Data fetch always uses Broker 1 (data account)
-    current_kite = get_kite(instance=1)
-    if not current_kite:
-        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+    current_provider = get_data_provider()
+    if not current_provider:
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
     
     try:
         from trading_app.filters import CPRFilterService
         
         # Initialize service
-        cpr_service = CPRFilterService(kite_instance=current_kite)
+        cpr_service = CPRFilterService(kite_instance=current_provider)
         
         # Get F&O Stocks
         fo_stocks = cpr_service.get_fo_stocks()
@@ -813,14 +656,14 @@ def get_fo_stocks() -> EndpointResponse:
     if auth_error:
         return auth_error
     
-    current_kite = get_kite()
-    if not current_kite:
-        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+    current_provider = get_data_provider()
+    if not current_provider:
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
     
     try:
         from trading_app.filters import CPRFilterService
         
-        cpr_service = CPRFilterService(kite_instance=current_kite)
+        cpr_service = CPRFilterService(kite_instance=current_provider)
         fo_stocks = cpr_service.get_fo_stocks()
         
         return jsonify({
@@ -876,14 +719,14 @@ def get_options_init() -> EndpointResponse:
     if not symbol:
         return jsonify({'success': False, 'error': 'Symbol is required'}), 400
     
-    current_kite = get_kite()
-    if not current_kite:
-        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+    current_provider = get_data_provider()
+    if not current_provider:
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
     
     try:
         from trading_app.service.options_chart_service import OptionsChartService
         
-        chart_service = OptionsChartService(current_kite)
+        chart_service = OptionsChartService(current_provider)
         
         # Skip pricing in service - fetch it once here to avoid duplication
         result = chart_service.get_strikes_for_symbol(symbol, price_source, skip_pricing=True, target_date=target_date)
@@ -947,88 +790,84 @@ def get_options_chart_data() -> EndpointResponse:
     """
     Get historical chart data for CE and PE options.
     
-    FAST PATH (Recommended):
-        POST /api/options-chart-data
-        {
-            "ce_token": 12345678,
-            "pe_token": 87654321,
-            "timeframe": "5minute"
-        }
-        Response time: <2 seconds (direct token access, no lookups)
-    
-    LEGACY PATH (Still supported):
+    PRIMARY PATH (Best for Multi-Broker Support):
         POST /api/options-chart-data
         {
             "symbol": "NIFTY",
             "ce_strike": 25700,
             "pe_strike": 26000,
-            "timeframe": "5minute"
+            "timeframe": "5minute",
+            "live": true
         }
-        Response time: 3-5 seconds (needs token lookup from NFO cache)
+        This resolves the correct tokens/symbols for either Zerodha or Fyers automatically.
+
+    FAST PATH (Requires provider-native tokens):
+        POST /api/options-chart-data
+        {
+            "ce_token": 12345678,           # Use integer for Zerodha OR
+            "pe_token": "NSE:NIFTY...",      # Use string symbol for Fyers
+            "timeframe": "5minute",
+            "live": true
+        }
     """
     import time as time_module
     start_time = time_module.time()
-    
-    # NOTE: Authentication check removed to allow real-time chart updates
-    # from /options-chart page without login. Chart data endpoint is public.
-    # This matches the /options-chart page route which is also accessible
-    # without authentication. For protected operations, use ACCESS_TOKEN
-    # environment variable or handle auth in the service layer.
     
     data = request.get_json(silent=True) or {}
     
     if not isinstance(data, dict):
         return jsonify({'success': False, 'error': 'Invalid request body format (must be JSON)'}), 400
     
-    current_kite = get_kite()
-    if not current_kite:
-        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+    current_provider = get_data_provider()
+    if not current_provider:
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
     
     try:
         from trading_app.service.options_chart_service import OptionsChartService
+        chart_service = OptionsChartService(current_provider)
         
-        chart_service = OptionsChartService(current_kite)
-        
-        # Prefer tokens (FAST PATH - no lookups needed)
+        symbol = data.get('symbol')
+        ce_strike_str = data.get('ce_strike')
+        pe_strike_str = data.get('pe_strike')
         ce_token = data.get('ce_token')
         pe_token = data.get('pe_token')
         timeframe = data.get('timeframe', '5minute')
         
-        if not ce_token or not pe_token:
-            # Fall back to symbol + strikes (LEGACY PATH)
-            symbol = data.get('symbol')
-            ce_strike_str = data.get('ce_strike')
-            pe_strike_str = data.get('pe_strike')
-            
-            if not symbol or not ce_strike_str or not pe_strike_str:
-                return jsonify({
-                    'success': False,
-                    'error': 'Provide either (ce_token + pe_token) OR (symbol + ce_strike + pe_strike)',
-                    'fast_path': {
-                        'description': 'For faster responses, use tokens instead of strikes',
-                        'example': {
-                            'ce_token': 12345678,
-                            'pe_token': 87654321,
-                            'timeframe': '5minute'
-                        }
-                    }
-                }), 400
-            
+        # Determine cache behavior from payload
+        is_live = data.get('live', False)
+        requested_cache = data.get('use_cache', True)
+        should_use_cache = requested_cache and not is_live
+        
+        # RESOLUTION LOGIC:
+        # 1. If strikes are provided, ALWAYS resolve tokens to ensure provider-native symbols are used
+        if symbol and ce_strike_str and pe_strike_str:
             ce_strike = float(ce_strike_str)
             pe_strike = float(pe_strike_str)
             
-            lookup_start = time_module.time()
+            logger.info(f"[options-chart-data] Resolving tokens for {symbol} {ce_strike}C/{pe_strike}P for {current_provider.__class__.__name__}")
             ce_token, pe_token = chart_service.get_tokens_for_strikes(symbol, ce_strike, pe_strike)
-            lookup_time = time_module.time() - lookup_start
-            logger.info(f"Token lookup for {symbol} {ce_strike}C/{pe_strike}P took {lookup_time:.2f}s")
             
-            if not ce_token or not pe_token:
-                return jsonify({
-                    'success': False,
-                    'error': f'Could not find tokens for the given strikes: CE {ce_strike}, PE {pe_strike}'
-                }), 404
+        # 2. If no strikes, but tokens provided, use them as-is
+        elif not ce_token or not pe_token:
+            return jsonify({
+                'success': False,
+                'error': 'Provide either (symbol + ce_strike + pe_strike) OR provider-native (ce_token + pe_token)',
+                'example': {
+                    'symbol': 'NIFTY',
+                    'ce_strike': 25700,
+                    'pe_strike': 26000,
+                    'timeframe': '5minute'
+                }
+            }), 400
         
-        ce_data, pe_data = chart_service.get_chart_data(ce_token, pe_token, timeframe, use_cache=True)
+        if not ce_token or not pe_token:
+            return jsonify({
+                'success': False,
+                'error': f'Could not resolve tokens for {symbol}. Check if expiry has passed.'
+            }), 404
+        
+        logger.info(f"[options-chart-data] Fetching for {ce_token} and {pe_token} (timeframe={timeframe}, cache={should_use_cache})")
+        ce_data, pe_data = chart_service.get_chart_data(ce_token, pe_token, timeframe, use_cache=should_use_cache)
         
         combined_data = []
         for candle in ce_data:
@@ -1103,14 +942,14 @@ def get_options_pdh_pdl() -> EndpointResponse:
     if not isinstance(data, dict):
         return jsonify({'success': False, 'error': 'Invalid request body format (must be JSON)'}), 400
     
-    current_kite = get_kite()
-    if not current_kite:
-        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+    current_provider = get_data_provider()
+    if not current_provider:
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
     
     try:
         from trading_app.service.options_chart_service import OptionsChartService
         
-        chart_service = OptionsChartService(current_kite)
+        chart_service = OptionsChartService(current_provider)
         
         # PREFERRED METHOD: Get tokens from request
         ce_token = data.get('ce_token')
@@ -1150,21 +989,18 @@ def get_options_pdh_pdl() -> EndpointResponse:
         
         if symbol:
             try:
-                # Get the underlying instrument token for the symbol
-                symbol_map = {
-                    'NIFTY': 256265985,      # NSE:NIFTY 50
-                    'BANKNIFTY': 260105729,  # NSE:NIFTY BANK
-                    'FINNIFTY': 257356037    # NSE:NIFTY FIN SERVICE
-                }
+                # Get the underlying instrument token/symbol for the active provider
+                underlying_token = chart_service.kite_service.get_instrument_token(symbol.upper())
                 
-                underlying_token = symbol_map.get(symbol.upper())
                 if underlying_token:
                     # Fetch previous day's OHLC for the underlying (with optional target_date)
                     underlying_ohlc = chart_service._fetch_prev_day_ohlc(underlying_token, target_date)
                     underlying_pdh = underlying_ohlc.get('high')
                     underlying_pdl = underlying_ohlc.get('low')
                     date_label = f" for {target_date}" if target_date else ""
-                    logger.info(f"Underlying {symbol}{date_label} PDH/PDL: {underlying_pdh}/{underlying_pdl}")
+                    logger.info(f"Underlying {symbol}{date_label} PDH/PDL: {underlying_pdh}/{underlying_pdl} (token/symbol: {underlying_token})")
+                else:
+                    logger.warning(f"Could not resolve underlying token for {symbol}")
             except Exception as e:
                 logger.warning(f"Error fetching underlying PDH/PDL for {symbol}: {e}")
         
@@ -1199,9 +1035,9 @@ def get_cpr_filter_results() -> EndpointResponse:
     if auth_error:
         return auth_error
     
-    current_kite = get_kite()
+    current_kite = get_data_provider()
     if not current_kite:
-        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+        return jsonify({'success': False, 'error': 'Data Provider initialization failed.'}), 401
     
     # Get date parameter
     date_str = request.args.get('date')
@@ -1216,7 +1052,7 @@ def get_cpr_filter_results() -> EndpointResponse:
     from trading_app.app.utils.cache import cpr_filter_cache
     cache_user = session.get('username', 'anonymous')
     cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
-    cache_key = f"cpr_filter:{cache_user}:{cache_date}"
+    cache_key = f"cpr_filter_v2:{cache_user}:{cache_date}"
 
     cached_response = cpr_filter_cache.get(cache_key)
     if cached_response is not None:
@@ -1300,12 +1136,13 @@ def get_ema_rsi_filter_results() -> EndpointResponse:
     if auth_error:
         return auth_error
 
-    current_kite = get_kite()
+    current_kite = get_data_provider()
     if not current_kite:
-        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+        return jsonify({'success': False, 'error': 'Data Provider initialization failed.'}), 401
 
     # ── Parse optional date param (same as CPR filter) ────────────────────────
     date_str    = request.args.get('date')
+    timeframe_filter = request.args.get('timeframe', 'weekly')  # 'weekly' or 'monthly'
     target_date = None
     if date_str:
         try:
@@ -1313,10 +1150,10 @@ def get_ema_rsi_filter_results() -> EndpointResponse:
         except ValueError:
             return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
 
-    # ── Cache key per date + 10-min bucket ────────────────────────────────────
+    # ── Cache key per date + timeframe + 10-min bucket ────────────────────────────────────
     from trading_app.app.utils.cache import cpr_filter_cache  # reuse same cache backend
     cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
-    cache_key  = f"ema_rsi_filter:{cache_date}:{datetime.now().minute // 10}"
+    cache_key  = f"ema_rsi_filter_v2:{cache_date}:{timeframe_filter}:{datetime.now().minute // 10}"
 
     cached = cpr_filter_cache.get(cache_key)
     if cached is not None:
@@ -1325,13 +1162,12 @@ def get_ema_rsi_filter_results() -> EndpointResponse:
     try:
         from trading_app.filters.ema_rsi_filter import EmaRsiFilterService
         svc    = EmaRsiFilterService(kite_instance=current_kite)
-        result = svc.run_filter(root_date=target_date)
+        result = svc.run_filter(root_date=target_date, timeframe=timeframe_filter)
 
         payload = {
             'success':         True,
-            'weekly_ema':      result.get('weekly_ema', []),
-            'daily_ema':       result.get('daily_ema', []),
-            'nearest_weekly':  result.get('nearest_weekly', []),  # top-10 closest to EMA-208
+            'results':         result.get('results', []),
+            'nearest':         result.get('nearest', []),
             'date':            cache_date,
             'generated_at':    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
@@ -1385,14 +1221,17 @@ def get_instrument_token() -> EndpointResponse:
     if auth_error:
         return auth_error
     
-    current_kite = get_kite()
-    if not current_kite:
-        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+    current_provider = get_data_provider()
+    if not current_provider:
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
     
     try:
-        from trading_app.service.kite_order_services import KiteService
+        from trading_app.app.intraday_option.Kite_data_fetch_services import get_merged_options_data
         
+        # Pass the current provider (Kite or Fyers) to the data fetch service
         symbol = request.args.get('symbol', '').upper()
+        combined_data = get_merged_options_data(current_provider, symbol)
+        
         symbol_type = request.args.get('type', 'fno').lower()
         fno_type = request.args.get('fno_type', 'futures').lower()
         
@@ -1467,9 +1306,9 @@ def get_historical_data() -> EndpointResponse:
     if auth_error:
         return auth_error
     
-    current_kite = get_kite()
+    current_kite = get_data_provider()
     if not current_kite:
-        return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
     
     try:
         data = request.get_json()
@@ -1590,6 +1429,297 @@ def run_strategy_backtest() -> EndpointResponse:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+@api_bp.route('/backtest/symbols', methods=['GET'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def get_backtest_symbols():
+    """Fetch all unique future stocks and indices for backtesting."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        import json
+        import os
+        
+        # Path to cached NFO instruments
+        cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cache', 'nfo_instruments.json')
+        
+        if not os.path.exists(cache_path):
+            return jsonify({'success': False, 'error': 'NFO instruments cache not found. Please login to refresh.'}), 404
+            
+        with open(cache_path, 'r') as f:
+            instruments = json.load(f)
+            
+        # Filter unique names for futures
+        futures = set()
+        indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']
+        
+        for inst in instruments:
+            if inst.get('instrument_type') == 'FUT':
+                name = inst.get('name')
+                if name:
+                    futures.add(name)
+        
+        # Combine and sort
+        all_symbols = sorted(list(futures))
+        
+        return jsonify({
+            'success': True,
+            'symbols': all_symbols,
+            'indices': indices
+        })
+    except Exception as e:
+        logger.error(f"Error fetching backtest symbols: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/apex-reversal', methods=['GET', 'POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_apex_reversal_backtest():
+    """Run Apex Reversal backtest for a specific symbol and date range."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data = request.get_json()
+        symbol = data.get('symbol')
+        start_date_str = data.get('start_date')
+        end_date_str = data.get('end_date')
+        interval = data.get('interval', '5minute')
+        
+        # Strategy parameters
+        params = {
+            'pivot_strength': int(data.get('pivot_strength', 1)),
+            'rsi_length': int(data.get('rsi_length', 14)),
+            'rsi_overbought': int(data.get('rsi_overbought', 70)),
+            'rsi_oversold': int(data.get('rsi_oversold', 30)),
+            'rr_ratio': float(data.get('rr_ratio', 3.0)),
+            'entry_buffer': float(data.get('entry_buffer', 10.0)),
+            'interval': interval,
+            'intraday_only': data.get('intraday_only', True),
+            'sl_close_price': data.get('sl_close_price', True),
+            'trail_candles': int(data.get('trail_candles', 0))
+        }
+        
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+            
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+            
+        # Get instrument token for historical data
+        from trading_app.service.kite_order_services import KiteService
+        kite_service = KiteService(kite_instance=current_kite)
+        
+        # We need the instrument token for the index or the FUT
+        # For simplicity, we'll try to find the token in the cache
+        import json
+        import os
+        cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cache', 'nfo_instruments.json')
+        
+        instrument_token = None
+        if os.path.exists(cache_path):
+            with open(cache_path, 'r') as f:
+                instruments = json.load(f)
+                for inst in instruments:
+                    if inst.get('name') == symbol and inst.get('instrument_type') == 'FUT':
+                        # Prefer the near month future for price data, or we could use the index token
+                        # Actually, index data is better for Apex Reversal logic if it's an index.
+                        instrument_token = inst.get('instrument_token')
+                        break
+        
+        if not instrument_token:
+            # Fallback to index tokens if it's a major index
+            index_tokens = {
+                'NIFTY': 256265,
+                'BANKNIFTY': 260105,
+                'FINNIFTY': 257801,
+                'MIDCPNIFTY': 288009
+            }
+            instrument_token = index_tokens.get(symbol)
+            
+        # Provider-specific adjustments (especially for Fyers)
+        if hasattr(current_kite, 'fyers'):
+            # Fyers expects symbol strings, not Kite tokens
+            fyers_indices = {
+                'NIFTY': 'NSE:NIFTY50-INDEX',
+                'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
+                'FINNIFTY': 'NSE:FINNIFTY-INDEX',
+                'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+                'SENSEX': 'BSE:SENSEX-INDEX'
+            }
+            if symbol in fyers_indices:
+                instrument_token = fyers_indices[symbol]
+            else:
+                # For stocks, try to find the Fyers symbol in the Fyers instruments list
+                try:
+                    fyers_inst = current_kite.instruments('NSE')
+                    # Look for the -EQ symbol first as it's best for price history
+                    for inst in fyers_inst:
+                        if inst.get('name') == symbol and inst.get('instrument_type') == 'EQ':
+                            instrument_token = inst.get('instrument_token')
+                            break
+                    
+                    if not instrument_token or isinstance(instrument_token, int):
+                        # Fallback to a guessed -EQ symbol
+                        instrument_token = f"NSE:{symbol}-EQ"
+                except Exception as e:
+                    logger.error(f"Error fetching Fyers instruments for backtest: {e}")
+                    instrument_token = f"NSE:{symbol}-EQ"
+        
+        if not instrument_token:
+            return jsonify({'success': False, 'error': f'Could not find instrument token for {symbol}'}), 404
+            
+        # Fetch historical data
+        candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval=interval
+        )
+        
+        if not candles:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+            
+        import pandas as pd
+        df = pd.DataFrame(candles)
+        
+        import importlib
+        import trading_app.Backtest.apex_reversal_engine as _apex_mod
+        importlib.reload(_apex_mod)
+        from trading_app.Backtest.apex_reversal_engine import run_apex_backtest
+        trades = run_apex_backtest(df, params)
+        
+        return jsonify({
+            'success': True,
+            'trades': trades,
+            'summary': {
+                'total_trades': len(trades),
+                'wins': len([t for t in trades if t['pnl'] > 0]),
+                'losses': len([t for t in trades if t['pnl'] <= 0]),
+                'total_pnl': sum([t['pnl'] for t in trades])
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in Apex Reversal backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/cpr-gap', methods=['GET', 'POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_cpr_gap_backtest_api():
+    """Run CPR Gap backtest for a specific symbol and date range."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data = request.get_json()
+        symbol = data.get('symbol')
+        start_date_str = data.get('start_date')
+        end_date_str = data.get('end_date')
+        interval = data.get('interval', '5minute')
+        
+        # Strategy parameters
+        params = {
+            'interval': interval,
+            'intraday_only': data.get('intraday_only', True),
+            'rr_ratio': float(data.get('rr_ratio', 2.0)),
+            'cpr_type': data.get('cpr_type', 's1_r1'),
+            'sl_close_price': data.get('sl_close_price', True),
+            'entry_type': data.get('entry_type', 'any'),
+            'sl_type': data.get('sl_type', 'both')
+        }
+        
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+            
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+            
+        import json
+        import os
+        cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cache', 'nfo_instruments.json')
+        
+        instrument_token = None
+        if os.path.exists(cache_path):
+            with open(cache_path, 'r') as f:
+                instruments = json.load(f)
+                for inst in instruments:
+                    if inst.get('name') == symbol and inst.get('instrument_type') == 'FUT':
+                        instrument_token = inst.get('instrument_token')
+                        break
+        
+        if not instrument_token:
+            index_tokens = {
+                'NIFTY': 256265,
+                'BANKNIFTY': 260105,
+                'FINNIFTY': 257801,
+                'MIDCPNIFTY': 288009
+            }
+            instrument_token = index_tokens.get(symbol)
+            
+        if hasattr(current_kite, 'fyers'):
+            fyers_indices = {
+                'NIFTY': 'NSE:NIFTY50-INDEX',
+                'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
+                'FINNIFTY': 'NSE:FINNIFTY-INDEX',
+                'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+                'SENSEX': 'BSE:SENSEX-INDEX'
+            }
+            if symbol in fyers_indices:
+                instrument_token = fyers_indices[symbol]
+            else:
+                try:
+                    fyers_inst = current_kite.instruments('NSE')
+                    for inst in fyers_inst:
+                        if inst.get('name') == symbol and inst.get('instrument_type') == 'EQ':
+                            instrument_token = inst.get('instrument_token')
+                            break
+                    if not instrument_token or isinstance(instrument_token, int):
+                        instrument_token = f"NSE:{symbol}-EQ"
+                except:
+                    instrument_token = f"NSE:{symbol}-EQ"
+        
+        if not instrument_token:
+            return jsonify({'success': False, 'error': f'Could not find instrument token for {symbol}'}), 404
+            
+        candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval=interval
+        )
+        
+        if not candles:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+            
+        import pandas as pd
+        df = pd.DataFrame(candles)
+        
+        from trading_app.Backtest.cpr_gap_engine import run_cpr_gap_backtest
+        trades = run_cpr_gap_backtest(df, params)
+        
+        return jsonify({
+            'success': True,
+            'trades': trades,
+            'summary': {
+                'total_trades': len(trades),
+                'wins': len([t for t in trades if t['pnl'] > 0]),
+                'losses': len([t for t in trades if t['pnl'] <= 0]),
+                'total_pnl': sum([t['pnl'] for t in trades])
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in CPR Gap backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/place-live-order', methods=['POST'])
 @csrf.exempt
 def place_live_order() -> EndpointResponse:
@@ -1669,14 +1799,14 @@ def get_multi_strike() -> EndpointResponse:
     symbol = request.args.get('symbol', 'NIFTY')
     num_strikes = int(request.args.get('num_strikes', 3))
     
+    current_provider = get_data_provider()
+    if not current_provider:
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
+    
     try:
-        current_kite = get_kite()
-        if not current_kite:
-            return jsonify({'success': False, 'error': 'KiteConnect initialization failed.'}), 401
-        
         from trading_app.service.multi_strike_service import MultiStrikeService
         
-        multi_strike_service = MultiStrikeService(current_kite)
+        multi_strike_service = MultiStrikeService(current_provider)
         result = multi_strike_service.get_multi_strike_data(symbol, num_strikes)
         
         if not result.get('success'):
@@ -2243,12 +2373,12 @@ def get_intraday_920_symbol_payload() -> EndpointResponse:
             logger.info(f"✓ intraday-920/data cache hit for {symbol} in {elapsed:.3f}s")
             return jsonify(cached)
         
-        # Get KiteConnect instance
-        kite = get_kite()
+        # Get Data Provider instance (Kite or Fyers based on .env)
+        kite = get_data_provider()
         if not kite:
             return jsonify({
                 'success': False,
-                'error': 'Failed to initialize Kite connection'
+                'error': 'Failed to initialize data provider connection'
             }), 500
         
         # Import strategy
@@ -2681,19 +2811,35 @@ def place_intraday_920_order() -> EndpointResponse:
                 
                 # Calculate absolute quantity for Zerodha (units = lots * lot_size)
                 lot_size = kite_service.get_lot_size(symbol)
-                final_qty = order_lots * lot_size
                 
-                result = kite_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=transaction_type, quantity=final_qty)
+                if strategy == 'intrinsic':
+                    main_qty = order_lots * 15 * lot_size
+                    sl_qty = order_lots * 5 * lot_size
+                else:
+                    main_qty = order_lots * lot_size
+                    sl_qty = main_qty
+                
+                result = kite_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=transaction_type, quantity=main_qty)
                 if result['success'] and action == 'BUY':
                     try:
                         entry_price = result.get('price')
                         if entry_price and entry_price > 0:
-                            sl_price = entry_price - 20
                             option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
-                            if option_symbol:
-                                sl_res = kite_service.place_stoploss_order(tradingsymbol=option_symbol, trigger_price=sl_price, quantity=final_qty)
-                                if sl_res['success']:
-                                    result.update({'sl_order_id': sl_res['order_id'], 'sl_trigger_price': sl_price, 'sl_success': True})
+                            if strategy == 'intrinsic':
+                                sl_price = entry_price - 10
+                                sl_orders = []
+                                if option_symbol:
+                                    for _ in range(3):
+                                        sl_res = kite_service.place_stoploss_order(tradingsymbol=option_symbol, trigger_price=sl_price, quantity=sl_qty)
+                                        if sl_res.get('success'): sl_orders.append(sl_res.get('order_id'))
+                                from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
+                                IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, None, option_symbol, _username, session)
+                            else:
+                                sl_price = entry_price - 20
+                                if option_symbol:
+                                    sl_res = kite_service.place_stoploss_order(tradingsymbol=option_symbol, trigger_price=sl_price, quantity=main_qty)
+                                    if sl_res.get('success'):
+                                        result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_price, 'sl_success': True})
                     except Exception as e: logger.error(f"[SL] Kite Err: {e}")
                 return result, (200 if result['success'] else 400)
 
@@ -2719,8 +2865,36 @@ def place_intraday_920_order() -> EndpointResponse:
                         lot_size = ks.get_lot_size(symbol)
                 except Exception: pass
                 
-                final_qty = order_lots * lot_size
-                result = kotak_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=action, quantity=final_qty, tradingsymbol=tradingsymbol_override, target_expiry=expiry_override)
+                if strategy == 'intrinsic':
+                    main_qty = order_lots * 15 * lot_size
+                    sl_qty = order_lots * 5 * lot_size
+                else:
+                    main_qty = order_lots * lot_size
+                    sl_qty = main_qty
+                
+                result = kotak_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=action, quantity=main_qty, tradingsymbol=tradingsymbol_override, target_expiry=expiry_override)
+                if result['success'] and action == 'BUY':
+                    try:
+                        entry_price = result.get('price', 0)
+                        if not entry_price or entry_price == 0:
+                            kite = get_kite()
+                            try:
+                                ks = KiteService(kite_instance=kite)
+                                kite_opt_sym = ks.get_option_symbol(symbol, strike, option_type)
+                                ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
+                                entry_price = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', 0)
+                            except: pass
+                        if entry_price and entry_price > 0:
+                            k_symbol = tradingsymbol_override
+                            if strategy == 'intrinsic' and k_symbol:
+                                sl_price = entry_price - 10
+                                sl_orders = []
+                                for _ in range(3):
+                                    sl_res = kotak_service.place_stoploss_order(symbol=k_symbol, trigger_price=sl_price, quantity=sl_qty)
+                                    if sl_res.get('success'): sl_orders.append(sl_res.get('order_id'))
+                                from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
+                                IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, None, k_symbol, _username, session)
+                    except Exception as e: logger.error(f"[SL] Kotak Err: {e}")
                 return result, (200 if result['success'] else 400)
 
             # Dhan
@@ -2744,8 +2918,14 @@ def place_intraday_920_order() -> EndpointResponse:
                     sec_id = str(dhan_service.search_symbol(kite_opt_sym).get('security_id', kite_opt_sym))
                 
                 lot = dhan_service.get_lot_size(symbol)
-                qty = order_lots * lot
-                result = dhan_service.place_order(security_id=sec_id, transaction_type=action, quantity=qty, order_type='MARKET', product_type='INTRADAY', exchange_segment='NSE_FNO')
+                if strategy == 'intrinsic':
+                    main_qty = order_lots * 15 * lot
+                    sl_qty = order_lots * 5 * lot
+                else:
+                    main_qty = order_lots * lot
+                    sl_qty = main_qty
+                    
+                result = dhan_service.place_order(security_id=sec_id, transaction_type=action, quantity=main_qty, order_type='MARKET', product_type='INTRADAY', exchange_segment='NSE_FNO')
                 
                 if result['success'] and action == 'BUY':
                     try:
@@ -2754,9 +2934,18 @@ def place_intraday_920_order() -> EndpointResponse:
                             kite = get_kite()
                             ltp_data = kite.ltp([f'NSE:{kite_opt_sym}']) if kite and kite_opt_sym else {}
                             entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
-                        sl_p = entry - 20
-                        sl_res = dhan_service.place_stoploss_order(security_id=sec_id, trigger_price=sl_p, quantity=qty, product_type='INTRADAY', exchange_segment='NSE_FNO', entry_price=entry)
-                        if sl_res['success']: result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
+                        if strategy == 'intrinsic':
+                            sl_p = entry - 10
+                            sl_orders = []
+                            for _ in range(3):
+                                sl_res = dhan_service.place_stoploss_order(security_id=sec_id, trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', exchange_segment='NSE_FNO', entry_price=entry)
+                                if sl_res.get('success'): sl_orders.append(sl_res.get('order_id'))
+                            from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
+                            IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry, sl_orders, lot, order_lots, sec_id, kite_opt_sym, _username, session)
+                        else:
+                            sl_p = entry - 20
+                            sl_res = dhan_service.place_stoploss_order(security_id=sec_id, trigger_price=sl_p, quantity=main_qty, product_type='INTRADAY', exchange_segment='NSE_FNO', entry_price=entry)
+                            if sl_res.get('success'): result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
                     except Exception as e: logger.error(f"[SL] Dhan Err: {e}")
                 return result, (200 if result['success'] else 400)
 
@@ -2776,11 +2965,16 @@ def place_intraday_920_order() -> EndpointResponse:
                 if not kite_opt_sym: return {'success': False, 'error': 'Option not found'}, 400
                 
                 lot = fyers_service.get_lot_size(symbol)
-                qty = order_lots * lot
+                if strategy == 'intrinsic':
+                    main_qty = order_lots * 15 * lot
+                    sl_qty = order_lots * 5 * lot
+                else:
+                    main_qty = order_lots * lot
+                    sl_qty = main_qty
                 
                 # Fyers side: 1 for BUY, -1 for SELL; order_type: 2 for MARKET
                 fyers_side = 1 if action == 'BUY' else -1
-                result = fyers_service.place_order(symbol=f'NSE:{kite_opt_sym}', side=fyers_side, quantity=qty, order_type=2, product_type='INTRADAY')
+                result = fyers_service.place_order(symbol=f'NSE:{kite_opt_sym}', side=fyers_side, quantity=main_qty, order_type=2, product_type='INTRADAY')
                 
                 if result['success'] and action == 'BUY':
                     try:
@@ -2788,9 +2982,18 @@ def place_intraday_920_order() -> EndpointResponse:
                         if not entry or entry == 0:
                             ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
                             entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
-                        sl_p = entry - 20
-                        sl_res = fyers_service.place_stoploss_order(symbol=f'NSE:{kite_opt_sym}', trigger_price=sl_p, quantity=qty, product_type='INTRADAY', entry_price=entry)
-                        if sl_res['success']: result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
+                        if strategy == 'intrinsic':
+                            sl_p = entry - 10
+                            sl_orders = []
+                            for _ in range(3):
+                                sl_res = fyers_service.place_stoploss_order(symbol=f'NSE:{kite_opt_sym}', trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', entry_price=entry)
+                                if sl_res.get('success'): sl_orders.append(sl_res.get('order_id'))
+                            from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
+                            IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry, sl_orders, lot, order_lots, None, kite_opt_sym, _username, session)
+                        else:
+                            sl_p = entry - 20
+                            sl_res = fyers_service.place_stoploss_order(symbol=f'NSE:{kite_opt_sym}', trigger_price=sl_p, quantity=main_qty, product_type='INTRADAY', entry_price=entry)
+                            if sl_res.get('success'): result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
                     except Exception as e: logger.error(f"[SL] Fyers Err: {e}")
                 return result, (200 if result['success'] else 400)
 
@@ -3109,14 +3312,14 @@ def get_open_interest() -> EndpointResponse:
         from trading_app.service.open_interest_service import OpenInterestService
         
         # Data fetch always uses Broker 1 (Zerodha Kite - data account)
-        kite = get_kite(instance=1)
-        if not kite:
+        provider = get_data_provider()
+        if not provider:
             return jsonify({
                 'success': False,
-                'error': 'Broker 1 (data account) is not connected. Please login with Zerodha Kite.'
+                'error': 'Data provider (Kite/Fyers) is not connected.'
             }), 400
         
-        oi_service = OpenInterestService(kite)
+        oi_service = OpenInterestService(provider)
         
         # 1. Try to get data from DB first
         # Reduce max_age to 1 minute to ensure fresh data (user requested 1 min intervals)
@@ -3223,8 +3426,8 @@ def oi_profile_candles() -> EndpointResponse:
         with _candle_cache_lock:
             if cache_key in _candle_response_cache:
                 data, ts = _candle_response_cache[cache_key]
-                # Cache for 1.5 seconds to balance freshness and speed
-                if datetime.now().timestamp() - ts < 1.5:
+                # Cache for TTL threshold to balance freshness and rate limits
+                if datetime.now().timestamp() - ts < 0.8:
                     return jsonify(data)
             
             # Prune cache if it exceeds max size (FIFO approximate)
@@ -3246,11 +3449,19 @@ def oi_profile_candles() -> EndpointResponse:
         
         days = min(max(int(days), 1), 100)
         kite = get_kite(instance=1)
-        if not kite:
-            return jsonify({'success': False, 'error': 'Kite (Broker 1) not connected. Please login.'}), 401
+        # Get configured data provider (Kite or Fyers based on DATA_PROVIDER env flag)
+        _data_provider = get_data_provider()
+        if not kite and not _data_provider:
+            return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
         
-        from trading_app.service.kite_order_services import KiteService
-        kite_service = KiteService(kite_instance=kite)
+        # Detect if using Fyers as data provider
+        from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+        _is_fyers_provider = isinstance(_data_provider, FyersDataServiceAdapter)
+        
+        # Initialize KiteService with the active data provider to ensure symbol/token 
+        # lookups match the data source (crucial for Fyers vs Kite compatibility)
+        effective_instance = _data_provider if _data_provider else kite
+        kite_service = KiteService(kite_instance=effective_instance) if effective_instance else KiteService()
         
         ist_offset = int(5.5 * 3600)  # 19 800 s
         now = datetime.now()
@@ -3259,14 +3470,33 @@ def oi_profile_candles() -> EndpointResponse:
         to_date = now
 
         fetch_interval = 'minute' if interval == '2minute' else interval
+
+        # ── Fyers index symbol map (used when DATA_PROVIDER=FYERS) ───────
+        FYERS_INDEX_SYMBOLS = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+
         # ── Resolve Token ──────────────────────────────────────────
-        token = NSE_INDEX_TOKENS.get(symbol)
-        if not token:
-            # For non-indices, look up in instrument cache
-            token = kite_service.get_instrument_token(symbol)
+        if _is_fyers_provider:
+            # For Fyers: use Fyers symbol strings
+            token = FYERS_INDEX_SYMBOLS.get(symbol)
+            if not token:
+                # For non-index stocks: build Fyers-style symbol
+                token = f'NSE:{symbol}-EQ'
+        else:
+            # For Kite: use integer instrument tokens
+            token = NSE_INDEX_TOKENS.get(symbol)
+            if not token:
+                token = kite_service.get_instrument_token(symbol)
             
         if not token:
             return jsonify({'success': False, 'error': f'Invalid or unknown symbol: {symbol}'}), 400
+
+        logger.info(f"[OI-Profile/Candles] Provider={'Fyers' if _is_fyers_provider else 'Kite'}, token={token}")
 
         # Shared aggregation/formatting logic
         def format_candles(raw_data, ist_offset, requested_interval):
@@ -3309,8 +3539,16 @@ def oi_profile_candles() -> EndpointResponse:
 
         def fetch_task(token, from_dt, to_dt, inter):
             try:
-                # Use KiteService's retry logic and rate limiting
-                res = kite_service._historical_with_retry(instrument_token=int(token), from_date=from_dt, to_date=to_dt, interval=inter)
+                if _is_fyers_provider:
+                    # Use Fyers data provider for historical data
+                    from_str = from_dt.strftime('%Y-%m-%d')
+                    to_str = to_dt.strftime('%Y-%m-%d')
+                    res = _data_provider.historical_data(str(token), from_str, to_str, inter, use_cache=False)
+                elif kite:
+                    # Use KiteService's retry logic and rate limiting
+                    res = kite_service._historical_with_retry(instrument_token=int(token), from_date=from_dt, to_date=to_dt, interval=inter)
+                else:
+                    return []
                 return res
             except Exception as e:
                 logger.error(f"[OI-Profile] Fetch error for token {token}: {e}")
@@ -3339,6 +3577,9 @@ def oi_profile_candles() -> EndpointResponse:
         itm_ce_strike, itm_pe_strike = None, None
         ce_symbol, pe_symbol, ce_token, pe_token = None, None, None, None
         
+        today_str = now.strftime('%Y-%m-%d')
+        atm_cache_key = (symbol, today_str)
+        
         if not auto_hl and not first_5m_atm and spot_high is not None and spot_low is not None:
             if custom_strike:
                 itm_ce_strike = custom_strike
@@ -3351,6 +3592,18 @@ def oi_profile_candles() -> EndpointResponse:
                 itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
                     kite_service, symbol, spot_high, spot_low, step_value
                 )
+        elif first_5m_atm and atm_cache_key in _daily_5m_atm_cache:
+            # FAST-LANE PARALLELIZATION: 5m ATM is static after 9:20. Use cached strike to concurrently fetch Options!
+            atm_strike = _daily_5m_atm_cache[atm_cache_key]
+            itm_ce_strike, itm_pe_strike = atm_strike, atm_strike
+            ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+            pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+            if _is_fyers_provider:
+                ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
+                pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
+            else:
+                ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
+                pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
 
         # 3. Fetch Option Candles if tokens known
         future_ce = None
@@ -3406,24 +3659,45 @@ def oi_profile_candles() -> EndpointResponse:
                 close_p = five_m_close_candle['close']
                 # Round to nearest 100
                 atm_strike = int(round(close_p / 100.0) * 100)
+                _daily_5m_atm_cache[atm_cache_key] = atm_strike
+                
                 itm_ce_strike, itm_pe_strike = atm_strike, atm_strike
                 ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
                 pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-                ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
-                pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
-                logger.info(f"[OI-Profile] First 5m ATM: 5m Mark close {close_p} (at {datetime.fromtimestamp(five_m_close_candle['time'] - ist_offset).strftime('%H:%M')}) -> Strike {atm_strike}")
+                if _is_fyers_provider:
+                    # For Fyers: resolve option tokens as Fyers symbol strings
+                    ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
+                    pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
+                else:
+                    ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
+                    pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+                logger.info(f"[OI-Profile] First 5m ATM: 5m Mark close {close_p} (at {datetime.fromtimestamp(five_m_close_candle['time'] - ist_offset).strftime('%H:%M')}) -> Strike {atm_strike}, CE_token={ce_token}, PE_token={pe_token}")
             else:
                 if custom_strike:
                     itm_ce_strike = custom_strike
                     itm_pe_strike = custom_strike
                     ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
                     pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-                    ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
-                    pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+                    if _is_fyers_provider:
+                        ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
+                        pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
+                    else:
+                        ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
+                        pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
                 else:
-                    itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
-                        kite_service, symbol, spot_high, spot_low, step_value
-                    )
+                    if _is_fyers_provider:
+                        # For Fyers: compute strikes arithmetically then look up Fyers symbols
+                        offset = 3 * step_value
+                        itm_ce_strike = int(math.ceil((spot_low - offset) / step_value) * step_value)
+                        itm_pe_strike = int(math.floor((spot_high + offset) / step_value) * step_value)
+                        ce_symbol = f'{symbol}{itm_ce_strike}CE'  # display name only
+                        pe_symbol = f'{symbol}{itm_pe_strike}PE'
+                        ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
+                        pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
+                    else:
+                        itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
+                            kite_service, symbol, spot_high, spot_low, step_value
+                        )
             
             if ce_token: future_ce = executor.submit(fetch_task, ce_token, from_date, to_date, fetch_interval)
             if pe_token: future_pe = executor.submit(fetch_task, pe_token, from_date, to_date, fetch_interval)
@@ -3449,7 +3723,7 @@ def oi_profile_candles() -> EndpointResponse:
 
         # ── Intrinsic Levels ─────────────────────────────────────────
         intrinsic_data = None
-        if spot_high is not None and spot_low is not None:
+        if spot_high is not None and spot_low is not None and itm_ce_strike is not None and itm_pe_strike is not None:
             ce_intrinsic = max(spot_high - itm_ce_strike, 0)
             pe_intrinsic = max(itm_pe_strike - spot_low, 0)
             ce_levels = [ce_intrinsic + (step_value * i) for i in range(1, multiplier + 1)]

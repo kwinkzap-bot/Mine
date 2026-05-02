@@ -110,7 +110,11 @@ class UserEnvManager:
                         continue
                     if '=' in line:
                         key, value = line.split('=', 1)
-                        env_vars[key.strip()] = value.strip()
+                        # Strip inline comments (e.g. KEY=VALUE # comment -> VALUE)
+                        raw_val = value.strip()
+                        if ' #' in raw_val:
+                            raw_val = raw_val.split(' #')[0].rstrip()
+                        env_vars[key.strip()] = raw_val
             
             # Cache all vars
             UserEnvManager._user_env_cache[username] = env_vars
@@ -240,7 +244,11 @@ class UserEnvManager:
                         continue
                     if '=' in line:
                         key, value = line.split('=', 1)
-                        env_vars[key.strip()] = value.strip()
+                        # Strip inline comments (e.g. KEY=VALUE # comment -> VALUE)
+                        raw_val = value.strip()
+                        if ' #' in raw_val:
+                            raw_val = raw_val.split(' #')[0].rstrip()
+                        env_vars[key.strip()] = raw_val
             
             # Cache all vars for this user
             UserEnvManager._user_env_cache[username] = env_vars
@@ -476,7 +484,11 @@ class UserEnvManager:
                         continue
                     if '=' in line:
                         key, value = line.split('=', 1)
-                        env_vars[key.strip()] = value.strip()
+                        # Strip inline comments (e.g. KEY=VALUE # comment -> VALUE)
+                        raw_val = value.strip()
+                        if ' #' in raw_val:
+                            raw_val = raw_val.split(' #')[0].rstrip()
+                        env_vars[key.strip()] = raw_val
             
             # Cache it
             UserEnvManager._user_env_cache[username] = env_vars

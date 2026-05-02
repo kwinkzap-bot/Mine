@@ -43,7 +43,7 @@ const oipElems = {
     hdrPrice: null, hdrPcr: null, hdrMaxPain: null, hdrRes: null,
     hdrSupp: null, hdrCeOI: null, hdrCeChg: null, hdrPeOI: null,
     hdrPeChg: null, hdrTrend: null, hdrAtm: null, brokerSelect: null,
-    showPremium: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null
+    showPremium: null, showSignals: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null
 };
 
 function oipInitElems() {
@@ -81,6 +81,7 @@ function oipInitElems() {
     oipElems.hdrAtm = document.getElementById('hdrAtm');
     oipElems.brokerSelect = document.getElementById('oipBrokerSelect');
     oipElems.showPremium   = document.getElementById('oipShowPremium');
+    oipElems.showSignals   = document.getElementById('oipShowSignals');
     oipElems.first5mATM    = document.getElementById('oipFirst5mATM');
     oipElems.customStrikeCheck = document.getElementById('oipCustomStrikeCheck');
     oipElems.customStrikeDropdown = document.getElementById('oipCustomStrikeDropdown');
@@ -195,6 +196,10 @@ document.addEventListener('DOMContentLoaded', () => {
         oipRefreshLocalView(oipElems.view.value);
     });
 
+    oipElems.showSignals?.addEventListener('change', () => {
+        oipRefreshLocalView(oipElems.view.value);
+    });
+
     oipElems.first5mATM?.addEventListener('change', (e) => {
         if (e.target.checked && oipElems.customStrikeCheck) {
             oipElems.customStrikeCheck.checked = false;
@@ -276,7 +281,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setInterval(() => {
         if (!document.hidden && oipIsMarketOpen()) oipFullRefresh(false);
-    }, 5000);
+    }, 1000);
 });
 
 /* ── Lightweight Charts Initialization ──────────────────────── */
@@ -315,11 +320,11 @@ function oipInitCharts() {
         oipIntrinsicPeSeries = oipIntrinsicChart.peSeries;
         const showV = oipElems.showVwapInt.checked;
         oipVwapIntSeries = oipIntrinsicChart.chart.addLineSeries({
-            color: '#10b981', lineWidth: 2, title: '', visible: showV,
+            color: '#ef4444', lineWidth: 1, title: '', visible: showV,
             priceLineVisible: false, lastValueVisible: false
         });
         oipVwapIntPeSeries = oipIntrinsicChart.chart.addLineSeries({
-            color: '#8b5cf6', lineWidth: 2, title: '', visible: showV,
+            color: '#000000', lineWidth: 1, title: '', visible: showV,
             priceLineVisible: false, lastValueVisible: false
         });
         oipInitPremiumSeries();
@@ -736,18 +741,17 @@ function oipRefreshLocalView(view, resetZoom = false) {
             oipIntrinsicChart.update(ceData, peData, resetZoom);
             if (oipVwapIntSeries) oipVwapIntSeries.setData(oipCalculateVWAP(ceData));
             if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(oipCalculateVWAP(peData));
-            if (oipIntrinsicChart.setMarkers) oipIntrinsicChart.setMarkers([], []);
         } else if (view === 'ce') {
             oipIntrinsicChart.update(ceData, null, resetZoom);
             if (oipVwapIntSeries) oipVwapIntSeries.setData(oipCalculateVWAP(ceData));
             if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData([]);
-            if (oipIntrinsicChart.setMarkers) oipIntrinsicChart.setMarkers([], []);
         } else {
             oipIntrinsicChart.update(null, peData, resetZoom);
             if (oipVwapIntSeries) oipVwapIntSeries.setData([]);
             if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(oipCalculateVWAP(peData));
-            if (oipIntrinsicChart.setMarkers) oipIntrinsicChart.setMarkers([], []);
         }
+        // Draw entry/exit signal markers
+        oipDrawIntrinsicSignals(view, ceData, peData);
     }
     if (oipOIData.intrinsic) oipDrawIntrinsicLines(oipOIData.intrinsic, view);
     if (oipOIData.intrinsic) oipDrawPremiumLines(oipOIData.intrinsic, view);
@@ -770,55 +774,112 @@ function oipCalculateDynamicCPR(candles) {
         currentDay.times.push(c.time); currentDay.closes.push(c.close);
     }
     if (currentDay) days.push(currentDay);
-    let res = { pp: [], tc: [], bc: [], prevH: [], prevL: [], r1: [], s1: [], r0_5: [], s0_5: [], r0_25: [], s0_25: [], cr3: [], cs3: [], r1_box: [], s1_box: [], r0_5_box: [], s0_5_box: [] };
+    let daysData = [];
     for (let i = 1; i < days.length; i++) {
         const prev = days[i - 1], curr = days[i];
         let oH = prev.high, oL = prev.low, oC = prev.close;
         if (oipOIData?.daily_ohlc?.[prev.isoDate]) { const t = oipOIData.daily_ohlc[prev.isoDate]; oH = t.high; oL = t.low; oC = t.close; }
         const pp = (oH + oL + oC) / 3; let bc = (oH + oL) / 2, tc = (2 * pp) - bc; if (bc > tc) [bc, tc] = [tc, bc];
         const range = oH - oL, r1 = (pp * 2) - oL, s1 = (pp * 2) - oH, r0_5 = (pp + r1) / 2, s0_5 = (pp + s1) / 2, r0_25 = r0_5 + (oH - r0_5) / 4, s0_25 = s0_5 - (s0_5 - oL) / 4, cr3 = oC + (range * 1.1) / 4, cs3 = oC - (range * 1.1) / 4;
-        for (const t of curr.times) {
-            res.pp.push({ time: t, value: pp }); res.tc.push({ time: t, value: tc }); res.bc.push({ time: t, value: bc });
-            res.prevH.push({ time: t, value: oH }); res.prevL.push({ time: t, value: oL }); res.r1.push({ time: t, value: r1 }); res.s1.push({ time: t, value: s1 });
-            res.r0_5.push({ time: t, value: r0_5 }); res.s0_5.push({ time: t, value: s0_5 }); res.r0_25.push({ time: t, value: r0_25 }); res.s0_25.push({ time: t, value: s0_25 });
-            res.cr3.push({ time: t, value: cr3 }); res.cs3.push({ time: t, value: cs3 });
-            res.r1_box.push({ time: t, open: r1, close: oH, high: Math.max(r1, oH), low: Math.min(r1, oH) });
-            res.s1_box.push({ time: t, open: s1, close: oL, high: Math.max(s1, oL), low: Math.min(s1, oL) });
-            res.r0_5_box.push({ time: t, open: r0_5, close: r0_25, high: Math.max(r0_5, r0_25), low: Math.min(r0_5, r0_25) });
-            res.s0_5_box.push({ time: t, open: s0_5, close: s0_25, high: Math.max(s0_5, s0_25), low: Math.min(s0_5, s0_25) });
-        }
+        
+        let boxes = [
+            { type: 'r1', min: Math.min(r1, oH), max: Math.max(r1, oH), times: curr.times },
+            { type: 's1', min: Math.min(s1, oL), max: Math.max(s1, oL), times: curr.times },
+            { type: 'r0_5', min: Math.min(r0_5, r0_25), max: Math.max(r0_5, r0_25), times: curr.times },
+            { type: 's0_5', min: Math.min(s0_5, s0_25), max: Math.max(s0_5, s0_25), times: curr.times },
+            { type: 'cpr', min: Math.min(tc, bc), max: Math.max(tc, bc), times: curr.times }
+        ];
+        
+        daysData.push({
+            times: curr.times,
+            levels: { prevH: oH, prevL: oL, r1, s1, r0_5, s0_5, r0_25, s0_25, cr3, cs3, pp, tc, bc },
+            boxes: boxes
+        });
     }
-    return res;
+    return daysData;
 }
 
 function oipDrawCpr(candles) {
     if (!oipOIChart || !oipOISeries) return;
-    if (!oipCprSeriesObj) {
-        const boxStyle = { upColor: 'rgba(234, 179, 8, 0.05)', downColor: 'rgba(234, 179, 8, 0.05)', borderVisible: false, wickVisible: false, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
-        oipCprSeriesObj = {
-            r1_box: oipOIChart.addCandlestickSeries(boxStyle), s1_box: oipOIChart.addCandlestickSeries(boxStyle), 
-            r0_5_box: oipOIChart.addCandlestickSeries({...boxStyle, upColor: 'rgba(239, 68, 68, 0.05)', downColor: 'rgba(239, 68, 68, 0.05)'}),
-            s0_5_box: oipOIChart.addCandlestickSeries({...boxStyle, upColor: 'rgba(34, 197, 94, 0.05)', downColor: 'rgba(34, 197, 94, 0.05)'}),
-            prevH: oipOIChart.addLineSeries({ color: '#000000', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-            r1: oipOIChart.addLineSeries({ color: '#eab308', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-            r0_25: oipOIChart.addLineSeries({ color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-            r0_5: oipOIChart.addLineSeries({ color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-            tc: oipOIChart.addLineSeries({ color: '#06b6d4', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-            cr3: oipOIChart.addLineSeries({ color: '#a855f7', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }),
-            pp: oipOIChart.addLineSeries({ color: '#06b6d4', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-            bc: oipOIChart.addLineSeries({ color: '#06b6d4', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-            s0_5: oipOIChart.addLineSeries({ color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-            s0_25: oipOIChart.addLineSeries({ color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-            prevL: oipOIChart.addLineSeries({ color: '#000000', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-            cs3: oipOIChart.addLineSeries({ color: '#a855f7', lineWidth: 2, lastValueVisible: false, priceLineVisible: false }),
-            s1: oipOIChart.addLineSeries({ color: '#eab308', lineWidth: 1, lastValueVisible: false, priceLineVisible: false }),
-        };
+    
+    if (window.oipCprBoxSeries) {
+        window.oipCprBoxSeries.forEach(s => { try { oipOIChart.removeSeries(s); } catch(e){} });
     }
+    window.oipCprBoxSeries = [];
+
+    if (window.oipCprLineSeries) {
+        window.oipCprLineSeries.forEach(s => { try { oipOIChart.removeSeries(s); } catch(e){} });
+    }
+    window.oipCprLineSeries = [];
+
     const show = oipElems.showCpr.checked;
-    if (!show || !candles || !candles.length) { Object.values(oipCprSeriesObj).forEach(s => s.applyOptions({ visible: false })); return; }
-    Object.values(oipCprSeriesObj).forEach(s => s.applyOptions({ visible: true }));
-    const cprData = oipCalculateDynamicCPR(candles);
-    if (cprData) { Object.keys(oipCprSeriesObj).forEach(k => oipCprSeriesObj[k].setData(cprData[k])); }
+    if (!show || !candles || !candles.length) { 
+        return; 
+    }
+    
+    const daysData = oipCalculateDynamicCPR(candles);
+    if (!daysData) return;
+    
+    const lineStyles = {
+        prevH: { color: '#eab308', lineWidth: 1 },
+        r1: { color: '#eab308', lineWidth: 1 },
+        r0_25: { color: '#ef4444', lineWidth: 1 },
+        r0_5: { color: '#ef4444', lineWidth: 1 },
+        tc: { color: '#26bcd4', lineWidth: 1 },
+        cr3: { color: '#a855f7', lineWidth: 2 },
+        pp: { color: '#26bcd4', lineWidth: 1 },
+        bc: { color: '#26bcd4', lineWidth: 1 },
+        s0_5: { color: '#22c55e', lineWidth: 1 },
+        s0_25: { color: '#22c55e', lineWidth: 1 },
+        prevL: { color: '#eab308', lineWidth: 1 },
+        cs3: { color: '#a855f7', lineWidth: 2 },
+        s1: { color: '#eab308', lineWidth: 1 }
+    };
+    
+    const boxColors = {
+        'r1': 'rgba(234, 179, 8, 0.06)',
+        's1': 'rgba(234, 179, 8, 0.06)',
+        'r0_5': 'rgba(239, 68, 68, 0.06)',
+        's0_5': 'rgba(34, 197, 94, 0.06)',
+        'cpr': 'rgba(38, 188, 212, 0.03)'
+    };
+    
+    daysData.forEach(day => {
+        Object.keys(day.levels).forEach(key => {
+            const style = lineStyles[key];
+            if (!style) return;
+            const series = oipOIChart.addLineSeries({
+                ...style,
+                lastValueVisible: false,
+                priceLineVisible: false,
+                crosshairMarkerVisible: false
+            });
+            const data = day.times.map(t => ({ time: t, value: day.levels[key] }));
+            series.setData(data);
+            window.oipCprLineSeries.push(series);
+        });
+        
+        day.boxes.forEach(box => {
+            if (box.min === box.max) return;
+            const col = boxColors[box.type];
+            const boxSeries = oipOIChart.addBaselineSeries({
+                baseValue: { type: 'price', price: box.min },
+                topFillColor1: col,
+                topFillColor2: col,
+                topLineColor: 'transparent',
+                bottomFillColor1: col,
+                bottomFillColor2: col,
+                bottomLineColor: 'transparent',
+                lineWidth: 1,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false
+            });
+            const data = box.times.map(t => ({ time: t, value: box.max }));
+            boxSeries.setData(data);
+            window.oipCprBoxSeries.push(boxSeries);
+        });
+    });
 }
 
 function oipAutoFillHighLow() {
@@ -1055,4 +1116,186 @@ function oipCalculateRSISnR(candles) {
         }
     }
     return { ob_series, os_series, bull_series, bear_series, markers };
+}
+
+/* ── Intrinsic Levels Entry / Exit Signals ──────────────────────
+ *  Strategy:
+ *  ENTRY  → Price bounces off VWAP from below (candle close > VWAP after prev close ≤ VWAP)
+ *           + proximity to intrinsic level (within 1.5× step) gives bonus confidence
+ *  EXIT   → T1 = entry + step, T2 = entry + 2×step, SL = entry - SL_DIST
+ *  Each trade tracks its own SL/T1/T2. Only 1 trade active per side at a time.
+ */
+function oipDrawIntrinsicSignals(view, ceData, peData) {
+    if (!oipIntrinsicChart || !oipIntrinsicChart.setMarkers) return;
+
+    const showSignals = oipElems.showSignals?.checked;
+    if (!showSignals || !oipOIData?.intrinsic) {
+        oipIntrinsicChart.setMarkers([], []);
+        return;
+    }
+
+    const intrinsic = oipOIData.intrinsic;
+    const step = parseInt(oipElems.step?.value) || 50;
+    const SL_DIST = 30;  // fixed SL distance
+
+    function computeSignals(candles, intrinsicBase) {
+        if (!candles || candles.length < 3) return [];
+
+        // Compute VWAP inline
+        const vwap = [];
+        let cpv = 0, cv = 0, ld = null;
+        for (const c of candles) {
+            const d = new Date(c.time * 1000).toDateString();
+            if (d !== ld) { cpv = 0; cv = 0; ld = d; }
+            const v = c.volume > 0 ? c.volume : 1;
+            const tp = (c.high + c.low + c.close) / 3;
+            cpv += tp * v; cv += v;
+            vwap.push(cpv / cv);
+        }
+
+        // Build level array: intrinsicBase, intrinsicBase+step, +2*step, etc.
+        const levels = [intrinsicBase];
+        for (let i = 1; i <= 10; i++) levels.push(intrinsicBase + step * i);
+
+        function nearLevel(price) {
+            for (const lvl of levels) {
+                if (Math.abs(price - lvl) <= step * 1.5) return true;
+            }
+            return false;
+        }
+
+        const markers = [];
+        let inTrade = false;
+        let entryPrice = 0;
+        let sl = 0;
+        let t1 = 0;
+        let t2 = 0;
+        let t1Hit = false;
+
+        for (let i = 1; i < candles.length; i++) {
+            const c = candles[i];
+            const prev = candles[i - 1];
+            const vCur = vwap[i];
+            const vPrev = vwap[i - 1];
+
+            // Filter: only current day candles
+            const cDay = new Date(c.time * 1000).toDateString();
+            const pDay = new Date(prev.time * 1000).toDateString();
+
+            // Reset trade on new day
+            if (cDay !== pDay) {
+                inTrade = false;
+            }
+
+            if (!inTrade) {
+                // ENTRY CONDITIONS:
+                // A) VWAP crossover bounce — prev close ≤ VWAP, current close > VWAP
+                const prevBelowVwap = prev.close <= vPrev;
+                const curAboveVwap = c.close > vCur;
+                const greenCandle = c.close > c.open;
+                const vwapBounce = prevBelowVwap && curAboveVwap && greenCandle;
+
+                // B) Entry Premium touch — candle dips to/below VWAP (entry premium)
+                //    but closes above it with a green body (hammer/reversal at VWAP)
+                const lowTouchedVwap = c.low <= vCur;
+                const closeAboveVwap = c.close > vCur;
+                const premiumTouch = lowTouchedVwap && closeAboveVwap && greenCandle && !prevBelowVwap;
+
+                if (vwapBounce || premiumTouch) {
+                    const isNearLevel = nearLevel(c.close);
+                    const label = vwapBounce
+                        ? (isNearLevel ? 'BUY ★' : 'BUY')
+                        : (isNearLevel ? 'EP ★' : 'EP');
+
+                    inTrade = true;
+                    entryPrice = c.close;
+                    sl = entryPrice - SL_DIST;
+                    t1 = entryPrice + step;
+                    t2 = entryPrice + 2 * step;
+                    t1Hit = false;
+
+                    markers.push({
+                        time: c.time,
+                        position: 'belowBar',
+                        color: isNearLevel ? '#10b981' : '#22c55e',
+                        shape: 'arrowUp',
+                        text: label,
+                        size: isNearLevel ? 2 : 1
+                    });
+                }
+            } else {
+                // EXIT checks
+                // Check SL
+                if (c.low <= sl) {
+                    inTrade = false;
+                    markers.push({
+                        time: c.time,
+                        position: 'aboveBar',
+                        color: '#ef4444',
+                        shape: 'circle',
+                        text: 'SL',
+                        size: 1
+                    });
+                    continue;
+                }
+                // Check T1
+                if (!t1Hit && c.high >= t1) {
+                    t1Hit = true;
+                    // Trail SL to entry (break-even)
+                    sl = entryPrice;
+                    markers.push({
+                        time: c.time,
+                        position: 'aboveBar',
+                        color: '#f97316',
+                        shape: 'circle',
+                        text: 'T1',
+                        size: 1
+                    });
+                }
+                // Check T2
+                if (t1Hit && c.high >= t2) {
+                    inTrade = false;
+                    markers.push({
+                        time: c.time,
+                        position: 'aboveBar',
+                        color: '#8b5cf6',
+                        shape: 'circle',
+                        text: 'T2 🎯',
+                        size: 2
+                    });
+                    continue;
+                }
+                // VWAP breakdown exit (after T1 hit, if price closes below VWAP)
+                if (t1Hit && c.close < vCur) {
+                    inTrade = false;
+                    markers.push({
+                        time: c.time,
+                        position: 'aboveBar',
+                        color: '#6b7280',
+                        shape: 'circle',
+                        text: 'EXIT',
+                        size: 1
+                    });
+                }
+            }
+        }
+        return markers;
+    }
+
+    const ceIntrinsic = intrinsic.ce_intrinsic || 0;
+    const peIntrinsic = intrinsic.pe_intrinsic || 0;
+
+    if (view === 'combined') {
+        const ceMarkers = computeSignals(ceData, ceIntrinsic);
+        const peMarkers = computeSignals(peData, peIntrinsic);
+        oipIntrinsicChart.setMarkers(ceMarkers, peMarkers);
+    } else if (view === 'ce') {
+        const ceMarkers = computeSignals(ceData, ceIntrinsic);
+        oipIntrinsicChart.setMarkers(ceMarkers, []);
+    } else if (view === 'pe') {
+        const peMarkers = computeSignals(peData, peIntrinsic);
+        oipIntrinsicChart.setMarkers([], peMarkers);
+    } else {
+        oipIntrinsicChart.setMarkers([], []);
+    }
 }

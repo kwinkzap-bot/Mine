@@ -74,12 +74,9 @@ class CPRFilterService:
     CPR_TOUCH_ABOVE = "🟢 MONTHLY CPR TOUCH (Closed Above)"
     CPR_TOUCH_BELOW = "🔴 MONTHLY CPR TOUCH (Closed Below)"
 
-    def __init__(self, kite_instance=None, api_key=None):
-        self.kite = kite_instance or KiteConnect(api_key or os.getenv("API_KEY"))
-        if not kite_instance:
-            token = os.getenv("ACCESS_TOKEN")
-            if token:
-                self.kite.set_access_token(token)
+    def __init__(self, kite_instance=None):
+        from trading_app.service.provider_logic import get_data_provider
+        self.kite = kite_instance or get_data_provider()
         
         self._instruments = []
         self._fo_stocks = None
@@ -91,6 +88,8 @@ class CPRFilterService:
 
     def _rate_limit(self):
         """Use the global rate limiter to ensure 3 req/sec across entire application."""
+        if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+            return  # Fyers SDK executes native backoff queues securely; unlock threading limit
         _rate_limiter.wait()
 
     def _load_instruments(self):
@@ -107,7 +106,7 @@ class CPRFilterService:
         if not self._instruments:
             self._load_instruments()
         for inst in self._instruments:
-            if inst.get('tradingsymbol') == symbol and inst.get('instrument_type') == 'EQ':
+            if inst.get('instrument_type') == 'EQ' and (inst.get('tradingsymbol') == symbol or inst.get('name') == symbol):
                 return inst.get('instrument_token')
         return None
 
@@ -1380,9 +1379,11 @@ class CPRFilterService:
                 except Exception as e:
                     logger.debug(f"HV percentile failed for {symbol}: {e}")
                 return None
-            
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                results = executor.map(_compute_single_hv, atm_ivs.items())
+            hv_workers_count = 4
+            if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+                hv_workers_count = 15
+            with ThreadPoolExecutor(max_workers=hv_workers_count) as executor:
+                results = list(executor.map(_compute_single_hv, atm_ivs.items()))
                 for result in results:
                     if result:
                         high_iv_stocks.append(result)
@@ -1431,7 +1432,10 @@ class CPRFilterService:
         start_time = time.time()
         
         # Phase 1: CPR processing (existing logic, unchanged)
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
+        workers_count = self.MAX_WORKERS
+        if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+            workers_count = 15  # Rapid scaling for Fyers data pulling
+        with ThreadPoolExecutor(max_workers=workers_count) as executor:
             futures = {executor.submit(self.process_stock, symbol, root_date): symbol for symbol in stocks}
             for future in as_completed(futures):
                 symbol = futures[future]

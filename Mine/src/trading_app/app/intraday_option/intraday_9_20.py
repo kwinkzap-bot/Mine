@@ -31,26 +31,39 @@ class Intraday920Strategy:
 
 
     def _refresh_kite_access_token(self) -> bool:
-        """Refresh Kite access token and update clients.
-
-        Note: Zerodha request tokens are single-use. Once used to generate
-        an access token, they become invalid. Users must re-login via OAuth
-        to get a fresh access token when it expires.
+        """Refresh access token for the active data provider.
+        
+        Handles both Zerodha (Kite) and Fyers providers.
         """
         try:
-            new_token = get_access_token()
-            if new_token:
-                self.kite.set_access_token(new_token)
-                # Keep data service in sync
-                self.data_service.kite = self.kite
-                logger.info("Kite access token refreshed from cache/env")
-                return True
-
-            logger.warning("No access token available. Please login via Zerodha OAuth.")
+            from trading_app.service.provider_logic import get_data_provider
+            
+            # Detect provider type
+            is_fyers = 'Fyers' in self.kite.__class__.__name__
+            
+            if is_fyers:
+                logger.info("Refreshing Fyers provider instance...")
+                new_provider = get_data_provider()
+                if new_provider:
+                    self.kite = new_provider
+                    self.data_service.kite = new_provider
+                    logger.info("✓ Fyers provider refreshed successfully")
+                    return True
+                return False
+            else:
+                # Original Zerodha logic
+                new_token = get_access_token()
+                if new_token:
+                    self.kite.set_access_token(new_token)
+                    self.data_service.kite = self.kite
+                    logger.info("✓ Kite access token refreshed from cache/env")
+                    return True
+            
+            logger.warning("No valid access token available for data provider.")
             return False
 
         except Exception as e:
-            logger.warning(f"Failed to refresh Kite access token: {e}")
+            logger.warning(f"Failed to refresh data provider access token: {e}")
             return False
 
     def get_first_5min_high_low(self, symbol: str, target_date: Optional[datetime] = None) -> Dict[str, Any]:
@@ -400,7 +413,7 @@ class Intraday920Strategy:
                             quote = self.kite.ltp([instrument_key])
                             break
                         except Exception as e:
-                            logger.warning(f"LTP fetch failed after token refresh: {e}")
+                            logger.warning(f"LTP fetch failed for {instrument_key} after token refresh: {e}")
                             if attempt < max_retries - 1:
                                 time.sleep(retry_delay)
                             else:
@@ -461,7 +474,7 @@ class Intraday920Strategy:
                                 
                         return {
                             'symbol': symbol,
-                            'error': f'Error fetching quote: {str(e)}. Please ensure you are logged in to the correct Zerodha account with a valid API subscription.',
+                            'error': f'Error fetching quote: {str(e)}. Please ensure you are logged in to the correct broker account with a valid data subscription.',
                             'timestamp': datetime.now().isoformat(),
                             'success': False
                         }

@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 # Global cache shared across requests
 _ema_filter_cache: Dict = {}
 _ema_cache_lock = threading.Lock()
+
+_GLOBAL_EMA_HIST_CACHE = {}
+_GLOBAL_EMA_CACHE_LOCK = threading.Lock()
 
 # Weekly params
 EMA_PERIOD = 208
@@ -86,19 +89,40 @@ def _weekly_resample(df: pd.DataFrame) -> pd.DataFrame:
     return weekly
 
 
+def _monthly_resample(df: pd.DataFrame) -> pd.DataFrame:
+    """Resample daily OHLCV data to monthly."""
+    df = df.copy()
+    df.index = pd.to_datetime(df.index)
+    try:
+        monthly = df.resample("ME").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+        ).dropna(subset=["close"])
+    except ValueError:
+        monthly = df.resample("M").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+        ).dropna(subset=["close"])
+    return monthly
+
+
 class EmaRsiFilterService:
     """Filter F&O stocks by EMA-208 touch or RSI-208 in 49–51 range (Weekly + Daily)."""
 
     INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
-    MAX_WORKERS = 2
-    # Kite historical data max is 2000 calendar days per request.
-    # To fully mimic TradingView's EMA precision for extremely old stocks (like VBL),
-    # we need ~10 years (~3800 days) of data to mathematically converge to TradingView's value. 
-    WEEKLY_FETCH_DAYS = 3800
-    DAILY_RSI_FETCH_DAYS = 600  # enough for 88 daily bars + rsi warmup
+    MAX_WORKERS = 3
 
-    def __init__(self, kite_instance):
-        self.kite = kite_instance
+    TIMEFRAME_CONFIG = {
+        "1minute":  {"interval": "minute",   "period": 60,  "fetch_days": 3,    "resample": None},
+        "5minute":  {"interval": "5minute",  "period": 75,  "fetch_days": 10,   "resample": None},
+        "15minute": {"interval": "15minute", "period": 125, "fetch_days": 20,   "resample": None},
+        "60minute": {"interval": "60minute", "period": 137, "fetch_days": 60,   "resample": None},
+        "daily":    {"interval": "day",      "period": 88,  "fetch_days": 364,  "resample": None},
+        "weekly":   {"interval": "day",      "period": 208, "fetch_days": 1600, "resample": "W"},
+        "monthly":  {"interval": "day",      "period": 48,  "fetch_days": 1800, "resample": "M"},
+    }
+
+    def __init__(self, kite_instance=None):
+        from trading_app.service.provider_logic import get_data_provider
+        self.kite = kite_instance or get_data_provider()
         self._instruments: List[Dict] = []
         self._fo_stocks: Optional[List[str]] = None
         self._hist_cache: Dict = _ema_filter_cache
@@ -113,9 +137,12 @@ class EmaRsiFilterService:
                 logger.error(f"Instrument load failed: {e}")
                 self._instruments = []
 
-    def _get_token(self, symbol: str) -> Optional[int]:
+    def _get_token(self, symbol: str) -> Optional[Union[int, str]]:
+        if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+            return f"NSE:{symbol}-EQ"
+            
         for inst in self._instruments:
-            if inst.get("tradingsymbol") == symbol and inst.get("instrument_type") == "EQ":
+            if inst.get("instrument_type") == "EQ" and (inst.get("tradingsymbol") == symbol or inst.get("name") == symbol):
                 return inst.get("instrument_token")
         return None
 
@@ -123,10 +150,10 @@ class EmaRsiFilterService:
                     end_date: Optional[datetime] = None) -> Optional[pd.DataFrame]:
         end   = end_date if end_date else datetime.now()
         start = end - timedelta(days=days)
-        cache_key = f"{symbol}_{start.date()}_{end.date()}_{interval}"
+        cache_key = f"{symbol}_{start.date()}_{end.date()}_{interval}_{days}"
 
-        with self._cache_lock:
-            cached = self._hist_cache.get(cache_key)
+        with _GLOBAL_EMA_CACHE_LOCK:
+            cached = _GLOBAL_EMA_HIST_CACHE.get(cache_key)
             if cached is not None:
                 return cached
 
@@ -170,8 +197,8 @@ class EmaRsiFilterService:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
             df = df.dropna(subset=["close"])
-            with self._cache_lock:
-                self._hist_cache[cache_key] = df
+            with _GLOBAL_EMA_CACHE_LOCK:
+                _GLOBAL_EMA_HIST_CACHE[cache_key] = df
             return df
         except Exception as e:
             logger.warning(f"[hist] {symbol} ({interval}, {days}d): {e}")
@@ -199,43 +226,24 @@ class EmaRsiFilterService:
     # Core analysis per stock
     # ------------------------------------------------------------------
 
-    def _analyse_weekly(self, symbol: str, current_price: float,
-                        root_date: Optional[datetime] = None,
-                        near_miss_pct: float = 15.0) -> Optional[Dict]:
-        """
-        Weekly analysis: fetch native weekly candles (interval='week').
-        Falls back to daily→weekly resample when Zerodha returns fewer than EMA_PERIOD rows.
-        Match if:
-          - candle low <= EMA208 <= candle high (actual touch), OR close within 5% of EMA OR
-          - RSI208 in [49, 51]
-        Returns a dict with ema_pct_diff (for near-miss ranking) regardless of match.
-        """
-        # ── Step 1: Try native weekly candles from Zerodha ────────────────────
-        df = self._fetch_hist(symbol, days=self.WEEKLY_FETCH_DAYS,
-                              interval="week", end_date=root_date)
+    def _analyse_timeframe(self, symbol: str, current_price: float, df: Optional[pd.DataFrame], period: int, resample: Optional[str] = None, near_miss_pct: float = 15.0) -> Optional[Dict]:
+        if df is None or len(df) < 20:
+            return None
 
-        if df is None or len(df) < EMA_PERIOD:
-            native_count = len(df) if df is not None else 0
-            logger.debug(f"[Weekly] {symbol}: {native_count} weekly bars from Zerodha, "
-                         f"need {EMA_PERIOD} — trying daily resample")
+        if resample == 'W':
+            df = _weekly_resample(df)
+        elif resample == 'M':
+            df = _monthly_resample(df)
 
-            # ── Fallback: fetch daily → resample to weekly ─────────────────
-            day_df = self._fetch_hist(symbol, days=self.WEEKLY_FETCH_DAYS,
-                                      interval="day", end_date=root_date)
-            if day_df is None or len(day_df) < 100:
-                return None
-
-            df = _weekly_resample(day_df)
-            if len(df) < EMA_PERIOD:
-                logger.debug(f"[Weekly] {symbol}: only {len(df)} resampled weekly rows, skipping")
-                return None
+        if len(df) < period:
+            return None
 
         closes = df["close"].tolist()
         highs  = df["high"].tolist()
         lows   = df["low"].tolist()
 
-        ema_vals = _calc_ema(closes, EMA_PERIOD)
-        rsi_vals = _calc_rsi(closes, RSI_PERIOD)
+        ema_vals = _calc_ema(closes, period)
+        rsi_vals = _calc_rsi(closes, period)
 
         last_ema   = ema_vals[-1]
         last_rsi   = rsi_vals[-1]
@@ -248,15 +256,6 @@ class EmaRsiFilterService:
             return None
 
         ema_pct_diff = round(abs(last_close - last_ema) / last_ema * 100, 2)
-
-        # Log near-misses so the user can see what's closest
-        if ema_pct_diff <= near_miss_pct:
-            logger.info(
-                f"[Weekly near] {symbol}: close={last_close:.1f}, "
-                f"EMA208={last_ema:.1f}, dist={ema_pct_diff:.1f}%"
-            )
-
-        # Strict touch with a 0.5% mathematical buffer to account for data history limitations vs TradingView
         margin = last_ema * 0.005
         ema_touched  = bool((last_low - margin) <= last_ema <= (last_high + margin))
         rsi_valid    = (last_rsi == last_rsi and prev_rsi == prev_rsi)
@@ -264,13 +263,12 @@ class EmaRsiFilterService:
 
         matched = bool(ema_touched or rsi_crossed_above)
 
-        # Return a full dict always (matched flag lets run_filter separate hits from near-misses)
         return {
             "symbol":        symbol,
             "current_price": float(current_price),
-            "weekly_close":  round(float(last_close), 2),
-            "ema_208":       round(float(last_ema), 2),
-            "rsi_208":       round(float(last_rsi), 2) if rsi_valid else None,
+            "close":         round(float(last_close), 2),
+            "ema":           round(float(last_ema), 2),
+            "rsi":           round(float(last_rsi), 2) if rsi_valid else None,
             "ema_pct_diff":  ema_pct_diff,
             "ema_touched":   ema_touched,
             "rsi_in_range":  rsi_crossed_above,
@@ -279,58 +277,6 @@ class EmaRsiFilterService:
                 "EMA+RSI" if ema_touched and rsi_crossed_above
                 else ("EMA Touch" if ema_touched else "RSI > 51")
             ) if matched else "—",
-        }
-
-    def _analyse_daily(self, symbol: str, current_price: float,
-                       root_date: Optional[datetime] = None) -> Optional[Dict]:
-        """
-        Daily analysis: compute EMA-88 and RSI-88 on daily candles.
-        Match if:
-          - candle low <= EMA88 <= candle high (touches EMA) OR
-          - RSI88 in [49, 51]
-        """
-        df = self._fetch_hist(symbol, days=self.DAILY_RSI_FETCH_DAYS, end_date=root_date)
-        if df is None or len(df) < DAILY_EMA_PERIOD + 50:
-            return None
-
-        closes = df["close"].tolist()
-        highs = df["high"].tolist()
-        lows = df["low"].tolist()
-
-        ema_vals = _calc_ema(closes, DAILY_EMA_PERIOD)
-        rsi_vals = _calc_rsi(closes, DAILY_RSI_PERIOD)
-
-        last_ema = ema_vals[-1]
-        last_rsi = rsi_vals[-1]
-        prev_rsi = rsi_vals[-2] if len(rsi_vals) > 1 else float('nan')
-        last_high = highs[-1]
-        last_low = lows[-1]
-        last_close = closes[-1]
-
-        if last_ema != last_ema:
-            return None
-
-        # Strict touch: EMA must be within the current candle's actual range (low to high), with 0.5% buffer
-        margin = last_ema * 0.005
-        ema_touched  = bool((last_low - margin) <= last_ema <= (last_high + margin))
-        rsi_valid    = (last_rsi == last_rsi and prev_rsi == prev_rsi)
-        rsi_crossed_above = bool(rsi_valid and prev_rsi <= RSI_CROSSOVER and last_rsi > RSI_CROSSOVER)
-
-        if not (ema_touched or rsi_crossed_above):
-            return None
-
-        return {
-            "symbol": symbol,
-            "current_price": float(current_price),
-            "daily_close": round(float(last_close), 2),
-            "ema_208": round(float(last_ema), 2),
-            "rsi_208": round(float(last_rsi), 2) if last_rsi == last_rsi else None,
-            "ema_touched": ema_touched,
-            "rsi_in_range": rsi_crossed_above,
-            "trigger": (
-                "EMA+RSI" if ema_touched and rsi_crossed_above
-                else ("EMA Touch" if ema_touched else "RSI > 51")
-            ),
         }
 
     # ------------------------------------------------------------------
@@ -355,21 +301,13 @@ class EmaRsiFilterService:
     # Main entry point
     # ------------------------------------------------------------------
 
-    def run_filter(self, root_date: Optional[datetime] = None) -> Dict:
-        """
-        Scan all F&O stocks and return:
-          {
-            "weekly_ema": [...],
-            "daily_ema": [...],
-          }
-        root_date: analyse data up to this date (None = today / live).
-        """
+    def run_filter(self, root_date: Optional[datetime] = None, timeframe: str = "daily") -> Dict:
         stocks = self._get_fo_stocks()
         if not stocks:
             logger.warning("EMA filter: no F&O stocks found")
-            return {"weekly_ema": [], "daily_ema": []}
+            return {"results": [], "nearest": []}
 
-        logger.info(f"EMA/RSI 208 filter: scanning {len(stocks)} F&O stocks...")
+        logger.info(f"EMA/RSI 208 filter: scanning {len(stocks)} F&O stocks for {timeframe}...")
 
         # Batch quote all symbols at once to minimise API calls
         nse_symbols = [f"NSE:{s}" for s in stocks]
@@ -386,62 +324,56 @@ class EmaRsiFilterService:
             except Exception as e:
                 logger.warning(f"Batch quote failed: {e}")
 
-        weekly_results: List[Dict] = []
-        weekly_all: List[Dict]     = []  # all records (for near-miss tracking)
-        daily_results: List[Dict]  = []
+        results: List[Dict] = []
+        all_results: List[Dict] = []  # all records (for near-miss tracking)
+
+        config = self.TIMEFRAME_CONFIG.get(timeframe, self.TIMEFRAME_CONFIG["daily"])
+
+        if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+            if timeframe == "weekly":
+                config = {"interval": "week", "period": 208, "fetch_days": 1600, "resample": None}
+            elif timeframe == "monthly":
+                config = {"interval": "month", "period": 48, "fetch_days": 1800, "resample": None}
 
         def process_stock(symbol: str):
-            price    = price_map.get(symbol, 0.0)
-            w_result = self._analyse_weekly(symbol, price, root_date=root_date)
-            d_result = self._analyse_daily(symbol, price, root_date=root_date)
-            return symbol, w_result, d_result
+            price = price_map.get(symbol, 0.0)
+            
+            df = self._fetch_hist(symbol, days=config["fetch_days"], interval=config["interval"], end_date=root_date)
+            res = self._analyse_timeframe(symbol, price, df, config["period"], config["resample"])
+            return symbol, res
 
-        with ThreadPoolExecutor(max_workers=self.MAX_WORKERS) as executor:
+        # Limit workers if using Fyers to avoid rate limits
+        workers_count = self.MAX_WORKERS
+        if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+            workers_count = 5
+
+        with ThreadPoolExecutor(max_workers=workers_count) as executor:
             futures = {executor.submit(process_stock, s): s for s in stocks}
             for future in as_completed(futures):
                 try:
-                    sym, w_res, d_res = future.result(timeout=60)
-                    if w_res:
-                        weekly_all.append(w_res)
-                        if w_res.get("matched"):
-                            weekly_results.append(w_res)
-                    if d_res:
-                        daily_results.append(d_res)
+                    sym, res = future.result(timeout=60)
+                    if res:
+                        all_results.append(res)
+                        if res.get("matched"):
+                            results.append(res)
                 except Exception as e:
                     logger.warning(f"Stock processing error ({e.__class__.__name__}): {e}")
 
-        # Sort matched results: EMA+RSI first, then by RSI proximity to 51.0
         def sort_key(r):
             is_ema_rsi = 1 if r.get("trigger") == "EMA+RSI" else 0
-            rsi = r.get("rsi_208") or 0
+            rsi = r.get("rsi") or 0
             return (-is_ema_rsi, abs(rsi - 51.0))
 
-        weekly_results.sort(key=sort_key)
-        daily_results.sort(key=sort_key)
+        results.sort(key=sort_key)
 
-        # Top-10 nearest-to-EMA weekly stocks (for diagnostic display)
-        nearest_weekly = sorted(
-            [r for r in weekly_all if r.get("ema_208") is not None],
+        nearest_stocks = sorted(
+            [r for r in all_results if r.get("ema") is not None],
             key=lambda r: r.get("ema_pct_diff", 999)
         )[:10]
 
-        # Safe summary log — avoid f-string format spec issues
-        if nearest_weekly:
-            top = nearest_weekly[0]
-            logger.info(
-                f"EMA/RSI filter → Weekly: {len(weekly_results)} matches | "
-                f"Daily: {len(daily_results)} matches | "
-                f"Nearest to EMA208: {top['symbol']} "
-                f"({top['ema_pct_diff']} % away)"
-            )
-        else:
-            logger.info(
-                f"EMA/RSI filter → Weekly: {len(weekly_results)} | "
-                f"Daily: {len(daily_results)} | No weekly data"
-            )
+        logger.info(f"EMA/RSI filter → {timeframe}: {len(results)} matches")
 
         return {
-            "weekly_ema":     weekly_results,
-            "daily_ema":      daily_results,
-            "nearest_weekly": nearest_weekly,
+            "results": results,
+            "nearest": nearest_stocks,
         }

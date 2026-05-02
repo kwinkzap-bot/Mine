@@ -254,8 +254,8 @@ async function fetchMultiStrikeData(silentMode = false) {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        ce_token: parseInt(strike.ce_token),
-                        pe_token: parseInt(strike.pe_token),
+                        ce_token: strike.ce_token,
+                        pe_token: strike.pe_token,
                         timeframe: '5minute'
                     })
                 });

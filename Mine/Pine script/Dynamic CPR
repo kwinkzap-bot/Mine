@@ -49,8 +49,20 @@ r0_5_show = input.bool(true, "", inline="S0.5/R0.5", group="CPR levels")
 r0_5_color = input.color(SR_COLOR, "R0.5", inline="S0.5/R0.5", group="CPR levels")
 var r1 = array.new_float()
 var s1 = array.new_float()
+var r2 = array.new_float()
+var s2 = array.new_float()
+var r3 = array.new_float()
+var s3 = array.new_float()
+var r4 = array.new_float()
+var s4 = array.new_float()
 s1_color = input.color(SR_COLOR, "S1", inline="S1/R1" , group="CPR levels")
 r1_color = input.color(SR_COLOR, "R1", inline="S1/R1", group="CPR levels")
+s2_color = input.color(#1b9981, "S2", inline="S2/R2" , group="CPR levels")
+r2_color = input.color(#e91e63, "R2", inline="S2/R2", group="CPR levels")
+s3_color = input.color(#1b9981, "S3", inline="S3/R3" , group="CPR levels")
+r3_color = input.color(#e91e63, "R3", inline="S3/R3", group="CPR levels")
+s4_color = input.color(#1b9981, "S4", inline="S4/R4" , group="CPR levels")
+r4_color = input.color(#e91e63, "R4", inline="S4/R4", group="CPR levels")
 
 // R1/S1 Box Colors
 r1_border_color = input.color(color.new(#FFD700, 0), "R1 Border", inline="R1/S1 Box", group="CPR levels")
@@ -210,6 +222,10 @@ traditional() =>
     _s1 = pivotX_Median * 2 - pivotX_prev_high
     _r2 = pivotX_Median + 1 * (pivotX_prev_high - pivotX_prev_low)
     _s2 = pivotX_Median - 1 * (pivotX_prev_high - pivotX_prev_low)
+    _r3 = _r1 + (pivotX_prev_high - pivotX_prev_low)
+    _s3 = _s1 - (pivotX_prev_high - pivotX_prev_low)
+    _r4 = _r3 + (pivotX_prev_high - pivotX_prev_low)
+    _s4 = _s3 - (pivotX_prev_high - pivotX_prev_low)
     array.push(r0_5, (pivotX_Median + _r1) / 2)
     array.push(s0_5, (pivotX_Median + _s1) / 2)
     
@@ -224,6 +240,12 @@ traditional() =>
 
     array.push(r1, _r1)
     array.push(s1, _s1)
+    array.push(r2, _r2)
+    array.push(s2, _s2)
+    array.push(r3, _r3)
+    array.push(s3, _s3)
+    array.push(r4, _r4)
+    array.push(s4, _s4)
 
 calc_pivot() =>
     pivotX_Median = (pivotX_prev_high + pivotX_prev_low + pivotX_prev_close) / 3
@@ -406,6 +428,18 @@ if is_can_calc_pivot and enough_bars_for_calculate
                 array.shift(r1)
             if array.size(s1) > 0
                 array.shift(s1)
+            if array.size(r2) > 0
+                array.shift(r2)
+            if array.size(s2) > 0
+                array.shift(s2)
+            if array.size(r3) > 0
+                array.shift(r3)
+            if array.size(s3) > 0
+                array.shift(s3)
+            if array.size(r4) > 0
+                array.shift(r4)
+            if array.size(s4) > 0
+                array.shift(s4)
     is_change := true
 else if not is_daily_based
     pivotX_high := math.max(pivotX_high, high)
@@ -421,30 +455,33 @@ if htf_show
         calc_htf_pivot(htf_resolution)
         htf_last_period_time := htf_current_period_time
 
-if barstate.islast and array.size(arr_time) > 0 and is_change
-    is_change := false
-    array.push(arr_time, time_close(resolution))
+if barstate.islast and array.size(arr_time) > 0
+    if is_change
+        is_change := false
+        array.push(arr_time, time_close(resolution))
 
-    for i = 0 to array.size(lines) - 1
-        if array.size(lines) > 0
-            line.delete(array.shift(lines))
-        if array.size(labels) > 0
-            label.delete(array.shift(labels))
-
-    for i = 0 to array.size(arr_time) - 2
-        if array.size(p) > 0 and cpr_show
+    // Clear previous drawings every tick
+    while array.size(lines) > 0
+        line.delete(array.pop(lines))
+    while array.size(labels) > 0
+        label.delete(array.pop(labels))
+    while array.size(immediate_boxes) > 0
+        box.delete(array.pop(immediate_boxes))
+    j = array.size(arr_time) - 2
+    for i = 0 to j
+        // Draw CPR lines for all periods, but labels only for current day
+        if array.size(p) > i and cpr_show
             draw_line(i, p, cpr_color)
-        if array.size(tp) > 0 and array.size(bp) > 0 and cpr_show
+            if i == j
+                draw_label(i, array.get(p, i), "P", cpr_color)
+        if array.size(tp) > i and array.size(bp) > i and cpr_show
             tp_line = draw_line(i, tp, cpr_color)
             bp_line = draw_line(i, bp, cpr_color)
             linefill.new(tp_line, bp_line, color.new(cpr_color, 95))
+            if i == j
+                draw_label(i, array.get(tp, i), "TC", cpr_color)
+                draw_label(i, array.get(bp, i), "BC", cpr_color)
 
-    // Clear previous Immediate S/R boxes
-    while array.size(immediate_boxes) > 0
-        box.delete(array.pop(immediate_boxes))
-
-    j = array.size(arr_time) - 2
-    for i = 0 to j
         // Immediate S/R Boxes
         if immediate_sr_show
             // Resistance Box: R0.5 to R0.25
@@ -467,31 +504,62 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
 
         if sr_show or quarter_show
             // R0.5 Logic (Resistance)
-            if array.size(r0_5) > 0 and r0_5_show and sr_show and i == j
+            if array.size(r0_5) > i and r0_5_show and sr_show
                 draw_line(i, r0_5, r0_5_color, line.style_dashed)
-                draw_label(i, array.get(r0_5, i), "R0.5", r0_5_color)
+                if i == j
+                    draw_label(i, array.get(r0_5, i), "R0.5", r0_5_color)
             
             // S0.5 Logic (Support)
-            if array.size(s0_5) > 0 and s0_5_show and sr_show and i == j
+            if array.size(s0_5) > i and s0_5_show and sr_show
                 draw_line(i, s0_5, s0_5_color, line.style_dashed)
-                draw_label(i, array.get(s0_5, i), "S0.5", s0_5_color)
+                if i == j
+                    draw_label(i, array.get(s0_5, i), "S0.5", s0_5_color)
             
             // R0.25 Logic (Resistance Quarter)
-            if array.size(r_quarter) > 0 and quarter_show and i == j
+            if array.size(r_quarter) > i and quarter_show
                 draw_line(i, r_quarter, quarter_color, line.style_dotted)
-                draw_label(i, array.get(r_quarter, i), "R0.25", quarter_color)
+                if i == j
+                    draw_label(i, array.get(r_quarter, i), "R0.25", quarter_color)
 
             // S0.25 Logic (Support Quarter)
-            if array.size(s_quarter) > 0 and quarter_show and i == j
+            if array.size(s_quarter) > i and quarter_show
                 draw_line(i, s_quarter, quarter_color, line.style_dotted)
-                draw_label(i, array.get(s_quarter, i), "S0.25", quarter_color)
-            if array.size(cam_r3_curr) > 0 and cam_cs3_show and sr_show
+                if i == j
+                    draw_label(i, array.get(s_quarter, i), "S0.25", quarter_color)
+            
+            // R2 to R4 and S2 to S4
+            if array.size(r2) > i and sr_show
+                draw_line(i, r2, r2_color, line.style_solid)
+                if i == j
+                    draw_label(i, array.get(r2, i), "R2", r2_color)
+            if array.size(s2) > i and sr_show
+                draw_line(i, s2, s2_color, line.style_solid)
+                if i == j
+                    draw_label(i, array.get(s2, i), "S2", s2_color)
+            if array.size(r3) > i and sr_show
+                draw_line(i, r3, r3_color, line.style_solid)
+                if i == j
+                    draw_label(i, array.get(r3, i), "R3", r3_color)
+            if array.size(s3) > i and sr_show
+                draw_line(i, s3, s3_color, line.style_solid)
+                if i == j
+                    draw_label(i, array.get(s3, i), "S3", s3_color)
+            if array.size(r4) > i and sr_show
+                draw_line(i, r4, r4_color, line.style_solid)
+                if i == j
+                    draw_label(i, array.get(r4, i), "R4", r4_color)
+            if array.size(s4) > i and sr_show
+                draw_line(i, s4, s4_color, line.style_solid)
+                if i == j
+                    draw_label(i, array.get(s4, i), "S4", s4_color)
+
+            if array.size(cam_r3_curr) > i and cam_cs3_show and sr_show
                 cam_r3_line = draw_line(i, cam_r3_curr, cam_r3_color, line.style_solid)
                 if not na(cam_r3_line)
                     line.set_width(cam_r3_line, 2)
                 if i == j
                     draw_label(i, array.get(cam_r3_curr, i), "C-R3", cam_r3_color)
-            if array.size(cam_s3_curr) > 0 and cam_cs3_show and sr_show
+            if array.size(cam_s3_curr) > i and cam_cs3_show and sr_show
                 cam_s3_line = draw_line(i, cam_s3_curr, cam_s3_color, line.style_solid)
                 if not na(cam_s3_line)
                     line.set_width(cam_s3_line, 2)
@@ -499,24 +567,10 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
                     draw_label(i, array.get(cam_s3_curr, i), "C-S3", cam_s3_color)
         
         // Draw Open line with label (for all historical periods)
-        if open_show and array.size(open_arr) > 0
+        if open_show and array.size(open_arr) > i
             draw_line(i, open_arr, open_color, line.style_dashed)
             if i == j
                 draw_label(i, array.get(open_arr, i), "Open", open_color)
-
-    i = array.size(arr_time) - 2
-    if array.size(p) > 0 and cpr_show
-        if show_labels
-            x = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
-            array.push(labels, label.new(x=x, y=array.get(p, i), text="                           P", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-    if array.size(tp) > 0 and cpr_show
-        if show_labels
-            x = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
-            array.push(labels, label.new(x=x, y=array.get(tp, i), text="                           TC", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
-    if array.size(bp) > 0 and cpr_show
-        if show_labels
-            x = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
-            array.push(labels, label.new(x=x, y=array.get(bp, i), text="                           BC", textcolor=cpr_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
 
 // Draw session ranges (completely independent from is_change block)
 if barstate.islast and array.size(arr_time) > 0 and session_ranges_show
@@ -529,7 +583,7 @@ if barstate.islast and array.size(arr_time) > 0 and session_ranges_show
     j = array.size(arr_time) - 2
     for i = 0 to j
         // Draw R1 and Previous High as box with labels (for all historical periods)
-        if array.size(r1_curr) > 0 and array.size(prev_high_arr) > 0
+        if array.size(r1_curr) > i and array.size(prev_high_arr) > i
             r1_val = array.get(r1_curr, i)
             prev_h_val = array.get(prev_high_arr, i)
             top_val = math.max(r1_val, prev_h_val)
@@ -546,7 +600,7 @@ if barstate.islast and array.size(arr_time) > 0 and session_ranges_show
                     array.push(sr_labels, label.new(x=x_pos, y=r1_val, text="                           R1", textcolor=r1_color, style=label.style_none, color=#00000000, size=size.small, xloc=xloc.bar_time))
         
         // Draw S1 and Previous Low as box with labels (for all historical periods)
-        if array.size(s1_curr) > 0 and array.size(prev_low_arr) > 0
+        if array.size(s1_curr) > i and array.size(prev_low_arr) > i
             s1_val = array.get(s1_curr, i)
             prev_l_val = array.get(prev_low_arr, i)
             top_val = math.max(s1_val, prev_l_val)
@@ -583,7 +637,7 @@ if barstate.islast and htf_show and array.size(htf_r1_curr) > 0
                 htf_end_time = array.get(htf_period_end, htf_i)
                 
                 // Draw box for R1 and Previous High using actual HTF time period
-                box_htf_r1 = box.new(htf_start_time, top_val, htf_end_time, bottom_val, border_color=color.orange, bgcolor=color.new(htf_sr_color, 85), border_width=1, xloc=xloc.bar_time)
+                box_htf_r1 = box.new(htf_start_time, top_val, htf_end_time, bottom_val, border_color=color.orange, bgcolor=color.new(htf_sr_color, 85), border_width=2, xloc=xloc.bar_time)
                 array.push(htf_boxes, box_htf_r1)
             
             // Draw HTF Session Ranges - S1 (Previous Low) level as box
@@ -596,7 +650,7 @@ if barstate.islast and htf_show and array.size(htf_r1_curr) > 0
                 htf_end_time = array.get(htf_period_end, htf_i)
                 
                 // Draw box for S1 and Previous Low using actual HTF time period
-                box_htf_s1 = box.new(htf_start_time, top_val, htf_end_time, bottom_val, border_color=color.orange, bgcolor=color.new(htf_sr_color, 85), border_width=1, xloc=xloc.bar_time)
+                box_htf_s1 = box.new(htf_start_time, top_val, htf_end_time, bottom_val, border_color=color.orange, bgcolor=color.new(htf_sr_color, 85), border_width=2, xloc=xloc.bar_time)
                 array.push(htf_boxes, box_htf_s1)
 
 // Track current session's running high/low/close dynamically (updates every bar/tick)
@@ -693,10 +747,31 @@ if barstate.islast and next_session_show and array.size(arr_time) > 0
                 ns_start := time + one_day_ms
                 ns_end := ns_start + (6 * 60 + 30) * 60 * 1000
         else
-            // Weekly/Monthly/Quarterly/etc: use actual session duration
-            ns_duration = array.get(arr_time, j + 1) - array.get(arr_time, j)
-            ns_start := array.get(arr_time, j + 1)
-            ns_end   := ns_start + ns_duration
+            // Weekly/Monthly/Quarterly/etc: project to the NEXT session
+            int cur_s_start = array.get(arr_time, j + 1)
+            string tz = "Asia/Kolkata"
+            int one_day_ms = 86400000
+            
+            if (resolution == "W" or resolution == "1W") and j >= 0
+                // Find next Monday
+                int candidate = cur_s_start + (2 * one_day_ms)
+                while dayofweek(candidate, tz) != dayofweek.monday
+                    candidate += one_day_ms
+                ns_start := candidate
+                ns_end   := ns_start + (5 * one_day_ms)
+            else if (resolution == "M" or resolution == "1M") and j >= 0
+                // Find first day of next month
+                int y = year(cur_s_start, tz)
+                int m = month(cur_s_start, tz)
+                int nm = m == 12 ? 1 : m + 1
+                int ny = m == 12 ? y + 1 : y
+                ns_start := timestamp(tz, ny, nm, 1, 9, 0, 0)
+                ns_end   := timestamp(tz, ny, nm, 28, 15, 30, 0)
+            else
+                // Generic duration-based projection
+                int duration = j >= 0 ? cur_s_start - array.get(arr_time, j) : one_day_ms
+                ns_start := cur_s_start + duration
+                ns_end   := ns_start + duration
         
         if not na(ns_start) and not na(ns_end) and ns_end > ns_start
             // Always use bar_time for proper time-based projection
@@ -718,6 +793,12 @@ if barstate.islast and next_session_show and array.size(arr_time) > 0
             // === R1, S1 (Traditional) ===
             ns_r1 = ns_pivot * 2 - curr_low
             ns_s1 = ns_pivot * 2 - curr_high
+            ns_r2 = ns_pivot + (curr_high - curr_low)
+            ns_s2 = ns_pivot - (curr_high - curr_low)
+            ns_r3 = ns_r1 + (curr_high - curr_low)
+            ns_s3 = ns_s1 - (curr_high - curr_low)
+            ns_r4 = ns_r3 + (curr_high - curr_low)
+            ns_s4 = ns_s3 - (curr_high - curr_low)
         
             // === Camarilla R3, S3 ===
             ns_cam_range = curr_high - curr_low
@@ -772,6 +853,28 @@ if barstate.islast and next_session_show and array.size(arr_time) > 0
             else
                 array.push(next_labels, label.new(x=x2_next, y=curr_low, text="  Prev L*", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
                 array.push(next_labels, label.new(x=x2_next, y=ns_s1, text="  S1*", textcolor=s1_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+        
+            // --- Draw R2 to R4 and S2 to S4 Lines ---
+            l_ns_r2 = line.new(x1_next, ns_r2, x2_next, ns_r2, color=r2_color, xloc=next_xloc, width=line_width, style=line.style_dashed)
+            l_ns_s2 = line.new(x1_next, ns_s2, x2_next, ns_s2, color=s2_color, xloc=next_xloc, width=line_width, style=line.style_dashed)
+            array.push(next_lines, l_ns_r2)
+            array.push(next_lines, l_ns_s2)
+            array.push(next_labels, label.new(x=x2_next, y=ns_r2, text="  R2*", textcolor=r2_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+            array.push(next_labels, label.new(x=x2_next, y=ns_s2, text="  S2*", textcolor=s2_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+            
+            l_ns_r3 = line.new(x1_next, ns_r3, x2_next, ns_r3, color=r3_color, xloc=next_xloc, width=line_width, style=line.style_dashed)
+            l_ns_s3 = line.new(x1_next, ns_s3, x2_next, ns_s3, color=s3_color, xloc=next_xloc, width=line_width, style=line.style_dashed)
+            array.push(next_lines, l_ns_r3)
+            array.push(next_lines, l_ns_s3)
+            array.push(next_labels, label.new(x=x2_next, y=ns_r3, text="  R3*", textcolor=r3_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+            array.push(next_labels, label.new(x=x2_next, y=ns_s3, text="  S3*", textcolor=s3_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+            
+            l_ns_r4 = line.new(x1_next, ns_r4, x2_next, ns_r4, color=r4_color, xloc=next_xloc, width=line_width, style=line.style_dashed)
+            l_ns_s4 = line.new(x1_next, ns_s4, x2_next, ns_s4, color=s4_color, xloc=next_xloc, width=line_width, style=line.style_dashed)
+            array.push(next_lines, l_ns_r4)
+            array.push(next_lines, l_ns_s4)
+            array.push(next_labels, label.new(x=x2_next, y=ns_r4, text="  R4*", textcolor=r4_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
+            array.push(next_labels, label.new(x=x2_next, y=ns_s4, text="  S4*", textcolor=s4_color, style=label.style_none, color=#00000000, size=size.small, xloc=next_xloc))
         
             // --- Draw C-R3, C-S3 Lines --- same color as current C-R3/C-S3
             l_cr3 = line.new(x1_next, ns_cam_r3, x2_next, ns_cam_r3, color=cam_r3_color, xloc=next_xloc, width=2, style=line.style_dashed)

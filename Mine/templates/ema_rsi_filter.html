@@ -8,28 +8,37 @@
 <div id="ema-status-bar" class="ema-status-bar">
     <span id="ema-status-text">⏳ Loading data...</span>
     <div class="ema-controls">
+        <select id="emaTimeframeFilter" class="date-picker tf-picker" title="Select timeframe">
+            <option value="1minute">EMA &amp; RSI 60 1Min</option>
+            <option value="5minute">EMA &amp; RSI 75 5Min</option>
+            <option value="15minute">EMA &amp; RSI 125 15Min</option>
+            <option value="60minute">EMA &amp; RSI 137 1Hour</option>
+            <option value="daily" selected>EMA &amp; RSI 88 Daily</option>
+            <option value="weekly">EMA &amp; RSI 208 Weekly</option>
+            <option value="monthly">EMA &amp; RSI 48 Monthly</option>
+        </select>
         <input type="date" id="emaDateFilter" class="date-picker" title="Select analysis date">
         <button id="ema-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
     </div>
 </div>
 
-<!-- WEEKLY GRID -->
+<!-- WEEKLY/MONTHLY GRID -->
 <div class="ema-section-label">
-    <span class="ema-tf-badge weekly-badge">📅 Weekly</span>
-    <span class="ema-section-title">EMA 208 Touch &amp; RSI 208 (Crossed &gt; 51)</span>
+    <span class="ema-tf-badge daily-badge" id="primary-tf-badge">📆 Daily</span>
+    <span class="ema-section-title" id="primary-tf-title">EMA Touch &amp; RSI (Crossed &gt; 51)</span>
 </div>
 <div class="results-row" id="weeklyGrid">
     <div id="weeklyEmaResults" class="results results-hidden results-block">
-        <h3>📈 Weekly EMA 208 Touch <span id="weeklyEmaCount">(0)</span></h3>
+        <h3 id="primary-results-title">📈 Weekly EMA 208 Touch <span id="weeklyEmaCount">(0)</span></h3>
         <div class="results-scroll">
             <table id="weeklyEmaTable">
                 <thead>
                     <tr>
                         <th data-col="0">Symbol</th>
                         <th data-col="1">Price</th>
-                        <th data-col="2">W Close</th>
-                        <th data-col="3">EMA 208</th>
-                        <th data-col="4">RSI 208</th>
+                        <th data-col="2" id="primary-close-col">Close</th>
+                        <th data-col="3" id="primary-ema-col">EMA</th>
+                        <th data-col="4" id="primary-rsi-col">RSI</th>
                         <th data-col="5">Trigger</th>
                     </tr>
                 </thead>
@@ -38,9 +47,9 @@
         </div>
     </div>
 
-    <!-- Shown only when 0 weekly matches — nearest stocks to EMA-208 -->
+    <!-- Shown only when 0 matches — nearest stocks to EMA-208 -->
     <div id="nearestWeeklySection" class="results results-block ema-hidden">
-        <h3>🎯 Nearest to Weekly EMA 208 <span class="nearest-count"></span>
+        <h3 id="nearest-primary-title">🎯 Nearest to Weekly EMA 208 <span class="nearest-count"></span>
             <small style="font-weight:400;font-size:0.75rem;opacity:0.7;"> — no touch yet, showing closest stocks</small>
         </h3>
         <div class="results-scroll">
@@ -49,9 +58,9 @@
                     <tr>
                         <th>Symbol</th>
                         <th>Price</th>
-                        <th>W Close</th>
-                        <th>EMA 208</th>
-                        <th>RSI 208</th>
+                        <th id="nearest-close-col">Close</th>
+                        <th id="nearest-ema-col">EMA</th>
+                        <th id="nearest-rsi-col">RSI</th>
                         <th>EMA Distance</th>
                     </tr>
                 </thead>
@@ -62,37 +71,13 @@
 </div>
 
 
-<!-- DAILY GRID -->
-<div class="ema-section-label" style="margin-top:18px;">
-    <span class="ema-tf-badge daily-badge">📆 Daily</span>
-    <span class="ema-section-title">EMA 88 Touch &amp; RSI 88 (Crossed &gt; 51)</span>
-</div>
-<div class="results-row" id="dailyGrid">
-    <div id="dailyEmaResults" class="results results-hidden results-block">
-        <h3>📉 Daily EMA 88 Touch <span id="dailyEmaCount">(0)</span></h3>
-        <div class="results-scroll">
-            <table id="dailyEmaTable">
-                <thead>
-                    <tr>
-                        <th data-col="0">Symbol</th>
-                        <th data-col="1">Price</th>
-                        <th data-col="2">D Close</th>
-                        <th data-col="3">EMA 88</th>
-                        <th data-col="4">RSI 88</th>
-                        <th data-col="5">Trigger</th>
-                    </tr>
-                </thead>
-                <tbody id="dailyEmaBody"></tbody>
-            </table>
-        </div>
-    </div>
-</div>
+
 
 <!-- Empty State -->
 <div id="ema-empty-state" class="ema-empty-state ema-hidden">
     <div class="ema-empty-icon">🔍</div>
     <div class="ema-empty-title">No matches found</div>
-    <div class="ema-empty-sub">No F&amp;O stocks currently touch EMA 208 or have RSI 208 crossed above 51.</div>
+    <div class="ema-empty-sub">No F&amp;O stocks currently touch the EMA or have RSI crossed above 51.</div>
 </div>
 {% endblock %}
 {% block scripts %}

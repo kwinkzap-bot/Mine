@@ -52,7 +52,7 @@
                     </div>
                     <div class="oip-control-item">
                         <label class="oip-checkbox">
-                            <input type="checkbox" id="oipShowCpr">
+                            <input type="checkbox" id="oipShowCpr" checked>
                             <span>CPR</span>
                         </label>
                     </div>
@@ -62,9 +62,9 @@
                             <span>EMA</span>
                         </label>
                     </div>
-                    <div class="oip-control-item">
+                    <div class="oip-control-item" style="display: none;">
                         <label class="oip-checkbox">
-                            <input type="checkbox" id="oipShowRSI" checked>
+                            <input type="checkbox" id="oipShowRSI">
                             <span>RSI S&R</span>
                         </label>
                     </div>
@@ -193,12 +193,8 @@
 
                     <div class="oip-order-controls"
                         style="display: flex; gap: 4px; border-left: 1px solid #e2e8f0; padding-left: 6px;">
-                        <button class="oip-order-btn ce-buy" data-side="CE" data-action="BUY" title="CE BUY"></button>
-                        <button class="oip-order-btn ce-sell" data-side="CE" data-action="SELL"
-                            title="CE SELL"></button>
-                        <button class="oip-order-btn pe-buy" data-side="PE" data-action="BUY" title="PE BUY"></button>
-                        <button class="oip-order-btn pe-sell" data-side="PE" data-action="SELL"
-                            title="PE SELL"></button>
+                        <button class="oip-btn oip-order-btn" data-side="CE" data-action="BUY" title="CE BUY" style="background: #10b981; color: white; padding: 4px 10px;">BUY CE</button>
+                        <button class="oip-btn oip-order-btn" data-side="PE" data-action="BUY" title="PE BUY" style="background: #8b5cf6; color: white; padding: 4px 10px;">BUY PE</button>
                     </div>
                 </div>
             </div>
@@ -256,7 +252,7 @@
                 </div>
                 <div class="oip-control-item">
                     <label class="oip-checkbox">
-                        <input type="checkbox" id="oipShowVwapInt">
+                        <input type="checkbox" id="oipShowVwapInt" checked>
                         <span>VWAP</span>
                     </label>
                 </div>
@@ -288,6 +284,12 @@
                     <label class="oip-checkbox">
                         <input type="checkbox" id="oipShowPremium" checked>
                         <span>Premium</span>
+                    </label>
+                </div>
+                <div class="oip-control-item">
+                    <label class="oip-checkbox">
+                        <input type="checkbox" id="oipShowSignals" checked>
+                        <span>Signals</span>
                     </label>
                 </div>
             </div>

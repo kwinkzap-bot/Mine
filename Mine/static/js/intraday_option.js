@@ -32,7 +32,7 @@ class IntradayOptionTracker {
 
         // Auto-update polling configuration (like options_chart_app.js)
         this.autoUpdateInterval = null;
-        this.autoUpdateDelay = 5000; // 5 seconds (configurable)
+        this.autoUpdateDelay = 2000; // 2 seconds for faster updates
         this.isAutoUpdating = false;
         this.lastUpdateTime = null;
         this.updateCount = 0;

@@ -1,0 +1,267 @@
+// @version=6
+indicator("Strict S/R + RSI Signals - Pro v6 by KK", overlay = true, max_lines_count = 500, max_labels_count = 500)
+
+// --- KONTROLA INTERWAŁU ---
+int currentTF_seconds = timeframe.in_seconds("")
+bool isValidTF = (currentTF_seconds >= 60) and (currentTF_seconds <= 86400)
+
+// --- KONFIGURACJA S/R ---
+int pivotStrength = input.int(1, "Minimalna czułość (Left/Right bars)", minval = 1)
+
+// Grupa Oporu
+color resColor      = input.color(color.new(#ff5252, 30), "Kolor Linii Oporu", group = "Estetyka Oporu")
+bool  showResLabels = input.bool(false, "Pokaż ceny Oporu", group = "Estetyka Oporu")
+
+// Grupa Wsparcia
+color supColor      = input.color(color.new(#00ffbb, 30), "Kolor Linii Wsparcia", group = "Estetyka Wsparcia")
+bool  showSupLabels = input.bool(false, "Pokaż ceny Wsparcia", group = "Estetyka Wsparcia")
+
+// Grupa Ustawienia Linii
+int    lineLength = input.int(10, "Długość linii (świece)", minval = 1, group = "Ustawienia Linii")
+int    lineWidth  = input.int(1, "Grubość linii", minval = 1, group = "Ustawienia Linii")
+string lineStyle  = input.string("Ciągła", "Styl linii", options = ["Ciągła", "Przerywana", "Kropkowana"], group = "Ustawienia Linii")
+
+// --- KONFIGURACJA RSI ---
+int   rsiLength     = input.int(14, "Długość RSI", minval = 1, group = "Ustawienia RSI")
+int   rsiOverbought = input.int(70, "RSI Overbought (Poziom Sprzedaży)", group = "Ustawienia RSI")
+int   rsiOversold   = input.int(30, "RSI Oversold (Poziom Kupna)", group = "Ustawienia RSI")
+color rsiColor      = input.color(#2962ff, "Kolor linii RSI", group = "Ustawienia RSI")
+
+// Grupa Ustawienia Handlu
+// Grupa Ustawienia Handlu
+rrRatio   = input.float(3.0, "Risk:Reward Ratio", minval = 0.1, group = "Ustawienia Handlu")
+// Entry buffer is dynamic based on timeframe
+float entryBuffer = timeframe.isdaily ? 10.0 :
+              timeframe.multiplier >= 15 ? 10.0 :
+              timeframe.multiplier == 5  ? 5.0 :
+              timeframe.multiplier == 3  ? 3.0 :
+              timeframe.multiplier == 1  ? 1.0 : 10.0
+entryCutoffHour = input.int(15, "Entry Cut-off Hour", minval = 0, maxval = 23, group = "Ustawienia Handlu")
+entryCutoffMin  = input.int(0, "Entry Cut-off Minute", minval = 0, maxval = 59, group = "Ustawienia Handlu")
+intradayOnly = input.bool(true, "Intraday Only (Square off)", group = "Ustawienia Handlu")
+exitHour = input.int(15, "Exit Hour", minval = 0, maxval = 23, group = "Ustawienia Handlu")
+exitMin  = input.int(20, "Exit Minute", minval = 0, maxval = 59, group = "Ustawienia Handlu")
+slClosePrice = input.bool(true, "SL on Candle Close (uncheck for touch-based SL)", group = "Ustawienia Handlu")
+string trailMode = input.string("Break Even Only", "Trailing SL Mode", options = ["Break Even Only", "Trail 1 Candle", "Trail 2 Candles", "Trail 3 Candles"], group = "Ustawienia Handlu")
+
+// --- MAPOWANIE STYLU ---
+get_style(s) =>
+    switch s
+        "Ciągła"     => line.style_solid
+        "Przerywana" => line.style_dashed
+        "Kropkowana" => line.style_dotted
+        => line.style_solid
+
+// --- LOGIKA ANALITYCZNA ---
+float ph = ta.pivothigh(high, pivotStrength, pivotStrength)
+float pl = ta.pivotlow(low, pivotStrength, pivotStrength)
+float rsiValue = ta.rsi(close, rsiLength)
+
+// --- FUNKCJA RYSOWANIA S/R ---
+render_sr(price, is_res) =>
+    int startX = bar_index - pivotStrength
+    int endX   = startX + lineLength
+    
+    line.new(x1 = startX, y1 = price, x2 = endX, y2 = price, color = is_res ? resColor : supColor, width = lineWidth, style = get_style(lineStyle))
+    
+    if (is_res and showResLabels) or (not is_res and showSupLabels)
+        label.new(startX, price, str.tostring(price, format.mintick), color = color.new(color.black, 100), textcolor = is_res ? resColor : supColor, style = label.style_none, size = size.small)
+
+// --- WYKONANIE WIZUALNE S/R I RSI ---
+if isValidTF and not na(ph)
+    render_sr(ph, true)
+
+if isValidTF and not na(pl)
+    render_sr(pl, false)
+
+plot(isValidTF ? rsiValue : na, "RSI", color = rsiColor, linewidth = 2)
+hline(rsiOverbought, "Overbought", color=color.new(color.red, 50), linestyle=hline.style_dashed)
+hline(rsiOversold, "Oversold", color=color.new(color.green, 50), linestyle=hline.style_dashed)
+
+// --- ŚCISŁE SYGNAŁY (TYLKO ZGODNOŚĆ S/R + RSI) ---
+// Sygnał SELL: Opór powstał ORAZ RSI w tamtej chwili wynosiło >= 70
+bool strictSell = isValidTF and not na(ph) and (rsiValue[pivotStrength] >= rsiOverbought)
+
+// Sygnał BUY: Wsparcie powstało ORAZ RSI w tamtej chwili wynosiło <= 30
+bool strictBuy  = isValidTF and not na(pl) and (rsiValue[pivotStrength] <= rsiOversold)
+
+plotshape(series = strictSell, title="Sell Signal", style=shape.labeldown, location=location.abovebar, color=color.new(#ff5252, 50), text="SELL", textcolor=color.white, offset=-pivotStrength)
+plotshape(series = strictBuy,  title="Buy Signal",  style=shape.labelup,   location=location.belowbar, color=color.new(#00ffbb, 50), text="BUY", textcolor=color.white, offset=-pivotStrength)
+
+// --- LOGIKA WEJŚCIA (POTWIERDZENIE PRZEBICIA HIGH/LOW) ---
+var float buyTriggerPrice = na
+var float sellTriggerPrice = na
+var bool waitingForBuy = false
+var bool waitingForSell = false
+
+// Zmienne Stop Loss i Take Profit
+var float slLevel = na
+var float tpLevel = na
+var float entryPriceVar = na
+var bool  slMoved = false
+var int   activePos = 0 // 1: Long, -1: Short
+var int   barsSinceBE = 0 // Counter for trailing candle frequency
+
+// Max SL filter based on timeframe
+float maxSL = timeframe.isdaily ? 300 :
+              timeframe.multiplier == 60 ? 150 :
+              timeframe.multiplier == 30 ? 150 :
+              timeframe.multiplier == 15 ? 150 :
+              timeframe.multiplier == 5  ? 100 :
+              timeframe.multiplier == 3  ? 80 :
+              timeframe.multiplier == 1  ? 50 : 150
+
+var int signalBarIndex = 0
+
+if strictBuy
+    buyTriggerPrice := high + entryBuffer
+    waitingForBuy := true
+    waitingForSell := false
+    slLevel := pl
+    signalBarIndex := bar_index
+    // Filter: Skip if SL is more than threshold
+    if (buyTriggerPrice - slLevel) > maxSL
+        waitingForBuy := false
+
+if strictSell
+    sellTriggerPrice := low - entryBuffer
+    waitingForSell := true
+    waitingForBuy := false
+    slLevel := ph
+    signalBarIndex := bar_index
+    // Filter: Skip if SL is more than threshold
+    if (slLevel - sellTriggerPrice) > maxSL
+        waitingForSell := false
+
+bool isAfterCutoff = (hour > entryCutoffHour) or (hour == entryCutoffHour and minute >= entryCutoffMin)
+bool canEnter = not isAfterCutoff
+
+// --- INVALIDATION: If price hits SL before entry, cancel the setup ---
+if waitingForBuy and low <= slLevel
+    waitingForBuy := false
+if waitingForSell and high >= slLevel
+    waitingForSell := false
+
+bool gapTooBig = math.abs(open - close[1]) > 100
+bool triggerHitBuy  = waitingForBuy and bar_index > signalBarIndex and high > buyTriggerPrice and canEnter
+bool triggerHitSell = waitingForSell and bar_index > signalBarIndex and low < sellTriggerPrice and canEnter
+
+// If trigger hit but gap is too big, cancel the entire setup
+if (triggerHitBuy or triggerHitSell) and gapTooBig
+    waitingForBuy := false
+    waitingForSell := false
+
+bool entryBuy  = triggerHitBuy and not gapTooBig
+bool entrySell = triggerHitSell and not gapTooBig
+
+// Visual feedback for trigger levels
+plot(waitingForBuy ? buyTriggerPrice : na, "Buy Trigger Level", color=color.new(#00ffbb, 30), style=plot.style_linebr, linewidth=2)
+plot(waitingForSell ? sellTriggerPrice : na, "Sell Trigger Level", color=color.new(#ff5252, 30), style=plot.style_linebr, linewidth=2)
+
+if entryBuy
+    waitingForBuy := false
+    activePos := 1
+    entryPriceVar := math.max(open, buyTriggerPrice)
+    // slLevel is already set during strictBuy
+    tpLevel := entryPriceVar + (entryPriceVar - slLevel) * rrRatio
+    slMoved := false
+
+if entrySell
+    waitingForSell := false
+    activePos := -1
+    entryPriceVar := math.min(open, sellTriggerPrice)
+    // slLevel is already set during strictSell
+    tpLevel := entryPriceVar - (slLevel - entryPriceVar) * rrRatio
+    slMoved := false
+
+// Logika Stop Loss (Zamknięcie świecy poza poziomem)
+bool slHit = false
+bool beHit = false
+bool sqOff = false
+
+// Intraday Square-off
+if intradayOnly and ((hour > exitHour) or (hour == exitHour and minute >= exitMin)) and activePos != 0
+    activePos := 0
+    sqOff := true
+
+// SL logic: close-based or touch-based
+bool longSlHit  = slClosePrice ? (close < slLevel) : (low <= slLevel)
+bool shortSlHit = slClosePrice ? (close > slLevel) : (high >= slLevel)
+
+if activePos == 1 and longSlHit
+    if slMoved
+        beHit := true
+    else
+        slHit := true
+    activePos := 0
+if activePos == -1 and shortSlHit
+    if slMoved
+        beHit := true
+    else
+        slHit := true
+    activePos := 0
+
+// Logika Take Profit (Cena dotyka poziomu targetu)
+bool tpHit = false
+if activePos == 1 and high >= tpLevel
+    tpHit := true
+    activePos := 0
+if activePos == -1 and low <= tpLevel
+    tpHit := true
+    activePos := 0
+
+// Move SL to Break Even (1:1) and Trailing SL logic
+// Trailing always uses candle CLOSE, takes effect next bar
+int trailCandles = trailMode == "Trail 1 Candle" ? 1 : trailMode == "Trail 2 Candles" ? 2 : trailMode == "Trail 3 Candles" ? 3 : 0
+
+if activePos == 1 and not slMoved
+    float initialRisk = entryPriceVar - slLevel
+    if close >= entryPriceVar + initialRisk
+        slLevel := entryPriceVar
+        slMoved := true
+        barsSinceBE := 0
+
+if activePos == -1 and not slMoved
+    float initialRisk = slLevel - entryPriceVar
+    if close <= entryPriceVar - initialRisk
+        slLevel := entryPriceVar
+        slMoved := true
+        barsSinceBE := 0
+
+// Continuous trailing after BE (only if trail mode is not "Break Even Only")
+if slMoved and trailCandles > 0 and activePos != 0
+    barsSinceBE += 1
+    if barsSinceBE >= trailCandles
+        barsSinceBE := 0
+        if activePos == 1
+            float trailLow = ta.lowest(low, trailCandles)
+            if trailLow > slLevel
+                slLevel := trailLow
+        if activePos == -1
+            float trailHigh = ta.highest(high, trailCandles)
+            if trailHigh < slLevel
+                slLevel := trailHigh
+
+// Plotowanie Entry (Tylko strzałki)
+// Plotowanie Entry (Tylko strzałki)
+plotshape(entryBuy,  title="Buy Entry",  style=shape.triangleup,   location=location.belowbar, color=color.new(#00ffbb, 0), size=size.normal)
+plotshape(entrySell, title="Sell Entry", style=shape.triangledown, location=location.abovebar, color=color.new(#ff5252, 0), size=size.normal)
+
+// Plotowanie SL / TP
+plotshape(slHit, title="Stop Loss Hit",  style=shape.xcross,  location=location.abovebar, color=color.new(color.red, 0),    size=size.small)
+plotshape(beHit, title="Break Even Hit", style=shape.circle,  location=location.abovebar, color=color.new(color.orange, 0), size=size.small)
+plotshape(sqOff, title="Intraday Square-off", style=shape.circle, location=location.abovebar, color=color.new(color.blue, 0), size=size.small)
+plotshape(tpHit, title="Take Profit Hit", style=shape.diamond, location=location.abovebar, color=color.new(color.lime, 0),   size=size.small)
+
+// Alerty
+alertcondition(entryBuy,  "Buy Entry",   "Apex Buy Entry Triggered")
+alertcondition(entrySell, "Sell Entry",  "Apex Sell Entry Triggered")
+alertcondition(slHit,     "Stop Loss",   "Apex Stop Loss Hit")
+alertcondition(beHit,     "Break Even",  "Apex Break Even Hit")
+alertcondition(tpHit,     "Take Profit", "Apex Take Profit Hit")
+
+// --- KOMUNIKAT O BŁĘDNEJ RAMIE CZASOWEJ ---
+var label tfWarning = na
+if not isValidTF and barstate.islast
+    tfWarning := label.new(bar_index, high, "Indicator works only on timeframes from 1H to 1 Day!", color=color.red, textcolor=color.white, style=label.style_label_center)
+label.delete(tfWarning[1])

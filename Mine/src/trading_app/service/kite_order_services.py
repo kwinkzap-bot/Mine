@@ -16,13 +16,12 @@ import gc
 load_dotenv()
 
 # Global singleton cache for instruments (shared across all KiteService instances)
-# Optimized to store pruned structures and indexed groups instead of full lists
+# Partitioned by provider to avoid token contamination between Kite and Fyers
 _global_instruments_cache = {
-    'tokens_by_symbol': {},
-    'tokens_by_name': {},
-    'nfo_by_name': {},  # Mapping: symbol_name -> list of pruned instrument dicts
-    'cache_date': None,
     'lock': threading.Lock()
+    # Structure:
+    # 'kite': { 'tokens_by_symbol': {}, 'cache_date': None, ... }
+    # 'fyers': { ... }
 }
 
 # ── RATE LIMITING ────────────────────────────────────────────────────────
@@ -56,10 +55,10 @@ class HistoricalDataCache:
         self._hits = 0
         self._misses = 0
     
-    def _make_key(self, token: int, from_date: str, to_date: str, interval: str) -> str:
+    def _make_key(self, token: Union[int, str], from_date: str, to_date: str, interval: str) -> str:
         return f"{token}:{from_date}:{to_date}:{interval}"
     
-    def get(self, token: int, from_date: str, to_date: str, interval: str) -> Optional[Any]:
+    def get(self, token: Union[int, str], from_date: str, to_date: str, interval: str) -> Optional[Any]:
         key = self._make_key(token, from_date, to_date, interval)
         with self._lock:
             if key not in self._cache:
@@ -74,7 +73,7 @@ class HistoricalDataCache:
             self._hits += 1
             return data.copy() if isinstance(data, pd.DataFrame) else data
     
-    def set(self, token: int, from_date: str, to_date: str, interval: str, data: Any, ttl: Optional[int] = None) -> None:
+    def set(self, token: Union[int, str], from_date: str, to_date: str, interval: str, data: Any, ttl: Optional[int] = None) -> None:
         key = self._make_key(token, from_date, to_date, interval)
         ttl = ttl or self._default_ttl
         with self._lock:
@@ -90,8 +89,8 @@ class KiteService:
     
     def __init__(self, kite_instance: Optional[KiteConnect] = None):
         self.kite: KiteConnect = kite_instance or self._create_kite_instance()
-        self._instrument_tokens_by_symbol: Dict[str, int] = {}
-        self._instrument_tokens_by_name: Dict[str, int] = {}
+        self._instrument_tokens_by_symbol: Dict[str, Union[int, str]] = {}
+        self._instrument_tokens_by_name: Dict[str, Union[int, str]] = {}
         self._nfo_by_name: Dict[str, List[Dict[str, Any]]] = {}
         self._nfo_cache_asof: Optional[date] = None
         self._nfo_option_symbol_cache: Dict[str, str] = {}
@@ -104,16 +103,21 @@ class KiteService:
     def _load_instruments_from_cache_or_api(self):
         global _global_instruments_cache
         today = date.today()
-        cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', 'kite_instruments_v2.pkl')
+        
+        # Determine provider type for cache partitioning
+        p_type = 'fyers' if 'Fyers' in self.kite.__class__.__name__ else 'kite'
+        cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', f'{p_type}_instruments_v2.pkl')
         os.makedirs(os.path.dirname(cache_file), exist_ok=True)
         
         with _global_instruments_cache['lock']:
-            if _global_instruments_cache['cache_date'] == today:
-                self._instrument_tokens_by_symbol = _global_instruments_cache['tokens_by_symbol']
-                self._instrument_tokens_by_name = _global_instruments_cache['tokens_by_name']
-                self._nfo_by_name = _global_instruments_cache['nfo_by_name']
-                self._nfo_cache_asof = today
-                return
+            if p_type in _global_instruments_cache:
+                p_cache = _global_instruments_cache[p_type]
+                if p_cache.get('cache_date') == today:
+                    self._instrument_tokens_by_symbol = p_cache['tokens_by_symbol']
+                    self._instrument_tokens_by_name = p_cache['tokens_by_name']
+                    self._nfo_by_name = p_cache['nfo_by_name']
+                    self._nfo_cache_asof = today
+                    return
         
         if os.path.exists(cache_file):
             try:
@@ -125,20 +129,24 @@ class KiteService:
                     self._instrument_tokens_by_name = disk_cache['tokens_by_name']
                     self._nfo_by_name = disk_cache.get('nfo_by_name', {})
                     self._nfo_cache_asof = today
+                    
                     with _global_instruments_cache['lock']:
-                        _global_instruments_cache['tokens_by_symbol'] = self._instrument_tokens_by_symbol
-                        _global_instruments_cache['tokens_by_name'] = self._instrument_tokens_by_name
-                        _global_instruments_cache['nfo_by_name'] = self._nfo_by_name
-                        _global_instruments_cache['cache_date'] = today
+                        _global_instruments_cache[p_type] = {
+                            'tokens_by_symbol': self._instrument_tokens_by_symbol,
+                            'tokens_by_name': self._instrument_tokens_by_name,
+                            'nfo_by_name': self._nfo_by_name,
+                            'cache_date': today
+                        }
                     return
             except Exception as e: logging.warning(f"Disk cache load error: {e}")
         
-        self._load_instruments()
+        self._load_instruments(p_type)
 
-    def _load_instruments(self):
+    def _load_instruments(self, p_type: str = 'kite'):
         """Fetch and prune instruments for memory efficiency (~70% reduction)."""
         global _global_instruments_cache
-        cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', 'kite_instruments_v2.pkl')
+        today = date.today()
+        cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', f'{p_type}_instruments_v2.pkl')
         try:
             logging.info("[KiteService] Fetching instruments (NSE+NFO)...")
             nse_raw = self.kite.instruments('NSE') or []
@@ -177,17 +185,58 @@ class KiteService:
                 'tokens_by_name': self._instrument_tokens_by_name,
                 'nfo_by_name': self._nfo_by_name
             }
+            disk_data = {'tokens_by_symbol': self._instrument_tokens_by_symbol, 'tokens_by_name': self._instrument_tokens_by_name, 'nfo_by_name': self._nfo_by_name}
             with open(cache_file, 'wb') as f: pickle.dump(disk_data, f)
             with _global_instruments_cache['lock']:
-                _global_instruments_cache['tokens_by_symbol'] = self._instrument_tokens_by_symbol
-                _global_instruments_cache['tokens_by_name'] = self._instrument_tokens_by_name
-                _global_instruments_cache['nfo_by_name'] = self._nfo_by_name
-                _global_instruments_cache['cache_date'] = self._nfo_cache_asof
-            logging.info(f"[KiteService] Memory-efficient cache built: {len(self._instrument_tokens_by_symbol)} items")
+                _global_instruments_cache[p_type] = {
+                    'tokens_by_symbol': self._instrument_tokens_by_symbol,
+                    'tokens_by_name': self._instrument_tokens_by_name,
+                    'nfo_by_name': self._nfo_by_name,
+                    'cache_date': today
+                }
+            logging.info(f"[KiteService] Memory-efficient {p_type} cache built: {len(self._instrument_tokens_by_symbol)} items")
         except Exception as e: logging.error(f"Instrument fetch error: {e}")
 
-    def get_instrument_token(self, symbol: str) -> Optional[int]:
-        return self._instrument_tokens_by_symbol.get(symbol)
+    def get_instrument_token(self, symbol: str) -> Optional[Union[int, str]]:
+        if not self._instrument_tokens_by_symbol: self._init_instruments()
+        token = self._instrument_tokens_by_symbol.get(symbol)
+        if token: return token
+        index_map = {'NIFTY': 'NSE:NIFTY 50', 'BANKNIFTY': 'NSE:NIFTY BANK', 'FINNIFTY': 'NSE:NIFTY FIN SERVICE'}
+        if symbol.upper() in index_map:
+            mapped = index_map[symbol.upper()]
+            token = self._instrument_tokens_by_symbol.get(mapped)
+            if token: return token
+            return self._instrument_tokens_by_name.get(symbol.lower())
+        return None
+
+    def get_current_ltp(self, symbol: str) -> Optional[float]:
+        try:
+            token = self.get_instrument_token(symbol)
+            if not token: return None
+            _global_rate_limiter.wait()
+            quote = self.kite.quote([token])
+            token_key = token if token in quote else str(token)
+            if token_key in quote: return float(quote[token_key]['last_price'])
+        except Exception as e:
+            logging.warning(f"[KiteService] LTP fetch failed for {symbol}: {e}")
+        return None
+
+    def get_previous_trading_day_close(self, symbol: str, target_date: Optional[str] = None) -> Optional[float]:
+        try:
+            token = self.get_instrument_token(symbol)
+            if not token: return None
+            ref_date = datetime.strptime(target_date, '%Y-%m-%d') if target_date else datetime.now()
+            from_date = ref_date - timedelta(days=10)
+            data = self._historical_with_retry(token, from_date, ref_date, 'day')
+            if not data: return None
+            data.sort(key=lambda x: x['date'], reverse=True)
+            ref_date_only = ref_date.date()
+            for bar in data:
+                bar_date = bar['date'].date() if isinstance(bar['date'], datetime) else bar['date']
+                if bar_date < ref_date_only: return float(bar['close'])
+        except Exception as e:
+            logging.warning(f"[KiteService] PDC fetch failed for {symbol}: {e}")
+        return None
 
     def get_nfo_instruments(self, name: str) -> List[Dict[str, Any]]:
         """O(1) lookup for options of a symbol."""

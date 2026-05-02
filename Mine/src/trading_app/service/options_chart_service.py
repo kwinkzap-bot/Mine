@@ -16,21 +16,29 @@ _rate_limiter = get_global_rate_limiter()
 class OptionsChartService:
     def __init__(self, kite_instance):
         self.kite_service = KiteService(kite_instance)
+        
+        # Partition disk cache by provider to avoid Kite-token vs Fyers-symbol contamination
+        # Detect provider type from the instance class name
+        provider_type = 'fyers' if 'Fyers' in kite_instance.__class__.__name__ else 'kite'
+        cache_filename = f'nfo_instruments_{provider_type}.json'
+        
         # Cache for historical data - {(ce_token, pe_token, timeframe): (ce_data, pe_data, timestamp)}
-        self._chart_data_cache: Dict[Tuple[int, int, str], Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float]] = {}
+        self._chart_data_cache: Dict[Tuple[Union[int, str], Union[int, str], str], Tuple[List[Dict[str, Any]], List[Dict[str, Any]], float]] = {}
         self._cache_lock = threading.Lock()
         # Incremental cache: {(ce_token, pe_token, timeframe): {date: candle}}
-        self._incremental_cache: Dict[Tuple[int, int, str], Dict] = {}
-        self._incremental_last_fetch: Dict[Tuple[int, int, str], datetime] = {}
+        self._incremental_cache: Dict[Tuple[Union[int, str], Union[int, str], str], Dict] = {}
+        self._incremental_last_fetch: Dict[Tuple[Union[int, str], Union[int, str], str], datetime] = {}
         # Cache for instruments - {expiry: instruments}
         self._instruments_cache: Dict[str, List[Dict[str, Any]]] = {}
         self._instruments_lock = threading.Lock()
         self._instruments_expiry = 0  # Timestamp when instruments cache expires (1 hour)
         # Disk cache path
-        self._nfo_cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', 'nfo_instruments.json')
+        self._nfo_cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', cache_filename)
         os.makedirs(os.path.dirname(self._nfo_cache_file), exist_ok=True)
         # Pre-cache timezone for repeated use
         self._ist = pytz.timezone('Asia/Kolkata')
+        
+        logging.info(f"[OptionsChartService] Initialized with {provider_type} provider (cache: {cache_filename})")
 
     def _respect_rate_limit(self, min_gap_seconds: float = 0.4):
         """Use the global rate limiter to ensure 3 req/sec across entire application."""
@@ -61,19 +69,29 @@ class OptionsChartService:
         except Exception as e:
             logging.warning(f"Error saving to disk cache: {e}")
 
-    def _historical_with_retry(self, instrument_token: int, from_date: datetime, to_date: datetime, interval: str, max_retries: int = 5):
-        """Call kite.historical_data with exponential backoff, jitter, and basic 429 handling."""
-        from kiteconnect.exceptions import NetworkException
+    def _historical_with_retry(self, instrument_token: Union[int, str], from_date: datetime, to_date: datetime, interval: str, max_retries: int = 5, use_cache: bool = True):
+        """Call historical_data with exponential backoff, jitter, and basic 429 handling."""
+        # Dynamic import to handle cases where kiteconnect might not be installed or needed
+        try:
+            from kiteconnect.exceptions import NetworkException
+        except ImportError:
+            NetworkException = Exception
         attempt = 0
         while True:
             try:
                 self._respect_rate_limit()
-                return self.kite_service.kite.historical_data(
-                    instrument_token=int(instrument_token),
-                    from_date=from_date,
-                    to_date=to_date,
-                    interval=interval
-                )
+                params = {
+                    "instrument_token": instrument_token,
+                    "from_date": from_date,
+                    "to_date": to_date,
+                    "interval": interval
+                }
+                # Only pass use_cache if the data provider's SDK (or our adapter) supports it
+                # For FyersDataServiceAdapter, we specifically added this support.
+                if 'Fyers' in self.kite_service.kite.__class__.__name__:
+                    params["use_cache"] = use_cache
+                
+                return self.kite_service.kite.historical_data(**params)
             except NetworkException as e:
                 msg = str(e) if e else ""
                 if attempt >= max_retries:
@@ -86,9 +104,12 @@ class OptionsChartService:
                 time.sleep(sleep_s)
                 attempt += 1
 
-    def _quote_with_retry(self, tokens, max_retries: int = 5):
-        """Call kite.quote with backoff and jitter."""
-        from kiteconnect.exceptions import NetworkException
+    def _quote_with_retry(self, tokens: List[Union[int, str]], max_retries: int = 5):
+        """Call quote with backoff and jitter."""
+        try:
+            from kiteconnect.exceptions import NetworkException
+        except ImportError:
+            NetworkException = Exception
         attempt = 0
         while True:
             try:
@@ -411,7 +432,7 @@ class OptionsChartService:
             logging.error(f"Error in get_strikes_for_symbol: {e}", exc_info=True)
             raise
     
-    def get_tokens_for_strikes(self, symbol: str, ce_strike: float, pe_strike: float) -> Tuple[Optional[int], Optional[int]]:
+    def get_tokens_for_strikes(self, symbol: str, ce_strike: float, pe_strike: float) -> Tuple[Optional[Union[int, str]], Optional[Union[int, str]]]:
         """Get CE and PE instrument tokens for given strike prices.
         
         Automatically selects the current/next expiry to handle expired options.
@@ -490,7 +511,7 @@ class OptionsChartService:
             logging.error(f"Error getting tokens for strikes: {e}", exc_info=True)
             return None, None
 
-    def _fetch_prev_day_ohlc(self, token: int, target_date: Optional[str] = None) -> Dict[str, Optional[float]]:
+    def _fetch_prev_day_ohlc(self, token: Union[int, str], target_date: Optional[str] = None) -> Dict[str, Optional[float]]:
         """Fetch previous day's OHLC using daily historical data to avoid intraday highs.
         
         Args:
@@ -514,7 +535,7 @@ class OptionsChartService:
                 to_dt = datetime.combine(today_ist, datetime.max.time()).replace(tzinfo=None)
 
             data = self._historical_with_retry(
-                instrument_token=int(token),
+                instrument_token=token,
                 from_date=from_dt,
                 to_date=to_dt,
                 interval='day'
@@ -558,7 +579,7 @@ class OptionsChartService:
             logging.error(f"Error fetching previous day OHLC for token {token}: {e}", exc_info=True)
             return {'high': None, 'low': None, 'open': None, 'close': None}
 
-    def _fetch_pdh_pdl_from_tokens(self, ce_token: int, pe_token: int, target_date: Optional[str] = None) -> Dict[str, Optional[float]]:
+    def _fetch_pdh_pdl_from_tokens(self, ce_token: Union[int, str], pe_token: Union[int, str], target_date: Optional[str] = None) -> Dict[str, Optional[float]]:
         """Fetch previous day high/low using daily historical bars (avoids live-day highs/lows).
         
         Args:
@@ -576,7 +597,7 @@ class OptionsChartService:
             'pe_pdl': pe.get('low')
         }
 
-    def get_pdh_pdl(self, ce_token: int, pe_token: int, target_date: Optional[str] = None) -> Dict[str, Optional[float]]:
+    def get_pdh_pdl(self, ce_token: Union[int, str], pe_token: Union[int, str], target_date: Optional[str] = None) -> Dict[str, Optional[float]]:
         """Public method to fetch PDH/PDL using instrument tokens.
         
         Args:
@@ -673,17 +694,16 @@ class OptionsChartService:
         }
         
         try:
-            ce_token_int, pe_token_int = int(tokens[0]), int(tokens[1])
+            ce_token_val, pe_token_val = tokens[0], tokens[1]
             self._respect_rate_limit(min_gap_seconds=0.35)
-            quotes = self._quote_with_retry([ce_token_int, pe_token_int])
+            quotes = self._quote_with_retry([ce_token_val, pe_token_val])
             
             if not quotes or not isinstance(quotes, dict):
                 return pdh_pdl_dict
             
-            # Try both int and str keys (kite API can return either)
-            # Cast to Dict[str, Any] for type safety
-            ce_quote: Dict[str, Any] = quotes.get(ce_token_int) or quotes.get(str(ce_token_int)) or {}  # type: ignore
-            pe_quote: Dict[str, Any] = quotes.get(pe_token_int) or quotes.get(str(pe_token_int)) or {}  # type: ignore
+            # Try both raw token and stringified token for cross-provider compatibility
+            ce_quote: Dict[str, Any] = quotes.get(ce_token_val) or quotes.get(str(ce_token_val)) or {}  # type: ignore
+            pe_quote: Dict[str, Any] = quotes.get(pe_token_val) or quotes.get(str(pe_token_val)) or {}  # type: ignore
             
             ce_ohlc = self._extract_ohlc_from_quote(ce_quote)
             pe_ohlc = self._extract_ohlc_from_quote(pe_quote)
@@ -701,7 +721,7 @@ class OptionsChartService:
         
         return pdh_pdl_dict
 
-    def get_chart_data(self, ce_token: int, pe_token: int, timeframe: str, use_cache: bool = True) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    def get_chart_data(self, ce_token: Union[int, str], pe_token: Union[int, str], timeframe: str, use_cache: bool = True) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Get historical data for CE and PE strikes using smart incremental caching.
         
         Optimization Strategy:
@@ -772,11 +792,11 @@ class OptionsChartService:
                 # Submit both immediately - Kite allows concurrent requests
                 ce_future = executor.submit(
                     self._historical_with_retry,
-                    int(ce_token), from_date, to_date, kite_timeframe
+                    ce_token, from_date, to_date, kite_timeframe, use_cache=use_cache
                 )
                 pe_future = executor.submit(
                     self._historical_with_retry,
-                    int(pe_token), from_date, to_date, kite_timeframe
+                    pe_token, from_date, to_date, kite_timeframe, use_cache=use_cache
                 )
                 
                 try:

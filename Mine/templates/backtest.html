@@ -1,0 +1,426 @@
+{% extends "base.html" %}
+{% block title %}Backtest - Apex Reversal Engine{% endblock %}
+{% block head %}
+{{ super() }}
+<style>
+    .backtest-container {
+        max-width: 1100px;
+        margin: 20px auto;
+        padding: 30px;
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
+    }
+
+    .backtest-container h1 {
+        font-size: 26px;
+        font-weight: 800;
+        color: #1a237e;
+        margin: 0 0 4px 0;
+    }
+
+    .backtest-container > p {
+        color: #777;
+        font-size: 14px;
+        margin: 0 0 24px 0;
+    }
+
+    /* ---------- Form rows ---------- */
+    .form-row {
+        display: grid;
+        gap: 16px;
+        margin-bottom: 16px;
+    }
+
+    .form-row-5 { grid-template-columns: repeat(5, 1fr); }
+    .form-row-6 { grid-template-columns: repeat(6, 1fr); }
+    .form-row-7 { grid-template-columns: repeat(7, 1fr); }
+    .form-row-4 { grid-template-columns: repeat(4, 1fr); }
+    .form-row-3 { grid-template-columns: repeat(3, 1fr); }
+
+    .form-group {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .form-group label {
+        font-size: 12px;
+        font-weight: 600;
+        color: #555;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 6px;
+    }
+
+    .form-group input,
+    .form-group select {
+        height: 42px;
+        padding: 0 14px;
+        border: 1.5px solid #e0e0e0;
+        border-radius: 10px;
+        font-size: 14px;
+        font-weight: 500;
+        width: 100%;
+        box-sizing: border-box;
+        background-color: #fafbfc;
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .form-group input:focus,
+    .form-group select:focus {
+        border-color: #2962ff;
+        box-shadow: 0 0 0 3px rgba(41, 98, 255, 0.1);
+        outline: none;
+        background-color: #fff;
+    }
+
+    /* ---------- Run button ---------- */
+    .btn-run {
+        width: 100%;
+        padding: 14px;
+        background: linear-gradient(135deg, #2962ff 0%, #1e4bd8 100%);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        font-weight: 700;
+        font-size: 15px;
+        transition: transform 0.2s, box-shadow 0.2s;
+        margin-top: 8px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .btn-run:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(41, 98, 255, 0.35);
+    }
+
+    .btn-run:active { transform: translateY(0); }
+
+    /* ---------- Results summary ---------- */
+    .results-summary {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-top: 28px;
+        padding: 22px;
+        background: linear-gradient(135deg, #f0f4ff 0%, #e8edff 100%);
+        border-radius: 14px;
+    }
+
+    .summary-card {
+        text-align: center;
+        padding: 18px 12px;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+    }
+
+    .summary-card h3 {
+        margin: 0 0 8px 0;
+        font-size: 11px;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        font-weight: 700;
+    }
+
+    .summary-card p {
+        margin: 0;
+        font-size: 26px;
+        font-weight: 800;
+        color: #1a237e;
+    }
+
+    /* ---------- Trade table ---------- */
+    .trades-table-container {
+        margin-top: 28px;
+        border-radius: 14px;
+        overflow: hidden;
+        border: 1px solid #eee;
+        background: #fff;
+    }
+
+    .trades-table-container h3 {
+        padding: 18px 22px 0;
+        margin: 0;
+        color: #1a237e;
+        font-size: 17px;
+        font-weight: 700;
+    }
+
+    .trades-table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+    }
+
+    .trades-table th {
+        background: #f8f9fb;
+        color: #555;
+        font-weight: 700;
+        padding: 14px 16px;
+        text-align: left;
+        border-bottom: 2px solid #eee;
+        text-transform: uppercase;
+        font-size: 11px;
+        letter-spacing: 0.8px;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+
+    .trades-table th:hover { background: #f1f3f5; }
+
+    .trades-table th.sort-asc::after {
+        content: " ▲";
+        color: #2962ff;
+        margin-left: 4px;
+        font-size: 9px;
+    }
+
+    .trades-table th.sort-desc::after {
+        content: " ▼";
+        color: #2962ff;
+        margin-left: 4px;
+        font-size: 9px;
+    }
+
+    .trades-table td {
+        padding: 13px 16px;
+        border-bottom: 1px solid #f2f2f2;
+        font-size: 13px;
+        color: #333;
+        font-weight: 500;
+    }
+
+    .trades-table tr:hover { background-color: #fafaff; }
+
+    .pnl-positive { color: #00c853 !important; font-weight: 800 !important; }
+    .pnl-negative { color: #ff1744 !important; font-weight: 800 !important; }
+
+    .badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+    .badge-buy { background: #e8f5e9; color: #2e7d32; }
+    .badge-sell { background: #ffebee; color: #c62828; }
+
+    /* ---------- Searchable dropdown ---------- */
+    .search-select-container { position: relative; }
+
+    #symbolList {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        background: white;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        max-height: 240px;
+        overflow-y: auto;
+        z-index: 1000;
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: none;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+    }
+
+    #symbolList.show { display: block; }
+
+    .symbol-item {
+        padding: 11px 16px;
+        cursor: pointer;
+        border-bottom: 1px solid #f5f5f5;
+        font-weight: 500;
+        font-size: 13px;
+        transition: background 0.15s;
+        list-style: none;
+    }
+
+    .symbol-item:last-child { border-bottom: none; }
+    .symbol-item:hover { background: #f0f4ff; color: #2962ff; }
+
+    /* ---------- Responsive ---------- */
+    @media (max-width: 768px) {
+        .form-row-5, .form-row-4, .form-row-3 { grid-template-columns: 1fr 1fr; }
+        .results-summary { grid-template-columns: 1fr 1fr; }
+        .backtest-container { padding: 16px; margin: 10px; }
+    }
+
+    @media (max-width: 480px) {
+        .form-row-5, .form-row-4, .form-row-3 { grid-template-columns: 1fr; }
+        .results-summary { grid-template-columns: 1fr; }
+    }
+</style>
+{% endblock %}
+{% block content %}
+<div class="backtest-container">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
+        <div>
+            <h1>Backtest Strategy</h1>
+            <p style="margin-bottom: 0;">Analyze performance of the Apex Reversal Engine across different symbols and timeframes.</p>
+        </div>
+        <div style="margin-top: 4px;">
+            <select id="strategySelect" style="height: 32px; padding: 0 30px 0 12px; font-size: 13px; font-weight: 600; color: #1a237e; border: 1.5px solid #2962ff; border-radius: 6px; background-color: #f0f4ff; cursor: pointer; outline: none; appearance: none; background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%232962ff%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E'); background-repeat: no-repeat; background-position: right 10px center; transition: all 0.2s;">
+                <option value="apex">Apex Reversal Engine</option>
+                <option value="cpr_gap">CPR</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Row 1: Core Parameters -->
+    <div class="form-row form-row-4" id="mainInputsRow">
+        <div class="form-group">
+            <label for="symbolSearch">Symbol</label>
+            <div class="search-select-container">
+                <input type="text" id="symbolSearch" placeholder="Search symbol…" autocomplete="off" value="NIFTY">
+                <ul id="symbolList"></ul>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="startDate">Start Date</label>
+            <input type="date" id="startDate">
+        </div>
+        <div class="form-group">
+            <label for="endDate">End Date</label>
+            <input type="date" id="endDate">
+        </div>
+        <div class="form-group">
+            <label for="interval">Timeframe</label>
+            <select id="interval">
+                <option value="minute">1 Minute</option>
+                <option value="3minute">3 Minute</option>
+                <option value="5minute">5 Minute</option>
+                <option value="15minute">15 Minute</option>
+                <option value="30minute">30 Minute</option>
+                <option value="60minute" selected>60 Minute</option>
+                <option value="day">Daily</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Row 1b: CPR Specific (Visible only for CPR) -->
+    <div class="form-row form-row-3" id="cprInputsRow" style="display: none;">
+        <div class="form-group" id="cprTypeContainer">
+            <label for="cprType">Type</label>
+            <select id="cprType">
+                <option value="s1_r1" selected>S1 & L and R1 & High</option>
+                <option value="on_cpr">On CPR</option>
+            </select>
+        </div>
+        <div class="form-group" id="entryTypeContainer">
+            <label for="entryType">Entry Type</label>
+            <select id="entryType">
+                <option value="any">Crossed Either (Any)</option>
+                <option value="pdh_pdl">Crossed High or Low</option>
+                <option value="s1_r1">Crossed S1 or R1</option>
+                <option value="both" selected>Crossed Both</option>
+            </select>
+        </div>
+        <div class="form-group" id="slTypeContainer">
+            <label for="slType">Stoploss Type</label>
+            <select id="slType">
+                <option value="both" selected>R1/S1 & High/Low</option>
+                <option value="pdh_pdl">High/Low Only</option>
+                <option value="s1_r1">R1/S1 Only</option>
+                <option value="candle">First Candle Low/High</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Row 2: Strategy Parameters -->
+    <div id="apexParamsRow" class="form-row form-row-3">
+        <div class="form-group">
+            <label for="pivotStrength">Pivot Strength</label>
+            <input type="number" id="pivotStrength" value="1" min="1">
+        </div>
+        <div class="form-group">
+            <label for="rsiLength">RSI Length</label>
+            <input type="number" id="rsiLength" value="14" min="1">
+        </div>
+        <div class="form-group">
+            <label for="rrRatio">Risk : Reward</label>
+            <input type="number" id="rrRatio" value="3.0" step="0.1">
+        </div>
+    </div>
+
+    <!-- Row 3: Options -->
+    <div id="apexOptionsRow" style="display: flex; align-items: center; gap: 24px; margin: 12px 0 8px; flex-wrap: wrap;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; font-weight: 500; color: #333; user-select: none;">
+            <input type="checkbox" id="slClosePrice" checked
+                   style="width: 18px; height: 18px; accent-color: #2962ff; cursor: pointer;">
+            SL on Candle Close
+            <span style="font-size: 12px; color: #888; font-weight: 400;">(uncheck for touch-based SL)</span>
+        </label>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <label for="trailMode" style="font-size: 14px; font-weight: 500; color: #333; white-space: nowrap;">Trailing SL:</label>
+            <select id="trailMode" style="height: 36px; padding: 0 10px; border: 1.5px solid #e0e0e0; border-radius: 8px; font-size: 13px; font-weight: 500; background: #fafbfc; cursor: pointer;">
+                <option value="0">Break Even Only</option>
+                <option value="1">Trail 1 Candle</option>
+                <option value="2">Trail 2 Candles</option>
+                <option value="3">Trail 3 Candles</option>
+            </select>
+        </div>
+    </div>
+
+    <button id="runBacktestBtn" class="btn-run">BACKTEST</button>
+
+    <div id="loading" style="display: none; text-align: center; margin: 20px;">
+        <p>🔄 Running backtest, please wait…</p>
+    </div>
+
+    <div id="resultsArea" style="display: none;">
+        <div class="results-summary">
+            <div class="summary-card">
+                <h3>Total Trades</h3>
+                <p id="statTotalTrades">0</p>
+            </div>
+            <div class="summary-card">
+                <h3>Win Rate</h3>
+                <p id="statWinRate">0%</p>
+            </div>
+            <div class="summary-card">
+                <h3>Total P&L</h3>
+                <p id="statTotalPnl">0</p>
+            </div>
+            <div class="summary-card">
+                <h3>Net Outcome</h3>
+                <p id="statOutcome">-</p>
+            </div>
+        </div>
+
+        <div class="trades-table-container">
+            <h3>Recent Trades (Latest First)</h3>
+            <table class="trades-table">
+                <thead>
+                    <tr>
+                        <th data-sort="entry_time">Entry Time</th>
+                        <th data-sort="type">Type</th>
+                        <th data-sort="entry_price">Entry Price</th>
+                        <th data-sort="exit_time">Exit Time</th>
+                        <th data-sort="exit_price">Exit Price</th>
+                        <th data-sort="result">Result</th>
+                        <th data-sort="pnl">P&L</th>
+                    </tr>
+                </thead>
+                <tbody id="tradesBody">
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/backtest.js') }}"></script>
+{% endblock %}
