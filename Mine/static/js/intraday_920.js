@@ -224,7 +224,7 @@ class Intraday920Tracker {
         const nonZerodhaBrokers = {
             'kotak_neo': 'Kotak Neo',
             'dhan': 'Dhan',
-            'fyers': 'Fyers'
+            'fyers': 'Kavin (Fyers)'
         };
 
         try {
@@ -317,13 +317,6 @@ class Intraday920Tracker {
 
             console.log(`[Order] Placing ${action} order: ${side} ${strike} (${strikeType})`);
 
-            // Get selected broker
-            const broker = this.brokerSelect ? this.brokerSelect.value : 'Kotak Neo';
-
-            // Optional explicit tradingsymbol override (for Kotak when Kite lookup unavailable)
-            const tradingsymbolInput = document.getElementById('customTradingsymbol');
-            const tradingsymbol = tradingsymbolInput && tradingsymbolInput.value ? tradingsymbolInput.value.trim() : undefined;
-
             // Make API call to place order
             const response = await fetch('/api/intraday-920/place-order', {
                 method: 'POST',
@@ -336,8 +329,6 @@ class Intraday920Tracker {
                     strike: strike,
                     option_type: side,
                     action: action,
-                    broker: broker,
-                    tradingsymbol: tradingsymbol,
                     strategy: 'intraday_920'
                 })
             });

@@ -17,6 +17,7 @@ window.TradingViewChart = (function () {
             return [];
         }
 
+        const seen = new Set();
         return rawData.map((item, index) => {
             try {
                 // Handle both 'time' and 'date' field names (backend uses 'date')
@@ -24,52 +25,47 @@ window.TradingViewChart = (function () {
                 let time;
 
                 if (typeof timestamp === 'number') {
-                    // If timestamp is in seconds (< 10 billion), it's likely seconds since epoch
-                    if (timestamp < 10000000000) {
-                        time = timestamp;
-                    } else {
-                        // Already in milliseconds, convert to seconds
-                        time = Math.floor(timestamp / 1000);
-                    }
+                    time = timestamp < 10000000000 ? timestamp : Math.floor(timestamp / 1000);
                 } else if (typeof timestamp === 'string') {
-                    // Parse ISO string like "2025-01-08T10:30:00Z"
                     const date = new Date(timestamp);
-
-                    // Validate the date object was created successfully
                     if (isNaN(date.getTime())) {
-                        console.warn(`[formatChartData] Invalid date at index ${index}: "${timestamp}". Using current time as fallback.`);
-                        time = Math.floor(Date.now() / 1000);
-                    } else {
-                        time = Math.floor(date.getTime() / 1000);
+                        return null;  // Drop candle with unparseable timestamp
                     }
+                    time = Math.floor(date.getTime() / 1000);
                 } else {
-                    // Fallback: use current time
-                    console.warn(`[formatChartData] Unknown timestamp type at index ${index}: ${typeof timestamp}. Using current time.`);
-                    time = Math.floor(Date.now() / 1000);
+                    return null;  // Drop candle with unknown timestamp type
+                }
+
+                const open  = parseFloat(item.open  ?? item.o);
+                const high  = parseFloat(item.high  ?? item.h);
+                const low   = parseFloat(item.low   ?? item.l);
+                const close = parseFloat(item.close ?? item.c);
+
+                // If all OHLC values are missing or invalid, treat as whitespace (only time)
+                if (!isFinite(open) || !isFinite(high) || !isFinite(low) || !isFinite(close) ||
+                    open <= 0 || high <= 0 || low <= 0 || close <= 0) {
+                    return { time };
                 }
 
                 return {
-                    time: time,
-                    open: parseFloat(item.open) || item.o || 0,
-                    high: parseFloat(item.high) || item.h || 0,
-                    low: parseFloat(item.low) || item.l || 0,
-                    close: parseFloat(item.close) || item.c || 0,
+                    time, open, high, low, close,
                     volume: item.volume || 0
                 };
             } catch (error) {
                 console.error(`[formatChartData] Error processing candle at index ${index}:`, error, item);
-                // Return a fallback candle with current time
-                return {
-                    time: Math.floor(Date.now() / 1000),
-                    open: 0,
-                    high: 0,
-                    low: 0,
-                    close: 0,
-                    volume: 0
-                };
+                return null;
             }
+        })
+        // Remove nulls, sort ascending by time, deduplicate timestamps
+        .filter(c => c !== null)
+        .sort((a, b) => a.time - b.time)
+        .filter(c => {
+            if (seen.has(c.time)) return false;
+            seen.add(c.time);
+            return true;
         });
     }
+
 
     /**
      * Creates a time formatter based on timeframe with IST timezone
@@ -385,14 +381,17 @@ window.TradingViewChart = (function () {
                     secondsVisible: false,
                     textColor: '#6b7280',           // Medium grey text on timeScale
                     borderColor: 'transparent',     // Hide the border
-                    rightOffset: 12,                // Reduced offset - brings candles closer to Y-axis
+                    rightOffset: 15,                // Matched with OI Profile chart
+                    barSpacing: 25,                 // Zoom the X-axis scaling heavily
                     fixLeftEdge: false,             // Allow scrolling on left
                     fixRightEdge: false             // Allow dragging to right side
                 },
                 rightPriceScale: {
                     textColor: '#6b7280',           // Price scale text color
                     borderColor: 'transparent',     // Hide the border
-                    width: 60                       // Set explicit width for price scale
+                    width: 70,                      // Matched with OI Profile chart
+                    autoScale: true,
+                    scaleMargins: { top: 0.02, bottom: 0.02 }
                 },
                 watermark: {
                     color: '#d1d5db'                // Light grey watermark
@@ -405,12 +404,12 @@ window.TradingViewChart = (function () {
 
             // Create candlestick series
             // Default colors: Green for up candles, Red for down candles
-            const upColor = '#10b981';      // Green for bullish candles
-            const downColor = '#ef4444';    // Red for bearish candles
-            const borderUpColor = '#10b981';
-            const borderDownColor = '#ef4444';
-            const wickUpColor = '#10b981';
-            const wickDownColor = '#ef4444';
+            const upColor = '#1b9981';      // Green for bullish candles
+            const downColor = '#f23645';    // Red for bearish candles
+            const borderUpColor = '#1b9981';
+            const borderDownColor = '#f23645';
+            const wickUpColor = '#1b9981';
+            const wickDownColor = '#f23645';
 
             // For combined charts, create two series (CE and PE)
             let series = null;
@@ -420,12 +419,12 @@ window.TradingViewChart = (function () {
             if (type === 'COMBINED' || config.isCombined) {
                 // Create CE series (primary series - green and red)
                 ceSeries = chart.addCandlestickSeries({
-                    upColor: '#10b981',      // Green for CE up
-                    downColor: '#ef4444',    // Red for CE down
-                    borderUpColor: '#10b981',
-                    borderDownColor: '#ef4444',
-                    wickUpColor: '#10b981',
-                    wickDownColor: '#ef4444',
+                    upColor: '#1b9981',      // Green for CE up
+                    downColor: '#f23645',    // Red for CE down
+                    borderUpColor: '#1b9981',
+                    borderDownColor: '#f23645',
+                    wickUpColor: '#1b9981',
+                    wickDownColor: '#f23645',
                     title: 'CE',
                     priceLineStyle: 1, // Dotted
                     priceLineWidth: 1
@@ -746,9 +745,19 @@ window.TradingViewChart = (function () {
                         this.addReferenceLines(referenceOrPeData);
                     }
 
-                    // NOTE: Chart zoom and timeScale settings are NOT recalculated on updates
-                    // They are only set ONCE during initialization (see create() method)
-                    // This prevents the chart from jumping/resetting on every data update
+                    // Recalculate zoom and timeScale if refresh is requested (e.g. on symbol switch)
+                    // Recalculate zoom and timeScale if refresh is requested (e.g. on symbol switch)
+                    if (refresh) {
+                        setTimeout(() => {
+                            try {
+                                this.chart.timeScale().fitContent();
+                                this.chart.applyOptions({
+                                    timeScale: { rightOffset: 300 },
+                                    rightPriceScale: { autoScale: true }
+                                });
+                            } catch (e) { console.warn('[Chart] Update scale err:', e); }
+                        }, 50);
+                    }
                 },
 
                 /**

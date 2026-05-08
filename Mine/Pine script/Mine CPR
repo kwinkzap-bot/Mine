@@ -1,0 +1,604 @@
+//@version=5
+indicator("CPR", "Mine CPR", overlay=true, max_lines_count=500, max_labels_count=500)
+//FLAG
+sp = input(true, title="Show CPR")
+fsd = input(false, title="Show Future CPR")
+shadow = input(true, title="CPR shadow")
+cprTransp = input.int(50, "CPR Central Transparency", minval=0, maxval=100)
+rsTransp = input.int(98, "CPR R/S Transparency", minval=0, maxval=100)
+mcprTransp = input.int(20, "Multi-Pivot Transparency", minval=0, maxval=100)
+showPivots = input.bool(false, title="Multi-Timeframe CPR")
+showAllSMAs = input(true, "Show All Moving Averages")
+enableIndicator = input.bool(false, "Enable Indicator", group = "Appearance")
+carmarilla = input(true, title="Show pivot R3 and S3")
+showSMA9 = input(true, "Show SMA 9", inline="sma9")
+EMA9 = input.int(9, "", inline="sma9")
+showSMA20 = input(true, "Show SMA 20", inline="sma20")
+EMA20 = input.int(20, "", inline="sma20")
+showSMA50 = input(true, "Show SMA 50", inline="sma50")
+EMA50 = input.int(50, "", inline="sma50")
+showSMA100 = input(false, "Show SMA 100", inline="sma100")
+EMA100 = input.int(100, "", inline="sma100")
+showSMA200 = input(true, "Show SMA 200", inline="sma200")
+EMA200 = input.int(200, "", inline="sma200")
+
+mshortest = ta.ema(close, EMA9)
+shortest = ta.ema(close, EMA20)
+short = ta.ema(close, EMA50)
+longer = ta.ema(close, EMA100)
+longest = ta.ema(close, EMA200)
+
+plot(showAllSMAs and showSMA9 ? mshortest : na, color = color.green, linewidth=1, title="SMA 9")
+plot(showAllSMAs and showSMA20 ? shortest : na, color = color.orange, linewidth=1, title="SMA 20")
+plot(showAllSMAs and showSMA50 ? short : na, color = color.red, linewidth=1, title="SMA 50")
+plot(showAllSMAs and showSMA100 ? longer : na, color = color.blue, linewidth=1, title="SMA 100")
+plot(showAllSMAs and showSMA200 ? longest : na, color = color.black, linewidth=1, title="SMA 200")
+
+//-----------------------------------------------------------------------------------------------------------------------------------------------------
+
+AUTO = "Auto"
+DAILY = "Daily"
+WEEKLY = "Weekly"
+MONTHLY = "Monthly"
+QUARTERLY = "Quarterly"
+YEARLY = "Yearly"
+BIYEARLY = "Biyearly"
+TRIYEARLY = "Triyearly"
+QUINQUENNIALLY = "Quinquennially"
+DECENNIALLY = "Decennially"
+
+TRADITIONAL = "Traditional"
+FIBONACCI = "Fibonacci"
+CAMARILLA = "Camarilla"
+
+kind = input.string(title="Type", defval="Camarilla", options=[TRADITIONAL, FIBONACCI, CAMARILLA])
+pivot_time_frame = input.string(title="Pivots Timeframe", defval=AUTO, options=[AUTO, DAILY, WEEKLY, MONTHLY, QUARTERLY, YEARLY, BIYEARLY, TRIYEARLY, QUINQUENNIALLY, DECENNIALLY])
+look_back = input.int(title="Number of Pivots Back", defval=15, minval=1, maxval=5000)
+is_daily_based = input.bool(title="Use Daily-based Values", defval=true, tooltip="When this option is unchecked, Pivot Points will use intraday data while calculating on intraday charts. If Extended Hours are displayed on the chart, they will be taken into account during the pivot level calculation. If intraday OHLC values are different from daily-based values (normal for stocks), the pivot levels will also differ.")
+show_labels = input.bool(title="Show Labels", defval=true, inline="labels")
+position_labels = input.string("Left", "", options=["Left", "Right"], inline="labels")
+
+var DEF_COLOR = #FB8C00
+var R3S3_COLOR = #A020F0
+var P_COLOR = #8E2929
+var arr_time = array.new_int()
+var p = array.new_float()
+p_show = input.bool(false, "P‏  ‏  ‏  ‏  ‏  ‏  ‏  ‏", inline="P")
+p_color = input.color(P_COLOR, "", inline="P")
+var r3 = array.new_float()
+var s3 = array.new_float()
+s3r3_show = input.bool(true, "S3/R3", inline="S3/R3")
+s3r3_color = input.color(R3S3_COLOR, "", inline="S3/R3")
+
+// CPR Arrays
+var arr_p = array.new_float()
+var arr_bc = array.new_float()
+var arr_tc = array.new_float()
+var arr_r1 = array.new_float()
+var arr_r2 = array.new_float()
+var arr_r3 = array.new_float()
+var arr_r4 = array.new_float()
+var arr_s1 = array.new_float()
+var arr_s2 = array.new_float()
+var arr_s3 = array.new_float()
+var arr_s4 = array.new_float()
+var arr_pdh = array.new_float()
+var arr_pdl = array.new_float()
+
+pivotX_open = float(na)
+pivotX_open := nz(pivotX_open[1], open)
+pivotX_high = float(na)
+pivotX_high := nz(pivotX_high[1], high)
+pivotX_low = float(na)
+pivotX_low := nz(pivotX_low[1], low)
+pivotX_prev_open = float(na)
+pivotX_prev_open := nz(pivotX_prev_open[1])
+pivotX_prev_high = float(na)
+pivotX_prev_high := nz(pivotX_prev_high[1])
+pivotX_prev_low = float(na)
+pivotX_prev_low := nz(pivotX_prev_low[1])
+pivotX_prev_close = float(na)
+pivotX_prev_close := nz(pivotX_prev_close[1])
+
+// Color and Timeframe Definitions for CPR
+greenColor = #00cc66
+darkgreenColor = #006400
+redColor = #ff0000
+pivtcol = #00008B
+pivotColor = #3366ff
+timeframe = timeframe.isweekly or timeframe.ismonthly ? "12M" : timeframe.isdaily ? "M" : timeframe.multiplier <= 15 ? "D" : "W"
+prevHighColor = #ef07f9
+
+get_pivot_resolution() =>
+    resolution = "M"
+    if pivot_time_frame == AUTO
+        if timeframe.isintraday
+            resolution := timeframe.multiplier <= 15 ? "D" : "W"
+        else if timeframe.isweekly or timeframe.ismonthly
+            resolution := "12M"
+    else if pivot_time_frame == DAILY
+        resolution := "D"
+    else if pivot_time_frame == WEEKLY
+        resolution := "W"
+    else if pivot_time_frame == MONTHLY
+        resolution := "M"
+    else if pivot_time_frame == QUARTERLY
+        resolution := "3M"
+    else if pivot_time_frame == YEARLY or pivot_time_frame == BIYEARLY or pivot_time_frame == TRIYEARLY or pivot_time_frame == QUINQUENNIALLY or pivot_time_frame == DECENNIALLY
+        resolution := "12M"
+    resolution
+
+var lines = array.new_line()
+var fills = array.new_linefill()
+var labels = array.new_label()
+
+draw_line(i, pivot, col) =>
+    if array.size(arr_time) > 1
+        array.push(lines, line.new(array.get(arr_time, i), array.get(pivot, i), array.get(arr_time, i + 1), array.get(pivot, i), color=col, xloc=xloc.bar_time, width=2))
+
+draw_label(i, y, txt, txt_color) =>
+    if show_labels
+        offset = '‏  ‏  ‏  ‏  ‏'
+        labels_align_str_left= position_labels == "Left" ? txt + offset : offset + txt
+        x = position_labels == "Left" ? array.get(arr_time, i) : array.get(arr_time, i + 1)
+        array.push(labels, label.new(x = x, y=y, text=labels_align_str_left, textcolor=txt_color, style=label.style_label_center, color=#00000000, xloc=xloc.bar_time))
+
+camarilla() =>
+    pivotX_Median = (pivotX_prev_high + pivotX_prev_low + pivotX_prev_close) / 3
+    pivot_range = pivotX_prev_high - pivotX_prev_low
+    array.push(p, pivotX_Median)
+    array.push(r3, pivotX_prev_close + pivot_range * 1.1 / 4.0)
+    array.push(s3, pivotX_prev_close - pivot_range * 1.1 / 4.0)
+
+resolution = get_pivot_resolution()
+
+[sec_open, sec_high, sec_low, sec_close] = request.security(syminfo.tickerid, resolution, [open, high, low, close], lookahead = barmerge.lookahead_on)
+sec_open_gaps_on = request.security(syminfo.tickerid, resolution, open, gaps = barmerge.gaps_on, lookahead = barmerge.lookahead_on)
+
+custom_years_divisor = switch pivot_time_frame
+	BIYEARLY => 2
+	TRIYEARLY => 3
+	QUINQUENNIALLY => 5
+	DECENNIALLY => 10
+	=> -1
+
+is_change_years = false	
+if custom_years_divisor > 0 and ta.change(time(resolution))
+	is_change_years := year % custom_years_divisor == 0
+
+var is_change = false
+var uses_current_bar = timeframe.isintraday
+var change_time = int(na)
+is_time_change = (ta.change(time(resolution)) and custom_years_divisor == -1) or is_change_years
+if is_time_change
+    change_time := time
+
+
+if (not uses_current_bar and is_time_change) or (uses_current_bar and not na(sec_open_gaps_on))
+    if is_daily_based and custom_years_divisor == -1
+        pivotX_prev_open := sec_open[1]
+        pivotX_prev_high := sec_high[1]
+        pivotX_prev_low := sec_low[1]
+        pivotX_prev_close := sec_close[1]
+        pivotX_open := sec_open
+        pivotX_high := sec_high
+        pivotX_low := sec_low
+    else
+        pivotX_prev_high := pivotX_high
+        pivotX_prev_low := pivotX_low
+        pivotX_prev_open := pivotX_open
+        pivotX_open := open
+        pivotX_high := high
+        pivotX_low := low
+        pivotX_prev_close := close[1]
+
+    if barstate.islast and not is_change and  array.size(arr_time) > 0
+        array.set(arr_time, array.size(arr_time) - 1, change_time)
+    else
+        array.push(arr_time, change_time)
+
+    if kind == CAMARILLA
+        camarilla()
+
+    // CPR Calculation for Arrays
+    _pivot = (pivotX_prev_high + pivotX_prev_low + pivotX_prev_close) / 3.0
+    _bc = (pivotX_prev_high + pivotX_prev_low) / 2.0
+    _tc = (_pivot - _bc) + _pivot
+    array.push(arr_p, _pivot)
+    array.push(arr_bc, _bc)
+    array.push(arr_tc, _tc)
+    array.push(arr_r1, (_pivot * 2) - pivotX_prev_low)
+    array.push(arr_r2, _pivot + (pivotX_prev_high - pivotX_prev_low))
+    array.push(arr_r3, ((_pivot * 2) - pivotX_prev_low) + (pivotX_prev_high - pivotX_prev_low))
+    array.push(arr_r4, (((_pivot * 2) - pivotX_prev_low) + (pivotX_prev_high - pivotX_prev_low)) + ((_pivot + (pivotX_prev_high - pivotX_prev_low)) - ((_pivot * 2) - pivotX_prev_low)))
+    array.push(arr_s1, (_pivot * 2) - pivotX_prev_high)
+    array.push(arr_s2, _pivot - (pivotX_prev_high - pivotX_prev_low))
+    array.push(arr_s3, ((_pivot * 2) - pivotX_prev_high) - (pivotX_prev_high - pivotX_prev_low))
+    array.push(arr_s4, (((_pivot * 2) - pivotX_prev_high) - (pivotX_prev_high - pivotX_prev_low)) - (((_pivot * 2) - pivotX_prev_high) - (_pivot - (pivotX_prev_high - pivotX_prev_low))))
+    array.push(arr_pdh, pivotX_prev_high)
+    array.push(arr_pdl, pivotX_prev_low)
+
+    if array.size(arr_time) > look_back
+        if array.size(arr_time) > 0
+            array.shift(arr_time)
+        if array.size(p) > 0 and p_show
+            array.shift(p)
+        if array.size(r3) > 0 and s3r3_show and carmarilla
+            array.shift(r3)
+        if array.size(s3) > 0 and s3r3_show and carmarilla
+            array.shift(s3)
+        // Shift CPR Arrays
+        if array.size(arr_p) > 0
+            array.shift(arr_p), array.shift(arr_bc), array.shift(arr_tc)
+            array.shift(arr_r1), array.shift(arr_r2), array.shift(arr_r3), array.shift(arr_r4)
+            array.shift(arr_s1), array.shift(arr_s2), array.shift(arr_s3), array.shift(arr_s4)
+            array.shift(arr_pdh), array.shift(arr_pdl)
+    is_change := true
+else
+    if is_daily_based and custom_years_divisor == -1
+        pivotX_high := math.max(pivotX_high, sec_high)
+        pivotX_low := math.min(pivotX_low, sec_low)
+    else
+        pivotX_high := math.max(pivotX_high, high)
+        pivotX_low := math.min(pivotX_low, low)
+
+if barstate.islast and array.size(arr_time) > 0 and is_change
+    is_change := false
+    if array.size(arr_time) > 2 and custom_years_divisor > 0
+        last_pivot_time = array.get(arr_time, array.size(arr_time) - 1)
+        prev_pivot_time = array.get(arr_time, array.size(arr_time) - 2)
+        estimate_pivot_time = last_pivot_time - prev_pivot_time
+        array.push(arr_time, last_pivot_time + estimate_pivot_time)
+    else
+        array.push(arr_time, time_close(resolution))
+
+    for i = 0 to array.size(lines) - 1
+        if array.size(lines) > 0
+            line.delete(array.shift(lines))
+    
+    for i = 0 to array.size(fills) - 1
+        if array.size(fills) > 0
+            linefill.delete(array.shift(fills))
+
+    for i = 0 to array.size(labels) - 1
+        if array.size(labels) > 0
+            label.delete(array.shift(labels))
+
+    for i = 0 to array.size(arr_time) - 2
+        if array.size(p) > 0 and p_show
+            draw_line(i, p, p_color)
+            draw_label(i, array.get(p, i), "P", p_color)
+        if array.size(r3) > 0 and s3r3_show and carmarilla
+            draw_line(i, r3, s3r3_color)
+            draw_label(i, array.get(r3, i), "R3", s3r3_color)
+        if array.size(s3) > 0 and s3r3_show and carmarilla
+            draw_line(i, s3, s3r3_color)
+            draw_label(i, array.get(s3, i), "S3", s3r3_color)
+        
+        // Draw CPR Lines
+        if sp and array.size(arr_p) > i
+            _lp = line.new(array.get(arr_time, i), array.get(arr_p, i), array.get(arr_time, i+1), array.get(arr_p, i), xloc=xloc.bar_time, color=pivtcol, width=1)
+            _lbc = line.new(array.get(arr_time, i), array.get(arr_bc, i), array.get(arr_time, i+1), array.get(arr_bc, i), xloc=xloc.bar_time, color=pivtcol, width=1)
+            _ltc = line.new(array.get(arr_time, i), array.get(arr_tc, i), array.get(arr_time, i+1), array.get(arr_tc, i), xloc=xloc.bar_time, color=pivtcol, width=1)
+            array.push(lines, _lp), array.push(lines, _lbc), array.push(lines, _ltc)
+            if shadow
+                array.push(fills, linefill.new(_lbc, _ltc, color.new(pivotColor, cprTransp)))
+            
+            _lr1 = line.new(array.get(arr_time, i), array.get(arr_r1, i), array.get(arr_time, i+1), array.get(arr_r1, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
+            _lr2 = line.new(array.get(arr_time, i), array.get(arr_r2, i), array.get(arr_time, i+1), array.get(arr_r2, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
+            _lr3 = line.new(array.get(arr_time, i), array.get(arr_r3, i), array.get(arr_time, i+1), array.get(arr_r3, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
+            _lr4 = line.new(array.get(arr_time, i), array.get(arr_r4, i), array.get(arr_time, i+1), array.get(arr_r4, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
+            array.push(lines, _lr1), array.push(lines, _lr2), array.push(lines, _lr3), array.push(lines, _lr4)
+            
+            _ls1 = line.new(array.get(arr_time, i), array.get(arr_s1, i), array.get(arr_time, i+1), array.get(arr_s1, i), xloc=xloc.bar_time, color=redColor, width=1)
+            _ls2 = line.new(array.get(arr_time, i), array.get(arr_s2, i), array.get(arr_time, i+1), array.get(arr_s2, i), xloc=xloc.bar_time, color=redColor, width=1)
+            _ls3 = line.new(array.get(arr_time, i), array.get(arr_s3, i), array.get(arr_time, i+1), array.get(arr_s3, i), xloc=xloc.bar_time, color=redColor, width=1)
+            _ls4 = line.new(array.get(arr_time, i), array.get(arr_s4, i), array.get(arr_time, i+1), array.get(arr_s4, i), xloc=xloc.bar_time, color=redColor, width=1)
+            array.push(lines, _ls1), array.push(lines, _ls2), array.push(lines, _ls3), array.push(lines, _ls4)
+            
+            _lpdh = line.new(array.get(arr_time, i), array.get(arr_pdh, i), array.get(arr_time, i+1), array.get(arr_pdh, i), xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1)
+            _lpdl = line.new(array.get(arr_time, i), array.get(arr_pdl, i), array.get(arr_time, i+1), array.get(arr_pdl, i), xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1)
+            array.push(lines, _lpdh), array.push(lines, _lpdl)
+            
+            if shadow
+                array.push(fills, linefill.new(_lr1, _lr2, color.new(greenColor, rsTransp)))
+                array.push(fills, linefill.new(_lr2, _lr3, color.new(greenColor, rsTransp)))
+                array.push(fills, linefill.new(_lr3, _lr4, color.new(greenColor, rsTransp)))
+                array.push(fills, linefill.new(_ls1, _ls2, color.new(redColor, rsTransp)))
+                array.push(fills, linefill.new(_ls2, _ls3, color.new(redColor, rsTransp)))
+                array.push(fills, linefill.new(_ls3, _ls4, color.new(redColor, rsTransp)))
+            
+//---------------------------------------------------------------------------------------------------------------------------------------------------------
+// Previous High/Low (Kept as plots for now or moved to lines)
+
+// Previous High/Low (Kept as plots for now or moved to lines)
+is_new_session = ta.change(time(timeframe))
+
+// Pivot Range Calculations - Mark Fisher
+pivot = (high + low + close ) / 3.0 
+bc = (high + low ) / 2.0 
+tc = (pivot - bc) + pivot
+rr1 = (pivot * 2) - low
+ss1 = (pivot * 2) - high
+rr2 = pivot + (high - low)
+ss2 = pivot - (high - low)
+rr3 = rr1 + (high - low)
+ss3 = ss1 - (high - low)
+rr4 = rr3 + (rr2 - rr1)
+ss4 = ss3 - (ss1 - ss2)
+
+// Future CPR - Projected into the next session
+[ftime_pivot, ftime_bc, ftime_tc, ftime_r1, ftime_r2, ftime_r3, ftime_r4, ftime_s1, ftime_s2, ftime_s3, ftime_s4] = request.security(syminfo.tickerid, timeframe, [pivot[0], bc[0], tc[0], rr1[0], rr2[0], rr3[0], rr4[0], ss1[0], ss2[0], ss3[0], ss4[0]], lookahead=barmerge.lookahead_on)
+ftime_pdh = request.security(syminfo.tickerid, timeframe, high[0], lookahead=barmerge.lookahead_on)
+ftime_pdl = request.security(syminfo.tickerid, timeframe, low[0], lookahead=barmerge.lookahead_on)
+
+var line f_p = na, var line f_bc = na, var line f_tc = na
+var line f_r1 = na, var line f_r2 = na, var line f_r3 = na, var line f_r4 = na
+var line f_s1 = na, var line f_s2 = na, var line f_s3 = na, var line f_s4 = na
+var line f_pdh = na, var line f_pdl = na
+
+var linefill f_fill_c = na
+var linefill f_fill_r12 = na, var linefill f_fill_r23 = na, var linefill f_fill_r34 = na
+var linefill f_fill_s12 = na, var linefill f_fill_s23 = na, var linefill f_fill_s34 = na
+
+if barstate.islast and fsd
+    line.delete(f_p), line.delete(f_bc), line.delete(f_tc)
+    line.delete(f_r1), line.delete(f_r2), line.delete(f_r3), line.delete(f_r4)
+    line.delete(f_s1), line.delete(f_s2), line.delete(f_s3), line.delete(f_s4)
+    line.delete(f_pdh), line.delete(f_pdl)
+    
+    // Determine the start and end of the next session
+    next_start = time_close(timeframe)
+    session_duration = next_start - time(timeframe)
+    next_end = next_start + session_duration
+    
+    // Draw lines
+    f_p := line.new(next_start, ftime_pivot, next_end, ftime_pivot, xloc=xloc.bar_time, color=pivtcol, width=1, style=line.style_dashed)
+    f_bc := line.new(next_start, ftime_bc, next_end, ftime_bc, xloc=xloc.bar_time, color=pivtcol, width=1, style=line.style_dashed)
+    f_tc := line.new(next_start, ftime_tc, next_end, ftime_tc, xloc=xloc.bar_time, color=pivtcol, width=1, style=line.style_dashed)
+    
+    f_r1 := line.new(next_start, ftime_r1, next_end, ftime_r1, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
+    f_r2 := line.new(next_start, ftime_r2, next_end, ftime_r2, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
+    f_r3 := line.new(next_start, ftime_r3, next_end, ftime_r3, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
+    f_r4 := line.new(next_start, ftime_r4, next_end, ftime_r4, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
+    
+    f_s1 := line.new(next_start, ftime_s1, next_end, ftime_s1, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
+    f_s2 := line.new(next_start, ftime_s2, next_end, ftime_s2, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
+    f_s3 := line.new(next_start, ftime_s3, next_end, ftime_s3, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
+    f_s4 := line.new(next_start, ftime_s4, next_end, ftime_s4, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
+    
+    f_pdh := line.new(next_start, ftime_pdh, next_end, ftime_pdh, xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1, style=line.style_dashed)
+    f_pdl := line.new(next_start, ftime_pdl, next_end, ftime_pdl, xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1, style=line.style_dashed)
+    
+    // Fills
+    if not na(f_fill_c)
+        linefill.delete(f_fill_c), linefill.delete(f_fill_r12), linefill.delete(f_fill_r23), linefill.delete(f_fill_r34)
+        linefill.delete(f_fill_s12), linefill.delete(f_fill_s23), linefill.delete(f_fill_s34)
+        
+    if shadow
+        f_fill_c := linefill.new(f_bc, f_tc, color.new(pivotColor, cprTransp))
+        f_fill_r12 := linefill.new(f_r1, f_r2, color.new(greenColor, rsTransp))
+        f_fill_r23 := linefill.new(f_r2, f_r3, color.new(greenColor, rsTransp))
+        f_fill_r34 := linefill.new(f_r3, f_r4, color.new(greenColor, rsTransp))
+        f_fill_s12 := linefill.new(f_s1, f_s2, color.new(redColor, rsTransp))
+        f_fill_s23 := linefill.new(f_s2, f_s3, color.new(redColor, rsTransp))
+        f_fill_s34 := linefill.new(f_s3, f_s4, color.new(redColor, rsTransp))
+
+//----Power Root Super Trend---------------------------------------------------------------------------------------------------------------------
+import TradingView/ta/8
+atrMult = input.float(4.5, "Factor")
+atrlen = input.int(12, "ATR Length")
+rsmlen = input.int(3, "Root-Mean-Square Length")
+tplen = input.int(14, "RSI Take-Profit Length")
+green = input.color(#00ffbb, "Bullish Color", group = "Appearance")
+red = input.color(#ff1100, "Bearish Color", group = "Appearance")
+
+// SuperTrend Function
+superTrendCalc(multiplier, atrLength, source) =>
+    atrValue1 = ta.atr(atrLength)
+    upperLevel = source + multiplier * atrValue1
+    lowerLevel = source - multiplier * atrValue1
+    previousLowerLevel = nz(lowerLevel[1])
+    previousUpperLevel = nz(upperLevel[1])
+    // Ensure continuity of lower and upper bands
+    lowerLevel := lowerLevel > previousLowerLevel or source[1] < previousLowerLevel ? lowerLevel : previousLowerLevel
+    upperLevel := upperLevel < previousUpperLevel or source[1] > previousUpperLevel ? upperLevel : previousUpperLevel
+    // Determine direction and SuperTrend
+    int trendDirection = na
+    float trendValue = na
+    previousTrend = trendValue[1]
+    // Initialize direction
+    if na(atrValue1[1])
+        trendDirection := 1
+    else if previousTrend == previousUpperLevel
+        trendDirection := source > upperLevel ? -1 : 1
+    else
+        trendDirection := source < lowerLevel ? 1 : -1
+    // Set SuperTrend value based on direction
+    trendValue := trendDirection == -1 ? lowerLevel : upperLevel
+    [trendValue, trendDirection]
+[superTrendValue, trendDirection] = superTrendCalc(atrMult, atrlen, ta.rms(close, rsmlen))
+
+dist = math.abs(close-superTrendValue)
+
+var chg = 0.0
+var tp1 = 0.0
+var tp2 = 0.0
+var tp3 = 0.0
+var tp4 = 0.0
+var tp5 = 0.0
+var tp6 = 0.0
+var tp7 = 0.0
+
+lvlCol = trendDirection > 0 ? red : green
+
+var keys = array.new_line()
+
+var printedtp1 = 0
+var printedtp2 = 0
+var printedtp3 = 0
+var printedtp4 = 0
+var printedtp5 = 0
+var printedtp6 = 0
+var printedtp7 = 0
+
+if ta.cross(trendDirection, 0) and enableIndicator
+    keys.clear()
+    printedtp1 := 0
+    printedtp2 := 0
+    printedtp3 := 0
+    printedtp4 := 0
+    printedtp5 := 0
+    printedtp6 := 0
+    printedtp7 := 0
+    chg := math.abs(superTrendValue-superTrendValue[1])
+    tp1 := superTrendValue[1] + (trendDirection > 0 ? -chg : chg)
+    tp2 := superTrendValue[1] + (trendDirection > 0 ? -chg * 2 : chg * 2)
+    tp3 := superTrendValue[1] + (trendDirection > 0 ? -chg * 3 : chg * 3)
+    tp4 := superTrendValue[1] + (trendDirection > 0 ? -chg * 4 : chg * 4)
+    tp5 := superTrendValue[1] + (trendDirection > 0 ? -chg * 5 : chg * 5)
+    tp6 := superTrendValue[1] + (trendDirection > 0 ? -chg * 6 : chg * 6)
+    tp7 := superTrendValue[1] + (trendDirection > 0 ? -chg * 7 : chg * 7)
+    keys.push(line.new(bar_index[1], tp1, bar_index, tp1, color = lvlCol, width = 2))
+    printedtp1 := 1
+
+tp = ta.crossunder(ta.rsi(dist, tplen), 60)
+
+extreme = trendDirection > 0 ? low : high
+
+extreme_tp1_dist = math.abs(extreme - tp1)
+extreme_tp2_dist = math.abs(extreme - tp2)
+extreme_tp3_dist = math.abs(extreme - tp3)
+extreme_tp4_dist = math.abs(extreme - tp4)
+extreme_tp5_dist = math.abs(extreme - tp5)
+extreme_tp6_dist = math.abs(extreme - tp6)
+extreme_tp7_dist = math.abs(extreme - tp7)
+
+p12 = plot(enableIndicator ? superTrendValue : na, color = trendDirection > 0 ? color.new(red, 70) : color.new(green, 70))
+upTrend = plot(enableIndicator and close > superTrendValue ? superTrendValue : na, color = color.new(green, 20), style = plot.style_linebr) //, force_overlay = true
+downTrend = plot(enableIndicator and close < superTrendValue ? superTrendValue : na, color = color.new(red, 20), style = plot.style_linebr, force_overlay = false) //, force_overlay = true
+bodyMiddle = plot(barstate.isfirst ? na : (open + close) / 2, "Body Middle",display = display.none)
+
+fill(bodyMiddle, upTrend, (open + close) / 2, superTrendValue, enableIndicator ? color.new(green, 99) : na, enableIndicator ? color.new(green, 95) : na)
+fill(bodyMiddle, downTrend, superTrendValue, (open + close) / 2, enableIndicator ? color.new(red, 95) : na, enableIndicator ? color.new(red, 99) : na)
+
+plotchar(enableIndicator and tp and trendDirection > 0, "RSI-Based Shorts TP", "X", location.belowbar, red, size = size.tiny)
+plotchar(enableIndicator and tp and trendDirection < 0, "RSI-Based Longs TP", "X", location.abovebar, green, size = size.tiny)
+
+if enableIndicator and printedtp2 == 0 and extreme_tp2_dist < extreme_tp1_dist
+    keys.push(line.new(bar_index[1], tp2, bar_index, tp2, color = lvlCol, width = 2))
+    printedtp2 := 1
+
+if enableIndicator and printedtp3 == 0 and extreme_tp3_dist < extreme_tp2_dist
+    keys.push(line.new(bar_index[1], tp3, bar_index, tp3, color = lvlCol, width = 2))
+    printedtp3 := 1
+
+if enableIndicator and printedtp4 == 0 and extreme_tp4_dist < extreme_tp3_dist
+    keys.push(line.new(bar_index[1], tp4, bar_index, tp4, color = lvlCol, width = 2))
+    printedtp4 := 1
+
+if enableIndicator and printedtp5 == 0 and extreme_tp5_dist < extreme_tp4_dist
+    keys.push(line.new(bar_index[1], tp5, bar_index, tp5, color = lvlCol, width = 2))
+    printedtp5 := 1
+
+if enableIndicator and printedtp6 == 0 and extreme_tp6_dist < extreme_tp5_dist
+    keys.push(line.new(bar_index[1], tp6, bar_index, tp6, color = lvlCol, width = 2))
+    printedtp6 := 1
+
+if enableIndicator and printedtp7 == 0 and extreme_tp7_dist < extreme_tp6_dist
+    keys.push(line.new(bar_index[1], tp7, bar_index, tp7, color = lvlCol, width = 2))
+    printedtp7 := 1
+
+
+if enableIndicator and keys.size() > 0
+    aSZ = keys.size()
+    for i = aSZ - 1 to 0
+        keys.get(i).set_x2(bar_index)
+
+
+// Alert when SuperTrend changes direction
+alertcondition(ta.cross(trendDirection, 0), title="SuperTrend Direction Change", message="SuperTrend has changed direction")
+
+// Alert when each TP line is drawn
+alertcondition(printedtp1 == 1, title="TP1 Line Drawn", message="TP1 line has been drawn")
+alertcondition(printedtp2 == 1, title="TP2 Line Drawn", message="TP2 line has been drawn")
+alertcondition(printedtp3 == 1, title="TP3 Line Drawn", message="TP3 line has been drawn")
+alertcondition(printedtp4 == 1, title="TP4 Line Drawn", message="TP4 line has been drawn")
+alertcondition(printedtp5 == 1, title="TP5 Line Drawn", message="TP5 line has been drawn")
+alertcondition(printedtp6 == 1, title="TP6 Line Drawn", message="TP6 line has been drawn")
+alertcondition(printedtp7 == 1, title="TP7 Line Drawn", message="TP7 line has been drawn")
+
+// Alert for crossing under RSI
+alertcondition(tp, title="Take-Profit Condition", message="Take-Profit condition met")
+
+//--------MCPR---------------------------------------------------------------------------------------------
+// --- Dynamic Timeframe Calculation (Global Scope) ---
+
+// Get the current chart period string (e.g., "5", "60", "D", "W")
+string currentPeriod = timeframe.period
+// Get the current chart multiplier (e.g., 5 for "5", 1 for "60", 1 for "D")
+float currentMultiplier = timeframe.multiplier
+
+// 1. Calculate currentTFMinutes on a single line
+float currentTFMinutes = currentPeriod == "S" or currentPeriod == "" ? na : currentMultiplier * (currentPeriod == "S" ? 1.0/60 : currentPeriod == "m" ? 1.0 : currentMultiplier < 60 ? currentMultiplier : 60.0)
+
+// 2. Determine the pivot timeframe string
+var string pivottimeframe = 
+  currentPeriod == "1" or currentPeriod == "3" or (currentPeriod != "D" and currentTFMinutes <= 3) ? "30" : // 1min to 3min -> 30m
+  currentPeriod == "5" or currentPeriod == "10" or (currentPeriod != "D" and currentTFMinutes <= 10) ? "60" : // 5min to 10min -> 1h
+  currentPeriod == "15" ? "120" :  // 15min -> 2h
+  currentPeriod == "30" ? "180" :  // 30min -> 3h
+  currentPeriod == "60" ? "D" :    // 1hour (60) -> Daily
+  currentPeriod == "D" ? "W" :    // Daily Chart (D) -> Weekly Pivot
+  currentPeriod == "W" ? "M" :    // Weekly Chart (W) -> Monthly Pivot
+  "D" // Default to Daily
+
+// --- Input Variables ---
+mdp = input.int(defval=2, title="Multiday Lookback (For High/Low)", tooltip="Defines the lookback period for calculating the High/Low used in the CPR formula.", minval=1)
+
+// --- SECURITY CALLS ---
+// Calculate the highest/lowest values of the previous 'mdp' days on the current chart TF
+mphigh_val = ta.highest(high[1], mdp) 
+mplow_val = ta.lowest(low[1], mdp)   
+
+// Fetch security data using the dynamic 'pivottimeframe'
+mpopen = request.security(syminfo.tickerid, pivottimeframe, open[mdp], barmerge.gaps_off, barmerge.lookahead_on)
+mphigh = request.security(syminfo.tickerid, pivottimeframe, mphigh_val, barmerge.gaps_off, barmerge.lookahead_on)
+mplow = request.security(syminfo.tickerid, pivottimeframe, mplow_val, barmerge.gaps_off, barmerge.lookahead_on)
+mpclose = request.security(syminfo.tickerid, pivottimeframe, close[1], barmerge.gaps_off, barmerge.lookahead_on)
+
+//Multiday CPR Calculation
+mpivot = (mphigh + mplow + mpclose) / 3.0
+mbc = (mphigh + mplow) / 2.0
+mtc = mpivot - mbc + mpivot
+
+// Color and style definitions
+myWidthMainLevels = input.int(title="Line width for Main levels", defval=1, minval=1)
+
+// ⬇️ --- CORRECTED PLOT CALLS (Moved back to Global Scope) --- ⬇️
+
+// Plot P
+p10 = plot(showPivots and not na(mpivot) ? mpivot : na, 
+         title="P", 
+         color=color.purple, 
+         style=plot.style_linebr, 
+         linewidth=myWidthMainLevels)
+
+// Plot BC
+c = plot(showPivots and not na(mbc) ? mbc : na, 
+         title="BC", 
+         color=color.blue, 
+         style=plot.style_linebr, 
+         linewidth=myWidthMainLevels)
+
+// Plot TC
+d = plot(showPivots and not na(mtc) ? mtc : na, 
+         title="TC", 
+         color=color.blue, 
+         style=plot.style_linebr, 
+         linewidth=myWidthMainLevels)
+
+// Fill the CPR zone only if the pivots are shown
+fill(c, d, color=showPivots ? color.new(color.yellow, mcprTransp) : na)
+
+//===============================================================================================================================

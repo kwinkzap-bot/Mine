@@ -171,7 +171,8 @@ class KiteService:
                     self._nfo_by_name[nl].append({
                         'tradingsymbol': s, 'name': n, 'instrument_token': t,
                         'strike': i.get('strike'), 'instrument_type': i.get('instrument_type'),
-                        'expiry': i.get('expiry')
+                        'expiry': i.get('expiry'),
+                        'lot_size': i.get('lot_size')
                     })
             
             # CRITICAL: Free up raw memory immediately
@@ -246,25 +247,48 @@ class KiteService:
         # Fast lookup in indexed map
         options = self.get_nfo_instruments(name)
         if not options: return None
-        # Filter for specific strike and type
+        
+        today = date.today()
+        valid_options = []
+        
+        # Filter for specific strike, type and ensure it hasn't expired
         for o in options:
             if o.get('strike') == strike and o.get('instrument_type') == option_type:
-                return o.get('tradingsymbol')
-        return None
+                expiry = o.get('expiry')
+                if expiry:
+                    # Handle both date and datetime objects for safety
+                    if hasattr(expiry, 'date'):
+                        expiry = expiry.date()
+                    
+                    if expiry >= today:
+                        valid_options.append(o)
+        
+        if not valid_options:
+            logging.warning(f"[KiteService] No valid non-expired options found for {name} {strike} {option_type}")
+            return None
+            
+        # Sort by expiry to always return the nearest one (most common for intraday)
+        valid_options.sort(key=lambda x: x['expiry'])
+        
+        ts = valid_options[0].get('tradingsymbol')
+        logging.info(f"[KiteService] Resolved {name} {strike} {option_type} to nearest expiry ({valid_options[0]['expiry']}): {ts}")
+        return ts
 
     def get_lot_size(self, symbol: str) -> int:
         """
         Get the lot size (quantity multiplier) for a symbol.
         """
-        default_lots = {
-            'NIFTY': 65,
-            'BANKNIFTY': 25,
-            'FINNIFTY': 40,
-            'MIDCPNIFTY': 50,
-            'SENSEX': 10,
-            'BANKEX': 15
-        }
-        return default_lots.get(symbol, 1)
+        # 1. Try to look up in our NFO cache
+        symbol_upper = symbol.upper()
+        options = self.get_nfo_instruments(symbol_upper)
+        if options:
+            # All instruments for same underlying share the same lot size
+            ls = options[0].get('lot_size')
+            if ls: return int(ls)
+
+        # 2. Final fallback (Avoid hardcoding specific indices as they change)
+        logger.warning(f"[KiteService] Lot size for {symbol} not found in NFO cache. Falling back to 1.")
+        return 1
 
     def get_nearest_option_expiry(self, symbol: str, strike: int, option_type: str) -> Optional[date]:
         """Get the expiry date of the nearest available option matching criteria."""
@@ -292,7 +316,7 @@ class KiteService:
             return min(valid_expiries)
         return None
 
-    def place_option_order(self, symbol: str, strike: int, option_type: str, transaction_type: str, quantity: int, product: str = 'NRML', tradingsymbol: Optional[str] = None) -> Dict[str, Any]:
+    def place_option_order(self, symbol: str, strike: int, option_type: str, transaction_type: str, quantity: int, product: str = 'NRML', tradingsymbol: Optional[str] = None, price: Optional[float] = None) -> Dict[str, Any]:
         try:
             ts = tradingsymbol or self.get_option_symbol(symbol, strike, option_type)
             if not ts:
@@ -313,12 +337,13 @@ class KiteService:
                     exchange=self.kite.EXCHANGE_NFO,
                     transaction_type=txn_const,
                     quantity=quantity,
-                    order_type=self.kite.ORDER_TYPE_MARKET,
+                    order_type=self.kite.ORDER_TYPE_LIMIT if price else self.kite.ORDER_TYPE_MARKET,
+                    price=price,
                     product=mapped_product,
                     variety=self.kite.VARIETY_REGULAR,
-                    market_protection=-1  # -1 enables automatic market protection
+                    market_protection=-1 if not price else None
                 )
-                return {'success': True, 'order_id': order_id, 'price': 0, 'response': {'order_id': order_id}}
+                return {'success': True, 'order_id': order_id, 'price': price or 0, 'response': {'order_id': order_id}}
             except Exception as e:
                 err_str = str(e).lower()
                 if "market protection" in err_str or "limit order" in err_str or "market orders are not allowed" in err_str:
@@ -356,15 +381,21 @@ class KiteService:
             logging.error(f"[KiteService] Failed to place option order: {e}")
             return {'success': False, 'error': str(e)}
 
-    def place_stoploss_order(self, tradingsymbol: str, trigger_price: float, quantity: int, product: str = 'NRML') -> Dict[str, Any]:
+    def place_stoploss_order(self, tradingsymbol: str, trigger_price: float, quantity: int, product: str = 'NRML', transaction_type: str = 'SELL') -> Dict[str, Any]:
         try:
-            logging.info(f"[KiteService] Placing SL order: SELL {tradingsymbol} x {quantity} @ trigger {trigger_price} ({product})")
+            logging.info(f"[KiteService] Placing SL order: {transaction_type} {tradingsymbol} x {quantity} @ trigger {trigger_price} ({product})")
             mapped_product = self.kite.PRODUCT_NRML if product.upper() in ['NRML', 'CARRYFORWARD'] else self.kite.PRODUCT_MIS
+            
+            # Map string transaction_type to Kite constants
+            txn_const = self.kite.TRANSACTION_TYPE_SELL
+            if transaction_type.upper() == 'BUY': txn_const = self.kite.TRANSACTION_TYPE_BUY
+            elif transaction_type.upper() == 'SELL': txn_const = self.kite.TRANSACTION_TYPE_SELL
+            
             # Use internal _safe_place_order to include market_protection parameter
             order_id = self._safe_place_order(
                 tradingsymbol=tradingsymbol,
                 exchange=self.kite.EXCHANGE_NFO,
-                transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+                transaction_type=txn_const,
                 quantity=int(quantity),
                 order_type=self.kite.ORDER_TYPE_SLM,
                 trigger_price=float(trigger_price),

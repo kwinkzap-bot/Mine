@@ -17,10 +17,8 @@
 .oip-page {
     display: flex;
     flex-direction: column;
-    /* Remove fixed height to fit into the main container */
     min-height: 85vh;
     background: transparent;
-    /* Let the body gradient show through around the box */
     color: var(--oip-text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
 }
@@ -34,8 +32,7 @@
     flex-direction: column;
     overflow: hidden;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    height: 420px;
-    /* Reduced for a more compact, data-centric look */
+    /* No fixed height — chart wrap controls the size */
 }
 
 /* ── Header ──────────────────────────────────────────────── */
@@ -51,17 +48,19 @@
 
 .oip-hdr-top {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
+    flex-direction: row;
     justify-content: space-between;
+    align-items: center;
     width: 100%;
+    gap: 12px;
 }
 
 .oip-intrinsic-controls {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 15px;
+    gap: 8px;
+    align-self: flex-end;
 }
 
 .oip-title {
@@ -94,7 +93,8 @@
 .oip-controls {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 4px;
+    align-self: center;
 }
 
 .oip-label {
@@ -210,6 +210,18 @@
     background: #000000;
 }
 
+.exit-all {
+    background: #dc2626; /* Primary Red */
+    font-weight: 900;
+    padding: 0 12px;
+    box-shadow: 0 1px 3px rgba(220, 38, 38, 0.2);
+}
+
+.exit-all:hover {
+    background: #b91c1c;
+    box-shadow: 0 2px 5px rgba(220, 38, 38, 0.3);
+}
+
 .oip-btn:hover:not(:disabled) {
     background: #eff2f5;
     border-color: #8c959f;
@@ -258,58 +270,73 @@
     }
 }
 
-/* Stats in header */
+/* ── Stats Strip (frameless pill row) ────────────────── */
 .oip-status-row.boxed {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
+    flex-wrap: wrap;
+    align-items: stretch;
     width: 100%;
-    padding: 6px;
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.02);
+    padding: 0;
+    gap: 2px;
+    background: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
 }
 
 .oip-hdr-metric {
     display: flex;
     flex-direction: column;
     align-items: center;
-    min-width: 65px;
-    padding: 0 12px;
-    border-right: 1px solid #e2e8f0;
+    justify-content: center;
+    flex: 1 1 80px;          /* grow/shrink, base 80px — wraps to 2 rows automatically */
+    min-width: 64px;
+    max-width: 110px;
+    padding: 3px 6px;
+    background: #ffffff;
+    border: 1px solid #e8ecf0;
+    border-radius: 5px;
+    text-align: center;
+    transition: background 0.15s;
+}
+
+.oip-hdr-metric:hover {
+    background: #f1f5f9;
 }
 
 .oip-hdr-metric:last-child {
-    border-right: none;
+    border-right: 1px solid #e8ecf0; /* restore — no longer needed for separator */
 }
 
 .oip-hdr-lbl {
-    font-size: 10px;
-    color: #64748b;
+    font-size: 9px;
+    color: #94a3b8;
+    font-weight: 600;
     text-transform: uppercase;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    margin-bottom: 1px;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    margin-bottom: 2px;
 }
 
 .oip-hdr-val {
-    font-size: 10px;
-    font-weight: 700;
+    font-size: 11px;
+    font-weight: 800;
     color: #0f172a;
     font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    line-height: 1;
 }
 
-.oip-hdr-val.red {
-    color: #e11d48;
-}
+.oip-hdr-val.red  { color: #e11d48; }
+.oip-hdr-val.grn  { color: #10b981; }
+.oip-hdr-val.blu  { color: #2563eb; }
 
-.oip-hdr-val.grn {
-    color: #10b981;
-}
-
-.oip-hdr-val.blu {
-    color: #2563eb;
+/* Bullet separator between label and value */
+.oip-stat-dot {
+    font-size: 9px;
+    color: #cbd5e1;
+    line-height: 1;
+    user-select: none;
 }
 
 .oip-status-chip {
@@ -356,8 +383,8 @@
 /* ── Chart ───────────────────────────────────────────────── */
 .oip-chart-wrap {
     position: relative;
-    flex: 1;
-    min-height: 0;
+    height: 360px;          /* fixed — both OI and Premium charts are same height */
+    flex-shrink: 0;
     background: #ffffff;
 }
 
@@ -599,4 +626,194 @@
 .custom-dropdown-list li.highlighted {
     background-color: #f1f5f9;
     color: #0969da;
+}
+
+/* ── In-Chart Legend (Top Left Overlay) ──────────────────── */
+.oip-chart-legend {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 10;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(4px);
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.legend-item {
+    font-size: 11px;
+    font-weight: 800;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    letter-spacing: 0.02em;
+}
+
+.legend-item.ce {
+    color: #10b981;
+}
+
+.legend-item.pe {
+    color: #8b5cf6;
+}
+
+/* ── Option Premium Compact Toolbar ─────────────────────── */
+.oip-header--compact {
+    padding: 5px 10px;
+    gap: 5px;
+}
+
+.oip-title--sm {
+    font-size: 13px;
+    font-weight: 700;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+/* Full-width single row: title left, controls right */
+.oip-prem-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    flex-wrap: nowrap;
+}
+
+/* Logical group of controls within the toolbar */
+.oip-prem-group {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+/* Thin vertical divider between groups */
+.oip-prem-sep {
+    width: 1px;
+    height: 16px;
+    background: #e2e8f0;
+    flex-shrink: 0;
+}
+
+/* Smaller select for compact toolbar */
+.oip-select--xs {
+    height: 20px;
+    font-size: 10px;
+    padding: 0 4px;
+}
+
+/* Price input: narrower */
+.oip-input--price {
+    width: 72px;
+    font-size: 10px;
+    height: 20px;
+}
+
+/* Order buttons — compact pill style */
+.oip-order-btn {
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 4px; /* Changed from pill to slightly rounded for better fit in groups */
+    font-size: 9px;
+    font-weight: 800;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    transition: filter 0.15s, transform 0.1s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 38px;
+}
+
+.oip-order-side-group {
+    display: flex;
+    gap: 2px;
+    background: #f8fafc;
+    padding: 2px;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+}
+
+.oip-order-side-group--ce {
+    border-color: #10b98166; /* Light green (semi-transparent) */
+}
+
+.oip-order-side-group--pe {
+    border-color: #ef444466; /* Light red (semi-transparent) */
+}
+
+.oip-order-btn:hover {
+    filter: brightness(1.12);
+    transform: translateY(-1px);
+}
+
+.oip-order-btn:active {
+    transform: translateY(0);
+    filter: brightness(0.96);
+}
+
+/* ── OI Profile compact helpers ─────────────────────────── */
+
+/* Symbol text input — shorter than default */
+.oip-input--sym {
+    width: 72px;
+    height: 20px;
+    font-size: 10px;
+}
+
+/* EMA checkbox label — very tight */
+.oip-ema-chk {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 600;
+    color: #64748b;
+    user-select: none;
+}
+
+.oip-ema-chk input {
+    width: 11px;
+    height: 11px;
+    cursor: pointer;
+    margin: 0;
+}
+
+/* Smaller OI/CHG radio pill */
+.oip-mode-group--xs {
+    padding: 1px;
+    gap: 1px;
+}
+
+.oip-mode-group--xs .oip-radio span {
+    padding: 2px 7px;
+    font-size: 10px;
+}
+
+/* Compact stats strip override */
+.oip-status-row--compact {
+    gap: 2px;
+    padding: 0;
+}
+
+.oip-status-row--compact .oip-hdr-metric {
+    flex: 1 1 72px;
+    min-width: 58px;
+    padding: 2px 5px;
+}
+
+.oip-status-row--compact .oip-hdr-lbl {
+    font-size: 8px;
+    margin-bottom: 1px;
+}
+
+.oip-status-row--compact .oip-hdr-val {
+    font-size: 10px;
 }

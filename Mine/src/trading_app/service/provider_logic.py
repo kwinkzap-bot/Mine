@@ -5,6 +5,7 @@ from flask import has_request_context, session
 from trading_app.service.fyers_data_service import FyersDataServiceAdapter
 
 logger = logging.getLogger(__name__)
+_fyers_adapter_cache = {}
 
 def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Optional[Any]:
     """Get Zerodha Kite instance. Original logic moved from api.py."""
@@ -69,8 +70,14 @@ def get_data_provider(user: Optional[str] = None) -> Optional[Any]:
                 secret = UserEnvManager.get_user_var(username, f'BROKER_{instance_num}_SECRET_KEY')
                 
                 if app_id and access_token:
+                    cache_key = f"{username}_{app_id}_{access_token[-10:]}"
+                    if cache_key in _fyers_adapter_cache:
+                        return _fyers_adapter_cache[cache_key]
+                    
                     logger.info(f"Initializing FyersDataServiceAdapter for {username} (app_id={app_id})")
-                    return FyersDataServiceAdapter(fyers_instance_or_app_id=app_id, access_token=access_token, secret=secret)
+                    adapter = FyersDataServiceAdapter(fyers_instance_or_app_id=app_id, access_token=access_token, secret=secret)
+                    _fyers_adapter_cache[cache_key] = adapter
+                    return adapter
                 else:
                     logger.warning(f"Fyers configured but missing app_id or access_token for {username}. Falling back to Kite.")
 

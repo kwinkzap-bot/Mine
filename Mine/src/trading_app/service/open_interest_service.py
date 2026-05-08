@@ -11,7 +11,8 @@ import logging
 import threading
 import gc
 import math
-from datetime import datetime, timedelta, time
+import time
+from datetime import datetime, timedelta, time as dt_time
 from typing import Dict, List, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from kiteconnect import KiteConnect
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 _global_nfo_cache = {
     'instruments': None,
     'timestamp': None,
+    'provider_type': None, # Track which provider (Kite/Fyers) populated the cache
     'lock': threading.Lock()
 }
 
@@ -307,13 +309,14 @@ class OpenInterestService:
         from trading_app.service.fyers_data_service import FyersDataServiceAdapter
         self._is_fyers = isinstance(kite_instance, FyersDataServiceAdapter)
         
-        # When switching to Fyers, clear the global NFO cache so it re-fetches
-        # with Fyers instruments (different format/tokens vs Kite)
-        if self._is_fyers:  # Always clear NFO cache on Fyers init to avoid stale 0-record cache
-            with _global_nfo_cache['lock']:
+        # When switching providers, clear the global NFO cache
+        provider_type = 'fyers' if self._is_fyers else 'kite'
+        with _global_nfo_cache['lock']:
+            if _global_nfo_cache['provider_type'] != provider_type:
+                logger.info(f"[OI] Provider change detected ({_global_nfo_cache['provider_type']} -> {provider_type}) — clearing global NFO cache")
                 _global_nfo_cache['instruments'] = None
                 _global_nfo_cache['timestamp'] = None
-            logger.info("[OI] Fyers provider detected — cleared global NFO cache for fresh Fyers instruments download")
+                _global_nfo_cache['provider_type'] = provider_type
         
         self.SYMBOL_CONFIG = {
             'NIFTY': {
@@ -758,41 +761,119 @@ class OpenInterestService:
             exchange = config.get('exchange', 'NFO')
             instruments = None
             
-            # Memory Optimization: Check global cache first to avoid 100MB download
-            with _global_nfo_cache['lock']:
-                now = datetime.now()
-                if (_global_nfo_cache['instruments'] and _global_nfo_cache['timestamp'] and 
-                    (now - _global_nfo_cache['timestamp']).total_seconds() < 3600):
-                    instruments = _global_nfo_cache['instruments']
-            
-            if not instruments:
+            # OPTIMIZATION: If Fyers, try to use native optionchain API first (MUCH FASTER than CSV)
+            proper_name_target = config['name'].strip().upper()
+            if self._is_fyers:
                 try:
-                    logger.info(f"Downloading heavy {exchange} instruments list (first time or stale)...")
-                    raw_inst = self.kite.instruments(exchange)
-                    # Prune instruments to save memory (~80% saved)
-                    instruments = []
-                    for r in raw_inst:
-                        if r.get('instrument_type') in ['CE', 'PE', 'FUT']:
-                            instruments.append({
-                                'name': r.get('name'),
-                                'tradingsymbol': r.get('tradingsymbol'),
-                                'instrument_token': r.get('instrument_token'),
-                                'strike': r.get('strike'),
-                                'instrument_type': r.get('instrument_type'),
-                                'expiry': r.get('expiry')
-                            })
-                    with _global_nfo_cache['lock']:
-                        _global_nfo_cache['instruments'] = instruments
-                        _global_nfo_cache['timestamp'] = now
-                    logger.info(f"Cached {len(instruments)} pruned {exchange} instruments.")
-                    # Clear raw list and collect GC
-                    raw_inst = None
-                    gc.collect()
+                    logger.info(f"[OI] Using native Fyers optionchain API for {symbol}...")
+                    # Fyers expects 'NSE:NIFTY50-INDEX'
+                    root_token = config.get('instrument_key')
+                    chain_resp = self.kite.fyers.optionchain(data={
+                        "symbol": root_token,
+                        "strikecount": 50 # Fetch 50 strikes (covers the dashboard range)
+                    })
+                    
+                    if chain_resp and chain_resp.get('s') == 'ok' and 'data' in chain_resp:
+                        chain_data = chain_resp['data']
+                        options_list = chain_data.get('optionsChain', [])
+                        if options_list:
+                            logger.info(f"✓ Found {len(options_list)} options via Fyers Chain API for {symbol}")
+                            # Convert Fyers Chain format to the format expected by _get_available_strikes
+                            # Get expiry date from root data
+                            raw_expiry = chain_data.get('expiryDate') or chain_data.get('expiry_date')
+                            expiry_dt = None
+                            if raw_expiry:
+                                # Try common string formats
+                                for fmt in ('%Y-%m-%d', '%d-%m-%Y', '%Y-%m-%d %H:%M:%S'):
+                                    try:
+                                        expiry_dt = datetime.strptime(str(raw_expiry).split(' ')[0], fmt).date()
+                                        break
+                                    except:
+                                        continue
+                                
+                                # Try timestamp if string formats failed
+                                if not expiry_dt:
+                                    try:
+                                        ts = int(float(raw_expiry))
+                                        if ts > 1000000000: # Valid unix timestamp
+                                            expiry_dt = datetime.fromtimestamp(ts).date()
+                                    except:
+                                        pass
+                            
+                            # Final fallback: Use first option's expiry or today's date
+                            if not expiry_dt and options_list:
+                                first_opt = options_list[0]
+                                raw_opt_exp = first_opt.get('expiry') or first_opt.get('expiry_date') or first_opt.get('exp')
+                                if raw_opt_exp:
+                                    try:
+                                        ts = int(float(raw_opt_exp))
+                                        expiry_dt = datetime.fromtimestamp(ts).date()
+                                    except:
+                                        pass
+                            
+                            # If still None, use today as last resort for Native API
+                            if not expiry_dt:
+                                expiry_dt = datetime.now().date()
+                                
+                            instruments = []
+                            for opt in options_list:
+                                # Map Fyers 'CALL'/'PUT' to internal 'CE'/'PE'
+                                f_type = (opt.get('optionType') or opt.get('option_type') or '').upper()
+                                inst_type = 'CE' if ('CALL' in f_type or 'CE' in f_type) else 'PE' if ('PUT' in f_type or 'PE' in f_type) else f_type
+                                
+                                # Handle strike price variations
+                                strike = float(opt.get('strikePrice') or opt.get('strike_price') or 0)
+                                
+                                instruments.append({
+                                    'instrument_token': opt.get('symbol'),
+                                    'tradingsymbol':    opt.get('symbol', '').split(':')[-1],
+                                    'name':             proper_name_target,
+                                    'instrument_type':  inst_type,
+                                    'strike':           strike,
+                                    'expiry':           expiry_dt,
+                                    # Include OI fields if present in native chain to avoid extra quote calls
+                                    'oi':               opt.get('oi', opt.get('open_interest', 0)),
+                                    'oi_change':        opt.get('oich', opt.get('oi_change', 0))
+                                })
+                            
+                            # Populate fast token cache for chart resolution
+                            from trading_app.service.fyers_data_service import _FYERS_OPTION_TOKEN_CACHE, _FYERS_OPTION_TOKEN_LOCK
+                            with _FYERS_OPTION_TOKEN_LOCK:
+                                for inst in instruments:
+                                    # Key: NIFTY:24100:CE -> NSE:NIFTY26MAY24100CE
+                                    c_key = f"{inst['name']}:{int(inst['strike'])}:{inst['instrument_type']}"
+                                    _FYERS_OPTION_TOKEN_CACHE[c_key] = inst['instrument_token']
                 except Exception as e:
-                    logger.error(f"Failed to get instruments for {exchange}: {e}")
-                    return {'success': False, 'error': f'Failed to get instruments: {str(e)}'}
+                    logger.warning(f"[OI] Native Fyers Chain API failed for {symbol}: {e}. Falling back to CSV.")
             
-            # Step 3: Get available strikes for symbol using KiteService method pattern
+            # Step 3: Fallback to Global Instruments Cache (CSV based)
+            if not instruments:
+                # Memory Optimization: Check global cache first to avoid 100MB download
+                with _global_nfo_cache['lock']:
+                    now = datetime.now()
+                    if (_global_nfo_cache['instruments'] and _global_nfo_cache['timestamp'] and 
+                        (now - _global_nfo_cache['timestamp']).total_seconds() < 3600):
+                        instruments = _global_nfo_cache['instruments']
+                
+                if not instruments:
+                    try:
+                        logger.info(f"Downloading heavy {exchange} instruments list (first time or stale)...")
+                        # This calls FyersDataServiceAdapter.instruments() which downloads CSV
+                        raw_inst = self.kite.instruments(exchange)
+                        if raw_inst:
+                            # Cache the full list for subsequent requests
+                            with _global_nfo_cache['lock']:
+                                _global_nfo_cache['instruments'] = raw_inst
+                                _global_nfo_cache['timestamp'] = now
+                            instruments = raw_inst
+                            logger.info(f"Cached {len(instruments)} {exchange} instruments.")
+                        else:
+                            logger.warning(f"Failed to fetch instruments for {exchange}")
+                    except Exception as e:
+                        logger.error(f"Failed to get instruments for {exchange}: {e}")
+                        return {'success': False, 'error': f'Failed to get instruments: {str(e)}'}
+            
+            # Step 4: Get available strikes for symbol
             strikes_data = self._get_available_strikes(instruments, symbol, current_price, config)
             
             if not strikes_data:
@@ -869,10 +950,6 @@ class OpenInterestService:
                     return []  # type: ignore[return-value]
             
             # Log sample instruments to see structure
-            if instruments:
-                logger.info(f"[DEBUG] Sample instrument 0: {instruments[0]}")
-                logger.info(f"[DEBUG] Sample instrument keys: {instruments[0].keys() if instruments else 'N/A'}")
-            
             # Normalize proper_name
             proper_name_target = proper_name.strip().upper()
             
@@ -981,8 +1058,12 @@ class OpenInterestService:
                     
                     if option_type == 'CE':
                         strikes_dict[strike]['ce_token'] = token
-                    else:  # PE
+                        strikes_dict[strike]['ce_oi'] = inst.get('oi', 0)
+                        strikes_dict[strike]['ce_oi_change'] = inst.get('oi_change', 0)
+                    elif option_type == 'PE':
                         strikes_dict[strike]['pe_token'] = token
+                        strikes_dict[strike]['pe_oi'] = inst.get('oi', 0)
+                        strikes_dict[strike]['pe_oi_change'] = inst.get('oi_change', 0)
                 except (KeyError, ValueError, TypeError) as e:
                     logger.debug(f"Skipping instrument: {e}")
                     continue
@@ -1046,29 +1127,22 @@ class OpenInterestService:
                     'pe_summary': {}
                 }
             
-            # Fetch quotes in batches
-            batch_size = 50
-            all_quotes = {}
+            # Fetch quotes in batches - use Fyers max limit (50) for speed
+            is_fyers = self._is_fyers
+            batch_size = 50 if is_fyers else 25
+            batch_delay = 0.2 if is_fyers else 0.5
             
-            # Log sample tokens so we can verify format
-            if all_tokens:
-                logger.info(f"[OI-Quotes] Sample tokens (first 3): {all_tokens[:3]}")
+            all_quotes = {}
             
             for i in range(0, len(all_tokens), batch_size):
                 batch = all_tokens[i:i + batch_size]
                 try:
-                    logger.info(f"Fetching batch {i//batch_size + 1} with {len(batch)} tokens...")
                     quotes = self.kite.quote(batch)  # Standard quote includes OI fields
                     if quotes:
                         all_quotes.update(quotes)
-                        # Log sample quote key to confirm symbol match
-                        if i == 0:
-                            sample_key = next(iter(quotes))
-                            sample_oi = quotes[sample_key].get('oi', 'MISSING')
-                            logger.info(f"[OI-Quotes] Sample response key={sample_key!r}, oi={sample_oi}")
-                        logger.info(f"✓ Batch {i//batch_size + 1}: Fetched {len(quotes)} quotes")
-                    else:
-                        logger.warning(f"Empty response for batch {i//batch_size + 1}")
+                    
+                    if i + batch_size < len(all_tokens):
+                        time.sleep(batch_delay)
                 except Exception as e:
                     logger.error(f"Error fetching batch {i//batch_size + 1}: {e}", exc_info=True)
                     continue
@@ -1095,13 +1169,19 @@ class OpenInterestService:
             for strike_info in strikes_data:
                 strike = strike_info['strike']
                 
+                # Prefer pre-fetched OI data from Native API if available
+                pre_ce_oi = strike_info.get('ce_oi')
+                pre_pe_oi = strike_info.get('pe_oi')
+                pre_ce_oich = strike_info.get('ce_oi_change')
+                pre_pe_oich = strike_info.get('pe_oi_change')
+
                 strikes_oi[strike] = {
                     'strike': strike,
-                    'ce_oi': 0,
-                    'ce_change_in_oi': 0,
+                    'ce_oi': pre_ce_oi if pre_ce_oi is not None else 0,
+                    'ce_change_in_oi': pre_ce_oich if pre_ce_oich is not None else 0,
                     'ce_iv': 0,
-                    'pe_oi': 0,
-                    'pe_change_in_oi': 0,
+                    'pe_oi': pre_pe_oi if pre_pe_oi is not None else 0,
+                    'pe_change_in_oi': pre_pe_oich if pre_pe_oich is not None else 0,
                     'pe_iv': 0
                 }
                 
@@ -1272,8 +1352,8 @@ class OpenInterestService:
             
             # Cache opening OI if it's 9:15 AM - 9:20 AM (first call of the day)
             current_time = datetime.now().time()
-            market_open = time(9, 15)
-            market_open_end = time(9, 20)
+            market_open = dt_time(9, 15)
+            market_open_end = dt_time(9, 20)
             
             is_cache_window = market_open <= current_time <= market_open_end
             is_already_cached = opening_oi_cache.is_cached_today(self._current_symbol)

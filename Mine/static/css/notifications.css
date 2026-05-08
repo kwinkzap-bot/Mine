@@ -1,33 +1,56 @@
-.notification-container {
+#notification-container, .notification-container {
     position: fixed;
-    top: 15px;
-    right: 15px;
-    z-index: 1000;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10000;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    align-items: center;
+    gap: 10px;
+    pointer-events: none;
+    width: max-content;
+    max-width: 90vw;
 }
+
 .notification {
-    padding: 15px 20px;
+    padding: 12px 24px;
     border-radius: 8px;
     color: white;
-    font-size: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
     opacity: 0;
-    transform: translateX(100%);
-    animation: slideIn 0.5s forwards, fadeOut 0.5s 4.5s forwards;
+    transform: translateY(-20px);
+    animation: toastIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards, toastOut 0.4s 4.5s forwards;
+    pointer-events: auto;
+    text-align: center;
+    min-width: 280px;
+    border: 1px solid rgba(255,255,255,0.1);
+    backdrop-filter: blur(8px);
 }
-.notification.info { background-color: #2196f3; }
-.notification.error { background-color: #ef5350; }
-.notification.success { background-color: #26a69a; }
-.notification.warning { background-color: #ffa726; }
 
-@keyframes slideIn {
-    to { opacity: 1; transform: translateX(0); }
+.notification.info { background-color: rgba(33, 150, 243, 0.95); }
+.notification.error { background-color: rgba(239, 83, 80, 0.95); }
+.notification.success { background-color: rgba(38, 166, 154, 0.95); }
+.notification.warning { background-color: rgba(255, 167, 38, 0.95); }
+
+@keyframes toastIn {
+    to { 
+        opacity: 1; 
+        transform: translateY(0); 
+    }
 }
-@keyframes fadeOut {
-    from { opacity: 1; }
-    to { opacity: 0; transform: scale(0.9); }
+
+@keyframes toastOut {
+    from { 
+        opacity: 1; 
+        transform: translateY(0) scale(1);
+    }
+    to { 
+        opacity: 0; 
+        transform: translateY(-10px) scale(0.95);
+    }
 }
 
 /* Watchlist button animations */

@@ -15,17 +15,38 @@ class FyersRateLimiter:
     """Thread-safe rate limiter for Fyers API (10 requests/second)."""
     def __init__(self, requests_per_second: float = 10.0):
         self.delay = 1.0 / requests_per_second
-        self.last_call = 0.0
+        self.next_call = 0.0
+        self.priority_next_call = 0.0 # Dedicated slot tracking for critical requests
         self.lock = threading.Lock()
 
-    def wait(self):
+    def wait(self, priority: int = 0):
+        """
+        priority 1: High (Charts, LTP) - Faster slots
+        priority 0: Low (Quotes, Chain) - Standard slots
+        """
+        sleep_time = 0
         with self.lock:
-            elapsed = time.time() - self.last_call
-            if elapsed < self.delay:
-                time.sleep(self.delay - elapsed)
-            self.last_call = time.time()
+            now = time.time()
+            # High priority (Charts) get nearly instant slots
+            effective_delay = self.delay if priority == 0 else self.delay * 0.1
+            
+            target_next = self.priority_next_call if priority == 1 else self.next_call
+            
+            if now < target_next:
+                sleep_time = target_next - now
+                new_next = target_next + effective_delay
+            else:
+                sleep_time = 0
+                new_next = now + effective_delay
+            
+            # Synchronize both clocks
+            self.next_call = max(self.next_call, new_next)
+            self.priority_next_call = max(self.priority_next_call, new_next)
+        
+        if sleep_time > 0:
+            time.sleep(sleep_time)
 
-_rate_limiter = FyersRateLimiter(10.0)
+_rate_limiter = FyersRateLimiter(5.0) # Optimized: 5 req/s (Fyers limit is 10)
 logger = logging.getLogger(__name__)
 
 # Global Static Caches to survive transient Adapter regenerations from api.py routes
@@ -36,9 +57,21 @@ _csv_fetch_lock = threading.Lock()
 _GLOBAL_OI_CHAIN_CACHE: Dict[str, Dict[str, Dict[str, float]]] = {}
 _GLOBAL_OI_CHAIN_TIMESTAMP: Dict[str, datetime] = {}
 
+# Global Token Mapping (Root:Strike:Type -> FyersSymbol) for high-speed resolution
+_FYERS_OPTION_TOKEN_CACHE: Dict[str, str] = {}
+_FYERS_OPTION_TOKEN_LOCK = threading.Lock()
+
 # Historical Data Cache for Fyers
 _FYERS_HIST_CACHE: Dict[str, tuple] = {}
 _FYERS_HIST_LOCK = threading.Lock()
+
+# Quotes Cache (Symbol -> (QuoteDict, Timestamp))
+_FYERS_SYMBOL_CACHE: Dict[str, tuple] = {}
+_FYERS_SYMBOL_LOCK = threading.Lock()
+
+# Global API Locks to prevent parallel requests per endpoint (Serialization)
+_GLOBAL_FYERS_QUOTE_LOCK = threading.Lock()
+_GLOBAL_FYERS_HIST_LOCK = threading.Lock()
 
 # Monkeypatch Fyers V3 SDK - Disabled as api-t1 is currently active and working
 # try:
@@ -146,157 +179,164 @@ class FyersDataServiceAdapter:
         }
         
         symbol = UNDERLYING.get(root_name, f"NSE:{root_name}-EQ")
-        try:
-            logger.info(f"[FyersAdapter] Fetching option chain for {symbol} (root={root_name})")
-            data = {'symbol': symbol, 'strikecount': 50}
-            resp = self.fyers.optionchain(data=data)
-            oi_map = {}
-            if resp.get('s') == 'ok':
-                options = resp.get('data', {}).get('optionsChain', [])
-                for row in options:
-                    sym = row.get('symbol')
-                    if sym:
-                        oi_map[sym] = {
-                            'oi': row.get('oi', row.get('open_interest', 0)),
-                            'oich': row.get('oich', 0)
-                        }
-            else:
-                logger.error(f"[FyersAdapter] optionchain failed for {symbol}: {resp}")
-                
-            _GLOBAL_OI_CHAIN_CACHE[root_name] = oi_map
-            _GLOBAL_OI_CHAIN_TIMESTAMP[root_name] = now
-            return oi_map
-        except Exception as e:
-            logger.error(f"[FyersAdapter] _get_fyers_oi error for {symbol}: {e}")
-            return {}
-
-    def set_access_token(self, token: str):
-        """Kite-compatibility dummy. Access token is set during init for Fyers."""
-        pass
-
-    def quote(self, symbols: List[str]) -> Dict[str, Any]:
-        """
-        Fetch full quotes with retry and rate-limiting.
-        Kite expects: { "NSE:NIFTY50-INDEX": { "last_price": ..., "ohlc": {...}, "oi": ... } }
-        """
         max_retries = 3
-        backoff = 1.0
+        backoff = 2.0
         
         for attempt in range(max_retries):
-            # Apply global rate limit protection
             _rate_limiter.wait()
-            
             try:
-                # Map naked EQ symbols back to Fyers EQ suffix
-                # Map Kite symbols to Fyers symbols
-                KITE_TO_FYERS_MAP = {
-                    'NSE:NIFTY 50': 'NSE:NIFTY50-INDEX',
-                    'NSE:NIFTY BANK': 'NSE:NIFTYBANK-INDEX',
-                    'NSE:NIFTY FIN SERVICE': 'NSE:FINNIFTY-INDEX',
-                    'NSE:NIFTY MID SELECT': 'NSE:MIDCPNIFTY-INDEX',
-                    'NSE:INDIA VIX': 'NSE:INDIAVIX-INDEX',
-                }
+                logger.info(f"[FyersAdapter] Fetching option chain for {symbol} (root={root_name}) [Attempt {attempt+1}]")
+                data = {'symbol': symbol, 'strikecount': 50}
+                resp = self.fyers.optionchain(data=data)
                 
-                fyers_symbols = []
-                fyers_to_kite_map = {}
-                for s in symbols:
-                    fsym = KITE_TO_FYERS_MAP.get(s, s)
-                    if fsym.startswith('NSE:') and not any(fsym.endswith(x) for x in ['-EQ', '-INDEX', 'CE', 'PE', 'FUT']):
-                        fsym = f"{fsym}-EQ"
-                    elif fsym.startswith('BSE:') and not any(fsym.endswith(x) for x in ['-EQ', '-INDEX']):
-                        fsym = f"{fsym}-EQ"
-                    else:
-                        fsym = fsym.replace('NFO:', 'NSE:') if fsym.startswith('NFO:') else fsym
-                    
-                    fyers_symbols.append(fsym)
-                    fyers_to_kite_map[fsym] = s
-
-                formatted_symbols = ",".join(fyers_symbols)
-                response = self.fyers.quotes(data={"symbols": formatted_symbols})
-
-                if response.get('s') != 'ok':
-                    code = response.get('code')
-                    if code == 429 or 'limit reached' in str(response.get('message')).lower():
-                        logger.warning(f"[FyersAdapter] Rate limit in quote() [Attempt {attempt+1}/{max_retries}]. Sleeping {backoff}s...")
-                        time.sleep(backoff)
-                        backoff *= 2
-                        continue
-                    logger.error(f"[FyersAdapter] quotes() failed: {response.get('message')} | code={code}")
-                    return {}
-
-                # Pre-fetch option chain OI for options since /quotes API omits OI
-                oi_caches = {}
-                d_list = response.get('d', [])
-                for item in d_list:
-                    fsym = item.get('n', '')
-                    if fsym.endswith('CE') or fsym.endswith('PE'):
-                        short_sym = fsym.split(':')[-1] if ':' in fsym else fsym
-                        m = re.match(r'^([A-Z&]+)', short_sym)
-                        if m:
-                            root = m.group(1)
-                            if root not in oi_caches:
-                                oi_caches[root] = self._get_fyers_oi(root)
+                if resp.get('s') == 'ok':
+                    oi_map = {}
+                    options = resp.get('data', {}).get('optionsChain', [])
+                    for row in options:
+                        sym = row.get('symbol')
+                        if sym:
+                            oi_map[sym] = {
+                                'oi': row.get('oi', row.get('open_interest', 0)),
+                                'oich': row.get('oich', 0)
+                            }
+                    _GLOBAL_OI_CHAIN_CACHE[root_name] = oi_map
+                    _GLOBAL_OI_CHAIN_TIMESTAMP[root_name] = now
+                    return oi_map
                 
-                kite_quotes: Dict[str, Any] = {}
-                for item in d_list:
-                    fsym = item.get('n', '')
-                    sym = fyers_to_kite_map.get(fsym, fsym)
-                    v = item.get('v', {})
-                    
-                    if not v: continue
-                    
-                    option_oi = 0
-                    option_oich = 0
-                    if fsym.endswith('CE') or fsym.endswith('PE'):
-                        short_sym = fsym.split(':')[-1] if ':' in fsym else fsym
-                        m = re.match(r'^([A-Z&]+)', short_sym)
-                        if m:
-                            root = m.group(1)
-                            if root in oi_caches and fsym in oi_caches[root]:
-                                option_oi = oi_caches[root][fsym].get('oi', 0)
-                                option_oich = oi_caches[root][fsym].get('oich', 0)
-                    
-                    fetched_oi = v.get('open_interest') or v.get('oi') or 0
-                    final_oi = option_oi if option_oi > 0 else fetched_oi
-                    
-                    kite_quotes[sym] = {
-                        'last_price':    v.get('lp', 0.0),
-                        'high':          v.get('high_price') or v.get('high') or 0.0,
-                        'low':           v.get('low_price') or v.get('low') or 0.0,
-                        'ohlc': {
-                            'open':  v.get('open_price') or v.get('open') or 0.0,
-                            'high':  v.get('high_price') or v.get('high') or 0.0,
-                            'low':   v.get('low_price') or v.get('low') or 0.0,
-                            'close': v.get('prev_close_price') or v.get('prev_close') or 0.0,
-                        },
-                        'oi':            final_oi,
-                        'change_in_oi':  option_oich,
-                        'oi_day_high':   v.get('oi_day_high', 0),
-                        'oi_day_low':    v.get('oi_day_low', 0),
-                        'volume':        v.get('volume') or v.get('vol') or 0,
-                        'change':        v.get('ch', 0.0),
-                        'change_percent':v.get('chp', 0.0),
-                        'last_quantity': v.get('askQty', 0),
-                        'timestamp':     datetime.fromtimestamp(int(v['tt'])) if v.get('tt') else datetime.now(),
-                    }
-                return kite_quotes
+                code = resp.get('code')
+                if code == 429 or 'limit' in str(resp.get('message', '')).lower():
+                    logger.warning(f"[FyersAdapter] Rate limit in optionchain({symbol}). Sleeping {backoff}s...")
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                else:
+                    logger.error(f"[FyersAdapter] optionchain failed for {symbol}: {resp}")
+                    break
             except Exception as e:
-                logger.error(f"[FyersAdapter] quote() error in core: {e}")
-                if attempt == max_retries - 1: return {}
+                logger.error(f"[FyersAdapter] _get_fyers_oi error for {symbol}: {e}")
                 time.sleep(backoff)
                 backoff *= 2
+        
         return {}
-    def ltp(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
-        """
-        Fetch LTP only.
-        Kite expects: { "NSE:NIFTY50-INDEX": { "last_price": 24000.0 } }
-        """
-        quotes = self.quote(symbols)
-        return {k: {'last_price': v['last_price']} for k, v in quotes.items()}
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Historical Data
-    # ──────────────────────────────────────────────────────────────────────
+    def set_access_token(self, token: str):
+        pass
+
+    def quote(self, symbols: List[str], priority: int = 0) -> Dict[str, Any]:
+        max_retries = 2
+        backoff = 2.0
+        
+        kite_quotes: Dict[str, Any] = {}
+        missing_symbols = []
+        now = datetime.now()
+        
+        with _FYERS_SYMBOL_LOCK:
+            for s in symbols:
+                if s in _FYERS_SYMBOL_CACHE:
+                    cached_q, ts = _FYERS_SYMBOL_CACHE[s]
+                    if (now - ts).total_seconds() < 0.5:
+                        kite_quotes[s] = cached_q
+                        continue
+                missing_symbols.append(s)
+        
+        if not missing_symbols:
+            return kite_quotes
+            
+        logger.info(f"[FyersAdapter] Fetching {len(missing_symbols)} missing symbols from API (already had {len(kite_quotes)})")
+        
+        KITE_TO_FYERS_MAP = {
+            'NSE:NIFTY 50': 'NSE:NIFTY50-INDEX',
+            'NSE:NIFTY BANK': 'NSE:NIFTYBANK-INDEX',
+            'NSE:NIFTY FIN SERVICE': 'NSE:FINNIFTY-INDEX',
+            'NSE:NIFTY MID SELECT': 'NSE:MIDCPNIFTY-INDEX',
+            'NSE:INDIA VIX': 'NSE:INDIAVIX-INDEX',
+        }
+        
+        fyers_symbols = []
+        f_to_k = {}
+        for s in missing_symbols:
+            fsym = KITE_TO_FYERS_MAP.get(s, s)
+            if fsym.startswith('NSE:') and not any(fsym.endswith(x) for x in ['-EQ', '-INDEX', 'CE', 'PE', 'FUT']):
+                fsym = f"{fsym}-EQ"
+            elif fsym.startswith('BSE:') and not any(fsym.endswith(x) for x in ['-EQ', '-INDEX']):
+                fsym = f"{fsym}-EQ"
+            else:
+                fsym = fsym.replace('NFO:', 'NSE:') if fsym.startswith('NFO:') else fsym
+            fyers_symbols.append(fsym)
+            f_to_k[fsym] = s
+
+        batch_size = 50
+        for i in range(0, len(fyers_symbols), batch_size):
+            batch = fyers_symbols[i:i+batch_size]
+            batch_str = ",".join(batch)
+            
+            for attempt in range(max_retries):
+                _rate_limiter.wait(priority=priority)
+                
+                resp = None
+                with _GLOBAL_FYERS_QUOTE_LOCK:
+                    try:
+                        resp = self.fyers.quotes(data={"symbols": batch_str})
+                    except Exception as e:
+                        if "json" in str(e).lower() or "expecting value" in str(e).lower():
+                            resp = {'s': 'error', 'code': 429, 'message': 'Malformed JSON'}
+                        else:
+                            raise e
+                
+                if resp and resp.get('s') == 'ok':
+                    d_list = resp.get('d', [])
+                    oi_caches = {}
+                    for item in d_list:
+                        fsym = item.get('n', '')
+                        if fsym.endswith('CE') or fsym.endswith('PE'):
+                            m = re.match(r'^([A-Z&]+)', fsym.split(':')[-1])
+                            if m and m.group(1) not in oi_caches:
+                                oi_caches[m.group(1)] = self._get_fyers_oi(m.group(1))
+                    
+                    batch_quotes = {}
+                    save_now = datetime.now()
+                    for item in d_list:
+                        fsym = item.get('n', '')
+                        sym = f_to_k.get(fsym, fsym)
+                        v = item.get('v', {})
+                        if not v: continue
+                        
+                        op_oi = 0; op_oich = 0
+                        if fsym.endswith('CE') or fsym.endswith('PE'):
+                            m = re.match(r'^([A-Z&]+)', fsym.split(':')[-1])
+                            if m and m.group(1) in oi_caches and fsym in oi_caches[m.group(1)]:
+                                op_oi = oi_caches[m.group(1)][fsym].get('oi', 0)
+                                op_oich = oi_caches[m.group(1)][fsym].get('oich', 0)
+                        
+                        q = {
+                            'last_price': v.get('lp', 0.0),
+                            'ohlc': {'open': v.get('open_price', 0.0), 'high': v.get('high_price', 0.0), 'low': v.get('low_price', 0.0), 'close': v.get('prev_close_price', 0.0)},
+                            'oi': op_oi or v.get('oi', 0),
+                            'change_in_oi': op_oich,
+                            'timestamp': datetime.now()
+                        }
+                        batch_quotes[sym] = q
+                        kite_quotes[sym] = q
+                    
+                    with _FYERS_SYMBOL_LOCK:
+                        for s, q in batch_quotes.items():
+                            _FYERS_SYMBOL_CACHE[s] = (q, save_now)
+                    break
+                
+                if resp and resp.get('code') == 429:
+                    time.sleep(backoff)
+                    backoff *= 2
+                elif resp and 'malformed' in str(resp.get('message', '')).lower():
+                    time.sleep(8.0)
+                else:
+                    break
+            
+            time.sleep(1.0)
+
+        return kite_quotes
+    def ltp(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        quotes = self.quote(symbols, priority=1)
+        return {k: {'last_price': v['last_price']} for k, v in quotes.items()}
 
     def historical_data(
         self,
@@ -307,16 +347,7 @@ class FyersDataServiceAdapter:
         oi: bool = False,
         use_cache: bool = True
     ) -> List[Dict[str, Any]]:
-        """
-        Fetch OHLCV candle data.
-
-        instrument_token : For Fyers, pass the full symbol string
-                           (e.g. "NSE:NIFTY50-INDEX" or "NSE:NIFTY26APR24450CE")
-        interval         : Kite-style ('minute','5minute','day', etc.)
-        Fyers resolution : '1', '5', '15', '30', '60', '120', '240', 'D', 'W', 'M'
-        """
         try:
-            # Kite → Fyers interval mapping
             _kite_to_fyers = {
                 'minute':    '1',
                 '2minute':   '2',
@@ -335,9 +366,7 @@ class FyersDataServiceAdapter:
             f_res = _kite_to_fyers.get(interval, interval.replace('minute', '') if 'minute' in interval else 'D')
 
             from datetime import timedelta
-            
             from datetime import date as dt_date
-            # Pre-process dates to handle both datetime objects and strings
             if isinstance(from_date, (datetime, dt_date)):
                 fd = from_date
                 from_date_str = fd.strftime('%Y-%m-%d')
@@ -358,14 +387,13 @@ class FyersDataServiceAdapter:
                 except ValueError:
                     td = None
                 
-            # Check cache first (symbol:from:to:res)
-            # 5-minute TTL for historical data cache
             cache_key = f"{instrument_token}:{from_date_str}:{to_date_str}:{f_res}"
             if use_cache:
                 with _FYERS_HIST_LOCK:
                     if cache_key in _FYERS_HIST_CACHE:
                         data, ts = _FYERS_HIST_CACHE[cache_key]
-                        if (datetime.now() - ts).total_seconds() < 300:
+                        cache_ttl = 300 if f_res in ['D', 'W', 'M'] else 0.5
+                        if (datetime.now() - ts).total_seconds() < cache_ttl:
                             logger.debug(f"[FyersAdapter] Returning cached historical data for {cache_key}")
                             return data
 
@@ -381,7 +409,6 @@ class FyersDataServiceAdapter:
             else:
                 chunks = [(from_date_str, to_date_str)]
 
-            # Translate Kite tokens (integer or string) to Fyers symbol strings for Indices
             kite_to_fyers_indices = {
                 '256265': 'NSE:NIFTY50-INDEX',
                 '260105': 'NSE:NIFTYBANK-INDEX',
@@ -401,47 +428,53 @@ class FyersDataServiceAdapter:
             all_candles = []
             import random
             for c_from, c_to in chunks:
-                # Apply global rate limit protection
                 _rate_limiter.wait()
                 
                 response = {}
                 logger.info(f"[FyersAdapter] Fetching history for {instrument_token} ({c_from} to {c_to}, resolution={f_res})")
 
-                # Boosted to 5 attempts against heavy chunk loads
                 for attempt in range(5):
-                    # For retry attempts, apply an extra wait
-                    if attempt > 0:
-                        _rate_limiter.wait()
-                        time.sleep(attempt * 0.5)
-
-                    logger.debug(f"[FyersAdapter] Making history call to Fyers for {instrument_token}...")
-                    response = self.fyers.history(data={
-                        "symbol":     str(instrument_token),
-                        "resolution": f_res,
-                        "date_format": "1",   # YYYY-MM-DD
-                        "range_from": c_from,
-                        "range_to":   c_to,
-                        "cont_flag":  "1",
-                    })
+                    _rate_limiter.wait(priority=1)
+                    
+                    response = None
+                    with _GLOBAL_FYERS_HIST_LOCK:
+                        try:
+                            if attempt > 0:
+                                time.sleep(0.2)
+                            
+                            response = self.fyers.history(data={
+                                "symbol":     str(instrument_token),
+                                "resolution": f_res,
+                                "date_format": "1",
+                                "range_from": c_from,
+                                "range_to":   c_to,
+                                "cont_flag":  "1",
+                            })
+                        except Exception as e:
+                            if "json" in str(e).lower() or "expecting value" in str(e).lower():
+                                response = {'s': 'error', 'code': 429, 'message': 'Malformed JSON'}
+                            else:
+                                raise e
 
                     if response.get('s') == 'ok':
                         break
                     
                     err_msg = str(response.get('message', '')).lower()
-                    logger.warning(f"[FyersAdapter] History call fail for {instrument_token}: {response}")
                     if 'limit' in err_msg or response.get('code') in (429, -99):
                         retry_wait = 1.0 * (attempt + 1) + random.uniform(0.5, 1.5)
-                        logger.warning(f"[FyersAdapter] Rate limit hit for {instrument_token} [{c_from}-{c_to}]. Retrying in {retry_wait:.2f}s...")
+                        logger.warning(f"[FyersAdapter] Rate limit hit for {instrument_token}. Retrying in {retry_wait:.2f}s...")
                         time.sleep(retry_wait)
+                    elif 'malformed' in err_msg:
+                        logger.warning(f"[FyersAdapter] Malformed history response. Sleeping 8s...")
+                        time.sleep(8.0)
                     else:
-                        break  # Break for non-rate-limit errors
+                        break
 
                 if response.get('s') != 'ok':
                     logger.error(f"[FyersAdapter] history() failed for {instrument_token} [{c_from}-{c_to}]: {response.get('message')}")
                     continue
 
                 for candle in response.get('candles', []):
-                    # Fyers returns Unix timestamp in UTC. Convert to IST (UTC+5:30)
                     from datetime import timezone, timedelta
                     IST = timezone(timedelta(hours=5, minutes=30))
                     
@@ -480,27 +513,9 @@ class FyersDataServiceAdapter:
     def instruments(self, exchange: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Fetch and parse the Fyers Symbol Master CSV.
-
-        Fyers NSE_FO.csv — NO header row. Column layout (0-indexed):
-          0   fyToken
-          1   Full Name  (e.g. "TATA MOTORS 23 Nov 30 370 CE")
-          2   Instrument Type  (OPTIDX / OPTSTK / FUTIDX / FUTSTK)
-          3   Lot Size
-          4   Tick Size
-          5   Reserved
-          6   Trading Session
-          7   Last Update Date
-          8   Expiry Date  ← UNIX timestamp (seconds)
-          9   Symbol       (e.g. NSE:NIFTY26APR24450CE)  ← used as instrument_token
-         10   Exchange     (NSE / BSE)
-         11   Segment      (NSE_FO)
-         12   Script Code
-         13   Short Symbol
-         14   Root/Underlying  (e.g. NIFTY, BANKNIFTY)  ← name field for filtering
-         15   Strike Price
-         16   Option Type  (CE / PE)
-         17   Underlying fyToken
         """
+        import csv
+        import io
         now = datetime.now()
         
         with _csv_fetch_lock:
@@ -521,65 +536,62 @@ class FyersDataServiceAdapter:
             target_urls = [(exchange, URLS[exchange])] if exchange in URLS else []
             for exch_key, url in target_urls:
                 try:
-                    resp = requests.get(url, timeout=20)
+                    logger.info(f"[FyersAdapter][CSV] Downloading {url}...")
+                    resp = requests.get(url, timeout=30, stream=True)
                     if resp.status_code != 200:
                         continue
-                    lines = resp.text.strip().split('\n')
-                    logger.info(f"[FyersAdapter][CSV] Parsing {len(lines)} rows from {url}")
-                    for line in lines:
-                        parts = line.split(',')
-                        if len(parts) < 10:
+                    
+                    # Use streaming reader to avoid massive string splits in memory
+                    lines = (line.decode('utf-8') for line in resp.iter_lines())
+                    reader = csv.reader(lines)
+                    
+                    count = 0
+                    for parts in reader:
+                        if len(parts) < 17:
                             continue
+                        
                         raw_sym = parts[9].strip()
                         if not raw_sym:
                             continue
                         
-                        if ':' in raw_sym:
-                            fyers_symbol = raw_sym
-                            sym_short = raw_sym.split(':')[-1]
-                        else:
-                            exch_col = parts[10].strip() if len(parts) > 10 else 'NSE'
-                            sym_short = raw_sym
-                            fyers_symbol = f"{exch_col or 'NSE'}:{raw_sym}"
-                        
-                        short_sym_upper = sym_short.upper()
-                        if exch_key in ('NSE', 'BSE'):
-                            opt_type = 'EQ'
-                        elif short_sym_upper.endswith('FUT'):
-                            opt_type = 'FUT'
-                        elif short_sym_upper.endswith('CE'):
-                            opt_type = 'CE'
-                        elif short_sym_upper.endswith('PE'):
-                            opt_type = 'PE'
-                        elif short_sym_upper.endswith('INDEX'):
-                            opt_type = 'INDEX'
-                        else:
+                        # Pre-filter for performance: Only keep relevant instruments (Type 10-15 cover EQ/FUT/OPT)
+                        inst_type_code = parts[2].strip()
+                        if exch_key in ('NFO', 'BFO') and inst_type_code not in ('10', '11', '12', '13', '14', '15'):
                             continue
 
-                        _m = re.match(r'^([A-Z&]+)', sym_short)
-                        root = _m.group(1) if _m else sym_short
-                        strike = 0.0
-                        try:
-                            strike = float(parts[15].strip()) if len(parts) > 15 else 0.0
-                        except (ValueError, IndexError):
-                            pass
+                        fyers_symbol = parts[9].strip()
+                        if not fyers_symbol:
+                            continue
                         
-                        expiry_date = None
+                        # Map Fyers columns to Kite-like dictionary for OpenInterestService compatibility
+                        expiry_dt = None
                         try:
-                            expiry_date = datetime.fromtimestamp(int(parts[8].strip())).date()
-                        except Exception:
+                            expiry_ts = int(float(parts[8].strip()))
+                            expiry_dt = datetime.fromtimestamp(expiry_ts).date()
+                        except:
                             pass
-                            
+
+                        # Determine Kite-compatible instrument type
+                        fyers_type = parts[16].strip()
+                        kite_type = fyers_type
+                        if fyers_type == 'XX':
+                            if exch_key in ('NSE', 'BSE'):
+                                kite_type = 'EQ'
+                            else:
+                                kite_type = 'FUT'
+
                         all_inst.append({
-                            'instrument_token': fyers_symbol,
-                            'tradingsymbol':    sym_short,
-                            'name':             root,
-                            'instrument_type':  opt_type,
-                            'exchange':         exch_key,
-                            'strike':           strike,
-                            'expiry':           expiry_date,
-                            'lot_size':         0,
+                            'instrument_token': fyers_symbol, # e.g. NSE:NIFTY26MAY24000CE
+                            'tradingsymbol':    fyers_symbol.split(':')[-1], # e.g. NIFTY26MAY24000CE
+                            'name':             parts[13].strip(), # e.g. NIFTY
+                            'instrument_type':  kite_type, # Map XX to EQ/FUT
+                            'strike':           float(parts[15].strip()) if parts[15].strip() else 0.0,
+                            'expiry':           expiry_dt,
+                            'lot_size':         int(float(parts[3].strip())) if parts[3].strip() else 1,
                         })
+                        count += 1
+                        
+                    logger.info(f"[FyersAdapter][CSV] Parsed {count} instruments from {exch_key}")
                 except Exception as e:
                     logger.warning(f"[FyersAdapter][CSV] Failed to fetch/parse {url}: {e}")
 
@@ -587,33 +599,27 @@ class FyersDataServiceAdapter:
                 _GLOBAL_INSTRUMENTS_CACHE[exchange] = all_inst
                 _GLOBAL_INSTRUMENTS_TIMESTAMP[exchange] = datetime.now()
             
-            logger.info(f"[FyersAdapter] instruments() loaded {len(all_inst)} records for {exchange}")
             return all_inst
-
-        logger.info(f"[FyersAdapter] instruments() via CSV fallback: {len(all_inst)} records loaded")
-        if not all_inst:
-            logger.warning(f"[FyersAdapter] Zero instruments parsed for {exchange}. Overriding memory cache assignment to provoke auto-retry.")
-            return all_inst
-            
-        _GLOBAL_INSTRUMENTS_CACHE[exchange] = all_inst
-        _GLOBAL_INSTRUMENTS_TIMESTAMP[exchange] = datetime.now()
-            
-        return all_inst
 
 
     def find_option_symbol(self, root: str, strike: float, option_type: str) -> Optional[str]:
         """
         Find the Fyers instrument_token (symbol string) for a given option.
-        Searches the instruments cache for matching root, strike, and option type.
-
-        Args:
-            root:        Underlying name (e.g. 'NIFTY', 'BANKNIFTY')
-            strike:      Strike price (float)
-            option_type: 'CE' or 'PE'
-
-        Returns:
-            Fyers symbol string (e.g. 'NSE:NIFTY26APR2424200CE') or None
+        Searches the high-speed memory cache first, then the CSV master.
         """
+        root_upper = root.strip().upper()
+        opt_upper = option_type.strip().upper()
+        cache_key = f"{root_upper}:{int(strike)}:{opt_upper}"
+
+        # 1. Try high-speed token cache (populated by OpenInterestService)
+        from trading_app.service.fyers_data_service import _FYERS_OPTION_TOKEN_CACHE, _FYERS_OPTION_TOKEN_LOCK
+        with _FYERS_OPTION_TOKEN_LOCK:
+            if cache_key in _FYERS_OPTION_TOKEN_CACHE:
+                sym = _FYERS_OPTION_TOKEN_CACHE[cache_key]
+                logger.debug(f"[FyersAdapter] Resolved option from FAST CACHE: {cache_key} -> {sym}")
+                return sym
+
+        # 2. Fallback to CSV Master
         from datetime import date as _date
         instruments = self.instruments('NFO')  # Uses 1-hour cache
         today = _date.today()
@@ -653,3 +659,36 @@ class FyersDataServiceAdapter:
         logger.info(f"[FyersAdapter] Resolved option: {root} {strike} {opt_upper} -> {sym} (expiry={matches[0]['expiry']})")
         return sym
 
+    def get_lot_size(self, symbol: str) -> int:
+        """
+        Get the lot size for a symbol (Underlying or Trading Symbol).
+        """
+        # 1. Check NFO cache
+        nfo = self.instruments('NFO')
+        symbol_upper = symbol.upper()
+        
+        # Check if it matches an underlying name (e.g. NIFTY)
+        for inst in nfo:
+            if inst.get('name') == symbol_upper:
+                return int(inst.get('lot_size', 1))
+        
+        # Check if it matches a trading symbol (e.g. NIFTY26MAYFUT)
+        for inst in nfo:
+            if inst.get('tradingsymbol') == symbol_upper or inst.get('instrument_token') == symbol_upper:
+                return int(inst.get('lot_size', 1))
+                
+        # 2. Check NSE cache
+        nse = self.instruments('NSE')
+        for inst in nse:
+            if inst.get('tradingsymbol') == symbol_upper or inst.get('name') == symbol_upper:
+                return int(inst.get('lot_size', 1))
+                
+        return 1
+
+    def clear_instruments_cache(self):
+        """Clear the global instrument caches to force re-download."""
+        global _GLOBAL_INSTRUMENTS_CACHE, _GLOBAL_INSTRUMENTS_TIMESTAMP
+        with _csv_fetch_lock:
+            _GLOBAL_INSTRUMENTS_CACHE.clear()
+            _GLOBAL_INSTRUMENTS_TIMESTAMP.clear()
+        logger.info("[FyersAdapter] Global instrument cache cleared")

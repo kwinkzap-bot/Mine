@@ -24,9 +24,9 @@ class IntrinsicOrderManager:
             logger.error("[Intrinsic Monitor] Kite not available")
             return
 
-        targets_reached = [False, False, False]
-        target_prices = [entry_price + 10, entry_price + 40, entry_price + 90]
-        qty_per_target = order_lots * 5 * lot_size
+        targets_reached = [False]
+        target_prices = [entry_price + 10]
+        qty_per_target = order_lots * lot_size
 
         logger.info(f"[Intrinsic Monitor] Started for {broker_type}_{instance_id} {kite_opt_sym} Entry: {entry_price}")
 

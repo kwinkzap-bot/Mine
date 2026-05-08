@@ -15,6 +15,16 @@ from flask import Blueprint, request, jsonify, session, Response
 from trading_app.app.utils.logger import logger
 from trading_app.app.extensions import csrf, limiter
 from trading_app.app.utils.user_auth import require_user_auth
+
+# Request Coalescing Globals
+_pending_request_locks: Dict[Any, threading.Lock] = {}
+_pending_locks_manager = threading.Lock()
+
+def _get_request_lock(key: Any) -> threading.Lock:
+    with _pending_locks_manager:
+        if key not in _pending_request_locks:
+            _pending_request_locks[key] = threading.Lock()
+        return _pending_request_locks[key]
 from trading_app.service.fyers_data_service import FyersDataServiceAdapter
 from trading_app.service.fyers_order_services import FyersOrderService
 from trading_app.service.kite_order_services import KiteService
@@ -1054,9 +1064,14 @@ def get_cpr_filter_results() -> EndpointResponse:
     cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
     cache_key = f"cpr_filter_v2:{cache_user}:{cache_date}"
 
-    cached_response = cpr_filter_cache.get(cache_key)
-    if cached_response is not None:
-        return jsonify(cached_response)
+    refresh = request.args.get('refresh', 'false').lower() == 'true'
+    if not refresh:
+        cached_response = cpr_filter_cache.get(cache_key)
+        if cached_response is not None:
+            return jsonify(cached_response)
+    else:
+        # If refreshing, clear existing cache entry
+        cpr_filter_cache.delete(cache_key)
 
     try:
         # Verify kite has access token
@@ -2693,6 +2708,397 @@ def debug_token_status() -> EndpointResponse:
             'details': str(e)
         }), 500
 
+@api_bp.route('/order/exit-all', methods=['POST'])
+def exit_all_orders() -> EndpointResponse:
+    """Exit all executed orders and cancel all pending orders for all active brokers."""
+    try:
+        _username = session.get('username', 'Mine')
+        from trading_app.app.utils.user_env import UserEnvManager
+        
+        from trading_app.app.utils.order_tracker import BotOrderTracker
+        
+        targets = []
+        for i in range(1, 21):
+            b_type = UserEnvManager.get_user_var(_username, f'BROKER_{i}_TYPE', '').strip().lower()
+            if not b_type:
+                continue  # slot not configured
+            if not is_broker_active(_username, i):
+                logger.info(f"[Exit-All] Skipping broker {i} ({b_type}): Active=False")
+                continue
+            
+            # Special handling for 'kite' which is an alias for 'zerodha_1'
+            if b_type == 'kite':
+                targets.append({'type': 'zerodha', 'instance': i})
+            else:
+                targets.append({'type': b_type, 'instance': i})
+
+        logger.info(f"[Exit-All] Targeting {len(targets)} active broker instances for user '{_username}': {targets}")
+
+        if not targets:
+            return jsonify({'success': False, 'error': 'No active brokers found for exit'}), 400
+
+        # Get symbols tracked by the bot for this user (global across accounts)
+        bot_symbols = BotOrderTracker.get_symbols(_username)
+        normalized_bot_symbols = [str(s).strip().upper() for s in bot_symbols] if bot_symbols else []
+        logger.info(f"[Exit-All] Bot Registry Symbols: {normalized_bot_symbols}")
+
+        exit_results = []
+        
+        for target in targets:
+            broker_type = target['type']
+            instance = target['instance']
+            broker_res = {'broker': broker_type, 'instance': instance, 'cancelled_orders': 0, 'exited_positions': 0, 'errors': []}
+            
+            try:
+                # 1. Handle Zerodha
+                if broker_type == 'zerodha' or broker_type.startswith('zerodha_'):
+                    kite = get_kite(instance=instance)
+                    if not kite:
+                        err_msg = f"Failed to initialize Zerodha instance {instance}. Check if API Key/Token is expired."
+                        logger.error(f"[Zerodha] {err_msg}")
+                        broker_res['errors'].append(err_msg)
+                    else:
+                        logger.info(f"[Zerodha] Starting exit-all for instance {instance}")
+                        
+                        try:
+                            orders = kite.orders()
+                            pending_statuses = ['OPEN', 'MODIFY', 'TRIGGER PENDING']
+                            for order in orders:
+                                if order['status'] in pending_statuses:
+                                    tsym = str(order.get('tradingsymbol', '')).strip().upper()
+                                    is_bot_tracked = (not normalized_bot_symbols) or (tsym in normalized_bot_symbols)
+                                    
+                                    if not is_bot_tracked:
+                                        logger.info(f"[Zerodha] Instance {instance} | SKIPPING Cancellation {tsym}: Not in Bot Registry.")
+                                        continue
+                                    
+                                    try:
+                                        kite.cancel_order(variety=order['variety'], order_id=order['order_id'])
+                                        broker_res['cancelled_orders'] += 1
+                                    except Exception as e:
+                                        broker_res['errors'].append(f"Cancel {order['order_id']} failed: {e}")
+                        except Exception as e:
+                            logger.error(f"[Zerodha] Error fetching orders: {e}")
+                            broker_res['errors'].append(f"Error fetching orders: {e}")
+                        
+                        # Identify account for logging
+                        try:
+                            profile = kite.profile()
+                            kite_user_id = profile.get('user_id', 'Unknown')
+                            active_segments = profile.get('segments', [])
+                            logger.info(f"[Zerodha] Account Verified: Instance {instance} (User ID: {kite_user_id}) | Active Segments: {active_segments} | Bot symbols: {bot_symbols}")
+                            
+                            # Check if NFO is in segments
+                            if 'nse_fo' not in [s.lower() for s in active_segments] and 'nfo' not in [s.lower() for s in active_segments]:
+                                logger.warning(f"[Zerodha] WARNING: Instance {instance} (User {kite_user_id}) does not seem to have F&O (NFO) segment active for API trading!")
+                        except Exception as profile_err:
+                            err_msg = f"Could not verify profile for Zerodha instance {instance}: {profile_err}"
+                            logger.error(f"[Zerodha] {err_msg}")
+                            broker_res['errors'].append(err_msg)
+                            # We continue anyway as we have the kite instance, but this is a red flag
+                            logger.info(f"[Zerodha] Instance {instance} (Profile Failed) | Bot symbols: {bot_symbols}")
+                        
+                        # Exit Positions
+                        try:
+                            pos_response = kite.positions()
+                            net_positions = pos_response.get('net', [])
+                            day_positions = pos_response.get('day', [])
+                            
+                            # Combine positions to ensure nothing is missed (unique by tradingsymbol)
+                            all_positions = {p['tradingsymbol']: p for p in (net_positions + day_positions)}.values()
+                            
+                            logger.info(f"[Zerodha] Instance {instance} | Found {len(all_positions)} total unique positions.")
+                        
+                            # Log all found symbols for deep analysis
+                            raw_syms = [p.get('tradingsymbol') for p in all_positions]
+                            logger.info(f"[Zerodha] Instance {instance} | RAW POSITIONS: {raw_syms}")
+                            logger.info(f"[Zerodha] Instance {instance} | BOT REGISTRY: {normalized_bot_symbols}")
+                            
+                            for pos in all_positions:
+                                tsym = str(pos.get('tradingsymbol', '')).strip().upper()
+                                qty = pos.get('quantity', 0)
+                                product = str(pos.get('product', '')).strip().upper()
+                                exchange = str(pos.get('exchange', '')).strip().upper()
+                                
+                                logger.info(f"[Zerodha] Instance {instance} | Analyzing: {tsym} | Qty: {qty} | Product: {product} | Exchange: {exchange}")
+                                
+                                # 1. Bot Tracking Check
+                                # If registry is enabled, we only exit what's in the registry.
+                                # If registry is empty, we exit everything (full liquidation mode).
+                                is_bot_tracked = (not normalized_bot_symbols) or (tsym in normalized_bot_symbols)
+                                
+                                if not is_bot_tracked:
+                                    logger.info(f"[Zerodha] Instance {instance} | SKIPPING {tsym}: Not in Bot Registry.")
+                                    continue
+                                
+                                # 2. CNC Check
+                                if product == 'CNC':
+                                    logger.info(f"[Zerodha] Instance {instance} | SKIPPING {tsym}: CNC/Delivery position.")
+                                    continue
+                                
+                                if qty == 0:
+                                    logger.info(f"[Zerodha] Instance {instance} | SKIPPING {tsym}: Zero quantity.")
+                                    continue
+
+                                logger.info(f"[Zerodha] Instance {instance} | TARGET FOUND: {tsym} | Qty: {qty}")
+                                    
+                                if qty != 0:
+                                    try:
+                                        side = 'SELL' if qty > 0 else 'BUY'
+                                        logger.info(f"[Zerodha] Exiting {pos['tradingsymbol']}: {qty} (Side: {side}, Product: {pos['product']})")
+                                        
+                                        from trading_app.service.kite_order_services import KiteService
+                                        kite_svc = KiteService(kite_instance=kite)
+                                        
+                                        order_id = kite_svc._safe_place_order(
+                                            variety='regular',
+                                            exchange=pos['exchange'],
+                                            tradingsymbol=pos['tradingsymbol'],
+                                            transaction_type=side,
+                                            quantity=abs(int(qty)),
+                                            order_type='MARKET',
+                                            product=pos['product'],
+                                            market_protection=-1
+                                        )
+                                        logger.info(f"[Zerodha] Instance {instance} | Exit MARKET order placed with protection: {order_id}")
+                                        broker_res['exited_positions'] += 1
+
+                                    except Exception as e:
+                                        logger.error(f"[Zerodha] Position exit failed for {pos['tradingsymbol']}: {e}")
+                                        broker_res['errors'].append(f"Exit {pos['tradingsymbol']} failed: {e}")
+                            
+                        except Exception as e:
+                            logger.error(f"[Zerodha] Error fetching positions: {e}")
+                            broker_res['errors'].append(f"Error fetching positions: {e}")
+
+                # 2. Handle Fyers
+                elif broker_type == 'fyers':
+                    fyers_at = session.get(f'fyers_{instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{instance}_ACCESS_TOKEN')
+                    fyers_id = UserEnvManager.get_user_var(_username, f'BROKER_{instance}_APP_ID')
+                    if fyers_at:
+                        from trading_app.service.fyers_order_services import FyersOrderService
+                        fyers_service = FyersOrderService(app_id=fyers_id, access_token=fyers_at)
+                        
+                        # Cancel Pending Orders
+                        order_book = fyers_service.get_orderbook()
+                        if order_book.get('success'):
+                            # Fyers V3 Status: 6=Pending, 4=Transit, 1=Cancelled, 2=Filled, 5=Rejected
+                            for order in order_book.get('orders', []):
+                                if order.get('status') in [6, 4]: 
+                                    fsym = str(order.get('symbol', '')).strip().upper()
+                                    alt_sym = fsym.split(':')[-1] if ':' in fsym else fsym
+                                    is_bot_tracked = (not normalized_bot_symbols) or (fsym in normalized_bot_symbols) or (alt_sym in normalized_bot_symbols)
+                                    
+                                    if not is_bot_tracked:
+                                        logger.info(f"[Fyers] Skipping Cancellation for non-bot order: {fsym}")
+                                        continue
+                                        
+                                    try:
+                                        fyers_service.cancel_order(order['id'])
+                                        broker_res['cancelled_orders'] += 1
+                                    except Exception as e:
+                                        broker_res['errors'].append(f"Cancel {order['id']} failed: {e}")
+                        
+                        # Exit Positions
+                        pos_book = fyers_service.get_positions()
+                        if pos_book.get('success'):
+                            for pos in pos_book.get('positions', []):
+                                fsym = pos.get('symbol', '')
+                                net_qty = pos.get('netQty', 0)
+                                product = pos.get('productType', '')
+                                
+                                # Skip if not bot-tracked
+                                if bot_symbols and fsym not in bot_symbols:
+                                    # Fyers symbols sometimes have NSE: prefix, check both
+                                    alt_sym = fsym.split(':')[-1] if ':' in fsym else fsym
+                                    if fsym not in bot_symbols and alt_sym not in bot_symbols:
+                                        logger.info(f"[Fyers] Skipping non-bot position: {fsym}")
+                                        continue
+                                
+                                # Skip CNC positions
+                                if product == 'CNC':
+                                    logger.info(f"[Fyers] Skipping CNC position {pos['symbol']}")
+                                    continue
+                                
+                                # Skip Equity positions (usually end with -EQ in Fyers)
+                                if '-EQ' in str(pos.get('symbol', '')):
+                                    logger.info(f"[Fyers] Skipping Equity position {pos['symbol']}")
+                                    continue
+                                    
+                                if net_qty != 0:
+                                    try:
+                                        # Use correct Fyers side: 1=BUY, 2=SELL
+                                        side = fyers_service.SIDE_SELL if net_qty > 0 else fyers_service.SIDE_BUY
+                                        fyers_service.place_order(
+                                            symbol=pos['symbol'],
+                                            side=side,
+                                            quantity=abs(int(net_qty)),
+                                            order_type=2, # 2: MARKET
+                                            product_type=pos['productType']
+                                        )
+                                        broker_res['exited_positions'] += 1
+                                    except Exception as e:
+                                        broker_res['errors'].append(f"Exit {pos['symbol']} failed: {e}")
+
+                # 3. Handle Kotak Neo
+                elif broker_type == 'kotak':
+                    kotak_at = session.get(f'kotak_{instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{instance}_ACCESS_TOKEN')
+                    if kotak_at:
+                        from trading_app.service.kotak_order_services import KotakOrderService
+                        kotak_service = KotakOrderService(access_token=kotak_at)
+                        # Re-inject cached trading tokens
+                        kotak_service.trading_token = UserEnvManager.get_user_var(_username, f'BROKER_{instance}_TRADING_TOKEN')
+                        kotak_service.trading_sid = UserEnvManager.get_user_var(_username, f'BROKER_{instance}_TRADING_SID')
+                        kotak_service.server_id = UserEnvManager.get_user_var(_username, f'BROKER_{instance}_SERVER_ID')
+                        kotak_service.inject_trading_tokens()
+
+                        # Cancel Pending Orders
+                        order_book = kotak_service.get_orderbook()
+                        if order_book.get('success'):
+                            for order in order_book.get('orders', []):
+                                if order.get('ordSt') in ['open', 'pending', 'modify', 'trigger_pending']:
+                                    ksym = str(order.get('trdSym', '')).strip().upper()
+                                    is_bot_tracked = (not normalized_bot_symbols) or (ksym in normalized_bot_symbols)
+                                    
+                                    if not is_bot_tracked:
+                                        logger.info(f"[Kotak] Skipping Cancellation for non-bot order: {ksym}")
+                                        continue
+                                        
+                                    try:
+                                        kotak_service.cancel_order(order.get('nOrdNo'))
+                                        broker_res['cancelled_orders'] += 1
+                                    except Exception as e:
+                                        broker_res['errors'].append(f"Cancel {order.get('nOrdNo')} failed: {e}")
+                        
+                        # Exit Positions
+                        pos_book = kotak_service.get_positions()
+                        if pos_book.get('success'):
+                            for pos in pos_book.get('positions', []):
+                                ksym = pos.get('trdSym', '')
+                                # Kotak positions often have 'flNetQty' or similar
+                                net_qty = float(pos.get('flNetQty', pos.get('netQty', 0)))
+                                product = pos.get('prod', '')
+                                
+                                # Skip if not bot-tracked
+                                if bot_symbols and ksym not in bot_symbols:
+                                    logger.info(f"[Kotak] Skipping non-bot position: {ksym}")
+                                    continue
+                                    
+                                # Skip CNC positions
+                                if product == 'CNC':
+                                    logger.info(f"[Kotak] Skipping CNC position {pos.get('trdSym')}")
+                                    continue
+                                
+                                # Target only F&O segments (nse_fo, bse_fo, mcx_fo)
+                                # Skip Equity segments (nse_cm, bse_cm)
+                                exseg = str(pos.get('exseg', '')).lower()
+                                if 'fo' not in exseg:
+                                    logger.info(f"[Kotak] Skipping non-F&O position {pos.get('trdSym')} ({exseg})")
+                                    continue
+                                    
+                                if net_qty != 0:
+                                    try:
+                                        side = 'SELL' if net_qty > 0 else 'BUY'
+                                        kotak_service.place_order(
+                                            tradingsymbol=pos['trdSym'],
+                                            transaction_type=side,
+                                            quantity=abs(int(net_qty)),
+                                            price=0.0,
+                                            order_type='MKT',
+                                            product_type=pos['prod'],
+                                            exchange_segment=pos['exseg']
+                                        )
+                                        broker_res['exited_positions'] += 1
+                                    except Exception as e:
+                                        broker_res['errors'].append(f"Exit {pos.get('trdSym')} failed: {e}")
+
+                # 4. Handle Dhan
+                elif broker_type == 'dhan':
+                    dhan_at = session.get(f'dhan_{instance}_access_token') or UserEnvManager.get_user_var(_username, f'BROKER_{instance}_ACCESS_TOKEN')
+                    dhan_cid = UserEnvManager.get_user_var(_username, f'BROKER_{instance}_CLIENT_ID')
+                    if dhan_at:
+                        from trading_app.service.dhan_order_services import DhanOrderService
+                        dhan_service = DhanOrderService(access_token=dhan_at, client_id=dhan_cid)
+                        
+                        # Cancel Pending Orders
+                        order_book = dhan_service.get_order_book()
+                        
+                        if order_book.get('success'):
+                            for order in order_book.get('orders', []):
+                                if order.get('orderStatus') in ['PENDING', 'TRANSIT', 'MODIFY_PENDING']:
+                                    dsym = str(order.get('tradingSymbol', '')).strip().upper()
+                                    is_bot_tracked = (not normalized_bot_symbols) or (dsym in normalized_bot_symbols)
+                                    
+                                    if not is_bot_tracked:
+                                        logger.info(f"[Dhan] Skipping Cancellation for non-bot order: {dsym}")
+                                        continue
+                                        
+                                    try:
+                                        dhan_service.cancel_order(order['orderId'])
+                                        broker_res['cancelled_orders'] += 1
+                                    except Exception as e:
+                                        broker_res['errors'].append(f"Cancel {order['orderId']} failed: {e}")
+                        
+                        # Exit Positions
+                        pos_book = dhan_service.get_positions()
+                        if pos_book.get('success'):
+                            for pos in pos_book.get('positions', []):
+                                dsym = pos.get('tradingSymbol', '')
+                                net_qty = pos.get('netQty', 0)
+                                product = pos.get('productType', '')
+                                
+                                # Skip if not bot-tracked
+                                if bot_symbols and dsym not in bot_symbols:
+                                    logger.info(f"[Dhan] Skipping non-bot position: {dsym}")
+                                    continue
+                                    
+                                # Skip CNC positions
+                                if product == 'CNC':
+                                    logger.info(f"[Dhan] Skipping CNC position {pos.get('tradingSymbol')}")
+                                    continue
+                                
+                                # Target only F&O segments
+                                exseg = str(pos.get('exchangeSegment', '')).upper()
+                                if 'FNO' not in exseg and 'COMM' not in exseg and 'CURR' not in exseg:
+                                    logger.info(f"[Dhan] Skipping non-Derivatives position {pos.get('tradingSymbol')} ({exseg})")
+                                    continue
+                                    
+                                if net_qty != 0:
+                                    try:
+                                        side = 'SELL' if net_qty > 0 else 'BUY'
+                                        dhan_service.place_order(
+                                            security_id=pos['securityId'],
+                                            transaction_type=side,
+                                            quantity=abs(int(net_qty)),
+                                            order_type='MARKET',
+                                            product_type=pos['productType'],
+                                            exchange_segment=pos['exchangeSegment']
+                                        )
+                                        broker_res['exited_positions'] += 1
+                                    except Exception as e:
+                                        broker_res['errors'].append(f"Exit {pos.get('tradingSymbol')} failed: {e}")
+
+            except Exception as broker_err:
+                broker_res['errors'].append(str(broker_err))
+                logger.error(f"Exit-All failed for {broker_type}_{instance}: {broker_err}")
+                
+            exit_results.append({
+                'broker': broker_type,
+                'instance': instance,
+                'cancelled_orders': broker_res['cancelled_orders'],
+                'exited_positions': broker_res['exited_positions'],
+                'errors': broker_res['errors']
+            })
+
+        return jsonify({
+            'success': True,
+            'summary': exit_results
+        })
+
+    except Exception as e:
+        logger.error(f"Global Exit-All failed: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @api_bp.route('/intraday-920/place-order', methods=['POST'])
 def place_intraday_920_order() -> EndpointResponse:
     """Place an option order for Intraday 9:20 strategy.
@@ -2717,45 +3123,44 @@ def place_intraday_920_order() -> EndpointResponse:
         tradingsymbol_override = data.get('tradingsymbol')
         expiry_override = data.get('expiry')
         strategy = data.get('strategy', '')
+        limit_price = data.get('limit_price')
         _username = session.get('username', 'Mine')
 
         from trading_app.app.utils.user_env import UserEnvManager
 
-        # Identify target brokers
-        targets = []
-        is_all = not broker_input or str(broker_input).lower() in ['all', 'null', 'none']
+        # Always auto-detect from .env — broker field in payload is ignored for routing.
+        # Only brokers with BROKER_N_ACTIVE=true AND BROKER_N_920_ACTIVE=true receive the order.
+        if broker_input:
+            logger.info(f"[920/place-order] 'broker' field '{broker_input}' in payload is ignored — routing via .env 920_ACTIVE flags")
 
-        if is_all:
-            for i in range(1, 21):
-                if is_broker_active(_username, i):
-                    b_type = UserEnvManager.get_user_var(_username, f'BROKER_{i}_TYPE', '').strip().lower()
-                    if b_type == 'zerodha': targets.append({'type': f'zerodha_{i}', 'instance': i})
-                    elif b_type in ['kotak', 'kotak_neo']: targets.append({'type': 'kotak_neo', 'instance': i})
-                    elif b_type == 'dhan': targets.append({'type': 'dhan', 'instance': i})
-                    elif b_type == 'fyers': targets.append({'type': 'fyers', 'instance': i})
-        else:
-            broker = broker_input.lower().strip()
-            is_zerodha_instance = broker.startswith('zerodha_') and broker.split('_')[1].isdigit()
-            _active_instance = None
-            if is_zerodha_instance:
-                _active_instance = int(broker.split('_')[1])
-            elif broker == 'kite':
-                _active_instance = 1
-            else:
-                broker_type_map = {'kotak_neo': 'kotak', 'dhan': 'dhan', 'fyers': 'fyers'}
-                _broker_type = broker_type_map.get(broker, '')
-                for _i in range(1, 21):
-                    if UserEnvManager.get_user_var(_username, f'BROKER_{_i}_TYPE', '').strip().lower() == _broker_type:
-                        _active_instance = _i
-                        break
-            if _active_instance:
-                targets.append({'type': broker, 'instance': _active_instance})
+        targets = []
+        for i in range(1, 21):
+            b_type = UserEnvManager.get_user_var(_username, f'BROKER_{i}_TYPE', '').strip().lower()
+            if not b_type:
+                continue  # slot not configured
+            if not is_broker_active(_username, i):
+                logger.info(f"[920/place-order] Skipping broker {i} ({b_type}): ACTIVE=false")
+                continue
+            raw_920 = UserEnvManager.get_user_var(_username, f'BROKER_{i}_920_ACTIVE', 'false').strip().lower()
+            if raw_920 not in ('true', '1', 'yes'):
+                logger.info(f"[920/place-order] Skipping broker {i} ({b_type}): 920_ACTIVE not enabled")
+                continue
+            if b_type == 'zerodha':
+                targets.append({'type': f'zerodha_{i}', 'instance': i})
+            elif b_type in ['kotak', 'kotak_neo']:
+                targets.append({'type': 'kotak_neo', 'instance': i})
+            elif b_type == 'dhan':
+                targets.append({'type': 'dhan', 'instance': i})
+            elif b_type == 'fyers':
+                targets.append({'type': 'fyers', 'instance': i})
+
+        logger.info(f"[920/place-order] Routing to brokers: {[t['type'] for t in targets]} for user '{_username}'")
 
         if not targets:
-            return jsonify({'success': False, 'error': 'No active broker(s) found'}), 400
+            return jsonify({'success': False, 'error': 'No 9:20-enabled broker found. Set BROKER_N_920_ACTIVE=true in .env'}), 400
 
         def _execute_single(broker, _active_instance):
-            is_zerodha_instance = broker.startswith('zerodha_') and broker.split('_')[1].isdigit()
+            is_zerodha_instance = (broker == 'zerodha' or broker.startswith('zerodha_'))
             
             if _active_instance is not None and not is_broker_active(_username, _active_instance):
                 return {'success': False, 'error': f'Broker {broker} is INACTIVE'}, 403
@@ -2767,40 +3172,63 @@ def place_intraday_920_order() -> EndpointResponse:
                     logger.info(f"[Intrinsic] Skipping broker {_active_instance} ({broker}) because BROKER_N_INTRINSIC_ACTIVE is FALSE")
                     return {'success': False, 'error': f'Intrinsic Orders for {broker} is DISABLED in config'}, 403
 
-            # Determine order lots (Priority: 1. Request qty, 2. Broker-specific Intrinsic config, 3. Global Intrinsic config, 4. Default broker config)
-            # Use order_lots to represent the number of lots configured in .env
-            order_lots = quantity  # value from data.get('quantity')
+            # Determine order lots (Priority: 1. Request qty, 2. Strategy-specific broker config, 3. Global strategy config, 4. General broker config)
+            order_lots = quantity
             if strategy == 'intrinsic' and not order_lots:
-                # Check for broker-specific intrinsic lots first
+                # 1. Check for broker-specific intrinsic lots
                 raw_broker_intrinsic = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_INTRINSIC_LOTS')
                 if raw_broker_intrinsic:
-                    try:
-                        order_lots = int(str(raw_broker_intrinsic))
-                        logger.info(f"[Intrinsic] Using broker {_active_instance} specific lots: {order_lots}")
-                    except (ValueError, TypeError):
-                        pass
-            
-            if strategy == 'intrinsic' and not order_lots:
-                # Use global strategy-specific configuration from .env if available
-                raw_intrinsic = UserEnvManager.get_user_var(_username, 'INTRINSIC_ORDER_LOTS')
-                if raw_intrinsic:
-                    try:
-                        order_lots = int(str(raw_intrinsic))
-                        logger.info(f"[Intrinsic] Using global configured lots: {order_lots}")
-                    except (ValueError, TypeError):
-                        pass
+                    try: order_lots = int(str(raw_broker_intrinsic))
+                    except: pass
+                
+                # 2. Global strategy config
+                if not order_lots:
+                    raw_intrinsic = UserEnvManager.get_user_var(_username, 'INTRINSIC_ORDER_LOTS')
+                    if raw_intrinsic:
+                        try: order_lots = int(str(raw_intrinsic))
+                        except: pass
             
             if not order_lots:
-                # Fallback to general broker lot size from .env
-                raw_broker_lot = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_LOT_SIZE', '1')
-                try:
-                    order_lots = int(str(raw_broker_lot))
-                except (ValueError, TypeError):
+                # 3. Fallback to general broker lot size from .env
+                raw_broker_lot = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_LOT_SIZE')
+                if raw_broker_lot:
+                    try: order_lots = int(str(raw_broker_lot))
+                    except: order_lots = 1
+                else:
+                    # 4. Final fallback
                     order_lots = 1
+
+            # Determine absolute quantity (units = lots * lot_size)
+            # Fetch dynamic lot size from the active provider
+            lot_size = 1
+            try:
+                # Use current_provider which is already initialized for data/quotes
+                current_provider = get_data_provider()
+                if current_provider:
+                    # Both Kite and Fyers adapters now support get_lot_size(symbol)
+                    if hasattr(current_provider, 'get_lot_size'):
+                        lot_size = current_provider.get_lot_size(symbol)
+                    else:
+                        # Fallback for generic adapters if needed
+                        from trading_app.service.kite_order_services import KiteService
+                        ks = KiteService(kite_instance=current_provider)
+                        lot_size = ks.get_lot_size(symbol)
+                
+                if not lot_size or lot_size < 1:
+                    lot_size = 1
+            except Exception as e:
+                logger.error(f"[Order] Lot size resolution failed for {symbol}: {e}")
+                lot_size = 1
+
+            main_qty = order_lots * lot_size
+            sl_qty = main_qty
+            
+            # SL action is always the opposite of entry action
+            sl_transaction_type = 'SELL' if action == 'BUY' else 'BUY'
 
             # Zerodha / Kite
             if broker == 'kite' or is_zerodha_instance:
-                zerodha_instance = 1 if broker == 'kite' else int(broker.split('_')[1])
+                zerodha_instance = _active_instance
                 kite = get_kite(instance=zerodha_instance)
                 if not kite:
                     return {'success': False, 'error': f'Zerodha {zerodha_instance} not connected'}, 401
@@ -2809,38 +3237,35 @@ def place_intraday_920_order() -> EndpointResponse:
                 kite_service = KiteService(kite_instance=kite)
                 transaction_type = kite.TRANSACTION_TYPE_BUY if action == 'BUY' else kite.TRANSACTION_TYPE_SELL
                 
-                # Calculate absolute quantity for Zerodha (units = lots * lot_size)
-                lot_size = kite_service.get_lot_size(symbol)
-                
-                if strategy == 'intrinsic':
-                    main_qty = order_lots * 15 * lot_size
-                    sl_qty = order_lots * 5 * lot_size
-                else:
-                    main_qty = order_lots * lot_size
-                    sl_qty = main_qty
-                
-                result = kite_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=transaction_type, quantity=main_qty)
-                if result['success'] and action == 'BUY':
-                    try:
-                        entry_price = result.get('price')
-                        if entry_price and entry_price > 0:
-                            option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
-                            if strategy == 'intrinsic':
-                                sl_price = entry_price - 10
-                                sl_orders = []
-                                if option_symbol:
-                                    for _ in range(3):
-                                        sl_res = kite_service.place_stoploss_order(tradingsymbol=option_symbol, trigger_price=sl_price, quantity=sl_qty)
-                                        if sl_res.get('success'): sl_orders.append(sl_res.get('order_id'))
-                                from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
-                                IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, None, option_symbol, _username, session)
-                            else:
-                                sl_price = entry_price - 20
-                                if option_symbol:
-                                    sl_res = kite_service.place_stoploss_order(tradingsymbol=option_symbol, trigger_price=sl_price, quantity=main_qty)
-                                    if sl_res.get('success'):
-                                        result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_price, 'sl_success': True})
-                    except Exception as e: logger.error(f"[SL] Kite Err: {e}")
+                result = kite_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=transaction_type, quantity=main_qty, price=limit_price)
+                if result['success']:
+                    # Register symbol for tracking
+                    from trading_app.app.utils.order_tracker import BotOrderTracker
+                    opt_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+                    if opt_symbol:
+                        BotOrderTracker.add_symbol(_username, opt_symbol)
+                    
+                    if action == 'BUY':
+                        try:
+                            entry_price = result.get('price')
+                            if entry_price and entry_price > 0:
+                                option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
+                                sl_order_ids = []
+                                
+                                # Skip SL placement for manual 'intrinsic' strategy as requested
+                                if strategy != 'intrinsic':
+                                    sl_price = entry_price - 20
+                                    if option_symbol:
+                                        sl_res = kite_service.place_stoploss_order(tradingsymbol=option_symbol, trigger_price=sl_price, quantity=sl_qty, transaction_type=sl_transaction_type)
+                                        if sl_res.get('success'):
+                                            sl_order_ids = [sl_res.get('order_id')]
+                                            result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_price, 'sl_success': True})
+                                
+                                # Always start monitoring for Intrinsic strategy
+                                if strategy == 'intrinsic':
+                                    from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
+                                    IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry_price, sl_order_ids, lot_size, order_lots, None, option_symbol, _username, session)
+                        except Exception as e: logger.error(f"[SL] Kite Err: {e}")
                 return result, (200 if result['success'] else 400)
 
             # Kotak Neo
@@ -2855,46 +3280,42 @@ def place_intraday_920_order() -> EndpointResponse:
                 kotak_service.trading_token = trading_token; kotak_service.trading_sid = trading_sid; kotak_service.base_url = base_url
                 kotak_service.inject_trading_tokens()
                 
-                # Determine absolute quantity for Kotak (using Kite service for lot size resolution if possible)
-                lot_size = 1
-                try:
-                    kite = get_kite()
-                    if kite:
-                        from trading_app.service.kite_order_services import KiteService
-                        ks = KiteService(kite_instance=kite)
-                        lot_size = ks.get_lot_size(symbol)
-                except Exception: pass
-                
-                if strategy == 'intrinsic':
-                    main_qty = order_lots * 15 * lot_size
-                    sl_qty = order_lots * 5 * lot_size
-                else:
-                    main_qty = order_lots * lot_size
-                    sl_qty = main_qty
-                
-                result = kotak_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=action, quantity=main_qty, tradingsymbol=tradingsymbol_override, target_expiry=expiry_override)
-                if result['success'] and action == 'BUY':
-                    try:
-                        entry_price = result.get('price', 0)
-                        if not entry_price or entry_price == 0:
-                            kite = get_kite()
-                            try:
-                                ks = KiteService(kite_instance=kite)
-                                kite_opt_sym = ks.get_option_symbol(symbol, strike, option_type)
-                                ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
-                                entry_price = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', 0)
-                            except: pass
-                        if entry_price and entry_price > 0:
-                            k_symbol = tradingsymbol_override
-                            if strategy == 'intrinsic' and k_symbol:
-                                sl_price = entry_price - 10
-                                sl_orders = []
-                                for _ in range(3):
-                                    sl_res = kotak_service.place_stoploss_order(symbol=k_symbol, trigger_price=sl_price, quantity=sl_qty)
-                                    if sl_res.get('success'): sl_orders.append(sl_res.get('order_id'))
-                                from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
-                                IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, None, k_symbol, _username, session)
-                    except Exception as e: logger.error(f"[SL] Kotak Err: {e}")
+                result = kotak_service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=action, quantity=main_qty, tradingsymbol=tradingsymbol_override, target_expiry=expiry_override, limit_price=limit_price)
+                if result['success']:
+                    # Register symbol for tracking
+                    from trading_app.app.utils.order_tracker import BotOrderTracker
+                    k_symbol = result.get('successful_symbol') or tradingsymbol_override
+                    if k_symbol:
+                        BotOrderTracker.add_symbol(_username, k_symbol)
+                        
+                    if action == 'BUY':
+                        try:
+                            entry_price = result.get('price', 0)
+                            if not entry_price or entry_price == 0:
+                                kite = get_kite()
+                                try:
+                                    ks = KiteService(kite_instance=kite)
+                                    kite_opt_sym = ks.get_option_symbol(symbol, strike, option_type)
+                                    ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
+                                    entry_price = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', 0)
+                                except: pass
+                            if entry_price and entry_price > 0:
+                                k_symbol = tradingsymbol_override
+                                sl_order_ids = []
+                                
+                                # Skip SL placement for manual 'intrinsic' strategy
+                                if strategy != 'intrinsic':
+                                    if k_symbol:
+                                        sl_price = entry_price - 20
+                                        sl_res = kotak_service.place_stoploss_order(symbol=k_symbol, trigger_price=sl_price, quantity=sl_qty, transaction_type=sl_transaction_type)
+                                        if sl_res.get('success'):
+                                            sl_order_ids = [sl_res.get('order_id')]
+                                            result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_price, 'sl_success': True})
+                                
+                                if strategy == 'intrinsic':
+                                    from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
+                                    IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry_price, sl_order_ids, lot_size, order_lots, None, k_symbol, _username, session)
+                        except Exception as e: logger.error(f"[SL] Kotak Err: {e}")
                 return result, (200 if result['success'] else 400)
 
             # Dhan
@@ -2917,36 +3338,36 @@ def place_intraday_920_order() -> EndpointResponse:
                     if not kite_opt_sym: return {'success': False, 'error': 'Option not found'}, 400
                     sec_id = str(dhan_service.search_symbol(kite_opt_sym).get('security_id', kite_opt_sym))
                 
-                lot = dhan_service.get_lot_size(symbol)
-                if strategy == 'intrinsic':
-                    main_qty = order_lots * 15 * lot
-                    sl_qty = order_lots * 5 * lot
-                else:
-                    main_qty = order_lots * lot
-                    sl_qty = main_qty
-                    
-                result = dhan_service.place_order(security_id=sec_id, transaction_type=action, quantity=main_qty, order_type='MARKET', product_type='INTRADAY', exchange_segment='NSE_FNO')
+                result = dhan_service.place_order(security_id=sec_id, transaction_type=action, quantity=main_qty, order_type='LIMIT' if limit_price else 'MARKET', product_type='INTRADAY', exchange_segment='NSE_FNO', price=limit_price if limit_price else 0.0)
                 
-                if result['success'] and action == 'BUY':
-                    try:
-                        entry = result.get('price', 0)
-                        if not entry or entry == 0:
-                            kite = get_kite()
-                            ltp_data = kite.ltp([f'NSE:{kite_opt_sym}']) if kite and kite_opt_sym else {}
-                            entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
-                        if strategy == 'intrinsic':
-                            sl_p = entry - 10
-                            sl_orders = []
-                            for _ in range(3):
-                                sl_res = dhan_service.place_stoploss_order(security_id=sec_id, trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', exchange_segment='NSE_FNO', entry_price=entry)
-                                if sl_res.get('success'): sl_orders.append(sl_res.get('order_id'))
-                            from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
-                            IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry, sl_orders, lot, order_lots, sec_id, kite_opt_sym, _username, session)
-                        else:
-                            sl_p = entry - 20
-                            sl_res = dhan_service.place_stoploss_order(security_id=sec_id, trigger_price=sl_p, quantity=main_qty, product_type='INTRADAY', exchange_segment='NSE_FNO', entry_price=entry)
-                            if sl_res.get('success'): result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
-                    except Exception as e: logger.error(f"[SL] Dhan Err: {e}")
+                if result['success']:
+                    # Register symbol for tracking
+                    from trading_app.app.utils.order_tracker import BotOrderTracker
+                    if kite_opt_sym:
+                        BotOrderTracker.add_symbol(_username, kite_opt_sym)
+                    
+                    if action == 'BUY':
+                        try:
+                            entry = result.get('price', 0)
+                            if not entry or entry == 0:
+                                kite = get_kite()
+                                ltp_data = kite.ltp([f'NSE:{kite_opt_sym}']) if kite and kite_opt_sym else {}
+                                entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
+                            
+                            if entry and entry > 0:
+                                sl_order_ids = []
+                                # Skip SL placement for manual 'intrinsic' strategy
+                                if strategy != 'intrinsic':
+                                    sl_p = entry - 20
+                                    sl_res = dhan_service.place_stoploss_order(security_id=sec_id, trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', exchange_segment='NSE_FNO', entry_price=entry, transaction_type=sl_transaction_type)
+                                    if sl_res.get('success'):
+                                        sl_order_ids = [sl_res.get('order_id')]
+                                        result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
+                                
+                                if strategy == 'intrinsic':
+                                    from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
+                                    IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry, sl_order_ids, lot_size, order_lots, sec_id, kite_opt_sym, _username, session)
+                        except Exception as e: logger.error(f"[SL] Dhan Err: {e}")
                 return result, (200 if result['success'] else 400)
 
             # Fyers
@@ -2964,55 +3385,56 @@ def place_intraday_920_order() -> EndpointResponse:
                 kite_opt_sym = kite_service.get_option_symbol(symbol, strike, option_type)
                 if not kite_opt_sym: return {'success': False, 'error': 'Option not found'}, 400
                 
-                lot = fyers_service.get_lot_size(symbol)
-                if strategy == 'intrinsic':
-                    main_qty = order_lots * 15 * lot
-                    sl_qty = order_lots * 5 * lot
-                else:
-                    main_qty = order_lots * lot
-                    sl_qty = main_qty
+                # Fyers side: 1 for BUY, 2 for SELL (V3); order_type: 1 for LIMIT, 2 for MARKET
+                fyers_side = fyers_service.SIDE_BUY if action == 'BUY' else fyers_service.SIDE_SELL
+                fyers_order_type = 1 if limit_price else 2
+                result = fyers_service.place_order(symbol=f'NSE:{kite_opt_sym}', side=fyers_side, quantity=main_qty, order_type=fyers_order_type, limit_price=limit_price if limit_price else 0.0, product_type='INTRADAY')
                 
-                # Fyers side: 1 for BUY, -1 for SELL; order_type: 2 for MARKET
-                fyers_side = 1 if action == 'BUY' else -1
-                result = fyers_service.place_order(symbol=f'NSE:{kite_opt_sym}', side=fyers_side, quantity=main_qty, order_type=2, product_type='INTRADAY')
-                
-                if result['success'] and action == 'BUY':
-                    try:
-                        entry = result.get('price', 0)
-                        if not entry or entry == 0:
-                            ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
-                            entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
-                        if strategy == 'intrinsic':
-                            sl_p = entry - 10
-                            sl_orders = []
-                            for _ in range(3):
-                                sl_res = fyers_service.place_stoploss_order(symbol=f'NSE:{kite_opt_sym}', trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', entry_price=entry)
-                                if sl_res.get('success'): sl_orders.append(sl_res.get('order_id'))
-                            from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
-                            IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry, sl_orders, lot, order_lots, None, kite_opt_sym, _username, session)
-                        else:
-                            sl_p = entry - 20
-                            sl_res = fyers_service.place_stoploss_order(symbol=f'NSE:{kite_opt_sym}', trigger_price=sl_p, quantity=main_qty, product_type='INTRADAY', entry_price=entry)
-                            if sl_res.get('success'): result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
-                    except Exception as e: logger.error(f"[SL] Fyers Err: {e}")
+                if result['success']:
+                    # Register symbol for tracking
+                    from trading_app.app.utils.order_tracker import BotOrderTracker
+                    if kite_opt_sym:
+                        # Register both with and without prefix for robustness
+                        BotOrderTracker.add_symbol(_username, kite_opt_sym)
+                        BotOrderTracker.add_symbol(_username, f'NSE:{kite_opt_sym}')
+                        
+                    if action == 'BUY':
+                        try:
+                            entry = result.get('price', 0)
+                            if not entry or entry == 0:
+                                ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
+                                entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
+                            
+                            if entry and entry > 0:
+                                sl_order_ids = []
+                                # Skip SL placement for manual 'intrinsic' strategy
+                                if strategy != 'intrinsic':
+                                    sl_p = entry - 20
+                                    sl_res = fyers_service.place_stoploss_order(symbol=f'NSE:{kite_opt_sym}', trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', transaction_type=sl_transaction_type)
+                                    if sl_res.get('success'):
+                                        sl_order_ids = [sl_res.get('order_id')]
+                                        result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
+                                
+                                if strategy == 'intrinsic':
+                                    from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
+                                    IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry, sl_order_ids, lot_size, order_lots, None, kite_opt_sym, _username, session)
+                        except Exception as e: logger.error(f"[SL] Fyers Err: {e}")
                 return result, (200 if result['success'] else 400)
 
             return {'success': False, 'error': 'Invalid broker'}, 400
 
-        # Execute all
+        # Execute against all resolved brokers and return unified summary
         final_responses = []
         for target in targets:
             res, code = _execute_single(target['type'], target['instance'])
             final_responses.append({'broker': target['type'], 'instance': target['instance'], 'result': res, 'status': code})
 
-        if not is_all:
-            return jsonify(final_responses[0]['result']), final_responses[0]['status']
-        else:
-            any_success = any(r['result'].get('success') for r in final_responses)
-            return jsonify({
-                'success': any_success,
-                'summary': final_responses
-            }), (200 if any_success else 400)
+        any_success = any(r['result'].get('success') for r in final_responses)
+        return jsonify({
+            'success': any_success,
+            'brokers_targeted': len(final_responses),
+            'summary': final_responses
+        }), (200 if any_success else 400)
 
     except Exception as e:
         logger.error(f"Error in multi-order: {e}", exc_info=True)
@@ -3321,42 +3743,45 @@ def get_open_interest() -> EndpointResponse:
         
         oi_service = OpenInterestService(provider)
         
-        # 1. Try to get data from DB first
-        # Reduce max_age to 1 minute to ensure fresh data (user requested 1 min intervals)
-        db_data = oi_service.get_latest_oi_from_db(symbol, max_age_minutes=1)
-        
-        if db_data:
-            logger.info(f"✅ Serving OI data from DB for {symbol} (Timestamp: {db_data.get('timestamp')})")
-            db_data['server_timestamp'] = datetime.now().isoformat()
-            db_data['data_source'] = 'DATABASE'
-            return jsonify(db_data)
-        
-        # 2. Fallback: Fetch Live if DB is empty or stale
-        logger.info(f"⚠️ DB data missing or stale for {symbol}. Fetching live...")
-        oi_data = oi_service.get_open_interest_data(symbol)
-        
-        if not oi_data.get('success'):
-            return jsonify(oi_data), 400
+        # Request Coalescing: Only one thread fetches live for this symbol at a time
+        req_lock = _get_request_lock(f"OI_{symbol}")
+        with req_lock:
+            # 1. Try to get data from DB first
+            # Reduce max_age to 1 minute to ensure fresh data
+            db_data = oi_service.get_latest_oi_from_db(symbol, max_age_minutes=1)
             
-        # Save this live fetch to DB so next call is fast
-        try:
-            oi_service.save_oi_snapshot(symbol, oi_data)
-            logger.info(f"Saved fallback OI snapshot for {symbol}")
-        except Exception as save_e:
-            logger.error(f"Failed to save fallback snapshot: {save_e}")
-        
-        # Add server timestamp to verify data freshness
-        oi_data['server_timestamp'] = datetime.now().isoformat()
-        oi_data['data_source'] = 'LIVE_FALLBACK'
-        
-        logger.info(f"API response server_timestamp: {oi_data['server_timestamp']}")
-        
-        response = jsonify(oi_data)
-        # Disable caching for real-time data
-        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
-        return response
+            if db_data:
+                logger.info(f"✅ Serving OI data from DB for {symbol} (Timestamp: {db_data.get('timestamp')})")
+                db_data['server_timestamp'] = datetime.now().isoformat()
+                db_data['data_source'] = 'DATABASE'
+                return jsonify(db_data)
+            
+            # 2. Fallback: Fetch Live if DB is empty or stale
+            logger.info(f"⚠️ DB data missing or stale for {symbol}. Fetching live...")
+            oi_data = oi_service.get_open_interest_data(symbol)
+            
+            if not oi_data.get('success'):
+                return jsonify(oi_data), 400
+                
+            # Save this live fetch to DB so next call is fast
+            try:
+                oi_service.save_oi_snapshot(symbol, oi_data)
+                logger.info(f"Saved fallback OI snapshot for {symbol}")
+            except Exception as save_e:
+                logger.error(f"Failed to save fallback snapshot: {save_e}")
+            
+            # Add server timestamp to verify data freshness
+            oi_data['server_timestamp'] = datetime.now().isoformat()
+            oi_data['data_source'] = 'LIVE_FALLBACK'
+            
+            logger.info(f"API response server_timestamp: {oi_data['server_timestamp']}")
+            
+            response = jsonify(oi_data)
+            # Disable caching for real-time data
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
         
     except Exception as e:
         logger.error(f"Error fetching open interest: {str(e)}", exc_info=True)
@@ -3366,30 +3791,41 @@ def get_open_interest() -> EndpointResponse:
         }), 500
 
 
-def resolve_itm_strikes(kite_service, symbol, spot_high, spot_low, step_value, offset_multiplier=3):
-    """Refactored helper for robust strike discovery."""
+def resolve_itm_strikes(kite_service, symbol, spot_high, spot_low, step_value, offset_multiplier=3, data_provider=None):
+    """Refactored helper for robust strike discovery. Now provider-aware (Kite/Fyers)."""
     offset = offset_multiplier * step_value
     itm_ce_strike = int(math.ceil((spot_low - offset) / step_value) * step_value)
     itm_pe_strike = int(math.floor((spot_high + offset) / step_value) * step_value)
 
-    ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-    pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+    # Detect provider
+    is_fyers = data_provider is not None and hasattr(data_provider, 'find_option_symbol')
 
-    if not ce_symbol or not pe_symbol:
-        # Fallback to nearest actual strikes if step calculation doesn't match exchange rules
-        # Using memory-efficient O(1) indexed lookup from new KiteService
-        all_options = kite_service.get_nfo_instruments(symbol)
-        available_strikes = sorted(list(set([i['strike'] for i in all_options if i.get('strike') is not None])))
-        if available_strikes:
-            if not ce_symbol:
-                itm_ce_strike = min(available_strikes, key=lambda x: abs(x - (spot_low - offset)))
-                ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-            if not pe_symbol:
-                itm_pe_strike = min(available_strikes, key=lambda x: abs(x - (spot_high + offset)))
-                pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-    
-    ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
-    pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+    if is_fyers:
+        ce_token = data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
+        pe_token = data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
+        ce_symbol = ce_token
+        pe_symbol = pe_token
+    else:
+        ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+        pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+        ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
+        pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+
+    # Fallback if symbols not found
+    if not ce_token or not pe_token:
+        # For Kite, try to find nearest
+        if not is_fyers:
+            all_options = kite_service.get_nfo_instruments(symbol)
+            available_strikes = sorted(list(set([i['strike'] for i in all_options if i.get('strike') is not None])))
+            if available_strikes:
+                if not ce_token:
+                    itm_ce_strike = min(available_strikes, key=lambda x: abs(x - (spot_low - offset)))
+                    ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                    ce_token = kite_service.get_instrument_token(ce_symbol)
+                if not pe_token:
+                    itm_pe_strike = min(available_strikes, key=lambda x: abs(x - (spot_high + offset)))
+                    pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+                    pe_token = kite_service.get_instrument_token(pe_symbol)
     
     return itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token
 
@@ -3420,24 +3856,26 @@ def oi_profile_candles() -> EndpointResponse:
         first_5m_atm = request.args.get('first_5m_atm', 'false').lower() == 'true'
         custom_strike = request.args.get('custom_strike', type=int)
 
-        # ── 1. Check Response Cache ───────────────────────────────────
+        # ── 1. Check Response Cache & Coalesce Requests ──────────────
         # Use request parameters as cache key (ignore _t timestamp)
         cache_key = (symbol, interval, days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike)
-        with _candle_cache_lock:
-            if cache_key in _candle_response_cache:
-                data, ts = _candle_response_cache[cache_key]
-                # Cache for TTL threshold to balance freshness and rate limits
-                if datetime.now().timestamp() - ts < 0.8:
-                    return jsonify(data)
-            
-            # Prune cache if it exceeds max size (FIFO approximate)
-            if len(_candle_response_cache) > _MAX_CACHE_ENTRIES:
-                # Remove oldest entries to prevent OOM (exit code 247)
-                entries_to_remove = len(_candle_response_cache) - (_MAX_CACHE_ENTRIES // 2)
-                # Sort by timestamp and remove oldest half
-                sorted_keys = sorted(_candle_response_cache.keys(), key=lambda k: _candle_response_cache[k][1])
-                for k in sorted_keys[:entries_to_remove]:
-                    _candle_response_cache.pop(k, None)
+        
+        # Request Coalescing: Only one thread fetches for this key at a time
+        req_lock = _get_request_lock(cache_key)
+        with req_lock:
+            with _candle_cache_lock:
+                if cache_key in _candle_response_cache:
+                    data, ts = _candle_response_cache[cache_key]
+                    # Reduced cache to 0.5s to allow for high-frequency (1s) price updates
+                    if datetime.now().timestamp() - ts < 0.5:
+                        return jsonify(data)
+                
+                # Prune cache if it exceeds max size
+                if len(_candle_response_cache) > _MAX_CACHE_ENTRIES:
+                    entries_to_remove = len(_candle_response_cache) - (_MAX_CACHE_ENTRIES // 2)
+                    sorted_keys = sorted(_candle_response_cache.keys(), key=lambda k: _candle_response_cache[k][1])
+                    for k in sorted_keys[:entries_to_remove]:
+                        _candle_response_cache.pop(k, None)
 
         valid_intervals = ['minute', '2minute', '3minute', '5minute', '10minute',
                            '15minute', '30minute', '60minute', 'day']
@@ -3504,6 +3942,9 @@ def oi_profile_candles() -> EndpointResponse:
             
             temp = []
             for c in raw_data:
+                # Lightweight Charts (candlestick) throws "Value is null" if any OHLC is None/NaN
+                if any(x is None for x in [c.get('open'), c.get('high'), c.get('low'), c.get('close')]):
+                    continue
                 temp.append({
                     'time':   int(c['date'].timestamp()) + ist_offset,
                     'open':   c['open'], 'high':   c['high'], 'low':    c['low'],
@@ -3584,13 +4025,19 @@ def oi_profile_candles() -> EndpointResponse:
             if custom_strike:
                 itm_ce_strike = custom_strike
                 itm_pe_strike = custom_strike
-                ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-                ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
-                pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+                if _is_fyers_provider:
+                    ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
+                    pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
+                    ce_symbol = ce_token
+                    pe_symbol = pe_token
+                else:
+                    ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                    pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+                    ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
+                    pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
             else:
                 itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
-                    kite_service, symbol, spot_high, spot_low, step_value
+                    kite_service, symbol, spot_high, spot_low, step_value, data_provider=(_data_provider if _is_fyers_provider else None)
                 )
         elif first_5m_atm and atm_cache_key in _daily_5m_atm_cache:
             # FAST-LANE PARALLELIZATION: 5m ATM is static after 9:20. Use cached strike to concurrently fetch Options!
@@ -3619,6 +4066,7 @@ def oi_profile_candles() -> EndpointResponse:
             unique_dates = sorted(list(set(c['date'].date() for c in index_raw)))
             target_dates = unique_dates[-days:] if len(unique_dates) >= days else unique_dates
             index_raw = [c for c in index_raw if c['date'].date() in target_dates]
+            
         
         candles = format_candles(index_raw, ist_offset, interval)
 
@@ -3674,30 +4122,20 @@ def oi_profile_candles() -> EndpointResponse:
                 logger.info(f"[OI-Profile] First 5m ATM: 5m Mark close {close_p} (at {datetime.fromtimestamp(five_m_close_candle['time'] - ist_offset).strftime('%H:%M')}) -> Strike {atm_strike}, CE_token={ce_token}, PE_token={pe_token}")
             else:
                 if custom_strike:
-                    itm_ce_strike = custom_strike
-                    itm_pe_strike = custom_strike
-                    ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                    pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
+                    itm_ce_strike, itm_pe_strike = custom_strike, custom_strike
                     if _is_fyers_provider:
                         ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
                         pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
+                        ce_symbol, pe_symbol = ce_token, pe_token
                     else:
+                        ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
+                        pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
                         ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
                         pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
                 else:
-                    if _is_fyers_provider:
-                        # For Fyers: compute strikes arithmetically then look up Fyers symbols
-                        offset = 3 * step_value
-                        itm_ce_strike = int(math.ceil((spot_low - offset) / step_value) * step_value)
-                        itm_pe_strike = int(math.floor((spot_high + offset) / step_value) * step_value)
-                        ce_symbol = f'{symbol}{itm_ce_strike}CE'  # display name only
-                        pe_symbol = f'{symbol}{itm_pe_strike}PE'
-                        ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
-                        pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
-                    else:
-                        itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
-                            kite_service, symbol, spot_high, spot_low, step_value
-                        )
+                    itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
+                        kite_service, symbol, spot_high, spot_low, step_value, data_provider=(_data_provider if _is_fyers_provider else None)
+                    )
             
             if ce_token: future_ce = executor.submit(fetch_task, ce_token, from_date, to_date, fetch_interval)
             if pe_token: future_pe = executor.submit(fetch_task, pe_token, from_date, to_date, fetch_interval)
@@ -3710,6 +4148,11 @@ def oi_profile_candles() -> EndpointResponse:
         
         ce_raw = future_ce.result() if future_ce else []
         pe_raw = future_pe.result() if future_pe else []
+
+        # Synchronize option data window with index data window
+        if 'target_dates' in locals():
+            if ce_raw: ce_raw = [c for c in ce_raw if c['date'].date() in target_dates]
+            if pe_raw: pe_raw = [c for c in pe_raw if c['date'].date() in target_dates]
 
         # ── Data Formatting ──────────────────────────────────────────
         daily_ohlc = {}

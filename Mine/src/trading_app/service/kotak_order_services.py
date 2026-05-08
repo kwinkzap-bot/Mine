@@ -876,6 +876,7 @@ class KotakOrderService:
                           transaction_type: str, quantity: Optional[int] = None,
                           sl_price: Optional[float] = None,
                           target_price: Optional[float] = None,
+                          limit_price: Optional[float] = None,
                           tradingsymbol: Optional[str] = None,
                           target_expiry: Optional[str] = None,
                           product_type: str = 'NRML') -> Dict[str, Any]:
@@ -1123,9 +1124,9 @@ class KotakOrderService:
             result = self.place_order(
                 tradingsymbol=candidate_ts,
                 transaction_type=transaction_type,
-                price=0.0,
+                price=limit_price if limit_price else 0.0,
                 quantity=quantity,
-                order_type=self.ORDER_TYPE_MARKET,
+                order_type='L' if limit_price else self.ORDER_TYPE_MARKET,
                 product_type=product_type,
                 exchange_segment=self.EXCHANGE_NFO
             )
@@ -1177,9 +1178,9 @@ class KotakOrderService:
                     alt_result = self.place_order(
                         tradingsymbol=alt_symbol,
                         transaction_type=transaction_type,
-                        price=0.0,
+                        price=limit_price if limit_price else 0.0,
                         quantity=quantity,
-                        order_type=self.ORDER_TYPE_MARKET,
+                        order_type='L' if limit_price else self.ORDER_TYPE_MARKET,
                         product_type=alt_product,
                         exchange_segment=self.EXCHANGE_NFO
                     )
@@ -1357,46 +1358,25 @@ class KotakOrderService:
         return 0.0
 
     def place_stoploss_order(self, symbol: str, trigger_price: float, 
-                            quantity: int, product_type: str = 'MIS') -> Dict[str, Any]:
+                            quantity: int, product_type: str = 'MIS', transaction_type: str = 'SELL') -> Dict[str, Any]:
         """
         Place a Stop Loss (SL-M) order in Kotak Neo.
-        This is a Sell order usually for exiting Long positions.
         """
         try:
-            # We need to construct the trading symbol if 'symbol' is just "NIFTY" etc
-            # But the caller (live_signal) passes 'NIFTY' and expects us to handle it?
-            # Wait, live_signal passes `symbol=self.symbol` (e.g. NIFTY) and `strike`, `side`.
-            # But THIS method signature `place_stoploss_order(symbol, ...)` usually expects the FULL TRADING SYMBOL
-            # because Fyers/Dhan use unique IDs or full symbols.
-            # However, looking at live_signal calls:
-            # `service.place_stoploss_order(security_id=..., ...)` for Dhan
-            # `service.place_stoploss_order(symbol=fyers_symbol, ...)` for Fyers
-            
-            # So Kotak service needs to match what live_signal will call, OR live_signal needs to adapt.
-            # live_signal currently has a `pass` for Kotak.
-            # I will implement `place_option_stoploss_order` helper or adapt `place_stoploss_order` to take strike/side if needed.
-            
-            # BUT: Consistent interface is better.
-            # Dhan/Fyers services take specific ID/Symbol.
-            # Kotak service `place_order` takes `tradingsymbol`.
-            # So `place_stoploss_order` should probably take `tradingsymbol`?
-            # Or I can add `place_option_stoploss_order` like `place_option_order`?
-            
-            # Let's stick to `place_stoploss_order` taking a `tradingsymbol`.
-            # If the caller doesn't have it, they should use `place_option_stoploss_order` (which I will add).
-            
-            # Actually, let's just use `place_order` directly in the caller if we have the symbol.
-            # But for now, let's implement `place_stoploss_order` to wrap `place_order` with SL-M.
-            
+            # Map transaction type
+            neo_txn_type = 'S'
+            if transaction_type.upper() in ['BUY', 'B']: neo_txn_type = 'B'
+            elif transaction_type.upper() in ['SELL', 'S']: neo_txn_type = 'S'
+
             return self.place_order(
                 tradingsymbol=symbol,
-                transaction_type='S', # SL usually Sell
+                transaction_type=neo_txn_type,
                 price=0.0,
                 quantity=quantity,
                 order_type='SL-M',
                 product_type=product_type,
                 trigger_price=trigger_price,
-                exchange_segment='nse_fo' # Defaulting to FO
+                exchange_segment='nse_fo'
             )
             
         except Exception as e:
@@ -1457,4 +1437,130 @@ class KotakOrderService:
 
             return {'success': False, 'error': 'SL-M order failed for all symbol formats', 'tried_symbols': candidates}
         except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def get_positions(self) -> Dict[str, Any]:
+        """
+        Get all positions for the day.
+        
+        Returns:
+            Dict with list of positions
+        """
+        try:
+            # Validate credentials
+            if not self.trading_token or not self.trading_sid:
+                return {'success': False, 'error': 'Not authenticated. Please login to Kotak Neo first.'}
+            
+            # Determine base URL
+            order_base_url = getattr(self, '_order_base_url', None)
+            if not order_base_url:
+                if self.client and hasattr(self.client, 'configuration'):
+                    order_base_url = getattr(self.client.configuration, 'base_url', None)
+                if not order_base_url:
+                    order_base_url = "https://gw-napi.kotaksecurities.com"
+            
+            is_gateway = 'gw-napi' in order_base_url or order_base_url.rstrip('/').endswith('napi.kotaksecurities.com')
+            path = '/Orders/2.0/quick/user/positions' if is_gateway else '/quick/user/positions'
+            url = order_base_url.rstrip('/') + path
+            
+            headers = {
+                "Authorization": str(self.consumer_key or ""),
+                "Sid": self.trading_sid,
+                "Auth": self.trading_token,
+                "neo-fin-key": self._neo_fin_key,
+                "Content-Type": "application/json"
+            }
+            
+            query_params = {}
+            if self.server_id:
+                query_params['sId'] = str(self.server_id)
+            
+            logging.info(f"[Kotak] Fetching positions from: {url}")
+            response = requests.get(url, headers=headers, params=query_params, timeout=30)
+            
+            try:
+                data = response.json()
+            except Exception:
+                return {'success': False, 'error': f'Non-JSON response: {response.text[:200]}'}
+            
+            if response.status_code == 200 and isinstance(data, dict):
+                # Kotak Neo returns positions in 'data' field
+                positions = data.get('data', [])
+                if isinstance(positions, str): # Sometimes it's a JSON string
+                    try: import json; positions = json.loads(positions)
+                    except: pass
+                
+                logging.info(f"✅ Retrieved {len(positions) if isinstance(positions, list) else 0} positions from Kotak")
+                return {
+                    'success': True,
+                    'positions': positions if isinstance(positions, list) else []
+                }
+            else:
+                error_msg = data.get('errMsg') or data.get('message') or 'Unknown error'
+                logging.error(f"❌ Failed to retrieve positions: {error_msg}")
+                return {
+                    'success': False,
+                    'error': error_msg
+                }
+                
+        except Exception as e:
+            logging.error(f"❌ Exception getting positions: {e}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    def get_orderbook(self) -> Dict[str, Any]:
+        """
+        Get all orders for the day.
+        
+        Returns:
+            Dict with list of orders
+        """
+        try:
+            if not self.trading_token or not self.trading_sid:
+                return {'success': False, 'error': 'Not authenticated'}
+            
+            order_base_url = getattr(self, '_order_base_url', None)
+            if not order_base_url:
+                if self.client and hasattr(self.client, 'configuration'):
+                    order_base_url = getattr(self.client.configuration, 'base_url', None)
+                if not order_base_url:
+                    order_base_url = "https://gw-napi.kotaksecurities.com"
+            
+            is_gateway = 'gw-napi' in order_base_url or order_base_url.rstrip('/').endswith('napi.kotaksecurities.com')
+            path = '/Orders/2.0/quick/user/orders' if is_gateway else '/quick/user/orders'
+            url = order_base_url.rstrip('/') + path
+            
+            headers = {
+                "Authorization": str(self.consumer_key or ""),
+                "Sid": self.trading_sid,
+                "Auth": self.trading_token,
+                "neo-fin-key": self._neo_fin_key,
+                "Content-Type": "application/json"
+            }
+            
+            query_params = {}
+            if self.server_id:
+                query_params['sId'] = str(self.server_id)
+            
+            response = requests.get(url, headers=headers, params=query_params, timeout=30)
+            try: data = response.json()
+            except: return {'success': False, 'error': f'Non-JSON: {response.text[:100]}'}
+            
+            if response.status_code == 200:
+                orders = data.get('data', [])
+                if isinstance(orders, str):
+                    try: import json; orders = json.loads(orders)
+                    except: pass
+                
+                return {
+                    'success': True,
+                    'orders': orders if isinstance(orders, list) else []
+                }
+            else:
+                return {'success': False, 'error': data.get('errMsg') or 'API Error'}
+                
+        except Exception as e:
+            logging.error(f"❌ Exception getting orderbook: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}

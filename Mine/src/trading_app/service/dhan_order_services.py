@@ -772,12 +772,17 @@ class DhanOrderService:
     def place_stoploss_order(self, security_id: str, trigger_price: float, 
                             quantity: int, product_type: str = 'INTRADAY',
                             exchange_segment: str = 'NSE_FNO', price: float = 0.0,
-                            entry_price: float = 0.0) -> Dict[str, Any]:
+                            entry_price: float = 0.0, transaction_type: str = 'SELL') -> Dict[str, Any]:
         """
-        Place a stop loss (sell) order on Dhan platform.
+        Place a stop loss order on Dhan platform.
         Wraps place_order with specific SL logic.
         """
         try:
+            # Map transaction type
+            dhan_txn_type = 'SELL'
+            if transaction_type.upper() in ['BUY', 'B']: dhan_txn_type = 'BUY'
+            elif transaction_type.upper() in ['SELL', 'S']: dhan_txn_type = 'SELL'
+
             # Determine best SL order type:
             # If price is 0, use STOP_LOSS_MARKET (safer for fast moves)
             # If price > 0, use STOP_LOSS (limit)
@@ -789,13 +794,13 @@ class DhanOrderService:
                 final_order_type = self.ORDER_TYPE_STOP_LOSS_MARKET
                 final_price = 0.0
                 
-            logging.info(f"[place_stoploss_order] Preparing {final_order_type}: sec_id={security_id}, "
+            logging.info(f"[place_stoploss_order] Preparing {final_order_type}: {dhan_txn_type} sec_id={security_id}, "
                         f"trigger={trigger_price:.2f}, qty={quantity}")
             
             # Delegate to main place_order for full auth/retry support
             return self.place_order(
                 security_id=str(security_id),
-                transaction_type=self.TRANSACTION_SELL,
+                transaction_type=dhan_txn_type,
                 quantity=int(quantity),
                 order_type=final_order_type,
                 product_type=product_type,

@@ -5,17 +5,19 @@
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}">
 <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}"></script>
+<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v=2.3"></script>
 {% endblock %}
 
 {% block content %}
 <div class="oip-page">
     <div class="oip-container">
         <!-- Original OI Profile Block -->
-        <div class="oip-header">
+        <div class="oip-header oip-header--compact">
             <div class="oip-hdr-top">
-                <div class="oip-title">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+
+                <!-- Title -->
+                <div class="oip-title oip-title--sm">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
                         stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                     </svg>
@@ -23,71 +25,84 @@
                     <span class="oip-title-badge">Live</span>
                 </div>
 
-                <div class="oip-controls">
-                    <span class="oip-label">Symbol</span>
-                    <div class="search-container">
-                        <input type="text" id="symbolSelect" class="oip-input symbol-dropdown"
-                            placeholder="Search Symbol..." value="NIFTY" autocomplete="off"
-                            style="width: 100px; height: 22px;">
-                        <ul id="symbolDropdownList" class="custom-dropdown-list hidden"></ul>
+                <!-- Compact single-row controls -->
+                <div class="oip-prem-toolbar">
+
+                    <!-- Symbol + TF -->
+                    <div class="oip-prem-group">
+                        <span class="oip-label">Sym</span>
+                        <div class="search-container">
+                            <input type="text" id="symbolSelect" class="oip-input oip-input--sym symbol-dropdown"
+                                placeholder="NIFTY" value="NIFTY" autocomplete="off">
+                            <ul id="symbolDropdownList" class="custom-dropdown-list hidden"></ul>
+                        </div>
+                        <span class="oip-label">TF</span>
+                        <select id="oipInterval" class="oip-select oip-select--xs">
+                            <option value="minute" selected>1m</option>
+                            <option value="2minute">2m</option>
+                            <option value="3minute">3m</option>
+                            <option value="5minute">5m</option>
+                            <option value="15minute">15m</option>
+                            <option value="30minute">30m</option>
+                            <option value="60minute">1h</option>
+                        </select>
                     </div>
 
-                    <span class="oip-label">TF</span>
-                    <select id="oipInterval" class="oip-select">
-                        <option value="minute" selected>1m</option>
-                        <option value="2minute">2m</option>
-                        <option value="3minute">3m</option>
-                        <option value="5minute">5m</option>
-                        <option value="15minute">15m</option>
-                        <option value="30minute">30m</option>
-                        <option value="60minute">1h</option>
-                    </select>
+                    <div class="oip-prem-sep"></div>
 
+                    <!-- Overlay toggles -->
+                    <div class="oip-prem-group">
+                        <label class="oip-checkbox" title="VWAP">
+                            <input type="checkbox" id="oipShowVwapOI"><span>VWAP</span>
+                        </label>
+                        <label class="oip-checkbox" title="CPR Levels">
+                            <input type="checkbox" id="oipShowCpr" checked><span>CPR</span>
+                        </label>
+                        <label class="oip-checkbox" title="Future CPR">
+                            <input type="checkbox" id="oipShowFutureCpr"><span>FCPR</span>
+                        </label>
+                    </div>
 
-                    <div class="oip-control-item">
-                        <label class="oip-checkbox">
-                            <input type="checkbox" id="oipShowVwapOI" checked>
-                            <span>VWAP</span>
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- EMA toggles -->
+                    <div class="oip-prem-group oip-ema-group">
+                        <span class="oip-label">EMA</span>
+                        <label class="oip-ema-chk" title="EMA 9">
+                            <input type="checkbox" id="oipShowEma9" checked><span>9</span>
+                        </label>
+                        <label class="oip-ema-chk" title="EMA 20">
+                            <input type="checkbox" id="oipShowEma20" checked><span>20</span>
+                        </label>
+                        <label class="oip-ema-chk" title="EMA 50">
+                            <input type="checkbox" id="oipShowEma50" checked><span>50</span>
+                        </label>
+                        <label class="oip-ema-chk" title="EMA 100">
+                            <input type="checkbox" id="oipShowEma100"><span>100</span>
+                        </label>
+                        <label class="oip-ema-chk" title="EMA 200">
+                            <input type="checkbox" id="oipShowEma200" checked><span>200</span>
                         </label>
                     </div>
-                    <div class="oip-control-item">
-                        <label class="oip-checkbox">
-                            <input type="checkbox" id="oipShowCpr" checked>
-                            <span>CPR</span>
-                        </label>
-                    </div>
-                    <div class="oip-control-item">
-                        <label class="oip-checkbox">
-                            <input type="checkbox" id="oipShowEMA" checked>
-                            <span>EMA</span>
-                        </label>
-                    </div>
-                    <div class="oip-control-item" style="display: none;">
-                        <label class="oip-checkbox">
-                            <input type="checkbox" id="oipShowRSI">
-                            <span>RSI S&R</span>
-                        </label>
-                    </div>
-                    <div class="oip-mode-group">
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- OI mode toggle -->
+                    <div class="oip-mode-group oip-mode-group--xs">
                         <label class="oip-radio"><input type="radio" name="oipMode" value="total">
                             <span>OI</span></label>
                         <label class="oip-radio"><input type="radio" name="oipMode" value="change" checked>
                             <span>CHG</span></label>
                     </div>
 
-                    <button class="oip-btn oip-btn-primary" id="oipRefreshBtn" onclick="oipFullRefresh()">
-                        <svg id="oipRefreshIcon" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="1 4 1 10 7 10" />
-                            <polyline points="23 20 23 14 17 14" />
-                            <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-                        </svg>
-                        Update
-                    </button>
+                    <!-- Hidden RSI toggle -->
+                    <input type="checkbox" id="oipShowRSI" style="display:none">
+
                 </div>
             </div>
 
-            <div class="oip-status-row boxed">
+            <!-- Stats strip — wrapping pill grid -->
+            <div class="oip-status-row boxed oip-status-row--compact">
                 <div class="oip-hdr-metric">
                     <span class="oip-hdr-lbl">Price</span>
                     <span id="hdrPrice" class="oip-hdr-val">--</span>
@@ -121,7 +136,7 @@
                     <span id="hdrAtm" class="oip-hdr-val">--</span>
                 </div>
                 <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">Max Pain</span>
+                    <span class="oip-hdr-lbl">MaxPain</span>
                     <span id="hdrMaxPain" class="oip-hdr-val blu">--</span>
                 </div>
                 <div class="oip-hdr-metric">
@@ -144,158 +159,96 @@
 
     <!-- New Box: Combined Strike Selector & Intrinsic Levels -->
     <div class="oip-container" style="margin-top: 10px;">
-        <div class="oip-header">
+        <div class="oip-header oip-header--compact">
+            <!-- Hidden inputs for state -->
+            <input type="hidden" id="oipIntrinsicView" value="combined">
+            <input type="hidden" id="oipStep" value="50">
+            <input type="hidden" id="oipMultiplier" value="3">
             <div class="oip-hdr-top">
-                <div class="oip-title">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                <!-- Title -->
+                <div class="oip-title oip-title--sm">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
                         stroke-linecap="round" stroke-linejoin="round">
                         <path d="M12 2 2 7l10 5 10-5-10-5Z" />
                         <path d="m2 17 10 5 10-5" />
                         <path d="m2 12 10 5 10-5" />
                     </svg>
-                    Intrinsic Levels
-                    <div id="oipDash" style="display: inline-flex; gap: 4px; margin-left: 8px;">
-                        <span id="oipItmCE" class="oip-title-badge" style="background: #10b981; color: white;">--
-                            CE</span>
-                        <span id="oipItmPE" class="oip-title-badge" style="background: #8b5cf6; color: white;">--
-                            PE</span>
-                    </div>
+                    Option Premium
                 </div>
 
-                <div class="oip-intrinsic-controls" style="margin-left: auto; gap: 8px;">
-                    <div class="oip-control-item">
-                        <span class="oip-label">Spot High</span>
-                        <input type="text" id="oipSpotHigh" class="oip-input h-low-input" value="23500">
-                    </div>
-                    <div class="oip-control-item">
-                        <span class="oip-label">Spot Low</span>
-                        <input type="text" id="oipSpotLow" class="oip-input h-low-input" value="23400">
-                    </div>
-                    <div class="oip-control-item">
-                        <button id="oipAutoHL" class="oip-btn" title="Auto detect High/Low from chart"
-                            style="padding: 4px 8px; font-size: 11px;">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
-                                fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
-                                stroke-linejoin="round" style="margin-right: 4px;">
-                                <path
-                                    d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.21 1.21 0 0 0 1.72 0L21.64 5.36a1.21 1.21 0 0 0 0-1.72Z" />
-                                <path d="m14 7 3 3" />
-                                <path d="M5 6v4" />
-                                <path d="M19 14v4" />
-                                <path d="M10 2v2" />
-                                <path d="M7 8H3" />
-                                <path d="M21 16h-4" />
-                                <path d="M11 3H9" />
-                            </svg>
-                            Recent H/L
-                        </button>
+                <!-- Compact single-row controls -->
+                <div class="oip-prem-toolbar">
+
+                    <!-- Toggles group (Hidden but checked by default) -->
+                    <div class="oip-prem-group" style="display:none">
+                        <label class="oip-checkbox" title="VWAP">
+                            <input type="checkbox" id="oipShowVwapInt" checked><span>VWAP</span>
+                        </label>
+                        <label class="oip-checkbox" title="Premium Levels">
+                            <input type="checkbox" id="oipShowPremium" checked><span>Prem.</span>
+                        </label>
                     </div>
 
-                    <div class="oip-order-controls"
-                        style="display: flex; gap: 4px; border-left: 1px solid #e2e8f0; padding-left: 6px;">
-                        <button class="oip-btn oip-order-btn" data-side="CE" data-action="BUY" title="CE BUY" style="background: #10b981; color: white; padding: 4px 10px;">BUY CE</button>
-                        <button class="oip-btn oip-order-btn" data-side="PE" data-action="BUY" title="PE BUY" style="background: #8b5cf6; color: white; padding: 4px 10px;">BUY PE</button>
+                    <div class="oip-prem-sep" style="display:none"></div>
+
+                    <!-- Strike group -->
+                    <div class="oip-prem-group">
+                        <label class="oip-checkbox" title="First 5m ATM Strike">
+                            <input type="checkbox" id="oipFirst5mATM"><span>Prem. Str.</span>
+                        </label>
+                        <label class="oip-checkbox" title="Custom Strike">
+                            <input type="checkbox" id="oipCustomStrikeCheck" checked><span>Custom</span>
+                        </label>
+                        <select id="oipCustomStrikeDropdown" class="oip-select oip-select--xs">
+                            <!-- Options generated in JS -->
+                        </select>
                     </div>
-                </div>
-            </div>
-            <!-- Second Line for the rest -->
-            <div class="oip-intrinsic-controls"
-                style="justify-content: flex-end; width: 100%; border-top: 1px dotted #e2e8f0; padding-top: 4px; gap: 8px;">
-                <div class="oip-control-item">
-                    <span class="oip-label">Step</span>
-                    <select id="oipStep" class="oip-select">
-                        <option value="25">25</option>
-                        <option value="50" selected>50</option>
-                        <option value="100">100</option>
-                    </select>
-                </div>
-                <div class="oip-control-item">
-                    <span class="oip-label">Levels</span>
-                    <select id="oipMultiplier" class="oip-select">
-                        <option value="0">0</option>
-                        <option value="1">1</option>
-                        <option value="2">2</option>
-                        <option value="3" selected>3</option>
-                        <option value="4">4</option>
-                        <option value="5">5</option>
-                        <option value="6">6</option>
-                        <option value="7">7</option>
-                        <option value="8">8</option>
-                        <option value="9">9</option>
-                        <option value="10">10</option>
-                    </select>
-                </div>
-                <div class="oip-control-item">
-                    <span class="oip-label">View</span>
-                    <select id="oipIntrinsicView" class="oip-select">
-                        <option value="ce">CE Option</option>
-                        <option value="pe">PE Option</option>
-                        <option value="combined" selected>Combined (CE+PE)</option>
-                    </select>
-                </div>
-                <div class="oip-control-item">
-                    <span class="oip-label">Broker</span>
-                    <select id="oipBrokerSelect" class="oip-select" title="Select trading platform for orders">
-                        <option value="all" selected>🚀 ALL Accounts</option>
-                        <option value="kotak_neo">Kotak Neo</option>
-                        <option value="zerodha_1">Zerodha (Kite)</option>
-                        <option value="zerodha_5">Zerodha Kavin</option>
-                        <option value="dhan">Dhan</option>
-                        <option value="fyers">Fyers</option>
-                    </select>
-                </div>
-                <div class="oip-control-item">
-                    <label class="oip-checkbox">
-                        <input type="checkbox" id="oipShowLevels">
-                        <span>Levels</span>
-                    </label>
-                </div>
-                <div class="oip-control-item">
-                    <label class="oip-checkbox">
-                        <input type="checkbox" id="oipShowVwapInt" checked>
-                        <span>VWAP</span>
-                    </label>
-                </div>
-                <div class="oip-control-item">
-                    <label class="oip-checkbox">
-                        <input type="checkbox" id="oipFirst5mATM" checked>
-                        <span>Premium Strike</span>
-                    </label>
-                </div>
-                <div class="oip-control-item">
-                    <label class="oip-checkbox">
-                        <input type="checkbox" id="oipCustomStrikeCheck">
-                        <span>Custom Str.</span>
-                    </label>
-                    <select id="oipCustomStrikeDropdown" class="oip-select" style="margin-left: 4px;">
-                        <!-- Options generated in JS -->
-                    </select>
-                </div>
-                <div class="oip-control-item">
-                    <span class="oip-label">Tgt Dist</span>
-                    <select id="oipTargetDistance" class="oip-select">
-                        <option value="50" selected>50</option>
-                        <option value="100">100</option>
-                        <option value="150">150</option>
-                        <option value="200">200</option>
-                    </select>
-                </div>
-                <div class="oip-control-item">
-                    <label class="oip-checkbox">
-                        <input type="checkbox" id="oipShowPremium" checked>
-                        <span>Premium</span>
-                    </label>
-                </div>
-                <div class="oip-control-item">
-                    <label class="oip-checkbox">
-                        <input type="checkbox" id="oipShowSignals" checked>
-                        <span>Signals</span>
-                    </label>
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- Target Distance -->
+                    <div class="oip-prem-group">
+                        <span class="oip-label">Tgt</span>
+                        <select id="oipTargetDistance" class="oip-select oip-select--xs">
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                            <option value="150">150</option>
+                            <option value="200">200</option>
+                        </select>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- Order controls -->
+                    <div class="oip-prem-group">
+                        <input type="number" id="oipLimitPrice" class="oip-input oip-input--price" placeholder="Limit ₹"
+                            step="0.05" title="Limit Price">
+                        <div class="oip-order-side-group oip-order-side-group--ce">
+                            <button class="oip-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B
+                                CE</button>
+                            <button class="oip-order-btn ce-sell" data-side="CE" data-action="SELL" title="Sell CE">S
+                                CE</button>
+                        </div>
+                        <div class="oip-order-side-group oip-order-side-group--pe">
+                            <button class="oip-order-btn pe-buy" data-side="PE" data-action="BUY" title="Buy PE">B
+                                PE</button>
+                            <button class="oip-order-btn pe-sell" data-side="PE" data-action="SELL" title="Sell PE">S
+                                PE</button>
+                        </div>
+                        <div class="oip-prem-sep"></div>
+                        <button id="oipExitAll" class="oip-order-btn exit-all"
+                            title="Exit All Positions & Cancel Orders">EXIT</button>
+                    </div>
+
                 </div>
             </div>
         </div>
 
         <div class="oip-chart-wrap" id="oipIntrinsicChartWrap">
+            <div id="oipIntrinsicLegend" class="oip-chart-legend">
+                <div id="oipLegendCE" class="legend-item ce">CE: --</div>
+                <div id="oipLegendPE" class="legend-item pe">PE: --</div>
+            </div>
             <div id="oipIntrinsicChart"></div>
         </div>
     </div>
@@ -304,5 +257,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/oi_profile.js') }}"></script>
+<script src="{{ url_for('static', filename='js/oi_profile.js') }}?v=2.9"></script>
 {% endblock %}

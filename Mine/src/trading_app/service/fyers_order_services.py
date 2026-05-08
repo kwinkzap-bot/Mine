@@ -95,7 +95,7 @@ class FyersOrderService:
         
         # Transaction type (side) mappings
         self.SIDE_BUY = 1
-        self.SIDE_SELL = -1
+        self.SIDE_SELL = 2
         
         # Product type mappings for Fyers
         self.PRODUCT_INTRADAY = 'INTRADAY'
@@ -749,23 +749,16 @@ class FyersOrderService:
             }
     
     def place_stoploss_order(self, symbol: str, trigger_price: float, 
-                            quantity: int, product_type: str = 'INTRADAY') -> Dict[str, Any]:
+                            quantity: int, product_type: str = 'INTRADAY', transaction_type: str = 'SELL') -> Dict[str, Any]:
         """
-        Place a stop loss (sell) order on Fyers platform.
-        
-        Creates a sell order with a trigger price that automatically executes
-        when the price drops to the trigger level.
-        
-        Args:
-            symbol: Trading symbol (e.g., "NSE:NIFTY24JAN21000CE")
-            trigger_price: SL trigger price
-            quantity: Order quantity
-            product_type: 'INTRADAY', 'CNC', 'MARGIN', etc.
-            
-        Returns:
-            Dict with success status, order_id, and details
+        Place a stop loss order on Fyers platform.
         """
         try:
+            # Map transaction type (Fyers V3: 1=BUY, 2=SELL)
+            fyers_side = self.SIDE_SELL
+            if str(transaction_type).upper() in ['BUY', 'B', '1']: fyers_side = self.SIDE_BUY
+            elif str(transaction_type).upper() in ['SELL', 'S', '2', '-1']: fyers_side = self.SIDE_SELL
+
             # Validate credentials FIRST
             if not self.access_token:
                 logging.error("[place_stoploss_order] Not authenticated. Missing access_token.")
@@ -788,7 +781,7 @@ class FyersOrderService:
                 "symbol": symbol,
                 "qty": int(quantity),
                 "type": 4,  # 4 = STOP_LOSS_MARKET
-                "side": self.SIDE_SELL,  # -1 = SELL
+                "side": fyers_side,
                 "productType": product_type,
                 "limitPrice": float(trigger_price),  # Must be >= 0.0025, use trigger_price
                 "stopPrice": float(trigger_price),
@@ -797,7 +790,7 @@ class FyersOrderService:
                 "offlineOrder": False
             }
             
-            logging.info(f"[place_stoploss_order] Placing SL order: {symbol} @ {trigger_price:.2f}, Qty: {quantity}")
+            logging.info(f"[place_stoploss_order] Placing SL order: {transaction_type} {symbol} @ {trigger_price:.2f}, Qty: {quantity}")
             logging.debug(f"[place_stoploss_order] Payload: {payload}")
             
             response = requests.post(url, headers=headers, json=payload, timeout=30)

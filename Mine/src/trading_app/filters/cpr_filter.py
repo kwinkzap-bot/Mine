@@ -105,9 +105,28 @@ class CPRFilterService:
     def get_token(self, symbol: str) -> Optional[int]:
         if not self._instruments:
             self._load_instruments()
+        
+        # Priority 1: Exact tradingsymbol match (any type)
         for inst in self._instruments:
-            if inst.get('instrument_type') == 'EQ' and (inst.get('tradingsymbol') == symbol or inst.get('name') == symbol):
+            if inst.get('tradingsymbol') == symbol:
                 return inst.get('instrument_token')
+                
+        # Priority 2: Name match for Equity (EQ)
+        for inst in self._instruments:
+            if inst.get('instrument_type') == 'EQ' and inst.get('name') == symbol:
+                return inst.get('instrument_token')
+                
+        # Priority 3: Name match for Future (FUT) - Nearest Expiry
+        fut_matches = [inst for inst in self._instruments 
+                      if inst.get('instrument_type') == 'FUT' and inst.get('name') == symbol]
+        if fut_matches:
+            # Sort by expiry if available, otherwise just pick first
+            try:
+                fut_matches.sort(key=lambda x: x.get('expiry') or datetime.max.date())
+            except:
+                pass
+            return fut_matches[0].get('instrument_token')
+            
         return None
 
     def get_hist_data(self, symbol: str, days: int = 300, interval='day', end_date: Optional[datetime] = None) -> Optional[pd.DataFrame]:
@@ -208,15 +227,15 @@ class CPRFilterService:
             logger.error(f"Range data failed for {symbol} {from_date.date()}-{to_date.date()}: {e}")
             return None
 
-    def calc_cpr_levels(self, symbol: str, root_date: datetime) -> Optional[CPRLevels]:
+    def calc_cpr_levels(self, symbol: str, root_date: datetime, all_data: Optional[pd.DataFrame] = None) -> Optional[CPRLevels]:
         """
-        Calculate CPR levels using a SINGLE historical data fetch.
-        OPTIMIZED: Fetches 400 days of data once and slices locally for daily/weekly/monthly/yearly.
+        Calculate CPR levels using historical data.
+        If all_data is provided, it is used directly. Otherwise, fetches 400 days once.
         """
-        # Fetch exactly 400 days relying on the standard get_hist_data caching mechanism
-        all_data = self.get_hist_data(symbol, days=400, interval='day', end_date=root_date)
-        
         if all_data is None:
+            all_data = self.get_hist_data(symbol, days=400, interval='day', end_date=root_date)
+        
+        if all_data is None or all_data.empty:
             return None
         
         # Filter to data on or before root_date
@@ -227,8 +246,23 @@ class CPRFilterService:
             logger.debug(f"Insufficient data for {symbol}")
             return None
         
-        # Daily CPR (prev day) - use last 2 rows
-        h, l, c = float(df.iloc[-2]['high']), float(df.iloc[-2]['low']), float(df.iloc[-2]['close'])
+        # Daily CPR (prev day)
+        # If the target date (root_date) is today or future, and the last bar in our data is YESTERDAY,
+        # we use the very last bar to calculate TODAY'S CPR.
+        last_bar_date = df.index[-1].date()
+        if last_bar_date < root_date.date():
+            # Scenario: Today is May 7, last bar is May 6.
+            # Use May 6 OHLC to calculate May 7 CPR.
+            h, l, c = float(df.iloc[-1]['high']), float(df.iloc[-1]['low']), float(df.iloc[-1]['close'])
+            # Current price is the last known close until market opens
+            curr_price, curr_open, curr_high, curr_low = c, c, c, c
+        else:
+            # Scenario: Target date (May 6) is in the data.
+            # Use May 5 (iloc[-2]) to calculate May 6 CPR.
+            h, l, c = float(df.iloc[-2]['high']), float(df.iloc[-2]['low']), float(df.iloc[-2]['close'])
+            # Current price/OHLC from the actual root_date bar (iloc[-1])
+            curr_price, curr_open, curr_high, curr_low = [float(df.iloc[-1][col]) for col in ['close', 'open', 'high', 'low']]
+
         d_pp, d_bc, d_tc = CPRService.calculate_cpr(h, l, c)
         
         # Weekly CPR - slice for prev week Mon-Fri
@@ -269,8 +303,7 @@ class CPRFilterService:
         y_h, y_l, y_c = float(year_df['high'].max()), float(year_df['low'].min()), float(year_df['close'].iloc[-1])
         y_pp, y_bc, y_tc = CPRService.calculate_cpr(y_h, y_l, y_c)
         
-        # Current candle (root_date)
-        curr_price, curr_open, curr_high, curr_low = [float(df.iloc[-1][col]) for col in ['close', 'open', 'high', 'low']]
+        # Current candle OHLC is already set at the beginning of this function
         
         return CPRLevels(d_pp, d_bc, d_tc, w_pp, w_bc, w_tc, m_pp, m_bc, m_tc, m_s1, m_r1, m_s05, m_r05,
                         m_cam_r3, m_cam_s3,
@@ -354,6 +387,12 @@ class CPRFilterService:
         return drsi, signal
 
     def get_fo_stocks(self) -> List[str]:
+        # If cache is empty, it might be due to previous mapping error. Clear it to force re-fetch.
+        if self._fo_stocks == []:
+            self._fo_stocks = None
+            if hasattr(self.kite, 'clear_instruments_cache'):
+                self.kite.clear_instruments_cache()
+
         if self._fo_stocks is not None:
             return self._fo_stocks
         
@@ -747,9 +786,16 @@ class CPRFilterService:
 
     def process_stock(self, symbol: str, root_date: datetime) -> Optional[Dict]:
         try:
-            cpr = self.calc_cpr_levels(symbol, root_date)
+            # 1. Fetch historical data ONCE at the start (400 days covers CPR + RSI stabilization)
+            all_data = self.get_hist_data(symbol, days=400, interval='day', end_date=root_date)
+            if all_data is None or all_data.empty:
+                logger.debug(f"{symbol}: No historical data found")
+                return None
+
+            # 2. Calculate CPR levels using the shared data
+            cpr = self.calc_cpr_levels(symbol, root_date, all_data=all_data)
             if not cpr:
-                logger.debug(f"{symbol}: No CPR levels")
+                logger.debug(f"{symbol}: No CPR levels calculated")
                 return None
             
             primary_status = self.evaluate_status(cpr)
@@ -772,15 +818,13 @@ class CPRFilterService:
                 'drsi_reversal_bearish': None
             }
 
-            # Phase D-RSI: Delta-RSI Filter (Daily) - Matches "Delta-RSI Oscillator" exactly
-            # Fetch 400 days to ensure RSI(21) and EMA(9) are fully stabilized
-            hist_prices = self.get_hist_data(symbol, days=400, interval='day', end_date=root_date)
-            if hist_prices is not None and len(hist_prices) > 50:
-                closes = hist_prices['close'].tolist()
+            # Phase D-RSI: Delta-RSI Filter (Daily) - Use the same shared data
+            if len(all_data) > 50:
+                closes = all_data['close'].tolist()
                 
                 # Ensure the CURRENT day's live price is accurately represented
                 target_dt = root_date.date() if root_date else datetime.now().date()
-                last_dt = hist_prices.index[-1].date()
+                last_dt = all_data.index[-1].date()
                 
                 if last_dt == target_dt:
                     # Override today's incomplete candle with live price
@@ -981,12 +1025,23 @@ class CPRFilterService:
                     'm_gap': touch_gaps[2]
                 }
 
-            return payloads if any(payloads.values()) else None
+            # Calculate daily change % using prev_close from CPR levels
+            day_change_pct = 0.0
+            if cpr.previous_close > 0:
+                day_change_pct = round(((cpr.current_price - cpr.previous_close) / cpr.previous_close) * 100, 2)
+
+            return {
+                'symbol': symbol,
+                'current_price': cpr.current_price,
+                'volume': all_data.iloc[-1]['volume'],
+                'day_change_pct': day_change_pct,
+                'payloads': payloads
+            }
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
             return None
 
-    def _build_atm_option_map(self, stocks: List[str]) -> Dict[str, Dict]:
+    def _build_atm_option_map(self, stocks: List[str], stock_metadata: Optional[Dict[str, Dict]] = None) -> Dict[str, Dict]:
         """
         Build a mapping of stock symbol -> nearest-expiry ATM CE option info.
         Pre-loads NFO instruments once and finds the ATM option for each stock.
@@ -1002,32 +1057,41 @@ class CPRFilterService:
                 self._nfo_instruments = self.kite.instruments('NFO')
                 logger.info(f"Loaded {len(self._nfo_instruments)} NFO instruments for IV calculation")
             
-            # Fetch stock quotes (gives price + volume) instead of just LTP
-            ltp_keys = [f"NSE:{s}" for s in stocks]
             stock_prices = {}
             stock_volumes = {}
             stock_day_change_pct = {}
             
-            batch_size = 250
-            for i in range(0, len(ltp_keys), batch_size):
-                batch = ltp_keys[i:i + batch_size]
-                self._rate_limit()
-                try:
-                    quote_data = self.kite.quote(batch)
-                    for key, val in quote_data.items():  # type: ignore
-                        symbol = str(key).replace('NSE:', '')
-                        last_price = val.get('last_price', 0)  # type: ignore
-                        stock_prices[symbol] = last_price
-                        stock_volumes[symbol] = val.get('volume', 0)  # type: ignore
-
-                        # Current day % change from previous close
-                        prev_close = val.get('ohlc', {}).get('close', 0)  # type: ignore
-                        if prev_close and prev_close > 0:
-                            stock_day_change_pct[symbol] = round(((last_price - prev_close) / prev_close) * 100, 2)
-                        else:
-                            stock_day_change_pct[symbol] = 0.0
-                except Exception as e:
-                    logger.warning(f"Batch quote fetch failed: {e}")
+            # Priority 1: Use pre-collected metadata from the main scan loop
+            if stock_metadata:
+                for symbol, meta in stock_metadata.items():
+                    stock_prices[symbol] = meta.get('current_price', 0)
+                    stock_volumes[symbol] = meta.get('volume', 0)
+                    stock_day_change_pct[symbol] = meta.get('day_change_pct', 0.0)
+                    
+            # Priority 2: Fallback to batch quotes for missing stocks
+            missing_stocks = [s for s in stocks if s not in stock_prices]
+            if missing_stocks:
+                ltp_keys = [f"NSE:{s}" for s in missing_stocks]
+                batch_size = 250
+                for i in range(0, len(ltp_keys), batch_size):
+                    batch = ltp_keys[i:i + batch_size]
+                    self._rate_limit()
+                    try:
+                        quote_data = self.kite.quote(batch)
+                        for key, val in quote_data.items():  # type: ignore
+                            symbol = str(key).replace('NSE:', '')
+                            last_price = val.get('last_price', 0)  # type: ignore
+                            stock_prices[symbol] = last_price
+                            stock_volumes[symbol] = val.get('volume', 0)  # type: ignore
+                            
+                            # Current day % change from previous close
+                            prev_close = val.get('ohlc', {}).get('close', 0)  # type: ignore
+                            if prev_close and prev_close > 0:
+                                stock_day_change_pct[symbol] = round(((last_price - prev_close) / prev_close) * 100, 2)
+                            else:
+                                stock_day_change_pct[symbol] = 0.0
+                    except Exception as e:
+                        logger.error(f"Quote batch failed: {e}")
             
             logger.info(f"Got prices+volumes for {len(stock_prices)} stocks")
             
@@ -1280,7 +1344,7 @@ class CPRFilterService:
         
         return max_pain_strike
 
-    def _batch_compute_iv_percentiles(self, stocks: List[str]) -> List[Dict]:
+    def _batch_compute_iv_percentiles(self, stocks: List[str], stock_metadata: Optional[Dict[str, Dict]] = None) -> List[Dict]:
         """
         Compute IV percentile for all F&O stocks in a batch-optimized manner:
         1. Build ATM option map (NFO instruments + stock prices)
@@ -1295,8 +1359,8 @@ class CPRFilterService:
             logger.info(f"Starting batch IV percentile computation for {len(stocks)} stocks...")
             iv_start = time.time()
             
-            # Step 1: Build ATM option map
-            atm_map = self._build_atm_option_map(stocks)
+            # Step 1: Build ATM option map (passing collected metadata to avoid quotes)
+            atm_map = self._build_atm_option_map(stocks, stock_metadata=stock_metadata)
             if not atm_map:
                 logger.warning("No ATM options found for any stock")
                 return []
@@ -1402,6 +1466,7 @@ class CPRFilterService:
 
     def filter_cpr_stocks(self, root_date: Optional[datetime] = None) -> FilterResult:
         stocks = self.get_fo_stocks()
+        logger.info(f"Retrieved {len(stocks)} FO stocks for scan")
         # stocks = ["COLPAL"]
         if root_date is None:
             root_date = datetime.now()
@@ -1416,6 +1481,14 @@ class CPRFilterService:
             
         logger.info(f"Filtering {len(stocks)} F&O stocks for date {root_date.date()} (cache size: {len(self._historical_data_cache)})...")
         
+        # If today's data is requested, clear small parts of the cache to ensure we get fresh price data
+        if root_date.date() == datetime.now().date():
+            with self._cache_lock:
+                # Clear entries that might be stale for today
+                keys_to_del = [k for k in self._historical_data_cache.keys() if str(root_date.date()) in k]
+                for k in keys_to_del:
+                    del self._historical_data_cache[k]
+        
         signals: List[Dict] = []
         cross_above: List[Dict] = []
         cross_below: List[Dict] = []
@@ -1427,6 +1500,7 @@ class CPRFilterService:
         drsi_bearish: List[Dict] = []
         drsi_reversal_bullish: List[Dict] = []
         drsi_reversal_bearish: List[Dict] = []
+        stock_metadata: Dict[str, Dict] = {} # Collection for IV calc
         processed = 0
         failed = 0
         start_time = time.time()
@@ -1442,44 +1516,53 @@ class CPRFilterService:
                 try:
                     result = future.result(timeout=25)  # 25 second timeout per stock
                     if result:
-                        if result.get('signal'):
-                            signals.append(result['signal'])
-                        cross = result.get('weekly_cross')
+                        # Collect metadata for IV phase to avoid redundant quote calls
+                        stock_metadata[result['symbol']] = {
+                            'current_price': result['current_price'],
+                            'volume': result['volume'],
+                            'day_change_pct': result.get('day_change_pct', 0.0)
+                        }
+                        
+                        payloads = result.get('payloads', {})
+                        if payloads.get('signal'):
+                            signals.append(payloads['signal'])
+                        
+                        cross = payloads.get('weekly_cross')
                         if cross and cross.get('payload'):
                             if cross.get('status') == self.CROSS_ABOVE_WEEKLY:
                                 cross_above.append(cross['payload'])
                             elif cross.get('status') == self.CROSS_BELOW_WEEKLY:
                                 cross_below.append(cross['payload'])
                         
-                        if result.get('bullish_reversal'):
-                            bullish_reversal.append(result['bullish_reversal'])
+                        if payloads.get('bullish_reversal'):
+                            bullish_reversal.append(payloads['bullish_reversal'])
                         
-                        if result.get('bearish_reversal'):
-                            bearish_reversal.append(result['bearish_reversal'])
+                        if payloads.get('bearish_reversal'):
+                            bearish_reversal.append(payloads['bearish_reversal'])
                         
-                        if result.get('cpr_touch_above'):
-                            cpr_touch_above.append(result['cpr_touch_above'])
+                        if payloads.get('cpr_touch_above'):
+                            cpr_touch_above.append(payloads['cpr_touch_above'])
                         
-                        if result.get('cpr_touch_below'):
-                            cpr_touch_below.append(result['cpr_touch_below'])
+                        if payloads.get('cpr_touch_below'):
+                            cpr_touch_below.append(payloads['cpr_touch_below'])
                             
-                        if result.get('drsi_bullish'):
-                            drsi_bullish.append(result['drsi_bullish'])
+                        if payloads.get('drsi_bullish'):
+                            drsi_bullish.append(payloads['drsi_bullish'])
                             
-                        if result.get('drsi_bearish'):
-                            drsi_bearish.append(result['drsi_bearish'])
+                        if payloads.get('drsi_bearish'):
+                            drsi_bearish.append(payloads['drsi_bearish'])
                             
-                        if result.get('drsi_reversal_bullish'):
-                            drsi_reversal_bullish.append(result['drsi_reversal_bullish'])
+                        if payloads.get('drsi_reversal_bullish'):
+                            drsi_reversal_bullish.append(payloads['drsi_reversal_bullish'])
                             
-                        if result.get('drsi_reversal_bearish'):
-                            drsi_reversal_bearish.append(result['drsi_reversal_bearish'])
+                        if payloads.get('drsi_reversal_bearish'):
+                            drsi_reversal_bearish.append(payloads['drsi_reversal_bearish'])
                     processed += 1
                     if processed % 10 == 0:
                         elapsed = time.time() - start_time
                         logger.info(f"CPR Progress: {processed}/{len(stocks)} ({failed} failed) in {elapsed:.1f}s")
                 except Exception as e:
-                    logger.debug(f"Stock {symbol} failed: {e}")
+                    logger.error(f"Stock {symbol} failed: {e}")
                     failed += 1
                     processed += 1
         
@@ -1487,7 +1570,8 @@ class CPRFilterService:
         logger.info(f"CPR phase complete in {cpr_time:.1f}s. Starting IV percentile computation...")
         
         # Phase 2: IV Percentile computation (batch-optimized, separate from CPR)
-        high_iv_stocks = self._batch_compute_iv_percentiles(stocks)
+        # Pass the pre-collected metadata to avoid 180+ extra quote calls
+        high_iv_stocks = self._batch_compute_iv_percentiles(stocks, stock_metadata=stock_metadata)
         
         total_time = time.time() - start_time
         logger.info(
