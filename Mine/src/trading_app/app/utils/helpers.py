@@ -9,7 +9,7 @@ from typing import Tuple
 MARKET_OPEN_HOUR = 9
 MARKET_OPEN_MINUTE = 15
 MARKET_CLOSE_HOUR = 15
-MARKET_CLOSE_MINUTE = 0
+MARKET_CLOSE_MINUTE = 30
 
 # Indices
 INDICES = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
@@ -30,11 +30,16 @@ BANKNIFTY_STRIKE_OFFSET = 100
 NIFTY_FINNIFTY_STRIKE_STEP = 150
 
 def is_market_hours() -> bool:
-    """Check if current time is within market hours."""
-    now = datetime.now().time()
-    market_open = datetime.min.time().replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE)
-    market_close = datetime.min.time().replace(hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MINUTE)
+    """Check if current time is within market hours (9:15 AM - 3:30 PM)."""
+    now = datetime.now()
+    market_open = now.replace(hour=MARKET_OPEN_HOUR, minute=MARKET_OPEN_MINUTE, second=0, microsecond=0)
+    market_close = now.replace(hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MINUTE, second=0, microsecond=0)
     return market_open <= now < market_close
+
+def is_trading_day() -> bool:
+    """Check if today is a trading day (Monday-Friday)."""
+    # 0 is Monday, 4 is Friday, 5 is Saturday, 6 is Sunday
+    return datetime.now().weekday() < 5
 
 def extract_symbol_from_tradingsymbol(trading_symbol: str) -> str:
     """Extract base symbol from trading symbol."""

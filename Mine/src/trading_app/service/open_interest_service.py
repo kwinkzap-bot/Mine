@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from kiteconnect import KiteConnect
 from kiteconnect.exceptions import NetworkException, TokenException
 from trading_app.app.utils.opening_oi_cache import get_opening_oi_cache
+from trading_app.service.greeks_calculator import GreeksCalculator
 from trading_app.service.kite_order_services import get_global_rate_limiter
 import sqlite3
 import json
@@ -251,8 +252,8 @@ def _calculate_iv_from_price(S: float, K: float, T: float, r: float, market_pric
     try:
         # Newton-Raphson method to find IV
         sigma = 0.5  # Initial guess: 50% volatility
-        max_iterations = 100
-        tolerance = 1e-6
+        max_iterations = 30 # Reduced from 100 for speed (converges quickly)
+        tolerance = 1e-4 # Slightly reduced tolerance for speed
         
         for i in range(max_iterations):
             # Calculate option price and vega at current sigma
@@ -303,6 +304,8 @@ class OpenInterestService:
             'current': None,
             'history': []  # Store list of daily closes for frequency calculation
         }
+        
+        self.greeks_calculator = GreeksCalculator()
         
         # Symbol configuration
         # Detect if provider is Fyers adapter (vs KiteConnect)
@@ -404,6 +407,7 @@ class OpenInterestService:
                         total_pe_change INTEGER,
                         max_pain REAL,
                         iv_percentile REAL,
+                        atm_iv REAL,  -- Added for crush detection
                         active_strikes TEXT  -- JSON string of top active strikes
                     )
                 ''')
@@ -413,6 +417,13 @@ class OpenInterestService:
                 
                 conn.commit()
                 
+                # Migration: Add atm_iv column if it doesn't exist
+                try:
+                    cursor.execute("ALTER TABLE oi_history ADD COLUMN atm_iv REAL")
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    pass # Column already exists
+                    
                 # Create ATM IV history table for Kite-accurate IV percentile
                 # Stores daily ATM IV per symbol for 250-day lookback ranking
                 cursor.execute('''
@@ -529,6 +540,75 @@ class OpenInterestService:
             logger.error(f"Error seeding ATM IV history for {symbol}: {e}")
             return False
 
+    def _get_avg_historical_iv(self, symbol: str) -> float:
+        """
+        Get the average ATM IV over the last 90 days from history.
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                row = conn.execute(
+                    '''SELECT AVG(atm_iv) FROM atm_iv_history 
+                       WHERE symbol = ? 
+                       ORDER BY date DESC 
+                       LIMIT 90''',
+                    (symbol,)
+                ).fetchone()
+                
+            if row and row[0]:
+                return float(row[0])
+            
+            # Fallback if no history
+            vix_data = self._get_india_vix_data()
+            if vix_data and vix_data.get('current'):
+                # Very rough approximation of "normal" IV
+                return vix_data['current'] / 100.0 * 0.7 
+                
+            return 0.15 # 15% default
+        except Exception as e:
+            logger.error(f"Error getting average historical IV: {e}")
+            return 0.15
+
+    def _detect_iv_crush(self, symbol: str, current_atm_iv: float) -> bool:
+        """
+        Detect if an IV Crush is happening by comparing current IV with recent history (last 15 mins).
+        """
+        try:
+            if current_atm_iv <= 0:
+                return False
+
+            with sqlite3.connect(self.db_path) as conn:
+                # Get last 5 snapshots (approx 15 mins if polling every 3 mins)
+                rows = conn.execute(
+                    '''SELECT atm_iv FROM oi_history 
+                       WHERE symbol = ? AND atm_iv IS NOT NULL
+                       ORDER BY timestamp DESC 
+                       LIMIT 5''',
+                    (symbol,)
+                ).fetchall()
+            
+            if not rows or len(rows) < 3:
+                return False
+            
+            # Filter out current and calculate average of past
+            past_ivs = [r[0] for r in rows if r[0] > 0]
+            if not past_ivs:
+                return False
+            
+            avg_past_iv = sum(past_ivs) / len(past_ivs)
+            
+            # If current IV is 15% lower than average of last 15 mins
+            # e.g., IV was 20%, now it's 16.5% -> (16.5 - 20)/20 = -0.175 (Crush!)
+            change = (current_atm_iv - avg_past_iv) / avg_past_iv
+            
+            if change <= -0.12: # 12% drop threshold
+                logger.warning(f"⚠️ IV CRUSH DETECTED for {symbol}: Current={current_atm_iv:.2%}, Avg={avg_past_iv:.2%}, Change={change:.2%}")
+                return True
+                
+            return False
+        except Exception as e:
+            logger.error(f"Error detecting IV crush for {symbol}: {e}")
+            return False
+
     def save_oi_snapshot(self, symbol: str, data: Dict[str, Any]):
         """
         Save a snapshot of the current OI data to the database.
@@ -553,6 +633,7 @@ class OpenInterestService:
             
             max_pain = data.get('max_pain', 0)
             iv_percentile = data.get('iv_percentile', 0)
+            atm_iv = data.get('atm_iv', 0)
             
             # Extract top active strikes (e.g., closest 10 strikes to ATM)
             strikes = data.get('strikes', [])
@@ -569,7 +650,8 @@ class OpenInterestService:
                     'ce_change': s.get('ce_change_in_oi'),
                     'pe_change': s.get('pe_change_in_oi'),
                     'ce_iv': s.get('ce_iv'),
-                    'pe_iv': s.get('pe_iv')
+                    'pe_iv': s.get('pe_iv'),
+                    'expiry': s.get('expiry_date').isoformat() if hasattr(s.get('expiry_date'), 'isoformat') else s.get('expiry_date')
                 })
             
             active_strikes_json = json.dumps(simple_strikes)
@@ -579,10 +661,10 @@ class OpenInterestService:
                 cursor.execute('''
                     INSERT INTO oi_history 
                     (timestamp, symbol, current_price, total_ce_oi, total_pe_oi, pcr, 
-                     total_ce_change, total_pe_change, max_pain, iv_percentile, active_strikes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     total_ce_change, total_pe_change, max_pain, iv_percentile, atm_iv, active_strikes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (timestamp, symbol, current_price, total_ce_oi, total_pe_oi, pcr,
-                      total_ce_change, total_pe_change, max_pain, iv_percentile, active_strikes_json))
+                      total_ce_change, total_pe_change, max_pain, iv_percentile, atm_iv, active_strikes_json))
                 conn.commit()
                 # logger.info(f"Saved OI snapshot for {symbol} at {timestamp}")
                 
@@ -646,6 +728,7 @@ class OpenInterestService:
                                 'pe_change_in_oi': s.get('pe_change'),
                                 'ce_iv': s.get('ce_iv'),
                                 'pe_iv': s.get('pe_iv'),
+                                'expiry_date': s.get('expiry'),
                                 'ce_token': None, # Tokens not stored in DB, not needed for visualization
                                 'pe_token': None
                             })
@@ -662,12 +745,13 @@ class OpenInterestService:
                     'pcr_oi': record.get('pcr'),
                     'max_pain': record.get('max_pain'),
                     'iv_percentile': record.get('iv_percentile'),
+                    'atm_iv': record.get('atm_iv'),
                     'strikes': active_strikes,
                     'ce_summary': {
                         'total_oi': record.get('total_ce_oi'),
                         'change_in_oi': record.get('total_ce_change'),
-                        'max_oi_strike': 0, # Not currently stored explicitly, frontend might need this?
-                        'max_oi_value': 0   # Frontend calculates if missing? checking js...
+                        'max_oi_strike': 0,
+                        'max_oi_value': 0
                     },
                     'pe_summary': {
                         'total_oi': record.get('total_pe_oi'),
@@ -678,6 +762,27 @@ class OpenInterestService:
                     'source': 'DATABASE'
                 }
                 
+                # ENRICH with Theoretical Prices
+                try:
+                    atm_iv = record.get('atm_iv', 0)
+                    avg_iv = self._get_avg_historical_iv(symbol)
+                    current_price = record.get('current_price', 0)
+                    
+                    # Find first strike with an expiry date to use as reference
+                    ref_expiry = next((s.get('expiry_date') for s in active_strikes if s.get('expiry_date')), None)
+                    
+                    if ref_expiry and current_price > 0:
+                        for s in active_strikes:
+                            # Use the strike's own expiry if available, else reference
+                            expiry = s.get('expiry_date') or ref_expiry
+                            
+                            s['ce_theory'] = self.greeks_calculator.calculate_theoretical_price('CE', current_price, s['strike'], expiry, avg_iv)
+                            s['pe_theory'] = self.greeks_calculator.calculate_theoretical_price('PE', current_price, s['strike'], expiry, avg_iv)
+                            s['ce_fair'] = self.greeks_calculator.calculate_theoretical_price('CE', current_price, s['strike'], expiry, atm_iv)
+                            s['pe_fair'] = self.greeks_calculator.calculate_theoretical_price('PE', current_price, s['strike'], expiry, atm_iv)
+                except Exception as enrich_e:
+                    logger.error(f"Failed to enrich DB data with theoretical prices: {enrich_e}")
+
                 # Enriched summaries - calculate max OI strike from loaded strikes
                 # This ensures frontend "Max OI Strike" display works correcty
                 if active_strikes:
@@ -833,7 +938,8 @@ class OpenInterestService:
                                     'expiry':           expiry_dt,
                                     # Include OI fields if present in native chain to avoid extra quote calls
                                     'oi':               opt.get('oi', opt.get('open_interest', 0)),
-                                    'oi_change':        opt.get('oich', opt.get('oi_change', 0))
+                                    'oi_change':        opt.get('oich', opt.get('oi_change', 0)),
+                                    'last_price':       opt.get('ltp', opt.get('last_price', opt.get('lp', 0)))
                                 })
                             
                             # Populate fast token cache for chart resolution
@@ -899,7 +1005,28 @@ class OpenInterestService:
             # Calculate PCR (Put-Call Ratio), Max Pain, and IV Percentile
             pcr_oi = self._calculate_pcr(oi_data['strikes'])
             max_pain = self._calculate_max_pain(oi_data['strikes'], current_price)
-            iv_percentile = self._calculate_iv_percentile(oi_data['strikes'], current_price, symbol)
+            
+            # IV Metrics
+            iv_metrics = self._calculate_iv_percentile(oi_data['strikes'], current_price, symbol)
+            iv_percentile = iv_metrics['percentile']
+            atm_iv = iv_metrics['atm_iv']
+            
+            # Detect IV Crush
+            iv_crush_alert = self._detect_iv_crush(symbol, atm_iv)
+            
+            # Theoretical Prices based on historical average IV
+            avg_iv = self._get_avg_historical_iv(symbol)
+            expiry_date = oi_data['strikes'][0].get('expiry_date') if oi_data['strikes'] else None
+            
+            if expiry_date:
+                for s in oi_data['strikes']:
+                    # Fair value if IV was at historical average
+                    s['ce_theory'] = self.greeks_calculator.calculate_theoretical_price('CE', current_price, s['strike'], expiry_date, avg_iv)
+                    s['pe_theory'] = self.greeks_calculator.calculate_theoretical_price('PE', current_price, s['strike'], expiry_date, avg_iv)
+                    
+                    # Also include current theoretical price based on current ATM IV for comparison
+                    s['ce_fair'] = self.greeks_calculator.calculate_theoretical_price('CE', current_price, s['strike'], expiry_date, atm_iv)
+                    s['pe_fair'] = self.greeks_calculator.calculate_theoretical_price('PE', current_price, s['strike'], expiry_date, atm_iv)
             
             return {
                 'success': True,
@@ -911,7 +1038,10 @@ class OpenInterestService:
                 'pe_summary': oi_data['pe_summary'],
                 'pcr_oi': pcr_oi,
                 'max_pain': max_pain,
-                'iv_percentile': iv_percentile
+                'iv_percentile': iv_percentile,
+                'atm_iv': atm_iv,
+                'avg_iv': avg_iv,
+                'iv_crush_alert': iv_crush_alert
             }
             
         except Exception as e:
@@ -941,13 +1071,13 @@ class OpenInterestService:
             logger.info(f"[DEBUG] Total instruments in NFO: {len(instruments)}")
             # Force refresh instruments if empty or stale
             if not instruments:
-                logger.info("[DEBUG] detailed_instruments is empty, refetching from kite...")
+                logger.info(f"[DEBUG] detailed_instruments is empty, refetching from kite for {exchange}...")
                 try:
-                    instruments = self.kite.instruments('NFO')
-                    # Update local cache if possible, or just use it here
+                    # Use the correct exchange (BFO for Sensex, NFO for others)
+                    instruments = self.kite.instruments(exchange)
                 except Exception as e:
                     logger.error(f"Error fetching instruments in _get_available_strikes: {e}")
-                    return []  # type: ignore[return-value]
+                    return []
             
             # Log sample instruments to see structure
             # Normalize proper_name
@@ -969,7 +1099,9 @@ class OpenInterestService:
                     inst_ts_norm   = inst_ts.strip().upper()
 
                     # Primary match: name == 'NIFTY' (Kite format / correct Fyers parse)
-                    name_match = (inst_name_norm == proper_name_target)
+                    # For SENSEX, also try BSESENSEX which is common in some master formats
+                    name_match = (inst_name_norm == proper_name_target) or \
+                                 (proper_name_target == 'SENSEX' and inst_name_norm == 'BSESENSEX')
 
                     # Fallback match: tradingsymbol starts with 'NIFTY' + digit
                     # e.g. 'NIFTY26APR2424200CE'.startswith('NIFTY') — covers Fyers CSV column shifts
@@ -1060,10 +1192,12 @@ class OpenInterestService:
                         strikes_dict[strike]['ce_token'] = token
                         strikes_dict[strike]['ce_oi'] = inst.get('oi', 0)
                         strikes_dict[strike]['ce_oi_change'] = inst.get('oi_change', 0)
+                        strikes_dict[strike]['ce_ltp'] = inst.get('last_price', 0)
                     elif option_type == 'PE':
                         strikes_dict[strike]['pe_token'] = token
                         strikes_dict[strike]['pe_oi'] = inst.get('oi', 0)
                         strikes_dict[strike]['pe_oi_change'] = inst.get('oi_change', 0)
+                        strikes_dict[strike]['pe_ltp'] = inst.get('last_price', 0)
                 except (KeyError, ValueError, TypeError) as e:
                     logger.debug(f"Skipping instrument: {e}")
                     continue
@@ -1102,51 +1236,57 @@ class OpenInterestService:
             
             # Collect all tokens to fetch as strings (kite.quote expects string tokens)
             all_tokens = []
+            all_quotes = {}
             token_to_strike_info = {}  # Map string token to strike info for later lookup
             
             for strike_info in strikes_data:
-                ce_token = strike_info['ce_token']
-                pe_token = strike_info['pe_token']
+                ce_token = strike_info.get('ce_token')
+                pe_token = strike_info.get('pe_token')
                 
-                if ce_token:
+                # OPTIMIZATION: Only fetch quote if we don't have OI/LTP from native API
+                needs_ce = ce_token and (strike_info.get('ce_oi') is None or strike_info.get('ce_ltp') is None)
+                needs_pe = pe_token and (strike_info.get('pe_oi') is None or strike_info.get('pe_ltp') is None)
+
+                if needs_ce:
                     ce_token_str = str(ce_token)
                     all_tokens.append(ce_token_str)
                     token_to_strike_info[ce_token_str] = (strike_info, 'CE')
-                if pe_token:
+                if needs_pe:
                     pe_token_str = str(pe_token)
                     all_tokens.append(pe_token_str)
                     token_to_strike_info[pe_token_str] = (strike_info, 'PE')
             
-            logger.info(f"Fetching quotes for {len(all_tokens)} tokens...")
+            if all_tokens:
+                logger.info(f"Fetching quotes for {len(all_tokens)} missing tokens...")
+                
+                # Fetch quotes in batches - use Fyers max limit (50) for speed
+                is_fyers = self._is_fyers
+                batch_size = 50 if is_fyers else 25
+                batch_delay = 0.2 if is_fyers else 0.5
+                
+                for i in range(0, len(all_tokens), batch_size):
+                    batch = all_tokens[i:i + batch_size]
+                    try:
+                        quotes = self.kite.quote(batch)  # Standard quote includes OI fields
+                        if quotes:
+                            all_quotes.update(quotes)
+                        
+                        if i + batch_size < len(all_tokens):
+                            time.sleep(batch_delay)
+                    except Exception as e:
+                        logger.error(f"Error fetching batch {i//batch_size + 1}: {e}", exc_info=True)
+                        continue
+                logger.info(f"Total quotes fetched: {len(all_quotes)}")
+            else:
+                logger.info("✓ All OI/LTP data pre-fetched via Native Chain API. Skipping batch quotes.")
             
-            if not all_tokens:
-                logger.warning("No tokens to fetch")
+            if not strikes_data:
+                logger.warning("No strikes data to process")
                 return {
                     'strikes': [],
                     'ce_summary': {},
                     'pe_summary': {}
                 }
-            
-            # Fetch quotes in batches - use Fyers max limit (50) for speed
-            is_fyers = self._is_fyers
-            batch_size = 50 if is_fyers else 25
-            batch_delay = 0.2 if is_fyers else 0.5
-            
-            all_quotes = {}
-            
-            for i in range(0, len(all_tokens), batch_size):
-                batch = all_tokens[i:i + batch_size]
-                try:
-                    quotes = self.kite.quote(batch)  # Standard quote includes OI fields
-                    if quotes:
-                        all_quotes.update(quotes)
-                    
-                    if i + batch_size < len(all_tokens):
-                        time.sleep(batch_delay)
-                except Exception as e:
-                    logger.error(f"Error fetching batch {i//batch_size + 1}: {e}", exc_info=True)
-                    continue
-            logger.info(f"Total quotes fetched: {len(all_quotes)}")
             
             # Log sample quote to see structure and available OI fields
             if all_quotes:
@@ -1182,7 +1322,8 @@ class OpenInterestService:
                     'ce_iv': 0,
                     'pe_oi': pre_pe_oi if pre_pe_oi is not None else 0,
                     'pe_change_in_oi': pre_pe_oich if pre_pe_oich is not None else 0,
-                    'pe_iv': 0
+                    'pe_iv': 0,
+                    'expiry_date': strike_info.get('expiry')
                 }
                 
                 # Get CE data - use string token as key
@@ -1211,10 +1352,11 @@ class OpenInterestService:
                                 
                                 # Get opening OI value - try multiple sources
                                 # IMPORTANT: opening_oi should be the OI at market open (9:15 AM)
-                                oi_day_low = ce_quote.get('oi_day_low', 0) or 0
+                                oi_day_low = ce_quote.get('oi_day_low', 0) if ce_quote else 0
                                 oi_day_low = int(oi_day_low) if oi_day_low else 0
                                 
-                                # Check if adapter natively populated change in OI
+                                # Use ltp from quote or pre-fetched
+                                last_price = ce_quote.get('last_price', 0) if ce_quote else strike_info.get('ce_ltp', 0)
                                 native_oich = ce_quote.get('change_in_oi')
                                 
                                 opening_oi = None
@@ -1290,11 +1432,12 @@ class OpenInterestService:
                                 
                                 # Get opening OI value - try multiple sources
                                 # IMPORTANT: opening_oi should be the OI at market open (9:15 AM)
-                                oi_day_low = pe_quote.get('oi_day_low', 0) or 0
+                                oi_day_low = pe_quote.get('oi_day_low', 0) if pe_quote else 0
                                 oi_day_low = int(oi_day_low) if oi_day_low else 0
                                 
-                                # Check if adapter natively populated change in OI
-                                native_oich = pe_quote.get('change_in_oi')
+                                # Use ltp from quote or pre-fetched
+                                last_price = pe_quote.get('last_price', 0) if pe_quote else strike_info.get('pe_ltp', 0)
+                                native_oich = pe_quote.get('change_in_oi') if pe_quote else None
                                 
                                 opening_oi = None
                                 source = "unknown"
@@ -1630,25 +1773,12 @@ class OpenInterestService:
             logger.error(f"Error getting India VIX data: {e}")
             return {}  # type: ignore[return-value]
 
-    def _calculate_iv_percentile(self, strikes: List[Dict[str, Any]], current_price: float, symbol: str = 'NIFTY') -> float:
+    def _calculate_iv_percentile(self, strikes: List[Dict[str, Any]], current_price: float, symbol: str = 'NIFTY') -> Dict[str, Any]:
         """
-        Calculate IV Percentile.
-        
-        Methodology:
-        - NIFTY: Uses INDIA VIX Frequency Percentile (Standard).
-          (Count of days where History VIX < Current VIX) / Total Days * 100
-        
-        - BANKNIFTY / FINNIFTY: Uses INDIA VIX Rank (Snapshot Range) as a proxy.
-          (Current VIX - 52W Low) / (52W High - 52W Low) * 100
-          
-        Reasoning:
-        - NIFTY is directly correlated with INDIA VIX.
-        - Users report BANKNIFTY IVP is typically lower ("Medium" vs "High") on broker terminals.
-        - The "Rank" method typically yields lower values (e.g., 30-40%) vs Frequency (50-60%) for the same VIX.
-        - This hybrid approach matches the user's observation/broker data.
+        Calculate IV Percentile and return both percentile and ATM IV.
         
         Returns:
-            IV Percentile value (0-100)
+            Dict with 'percentile' (0-100) and 'atm_iv' (float decimal)
         """
         try:
             # 1. Calculate ATM IV first (needed for both Fallback and Hybrid logic)
@@ -1732,16 +1862,16 @@ class OpenInterestService:
                     factor = CALIBRATION.get(symbol, 0.689)
                     calibrated = frequency_percentile * factor
                     logger.info(f"{symbol} IV Percentile (VIX Freq × {factor}): {calibrated:.2f}%")
-                    return max(0.0, min(calibrated, 100.0))
+                    return {'percentile': max(0.0, min(calibrated, 100.0)), 'atm_iv': atm_iv}
                 else:
                     # Stocks: Hybrid (ATM IV vs own 1-year realized vol history)
                     if atm_iv > 0:
                         hv_percentile = self._calculate_hybrid_iv_percentile(symbol, atm_iv)
                         if hv_percentile is not None:
                             logger.info(f"{symbol} IV Percentile (Hybrid): {hv_percentile:.2f}%")
-                            return hv_percentile
+                            return {'percentile': hv_percentile, 'atm_iv': atm_iv}
                     # Fallback to VIX freq for stocks
-                    return max(0.0, min(frequency_percentile, 100.0))
+                    return {'percentile': max(0.0, min(frequency_percentile, 100.0)), 'atm_iv': atm_iv}
             
             # Fallback...
             
@@ -1758,20 +1888,20 @@ class OpenInterestService:
             logger.warning("VIX data unavailable, falling back to snapshot IV Percentile")
             
             if not strikes or not all_ivs:
-                return 50.0
+                return {'percentile': 50.0, 'atm_iv': atm_iv}
 
             min_iv = min(all_ivs)
             max_iv = max(all_ivs)
             
             if max_iv == min_iv:
-                return 50.0
+                return {'percentile': 50.0, 'atm_iv': atm_iv}
                 
             percentile = ((atm_iv - min_iv) / (max_iv - min_iv)) * 100
-            return max(0.0, min(percentile, 100.0))
+            return {'percentile': max(0.0, min(percentile, 100.0)), 'atm_iv': atm_iv}
 
         except Exception as e:
             logger.error(f"Error calculating IV Percentile: {e}")
-            return 50.0
+            return {'percentile': 50.0, 'atm_iv': 0.0}
 
     def _calculate_hybrid_iv_percentile(self, symbol: str, current_atm_iv: float) -> Optional[float]:
         """

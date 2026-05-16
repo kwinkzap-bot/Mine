@@ -38,6 +38,7 @@
                         </div>
                         <span class="oip-label">TF</span>
                         <select id="oipInterval" class="oip-select oip-select--xs">
+                            <option value="30second">30s</option>
                             <option value="minute" selected>1m</option>
                             <option value="2minute">2m</option>
                             <option value="3minute">3m</option>
@@ -60,6 +61,9 @@
                         </label>
                         <label class="oip-checkbox" title="Future CPR">
                             <input type="checkbox" id="oipShowFutureCpr"><span>FCPR</span>
+                        </label>
+                        <label class="oip-checkbox" title="Entry Signals">
+                            <input type="checkbox" id="oipShowSignals" checked><span>Signals</span>
                         </label>
                     </div>
 
@@ -108,14 +112,6 @@
                     <span id="hdrPrice" class="oip-hdr-val">--</span>
                 </div>
                 <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">Res</span>
-                    <span id="hdrRes" class="oip-hdr-val red">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">Supp</span>
-                    <span id="hdrSupp" class="oip-hdr-val grn">--</span>
-                </div>
-                <div class="oip-hdr-metric">
                     <span class="oip-hdr-lbl">CE OI</span>
                     <span id="hdrCeOI" class="oip-hdr-val red">--</span>
                 </div>
@@ -136,21 +132,41 @@
                     <span id="hdrAtm" class="oip-hdr-val">--</span>
                 </div>
                 <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">MaxPain</span>
-                    <span id="hdrMaxPain" class="oip-hdr-val blu">--</span>
-                </div>
-                <div class="oip-hdr-metric">
                     <span class="oip-hdr-lbl">PCR</span>
                     <span id="hdrPcr" class="oip-hdr-val">--</span>
+                </div>
+                <div class="oip-hdr-metric">
+                    <span class="oip-hdr-lbl">Lot</span>
+                    <span id="hdrLotSize" class="oip-hdr-val">--</span>
                 </div>
                 <div class="oip-hdr-metric">
                     <span class="oip-hdr-lbl">Trend</span>
                     <span id="hdrTrend" class="oip-hdr-val">--</span>
                 </div>
+                <div class="oip-hdr-metric oip-ivp-metric" title="IV Percentile: High values mean expensive premiums">
+                    <span class="oip-hdr-lbl">IVP</span>
+                    <div class="oip-ivp-container">
+                        <span id="hdrIVP" class="oip-hdr-val">--</span>
+                        <div class="oip-ivp-gauge-bg">
+                            <div id="ivpGaugeBar" class="oip-ivp-gauge-bar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- IV Crush Alert Banner (Hidden by default) -->
+            <div id="ivCrushAlert" class="oip-alert-banner hidden">
+                <div class="oip-alert-content">
+                    <span class="oip-alert-icon">⚠️</span>
+                    <span class="oip-alert-msg">IV CRUSH DETECTED! Premiums dropping rapidly.</span>
+                </div>
             </div>
         </div>
 
         <div class="oip-chart-wrap" id="oipChartWrap">
+
+
+
             <div id="oipCandleChart"></div>
             <canvas id="oipOICanvas"></canvas>
             <div id="oipTooltip" class="oip-tooltip hidden"></div>
@@ -245,12 +261,50 @@
         </div>
 
         <div class="oip-chart-wrap" id="oipIntrinsicChartWrap">
-            <div id="oipIntrinsicLegend" class="oip-chart-legend">
-                <div id="oipLegendCE" class="legend-item ce">CE: --</div>
-                <div id="oipLegendPE" class="legend-item pe">PE: --</div>
+            <div class="oip-chart-legend">
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
+                        id="oipLegendCE">--</span></div>
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
+                        id="oipLegendPE">--</span></div>
             </div>
             <div id="oipIntrinsicChart"></div>
         </div>
+
+        <div class="oip-charts-row">
+            <!-- CE Individual Chart -->
+            <div class="oip-chart-wrap" id="oipCEChartWrap">
+                <div class="oip-chart-legend">
+                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE
+                        ONLY: <span id="oipLegendCEOnly">--</span></div>
+                </div>
+                <div id="oipCEChart"></div>
+            </div>
+
+            <!-- PE Individual Chart -->
+            <div class="oip-chart-wrap" id="oipPEChartWrap">
+                <div class="oip-chart-legend">
+                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE
+                        ONLY: <span id="oipLegendPEOnly">--</span></div>
+                </div>
+                <div id="oipPEChart"></div>
+            </div>
+        </div>
+
+        <!-- NEW: Combined Premium Chart (Straddle/Strangle Tracker) -->
+        <div class="oip-chart-wrap" id="oipCombinedChartWrap"
+            style="margin-top: 10px; border-top: 1px dashed #cbd5e1; padding-top: 5px;">
+            <div class="oip-chart-legend">
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #6366f1;"></span> COMBINED:
+                    <span id="oipCombinedStrikeDisplay">--</span>
+                </div>
+
+                <div class="oip-legend-item" style="margin-left: auto; color: #0f172a; font-weight: 800;">
+                    <span id="oipLegendSum">SUM: --</span>
+                </div>
+            </div>
+            <div id="oipCombinedChart"></div>
+        </div>
+
     </div>
 </div>
 </div>
@@ -258,4 +312,5 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/oi_profile.js') }}?v=2.9"></script>
+<script src="{{ url_for('static', filename='js/oi_profile_init.js') }}?v=1.0"></script>
 {% endblock %}

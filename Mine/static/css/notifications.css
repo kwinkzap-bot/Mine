@@ -24,10 +24,11 @@
     transform: translateY(-20px);
     animation: toastIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards, toastOut 0.4s 4.5s forwards;
     pointer-events: auto;
-    text-align: center;
+    text-align: left;
     min-width: 280px;
     border: 1px solid rgba(255,255,255,0.1);
     backdrop-filter: blur(8px);
+    white-space: pre-wrap;
 }
 
 .notification.info { background-color: rgba(33, 150, 243, 0.95); }

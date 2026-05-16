@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Multi-TF Charts{% endblock %}
+
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/chart.css') }}">
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v=2.3"></script>
+{% endblock %}
+
+{% block content %}
+<div class="chart-page">
+    <div class="chart-header">
+        <div class="chart-toolbar">
+            <!-- Symbol Selection -->
+            <div class="chart-control-group">
+                <span class="chart-label">Symbol</span>
+                <div class="search-container">
+                    <input type="text" id="symbolSelect" class="chart-input chart-input--sym" placeholder="NIFTY" value="NIFTY" autocomplete="off">
+                    <ul id="symbolDropdownList" class="custom-dropdown-list hidden"></ul>
+                </div>
+            </div>
+
+            <div class="chart-sep"></div>
+
+            <!-- Global Indicator Toggles -->
+            <div class="chart-control-group">
+                <label class="chart-checkbox"><input type="checkbox" id="showCpr" checked><span>CPR</span></label>
+            </div>
+
+            <div class="chart-sep"></div>
+
+            <!-- EMA group -->
+            <div class="chart-control-group">
+                <span class="chart-label">EMA</span>
+                <label class="chart-ema-chk"><input type="checkbox" id="showEma9" checked><span>9</span></label>
+                <label class="chart-ema-chk"><input type="checkbox" id="showEma20" checked><span>20</span></label>
+                <label class="chart-ema-chk"><input type="checkbox" id="showEma50" checked><span>50</span></label>
+                <label class="chart-ema-chk"><input type="checkbox" id="showEma200" checked><span>200</span></label>
+            </div>
+
+            <div class="chart-sep"></div>
+
+            <button id="refreshAll" class="chart-btn">Refresh All</button>
+        </div>
+    </div>
+
+    <div class="chart-grid" id="chartGrid">
+        <!-- Charts will be injected here -->
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/chart_page.js') }}"></script>
+{% endblock %}

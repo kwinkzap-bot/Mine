@@ -106,7 +106,7 @@ class KiteService:
         
         # Determine provider type for cache partitioning
         p_type = 'fyers' if 'Fyers' in self.kite.__class__.__name__ else 'kite'
-        cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', f'{p_type}_instruments_v2.pkl')
+        cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', f'{p_type}_instruments_v3.pkl')
         os.makedirs(os.path.dirname(cache_file), exist_ok=True)
         
         with _global_instruments_cache['lock']:
@@ -146,11 +146,14 @@ class KiteService:
         """Fetch and prune instruments for memory efficiency (~70% reduction)."""
         global _global_instruments_cache
         today = date.today()
-        cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', f'{p_type}_instruments_v2.pkl')
+        cache_file = os.path.join(os.path.dirname(__file__), '..', '.cache', f'{p_type}_instruments_v3.pkl')
         try:
             logging.info("[KiteService] Fetching instruments (NSE+NFO)...")
             nse_raw = self.kite.instruments('NSE') or []
             nfo_raw = self.kite.instruments('NFO') or []
+            bse_raw = self.kite.instruments('BSE') or []
+            bfo_raw = self.kite.instruments('BFO') or []
+            logging.info(f"[KiteService] Fetched: NSE({len(nse_raw)}), NFO({len(nfo_raw)}), BSE({len(bse_raw)}), BFO({len(bfo_raw)})")
             
             self._instrument_tokens_by_symbol = {}
             self._instrument_tokens_by_name = {}
@@ -175,10 +178,28 @@ class KiteService:
                         'lot_size': i.get('lot_size')
                     })
             
+            # Process BSE Cash
+            for i in bse_raw:
+                s, n, t = i.get('tradingsymbol'), i.get('name'), i.get('instrument_token')
+                if s and t: self._instrument_tokens_by_symbol[s] = t
+                if n and t: self._instrument_tokens_by_name[n.lower()] = t
+
+            # Process BSE Options (BFO)
+            for i in bfo_raw:
+                s, n, t = i.get('tradingsymbol'), i.get('name'), i.get('instrument_token')
+                if s and t: self._instrument_tokens_by_symbol[s] = t
+                if n:
+                    nl = n.lower()
+                    if nl not in self._nfo_by_name: self._nfo_by_name[nl] = []
+                    self._nfo_by_name[nl].append({
+                        'tradingsymbol': s, 'name': n, 'instrument_token': t,
+                        'strike': i.get('strike'), 'instrument_type': i.get('instrument_type'),
+                        'expiry': i.get('expiry'),
+                        'lot_size': i.get('lot_size')
+                    })
+
             # CRITICAL: Free up raw memory immediately
-            nse_raw = None
-            nfo_raw = None
-            gc.collect()
+            nse_raw = None; nfo_raw = None; bse_raw = None; bfo_raw = None
             
             self._nfo_cache_asof = date.today()
             disk_data = {
@@ -202,7 +223,12 @@ class KiteService:
         if not self._instrument_tokens_by_symbol: self._init_instruments()
         token = self._instrument_tokens_by_symbol.get(symbol)
         if token: return token
-        index_map = {'NIFTY': 'NSE:NIFTY 50', 'BANKNIFTY': 'NSE:NIFTY BANK', 'FINNIFTY': 'NSE:NIFTY FIN SERVICE'}
+        index_map = {
+            'NIFTY': 'NSE:NIFTY 50', 
+            'BANKNIFTY': 'NSE:NIFTY BANK', 
+            'FINNIFTY': 'NSE:NIFTY FIN SERVICE',
+            'SENSEX': 'BSE:SENSEX'
+        }
         if symbol.upper() in index_map:
             mapped = index_map[symbol.upper()]
             token = self._instrument_tokens_by_symbol.get(mapped)
@@ -240,8 +266,12 @@ class KiteService:
         return None
 
     def get_nfo_instruments(self, name: str) -> List[Dict[str, Any]]:
-        """O(1) lookup for options of a symbol."""
-        return self._nfo_by_name.get(name.lower(), [])
+        """O(1) lookup for options of a symbol (NFO or BFO)."""
+        name_lower = name.lower()
+        res = self._nfo_by_name.get(name_lower, [])
+        if not res and name_lower == 'sensex':
+            res = self._nfo_by_name.get('bsesensex', [])
+        return res
 
     def get_option_symbol(self, name: str, strike: float, option_type: str) -> Optional[str]:
         # Fast lookup in indexed map
@@ -331,10 +361,12 @@ class KiteService:
             mapped_product = self.kite.PRODUCT_NRML if product.upper() in ['NRML', 'CARRYFORWARD'] else self.kite.PRODUCT_MIS
             
             try:
+                exchange = self.kite.EXCHANGE_BFO if symbol.upper() == 'SENSEX' else self.kite.EXCHANGE_NFO
+                
                 # Use internal _safe_place_order to include market_protection parameter
                 order_id = self._safe_place_order(
                     tradingsymbol=ts,
-                    exchange=self.kite.EXCHANGE_NFO,
+                    exchange=exchange,
                     transaction_type=txn_const,
                     quantity=quantity,
                     order_type=self.kite.ORDER_TYPE_LIMIT if price else self.kite.ORDER_TYPE_MARKET,
@@ -350,9 +382,10 @@ class KiteService:
                     logging.warning(f"[KiteService] Market order blocked for NFO. Falling back to padded LIMIT order. Error: {e}")
                     
                     # Fetch LTP to calculate padded limit price
-                    ltp_res = self.kite.ltp(f"NFO:{ts}")
-                    if f"NFO:{ts}" in ltp_res:
-                        current_price = ltp_res[f"NFO:{ts}"]['last_price']
+                    prefix = 'BFO' if symbol.upper() == 'SENSEX' else 'NFO'
+                    ltp_res = self.kite.ltp(f"{prefix}:{ts}")
+                    if f"{prefix}:{ts}" in ltp_res:
+                        current_price = ltp_res[f"{prefix}:{ts}"]['last_price']
                         
                         # Pad by 5% to practically act as a market order safely
                         if txn_const == self.kite.TRANSACTION_TYPE_BUY:
@@ -363,13 +396,13 @@ class KiteService:
                         logging.info(f"[KiteService] Retrying as LIMIT. LTP: {current_price}, Safe Padded Price: {safe_price}")
                         order_id = self.kite.place_order(
                             tradingsymbol=ts,
-                            exchange=self.kite.EXCHANGE_NFO,
                             transaction_type=txn_const,
                             quantity=quantity,
                             order_type=self.kite.ORDER_TYPE_LIMIT,
                             price=safe_price,
                             product=mapped_product,
-                            variety=self.kite.VARIETY_REGULAR
+                            variety=self.kite.VARIETY_REGULAR,
+                            exchange=exchange
                         )
                         return {'success': True, 'order_id': order_id, 'price': safe_price, 'response': {'order_id': order_id, 'note': 'Executed as padded LIMIT due to NSE Market block'}}
                     else:
@@ -392,9 +425,12 @@ class KiteService:
             elif transaction_type.upper() == 'SELL': txn_const = self.kite.TRANSACTION_TYPE_SELL
             
             # Use internal _safe_place_order to include market_protection parameter
+            # Determine exchange from tradingsymbol or fallback to NFO
+            exchange = self.kite.EXCHANGE_BFO if tradingsymbol.startswith('SENSEX') else self.kite.EXCHANGE_NFO
+            
             order_id = self._safe_place_order(
                 tradingsymbol=tradingsymbol,
-                exchange=self.kite.EXCHANGE_NFO,
+                exchange=exchange,
                 transaction_type=txn_const,
                 quantity=int(quantity),
                 order_type=self.kite.ORDER_TYPE_SLM,

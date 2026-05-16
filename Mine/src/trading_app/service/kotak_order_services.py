@@ -1007,7 +1007,7 @@ class KotakOrderService:
             elif symbol_upper == 'BANKNIFTY': quantity = 15
             elif symbol_upper == 'FINNIFTY': quantity = 40
             elif symbol_upper == 'MIDCPNIFTY': quantity = 50
-            elif symbol_upper == 'SENSEX': quantity = 10
+            elif symbol_upper == 'SENSEX': quantity = 20
             elif symbol_upper == 'BANKEX': quantity = 15
             else: quantity = 1
             resolved_quantity = quantity
@@ -1121,6 +1121,7 @@ class KotakOrderService:
         for candidate_ts in candidates_preview:
             all_attempts.append(candidate_ts)
             logging.info(f"[KotakOrderService] ===== Attempt #{len(all_attempts)} ===== Symbol: '{candidate_ts}' (expiry={resolved_expiry})")
+            exch_seg = 'bse_fo' if symbol.upper() == 'SENSEX' else self.EXCHANGE_NFO
             result = self.place_order(
                 tradingsymbol=candidate_ts,
                 transaction_type=transaction_type,
@@ -1128,7 +1129,7 @@ class KotakOrderService:
                 quantity=quantity,
                 order_type='L' if limit_price else self.ORDER_TYPE_MARKET,
                 product_type=product_type,
-                exchange_segment=self.EXCHANGE_NFO
+                exchange_segment=exch_seg
             )
             
             # Weekend/Illiquid option fallback: If Kotak rejects MARKET order due to no LTP, retry as LIMIT
@@ -1368,6 +1369,7 @@ class KotakOrderService:
             if transaction_type.upper() in ['BUY', 'B']: neo_txn_type = 'B'
             elif transaction_type.upper() in ['SELL', 'S']: neo_txn_type = 'S'
 
+            exch_seg = 'bse_fo' if symbol.upper().startswith('SENSEX') else 'nse_fo'
             return self.place_order(
                 tradingsymbol=symbol,
                 transaction_type=neo_txn_type,
@@ -1376,7 +1378,7 @@ class KotakOrderService:
                 order_type='SL-M',
                 product_type=product_type,
                 trigger_price=trigger_price,
-                exchange_segment='nse_fo'
+                exchange_segment=exch_seg
             )
             
         except Exception as e:

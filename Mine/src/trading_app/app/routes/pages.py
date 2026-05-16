@@ -120,6 +120,13 @@ def oi_profile():
     """OI Profile – NIFTY candlestick chart + OI profile bars."""
     return render_template('oi_profile.html')
 
+@pages_bp.route('/replay')
+@require_user_auth
+@login_required
+def oi_replay():
+    """Replay – Step-by-step playback of OI Profile charts."""
+    return render_template('oi_replay.html')
+
 @pages_bp.route('/ema-rsi-filter')
 @require_user_auth
 @login_required
@@ -133,6 +140,13 @@ def ema_rsi_filter():
 def backtest():
     """Backtest page for various strategies."""
     return render_template('backtest.html')
+
+@pages_bp.route('/chart')
+@require_user_auth
+@login_required
+def chart_page():
+    """Multi-timeframe chart page."""
+    return render_template('chart.html')
 
 @pages_bp.route('/login')
 def login():

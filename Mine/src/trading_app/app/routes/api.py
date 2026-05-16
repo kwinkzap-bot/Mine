@@ -15,6 +15,7 @@ from flask import Blueprint, request, jsonify, session, Response
 from trading_app.app.utils.logger import logger
 from trading_app.app.extensions import csrf, limiter
 from trading_app.app.utils.user_auth import require_user_auth
+from trading_app.app.utils.helpers import is_market_hours, is_trading_day
 
 # Request Coalescing Globals
 _pending_request_locks: Dict[Any, threading.Lock] = {}
@@ -69,6 +70,15 @@ _daily_5m_atm_cache = LruCache(max_size=20)
 
 # Global executor for background data fetching (prevents thread-per-request OOM)
 _api_executor = ThreadPoolExecutor(max_workers=10)
+
+# Fyers index symbol map
+FYERS_INDEX_SYMBOLS = {
+    'NIFTY':      'NSE:NIFTY50-INDEX',
+    'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+    'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+    'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+    'SENSEX':     'BSE:SENSEX-INDEX',
+}
 
 # Broker type configurations (icons, descriptions, required fields, login info)
 BROKER_TYPE_CONFIGS = {
@@ -656,6 +666,67 @@ def get_symbols() -> EndpointResponse:
                 'error': 'Authentication failed. Please login again.',
                 'auth_error': True
             }), 401
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/symbol-metadata', methods=['GET'])
+def get_symbol_metadata() -> EndpointResponse:
+    """Get metadata for a symbol: lot size and strike step."""
+    symbol = request.args.get('symbol', 'NIFTY').upper()
+    
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    
+    current_provider = get_data_provider()
+    if not current_provider:
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
+    
+    try:
+        # Get lot size from provider
+        lot_size = 1
+        if hasattr(current_provider, 'get_lot_size'):
+            lot_size = current_provider.get_lot_size(symbol)
+        
+        # Calculate strike step from instruments
+        strike_step = 50 # Default fallback
+        try:
+            instruments = current_provider.instruments('NFO')
+            symbol_instruments = [
+                i for i in instruments 
+                if i.get('name', '').upper() == symbol or 
+                   i.get('tradingsymbol', '').upper().startswith(symbol)
+            ]
+            
+            strikes = sorted(list(set([float(i.get('strike', 0)) for i in symbol_instruments if i.get('strike')])))
+            if len(strikes) > 1:
+                # Find most common difference between adjacent strikes
+                diffs = []
+                for i in range(len(strikes) - 1):
+                    d = int(abs(strikes[i+1] - strikes[i]))
+                    if d > 0:
+                        diffs.append(d)
+                
+                if diffs:
+                    from collections import Counter
+                    strike_step = Counter(diffs).most_common(1)[0][0]
+        except Exception as e:
+            logger.warning(f"Error calculating strike step for {symbol}: {e}")
+        
+        # Fallback for common indices if step calculation fails
+        if strike_step == 50 and (symbol == 'BANKNIFTY' or symbol == 'SENSEX'):
+            strike_step = 100
+        elif symbol == 'MIDCPNIFTY' and strike_step == 50:
+            strike_step = 25
+            
+        return jsonify({
+            'success': True,
+            'symbol': symbol,
+            'lot_size': lot_size,
+            'strike_step': strike_step
+        })
+    except Exception as e:
+        logger.error(f"Error fetching symbol metadata: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -3172,30 +3243,38 @@ def place_intraday_920_order() -> EndpointResponse:
                     logger.info(f"[Intrinsic] Skipping broker {_active_instance} ({broker}) because BROKER_N_INTRINSIC_ACTIVE is FALSE")
                     return {'success': False, 'error': f'Intrinsic Orders for {broker} is DISABLED in config'}, 403
 
-            # Determine order lots (Priority: 1. Request qty, 2. Strategy-specific broker config, 3. Global strategy config, 4. General broker config)
+            # Determine order lots (Priority: 1. Request qty, 2. Symbol-specific config, 3. Strategy-specific config, 4. Global strategy config)
             order_lots = quantity
             if strategy == 'intrinsic' and not order_lots:
-                # 1. Check for broker-specific intrinsic lots
-                raw_broker_intrinsic = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_INTRINSIC_LOTS')
-                if raw_broker_intrinsic:
-                    try: order_lots = int(str(raw_broker_intrinsic))
+                symbol_upper = symbol.upper()
+                
+                # 1. Check for symbol-specific intrinsic lots (e.g. INTRINSIC_SENSEX_LOTS)
+                raw_sym_intrinsic = UserEnvManager.get_user_var(_username, f'INTRINSIC_{symbol_upper}_LOTS')
+                if raw_sym_intrinsic:
+                    try: order_lots = int(str(raw_sym_intrinsic))
                     except: pass
                 
-                # 2. Global strategy config
                 if not order_lots:
-                    raw_intrinsic = UserEnvManager.get_user_var(_username, 'INTRINSIC_ORDER_LOTS')
-                    if raw_intrinsic:
-                        try: order_lots = int(str(raw_intrinsic))
+                    # 2. Check for broker-specific intrinsic lots
+                    raw_broker_intrinsic = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_INTRINSIC_LOTS')
+                    if raw_broker_intrinsic:
+                        try: order_lots = int(str(raw_broker_intrinsic))
                         except: pass
+                    
+                    # 3. Global strategy config
+                    if not order_lots:
+                        raw_intrinsic = UserEnvManager.get_user_var(_username, 'INTRINSIC_ORDER_LOTS')
+                        if raw_intrinsic:
+                            try: order_lots = int(str(raw_intrinsic))
+                            except: pass
             
             if not order_lots:
-                # 3. Fallback to general broker lot size from .env
+                # 4. Fallback to general broker lot size from .env or default 1
                 raw_broker_lot = UserEnvManager.get_user_var(_username, f'BROKER_{_active_instance}_LOT_SIZE')
                 if raw_broker_lot:
                     try: order_lots = int(str(raw_broker_lot))
                     except: order_lots = 1
                 else:
-                    # 4. Final fallback
                     order_lots = 1
 
             # Determine absolute quantity (units = lots * lot_size)
@@ -3214,8 +3293,14 @@ def place_intraday_920_order() -> EndpointResponse:
                         ks = KiteService(kite_instance=current_provider)
                         lot_size = ks.get_lot_size(symbol)
                 
-                if not lot_size or lot_size < 1:
-                    lot_size = 1
+                if not lot_size or lot_size <= 1:
+                    s_upper = symbol.upper()
+                    if s_upper == 'NIFTY': lot_size = 25
+                    elif s_upper == 'BANKNIFTY': lot_size = 15
+                    elif s_upper == 'SENSEX': lot_size = 20
+                    elif s_upper == 'FINNIFTY': lot_size = 40
+                    elif s_upper == 'MIDCPNIFTY': lot_size = 75
+                    else: lot_size = 1
             except Exception as e:
                 logger.error(f"[Order] Lot size resolution failed for {symbol}: {e}")
                 lot_size = 1
@@ -3338,7 +3423,8 @@ def place_intraday_920_order() -> EndpointResponse:
                     if not kite_opt_sym: return {'success': False, 'error': 'Option not found'}, 400
                     sec_id = str(dhan_service.search_symbol(kite_opt_sym).get('security_id', kite_opt_sym))
                 
-                result = dhan_service.place_order(security_id=sec_id, transaction_type=action, quantity=main_qty, order_type='LIMIT' if limit_price else 'MARKET', product_type='INTRADAY', exchange_segment='NSE_FNO', price=limit_price if limit_price else 0.0)
+                exchange_seg = 'BSE_FNO' if symbol.upper() == 'SENSEX' else 'NSE_FNO'
+                result = dhan_service.place_order(security_id=sec_id, transaction_type=action, quantity=main_qty, order_type='LIMIT' if limit_price else 'MARKET', product_type='INTRADAY', exchange_segment=exchange_seg, price=limit_price if limit_price else 0.0)
                 
                 if result['success']:
                     # Register symbol for tracking
@@ -3359,7 +3445,8 @@ def place_intraday_920_order() -> EndpointResponse:
                                 # Skip SL placement for manual 'intrinsic' strategy
                                 if strategy != 'intrinsic':
                                     sl_p = entry - 20
-                                    sl_res = dhan_service.place_stoploss_order(security_id=sec_id, trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', exchange_segment='NSE_FNO', entry_price=entry, transaction_type=sl_transaction_type)
+                                    exchange_seg = 'BSE_FNO' if symbol.upper() == 'SENSEX' else 'NSE_FNO'
+                                    sl_res = dhan_service.place_stoploss_order(security_id=sec_id, trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', exchange_segment=exchange_seg, entry_price=entry, transaction_type=sl_transaction_type)
                                     if sl_res.get('success'):
                                         sl_order_ids = [sl_res.get('order_id')]
                                         result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
@@ -3388,7 +3475,12 @@ def place_intraday_920_order() -> EndpointResponse:
                 # Fyers side: 1 for BUY, 2 for SELL (V3); order_type: 1 for LIMIT, 2 for MARKET
                 fyers_side = fyers_service.SIDE_BUY if action == 'BUY' else fyers_service.SIDE_SELL
                 fyers_order_type = 1 if limit_price else 2
-                result = fyers_service.place_order(symbol=f'NSE:{kite_opt_sym}', side=fyers_side, quantity=main_qty, order_type=fyers_order_type, limit_price=limit_price if limit_price else 0.0, product_type='INTRADAY')
+                
+                # Use correct exchange prefix
+                prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
+                f_symbol = f'{prefix}:{kite_opt_sym}'
+                
+                result = fyers_service.place_order(symbol=f_symbol, side=fyers_side, quantity=main_qty, order_type=fyers_order_type, limit_price=limit_price if limit_price else 0.0, product_type='INTRADAY')
                 
                 if result['success']:
                     # Register symbol for tracking
@@ -3410,7 +3502,8 @@ def place_intraday_920_order() -> EndpointResponse:
                                 # Skip SL placement for manual 'intrinsic' strategy
                                 if strategy != 'intrinsic':
                                     sl_p = entry - 20
-                                    sl_res = fyers_service.place_stoploss_order(symbol=f'NSE:{kite_opt_sym}', trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', transaction_type=sl_transaction_type)
+                                    prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
+                                    sl_res = fyers_service.place_stoploss_order(symbol=f'{prefix}:{kite_opt_sym}', trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', transaction_type=sl_transaction_type)
                                     if sl_res.get('success'):
                                         sl_order_ids = [sl_res.get('order_id')]
                                         result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
@@ -3757,6 +3850,10 @@ def get_open_interest() -> EndpointResponse:
                 return jsonify(db_data)
             
             # 2. Fallback: Fetch Live if DB is empty or stale
+            # We no longer refuse live fetches based on the clock here, 
+            # as the UI handles the frequency logic. 
+            # If the UI specifically asks, we try to fetch.
+
             logger.info(f"⚠️ DB data missing or stale for {symbol}. Fetching live...")
             oi_data = oi_service.get_open_interest_data(symbol)
             
@@ -3829,6 +3926,49 @@ def resolve_itm_strikes(kite_service, symbol, spot_high, spot_low, step_value, o
     
     return itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token
 
+@api_bp.route('/chart/multi-live', methods=['GET'])
+@csrf.exempt
+def get_multi_timeframe_live() -> EndpointResponse:
+    """
+    Optimized live data fetcher for multi-timeframe dashboard.
+    Fetches the latest candles for all requested intervals in parallel.
+    """
+    symbol = request.args.get('symbol', 'NIFTY').upper()
+    intervals = ['minute', '3minute', '5minute', '60minute']
+    
+    _data_provider = get_data_provider()
+    if not _data_provider:
+        return jsonify({'success': False, 'error': 'No data provider'}), 401
+    
+    from concurrent.futures import ThreadPoolExecutor
+    
+    token = FYERS_INDEX_SYMBOLS.get(symbol, symbol)
+    now = datetime.now()
+    from_date = now - timedelta(days=5) # Buffer for higher timeframes
+    
+    def fetch_one(interval):
+        try:
+            # Fetch last 2 candles to ensure we get the 'incomplete' current one
+            # Corrected parameter order: symbol, from_date, to_date, interval
+            candles = _data_provider.historical_data(
+                token, from_date, now, interval, use_cache=False
+            )
+            return interval, candles[-2:] if candles else []
+        except Exception as e:
+            logger.error(f"[Multi-Live] Error fetching {interval}: {e}")
+            return interval, []
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(intervals)) as executor:
+        for interval, candles in executor.map(fetch_one, intervals):
+            results[interval] = candles
+            
+    return jsonify({
+        'success': True,
+        'symbol': symbol,
+        'data': results
+    })
+
 @api_bp.route('/oi-profile/candles', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -3856,6 +3996,14 @@ def oi_profile_candles() -> EndpointResponse:
         first_5m_atm = request.args.get('first_5m_atm', 'false').lower() == 'true'
         custom_strike = request.args.get('custom_strike', type=int)
 
+        # Sentinel Check: Ignore UI placeholders (20000 for Nifty, 50000 for BankNifty)
+        # and fallback to ATM calculation to prevent fetching wrong data on first load.
+        if custom_strike:
+            is_placeholder = (symbol == 'NIFTY' and custom_strike == 20000) or \
+                             (symbol == 'BANKNIFTY' and custom_strike == 50000)
+            if is_placeholder:
+                custom_strike = None
+
         # ── 1. Check Response Cache & Coalesce Requests ──────────────
         # Use request parameters as cache key (ignore _t timestamp)
         cache_key = (symbol, interval, days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike)
@@ -3877,15 +4025,28 @@ def oi_profile_candles() -> EndpointResponse:
                     for k in sorted_keys[:entries_to_remove]:
                         _candle_response_cache.pop(k, None)
 
-        valid_intervals = ['minute', '2minute', '3minute', '5minute', '10minute',
-                           '15minute', '30minute', '60minute', 'day']
+        # ── 2. Market Hours Check ──────────────
+        market_is_open = is_market_hours() and is_trading_day()
+        
+        # If market is closed, we can use a much longer cache (1 hour)
+        if not market_is_open:
+            with _candle_cache_lock:
+                if cache_key in _candle_response_cache:
+                    data, ts = _candle_response_cache[cache_key]
+                    if datetime.now().timestamp() - ts < 3600: # 1 hour cache when market closed
+                        return jsonify(data)
+
+        valid_intervals = ['30second', 'minute', '2minute', '3minute', '5minute', '10minute',
+                           '15minute', '30minute', '60minute', 'day', 'week', 'month']
 
         # Allow all symbols (indices + F&O stocks)
         # Validation happens during token resolution below
         if interval not in valid_intervals:
             return jsonify({'success': False, 'error': f'Invalid interval. Use one of {valid_intervals}'}), 400
         
-        days = min(max(int(days), 1), 100)
+        # Increase max days for week/month intervals to allow long-term analysis (minimum 200 candles)
+        max_allowed_days = 10000 if interval in ['week', 'month', 'day'] else 500
+        days = min(max(int(days), 1), max_allowed_days)
         kite = get_kite(instance=1)
         # Get configured data provider (Kite or Fyers based on DATA_PROVIDER env flag)
         _data_provider = get_data_provider()
@@ -3903,20 +4064,29 @@ def oi_profile_candles() -> EndpointResponse:
         
         ist_offset = int(5.5 * 3600)  # 19 800 s
         now = datetime.now()
-        fetch_back = days + 5
-        from_date = (now - timedelta(days=fetch_back)).replace(hour=9, minute=0, second=0, microsecond=0)
-        to_date = now
+        
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+
+        if start_date_str and end_date_str:
+            try:
+                from_date = datetime.strptime(start_date_str, '%Y-%m-%d').replace(hour=9, minute=0, second=0, microsecond=0)
+                to_date = datetime.strptime(end_date_str, '%Y-%m-%d').replace(hour=15, minute=30, second=0, microsecond=0)
+                # Calculate days range for filtering later in the function
+                days = (to_date.date() - from_date.date()).days + 1
+                if days > 100: days = 100 # Safety limit
+                fetch_back = days
+            except Exception as e:
+                logger.error(f"Date parse error: {e}")
+                fetch_back = days + 5
+                from_date = (now - timedelta(days=fetch_back)).replace(hour=9, minute=0, second=0, microsecond=0)
+                to_date = now
+        else:
+            fetch_back = days + 5
+            from_date = (now - timedelta(days=fetch_back)).replace(hour=9, minute=0, second=0, microsecond=0)
+            to_date = now
 
         fetch_interval = 'minute' if interval == '2minute' else interval
-
-        # ── Fyers index symbol map (used when DATA_PROVIDER=FYERS) ───────
-        FYERS_INDEX_SYMBOLS = {
-            'NIFTY':      'NSE:NIFTY50-INDEX',
-            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
-            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
-            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-            'SENSEX':     'BSE:SENSEX-INDEX',
-        }
 
         # ── Resolve Token ──────────────────────────────────────────
         if _is_fyers_provider:
@@ -4193,6 +4363,57 @@ def oi_profile_candles() -> EndpointResponse:
                 'multiplier': multiplier
             }
 
+        # ── Fetch Historical Max Pain from DB ─────────────────────────
+        max_pain_history = []
+        try:
+            import sqlite3
+            from trading_app.service.open_interest_service import OpenInterestService
+            db_path = OpenInterestService().db_path
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                days_ago = (now - timedelta(days=days+5)).strftime('%Y-%m-%d')
+                cursor.execute('''
+                    SELECT timestamp, max_pain FROM oi_history 
+                    WHERE symbol = ? AND max_pain IS NOT NULL AND max_pain > 0
+                    AND timestamp >= ?
+                    ORDER BY timestamp ASC
+                ''', (symbol, days_ago))
+                
+                rows = cursor.fetchall()
+                for row in rows:
+                    ts_str, mp = row
+                    try:
+                        # Parse ISO format and convert to UTC timestamp as frontend expects
+                        dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                        
+                        # Strip out any historical data that accidentally fell outside market hours 
+                        # to prevent Lightweight Charts from expanding the X-axis across the night
+                        m_time = dt.time()
+                        if not (datetime.strptime("09:15", "%H:%M").time() <= m_time <= datetime.strptime("15:30", "%H:%M").time()):
+                            continue
+                            
+                        # Only include Max Pain data for the exact same trading days as the candlesticks
+                        if 'target_dates' in locals() and dt.date() not in target_dates:
+                            continue
+                            
+                        unix_time = int(dt.timestamp()) + ist_offset
+                        max_pain_history.append({'time': unix_time, 'value': float(mp)})
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"[OI-Profile] Error fetching max_pain_history: {e}")
+
+        # Fetch available strikes for custom strike dropdown (needed for Replay mode)
+        strikes_list = []
+        try:
+            # We can use Kite's instrument list for strike discovery even if Fyers is the data provider
+            all_inst = kite_service.get_nfo_instruments(symbol)
+            if all_inst:
+                unique_strikes = sorted(list(set(float(i['strike']) for i in all_inst if i.get('strike') is not None)))
+                strikes_list = [{'strike': s} for s in unique_strikes]
+        except Exception as e:
+            logger.warn(f"[OI-Profile] Strike fetch failed: {e}")
+
         # ── 6. Update Cache and Return ────────────────────────────────
         response_data = {
             'success': True,
@@ -4204,6 +4425,9 @@ def oi_profile_candles() -> EndpointResponse:
             'count': len(candles),
             'intrinsic': intrinsic_data,
             'daily_ohlc': daily_ohlc,
+            'max_pain_history': max_pain_history,
+            'strikes': strikes_list,
+            'current_price': candles[-1]['close'] if candles else 0,
             'timestamp': datetime.now().isoformat(),
             'optimized': True,
             'cached': False

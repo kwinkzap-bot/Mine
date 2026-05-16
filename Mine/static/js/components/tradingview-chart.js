@@ -36,9 +36,9 @@ window.TradingViewChart = (function () {
                     return null;  // Drop candle with unknown timestamp type
                 }
 
-                const open  = parseFloat(item.open  ?? item.o);
-                const high  = parseFloat(item.high  ?? item.h);
-                const low   = parseFloat(item.low   ?? item.l);
+                const open = parseFloat(item.open ?? item.o);
+                const high = parseFloat(item.high ?? item.h);
+                const low = parseFloat(item.low ?? item.l);
                 const close = parseFloat(item.close ?? item.c);
 
                 // If all OHLC values are missing or invalid, treat as whitespace (only time)
@@ -49,21 +49,24 @@ window.TradingViewChart = (function () {
 
                 return {
                     time, open, high, low, close,
-                    volume: item.volume || 0
+                    volume: item.volume || 0,
+                    ...(item.color && { color: item.color }),
+                    ...(item.borderColor && { borderColor: item.borderColor }),
+                    ...(item.wickColor && { wickColor: item.wickColor })
                 };
             } catch (error) {
                 console.error(`[formatChartData] Error processing candle at index ${index}:`, error, item);
                 return null;
             }
         })
-        // Remove nulls, sort ascending by time, deduplicate timestamps
-        .filter(c => c !== null)
-        .sort((a, b) => a.time - b.time)
-        .filter(c => {
-            if (seen.has(c.time)) return false;
-            seen.add(c.time);
-            return true;
-        });
+            // Remove nulls, sort ascending by time, deduplicate timestamps
+            .filter(c => c !== null)
+            .sort((a, b) => a.time - b.time)
+            .filter(c => {
+                if (seen.has(c.time)) return false;
+                seen.add(c.time);
+                return true;
+            });
     }
 
 
@@ -334,8 +337,8 @@ window.TradingViewChart = (function () {
                 return null;
             }
 
-            // Add padding to create space on the right side
-            container.style.paddingRight = '80px';
+            // Remove manual padding that might hide the price scale
+            container.style.paddingRight = '0px';
             container.style.boxSizing = 'border-box';
             container.style.position = 'relative';
 
@@ -381,35 +384,54 @@ window.TradingViewChart = (function () {
                     secondsVisible: false,
                     textColor: '#6b7280',           // Medium grey text on timeScale
                     borderColor: 'transparent',     // Hide the border
-                    rightOffset: 15,                // Matched with OI Profile chart
-                    barSpacing: 25,                 // Zoom the X-axis scaling heavily
+                    rightOffset: 20,                 // Matched with OI Profile chart
+                    barSpacing: 8,                 // Increased zoom to match user preference
                     fixLeftEdge: false,             // Allow scrolling on left
-                    fixRightEdge: false             // Allow dragging to right side
+                    fixRightEdge: false,            // Allow dragging to right side
+                    shiftVisibleRangeOnNewBar: true
                 },
                 rightPriceScale: {
-                    textColor: '#6b7280',           // Price scale text color
-                    borderColor: 'transparent',     // Hide the border
-                    width: 70,                      // Matched with OI Profile chart
+                    textColor: '#64748b',
+                    borderColor: 'transparent',
+                    width: 85,
                     autoScale: true,
-                    scaleMargins: { top: 0.02, bottom: 0.02 }
+                    visible: true,
+                    scaleMargins: { top: 0, bottom: 0 },
+                    entireTextOnly: true
                 },
                 watermark: {
                     color: '#d1d5db'                // Light grey watermark
                 },
                 // Apply IST timezone formatter to x-axis
-                localizationParameters: createTimeFormatter(timeframe),
+                localization: {
+                    locale: 'en-IN',
+                    priceFormatter: val => val.toFixed(2),
+                    timeFormatter: t => {
+                        const d = new Date(t * 1000);
+                        const h = String(d.getUTCHours()).padStart(2, '0');
+                        const m = String(d.getUTCMinutes()).padStart(2, '0');
+                        return `${h}:${m}`;
+                    },
+                    timezone: 'Etc/UTC' // Use UTC to prevent double-shifting of already IST-shifted timestamps
+                },
                 height: height,
                 width: window.innerWidth > 600 ? container.offsetWidth : container.offsetWidth
             });
 
             // Create candlestick series
             // Default colors: Green for up candles, Red for down candles
-            const upColor = '#1b9981';      // Green for bullish candles
-            const downColor = '#f23645';    // Red for bearish candles
-            const borderUpColor = '#1b9981';
-            const borderDownColor = '#f23645';
-            const wickUpColor = '#1b9981';
-            const wickDownColor = '#f23645';
+            let upColor = '#1b9981';      // Green for bullish candles
+            let downColor = '#f23645';    // Red for bearish candles
+
+            if (type === 'PE') {
+                upColor = '#8b5cf6';      // Violet for PE up
+                downColor = '#1f2937';    // Black for PE down
+            }
+
+            const borderUpColor = upColor;
+            const borderDownColor = downColor;
+            const wickUpColor = upColor;
+            const wickDownColor = downColor;
 
             // For combined charts, create two series (CE and PE)
             let series = null;
@@ -417,6 +439,25 @@ window.TradingViewChart = (function () {
             let peSeries = null;
 
             if (type === 'COMBINED' || config.isCombined) {
+                const customAutoscale = (seriesObj) => () => {
+                    const data = seriesObj.data();
+                    const range = chart.timeScale().getVisibleLogicalRange();
+                    if (!data || data.length === 0 || !range) return null;
+                    let min = Infinity, max = -Infinity;
+                    const start = Math.max(0, Math.floor(range.from));
+                    const end = Math.min(data.length - 1, Math.ceil(range.to));
+                    for (let i = start; i <= end; i++) {
+                        const c = data[i];
+                        if (c && c.high !== undefined) {
+                            if (c.high > max) max = c.high;
+                            if (c.low < min) min = c.low;
+                        }
+                    }
+                    if (min === Infinity) return null;
+                    const pad = (max - min) * 0.1;
+                    return { priceRange: { minValue: min - pad, maxValue: max + pad } };
+                };
+
                 // Create CE series (primary series - green and red)
                 ceSeries = chart.addCandlestickSeries({
                     upColor: '#1b9981',      // Green for CE up
@@ -429,6 +470,7 @@ window.TradingViewChart = (function () {
                     priceLineStyle: 1, // Dotted
                     priceLineWidth: 1
                 });
+                ceSeries.applyOptions({ autoscaleInfoProvider: customAutoscale(ceSeries) });
 
                 // Create PE series (secondary series - violet/black)
                 peSeries = chart.addCandlestickSeries({
@@ -442,17 +484,49 @@ window.TradingViewChart = (function () {
                     priceLineStyle: 1, // Dotted
                     priceLineWidth: 1
                 });
+                peSeries.applyOptions({ autoscaleInfoProvider: customAutoscale(peSeries) });
+
+                // Create Sum Series (Line series for total premium)
+                const sumSeries = chart.addLineSeries({
+                    color: '#6366f1', // Indigo for combined
+                    lineWidth: 2,
+                    title: 'TOTAL',
+                    visible: false, // Hidden by default
+                    priceLineVisible: true,
+                    lastValueVisible: true
+                });
 
                 series = ceSeries; // Primary series for backward compatibility
+                // Assign to instance later
             } else if (type === 'LINE') {
                 // Single line series chart (for OI)
+                const customAutoscaleLine = (seriesObj) => () => {
+                    const data = seriesObj.data();
+                    const range = chart.timeScale().getVisibleLogicalRange();
+                    if (!data || data.length === 0 || !range) return null;
+                    let min = Infinity, max = -Infinity;
+                    const start = Math.max(0, Math.floor(range.from));
+                    const end = Math.min(data.length - 1, Math.ceil(range.to));
+                    for (let i = start; i <= end; i++) {
+                        const c = data[i];
+                        if (c && c.value !== undefined) {
+                            if (c.value > max) max = c.value;
+                            if (c.value < min) min = c.value;
+                        }
+                    }
+                    if (min === Infinity) return null;
+                    if (min === max) { min -= 1; max += 1; }
+                    const pad = (max - min) * 0.1;
+                    return { priceRange: { minValue: min - pad, maxValue: max + pad } };
+                };
+
                 series = chart.addLineSeries({
                     color: config.lineColor || '#2962ff',
                     lineWidth: 2,
                     crosshairMarkerVisible: true
                 });
+                series.applyOptions({ autoscaleInfoProvider: customAutoscaleLine(series) });
             } else {
-                // Single candlestick series chart
                 series = chart.addCandlestickSeries({
                     upColor: upColor,
                     downColor: downColor,
@@ -563,12 +637,7 @@ window.TradingViewChart = (function () {
                         const firstVisibleIndex = Math.max(0, formattedData.length - candleCount);
                         const firstVisibleCandle = formattedData[firstVisibleIndex];
 
-                        // Apply zoom with minimal rightOffset in applyOptions
-                        // The CSS padding handles the visual spacing
-                        chart.timeScale().applyOptions({
-                            rightOffset: 10,        // Minimal offset - spacing is handled by CSS
-                            barSpacing: 8
-                        });
+                        // Global scale options apply automatically
 
                         chart.timeScale().setVisibleRange({
                             from: firstVisibleCandle.time,
@@ -580,6 +649,11 @@ window.TradingViewChart = (function () {
                     }
                 }, 100); // Small delay to let chart render
             }
+
+            // Add "Scroll to Latest" button
+            addScrollButton(chart, series, container);
+
+            // Add cursor change on hover over candles/lines
 
             // Add cursor change on hover over candles/lines
             // When hovering over candles or reference lines, show pointer cursor (clickable)
@@ -618,6 +692,7 @@ window.TradingViewChart = (function () {
                 series: series,
                 ceSeries: ceSeries,
                 peSeries: peSeries,
+                sumSeries: typeof sumSeries !== 'undefined' ? sumSeries : null,
                 priceLinesArray: priceLinesArray,
                 data: formattedData,
                 isCombined: type === 'COMBINED' || config.isCombined,
@@ -626,19 +701,19 @@ window.TradingViewChart = (function () {
                 /**
                  * Controls visibility of series
                  */
-                setVisibleSeries: function(ceVisible, peVisible) {
+                setVisibleSeries: function (ceVisible, peVisible) {
                     if (this.ceSeries) this.ceSeries.applyOptions({ visible: ceVisible });
                     if (this.peSeries) this.peSeries.applyOptions({ visible: peVisible });
                     // If not separate series, handle the main series
                     if (!this.ceSeries && this.series) {
-                         this.series.applyOptions({ visible: ceVisible || peVisible });
+                        this.series.applyOptions({ visible: ceVisible || peVisible });
                     }
                 },
 
                 /**
                  * Sets markers (signals) on the chart series
                  */
-                setMarkers: function(ceMarkers, peMarkers = []) {
+                setMarkers: function (ceMarkers, peMarkers = []) {
                     try {
                         if (this.isCombined) {
                             if (this.ceSeries) this.ceSeries.setMarkers(ceMarkers || []);
@@ -668,20 +743,21 @@ window.TradingViewChart = (function () {
                         (referenceOrPeData.ce_payload_high !== undefined || referenceOrPeData.pe_payload_high !== undefined ||
                             referenceOrPeData.ce_payload_low !== undefined || referenceOrPeData.pe_payload_low !== undefined);
 
-                    // If refresh flag is true, clear existing price lines before updating
+                    // If refresh flag is true, clear existing price lines and reset Y-scale
                     if (refresh) {
-                        console.log('[Chart] Refresh mode: clearing existing price lines');
+                        console.log('[Chart] Refresh mode: resetting price scale');
+                        
+                        // Reset Y-axis only to jump to new price levels
+                        try {
+                            chart.priceScale('right').applyOptions({ autoScale: true });
+                        } catch (e) { console.warn('[Chart] Reset scale err:', e); }
+
                         // Remove all existing price lines
                         if (priceLinesArray && priceLinesArray.length > 0) {
-                            // Find and remove lines that look like PDH/PDL
-                            // In a real implementation we might keep track of these specifically
-
-                            // For a simpler approach, we'll just remove all lines for now and recreate them
-                            // Since this is specifically for PDH/PDL update
                             priceLinesArray.forEach(line => {
-                                try { if (series) series.removePriceLine(line); } catch(e) {}
-                                try { if (ceSeries) ceSeries.removePriceLine(line); } catch(e) {}
-                                try { if (peSeries) peSeries.removePriceLine(line); } catch(e) {}
+                                try { if (series) series.removePriceLine(line); } catch (e) { }
+                                try { if (ceSeries) ceSeries.removePriceLine(line); } catch (e) { }
+                                try { if (peSeries) peSeries.removePriceLine(line); } catch (e) { }
                             });
                             // Clear the array without reassigning (avoid const violation)
                             priceLinesArray.splice(0, priceLinesArray.length);
@@ -702,34 +778,28 @@ window.TradingViewChart = (function () {
                         }
 
                     } else if (type === 'LINE') {
-                        // Line chart update
-                        // Data format: { time, value }
-                        // Ensure data is sorted by time
-                        console.log(`[Chart] Updating LINE chart with ${newData.length} points`);
-
+                        // Line chart update - handle both value data and whitespace
                         const lineData = newData.map(item => {
-                            // Handle existing time (seconds) or parse timestamp
-                            const timeVal = item.time || Math.floor(new Date(item.timestamp).getTime() / 1000);
-                            if (isNaN(timeVal)) {
-                                console.warn('[Chart] Invalid time in data point:', item);
+                            let time = item.time;
+                            if (!time && item.timestamp) {
+                                time = Math.floor(new Date(item.timestamp).getTime() / 1000);
                             }
+
+                            // Handle whitespace (no value)
+                            if (item.value === undefined) {
+                                return { time };
+                            }
+
                             return {
-                                time: timeVal,
-                                value: item.value
+                                time,
+                                value: parseFloat(item.value),
+                                ...(item.color && { color: item.color })
                             };
-                        }).sort((a, b) => a.time - b.time);
+                        }).filter(item => item && !isNaN(item.time)).sort((a, b) => a.time - b.time);
 
                         if (lineData.length > 0) {
-                            console.log('[Chart] Setting LINE series data:', lineData[0], '...', lineData[lineData.length - 1]);
                             series.setData(lineData);
                             this.data = lineData;
-                            try {
-                                chart.timeScale().fitContent();
-                            } catch (e) {
-                                console.warn('[Chart] Failed to fit content:', e);
-                            }
-                        } else {
-                            console.warn('[Chart] No valid data points for LINE chart');
                         }
                     } else {
                         // Single series chart
@@ -748,15 +818,8 @@ window.TradingViewChart = (function () {
                     // Recalculate zoom and timeScale if refresh is requested (e.g. on symbol switch)
                     // Recalculate zoom and timeScale if refresh is requested (e.g. on symbol switch)
                     if (refresh) {
-                        setTimeout(() => {
-                            try {
-                                this.chart.timeScale().fitContent();
-                                this.chart.applyOptions({
-                                    timeScale: { rightOffset: 300 },
-                                    rightPriceScale: { autoScale: true }
-                                });
-                            } catch (e) { console.warn('[Chart] Update scale err:', e); }
-                        }, 50);
+                        // Scaling and zoom levels are now handled centrally by the master dashboard logic
+                        // to prevent race conditions during multi-chart synchronization.
                     }
                 },
 
@@ -1174,6 +1237,46 @@ window.TradingViewChart = (function () {
         /**
          * Utility: Get latest price
          */
-        getLatestPrice: getLatestPrice
+        getLatestPrice: getLatestPrice,
+
+        /**
+         * Utility: Add Scroll to Right button
+         */
+        addScrollButton: addScrollButton
     };
+
+    /**
+     * Internal helper to add the "Scroll to Latest" button to a chart
+     */
+    function addScrollButton(chart, series, container) {
+        if (!chart || !series || !container) return;
+
+        const scrollBtn = document.createElement('div');
+        scrollBtn.className = 'tv-chart-scroll-btn';
+        scrollBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m5.25 4.5 7.5 7.5-7.5 7.5m6-15 7.5 7.5-7.5 7.5" /></svg>`;
+        container.appendChild(scrollBtn);
+
+        scrollBtn.onclick = (e) => {
+            e.stopPropagation();
+            chart.timeScale().scrollToRealTime();
+        };
+
+        chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+            const timeScale = chart.timeScale();
+            const visibleRange = timeScale.getVisibleLogicalRange();
+            const data = series.data();
+            
+            if (!visibleRange || !data || data.length === 0) return;
+
+            // If the right-most visible bar is less than the total data count minus some buffer,
+            // it means we've scrolled back in time.
+            const isScrolledBack = visibleRange.to < data.length - 2;
+            
+            if (isScrolledBack) {
+                scrollBtn.classList.add('show');
+            } else {
+                scrollBtn.classList.remove('show');
+            }
+        });
+    }
 })();

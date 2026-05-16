@@ -30,7 +30,7 @@
     background: var(--oip-card-bg);
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow: visible;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
     /* No fixed height — chart wrap controls the size */
 }
@@ -211,7 +211,8 @@
 }
 
 .exit-all {
-    background: #dc2626; /* Primary Red */
+    background: #dc2626;
+    /* Primary Red */
     font-weight: 900;
     padding: 0 12px;
     box-shadow: 0 1px 3px rgba(220, 38, 38, 0.2);
@@ -260,6 +261,33 @@
     cursor: not-allowed;
 }
 
+.tv-chart-scroll-btn {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    z-index: 10;
+    color: #64748b;
+}
+
+.tv-chart-scroll-btn.show {
+    display: flex;
+}
+
+.tv-chart-scroll-btn:hover {
+    background: #f8fafc;
+    color: #2563eb;
+}
+
 .spin {
     animation: spin 0.8s linear infinite;
 }
@@ -289,7 +317,8 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    flex: 1 1 80px;          /* grow/shrink, base 80px — wraps to 2 rows automatically */
+    flex: 1 1 80px;
+    /* grow/shrink, base 80px — wraps to 2 rows automatically */
     min-width: 64px;
     max-width: 110px;
     padding: 3px 6px;
@@ -305,7 +334,8 @@
 }
 
 .oip-hdr-metric:last-child {
-    border-right: 1px solid #e8ecf0; /* restore — no longer needed for separator */
+    border-right: 1px solid #e8ecf0;
+    /* restore — no longer needed for separator */
 }
 
 .oip-hdr-lbl {
@@ -327,9 +357,101 @@
     line-height: 1;
 }
 
-.oip-hdr-val.red  { color: #e11d48; }
-.oip-hdr-val.grn  { color: #10b981; }
-.oip-hdr-val.blu  { color: #2563eb; }
+.oip-hdr-val.red {
+    color: #e11d48;
+}
+
+.oip-hdr-val.grn {
+    color: #10b981;
+}
+
+.oip-hdr-val.blu {
+    color: #2563eb;
+}
+
+/* ── Live Max Pain & PCR Indicator Styles ────────────────── */
+.oip-live-indicators {
+    display: flex;
+    gap: 12px;
+    padding: 8px 12px;
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    margin-bottom: 10px;
+    align-items: center;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.oip-live-title {
+    font-size: 11px;
+    font-weight: 800;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 12px;
+    border-right: 2px solid #cbd5e1;
+}
+
+.oip-live-item {
+    display: flex;
+    flex-direction: column;
+    min-width: 90px;
+}
+
+.oip-live-lbl {
+    font-size: 9px;
+    color: #94a3b8;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.oip-live-val {
+    font-size: 15px;
+    font-weight: 900;
+    color: #0f172a;
+    letter-spacing: -0.02em;
+}
+
+.oip-live-val.pcr-bullish {
+    color: #10b981;
+}
+
+.oip-live-val.pcr-bearish {
+    color: #ef4444;
+}
+
+.oip-live-val.max-pain {
+    color: #2563eb;
+}
+
+.oip-pulse-dot {
+    width: 6px;
+    height: 6px;
+    background: #2563eb;
+    border-radius: 50%;
+    animation: oip-pulse 2s infinite;
+}
+
+@keyframes oip-pulse {
+    0% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7);
+    }
+
+    70% {
+        transform: scale(1);
+        box-shadow: 0 0 0 6px rgba(37, 99, 235, 0);
+    }
+
+    100% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+    }
+}
+
 
 /* Bullet separator between label and value */
 .oip-stat-dot {
@@ -383,9 +505,29 @@
 /* ── Chart ───────────────────────────────────────────────── */
 .oip-chart-wrap {
     position: relative;
-    height: 360px;          /* fixed — both OI and Premium charts are same height */
+    height: 360px;
+    /* fixed — both OI and Premium charts are same height */
     flex-shrink: 0;
     background: #ffffff;
+}
+
+.oip-charts-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+    width: 100%;
+}
+
+.oip-charts-row .oip-chart-wrap {
+    height: 320px;
+    flex: 1;
+    min-width: 0;
+}
+
+@media (max-width: 1024px) {
+    .oip-charts-row .oip-chart-wrap {
+        height: 360px;
+    }
 }
 
 #oipCandleChart {
@@ -456,68 +598,194 @@
     color: #0969da;
 }
 
-/* ── Tooltip ─────────────────────────────────────────────── */
-.oip-tooltip {
+/* ── Chart Legend (Minimalist Institutional Design) ───── */
+/* ── Chart Scroll to Latest Button ───────────────────────── */
+.tv-chart-scroll-btn {
     position: absolute;
-    z-index: 1000;
-    pointer-events: none;
+    bottom: 60px;
+    right: 20px;
+    width: 36px;
+    height: 36px;
     background: #ffffff;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
-    padding: 8px 12px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-    font-size: 11px;
-    color: #1f2328;
-    line-height: 1.5;
-    min-width: 140px;
+    border: 1px solid #e2e8f0;
+    border-radius: 50%;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 100;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    color: #475569;
 }
 
-.oip-tooltip .strike {
-    font-weight: 700;
-    margin-bottom: 4px;
-    display: block;
-    color: #1f2328;
-    border-bottom: 1px solid #f0f2f5;
-    padding-bottom: 2px;
+.tv-chart-scroll-btn:hover {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+    color: #0f172a;
+    transform: scale(1.1);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
 }
 
-.oip-tooltip .row {
+.tv-chart-scroll-btn svg {
+    width: 20px;
+    height: 20px;
+}
+
+.tv-chart-scroll-btn.show {
+    display: flex;
+    animation: slideIn 0.3s forwards;
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateY(10px) scale(0.9); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.oip-chart-legend {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin: 2px 0;
+    padding: 2px 12px;
+    background: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    min-height: 28px;
+    gap: 12px;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+    overflow: hidden;
 }
 
-.oip-tooltip .lbl-wrap {
+.oip-legend-item {
     display: flex;
     align-items: center;
     gap: 6px;
-}
-
-.oip-tooltip .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-}
-
-.oip-tooltip .dot.ce {
-    background: #cf222e;
-}
-
-.oip-tooltip .dot.pe {
-    background: #1a7f37;
-}
-
-.oip-tooltip .lbl {
-    font-weight: 500;
-    color: #656d76;
-}
-
-.oip-tooltip .val {
+    font-size: 11px;
     font-weight: 700;
-    color: #1f2328;
-    font-variant-numeric: tabular-nums;
+    color: #475569;
+    white-space: nowrap;
+}
+
+.oip-legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.oip-legend-input-minimal {
+    width: 60px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #ef4444;
+    padding: 0 5px;
+    height: 20px;
+    outline: none;
+    margin-left: 4px;
+}
+
+.oip-legend-input-minimal:focus {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.1);
+}
+
+/* ── Tooltip ─────────────────────────────────────────────── */
+.oip-tooltip {
+    position: absolute;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    /* Professional Grey Border */
+    border-radius: 4px;
+    padding: 0;
+    pointer-events: none;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+    min-width: 140px;
+}
+
+.oip-tt-box {
+    display: flex;
+    flex-direction: column;
+}
+
+.tt-header {
+    background: #ffffff;
+    padding: 4px 8px;
+    font-weight: 800;
+    font-size: 10px;
+    color: #0f172a;
+    /* Deep Dark Navy */
+    text-align: center;
+    border-bottom: 1px solid #d1d5db;
+    /* Match Outer Border */
+    letter-spacing: 0.03em;
+}
+
+.tt-grid {
+    display: flex;
+}
+
+.tt-col {
+    flex: 1;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tt-col.ce {
+    border-right: 1px solid #d1d5db;
+}
+
+/* Match Outer Border */
+
+.tt-col .type {
+    font-size: 8px;
+    font-weight: 900;
+    margin-bottom: 2px;
+    text-align: center;
+    letter-spacing: 0.02em;
+}
+
+.tt-col.ce .type {
+    color: #ef4444;
+}
+
+/* Pro Red */
+.tt-col.pe .type {
+    color: #10b981;
+}
+
+/* Pro Green */
+
+.metric {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    line-height: 1.3;
+}
+
+.metric .l {
+    color: #64748b;
+    /* Professional Slate Labels */
+    font-weight: 600;
+}
+
+.metric .v {
+    font-weight: 800;
+    color: #1e293b;
+    /* Dark Navy Values */
+}
+
+/* Specific highlight for Fair Value */
+.metric:nth-child(2) .v {
+    color: #4f46e5;
+    /* Vibrant Indigo for Fair Value */
 }
 
 .hidden {
@@ -716,7 +984,8 @@
 .oip-order-btn {
     height: 20px;
     padding: 0 8px;
-    border-radius: 4px; /* Changed from pill to slightly rounded for better fit in groups */
+    border-radius: 4px;
+    /* Changed from pill to slightly rounded for better fit in groups */
     font-size: 9px;
     font-weight: 800;
     border: none;
@@ -731,6 +1000,101 @@
     min-width: 38px;
 }
 
+/* ── IV Percentile Gauge & Alert ────────────────────────── */
+.oip-ivp-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+}
+
+.oip-ivp-gauge-bg {
+    width: 100%;
+    height: 4px;
+    background: #f1f5f9;
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 2px;
+}
+
+.oip-ivp-gauge-bar {
+    height: 100%;
+    width: 0%;
+    transition: width 0.5s ease, background-color 0.5s ease;
+    background-color: #94a3b8;
+}
+
+/* Color Levels for IVP */
+.oip-ivp-gauge-bar.cheap {
+    background-color: #10b981;
+}
+
+/* Green */
+.oip-ivp-gauge-bar.neutral {
+    background-color: #f59e0b;
+}
+
+/* Orange */
+.oip-ivp-gauge-bar.expensive {
+    background-color: #ef4444;
+}
+
+/* Red */
+
+.oip-ivp-metric {
+    min-width: 70px !important;
+}
+
+/* IV Crush Alert Banner */
+.oip-alert-banner {
+    background: rgba(254, 242, 242, 0.9);
+    border: 1px solid #fee2e2;
+    border-radius: 6px;
+    padding: 6px 12px;
+    margin-top: 8px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    backdrop-filter: blur(4px);
+    animation: oip-flash 1.5s infinite;
+}
+
+.oip-alert-content {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: center;
+}
+
+.oip-alert-icon {
+    font-size: 16px;
+}
+
+.oip-alert-msg {
+    color: #991b1b;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+@keyframes oip-flash {
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.7;
+        transform: scale(0.99);
+        background-color: #fee2e2;
+    }
+}
+
+.oip-alert-banner.hidden {
+    display: none !important;
+}
+
 .oip-order-side-group {
     display: flex;
     gap: 2px;
@@ -741,11 +1105,13 @@
 }
 
 .oip-order-side-group--ce {
-    border-color: #10b98166; /* Light green (semi-transparent) */
+    border-color: #10b98166;
+    /* Light green (semi-transparent) */
 }
 
 .oip-order-side-group--pe {
-    border-color: #ef444466; /* Light red (semi-transparent) */
+    border-color: #ef444466;
+    /* Light red (semi-transparent) */
 }
 
 .oip-order-btn:hover {

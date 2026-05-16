@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 from trading_app.service.cpr_service import CPRService
 from trading_app.service.kite_order_services import get_global_rate_limiter
+from trading_app.service.greeks_calculator import GreeksCalculator
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -83,7 +84,8 @@ class CPRFilterService:
         # Use global cache for persistence between requests
         self._historical_data_cache = _global_cache
         self._cache_lock = _global_cache_lock
-        self._hv_cache = _global_hv_cache  # Shared HV cache across requests
+        self._hv_cache = _global_hv_cache
+        self._nfo_instruments = None  # Cache NFO instruments globally
         self._load_instruments()
 
     def _rate_limit(self):
@@ -784,7 +786,91 @@ class CPRFilterService:
         except Exception:
             return 0.0
 
-    def process_stock(self, symbol: str, root_date: datetime) -> Optional[Dict]:
+    def _enrich_with_greeks(self, symbol: str, spot_price: float, signal_type: str, atm_quotes: Optional[Dict] = None) -> Optional[Dict]:
+        """
+        Enriches a signal with ATM Option Greeks (Delta, IV).
+        Uses pre-fetched atm_quotes if available to avoid API calls.
+        """
+        try:
+            # 1. Identify Option Type
+            is_bullish = any(x in signal_type for x in ["ABOVE", "UP", "BULLISH", "TOUCH (Closed Above)"])
+            option_type = 'CE' if is_bullish else 'PE'
+            
+            # 2. Find nearest expiry and ATM instrument
+            if not self._nfo_instruments:
+                self._rate_limit()
+                self._nfo_instruments = self.kite.instruments('NFO')
+            
+            symbol_nfo = [inst for inst in self._nfo_instruments if inst.get('name') == symbol]
+            if not symbol_nfo: return None
+            
+            # Sort by expiry and pick the nearest
+            symbol_nfo.sort(key=lambda x: x.get('expiry') or datetime.max.date())
+            nearest_expiry = symbol_nfo[0].get('expiry')
+            if not nearest_expiry: return None
+            
+            all_strikes = sorted(list(set(float(inst['strike']) for inst in symbol_nfo if inst.get('strike'))))
+            if not all_strikes: return None
+            atm_strike = min(all_strikes, key=lambda x: abs(x - spot_price))
+            
+            expiry_dt = nearest_expiry if isinstance(nearest_expiry, date) else datetime.strptime(str(nearest_expiry), '%Y-%m-%d').date()
+            
+            opt_inst = next((inst for inst in symbol_nfo 
+                           if inst.get('expiry') == nearest_expiry 
+                           and float(inst.get('strike', 0)) == atm_strike 
+                           and inst.get('instrument_type') == option_type), None)
+            
+            if not opt_inst: return None
+            
+            # 3. Get LTP for the ATM Option
+            opt_symbol = f"NFO:{opt_inst['tradingsymbol']}"
+            opt_ltp = 0.0
+            
+            if atm_quotes and opt_symbol in atm_quotes:
+                opt_ltp = atm_quotes[opt_symbol]['last_price']
+            else:
+                self._rate_limit()
+                quote = self.kite.quote([opt_symbol])
+                if not quote: return None
+                opt_ltp = quote[opt_symbol]['last_price']
+            
+            if opt_ltp <= 0: return None
+            
+            # 4. Calculate Greeks
+            greeks = GreeksCalculator.calculate_greeks(
+                option_type=option_type,
+                ltp=opt_ltp,
+                underlying_price=spot_price,
+                strike_price=atm_strike,
+                expiry_date=expiry_dt.strftime('%Y-%m-%d')
+            )
+            
+            iv_decimal = greeks.get('IV', 0)
+            iv_pct = round(iv_decimal * 100, 2)
+            
+            # 5. Calculate IV Percentile (PIV)
+            iv_percentile = self.calculate_stock_iv_percentile(symbol, iv_decimal)
+            
+            # 6. Apply Momentum Threshold
+            delta_val = greeks.get('Delta', 0)
+            is_momentum_weak = False
+            if is_bullish and delta_val < 0.45: is_momentum_weak = True
+            if not is_bullish and delta_val > -0.45: is_momentum_weak = True
+            
+            return {
+                'delta': round(delta_val, 2),
+                'iv': iv_pct,
+                'iv_percentile': iv_percentile,
+                'gamma': round(greeks.get('Gamma', 0), 4),
+                'momentum_weak': is_momentum_weak,
+                'opt_symbol': opt_inst['tradingsymbol']
+            }
+            
+        except Exception as e:
+            logger.error(f"Greeks enrichment failed for {symbol}: {e}")
+            return None
+
+    def process_stock(self, symbol: str, root_date: datetime, latest_quote: Optional[float] = None, atm_quotes: Optional[Dict] = None) -> Optional[Dict]:
         try:
             # 1. Fetch historical data ONCE at the start (400 days covers CPR + RSI stabilization)
             all_data = self.get_hist_data(symbol, days=400, interval='day', end_date=root_date)
@@ -828,10 +914,13 @@ class CPRFilterService:
                 
                 if last_dt == target_dt:
                     # Override today's incomplete candle with live price
-                    closes[-1] = cpr.current_price
+                    # Use latest_quote if provided, else fallback to cpr.current_price
+                    live_price = latest_quote if latest_quote is not None else cpr.current_price
+                    closes[-1] = live_price
                 elif last_dt < target_dt:
                     # Append new daily candle for today using live price
-                    closes.append(cpr.current_price)
+                    live_price = latest_quote if latest_quote is not None else cpr.current_price
+                    closes.append(live_price)
                 
                 rsi_vals = self.calculate_rsi(closes, period=21)
                 # degree=2 matches Oscillator's default
@@ -1025,154 +1114,188 @@ class CPRFilterService:
                     'm_gap': touch_gaps[2]
                 }
 
-            # Calculate daily change % using prev_close from CPR levels
+            # --- NEW: Greeks & IV Percentile Filtering Logic ---
+            # Enrichment happens for any technical signal, OR if we want to check all stocks for IVP
+            final_price = latest_quote if latest_quote is not None else cpr.current_price
+            
+            # Determine direction (default to bullish if no signal)
+            dir_signal = primary_status if primary_status != "🟡 IN CPR" else (weekly_cross_status or bullish_reversal or "BULLISH")
+            greeks = self._enrich_with_greeks(symbol, final_price, dir_signal, atm_quotes)
+            
+            iv_percentile = 0.0
+            if greeks:
+                iv_percentile = greeks.get('iv_percentile', 0)
+                # Add greeks to all active payloads
+                for key in payloads:
+                    if payloads[key]:
+                        if 'payload' in payloads[key]: payloads[key]['payload'].update(greeks)
+                        else: payloads[key].update(greeks)
+
+            # Calculate daily change %
             day_change_pct = 0.0
             if cpr.previous_close > 0:
-                day_change_pct = round(((cpr.current_price - cpr.previous_close) / cpr.previous_close) * 100, 2)
+                day_change_pct = round(((final_price - cpr.previous_close) / cpr.previous_close) * 100, 2)
 
             return {
                 'symbol': symbol,
-                'current_price': cpr.current_price,
+                'current_price': round(final_price, 2),
                 'volume': all_data.iloc[-1]['volume'],
                 'day_change_pct': day_change_pct,
+                'iv_percentile': iv_percentile,
+                'iv': greeks.get('iv', 0) if greeks else 0,
                 'payloads': payloads
             }
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
             return None
 
-    def _build_atm_option_map(self, stocks: List[str], stock_metadata: Optional[Dict[str, Dict]] = None) -> Dict[str, Dict]:
+    def run_all_filters(self, root_date: datetime) -> FilterResult:
         """
-        Build a mapping of stock symbol -> nearest-expiry ATM CE option info.
-        Pre-loads NFO instruments once and finds the ATM option for each stock.
-        Also captures stock volume via kite.quote().
-        
-        Returns:
-            Dict[symbol, {'tradingsymbol': str, 'strike': float, 'expiry': date,
-                          'current_price': float, 'volume': int}]
+        Optimized main loop:
+        1. Pre-load instruments and batch quotes.
+        2. Parallel process stocks with efficient caching.
         """
-        try:
-            if not hasattr(self, '_nfo_instruments') or self._nfo_instruments is None:
-                self._rate_limit()
-                self._nfo_instruments = self.kite.instruments('NFO')
-                logger.info(f"Loaded {len(self._nfo_instruments)} NFO instruments for IV calculation")
-            
-            stock_prices = {}
-            stock_volumes = {}
-            stock_day_change_pct = {}
-            
-            # Priority 1: Use pre-collected metadata from the main scan loop
-            if stock_metadata:
-                for symbol, meta in stock_metadata.items():
-                    stock_prices[symbol] = meta.get('current_price', 0)
-                    stock_volumes[symbol] = meta.get('volume', 0)
-                    stock_day_change_pct[symbol] = meta.get('day_change_pct', 0.0)
-                    
-            # Priority 2: Fallback to batch quotes for missing stocks
-            missing_stocks = [s for s in stocks if s not in stock_prices]
-            if missing_stocks:
-                ltp_keys = [f"NSE:{s}" for s in missing_stocks]
-                batch_size = 250
-                for i in range(0, len(ltp_keys), batch_size):
-                    batch = ltp_keys[i:i + batch_size]
-                    self._rate_limit()
-                    try:
-                        quote_data = self.kite.quote(batch)
-                        for key, val in quote_data.items():  # type: ignore
-                            symbol = str(key).replace('NSE:', '')
-                            last_price = val.get('last_price', 0)  # type: ignore
-                            stock_prices[symbol] = last_price
-                            stock_volumes[symbol] = val.get('volume', 0)  # type: ignore
-                            
-                            # Current day % change from previous close
-                            prev_close = val.get('ohlc', {}).get('close', 0)  # type: ignore
-                            if prev_close and prev_close > 0:
-                                stock_day_change_pct[symbol] = round(((last_price - prev_close) / prev_close) * 100, 2)
-                            else:
-                                stock_day_change_pct[symbol] = 0.0
-                    except Exception as e:
-                        logger.error(f"Quote batch failed: {e}")
-            
-            logger.info(f"Got prices+volumes for {len(stock_prices)} stocks")
-            
-            # Build ATM option map
-            today = date.today()
-            atm_map = {}
-            
-            # Group NFO options (both CE and PE) by stock name for lookup
-            stock_options: Dict[str, List] = {}
-            for inst in self._nfo_instruments:
-                inst_type = inst.get('instrument_type', '')
-                if inst_type in ('CE', 'PE') and inst.get('expiry'):
-                    name = inst.get('name', '')
-                    if name in stock_prices:
-                        expiry = inst['expiry']
-                        if hasattr(expiry, 'date'):
-                            expiry = expiry.date()
-                        if expiry >= today:
-                            if name not in stock_options:
-                                stock_options[name] = []
-                            stock_options[name].append({
-                                'tradingsymbol': inst.get('tradingsymbol', ''),
-                                'strike': inst.get('strike', 0),
-                                'expiry': expiry,
-                                'type': inst_type
-                            })
-            
-            for symbol, options in stock_options.items():
-                current_price = stock_prices.get(symbol, 0)
-                if current_price <= 0 or not options:
-                    continue
-                
-                # Find suitable expiry (skip near-expiry < 5 days for reliable IV)
-                unique_expiries = sorted(set(o['expiry'] for o in options))
-                
-                min_days = 5
-                suitable_expiry = None
-                for exp in unique_expiries:
-                    if (exp - today).days >= min_days:
-                        suitable_expiry = exp
-                        break
-                
-                if suitable_expiry is None:
-                    suitable_expiry = unique_expiries[0]
-                
-                expiry_options = [o for o in options if o['expiry'] == suitable_expiry]
-                
-                # Find closest ATM strike
-                all_strikes = set(o['strike'] for o in expiry_options if o['strike'] > 0)
-                if not all_strikes:
-                    continue
-                atm_strike = min(all_strikes, key=lambda s: abs(s - current_price))
-                
-                # Get both CE and PE tradingsymbols at ATM strike
-                ce_ts = None
-                pe_ts = None
-                for o in expiry_options:
-                    if o['strike'] == atm_strike:
-                        if o['type'] == 'CE':
-                            ce_ts = o['tradingsymbol']
-                        elif o['type'] == 'PE':
-                            pe_ts = o['tradingsymbol']
-                
-                if ce_ts or pe_ts:
-                    atm_map[symbol] = {
-                        'ce_tradingsymbol': ce_ts,
-                        'pe_tradingsymbol': pe_ts,
-                        'strike': atm_strike,
-                        'expiry': suitable_expiry,
-                        'current_price': current_price,
-                        'volume': stock_volumes.get(symbol, 0),
-                        'day_change_pct': stock_day_change_pct.get(symbol, 0.0)
-                    }
-            
-            logger.info(f"Built ATM option map for {len(atm_map)} stocks")
-            return atm_map
+        logger.info(f"Starting optimized CPR scan for {root_date.date()}")
+        start_time = time.time()
         
-        except Exception as e:
-            logger.error(f"Error building ATM option map: {e}")
-            return {}
+        # 1. Batch Quote all FO stocks + Indices to minimize API calls
+        stocks = self.get_fo_stocks()
+        all_symbols = self.INDEX_SYMBOLS + stocks
+        
+        # Split into batches of 200 (Kite limit)
+        all_quotes = {}
+        for i in range(0, len(all_symbols), 200):
+            batch = all_symbols[i:i+200]
+            quote_keys = [f"NSE:{s}" for s in batch]
+            self._rate_limit()
+            try:
+                batch_quotes = self.kite.quote(quote_keys)
+                all_quotes.update(batch_quotes)
+            except Exception as e:
+                logger.error(f"Batch quote failed: {e}")
+        
+        # 2. Pre-load NFO instruments ONCE for the entire run
+        if not self._nfo_instruments:
+            self._rate_limit()
+            self._nfo_instruments = self.kite.instruments('NFO')
+            logger.info("NFO Instruments pre-loaded for Greeks calculation")
+        atm_symbols_to_quote = []
+        symbol_to_atm_map = {} # symbol -> {'tradingsymbol': str, 'strike': float}
+        
+        for s in all_symbols:
+            quote_data = all_quotes.get(f"NSE:{s}")
+            spot_ltp = quote_data['last_price'] if quote_data else 0
+            if spot_ltp <= 0: continue
+            
+            # Find nearest CE for this spot price
+            symbol_nfo = [inst for inst in self._nfo_instruments if inst.get('name') == s]
+            if not symbol_nfo: continue
+            
+            symbol_nfo.sort(key=lambda x: x.get('expiry') or datetime.max.date())
+            nearest_expiry = symbol_nfo[0].get('expiry')
+            
+            all_strikes = sorted(list(set(float(inst['strike']) for inst in symbol_nfo if inst.get('strike'))))
+            if not all_strikes: continue
+            atm_strike = min(all_strikes, key=lambda x: abs(x - spot_ltp))
+            
+            opt_inst = next((inst for inst in symbol_nfo 
+                           if inst.get('expiry') == nearest_expiry 
+                           and float(inst.get('strike', 0)) == atm_strike 
+                           and inst.get('instrument_type') == 'CE'), None)
+            
+            if opt_inst:
+                ts = f"NFO:{opt_inst['tradingsymbol']}"
+                atm_symbols_to_quote.append(ts)
+                symbol_to_atm_map[s] = {
+                    'tradingsymbol': ts, 
+                    'strike': atm_strike,
+                    'expiry': nearest_expiry
+                }
 
+        # 3. Batch Quote all ATM options (max 200 per call)
+        atm_quotes = {}
+        for i in range(0, len(atm_symbols_to_quote), 200):
+            batch = atm_symbols_to_quote[i:i+200]
+            self._rate_limit()
+            try:
+                batch_quotes = self.kite.quote(batch)
+                atm_quotes.update(batch_quotes)
+            except Exception as e:
+                logger.error(f"ATM Option Batch quote failed: {e}")
+
+        results = {
+            "signals": [],
+            "weekly_cross": {"bullish": [], "bearish": []},
+            "reversals": {"bullish": [], "bearish": []},
+            "cpr_touch": {"above": [], "below": []},
+            "high_iv_stocks": [] # Restored: High IV stocks with full enrichment
+        }
+        
+        # Temp maps for enrichment
+        atm_map_for_enrich = {}
+        atm_ivs_for_enrich = {}
+
+        # Increase workers since most time is spent in I/O but rate limiter is global
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            # Pass the batched quote to each process_stock call
+            futures = {}
+            for s in all_symbols:
+                quote_data = all_quotes.get(f"NSE:{s}")
+                ltp = quote_data['last_price'] if quote_data else None
+                futures[executor.submit(self.process_stock, s, root_date, ltp, atm_quotes)] = s
+            
+            for future in as_completed(futures):
+                res = future.result()
+                if not res: continue
+                
+                # Check for High IV Percentile (> 80)
+                ivp = res.get('iv_percentile', 0)
+                if ivp > 80:
+                    symbol = res['symbol']
+                    results['high_iv_stocks'].append({
+                        'symbol': symbol,
+                        'iv_percentile': ivp,
+                        'current_price': res['current_price'],
+                        'day_change_pct': res['day_change_pct']
+                    })
+                    
+                    # Prepare data for enrichment call
+                    if symbol in symbol_to_atm_map:
+                        atm_info = symbol_to_atm_map[symbol]
+                        atm_map_for_enrich[symbol] = {
+                            'expiry': atm_info.get('expiry'),
+                            'current_price': res['current_price'],
+                            'volume': res['volume'],
+                            'day_change_pct': res['day_change_pct']
+                        }
+                        atm_ivs_for_enrich[symbol] = res.get('iv', 0) / 100.0 # Back to decimal
+
+                p = res['payloads']
+                if p['signal']: results['signals'].append(p['signal'])
+                
+                if p['weekly_cross']:
+                    if "ABOVE" in p['weekly_cross']['status']: results['weekly_cross']['bullish'].append(p['weekly_cross']['payload'])
+                    else: results['weekly_cross']['bearish'].append(p['weekly_cross']['payload'])
+                
+                if p['bullish_reversal']: results['reversals']['bullish'].append(p['bullish_reversal'])
+                if p['bearish_reversal']: results['reversals']['bearish'].append(p['bearish_reversal'])
+                
+                if p['cpr_touch_above']: results['cpr_touch']['above'].append(p['cpr_touch_above'])
+                if p['cpr_touch_below']: results['cpr_touch']['below'].append(p['cpr_touch_below'])
+
+        # Final Enrichment Pass: Add PCR, Max Pain to High IV stocks
+        if results['high_iv_stocks']:
+            try:
+                enriched = self._enrich_high_iv_stocks(results['high_iv_stocks'], atm_map_for_enrich, atm_ivs_for_enrich)
+                results['high_iv_stocks'] = enriched
+            except Exception as e:
+                logger.error(f"Post-enrichment failed: {e}")
+
+        # Sort high_iv_stocks by percentile descending
+        results['high_iv_stocks'].sort(key=lambda x: x.get('iv_percentile', 0), reverse=True)
+        
+        logger.info(f"CPR Scan completed in {time.time() - start_time:.2f} seconds")
+        return results
     def _enrich_high_iv_stocks(self, high_iv_stocks: List[Dict], atm_map: Dict, atm_ivs: Dict) -> List[Dict]:
         """
         Enrich high-IV stocks with option chain data: PCR, Max Pain, OI% Change.
@@ -1343,6 +1466,67 @@ class CPRFilterService:
                 max_pain_strike = test_strike
         
         return max_pain_strike
+
+    def _build_atm_option_map(self, stocks: List[str], stock_metadata: Optional[Dict[str, Dict]] = None) -> Dict[str, Dict]:
+        """
+        Efficiently find ATM CE and PE symbols for a list of stocks.
+        """
+        if not self._nfo_instruments:
+            self._rate_limit()
+            self._nfo_instruments = self.kite.instruments('NFO')
+            
+        atm_map = {}
+        for symbol in stocks:
+            try:
+                # Get current price from metadata or fallback to quote
+                metadata = stock_metadata.get(symbol) if stock_metadata else None
+                current_price = metadata['current_price'] if metadata else 0
+                
+                if current_price <= 0:
+                    self._rate_limit()
+                    quote = self.kite.quote([f"NSE:{symbol}"])
+                    if not quote: continue
+                    current_price = quote[f"NSE:{symbol}"]['last_price']
+                
+                # Find options for this symbol
+                symbol_nfo = [inst for inst in self._nfo_instruments if inst.get('name') == symbol]
+                if not symbol_nfo: continue
+                
+                # Sort by expiry and pick the nearest
+                symbol_nfo.sort(key=lambda x: x.get('expiry') or datetime.max.date())
+                nearest_expiry = symbol_nfo[0].get('expiry')
+                if not nearest_expiry: continue
+                
+                all_strikes = sorted(list(set(float(inst['strike']) for inst in symbol_nfo if inst.get('strike'))))
+                if not all_strikes: continue
+                atm_strike = min(all_strikes, key=lambda x: abs(x - current_price))
+                
+                expiry_dt = nearest_expiry if isinstance(nearest_expiry, date) else datetime.strptime(str(nearest_expiry), '%Y-%m-%d').date()
+                
+                ce_inst = next((inst for inst in symbol_nfo 
+                              if inst.get('expiry') == nearest_expiry 
+                              and float(inst.get('strike', 0)) == atm_strike 
+                              and inst.get('instrument_type') == 'CE'), None)
+                
+                pe_inst = next((inst for inst in symbol_nfo 
+                              if inst.get('expiry') == nearest_expiry 
+                              and float(inst.get('strike', 0)) == atm_strike 
+                              and inst.get('instrument_type') == 'PE'), None)
+                
+                if ce_inst or pe_inst:
+                    atm_map[symbol] = {
+                        'current_price': current_price,
+                        'strike': atm_strike,
+                        'expiry': expiry_dt,
+                        'ce_tradingsymbol': ce_inst['tradingsymbol'] if ce_inst else None,
+                        'pe_tradingsymbol': pe_inst['tradingsymbol'] if pe_inst else None,
+                        'volume': metadata.get('volume', 0) if metadata else 0,
+                        'day_change_pct': metadata.get('day_change_pct', 0) if metadata else 0
+                    }
+            except Exception as e:
+                logger.error(f"Failed to build ATM map for {symbol}: {e}")
+                
+        return atm_map
 
     def _batch_compute_iv_percentiles(self, stocks: List[str], stock_metadata: Optional[Dict[str, Dict]] = None) -> List[Dict]:
         """

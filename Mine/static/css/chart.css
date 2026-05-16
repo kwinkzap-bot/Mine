@@ -1,0 +1,176 @@
+.chart-page {
+    min-height: 100vh;
+}
+
+.chart-header {
+    background: white;
+    padding: 8px 15px;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    margin-bottom: 10px;
+}
+
+.chart-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.chart-control-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.chart-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+}
+
+.chart-input {
+    padding: 6px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 14px;
+    outline: none;
+}
+
+.chart-sep {
+    width: 1px;
+    height: 24px;
+    background-color: #e2e8f0;
+}
+
+.chart-checkbox,
+.chart-ema-chk {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
+    cursor: pointer;
+    color: #334155;
+}
+
+.chart-checkbox input,
+.chart-ema-chk input {
+    cursor: pointer;
+}
+
+.chart-btn {
+    padding: 6px 16px;
+    background-color: #6366f1;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.chart-btn:hover {
+    background-color: #4f46e5;
+}
+
+/* Grid Layout */
+.chart-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    /* Four charts per row */
+    gap: 2px;
+}
+
+.chart-item {
+    background: white;
+    border-radius: 6px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    padding: 4px;
+    height: 240px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+}
+
+.chart-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 2px;
+    border-bottom: 1px solid #f1f5f9;
+    margin-bottom: 4px;
+    position: relative;
+    z-index: 5;
+    background: white;
+}
+
+.chart-item-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1e293b;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chart-container {
+    flex: 1;
+    position: relative;
+    z-index: 1;
+}
+
+/* Custom Dropdown (same as other pages) */
+.search-container {
+    position: relative;
+}
+
+.custom-dropdown-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 250px;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.custom-dropdown-list li {
+    padding: 10px 15px;
+    cursor: pointer;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.custom-dropdown-list li:hover {
+    background: #f8fafc;
+    color: #6366f1;
+}
+
+.hidden {
+    display: none;
+}
+
+@media (max-width: 1400px) {
+    .chart-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (max-width: 1024px) {
+    .chart-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 600px) {
+    .chart-grid {
+        grid-template-columns: repeat(2, 1fr);
+        /* Two charts in row for <= 600px as requested */
+    }
+}

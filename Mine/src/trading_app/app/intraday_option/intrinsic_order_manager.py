@@ -68,8 +68,10 @@ class IntrinsicOrderManager:
         while not all(targets_reached):
             time.sleep(1)
             try:
-                ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
-                ltp = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', 0)
+                # Use correct exchange prefix for LTP
+                prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
+                ltp_data = kite.ltp([f'{prefix}:{kite_opt_sym}'])
+                ltp = ltp_data.get(f'{prefix}:{kite_opt_sym}', {}).get('last_price', 0)
                 if ltp == 0:
                     continue
 
@@ -100,9 +102,11 @@ class IntrinsicOrderManager:
                             elif broker_type == 'kotak_neo':
                                 service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type='SELL', quantity=qty_per_target)
                             elif broker_type == 'dhan':
-                                service.place_order(security_id=sec_id, transaction_type='SELL', quantity=qty_per_target, order_type='MARKET', product_type='INTRADAY', exchange_segment='NSE_FNO')
+                                exchange_seg = 'BSE_FNO' if symbol.upper() == 'SENSEX' else 'NSE_FNO'
+                                service.place_order(security_id=sec_id, transaction_type='SELL', quantity=qty_per_target, order_type='MARKET', product_type='INTRADAY', exchange_segment=exchange_seg)
                             elif broker_type == 'fyers':
-                                service.place_order(symbol=f'NSE:{kite_opt_sym}', side=-1, quantity=qty_per_target, order_type=2, product_type='INTRADAY')
+                                prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
+                                service.place_order(symbol=f'{prefix}:{kite_opt_sym}', side=-1, quantity=qty_per_target, order_type=2, product_type='INTRADAY')
                         except Exception as e:
                             logger.error(f"[Intrinsic Monitor] Failed to place target EXIT order: {e}")
             except Exception as e:

@@ -250,6 +250,7 @@ class FyersDataServiceAdapter:
             'NSE:NIFTY FIN SERVICE': 'NSE:FINNIFTY-INDEX',
             'NSE:NIFTY MID SELECT': 'NSE:MIDCPNIFTY-INDEX',
             'NSE:INDIA VIX': 'NSE:INDIAVIX-INDEX',
+            'BSE:SENSEX': 'BSE:SENSEX-INDEX',
         }
         
         fyers_symbols = []
@@ -258,7 +259,7 @@ class FyersDataServiceAdapter:
             fsym = KITE_TO_FYERS_MAP.get(s, s)
             if fsym.startswith('NSE:') and not any(fsym.endswith(x) for x in ['-EQ', '-INDEX', 'CE', 'PE', 'FUT']):
                 fsym = f"{fsym}-EQ"
-            elif fsym.startswith('BSE:') and not any(fsym.endswith(x) for x in ['-EQ', '-INDEX']):
+            elif fsym.startswith('BSE:') and not any(fsym.endswith(x) for x in ['-EQ', '-INDEX', 'CE', 'PE', 'FUT']):
                 fsym = f"{fsym}-EQ"
             else:
                 fsym = fsym.replace('NFO:', 'NSE:') if fsym.startswith('NFO:') else fsym
@@ -349,6 +350,7 @@ class FyersDataServiceAdapter:
     ) -> List[Dict[str, Any]]:
         try:
             _kite_to_fyers = {
+                '30second':  '30S',
                 'minute':    '1',
                 '2minute':   '2',
                 '3minute':   '3',
@@ -663,19 +665,30 @@ class FyersDataServiceAdapter:
         """
         Get the lot size for a symbol (Underlying or Trading Symbol).
         """
-        # 1. Check NFO cache
+        # 1. Check NFO and BFO caches
         nfo = self.instruments('NFO')
-        symbol_upper = symbol.upper()
+        bfo = self.instruments('BFO')
+        all_derivs = nfo + bfo
         
+        symbol_upper = symbol.upper()
+        # Common mapping for Sensex
+        search_names = [symbol_upper]
+        if symbol_upper == 'SENSEX':
+            search_names.append('BSESENSEX')
+        elif symbol_upper == 'BSESENSEX':
+            search_names.append('SENSEX')
+            
         # Check if it matches an underlying name (e.g. NIFTY)
-        for inst in nfo:
-            if inst.get('name') == symbol_upper:
+        for inst in all_derivs:
+            if inst.get('name') in search_names:
                 return int(inst.get('lot_size', 1))
         
         # Check if it matches a trading symbol (e.g. NIFTY26MAYFUT)
-        for inst in nfo:
+        for inst in all_derivs:
             if inst.get('tradingsymbol') == symbol_upper or inst.get('instrument_token') == symbol_upper:
                 return int(inst.get('lot_size', 1))
+        
+        return 1
                 
         # 2. Check NSE cache
         nse = self.instruments('NSE')
