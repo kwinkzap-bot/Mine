@@ -1,0 +1,1500 @@
+{% extends "base.html" %}
+
+{% block title %}Markets Overview - Stock Scanner{% endblock %}
+
+{% block head %}
+<style>
+    :root {
+        --mkt-bg: #090e17;
+        --mkt-card-bg: #111827;
+        --mkt-border: #1f2937;
+        --mkt-text: #f8fafc;
+        --mkt-text-muted: #94a3b8;
+        --mkt-accent: #3b82f6;
+        --mkt-up: #10b981;
+        --mkt-down: #f43f5e;
+        --mkt-neutral: #64748b;
+    }
+
+    .mkt-page.light-theme {
+        --mkt-bg: #f1f5f9;
+        --mkt-card-bg: #ffffff;
+        --mkt-border: #cbd5e1;
+        --mkt-text: #0f172a;
+        --mkt-text-muted: #475569;
+        --mkt-accent: #2563eb;
+    }
+
+    .mkt-page {
+        padding: 10px;
+        background: var(--mkt-bg);
+        min-height: calc(100vh - 60px);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        color: var(--mkt-text);
+    }
+
+    .mkt-header {
+        margin-bottom: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        border-bottom: 1px solid var(--mkt-border);
+        padding-bottom: 5px;
+    }
+
+    .mkt-header-title-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .mkt-header h1 {
+        font-size: 20px;
+        font-weight: 800;
+        color: var(--mkt-text);
+        letter-spacing: -0.02em;
+        margin: 0;
+    }
+
+    .mkt-header p {
+        color: var(--mkt-text-muted);
+        font-size: 12px;
+        margin: 0;
+    }
+
+    .live-dot {
+        width: 8px;
+        height: 8px;
+        background-color: var(--mkt-up);
+        border-radius: 50%;
+        box-shadow: 0 0 8px var(--mkt-up);
+        animation: pulse-glow 2s infinite ease-in-out;
+    }
+
+    @keyframes pulse-glow {
+
+        0%,
+        100% {
+            transform: scale(1);
+            opacity: 1;
+            box-shadow: 0 0 8px var(--mkt-up);
+        }
+
+        50% {
+            transform: scale(1.2);
+            opacity: 0.5;
+            box-shadow: 0 0 2px var(--mkt-up);
+        }
+    }
+
+    /* ── Grid Layout ────────────────────────────────────────── */
+    .mkt-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        align-items: stretch;
+        margin-bottom: 14px;
+    }
+
+    @media (max-width: 1200px) {
+        .mkt-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+    }
+
+    @media (max-width: 768px) {
+        .mkt-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* ── Premium Terminal Cards ─────────────────────────────── */
+    .mkt-card {
+        background: var(--mkt-card-bg);
+        border: 1px solid var(--mkt-border);
+        border-radius: 8px;
+        padding: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }
+
+    .mkt-card-hdr {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        padding-bottom: 6px;
+    }
+
+    .mkt-card-hdr h2 {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--mkt-text);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 0;
+    }
+
+    .mkt-card-hdr-meta {
+        font-size: 10px;
+        color: var(--mkt-text-muted);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+
+    .mkt-card-body {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        flex-grow: 1;
+        gap: 6px;
+    }
+
+    /* ── Watchlist Slim Scrollbar ─────────────────────────────── */
+    .mkt-card-scrollable {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 222px;
+        /* Matches exact height of 6 rows for perfect layout symmetry */
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+
+    .mkt-card-scrollable::-webkit-scrollbar {
+        width: 4px;
+    }
+
+    .mkt-card-scrollable::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .mkt-card-scrollable::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 2px;
+    }
+
+    .mkt-card-scrollable::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.2);
+    }
+
+    .mkt-flag {
+        font-size: 13px;
+        line-height: 1;
+        display: inline-flex;
+        align-items: center;
+        margin-right: 1px;
+    }
+
+    /* ── Uniform Rows ────────────────────────────────────────── */
+    .mkt-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 4px 8px;
+        background: rgba(255, 255, 255, 0.015);
+        border: 1px solid rgba(255, 255, 255, 0.03);
+        border-radius: 4px;
+        transition: all 0.2s ease;
+        height: 32px;
+    }
+
+    .mkt-row:hover {
+        background: rgba(255, 255, 255, 0.04);
+        border-color: rgba(255, 255, 255, 0.06);
+    }
+
+    .mkt-row-label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .mkt-name {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--mkt-text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+    }
+
+    .mkt-row-data {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .mkt-card-price {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--mkt-text);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .mkt-card-chg {
+        font-size: 10.5px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        min-width: 82px;
+        text-align: right;
+    }
+
+    .mkt-card-chg.up {
+        color: var(--mkt-up);
+    }
+
+    .mkt-card-chg.down {
+        color: var(--mkt-down);
+    }
+
+    /* ── FII/DII Bars ───────────────────────────────────────── */
+    .inst-bar-container {
+        flex-grow: 1;
+        margin: 0 10px;
+        height: 10px;
+        position: relative;
+        background: rgba(255, 255, 255, 0.04);
+        border-radius: 2px;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+    }
+
+    .inst-bar-center {
+        width: 1px;
+        height: 100%;
+        background: rgba(255, 255, 255, 0.15);
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 2;
+    }
+
+    .inst-bar {
+        height: 6px;
+        border-radius: 1px;
+        z-index: 1;
+        transition: width 0.3s ease;
+    }
+
+    .inst-val {
+        font-size: 11px;
+        font-weight: 700;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        min-width: 72px;
+    }
+
+    /* ── CPR Sentiment ──────────────────────────────────────── */
+    .cpr-range {
+        font-size: 11px;
+        color: var(--mkt-text-muted);
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        margin-right: 4px;
+    }
+
+    .cpr-status-badge {
+        font-size: 9px;
+        font-weight: 800;
+        padding: 2px 6px;
+        border-radius: 3px;
+        text-align: center;
+        min-width: 58px;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+    }
+
+    .cpr-status-badge.above {
+        background: rgba(16, 185, 129, 0.12);
+        color: var(--mkt-up);
+        border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    .cpr-status-badge.below {
+        background: rgba(244, 63, 94, 0.12);
+        color: var(--mkt-down);
+        border: 1px solid rgba(244, 63, 94, 0.2);
+    }
+
+    .cpr-status-badge.incpr {
+        background: rgba(245, 158, 11, 0.12);
+        color: #f59e0b;
+        border: 1px solid rgba(245, 158, 11, 0.2);
+    }
+
+    .cpr-type-badge {
+        font-size: 8.5px;
+        font-weight: 800;
+        padding: 2px 6px;
+        border-radius: 3px;
+        text-align: center;
+        min-width: 58px;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+    }
+
+    .cpr-type-badge.narrow {
+        background: rgba(14, 165, 233, 0.12);
+        /* Ocean Blue */
+        color: #38bdf8;
+        border: 1px solid rgba(14, 165, 233, 0.2);
+    }
+
+    .cpr-type-badge.average {
+        background: rgba(255, 255, 255, 0.04);
+        /* Slate / White */
+        color: var(--mkt-text-muted);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .cpr-type-badge.wide {
+        background: rgba(236, 72, 153, 0.12);
+        /* Pink / Violet */
+        color: #f472b6;
+        border: 1px solid rgba(236, 72, 153, 0.2);
+    }
+
+    /* ── Advance/Decline Summary ────────────────────────────── */
+    .mkt-ad-summary {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--mkt-font);
+    }
+
+    .mkt-ad-pill {
+        font-size: 10.5px;
+        font-weight: 800;
+        padding: 2px 8px;
+        border-radius: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .mkt-ad-total {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--mkt-text-muted);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .mkt-ad-adv {
+        background: rgba(16, 185, 129, 0.12);
+        color: var(--mkt-up);
+        border: 1px solid rgba(16, 185, 129, 0.2);
+    }
+
+    .mkt-ad-dec {
+        background: rgba(244, 63, 94, 0.12);
+        color: var(--mkt-down);
+        border: 1px solid rgba(244, 63, 94, 0.2);
+    }
+
+    .mkt-ad-unc {
+        background: rgba(255, 255, 255, 0.03);
+        color: #64748b;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    /* ── Heatmap ────────────────────────────────────────────── */
+    .mkt-heatmap-wrap {
+        background: var(--mkt-card-bg);
+        border: 1px solid var(--mkt-border);
+        border-radius: 8px;
+        padding: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    .mkt-heatmap-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+        gap: 4px;
+        width: 100%;
+    }
+
+    .mkt-index-select {
+        background: #090e17;
+        color: #f8fafc;
+        border: 1px solid #1f2937;
+        border-radius: 4px;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        outline: none;
+        transition: all 0.2s ease;
+        text-transform: uppercase;
+        font-family: inherit;
+    }
+
+    .mkt-index-select:hover {
+        background: #111827;
+        border-color: #374151;
+    }
+
+    .mkt-index-select option {
+        background: #111827;
+        color: #f8fafc;
+    }
+
+    .mkt-stock-box {
+        border-radius: 3px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        padding: 3px 4px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        height: 34px;
+        text-align: center;
+        border: 1px solid rgba(0, 0, 0, 0.25);
+        color: #ffffff;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    }
+
+    .mkt-stock-box:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.15);
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    .mkt-stock-box .sym {
+        font-weight: 700;
+        font-size: 9px;
+        letter-spacing: 0.02em;
+        line-height: 1.1;
+    }
+
+    .mkt-stock-box .val {
+        font-weight: 800;
+        font-size: 8.5px;
+        opacity: 0.95;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.1;
+        margin-top: 1px;
+    }
+
+    /* ── Skeleton Loading ───────────────────────────────────── */
+    .skeleton {
+        background: linear-gradient(90deg, #1f2937 25%, #374151 50%, #1f2937 75%);
+        background-size: 200% 100%;
+        animation: skeleton-loading 1.5s infinite;
+        border: none !important;
+    }
+
+    @keyframes skeleton-loading {
+        0% {
+            background-position: 200% 0;
+        }
+
+        100% {
+            background-position: -200% 0;
+        }
+    }
+
+    /* ── Theme Toggle Button ────────────────────────────────── */
+    .theme-toggle-btn {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--mkt-text);
+        border: 1px solid var(--mkt-border);
+        border-radius: 6px;
+        padding: 3px 7px;
+        font-size: 10px;
+        font-weight: 700;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        transition: all 0.2s ease;
+        outline: none;
+    }
+
+    .theme-toggle-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: var(--mkt-accent);
+    }
+
+    /* ── Light Theme Overrides ───────────────────────────────── */
+    .light-theme .mkt-row {
+        background: rgba(0, 0, 0, 0.015);
+        border: 1px solid rgba(0, 0, 0, 0.03);
+    }
+
+    .light-theme .mkt-row:hover {
+        background: rgba(0, 0, 0, 0.04);
+        border-color: rgba(0, 0, 0, 0.06);
+    }
+
+    .light-theme .mkt-index-select {
+        background: #ffffff;
+        color: #0f172a;
+        border: 1px solid #cbd5e1;
+    }
+
+    .light-theme .mkt-index-select:hover {
+        background: #f8fafc;
+        border-color: #94a3b8;
+    }
+
+    .light-theme .mkt-index-select option {
+        background: #ffffff;
+        color: #0f172a;
+    }
+
+    .light-theme .mkt-card-hdr {
+        border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    }
+
+    .light-theme .cpr-type-badge.average {
+        background: rgba(0, 0, 0, 0.04);
+        border: 1px solid rgba(0, 0, 0, 0.06);
+    }
+
+    .light-theme .mkt-ad-total {
+        background: rgba(0, 0, 0, 0.04);
+        border: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    .light-theme .mkt-ad-unc {
+        background: rgba(0, 0, 0, 0.02);
+        border: 1px solid rgba(0, 0, 0, 0.05);
+    }
+
+    .light-theme .mkt-card-scrollable::-webkit-scrollbar-thumb {
+        background: rgba(0, 0, 0, 0.15);
+    }
+
+    .light-theme .skeleton {
+        background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+    }
+
+    .light-theme .theme-toggle-btn {
+        background: rgba(0, 0, 0, 0.04);
+        color: var(--mkt-text);
+        border: 1px solid var(--mkt-border);
+    }
+
+    .light-theme .theme-toggle-btn:hover {
+        background: rgba(0, 0, 0, 0.08);
+        border-color: var(--mkt-accent);
+    }
+
+    /* ── Stock Hover CPR Tooltip ────────────────────────────── */
+    .mkt-tooltip {
+        position: absolute;
+        z-index: 10000;
+        background: rgba(15, 23, 42, 0.95);
+        /* Deep slate backdrop */
+        color: #f8fafc;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 11px;
+        font-family: var(--mkt-font);
+        pointer-events: none;
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(12px);
+        min-width: 180px;
+        transition: opacity 0.12s ease, transform 0.12s ease;
+        transform: scale(0.96);
+        opacity: 0;
+        display: none;
+    }
+
+    .mkt-tooltip.show {
+        opacity: 1;
+        transform: scale(1);
+        display: block;
+    }
+
+    .mkt-tooltip-hdr {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        padding-bottom: 5px;
+    }
+
+    .mkt-tooltip-sym {
+        font-weight: 800;
+        font-size: 13px;
+        letter-spacing: -0.01em;
+    }
+
+    .mkt-tooltip-price {
+        font-weight: 700;
+        font-size: 11px;
+    }
+
+    .mkt-tooltip-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
+    }
+
+    .mkt-tooltip-label {
+        color: var(--mkt-text-muted);
+        font-weight: 500;
+    }
+
+    .mkt-tooltip-val {
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* Multi-timeframe CPR Tooltip Row Styles */
+    .mkt-tooltip-cpr-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 5px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .mkt-tooltip-cpr-row:last-child {
+        margin-bottom: 0;
+        padding-bottom: 0;
+        border-bottom: none;
+    }
+
+    .mkt-tooltip-cpr-tf {
+        font-weight: 700;
+        font-size: 8.5px;
+        text-transform: uppercase;
+        width: 75px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--mkt-text-muted);
+    }
+
+    .mkt-tooltip-cpr-badge {
+        font-size: 6.5px;
+        font-weight: 800;
+        padding: 0px 3px;
+        border-radius: 2px;
+        letter-spacing: 0.01em;
+        line-height: 1.2;
+    }
+
+    .mkt-tooltip-cpr-badge.narrow {
+        background: rgba(14, 165, 233, 0.15);
+        color: #38bdf8;
+        border: 1px solid rgba(14, 165, 233, 0.3);
+    }
+
+    .mkt-tooltip-cpr-badge.average {
+        background: rgba(148, 163, 184, 0.15);
+        color: #94a3b8;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+    }
+
+    .mkt-tooltip-cpr-badge.wide {
+        background: rgba(244, 114, 182, 0.15);
+        color: #f472b6;
+        border: 1px solid rgba(244, 114, 182, 0.3);
+    }
+
+    .mkt-tooltip-cpr-range {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        font-size: 9px;
+        color: #cbd5e1;
+        text-align: right;
+        flex-grow: 1;
+    }
+
+    .mkt-tooltip-cpr-status {
+        font-size: 7.5px;
+        font-weight: 800;
+        padding: 1px 4px;
+        border-radius: 2px;
+        min-width: 42px;
+        text-align: center;
+        line-height: 1.3;
+    }
+
+    .mkt-tooltip-cpr-status.above {
+        background: rgba(16, 185, 129, 0.15);
+        color: #10b981;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .mkt-tooltip-cpr-status.below {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .mkt-tooltip-cpr-status.incpr {
+        background: rgba(245, 158, 11, 0.15);
+        color: #f59e0b;
+        border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    /* Light Theme overrides */
+    .light-theme .mkt-tooltip-cpr-range {
+        color: #334155;
+    }
+
+    .light-theme .mkt-tooltip-cpr-row {
+        border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    }
+
+    .light-theme .mkt-tooltip {
+        background: rgba(255, 255, 255, 0.98);
+        color: #0f172a;
+        border: 1px solid rgba(0, 0, 0, 0.12);
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.12);
+    }
+
+    .light-theme .mkt-tooltip-hdr {
+        border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mkt-page">
+    <header class="mkt-header">
+        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <div class="mkt-header-title-wrap">
+                <h1>Market Pulse</h1>
+                <div class="live-dot" title="Live terminal feed active"></div>
+            </div>
+            <button id="theme-toggle-btn" class="theme-toggle-btn" title="Toggle Light/Dark Theme">
+                ☀️ Light Mode
+            </button>
+        </div>
+    </header>
+
+    <div class="mkt-grid">
+        <!-- Indices (Perfect 6 Rows Alignment) -->
+        <div class="mkt-card">
+            <div class="mkt-card-hdr">
+                <h2>📈 Major Indices</h2>
+                <div class="mkt-card-hdr-meta">LIVE INDEX FEEDS</div>
+            </div>
+            <div class="mkt-card-body">
+                <div class="mkt-row" id="mkt-nifty">
+                    <div class="mkt-row-label">
+                        <span class="mkt-name">NIFTY 50</span>
+                    </div>
+                    <div class="mkt-row-data">
+                        <span class="mkt-card-price">--</span>
+                        <span class="mkt-card-chg">--</span>
+                    </div>
+                </div>
+
+                <div class="mkt-row" id="mkt-banknifty">
+                    <div class="mkt-row-label">
+                        <span class="mkt-name">BANK NIFTY</span>
+                    </div>
+                    <div class="mkt-row-data">
+                        <span class="mkt-card-price">--</span>
+                        <span class="mkt-card-chg">--</span>
+                    </div>
+                </div>
+
+
+
+                <div class="mkt-row" id="mkt-sensex">
+                    <div class="mkt-row-label">
+                        <span class="mkt-name">SENSEX</span>
+                    </div>
+                    <div class="mkt-row-data">
+                        <span class="mkt-card-price">--</span>
+                        <span class="mkt-card-chg">--</span>
+                    </div>
+                </div>
+
+                <div class="mkt-row" id="mkt-indiavix">
+                    <div class="mkt-row-label">
+                        <span class="mkt-name">INDIA VIX</span>
+                    </div>
+                    <div class="mkt-row-data">
+                        <span class="mkt-card-price">--</span>
+                        <span class="mkt-card-chg">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Institutional Activity (FII/DII - 6 Rows) -->
+        <div class="mkt-card">
+            <div class="mkt-card-hdr">
+                <h2>🏢 FII / DII Flow</h2>
+                <div class="mkt-card-hdr-meta" id="mkt-inst-date">--</div>
+            </div>
+            <div class="mkt-card-body">
+                <div class="mkt-row" id="row-fii-cash">
+                    <div class="mkt-row-label" style="min-width: 65px;">
+                        <span class="mkt-name">FII Cash</span>
+                    </div>
+                    <div class="inst-bar-container">
+                        <div class="inst-bar-center"></div>
+                        <div class="inst-bar" id="bar-fii-cash"></div>
+                    </div>
+                    <div class="inst-val" id="val-fii-cash">--</div>
+                </div>
+
+                <div class="mkt-row" id="row-dii-cash">
+                    <div class="mkt-row-label" style="min-width: 65px;">
+                        <span class="mkt-name">DII Cash</span>
+                    </div>
+                    <div class="inst-bar-container">
+                        <div class="inst-bar-center"></div>
+                        <div class="inst-bar" id="bar-dii-cash"></div>
+                    </div>
+                    <div class="inst-val" id="val-dii-cash">--</div>
+                </div>
+
+                <div class="mkt-row" id="row-fii-idx-fut">
+                    <div class="mkt-row-label" style="min-width: 65px;">
+                        <span class="mkt-name">Idx Fut</span>
+                    </div>
+                    <div class="inst-bar-container">
+                        <div class="inst-bar-center"></div>
+                        <div class="inst-bar" id="bar-fii-idx-fut"></div>
+                    </div>
+                    <div class="inst-val" id="val-fii-idx-fut">--</div>
+                </div>
+
+                <div class="mkt-row" id="row-fii-idx-opt">
+                    <div class="mkt-row-label" style="min-width: 65px;">
+                        <span class="mkt-name">Idx Opt</span>
+                    </div>
+                    <div class="inst-bar-container">
+                        <div class="inst-bar-center"></div>
+                        <div class="inst-bar" id="bar-fii-idx-opt"></div>
+                    </div>
+                    <div class="inst-val" id="val-fii-idx-opt">--</div>
+                </div>
+
+
+            </div>
+        </div>
+
+        <!-- Global Markets Watchlist (10 Indices, Symmetrical Height) -->
+        <div class="mkt-card">
+            <div class="mkt-card-hdr">
+                <h2>🌎 Global Markets</h2>
+                <div class="mkt-card-hdr-meta">WORLD WATCHLIST</div>
+            </div>
+            <div class="mkt-card-body">
+                <div class="mkt-card-scrollable">
+
+
+                    <div class="mkt-row" id="mkt-dji">
+                        <div class="mkt-row-label">
+                            <span class="mkt-flag">🇺🇸</span>
+                            <span class="mkt-name">Dow</span>
+                        </div>
+                        <div class="mkt-row-data">
+                            <span class="mkt-card-price">--</span>
+                            <span class="mkt-card-chg">--</span>
+                        </div>
+                    </div>
+
+                    <div class="mkt-row" id="mkt-dji_fut">
+                        <div class="mkt-row-label">
+                            <span class="mkt-flag">🇺🇸</span>
+                            <span class="mkt-name">Dow Futures</span>
+                        </div>
+                        <div class="mkt-row-data">
+                            <span class="mkt-card-price">--</span>
+                            <span class="mkt-card-chg">--</span>
+                        </div>
+                    </div>
+
+                    <div class="mkt-row" id="mkt-gspc">
+                        <div class="mkt-row-label">
+                            <span class="mkt-flag">🇺🇸</span>
+                            <span class="mkt-name">S&P</span>
+                        </div>
+                        <div class="mkt-row-data">
+                            <span class="mkt-card-price">--</span>
+                            <span class="mkt-card-chg">--</span>
+                        </div>
+                    </div>
+
+                    <div class="mkt-row" id="mkt-n225">
+                        <div class="mkt-row-label">
+                            <span class="mkt-flag">🇯🇵</span>
+                            <span class="mkt-name">NIKKEI</span>
+                        </div>
+                        <div class="mkt-row-data">
+                            <span class="mkt-card-price">--</span>
+                            <span class="mkt-card-chg">--</span>
+                        </div>
+                    </div>
+
+                    <div class="mkt-row" id="mkt-hsi">
+                        <div class="mkt-row-label">
+                            <span class="mkt-flag">🇭🇰</span>
+                            <span class="mkt-name">HANG SENG</span>
+                        </div>
+                        <div class="mkt-row-data">
+                            <span class="mkt-card-price">--</span>
+                            <span class="mkt-card-chg">--</span>
+                        </div>
+                    </div>
+
+                    <div class="mkt-row" id="mkt-daxi">
+                        <div class="mkt-row-label">
+                            <span class="mkt-flag">🇩🇪</span>
+                            <span class="mkt-name">DAX</span>
+                        </div>
+                        <div class="mkt-row-data">
+                            <span class="mkt-card-price">--</span>
+                            <span class="mkt-card-chg">--</span>
+                        </div>
+                    </div>
+
+                    <div class="mkt-row" id="mkt-fchi">
+                        <div class="mkt-row-label">
+                            <span class="mkt-flag">🇫🇷</span>
+                            <span class="mkt-name">CAC</span>
+                        </div>
+                        <div class="mkt-row-data">
+                            <span class="mkt-card-price">--</span>
+                            <span class="mkt-card-chg">--</span>
+                        </div>
+                    </div>
+
+                    <div class="mkt-row" id="mkt-ks11">
+                        <div class="mkt-row-label">
+                            <span class="mkt-flag">🇰🇷</span>
+                            <span class="mkt-name">KOSPI</span>
+                        </div>
+                        <div class="mkt-row-data">
+                            <span class="mkt-card-price">--</span>
+                            <span class="mkt-card-chg">--</span>
+                        </div>
+                    </div>
+
+                    <div class="mkt-row" id="mkt-ftse">
+                        <div class="mkt-row-label">
+                            <span class="mkt-flag">🇬🇧</span>
+                            <span class="mkt-name">FTSE 100</span>
+                        </div>
+                        <div class="mkt-row-data">
+                            <span class="mkt-card-price">--</span>
+                            <span class="mkt-card-chg">--</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CPR Sentiment (6 Rows) -->
+        <div class="mkt-card" id="mkt-cpr-wrap">
+            <div class="mkt-card-hdr">
+                <h2>🎯 NIFTY CPR Sentiment</h2>
+                <div class="mkt-card-hdr-meta">NIFTY BOUNDARIES</div>
+            </div>
+            <div class="mkt-card-body">
+                <div class="mkt-row" id="cpr-row-Hourly">
+                    <div class="mkt-row-label">
+                        <span class="mkt-name">Hourly</span>
+                        <div class="cpr-type-badge" id="type-Hourly">--</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div class="cpr-range" id="range-Hourly">--</div>
+                        <div class="cpr-status-badge" id="status-Hourly">--</div>
+                    </div>
+                </div>
+                <div class="mkt-row" id="cpr-row-Daily">
+                    <div class="mkt-row-label">
+                        <span class="mkt-name">Daily</span>
+                        <div class="cpr-type-badge" id="type-Daily">--</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div class="cpr-range" id="range-Daily">--</div>
+                        <div class="cpr-status-badge" id="status-Daily">--</div>
+                    </div>
+                </div>
+                <div class="mkt-row" id="cpr-row-Weekly">
+                    <div class="mkt-row-label">
+                        <span class="mkt-name">Weekly</span>
+                        <div class="cpr-type-badge" id="type-Weekly">--</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div class="cpr-range" id="range-Weekly">--</div>
+                        <div class="cpr-status-badge" id="status-Weekly">--</div>
+                    </div>
+                </div>
+                <div class="mkt-row" id="cpr-row-Monthly">
+                    <div class="mkt-row-label">
+                        <span class="mkt-name">Monthly</span>
+                        <div class="cpr-type-badge" id="type-Monthly">--</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div class="cpr-range" id="range-Monthly">--</div>
+                        <div class="cpr-status-badge" id="status-Monthly">--</div>
+                    </div>
+                </div>
+                <div class="mkt-row" id="cpr-row-6-Month">
+                    <div class="mkt-row-label">
+                        <span class="mkt-name">6-Month</span>
+                        <div class="cpr-type-badge" id="type-6-Month">--</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div class="cpr-range" id="range-6-Month">--</div>
+                        <div class="cpr-status-badge" id="status-6-Month">--</div>
+                    </div>
+                </div>
+                <div class="mkt-row" id="cpr-row-Yearly">
+                    <div class="mkt-row-label">
+                        <span class="mkt-name">Yearly</span>
+                        <div class="cpr-type-badge" id="type-Yearly">--</div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div class="cpr-range" id="range-Yearly">--</div>
+                        <div class="cpr-status-badge" id="status-Yearly">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Heatmap Section -->
+        <div class="mkt-heatmap-wrap" style="grid-column: 1 / -1;">
+            <div class="mkt-card-hdr"
+                style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 5px;">
+                    <h2 id="heatmap-title">📊 NIFTY Heatmap</h2>
+                    <select id="heatmap-index-select" class="mkt-index-select">
+                        <option value="NIFTY">NIFTY 50</option>
+                        <option value="BANKNIFTY">BANK NIFTY</option>
+                        <option value="FINNIFTY">FIN NIFTY</option>
+                        <option value="MIDCPNIFTY">MIDCAP NIFTY</option>
+                        <option value="SENSEX">SENSEX</option>
+                        <option value="NIFTY IT">NIFTY IT</option>
+                        <option value="NIFTY AUTO">NIFTY AUTO</option>
+                        <option value="NIFTY FMCG">NIFTY FMCG</option>
+                        <option value="NIFTY METAL">NIFTY METAL</option>
+                        <option value="NIFTY PHARMA">NIFTY PHARMA</option>
+                        <option value="NIFTY PSU BANK">NIFTY PSU BANK</option>
+                        <option value="NIFTY MIDCAP 150">NIFTY MIDCAP 150</option>
+                        <option value="NIFTY SMLCAP 100">NIFTY SMALLCAP 100</option>
+                    </select>
+                    <button id="heatmap-sort-btn" class="mkt-index-select" title="Toggle Sort Order">
+                        ⇅ High to Low
+                    </button>
+                    <div class="mkt-ad-summary" id="heatmap-ad-summary">
+                        <span class="mkt-ad-pill mkt-ad-total" id="ad-total" title="Total Stocks">Total: --</span>
+                        <span class="mkt-ad-pill mkt-ad-adv" id="ad-adv" title="Advances">▲ --</span>
+                        <span class="mkt-ad-pill mkt-ad-dec" id="ad-dec" title="Declines">▼ --</span>
+                        <span class="mkt-ad-pill mkt-ad-unc" id="ad-unc" title="Unchanged">--</span>
+                    </div>
+                </div>
+                <div class="mkt-card-hdr-meta">DAILY</div>
+            </div>
+            <div class="mkt-heatmap-grid" id="mkt-heatmap">
+                {% for i in range(50) %}
+                <div class="mkt-stock-box skeleton"></div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Premium Stock Hover CPR Tooltip -->
+        <div id="mkt-tooltip" class="mkt-tooltip"></div>
+    </div>
+    {% endblock %}
+
+    {% block scripts %}
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Theme Toggle Logic (strictly scoped to Markets page)
+            const themeBtn = document.getElementById('theme-toggle-btn');
+            const mktPage = document.querySelector('.mkt-page');
+
+            // Load saved preference
+            const savedTheme = localStorage.getItem('mkt-theme') || 'dark';
+            if (savedTheme === 'light') {
+                mktPage.classList.add('light-theme');
+                if (themeBtn) themeBtn.innerHTML = '🌙 Dark Mode';
+            }
+
+            if (themeBtn) {
+                themeBtn.addEventListener('click', () => {
+                    const isLight = mktPage.classList.toggle('light-theme');
+                    localStorage.setItem('mkt-theme', isLight ? 'light' : 'dark');
+                    themeBtn.innerHTML = isLight ? '🌙 Dark Mode' : '☀️ Light Mode';
+                });
+            }
+
+            // ── Hover Tooltip & CPR Caching Logic ───────────────────
+            const hoverCache = {};
+            let activeHoverSym = null;
+            const tooltip = document.getElementById('mkt-tooltip');
+
+            function positionTooltip(e) {
+                if (!tooltip) return;
+                const tooltipWidth = tooltip.offsetWidth || 180;
+                const tooltipHeight = tooltip.offsetHeight || 100;
+
+                let x = e.pageX + 12;
+                let y = e.pageY + 12;
+
+                // Boundary checks to keep tooltip fully visible on screen
+                if (x + tooltipWidth > window.innerWidth + window.scrollX) {
+                    x = e.pageX - tooltipWidth - 12;
+                }
+                if (y + tooltipHeight > window.innerHeight + window.scrollY) {
+                    y = e.pageY - tooltipHeight - 12;
+                }
+
+                tooltip.style.left = `${x}px`;
+                tooltip.style.top = `${y}px`;
+            }
+
+            function renderTooltipData(data) {
+                if (!tooltip || activeHoverSym !== data.symbol) return;
+
+                const tfData = data.cpr_timeframes || {};
+                const timeframes = ['Hourly', 'Daily', 'Weekly', 'Monthly', '6-Month', 'Yearly'];
+
+                let html = `
+                <div class="mkt-tooltip-hdr">
+                    <span class="mkt-tooltip-sym">${data.symbol}</span>
+                    <span class="mkt-tooltip-price">₹${data.price.toFixed(2)}</span>
+                </div>
+                <div class="mkt-tooltip-body">
+            `;
+
+                timeframes.forEach(tf => {
+                    const c = tfData[tf];
+                    if (c) {
+                        const badgeClass = c.cpr_type.toLowerCase();
+                        const statusClass = c.status.replace(' ', '').toLowerCase();
+
+                        html += `
+                        <div class="mkt-tooltip-cpr-row">
+                            <div class="mkt-tooltip-cpr-tf">
+                                <span>${tf}</span>
+                                <span class="mkt-tooltip-cpr-badge ${badgeClass}">${c.cpr_type}</span>
+                            </div>
+                            <span class="mkt-tooltip-cpr-range">${c.bc.toFixed(0)} - ${c.tc.toFixed(0)}</span>
+                            <span class="mkt-tooltip-cpr-status ${statusClass}">${c.status}</span>
+                        </div>
+                    `;
+                    } else {
+                        html += `
+                        <div class="mkt-tooltip-cpr-row">
+                            <div class="mkt-tooltip-cpr-tf">
+                                <span>${tf}</span>
+                                <span class="mkt-tooltip-cpr-badge average">--</span>
+                            </div>
+                            <span class="mkt-tooltip-cpr-range">--</span>
+                            <span class="mkt-tooltip-cpr-status below">--</span>
+                        </div>
+                    `;
+                    }
+                });
+
+                html += `</div>`;
+                tooltip.innerHTML = html;
+            }
+            const updateIndex = (id, name, price, chg, pct) => {
+                const card = document.getElementById(id);
+                if (!card) return;
+                const isUp = chg >= 0;
+
+                const priceEl = card.querySelector('.mkt-card-price');
+                if (priceEl) {
+                    priceEl.textContent = price.toLocaleString('en-IN', { minimumFractionDigits: 2 });
+                }
+
+                const chgEl = card.querySelector('.mkt-card-chg');
+                if (chgEl) {
+                    chgEl.className = `mkt-card-chg ${isUp ? 'up' : 'down'}`;
+                    chgEl.textContent = `${isUp ? '▲' : '▼'} ${Math.abs(chg).toFixed(2)} (${Math.abs(pct).toFixed(2)}%)`;
+                }
+            };
+
+            const updateInstPro = (data) => {
+                const MAX_VAL = 3000;
+                Object.entries(data).forEach(([key, val]) => {
+                    const bar = document.getElementById(`bar-${key}`);
+                    const valEl = document.getElementById(`val-${key}`);
+                    if (!bar || !valEl) return;
+                    const isPos = val >= 0;
+                    const width = Math.min((Math.abs(val) / MAX_VAL) * 100, 50);
+
+                    valEl.textContent = `${isPos ? '+' : ''}${val.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+                    valEl.style.color = isPos ? 'var(--mkt-up)' : 'var(--mkt-down)';
+
+                    bar.style.width = `${width}%`;
+                    bar.style.background = isPos ? 'var(--mkt-up)' : 'var(--mkt-down)';
+                    bar.style.position = 'absolute';
+                    if (isPos) {
+                        bar.style.left = '50%';
+                        bar.style.right = 'auto';
+                    } else {
+                        bar.style.left = 'auto';
+                        bar.style.right = '50%';
+                    }
+                });
+            };
+
+            const indexSelect = document.getElementById('heatmap-index-select');
+            let selectedIndex = indexSelect ? indexSelect.value : 'NIFTY';
+
+            const sortBtn = document.getElementById('heatmap-sort-btn');
+            let currentSort = 'desc';
+
+            if (indexSelect) {
+                indexSelect.addEventListener('change', (e) => {
+                    selectedIndex = e.target.value;
+                    const titleEl = document.getElementById('heatmap-title');
+                    if (titleEl) {
+                        const displayName = e.target.options[e.target.selectedIndex].text;
+                        titleEl.textContent = `📊 ${displayName} Heatmap`;
+                    }
+
+                    // Reset Advance/Decline summary to loading state
+                    const totalEl = document.getElementById('ad-total');
+                    const advEl = document.getElementById('ad-adv');
+                    const decEl = document.getElementById('ad-dec');
+                    const uncEl = document.getElementById('ad-unc');
+                    if (totalEl) totalEl.textContent = 'Total: --';
+                    if (advEl) advEl.textContent = '▲ --';
+                    if (decEl) decEl.textContent = '▼ --';
+                    if (uncEl) {
+                        uncEl.textContent = '--';
+                        uncEl.style.display = 'inline-flex';
+                    }
+
+                    // Show dynamic skeleton blocks corresponding to constituent counts
+                    const heatmap = document.getElementById('mkt-heatmap');
+                    if (heatmap) {
+                        heatmap.innerHTML = '';
+                        let blockCount = 10; // Default count for sectoral indices
+                        if (selectedIndex === 'NIFTY') blockCount = 50;
+                        else if (selectedIndex === 'BANKNIFTY') blockCount = 12;
+                        else if (selectedIndex === 'FINNIFTY') blockCount = 20;
+                        else if (selectedIndex === 'MIDCPNIFTY') blockCount = 25;
+                        else if (selectedIndex === 'SENSEX') blockCount = 30;
+                        else if (selectedIndex === 'NIFTY MIDCAP 150') blockCount = 25;
+
+                        for (let i = 0; i < blockCount; i++) {
+                            const box = document.createElement('div');
+                            box.className = 'mkt-stock-box skeleton';
+                            heatmap.appendChild(box);
+                        }
+                    }
+
+                    fetchMarketPulse();
+                });
+            }
+
+            if (sortBtn) {
+                sortBtn.addEventListener('click', () => {
+                    if (currentSort === 'desc') {
+                        currentSort = 'asc';
+                        sortBtn.innerHTML = '⇅ Low to High';
+                    } else {
+                        currentSort = 'desc';
+                        sortBtn.innerHTML = '⇅ High to Low';
+                    }
+                    fetchMarketPulse();
+                });
+            }
+
+            async function fetchMarketPulse() {
+                try {
+                    const response = await fetch(`/api/market-pulse?index=${selectedIndex}`);
+                    const data = await response.json();
+
+                    if (!data.success) return;
+
+                    // Update Indices
+                    if (data.indices.NIFTY) updateIndex('mkt-nifty', 'NIFTY 50', data.indices.NIFTY.price, data.indices.NIFTY.change, data.indices.NIFTY.pChange);
+                    if (data.indices.BANKNIFTY) updateIndex('mkt-banknifty', 'BANK NIFTY', data.indices.BANKNIFTY.price, data.indices.BANKNIFTY.change, data.indices.BANKNIFTY.pChange);
+                    if (data.indices.SENSEX) updateIndex('mkt-sensex', 'SENSEX', data.indices.SENSEX.price, data.indices.SENSEX.change, data.indices.SENSEX.pChange);
+                    if (data.indices.INDIAVIX) updateIndex('mkt-indiavix', 'INDIA VIX', data.indices.INDIAVIX.price, data.indices.INDIAVIX.change, data.indices.INDIAVIX.pChange);
+
+                    // Update Global Markets
+                    if (data.global && data.global.length > 0) {
+                        data.global.forEach(g => {
+                            updateIndex(`mkt-${g.id}`, g.name, g.price, g.change, g.pChange);
+                        });
+                    }
+
+                    // Update Institutional Activity
+                    if (data.institutional) {
+                        const dateEl = document.getElementById('mkt-inst-date');
+                        if (dateEl) dateEl.textContent = data.institutional.date;
+                        updateInstPro(data.institutional.data);
+                    }
+
+                    // Update CPR Status
+                    if (data.cpr) {
+                        Object.entries(data.cpr).forEach(([tf, lvl]) => {
+                            const rangeEl = document.getElementById(`range-${tf}`);
+                            const typeEl = document.getElementById(`type-${tf}`);
+                            const statusEl = document.getElementById(`status-${tf}`);
+                            if (!rangeEl || !statusEl) return;
+
+                            rangeEl.textContent = `${lvl.bc.toFixed(0)} - ${lvl.tc.toFixed(0)}`;
+                            statusEl.textContent = lvl.status;
+
+                            statusEl.className = 'cpr-status-badge'; // Reset classes
+                            if (lvl.status === 'ABOVE') {
+                                statusEl.classList.add('above');
+                            } else if (lvl.status === 'BELOW') {
+                                statusEl.classList.add('below');
+                            } else {
+                                statusEl.classList.add('incpr');
+                            }
+
+                            if (typeEl && lvl.cpr_type) {
+                                typeEl.textContent = lvl.cpr_type;
+                                typeEl.className = 'cpr-type-badge';
+                                typeEl.classList.add(lvl.cpr_type.toLowerCase());
+                            }
+                        });
+                    }
+
+                    // Update Heatmap
+                    if (data.heatmap && data.heatmap.length > 0) {
+                        const heatmap = document.getElementById('mkt-heatmap');
+                        heatmap.innerHTML = '';
+
+                        // Calculate Advances / Declines
+                        let total = data.heatmap.length;
+                        let advances = 0;
+                        let declines = 0;
+                        let unchanged = 0;
+
+                        data.heatmap.forEach(s => {
+                            if (s.pct > 0) advances++;
+                            else if (s.pct < 0) declines++;
+                            else unchanged++;
+                        });
+
+                        const totalEl = document.getElementById('ad-total');
+                        const advEl = document.getElementById('ad-adv');
+                        const decEl = document.getElementById('ad-dec');
+                        const uncEl = document.getElementById('ad-unc');
+
+                        if (totalEl) totalEl.textContent = `Total: ${total}`;
+                        if (advEl) advEl.textContent = `▲ ${advances}`;
+                        if (decEl) decEl.textContent = `▼ ${declines}`;
+                        if (uncEl) {
+                            uncEl.textContent = `UNCH: ${unchanged}`;
+                            uncEl.style.display = unchanged > 0 ? 'inline-flex' : 'none';
+                        }
+
+                        const sortedHeatmap = [...data.heatmap].sort((a, b) => {
+                            return currentSort === 'desc' ? b.pct - a.pct : a.pct - b.pct;
+                        });
+
+                        sortedHeatmap.forEach(s => {
+                            const box = document.createElement('div');
+                            box.className = 'mkt-stock-box';
+
+                            let color = '#475569'; // Neutral Slate
+                            if (s.pct >= 2) color = '#064e3b';      // Deep Green
+                            else if (s.pct >= 1) color = '#065f46'; // Emerald
+                            else if (s.pct > 0) color = '#0f766e';  // Teal Green
+                            else if (s.pct <= -2) color = '#881337'; // Deep Rose/Red
+                            else if (s.pct <= -1) color = '#9f1239'; // Premium red
+                            else if (s.pct < 0) color = '#be123c';  // Pinkish Red
+
+                            box.style.background = color;
+                            box.innerHTML = `
+                            <div class="sym">${s.sym}</div>
+                            <div class="val">${s.pct > 0 ? '+' : ''}${s.pct.toFixed(2)}%</div>
+                        `;
+
+                            // Tooltip & CPR hover interactions
+                            box.addEventListener('mouseenter', async (e) => {
+                                const sym = s.sym;
+                                activeHoverSym = sym;
+
+                                if (!tooltip) return;
+
+                                tooltip.style.display = 'block';
+                                tooltip.innerHTML = `
+                                <div class="mkt-tooltip-hdr">
+                                    <span class="mkt-tooltip-sym">${sym}</span>
+                                    <span class="mkt-tooltip-price">₹${s.price ? s.price.toFixed(2) : '--'}</span>
+                                </div>
+                                <div style="display: flex; align-items: center; gap: 8px; justify-content: center; padding: 12px 0;">
+                                    <div class="live-dot" style="width: 6px; height: 6px; background-color: var(--mkt-accent); box-shadow: 0 0 6px var(--mkt-accent);"></div>
+                                    <span style="font-weight: 600; color: var(--mkt-text-muted); font-size: 10px;">Fetching CPR...</span>
+                                </div>
+                            `;
+
+                                positionTooltip(e);
+                                tooltip.classList.add('show');
+
+                                if (hoverCache[sym]) {
+                                    renderTooltipData(hoverCache[sym]);
+                                } else {
+                                    try {
+                                        const res = await fetch(`/api/stock-cpr?symbol=${sym}`);
+                                        const json = await res.json();
+                                        if (json.success && activeHoverSym === sym) {
+                                            hoverCache[sym] = json;
+                                            renderTooltipData(json);
+                                        }
+                                    } catch (err) {
+                                        console.error('Error fetching stock CPR:', err);
+                                        if (activeHoverSym === sym) {
+                                            tooltip.innerHTML = `
+                                            <div class="mkt-tooltip-hdr">
+                                                <span class="mkt-tooltip-sym">${sym}</span>
+                                            </div>
+                                            <div style="color: var(--mkt-down); font-weight: 700; text-align: center; padding: 6px 0; font-size: 10px;">
+                                                ⚠️ Failed to load CPR
+                                            </div>
+                                        `;
+                                        }
+                                    }
+                                }
+                            });
+
+                            box.addEventListener('mousemove', (e) => {
+                                positionTooltip(e);
+                            });
+
+                            box.addEventListener('mouseleave', () => {
+                                activeHoverSym = null;
+                                if (tooltip) {
+                                    tooltip.classList.remove('show');
+                                    tooltip.style.display = 'none';
+                                }
+                            });
+
+                            heatmap.appendChild(box);
+                        });
+                    }
+
+                } catch (error) {
+                    console.error('Error fetching market pulse:', error);
+                }
+            }
+
+            // Initial fetch
+            fetchMarketPulse();
+
+            // Poll every 5 seconds for absolute high fidelity live terminal updates
+            setInterval(fetchMarketPulse, 5000);
+        });
+    </script>
+    {% endblock %}

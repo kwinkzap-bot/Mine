@@ -41,7 +41,7 @@ window.addEventListener('load', () => {
         updateTimeframeLabels(tfPicker.value);
     }
 
-    setStatus('⏳ Loading initial data...');
+    setEmaStatus('⏳ Loading initial data...');
     loadEmaData();
 
     // ── Auto-refresh — skip historical dates (same guard as CPR filter) ────────
@@ -71,7 +71,7 @@ window.addEventListener('load', () => {
         const tbl = document.getElementById(tid);
         if (!tbl) return;
         tbl.querySelectorAll('th[data-col]').forEach(th => {
-            th.addEventListener('click', () => sortTable(tid, th.dataset.col));
+            th.addEventListener('click', () => sortEmaTable(tid, th.dataset.col));
         });
     });
 });
@@ -91,7 +91,7 @@ async function loadEmaData() {
     _emaLastAt   = now;
 
     const isInitial = (document.getElementById('ema-status-text')?.textContent || '').includes('initial');
-    setStatus(isInitial
+    setEmaStatus(isInitial
         ? '⏳ Loading initial data...'
         : `⏳ Refreshing data... (Last: ${new Date().toLocaleTimeString()})`
     );
@@ -146,16 +146,16 @@ async function loadEmaData() {
 
             const titleStr = document.getElementById('primary-results-title')?.textContent?.split(' Touch')[0] || tf;
             const dateLabel = selectedDate ? ` [${selectedDate}]` : '';
-            setStatus(
+            setEmaStatus(
                 `✅ Last update: ${new Date().toLocaleTimeString()}${dateLabel} | ` +
                 `${titleStr}: ${results.length} match${results.length !== 1 ? 'es' : ''}`
             );
         } else if (response && !response.needs_login) {
-            setStatus(`❌ Error: ${response.message || response.error || 'Unknown error'}`);
+            setEmaStatus(`❌ Error: ${response.message || response.error || 'Unknown error'}`);
         }
     } catch (err) {
         console.error('EMA filter fetch error:', err);
-        setStatus(`❌ Network error: ${err.message}`);
+        setEmaStatus(`❌ Network error: ${err.message}`);
     } finally {
         _emaInFlight = false;
         if (btn) btn.disabled = false;
@@ -218,7 +218,7 @@ function renderTable(type, results) {
 }
 
 // ─── Sort ─────────────────────────────────────────────────────────────────────
-function sortTable(tableId, colStr) {
+function sortEmaTable(tableId, colStr) {
     const col   = parseInt(colStr, 10);
     const table = document.getElementById(tableId);
     if (!table) return;
@@ -252,7 +252,7 @@ function sortTable(tableId, colStr) {
 }
 
 // ─── Status helper ────────────────────────────────────────────────────────────
-function setStatus(msg) {
+function setEmaStatus(msg) {
     const el = document.getElementById('ema-status-text');
     if (el) el.textContent = msg;
 }

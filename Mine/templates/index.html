@@ -207,12 +207,13 @@
                     }
                 } else if (broker.login_type === 'modal' && broker.login_action && broker.auth_endpoint) {
                     // JavaScript action (modal, etc.) - call function with endpoint
+                    const cleanAction = broker.login_action.replace('()', '');
                     html += `
                         <div class="broker-btn-wrapper">
                             <button 
                                 class="btn broker-login-btn" 
                                 id="${buttonId}"
-                                onclick="window.${broker.login_action}('${broker.auth_endpoint}')"
+                                onclick="window.${cleanAction}('${broker.auth_endpoint}')"
                                 title="${broker.description}"
                                 style="background-color: ${brokerColor}; color: white; font-weight: 500;"
                             >

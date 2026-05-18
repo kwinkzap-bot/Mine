@@ -1,0 +1,57 @@
+//@version=5
+indicator("Dual Gap-Failure Pattern (FAIL/SUCCESS)", overlay=true)
+
+// --- Inputs ---
+checkCloseMode = input.string("Prev Body", "Close Cross Requirement:", options=["Prev Body", "Prev Close"])
+signalColorFail = input.color(color.red, "Fail (Top) Color")
+signalColorSucc = input.color(color.green, "Success (Bottom) Color")
+showLabels      = input.bool(true, "Show Pattern Labels")
+showEngulfing   = input.bool(true, "Show Engulfing")
+showStopHunt    = input.bool(true, "Show Stop Hunt")
+
+// --- 1. Top Failure Logic (Bearish) ---
+isGreenPrev = close[1] > open[1]
+cond_openF  = open > close[1]
+cond_lowF   = low < low[1]
+cond_closeF = checkCloseMode == "Prev Body" ? (close < open[1]) : (close < close[1])
+
+patternFailEngulfing = isGreenPrev and cond_openF and (high < high[1]) and cond_lowF and cond_closeF
+patternFailStopHunt  = isGreenPrev and cond_openF and (high > high[1]) and cond_lowF and cond_closeF
+
+patternFail = (showEngulfing and patternFailEngulfing) or (showStopHunt and patternFailStopHunt)
+
+// --- 2. Bottom Success Logic (Bullish) ---
+isRedPrev   = close[1] < open[1]
+cond_openS  = open < close[1]
+cond_highS  = high > high[1]
+cond_closeS = checkCloseMode == "Prev Body" ? (close > open[1]) : (close > close[1])
+
+patternSuccessEngulfing = isRedPrev and cond_openS and (low > low[1]) and cond_highS and cond_closeS
+patternSuccessStopHunt  = isRedPrev and cond_openS and (low < low[1]) and cond_highS and cond_closeS
+
+patternSuccess = (showEngulfing and patternSuccessEngulfing) or (showStopHunt and patternSuccessStopHunt)
+
+// --- Visuals: Top Failure ---
+plotshape(patternFail and showLabels, 
+          title="Fail Label", style=shape.labeldown, location=location.abovebar, 
+          color=signalColorFail, text="SELL", textcolor=color.white, size=size.small)
+
+plotshape(patternFail and not showLabels, 
+          title="Fail Icon", style=shape.triangledown, location=location.abovebar, 
+          color=signalColorFail, size=size.small)
+
+// --- Visuals: Bottom Success ---
+plotshape(patternSuccess and showLabels, 
+          title="Success Label", style=shape.labelup, location=location.belowbar, 
+          color=signalColorSucc, text="BUY", textcolor=color.white, size=size.small)
+
+plotshape(patternSuccess and not showLabels, 
+          title="Success Icon", style=shape.triangleup, location=location.belowbar, 
+          color=signalColorSucc, size=size.small)
+
+// Highlight Bars
+barcolor(patternFail ? color.new(signalColorFail, 20) : patternSuccess ? color.new(signalColorSucc, 20) : na)
+
+// --- Alerts ---
+alertcondition(patternFail, "Bearish Trap (FAIL)", "Top failure pattern detected.")
+alertcondition(patternSuccess, "Bullish Trap (SUCCESS)", "Bottom reversal pattern detected.")

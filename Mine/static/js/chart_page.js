@@ -6,7 +6,7 @@
 
 let charts = {}; // Store chart instances: { interval: { chartObj, series, indicators } }
 let currentSymbol = 'NIFTY';
-let allSymbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'];
+let allSymbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTY MIDCAP 150', 'NIFTY AUTO', 'NIFTY Smallcap 100', 'NIFTY FMCG', 'NIFTY METAL', 'NIFTY PHARMA', 'NIFTY PSU BANK', 'NIFTY IT'];
 const intervals = ['minute', '3minute', '5minute', '60minute']; // Commented: '15minute', 'day', 'week', 'month'
 const intervalLabels = {
     'minute': '1m',

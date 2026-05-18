@@ -107,7 +107,12 @@ def _monthly_resample(df: pd.DataFrame) -> pd.DataFrame:
 class EmaRsiFilterService:
     """Filter F&O stocks by EMA-208 touch or RSI-208 in 49–51 range (Weekly + Daily)."""
 
-    INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
+    INDEX_SYMBOLS = {
+        "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50",
+        "NIFTY MIDCAP 150", "NIFTY AUTO", "NIFTY Smallcap 100", "NIFTY SMLCAP 100",
+        "NIFTY FMCG", "NIFTY METAL", "NIFTY PHARAMA", "NIFTY PHARMA",
+        "NIFTY PSU BANK", "NIFTY IT"
+    }
     MAX_WORKERS = 3
 
     TIMEFRAME_CONFIG = {

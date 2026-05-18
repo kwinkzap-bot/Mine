@@ -23,6 +23,35 @@ logger = logging.getLogger(__name__)
 _global_cache = {}
 _global_cache_lock = threading.Lock()
 
+import pickle
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache")
+_CACHE_FILE = os.path.join(_CACHE_DIR, "cpr_historical_candles_v1.pkl")
+
+def _load_cpr_cache():
+    global _global_cache
+    if os.path.exists(_CACHE_FILE):
+        try:
+            with open(_CACHE_FILE, 'rb') as f:
+                loaded = pickle.load(f)
+                if isinstance(loaded, dict):
+                    _global_cache.update(loaded)
+                    logger.info(f"Loaded {len(_global_cache)} cached historical series from disk cache.")
+        except Exception as e:
+            logger.warning(f"Failed to load CPR disk cache: {e}")
+
+def _save_cpr_cache():
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with _global_cache_lock:
+            data_to_save = dict(_global_cache)
+        with open(_CACHE_FILE, 'wb') as f:
+            pickle.dump(data_to_save, f)
+    except Exception as e:
+        logger.warning(f"Failed to save CPR disk cache: {e}")
+
+# Load on module load
+_load_cpr_cache()
+
 # Global cache for per-stock Historical Volatility data (valid 24h)
 _global_hv_cache = {}
 
@@ -56,6 +85,8 @@ class CPRLevels:
     previous_close: float
     prev_month_high: float
     prev_month_low: float
+    daily_cam_r3: float = 0.0
+    daily_cam_s3: float = 0.0
 
 # Type aliases for clearer payload structure
 SignalPayload = Dict[str, Union[float, str]]
@@ -64,16 +95,19 @@ FilterResult = Dict[str, Union[List[SignalPayload], WeeklyCrossPayload, Dict[str
 
 class CPRFilterService:
     PERCENTAGE_DIFF_THRESHOLD = 3.0
-    INDEX_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY']
+    INDEX_SYMBOLS = [
+        'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'NIFTYNXT50', 'INDIAVIX', 'BANKEX',
+        'NIFTY MIDCAP 150', 'NIFTY AUTO', 'NIFTY Smallcap 100', 'NIFTY SMLCAP 100', 'NIFTY FMCG',
+        'NIFTY METAL', 'NIFTY PHARAMA', 'NIFTY PHARMA', 'NIFTY PSU BANK', 'NIFTY IT'
+    ]
     API_RATE_LIMIT_DELAY = 0.34  # Using global rate limiter now
-    MAX_WORKERS = 4  # Workers queue behind global rate limiter (3 req/sec max)
+    MAX_WORKERS = 15  # Increased workers to saturate rate limits during parallel HTTP waits
 
     CROSS_ABOVE_WEEKLY = "↗ CROSSED ABOVE WEEKLY CPR"
     CROSS_BELOW_WEEKLY = "↘ CROSSED BELOW WEEKLY CPR"
     BULLISH_REVERSAL = "🐂 BULLISH REVERSAL (M S1/Low)"
     BEARISH_REVERSAL = "🐻 BEARISH REVERSAL (M R1/High)"
-    CPR_TOUCH_ABOVE = "🟢 MONTHLY CPR TOUCH (Closed Above)"
-    CPR_TOUCH_BELOW = "🔴 MONTHLY CPR TOUCH (Closed Below)"
+
 
     def __init__(self, kite_instance=None):
         from trading_app.service.provider_logic import get_data_provider
@@ -159,6 +193,7 @@ class CPRFilterService:
             with self._cache_lock:
                 self._historical_data_cache[key] = df
             
+            _save_cpr_cache()
             return df
         except Exception as e:
             logger.error(f"Hist data failed for {symbol}: {e}")
@@ -223,6 +258,7 @@ class CPRFilterService:
             df.index = pd.to_datetime(df.index)
             with self._cache_lock:
                 self._historical_data_cache[key] = df
+            _save_cpr_cache()
             logger.debug(f"Cached {len(df)} rows for {symbol} {from_date.date()} to {to_date.date()}")
             return df
         except Exception as e:
@@ -305,11 +341,17 @@ class CPRFilterService:
         y_h, y_l, y_c = float(year_df['high'].max()), float(year_df['low'].min()), float(year_df['close'].iloc[-1])
         y_pp, y_bc, y_tc = CPRService.calculate_cpr(y_h, y_l, y_c)
         
+        # Calculate Daily Camarilla R3 and S3 from previous day OHLC
+        d_cam_range = h - l
+        d_cam_r3 = c + d_cam_range * 1.1 / 4.0
+        d_cam_s3 = c - d_cam_range * 1.1 / 4.0
+        
         # Current candle OHLC is already set at the beginning of this function
         
         return CPRLevels(d_pp, d_bc, d_tc, w_pp, w_bc, w_tc, m_pp, m_bc, m_tc, m_s1, m_r1, m_s05, m_r05,
                         m_cam_r3, m_cam_s3,
-                        y_pp, y_bc, y_tc, curr_price, curr_open, curr_high, curr_low, c, m_h, m_l)
+                        y_pp, y_bc, y_tc, curr_price, curr_open, curr_high, curr_low, c, m_h, m_l,
+                        d_cam_r3, d_cam_s3)
 
     def calculate_rsi(self, prices: List[float], period: int = 21) -> List[float]:
         """Standard Wilder's RSI calculation - Aligned exactly with Pine Script RMA."""
@@ -471,10 +513,7 @@ class CPRFilterService:
             # For bearish reversal, relevant levels are Monthly R1 and Prev Month High
             # Use m_gap for distance from Monthly R1
             return 0.0, 0.0, round(abs(price - levels.monthly_r1) / max(levels.monthly_r1, 1e-6) * 100, 2)
-        elif status == self.CPR_TOUCH_ABOVE:
-            return 0.0, 0.0, round(abs(price - levels.monthly_pp) / max(levels.monthly_pp, 1e-6) * 100, 2)
-        elif status == self.CPR_TOUCH_BELOW:
-            return 0.0, 0.0, round(abs(price - levels.monthly_pp) / max(levels.monthly_pp, 1e-6) * 100, 2)
+
         return 0.0, 0.0, 0.0
 
     def detect_weekly_cross(self, levels: CPRLevels) -> Optional[str]:
@@ -554,79 +593,37 @@ class CPRFilterService:
             return self.BEARISH_REVERSAL
         return None
 
-    def detect_cpr_touch_closed_above(self, levels: CPRLevels) -> Optional[str]:
+    def detect_camarilla_cpr_reversal(self, levels: CPRLevels) -> Tuple[Optional[str], Optional[str]]:
         """
-        Daily candle touches the Monthly CPR and closes ABOVE.
-        Conditions:
-        1. Touch: daily low dipped into CPR zone (low <= monthly_tc)
-        2. Close above monthly TC
-        3. Green candle (close > open)
-        4. Upper wick <= 40% of candle range
-        5. Gap between close and Monthly Camarilla R3 > 2%
-        6. Monthly CPR must NOT be narrow (TC-BC spread > 0.5% of PP)
+        Detects Monthly Camarilla S3 / R3 inside Monthly CPR reversals:
+        - Buy: Monthly Camarilla S3 is inside Monthly CPR, daily candle touched C-S3 (low <= S3) and closed above C-S3 (close > S3).
+        - Sell: Monthly Camarilla R3 is inside Monthly CPR, daily candle touched C-R3 (high >= R3) and closed below C-R3 (close < R3).
         """
-        # Monthly CPR must not be narrow
-        cpr_spread = abs(levels.monthly_tc - levels.monthly_bc)
-        cpr_spread_pct = cpr_spread / max(levels.monthly_pp, 1e-6) * 100
-        if cpr_spread_pct < 0.5:
-            return None
+        cpr_min = min(levels.monthly_bc, levels.monthly_tc)
+        cpr_max = max(levels.monthly_bc, levels.monthly_tc)
+        
+        buy_signal = None
+        sell_signal = None
+        
+        # Buy check
+        s3_inside_cpr = cpr_min <= levels.monthly_cam_s3 <= cpr_max
+        if s3_inside_cpr:
+            touched_s3 = levels.current_low <= levels.monthly_cam_s3
+            closed_above_s3 = levels.current_price > levels.monthly_cam_s3
+            if touched_s3 and closed_above_s3:
+                buy_signal = "🟢 CAMARILLA S3 REVERSAL"
+                
+        # Sell check
+        r3_inside_cpr = cpr_min <= levels.monthly_cam_r3 <= cpr_max
+        if r3_inside_cpr:
+            touched_r3 = levels.current_high >= levels.monthly_cam_r3
+            closed_below_r3 = levels.current_price < levels.monthly_cam_r3
+            if touched_r3 and closed_below_r3:
+                sell_signal = "🔴 CAMARILLA R3 REVERSAL"
+                
+        return buy_signal, sell_signal
 
-        touched_cpr = levels.current_low <= levels.monthly_tc
-        closed_above = levels.current_price > levels.monthly_tc
-        is_green = levels.current_price > levels.current_open
 
-        # Upper wick <= 40% of candle range
-        candle_range = levels.current_high - levels.current_low
-        if candle_range <= 0:
-            return None
-        upper_wick = levels.current_high - levels.current_price  # high - close for green candle
-        wick_ratio = upper_wick / candle_range
-        wick_ok = wick_ratio <= 0.20
-
-        # Gap between close and Monthly Camarilla R3 > 2%
-        cam_r3_gap = abs(levels.monthly_cam_r3 - levels.current_price) / max(levels.current_price, 1e-6) * 100
-        cam_gap_ok = cam_r3_gap > 3.0
-
-        if touched_cpr and closed_above and is_green and wick_ok and cam_gap_ok:
-            return self.CPR_TOUCH_ABOVE
-        return None
-
-    def detect_cpr_touch_closed_below(self, levels: CPRLevels) -> Optional[str]:
-        """
-        Daily candle touches the Monthly CPR and closes BELOW.
-        Conditions:
-        1. Touch: daily high reached into CPR zone (high >= monthly_bc)
-        2. Close below monthly BC
-        3. Red candle (close < open)
-        4. Lower wick <= 40% of candle range
-        5. Gap between close and Monthly Camarilla S3 > 2%
-        6. Monthly CPR must NOT be narrow (TC-BC spread > 0.5% of PP)
-        """
-        # Monthly CPR must not be narrow
-        cpr_spread = abs(levels.monthly_tc - levels.monthly_bc)
-        cpr_spread_pct = cpr_spread / max(levels.monthly_pp, 1e-6) * 100
-        if cpr_spread_pct < 0.5:
-            return None
-
-        touched_cpr = levels.current_high >= levels.monthly_bc
-        closed_below = levels.current_price < levels.monthly_bc
-        is_red = levels.current_price < levels.current_open
-
-        # Lower wick <= 40% of candle range
-        candle_range = levels.current_high - levels.current_low
-        if candle_range <= 0:
-            return None
-        lower_wick = levels.current_price - levels.current_low  # close - low for red candle
-        wick_ratio = lower_wick / candle_range
-        wick_ok = wick_ratio <= 0.20
-
-        # Gap between close and Monthly Camarilla S3 > 2%
-        cam_s3_gap = abs(levels.current_price - levels.monthly_cam_s3) / max(levels.current_price, 1e-6) * 100
-        cam_gap_ok = cam_s3_gap > 3.0
-
-        if touched_cpr and closed_below and is_red and wick_ok and cam_gap_ok:
-            return self.CPR_TOUCH_BELOW
-        return None
 
     def calculate_stock_iv_percentile(self, symbol: str, atm_iv: float) -> Optional[float]:
         """
@@ -884,24 +881,12 @@ class CPRFilterService:
                 logger.debug(f"{symbol}: No CPR levels calculated")
                 return None
             
-            primary_status = self.evaluate_status(cpr)
-            weekly_cross_status = self.detect_weekly_cross(cpr)
-            bullish_reversal = self.detect_bullish_reversal(cpr)
-            bearish_reversal = self.detect_bearish_reversal(cpr)
-            cpr_touch_above = self.detect_cpr_touch_closed_above(cpr)
-            cpr_touch_below = self.detect_cpr_touch_closed_below(cpr)
-
+            cam_bullish_rev, cam_bearish_rev = self.detect_camarilla_cpr_reversal(cpr)
             payloads: Dict[str, Optional[Dict]] = {
-                'signal': None, 
-                'weekly_cross': None,
-                'bullish_reversal': None,
-                'bearish_reversal': None,
-                'cpr_touch_above': None,
-                'cpr_touch_below': None,
-                'drsi_bullish': None,
-                'drsi_bearish': None,
                 'drsi_reversal_bullish': None,
-                'drsi_reversal_bearish': None
+                'drsi_reversal_bearish': None,
+                'camarilla_cpr_reversal_bullish': None,
+                'camarilla_cpr_reversal_bearish': None
             }
 
             # Phase D-RSI: Delta-RSI Filter (Daily) - Use the same shared data
@@ -927,57 +912,21 @@ class CPRFilterService:
                 drsi_vals, sig_vals = self.calculate_delta_rsi(rsi_vals, window=21, degree=2)
                 
                 if len(drsi_vals) >= 3:
-                    in_long = False
-                    in_short = False
-                    trigger_type = ""
-                    trigger_today = False
-                    flip_up_today = False
-                    flip_down_today = False
+                    d = drsi_vals[-1]
+                    d1 = drsi_vals[-2]
+                    d2 = drsi_vals[-3]
                     
-                    # Iterate through history to track Zero-cross states and Whipsaw Flips
-                    for i in range(2, len(drsi_vals)):
-                        d = drsi_vals[i]
-                        d1 = drsi_vals[i-1]
-                        d2 = drsi_vals[i-2]
-                        
-                        # Primary oscillator crossovers (Zero-Cross) Today
-                        crossup = (d1 <= 0 and d > 0)
-                        crossdw = (d1 >= 0 and d < 0)
-                        
-                        # Oscillator crossovers Yesterday
-                        prev_crossup = (d2 <= 0 and d1 > 0)
-                        prev_crossdw = (d2 >= 0 and d1 < 0)
-                        
-                        # 1-Bar Whipsaw (Back-to-back opposite Zero-Crosses)
-                        flip_up_today_cond = (prev_crossdw and crossup)
-                        flip_down_today_cond = (prev_crossup and crossdw)
-                        
-                        is_last = (i == len(drsi_vals) - 1)
-                        
-                        if crossup:
-                            in_long = True
-                            in_short = False
-                            if is_last:
-                                trigger_today = True
-                                trigger_type = "Zero-Cross"
-                        elif crossdw:
-                            in_short = True
-                            in_long = False
-                            if is_last:
-                                trigger_today = True 
-                                trigger_type = "Zero-Cross"
-                                
-                        if is_last:
-                            if flip_up_today_cond:
-                                flip_up_today = True
-                            if flip_down_today_cond:
-                                flip_down_today = True
-
-                    # Watch list for debugging (User reported stocks)
-                    watch_stocks = ['DELHIVERY', 'SIEMENS', 'GLENMARK', 'LICHSGFIN', 'DIVISLAB', 
-                                    'APOLLOTYRE', 'PAGEIND', 'SRF', 'PERSISTENT', 'ABB', 'ANGELONE', 'BDL', 'MAZDOCK']
-                    if symbol in watch_stocks:
-                        logger.info(f"DEBUG D-RSI {symbol}: D={drsi_vals[-1]:.4f}, S={sig_vals[-1]:.4f}, RSI={rsi_vals[-1]:.2f}, Long={in_long}, Short={in_short}, TriggerToday={trigger_today} ({trigger_type}), FlipUp={flip_up_today}, FlipDw={flip_down_today}")
+                    # Primary oscillator crossovers (Zero-Cross)
+                    crossup = (d1 <= 0 and d > 0)
+                    crossdw = (d1 >= 0 and d < 0)
+                    
+                    # Oscillator crossovers Yesterday
+                    prev_crossup = (d2 <= 0 and d1 > 0)
+                    prev_crossdw = (d2 >= 0 and d1 < 0)
+                    
+                    # 1-Bar Whipsaw (Back-to-back opposite Zero-Crosses)
+                    flip_up_today = (prev_crossdw and crossup)
+                    flip_down_today = (prev_crossup and crossdw)
 
                     # D-RSI Reversal Logic: Direction Change (Flip-Up / Flip-Down)
                     if flip_up_today:
@@ -1000,137 +949,30 @@ class CPRFilterService:
                             'trigger': "Flip-DOWN"
                         }
 
-                    # Strict filter: ONLY Add to payload if the Zero-Cross signal triggered TODAY
-                    # if in_long and trigger_today:
-                    #     payloads['drsi_bullish'] = {
-                    #         'symbol': symbol,
-                    #         'current_price': round(cpr.current_price, 2),
-                    #         'rsi': round(rsi_vals[-1], 2),
-                    #         'drsi': round(drsi_vals[-1], 4),
-                    #         'signal': round(sig_vals[-1], 4),
-                    #         'is_new': trigger_today,
-                    #         'trigger': trigger_type
-                    #     }
-                    # 
-                    # if in_short and trigger_today:
-                    #     payloads['drsi_bearish'] = {
-                    #         'symbol': symbol,
-                    #         'current_price': round(cpr.current_price, 2),
-                    #         'rsi': round(rsi_vals[-1], 2),
-                    #         'drsi': round(drsi_vals[-1], 4),
-                    #         'signal': round(sig_vals[-1], 4),
-                    #         'is_new': trigger_today,
-                    #         'trigger': trigger_type
-                    #     }
-
-
-            if primary_status != "🟡 IN CPR":
-                gaps = self.calc_gaps(cpr.current_price, primary_status, cpr)
-                payloads['signal'] = {
+            if cam_bullish_rev:
+                payloads['camarilla_cpr_reversal_bullish'] = {
                     'symbol': symbol,
                     'current_price': round(cpr.current_price, 2),
-                    'status': primary_status,
-                    'daily_tc': round(cpr.daily_tc, 2),
-                    'daily_bc': round(cpr.daily_bc, 2),
-                    'weekly_tc': round(cpr.weekly_tc, 2),
-                    'weekly_bc': round(cpr.weekly_bc, 2),
-                    'monthly_tc': round(cpr.monthly_tc, 2),
-                    'monthly_bc': round(cpr.monthly_bc, 2),
-                    'yearly_tc': round(cpr.yearly_tc, 2),
-                    'yearly_bc': round(cpr.yearly_bc, 2),
-                    'd_gap': gaps[0],
-                    'w_gap': gaps[1],
-                    'm_gap': gaps[2]
-                }
-                logger.debug(f"{symbol}: {primary_status}")
-
-            if weekly_cross_status:
-                cross_gaps = self.calc_gaps(cpr.current_price, weekly_cross_status, cpr)
-                payloads['weekly_cross'] = {
-                    'status': weekly_cross_status,
-                    'payload': {
-                        'symbol': symbol,
-                        'current_price': round(cpr.current_price, 2),
-                        'status': weekly_cross_status,
-                        'daily_tc': round(cpr.daily_tc, 2),
-                        'daily_bc': round(cpr.daily_bc, 2),
-                        'weekly_tc': round(cpr.weekly_tc, 2),
-                        'weekly_bc': round(cpr.weekly_bc, 2),
-                        'monthly_tc': round(cpr.monthly_tc, 2),
-                        'monthly_bc': round(cpr.monthly_bc, 2),
-                        'yearly_tc': round(cpr.yearly_tc, 2),
-                        'yearly_bc': round(cpr.yearly_bc, 2),
-                        'd_gap': cross_gaps[0],
-                        'w_gap': cross_gaps[1],
-                        'm_gap': cross_gaps[2]
-                    }
-                }
-
-            if bullish_reversal:
-                rev_gaps = self.calc_gaps(cpr.current_price, bullish_reversal, cpr)
-                payloads['bullish_reversal'] = {
-                    'symbol': symbol,
-                    'current_price': round(cpr.current_price, 2),
-                    'status': bullish_reversal,
-                    'monthly_s1': round(cpr.monthly_s1, 2),
-                    'prev_month_low': round(cpr.prev_month_low, 2),
-                    'monthly_tc': round(cpr.monthly_tc, 2), # Context
-                    'm_gap': rev_gaps[2]
-                }
-
-            if bearish_reversal:
-                rev_gaps = self.calc_gaps(cpr.current_price, bearish_reversal, cpr)
-                payloads['bearish_reversal'] = {
-                    'symbol': symbol,
-                    'current_price': round(cpr.current_price, 2),
-                    'status': bearish_reversal,
-                    'monthly_r1': round(cpr.monthly_r1, 2),
-                    'prev_month_high': round(cpr.prev_month_high, 2),
-                    'monthly_bc': round(cpr.monthly_bc, 2), # Context
-                    'm_gap': rev_gaps[2]
-                }
-
-            if cpr_touch_above:
-                touch_gaps = self.calc_gaps(cpr.current_price, cpr_touch_above, cpr)
-                payloads['cpr_touch_above'] = {
-                    'symbol': symbol,
-                    'current_price': round(cpr.current_price, 2),
-                    'status': cpr_touch_above,
-                    'monthly_tc': round(cpr.monthly_tc, 2),
+                    'status': cam_bullish_rev,
+                    'monthly_cam_s3': round(cpr.monthly_cam_s3, 2),
                     'monthly_pp': round(cpr.monthly_pp, 2),
                     'monthly_bc': round(cpr.monthly_bc, 2),
-                    'm_gap': touch_gaps[2]
+                    'monthly_tc': round(cpr.monthly_tc, 2)
                 }
 
-            if cpr_touch_below:
-                touch_gaps = self.calc_gaps(cpr.current_price, cpr_touch_below, cpr)
-                payloads['cpr_touch_below'] = {
+            if cam_bearish_rev:
+                payloads['camarilla_cpr_reversal_bearish'] = {
                     'symbol': symbol,
                     'current_price': round(cpr.current_price, 2),
-                    'status': cpr_touch_below,
-                    'monthly_tc': round(cpr.monthly_tc, 2),
+                    'status': cam_bearish_rev,
+                    'monthly_cam_r3': round(cpr.monthly_cam_r3, 2),
                     'monthly_pp': round(cpr.monthly_pp, 2),
                     'monthly_bc': round(cpr.monthly_bc, 2),
-                    'm_gap': touch_gaps[2]
+                    'monthly_tc': round(cpr.monthly_tc, 2)
                 }
 
-            # --- NEW: Greeks & IV Percentile Filtering Logic ---
-            # Enrichment happens for any technical signal, OR if we want to check all stocks for IVP
             final_price = latest_quote if latest_quote is not None else cpr.current_price
             
-            # Determine direction (default to bullish if no signal)
-            dir_signal = primary_status if primary_status != "🟡 IN CPR" else (weekly_cross_status or bullish_reversal or "BULLISH")
-            greeks = self._enrich_with_greeks(symbol, final_price, dir_signal, atm_quotes)
-            
-            iv_percentile = 0.0
-            if greeks:
-                iv_percentile = greeks.get('iv_percentile', 0)
-                # Add greeks to all active payloads
-                for key in payloads:
-                    if payloads[key]:
-                        if 'payload' in payloads[key]: payloads[key]['payload'].update(greeks)
-                        else: payloads[key].update(greeks)
-
             # Calculate daily change %
             day_change_pct = 0.0
             if cpr.previous_close > 0:
@@ -1141,8 +983,6 @@ class CPRFilterService:
                 'current_price': round(final_price, 2),
                 'volume': all_data.iloc[-1]['volume'],
                 'day_change_pct': day_change_pct,
-                'iv_percentile': iv_percentile,
-                'iv': greeks.get('iv', 0) if greeks else 0,
                 'payloads': payloads
             }
         except Exception as e:
@@ -1227,7 +1067,7 @@ class CPRFilterService:
             "signals": [],
             "weekly_cross": {"bullish": [], "bearish": []},
             "reversals": {"bullish": [], "bearish": []},
-            "cpr_touch": {"above": [], "below": []},
+
             "high_iv_stocks": [] # Restored: High IV stocks with full enrichment
         }
         
@@ -1280,8 +1120,7 @@ class CPRFilterService:
                 if p['bullish_reversal']: results['reversals']['bullish'].append(p['bullish_reversal'])
                 if p['bearish_reversal']: results['reversals']['bearish'].append(p['bearish_reversal'])
                 
-                if p['cpr_touch_above']: results['cpr_touch']['above'].append(p['cpr_touch_above'])
-                if p['cpr_touch_below']: results['cpr_touch']['below'].append(p['cpr_touch_below'])
+
 
         # Final Enrichment Pass: Add PCR, Max Pain to High IV stocks
         if results['high_iv_stocks']:
@@ -1543,6 +1382,36 @@ class CPRFilterService:
             logger.info(f"Starting batch IV percentile computation for {len(stocks)} stocks...")
             iv_start = time.time()
             
+            # Build stock_metadata if not provided
+            if not stock_metadata:
+                logger.info("stock_metadata is empty/None in _batch_compute_iv_percentiles. Batch quoting all stocks to populate...")
+                stock_metadata = {}
+                quote_keys = [f"NSE:{s}" for s in stocks]
+                all_quotes = {}
+                batch_size = 200
+                for i in range(0, len(quote_keys), batch_size):
+                    batch = quote_keys[i:i+batch_size]
+                    self._rate_limit()
+                    try:
+                        batch_quotes = self.kite.quote(batch)
+                        all_quotes.update(batch_quotes)
+                    except Exception as e:
+                        logger.error(f"Batch quote for F&O stocks failed: {e}")
+                
+                # Populate stock_metadata
+                for symbol in stocks:
+                    quote_data = all_quotes.get(f"NSE:{symbol}") or all_quotes.get(symbol) or all_quotes.get(f"NSE:{symbol}-EQ")
+                    if quote_data:
+                        ohlc = quote_data.get('ohlc', {})
+                        prev_close = ohlc.get('close', 0.0)
+                        ltp = quote_data.get('last_price', 0.0)
+                        change_pct = ((ltp - prev_close) / prev_close * 100) if prev_close else 0.0
+                        stock_metadata[symbol] = {
+                            'current_price': ltp,
+                            'volume': quote_data.get('volume', 0),
+                            'day_change_pct': change_pct
+                        }
+            
             # Step 1: Build ATM option map (passing collected metadata to avoid quotes)
             atm_map = self._build_atm_option_map(stocks, stock_metadata=stock_metadata)
             if not atm_map:
@@ -1616,9 +1485,13 @@ class CPRFilterService:
             def _compute_single_hv(symbol_iv_pair):
                 symbol, atm_iv = symbol_iv_pair
                 try:
+                    # Skip historical daily OHLC fetch for low IV stocks to prevent rate limits and speed up computation by 95%
+                    if atm_iv < 0.40:
+                        return None
+                    
                     iv_pct = self.calculate_stock_iv_percentile(symbol, atm_iv)
                     # Filter for IV Percentile > 80 AND ATM IV >= 40% (0.40)
-                    if iv_pct is not None and iv_pct > 80 and atm_iv >= 0.40:
+                    if iv_pct is not None and iv_pct > 80:
                         return {
                             'symbol': symbol,
                             'current_price': round(atm_map[symbol]['current_price'], 2),
@@ -1648,7 +1521,7 @@ class CPRFilterService:
             logger.error(f"Batch IV percentile computation failed: {e}")
             return []
 
-    def filter_cpr_stocks(self, root_date: Optional[datetime] = None) -> FilterResult:
+    def filter_cpr_stocks(self, root_date: Optional[datetime] = None, skip_iv: bool = False) -> FilterResult:
         stocks = self.get_fo_stocks()
         logger.info(f"Retrieved {len(stocks)} FO stocks for scan")
         # stocks = ["COLPAL"]
@@ -1673,23 +1546,15 @@ class CPRFilterService:
                 for k in keys_to_del:
                     del self._historical_data_cache[k]
         
-        signals: List[Dict] = []
-        cross_above: List[Dict] = []
-        cross_below: List[Dict] = []
-        bullish_reversal: List[Dict] = []
-        bearish_reversal: List[Dict] = []
-        cpr_touch_above: List[Dict] = []
-        cpr_touch_below: List[Dict] = []
-        drsi_bullish: List[Dict] = []
-        drsi_bearish: List[Dict] = []
         drsi_reversal_bullish: List[Dict] = []
         drsi_reversal_bearish: List[Dict] = []
-        stock_metadata: Dict[str, Dict] = {} # Collection for IV calc
+        camarilla_cpr_reversal_bullish: List[Dict] = []
+        camarilla_cpr_reversal_bearish: List[Dict] = []
         processed = 0
         failed = 0
         start_time = time.time()
         
-        # Phase 1: CPR processing (existing logic, unchanged)
+        # Phase 1: CPR processing
         workers_count = self.MAX_WORKERS
         if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
             workers_count = 15  # Rapid scaling for Fyers data pulling
@@ -1700,47 +1565,19 @@ class CPRFilterService:
                 try:
                     result = future.result(timeout=25)  # 25 second timeout per stock
                     if result:
-                        # Collect metadata for IV phase to avoid redundant quote calls
-                        stock_metadata[result['symbol']] = {
-                            'current_price': result['current_price'],
-                            'volume': result['volume'],
-                            'day_change_pct': result.get('day_change_pct', 0.0)
-                        }
-                        
                         payloads = result.get('payloads', {})
-                        if payloads.get('signal'):
-                            signals.append(payloads['signal'])
                         
-                        cross = payloads.get('weekly_cross')
-                        if cross and cross.get('payload'):
-                            if cross.get('status') == self.CROSS_ABOVE_WEEKLY:
-                                cross_above.append(cross['payload'])
-                            elif cross.get('status') == self.CROSS_BELOW_WEEKLY:
-                                cross_below.append(cross['payload'])
-                        
-                        if payloads.get('bullish_reversal'):
-                            bullish_reversal.append(payloads['bullish_reversal'])
-                        
-                        if payloads.get('bearish_reversal'):
-                            bearish_reversal.append(payloads['bearish_reversal'])
-                        
-                        if payloads.get('cpr_touch_above'):
-                            cpr_touch_above.append(payloads['cpr_touch_above'])
-                        
-                        if payloads.get('cpr_touch_below'):
-                            cpr_touch_below.append(payloads['cpr_touch_below'])
-                            
-                        if payloads.get('drsi_bullish'):
-                            drsi_bullish.append(payloads['drsi_bullish'])
-                            
-                        if payloads.get('drsi_bearish'):
-                            drsi_bearish.append(payloads['drsi_bearish'])
-                            
                         if payloads.get('drsi_reversal_bullish'):
                             drsi_reversal_bullish.append(payloads['drsi_reversal_bullish'])
                             
                         if payloads.get('drsi_reversal_bearish'):
                             drsi_reversal_bearish.append(payloads['drsi_reversal_bearish'])
+ 
+                        if payloads.get('camarilla_cpr_reversal_bullish'):
+                            camarilla_cpr_reversal_bullish.append(payloads['camarilla_cpr_reversal_bullish'])
+ 
+                        if payloads.get('camarilla_cpr_reversal_bearish'):
+                            camarilla_cpr_reversal_bearish.append(payloads['camarilla_cpr_reversal_bearish'])
                     processed += 1
                     if processed % 10 == 0:
                         elapsed = time.time() - start_time
@@ -1750,43 +1587,22 @@ class CPRFilterService:
                     failed += 1
                     processed += 1
         
-        cpr_time = time.time() - start_time
-        logger.info(f"CPR phase complete in {cpr_time:.1f}s. Starting IV percentile computation...")
-        
-        # Phase 2: IV Percentile computation (batch-optimized, separate from CPR)
-        # Pass the pre-collected metadata to avoid 180+ extra quote calls
-        high_iv_stocks = self._batch_compute_iv_percentiles(stocks, stock_metadata=stock_metadata)
-        
         total_time = time.time() - start_time
         logger.info(
-            f"Filter complete: {len(signals)} match criteria, "
-            f"{len(cross_above)} crossed above weekly CPR, {len(cross_below)} crossed below weekly CPR, "
-            f"{len(bullish_reversal)} bullish reversal, {len(bearish_reversal)} bearish reversal, "
-            f"{len(cpr_touch_above)} CPR touch above, {len(cpr_touch_below)} CPR touch below, "
-            f"{len(high_iv_stocks)} high IV percentile "
+            f"Filter complete: "
+            f"S3 Rev↑: {len(camarilla_cpr_reversal_bullish)}, R3 Rev↓: {len(camarilla_cpr_reversal_bearish)}, "
+            f"D-RSI Flip↑: {len(drsi_reversal_bullish)}, D-RSI Flip↓: {len(drsi_reversal_bearish)} "
             f"({failed} failed) in {total_time:.1f}s. Cache: {len(self._historical_data_cache)} entries"
         )
         return {
-            'signals': sorted(signals, key=lambda x: x['symbol']),
-            'weekly_cross': {
-                'crossed_above': sorted(cross_above, key=lambda x: x['symbol']),
-                'crossed_below': sorted(cross_below, key=lambda x: x['symbol'])
-            },
-            'reversal': {
-                'bullish': sorted(bullish_reversal, key=lambda x: x['symbol']),
-                'bearish': sorted(bearish_reversal, key=lambda x: x['symbol'])
-            },
-            'cpr_touch': {
-                'closed_above': sorted(cpr_touch_above, key=lambda x: x['symbol']),
-                'closed_below': sorted(cpr_touch_below, key=lambda x: x['symbol'])
+            'camarilla_cpr_reversal': {
+                'bullish': sorted(camarilla_cpr_reversal_bullish, key=lambda x: x['symbol']),
+                'bearish': sorted(camarilla_cpr_reversal_bearish, key=lambda x: x['symbol'])
             },
             'drsi_filter': {
-                'bullish': sorted(drsi_bullish, key=lambda x: x['symbol']),
-                'bearish': sorted(drsi_bearish, key=lambda x: x['symbol']),
                 'reversal_bullish': sorted(drsi_reversal_bullish, key=lambda x: x['symbol']),
                 'reversal_bearish': sorted(drsi_reversal_bearish, key=lambda x: x['symbol'])
-            },
-            'high_iv_stocks': sorted(high_iv_stocks, key=lambda x: x['iv_percentile'], reverse=True)
+            }
         }
 
     def clear_cache(self):

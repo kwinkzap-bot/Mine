@@ -12,41 +12,26 @@ import time
 import threading
 
 class FyersRateLimiter:
-    """Thread-safe rate limiter for Fyers API (10 requests/second)."""
-    def __init__(self, requests_per_second: float = 10.0):
+    """Thread-safe strict queue-based rate limiter for Fyers API (max 10 requests/second)."""
+    def __init__(self, requests_per_second: float = 8.0):
         self.delay = 1.0 / requests_per_second
         self.next_call = 0.0
-        self.priority_next_call = 0.0 # Dedicated slot tracking for critical requests
         self.lock = threading.Lock()
 
     def wait(self, priority: int = 0):
-        """
-        priority 1: High (Charts, LTP) - Faster slots
-        priority 0: Low (Quotes, Chain) - Standard slots
-        """
         sleep_time = 0
         with self.lock:
             now = time.time()
-            # High priority (Charts) get nearly instant slots
-            effective_delay = self.delay if priority == 0 else self.delay * 0.1
-            
-            target_next = self.priority_next_call if priority == 1 else self.next_call
-            
-            if now < target_next:
-                sleep_time = target_next - now
-                new_next = target_next + effective_delay
+            if now < self.next_call:
+                sleep_time = self.next_call - now
+                self.next_call += self.delay
             else:
-                sleep_time = 0
-                new_next = now + effective_delay
-            
-            # Synchronize both clocks
-            self.next_call = max(self.next_call, new_next)
-            self.priority_next_call = max(self.priority_next_call, new_next)
-        
+                self.next_call = now + self.delay
+                
         if sleep_time > 0:
             time.sleep(sleep_time)
 
-_rate_limiter = FyersRateLimiter(5.0) # Optimized: 5 req/s (Fyers limit is 10)
+_rate_limiter = FyersRateLimiter(8.0) # Strictly pace all combined endpoint queries to max 8 req/s
 logger = logging.getLogger(__name__)
 
 # Global Static Caches to survive transient Adapter regenerations from api.py routes
@@ -176,6 +161,16 @@ class FyersDataServiceAdapter:
             'FINNIFTY':    'NSE:FINNIFTY-INDEX',
             'MIDCPNIFTY':  'NSE:MIDCPNIFTY-INDEX',
             'SENSEX':      'BSE:SENSEX-INDEX',
+            'NIFTY MIDCAP 150': 'NSE:NIFTYMIDCAP150-INDEX',
+            'NIFTY AUTO':      'NSE:NIFTYAUTO-INDEX',
+            'NIFTY Smallcap 100': 'NSE:NIFTYSMLCAP100-INDEX',
+            'NIFTY SMLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
+            'NIFTY FMCG':      'NSE:NIFTYFMCG-INDEX',
+            'NIFTY METAL':     'NSE:NIFTYMETAL-INDEX',
+            'NIFTY PHARAMA':   'NSE:NIFTYPHARMA-INDEX',
+            'NIFTY PHARMA':    'NSE:NIFTYPHARMA-INDEX',
+            'NIFTY PSU BANK':  'NSE:NIFTYPSUBANK-INDEX',
+            'NIFTY IT':        'NSE:NIFTYIT-INDEX',
         }
         
         symbol = UNDERLYING.get(root_name, f"NSE:{root_name}-EQ")
@@ -251,6 +246,16 @@ class FyersDataServiceAdapter:
             'NSE:NIFTY MID SELECT': 'NSE:MIDCPNIFTY-INDEX',
             'NSE:INDIA VIX': 'NSE:INDIAVIX-INDEX',
             'BSE:SENSEX': 'BSE:SENSEX-INDEX',
+            'NSE:NIFTY MIDCAP 150': 'NSE:NIFTYMIDCAP150-INDEX',
+            'NSE:NIFTY AUTO':      'NSE:NIFTYAUTO-INDEX',
+            'NSE:NIFTY SMALLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
+            'NSE:NIFTY SMLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
+            'NSE:NIFTY FMCG':      'NSE:NIFTYFMCG-INDEX',
+            'NSE:NIFTY METAL':     'NSE:NIFTYMETAL-INDEX',
+            'NSE:NIFTY PHARMA':    'NSE:NIFTYPHARMA-INDEX',
+            'NSE:NIFTY PHARAMA':   'NSE:NIFTYPHARMA-INDEX',
+            'NSE:NIFTY PSU BANK':  'NSE:NIFTYPSUBANK-INDEX',
+            'NSE:NIFTY IT':        'NSE:NIFTYIT-INDEX',
         }
         
         fyers_symbols = []
@@ -266,11 +271,14 @@ class FyersDataServiceAdapter:
             fyers_symbols.append(fsym)
             f_to_k[fsym] = s
 
+        # Prepare batches of 50 symbols
         batch_size = 50
+        batches = []
         for i in range(0, len(fyers_symbols), batch_size):
-            batch = fyers_symbols[i:i+batch_size]
+            batches.append(fyers_symbols[i:i+batch_size])
+
+        def fetch_batch(batch):
             batch_str = ",".join(batch)
-            
             for attempt in range(max_retries):
                 _rate_limiter.wait(priority=priority)
                 
@@ -285,54 +293,62 @@ class FyersDataServiceAdapter:
                             raise e
                 
                 if resp and resp.get('s') == 'ok':
-                    d_list = resp.get('d', [])
-                    oi_caches = {}
-                    for item in d_list:
-                        fsym = item.get('n', '')
-                        if fsym.endswith('CE') or fsym.endswith('PE'):
-                            m = re.match(r'^([A-Z&]+)', fsym.split(':')[-1])
-                            if m and m.group(1) not in oi_caches:
-                                oi_caches[m.group(1)] = self._get_fyers_oi(m.group(1))
-                    
-                    batch_quotes = {}
-                    save_now = datetime.now()
-                    for item in d_list:
-                        fsym = item.get('n', '')
-                        sym = f_to_k.get(fsym, fsym)
-                        v = item.get('v', {})
-                        if not v: continue
-                        
-                        op_oi = 0; op_oich = 0
-                        if fsym.endswith('CE') or fsym.endswith('PE'):
-                            m = re.match(r'^([A-Z&]+)', fsym.split(':')[-1])
-                            if m and m.group(1) in oi_caches and fsym in oi_caches[m.group(1)]:
-                                op_oi = oi_caches[m.group(1)][fsym].get('oi', 0)
-                                op_oich = oi_caches[m.group(1)][fsym].get('oich', 0)
-                        
-                        q = {
-                            'last_price': v.get('lp', 0.0),
-                            'ohlc': {'open': v.get('open_price', 0.0), 'high': v.get('high_price', 0.0), 'low': v.get('low_price', 0.0), 'close': v.get('prev_close_price', 0.0)},
-                            'oi': op_oi or v.get('oi', 0),
-                            'change_in_oi': op_oich,
-                            'timestamp': datetime.now()
-                        }
-                        batch_quotes[sym] = q
-                        kite_quotes[sym] = q
-                    
-                    with _FYERS_SYMBOL_LOCK:
-                        for s, q in batch_quotes.items():
-                            _FYERS_SYMBOL_CACHE[s] = (q, save_now)
-                    break
+                    return resp.get('d', [])
                 
                 if resp and resp.get('code') == 429:
-                    time.sleep(backoff)
-                    backoff *= 2
+                    time.sleep(backoff * (attempt + 1))
                 elif resp and 'malformed' in str(resp.get('message', '')).lower():
                     time.sleep(8.0)
                 else:
                     break
+            return []
+
+        # Execute batches in parallel
+        from concurrent.futures import ThreadPoolExecutor
+        d_list = []
+        with ThreadPoolExecutor(max_workers=max(1, len(batches))) as executor:
+            results = executor.map(fetch_batch, batches)
+            for res in results:
+                if res:
+                    d_list.extend(res)
+
+        if d_list:
+            oi_caches = {}
+            for item in d_list:
+                fsym = item.get('n', '')
+                if fsym.endswith('CE') or fsym.endswith('PE'):
+                    m = re.match(r'^([A-Z&]+)', fsym.split(':')[-1])
+                    if m and m.group(1) not in oi_caches:
+                        oi_caches[m.group(1)] = self._get_fyers_oi(m.group(1))
             
-            time.sleep(1.0)
+            batch_quotes = {}
+            save_now = datetime.now()
+            for item in d_list:
+                fsym = item.get('n', '')
+                sym = f_to_k.get(fsym, fsym)
+                v = item.get('v', {})
+                if not v: continue
+                
+                op_oi = 0; op_oich = 0
+                if fsym.endswith('CE') or fsym.endswith('PE'):
+                    m = re.match(r'^([A-Z&]+)', fsym.split(':')[-1])
+                    if m and m.group(1) in oi_caches and fsym in oi_caches[m.group(1)]:
+                        op_oi = oi_caches[m.group(1)][fsym].get('oi', 0)
+                        op_oich = oi_caches[m.group(1)][fsym].get('oich', 0)
+                
+                q = {
+                    'last_price': v.get('lp', 0.0),
+                    'ohlc': {'open': v.get('open_price', 0.0), 'high': v.get('high_price', 0.0), 'low': v.get('low_price', 0.0), 'close': v.get('prev_close_price', 0.0)},
+                    'oi': op_oi or v.get('oi', 0),
+                    'change_in_oi': op_oich,
+                    'timestamp': datetime.now()
+                }
+                batch_quotes[sym] = q
+                kite_quotes[sym] = q
+            
+            with _FYERS_SYMBOL_LOCK:
+                for s, q in batch_quotes.items():
+                    _FYERS_SYMBOL_CACHE[s] = (q, save_now)
 
         return kite_quotes
     def ltp(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -394,7 +410,7 @@ class FyersDataServiceAdapter:
                 with _FYERS_HIST_LOCK:
                     if cache_key in _FYERS_HIST_CACHE:
                         data, ts = _FYERS_HIST_CACHE[cache_key]
-                        cache_ttl = 300 if f_res in ['D', 'W', 'M'] else 0.5
+                        cache_ttl = 300 if f_res in ['D', 'W', 'M'] else 15.0
                         if (datetime.now() - ts).total_seconds() < cache_ttl:
                             logger.debug(f"[FyersAdapter] Returning cached historical data for {cache_key}")
                             return data
@@ -421,6 +437,24 @@ class FyersDataServiceAdapter:
                 'NSE:NIFTY BANK': 'NSE:NIFTYBANK-INDEX',
                 'NSE:NIFTY FIN SERVICE': 'NSE:FINNIFTY-INDEX',
                 'NSE:NIFTY MID SELECT': 'NSE:MIDCPNIFTY-INDEX',
+                '266249': 'NSE:NIFTYMIDCAP150-INDEX',
+                '263433': 'NSE:NIFTYAUTO-INDEX',
+                '267017': 'NSE:NIFTYSMLCAP100-INDEX',
+                '261897': 'NSE:NIFTYFMCG-INDEX',
+                '263689': 'NSE:NIFTYMETAL-INDEX',
+                '262409': 'NSE:NIFTYPHARMA-INDEX',
+                '262921': 'NSE:NIFTYPSUBANK-INDEX',
+                '259849': 'NSE:NIFTYIT-INDEX',
+                'NSE:NIFTY MIDCAP 150': 'NSE:NIFTYMIDCAP150-INDEX',
+                'NSE:NIFTY AUTO':      'NSE:NIFTYAUTO-INDEX',
+                'NSE:NIFTY SMALLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
+                'NSE:NIFTY SMLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
+                'NSE:NIFTY FMCG':      'NSE:NIFTYFMCG-INDEX',
+                'NSE:NIFTY METAL':     'NSE:NIFTYMETAL-INDEX',
+                'NSE:NIFTY PHARMA':    'NSE:NIFTYPHARMA-INDEX',
+                'NSE:NIFTY PHARAMA':   'NSE:NIFTYPHARMA-INDEX',
+                'NSE:NIFTY PSU BANK':  'NSE:NIFTYPSUBANK-INDEX',
+                'NSE:NIFTY IT':        'NSE:NIFTYIT-INDEX',
             }
             str_token = str(instrument_token)
             if str_token in kite_to_fyers_indices:

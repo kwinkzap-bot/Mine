@@ -22,7 +22,7 @@ class CacheManager:
             ttl: Time to live for cache entries in seconds
             max_size: Maximum number of entries (LRU eviction when exceeded)
         """
-        self._cache: OrderedDict[str, Tuple[Any, float]] = OrderedDict()
+        self._cache: OrderedDict[str, Tuple[Any, float, float]] = OrderedDict()
         self._lock = threading.Lock()
         self._ttl = ttl
         self._max_size = max_size
@@ -36,8 +36,14 @@ class CacheManager:
                 self._misses += 1
                 return None
             
-            value, timestamp = self._cache[key]
-            if time.time() - timestamp > self._ttl:
+            entry = self._cache[key]
+            if len(entry) == 2:
+                value, timestamp = entry
+                entry_ttl = self._ttl
+            else:
+                value, timestamp, entry_ttl = entry
+                
+            if time.time() - timestamp > entry_ttl:
                 del self._cache[key]
                 self._misses += 1
                 return None
@@ -47,7 +53,7 @@ class CacheManager:
             self._hits += 1
             return value
     
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: Any, timeout: Optional[int] = None) -> None:
         """Set value in cache with current timestamp. Evicts LRU if at capacity."""
         with self._lock:
             # If key exists, remove it first (will be re-added at end)
@@ -59,7 +65,14 @@ class CacheManager:
                 oldest_key = next(iter(self._cache))
                 del self._cache[oldest_key]
             
-            self._cache[key] = (value, time.time())
+            entry_ttl = timeout if timeout is not None else self._ttl
+            self._cache[key] = (value, time.time(), entry_ttl)
+    
+    def delete(self, key: str) -> None:
+        """Delete key from cache."""
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
     
     def clear(self) -> None:
         """Clear all cache."""
@@ -72,10 +85,15 @@ class CacheManager:
         """Remove expired entries from cache. Returns count of removed entries."""
         with self._lock:
             current_time = time.time()
-            expired_keys = [
-                key for key, (_, timestamp) in self._cache.items()
-                if current_time - timestamp > self._ttl
-            ]
+            expired_keys = []
+            for key, entry in self._cache.items():
+                if len(entry) == 2:
+                    _, timestamp = entry
+                    entry_ttl = self._ttl
+                else:
+                    _, timestamp, entry_ttl = entry
+                if current_time - timestamp > entry_ttl:
+                    expired_keys.append(key)
             for key in expired_keys:
                 del self._cache[key]
             return len(expired_keys)
@@ -132,13 +150,16 @@ class SmartCache:
         """Get with dynamic TTL check."""
         return self._cache.get(key)
     
-    def set(self, key: str, value: Any) -> None:
-        """Set with dynamic TTL."""
-        # Adjust TTL based on market hours
-        current_ttl = self._market_ttl if self._is_market_hours() else self._after_hours_ttl
+    def set(self, key: str, value: Any, timeout: Optional[int] = None) -> None:
+        """Set with dynamic TTL or custom timeout."""
+        current_ttl = timeout if timeout is not None else (self._market_ttl if self._is_market_hours() else self._after_hours_ttl)
         self._cache._ttl = current_ttl
-        self._cache.set(key, value)
+        self._cache.set(key, value, timeout=current_ttl)
     
+    def delete(self, key: str) -> None:
+        """Delete key from cache."""
+        self._cache.delete(key)
+        
     def clear(self) -> None:
         self._cache.clear()
     

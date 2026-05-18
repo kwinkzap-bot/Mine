@@ -131,8 +131,8 @@ def oi_replay():
 @require_user_auth
 @login_required
 def ema_rsi_filter():
-    """EMA/RSI 208 Filter – Weekly & Daily candle touch scanner."""
-    return render_template('ema_rsi_filter.html')
+    """EMA/RSI Filter is now merged into CPR Filter - redirect there."""
+    return redirect(url_for('pages.cpr_filter', tab='ema'))
 
 @pages_bp.route('/backtest')
 @require_user_auth
@@ -140,6 +140,13 @@ def ema_rsi_filter():
 def backtest():
     """Backtest page for various strategies."""
     return render_template('backtest.html')
+
+@pages_bp.route('/markets')
+@require_user_auth
+@login_required
+def markets():
+    """Markets overview page."""
+    return render_template('markets.html')
 
 @pages_bp.route('/chart')
 @require_user_auth

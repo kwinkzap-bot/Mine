@@ -227,7 +227,17 @@ class KiteService:
             'NIFTY': 'NSE:NIFTY 50', 
             'BANKNIFTY': 'NSE:NIFTY BANK', 
             'FINNIFTY': 'NSE:NIFTY FIN SERVICE',
-            'SENSEX': 'BSE:SENSEX'
+            'SENSEX': 'BSE:SENSEX',
+            'NIFTY MIDCAP 150': 'NSE:NIFTY MIDCAP 150',
+            'NIFTY AUTO':      'NSE:NIFTY AUTO',
+            'NIFTY Smallcap 100': 'NSE:NIFTY SMLCAP 100',
+            'NIFTY SMLCAP 100': 'NSE:NIFTY SMLCAP 100',
+            'NIFTY FMCG':      'NSE:NIFTY FMCG',
+            'NIFTY METAL':     'NSE:NIFTY METAL',
+            'NIFTY PHARAMA':   'NSE:NIFTY PHARMA',
+            'NIFTY PHARMA':    'NSE:NIFTY PHARMA',
+            'NIFTY PSU BANK':  'NSE:NIFTY PSU BANK',
+            'NIFTY IT':        'NSE:NIFTY IT',
         }
         if symbol.upper() in index_map:
             mapped = index_map[symbol.upper()]

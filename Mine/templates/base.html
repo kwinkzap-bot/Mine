@@ -20,10 +20,7 @@
             <!-- <a href="/historical" class="nav-link {% if request.path == '/historical' %}active{% endif %}">📈 Historical</a>
             <a href="/strategy" class="nav-link {% if request.path == '/strategy' %}active{% endif %}">📊 Strategy</a>
             <a href="/multi-strike" class="nav-link {% if request.path == '/multi-strike' %}active{% endif %}">⚡ Multi Strike</a> -->
-            <a href="/cpr-filter" class="nav-link {% if request.path == '/cpr-filter' %}active{% endif %}">🔍 CPR
-                Filter</a>
-            <a href="/ema-rsi-filter" class="nav-link {% if request.path == '/ema-rsi-filter' %}active{% endif %}">📊 EMA/RSI
-                Filter</a>
+            <a href="/cpr-filter" class="nav-link {% if request.path == '/cpr-filter' or request.path == '/ema-rsi-filter' %}active{% endif %}">🔍 Scanners</a>
             <!-- <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉
                 Options Chart</a> -->
             <!-- <a href="/intraday-option" class="nav-link {% if request.path == '/intraday-option' %}active{% endif %}">💹
@@ -36,6 +33,7 @@
                 Profile</a>
             <a href="/replay" class="nav-link {% if request.path == '/replay' %}active{% endif %}">🕒
                 Replay</a>
+            <a href="/markets" class="nav-link {% if request.path == '/markets' %}active{% endif %}">🏢 Markets</a>
             <a href="/chart" class="nav-link {% if request.path == '/chart' %}active{% endif %}">🗺️ Chart</a>
             <a href="/backtest" class="nav-link {% if request.path == '/backtest' %}active{% endif %}">🧪 Backtest</a>
             <div class="login-dropdown">

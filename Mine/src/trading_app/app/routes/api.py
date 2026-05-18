@@ -78,6 +78,16 @@ FYERS_INDEX_SYMBOLS = {
     'FINNIFTY':   'NSE:FINNIFTY-INDEX',
     'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
     'SENSEX':     'BSE:SENSEX-INDEX',
+    'NIFTY MIDCAP 150': 'NSE:NIFTYMIDCAP150-INDEX',
+    'NIFTY AUTO':      'NSE:NIFTYAUTO-INDEX',
+    'NIFTY Smallcap 100': 'NSE:NIFTYSMLCAP100-INDEX',
+    'NIFTY SMLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
+    'NIFTY FMCG':      'NSE:NIFTYFMCG-INDEX',
+    'NIFTY METAL':     'NSE:NIFTYMETAL-INDEX',
+    'NIFTY PHARAMA':   'NSE:NIFTYPHARMA-INDEX',
+    'NIFTY PHARMA':    'NSE:NIFTYPHARMA-INDEX',
+    'NIFTY PSU BANK':  'NSE:NIFTYPSUBANK-INDEX',
+    'NIFTY IT':        'NSE:NIFTYIT-INDEX',
 }
 
 # Broker type configurations (icons, descriptions, required fields, login info)
@@ -601,6 +611,479 @@ _symbols_cache = {
     'last_updated': 0
 }
 
+_INDEX_CPR_CACHE = {}
+_STOCK_CPR_CACHE = {}
+
+def calculate_cpr_from_ohlc(h, l, c):
+    pp = (h + l + c) / 3
+    bc = (h + l) / 2
+    tc = (2 * pp) - bc
+    return {
+        'pp': round(pp, 2),
+        'bc': round(min(bc, tc), 2),
+        'tc': round(max(bc, tc), 2)
+    }
+
+def get_index_cpr_levels(provider, index_name="NIFTY"):
+    global _INDEX_CPR_CACHE
+    now = datetime.now()
+    index_name = index_name.upper()
+    
+    # Return from cache if fresh (within 30 mins)
+    if index_name in _INDEX_CPR_CACHE:
+        cache = _INDEX_CPR_CACHE[index_name]
+        if cache['levels'] and cache['timestamp']:
+            if (now - cache['timestamp']).total_seconds() < 1800:
+                return cache['levels']
+                
+    try:
+        # Determine token for requested index
+        provider_name = provider.__class__.__name__.lower()
+        is_kite = 'kite' in provider_name
+        
+        index_map = {
+            'NIFTY':            'NSE:NIFTY 50' if is_kite else 'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':        'NSE:NIFTY BANK' if is_kite else 'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':         'NSE:NIFTY FIN SERVICE' if is_kite else 'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY':       'NSE:NIFTY MID SELECT' if is_kite else 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':           'BSE:SENSEX' if is_kite else 'BSE:SENSEX-INDEX',
+            'INDIAVIX':         'NSE:INDIA VIX' if is_kite else 'NSE:INDIAVIX-INDEX',
+            'NIFTY IT':         'NSE:NIFTY IT' if is_kite else 'NSE:NIFTYIT-INDEX',
+            'NIFTY AUTO':       'NSE:NIFTY AUTO' if is_kite else 'NSE:NIFTYAUTO-INDEX',
+            'NIFTY FMCG':       'NSE:NIFTY FMCG' if is_kite else 'NSE:NIFTYFMCG-INDEX',
+            'NIFTY METAL':      'NSE:NIFTY METAL' if is_kite else 'NSE:NIFTYMETAL-INDEX',
+            'NIFTY PHARMA':     'NSE:NIFTY PHARMA' if is_kite else 'NSE:NIFTYPHARMA-INDEX',
+            'NIFTY PSU BANK':   'NSE:NIFTY PSU BANK' if is_kite else 'NSE:NIFTYPSUBANK-INDEX',
+            'NIFTY MIDCAP 150': 'NSE:NIFTY MIDCAP 150' if is_kite else 'NSE:NIFTYMIDCAP150-INDEX',
+            'NIFTY SMLCAP 100': 'NSE:NIFTY SMALLCAP 100' if is_kite else 'NSE:NIFTYSMLCAP100-INDEX'
+        }
+        
+        token = index_map.get(index_name, index_name)
+        
+        # 1. Fetch Hourly Data
+        to_dt = now
+        from_dt_hr = to_dt - timedelta(days=5)
+        hr_candles = provider.historical_data(token, from_dt_hr, to_dt, '60minute')
+        
+        hourly_cpr = None
+        if len(hr_candles) >= 2:
+            last_c = hr_candles[-1]
+            last_c_dt = last_c['date']
+            # Remove timezone if aware for comparison
+            if last_c_dt.tzinfo:
+                last_c_dt = last_c_dt.replace(tzinfo=None)
+            
+            if last_c_dt.date() == now.date() and last_c_dt.hour == now.hour:
+                target_candle = hr_candles[-2]
+            else:
+                target_candle = hr_candles[-1]
+            
+            hourly_cpr = calculate_cpr_from_ohlc(target_candle['high'], target_candle['low'], target_candle['close'])
+            
+        # 2. Fetch Daily Data
+        from_dt_day = to_dt - timedelta(days=500)
+        day_candles = provider.historical_data(token, from_dt_day, to_dt, 'day')
+        
+        daily_cpr = None
+        weekly_cpr = None
+        monthly_cpr = None
+        half_yearly_cpr = None
+        yearly_cpr = None
+        
+        if day_candles:
+            df = pd.DataFrame(day_candles)
+            df['date'] = pd.to_datetime(df['date'])
+            # Ensure timezone naive for comparison
+            if df['date'].dt.tz is not None:
+                df['date'] = df['date'].dt.tz_localize(None)
+            df.set_index('date', inplace=True)
+            
+            # Daily CPR
+            last_idx = -2 if df.index[-1].date() == now.date() else -1
+            if len(df) >= abs(last_idx):
+                day_row = df.iloc[last_idx]
+                daily_cpr = calculate_cpr_from_ohlc(day_row['high'], day_row['low'], day_row['close'])
+                
+            # Weekly CPR
+            current_week_start = now - timedelta(days=now.weekday())
+            prev_week_start = current_week_start - timedelta(days=7)
+            prev_week_end = prev_week_start + timedelta(days=4)
+            week_df = df[(df.index.date >= prev_week_start.date()) & (df.index.date <= prev_week_end.date())]
+            if not week_df.empty:
+                weekly_cpr = calculate_cpr_from_ohlc(week_df['high'].max(), week_df['low'].min(), week_df['close'].iloc[-1])
+                
+            # Monthly CPR
+            first_current = now.replace(day=1)
+            last_prev = first_current - timedelta(days=1)
+            first_prev = last_prev.replace(day=1)
+            month_df = df[(df.index.date >= first_prev.date()) & (df.index.date <= last_prev.date())]
+            if not month_df.empty:
+                monthly_cpr = calculate_cpr_from_ohlc(month_df['high'].max(), month_df['low'].min(), month_df['close'].iloc[-1])
+                
+            # 6-Month CPR
+            year = now.year
+            month = now.month
+            if month <= 6:
+                half_start = datetime(year - 1, 7, 1)
+                half_end = datetime(year - 1, 12, 31)
+            else:
+                half_start = datetime(year, 1, 1)
+                half_end = datetime(year, 6, 30)
+            half_df = df[(df.index.date >= half_start.date()) & (df.index.date <= half_end.date())]
+            if not half_df.empty:
+                half_yearly_cpr = calculate_cpr_from_ohlc(half_df['high'].max(), half_df['low'].min(), half_df['close'].iloc[-1])
+                
+            # Yearly CPR
+            year_start = datetime(now.year - 1, 1, 1)
+            year_end = datetime(now.year - 1, 12, 31)
+            year_df = df[(df.index.date >= year_start.date()) & (df.index.date <= year_end.date())]
+            if not year_df.empty:
+                yearly_cpr = calculate_cpr_from_ohlc(year_df['high'].max(), year_df['low'].min(), year_df['close'].iloc[-1])
+                
+        levels = {
+            'Hourly': hourly_cpr,
+            'Daily': daily_cpr,
+            'Weekly': weekly_cpr,
+            'Monthly': monthly_cpr,
+            '6-Month': half_yearly_cpr,
+            'Yearly': yearly_cpr
+        }
+        
+        # Cache successful calculation
+        _INDEX_CPR_CACHE[index_name] = {
+            'levels': levels,
+            'timestamp': now
+        }
+        return levels
+        
+    except Exception as e:
+        logger.warning(f"Error calculating {index_name} CPR timeframes: {e}")
+        # Return stale cache if available
+        if index_name in _INDEX_CPR_CACHE and _INDEX_CPR_CACHE[index_name]['levels']:
+            return _INDEX_CPR_CACHE[index_name]['levels']
+        return {}
+
+def get_nifty_cpr_levels(provider):
+    """Wrapper for backward compatibility."""
+    return get_index_cpr_levels(provider, "NIFTY")
+
+@api_bp.route('/stock-cpr', methods=['GET'])
+@limiter.exempt
+def get_stock_cpr_endpoint():
+    symbol = request.args.get('symbol', '').upper()
+    if not symbol:
+        return jsonify({'success': False, 'error': 'Symbol is required'}), 400
+        
+    global _STOCK_CPR_CACHE
+    now = datetime.now()
+    cache_key = symbol
+    if cache_key in _STOCK_CPR_CACHE:
+        cache = _STOCK_CPR_CACHE[cache_key]
+        if (now - cache['timestamp']).total_seconds() < 300:  # 5 mins cache
+            return jsonify(cache['data'])
+            
+    provider = get_data_provider()
+    if not provider:
+        return jsonify({'success': False, 'error': 'Data Provider failed'}), 500
+        
+    try:
+        provider_name = provider.__class__.__name__.lower()
+        is_kite = 'kite' in provider_name
+        token = f"NSE:{symbol}" if is_kite else f"NSE:{symbol}-EQ"
+        
+        # Fetch current price from quote
+        raw_quotes = provider.quote([token])
+        q = raw_quotes.get(token, {})
+        price = q.get('last_price', 0)
+        
+        # Fetch multi-timeframe CPR levels using generic helper
+        cpr_levels = get_index_cpr_levels(provider, token)
+        
+        cpr_results = {}
+        if price > 0 and cpr_levels:
+            for tf, lvl in cpr_levels.items():
+                if lvl:
+                    tc = lvl['tc']
+                    bc = lvl['bc']
+                    pp = lvl['pp']
+                    
+                    if price > tc:
+                        status = 'ABOVE'
+                    elif price < bc:
+                        status = 'BELOW'
+                    else:
+                        status = 'IN CPR'
+                        
+                    cpr_width = abs(tc - bc)
+                    cpr_width_pct = (cpr_width / pp * 100) if pp else 0
+                    
+                    if cpr_width_pct < 0.1:
+                        cpr_type = 'NARROW'
+                    elif cpr_width_pct > 0.25:
+                        cpr_type = 'WIDE'
+                    else:
+                        cpr_type = 'AVERAGE'
+                        
+                    cpr_results[tf] = {
+                        'tc': round(tc, 2),
+                        'bc': round(bc, 2),
+                        'pp': round(pp, 2),
+                        'status': status,
+                        'cpr_type': cpr_type,
+                        'width_pct': round(cpr_width_pct, 2)
+                    }
+                    
+        res_data = {
+            'success': True,
+            'symbol': symbol,
+            'price': price,
+            'cpr_timeframes': cpr_results
+        }
+        
+        _STOCK_CPR_CACHE[cache_key] = {
+            'data': res_data,
+            'timestamp': now
+        }
+        
+        return jsonify(res_data)
+    except Exception as e:
+        logger.error(f"Error calculating multi-timeframe CPR for {symbol}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@api_bp.route('/market-pulse', methods=['GET'])
+def get_market_pulse() -> EndpointResponse:
+    """
+    Consolidated market overview endpoint for the 'Markets' dashboard.
+    Returns:
+    1. Indices: Live quotes for major Indian indices
+    2. Institutional: Latest FII/DII activity data
+    3. Heatmap: NIFTY 50 stock quotes
+    4. CPR: NIFTY CPR levels
+    """
+    auth_error = check_auth()
+    if auth_error: return auth_error
+    
+    provider = get_data_provider()
+    if not provider:
+        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
+
+    try:
+        provider_name = provider.__class__.__name__.lower()
+        is_kite = 'kite' in provider_name
+        
+        target_index = request.args.get('index', 'NIFTY').upper()
+        from trading_app.service.dynamic_constituents import DynamicConstituentsService
+        target_stocks = DynamicConstituentsService.get_constituents(target_index)
+        
+        # Prepare Fyers index tokens by default
+        index_map = {
+            'NIFTY':            'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':        'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':         'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY':       'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':           'BSE:SENSEX-INDEX',
+            'INDIAVIX':         'NSE:INDIAVIX-INDEX',
+            'NIFTY IT':         'NSE:NIFTYIT-INDEX',
+            'NIFTY AUTO':       'NSE:NIFTYAUTO-INDEX',
+            'NIFTY FMCG':       'NSE:NIFTYFMCG-INDEX',
+            'NIFTY METAL':      'NSE:NIFTYMETAL-INDEX',
+            'NIFTY PHARMA':     'NSE:NIFTYPHARMA-INDEX',
+            'NIFTY PSU BANK':   'NSE:NIFTYPSUBANK-INDEX',
+            'NIFTY MIDCAP 150': 'NSE:NIFTYMIDCAP150-INDEX',
+            'NIFTY SMLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX'
+        }
+        if is_kite:
+            index_map = {
+                'NIFTY':            'NSE:NIFTY 50',
+                'BANKNIFTY':        'NSE:NIFTY BANK',
+                'FINNIFTY':         'NSE:NIFTY FIN SERVICE',
+                'MIDCPNIFTY':       'NSE:NIFTY MID SELECT',
+                'SENSEX':           'BSE:SENSEX',
+                'INDIAVIX':         'NSE:INDIA VIX',
+                'NIFTY IT':         'NSE:NIFTY IT',
+                'NIFTY AUTO':       'NSE:NIFTY AUTO',
+                'NIFTY FMCG':       'NSE:NIFTY FMCG',
+                'NIFTY METAL':      'NSE:NIFTY METAL',
+                'NIFTY PHARMA':     'NSE:NIFTY PHARMA',
+                'NIFTY PSU BANK':   'NSE:NIFTY PSU BANK',
+                'NIFTY MIDCAP 150': 'NSE:NIFTY MIDCAP 150',
+                'NIFTY SMLCAP 100': 'NSE:NIFTY SMALLCAP 100'
+            }
+            
+        index_tokens = list(index_map.values())
+        stock_tokens = [f"NSE:{sym}" if is_kite else f"NSE:{sym}-EQ" for sym in target_stocks]
+        all_tokens = index_tokens + stock_tokens
+
+        # Capture username in main thread before starting the workers
+        from flask import has_request_context
+        username = session.get('username') if has_request_context() else 'Mine'
+
+        # Define individual fetching sub-tasks for parallel execution
+        def fetch_quotes():
+            try:
+                raw = provider.quote(all_tokens)
+                if not raw:
+                    # Fallback to Kite
+                    from trading_app.service.provider_logic import get_kite
+                    fallback_provider = get_kite(user=username)
+                    if fallback_provider:
+                        fb_index_map = {
+                            'NIFTY':      'NSE:NIFTY 50',
+                            'BANKNIFTY':  'NSE:NIFTY BANK',
+                            'FINNIFTY':   'NSE:NIFTY FIN SERVICE',
+                            'MIDCPNIFTY': 'NSE:NIFTY MID SELECT',
+                            'SENSEX':     'BSE:SENSEX',
+                            'INDIAVIX':   'NSE:INDIA VIX'
+                        }
+                        fb_stock_tokens = [f"NSE:{sym}" for sym in target_stocks]
+                        fb_all_tokens = list(fb_index_map.values()) + fb_stock_tokens
+                        raw = fallback_provider.quote(fb_all_tokens)
+                return raw or {}
+            except Exception as e:
+                logger.warning(f"[MarketPulse] Error fetching quotes: {e}")
+                return {}
+
+        def fetch_institutional():
+            from trading_app.service.institutional_service import InstitutionalService
+            try:
+                return InstitutionalService.get_latest_data()
+            except Exception as e:
+                logger.warning(f"[MarketPulse] Error getting institutional data: {e}")
+                return {
+                    'date': datetime.now().strftime('%a, %d %b %Y'),
+                    'data': {
+                        'fii-cash': 0.0, 'dii-cash': 0.0,
+                        'fii-idx-fut': 0.0, 'fii-idx-opt': 0.0,
+                        'fii-stk-fut': 0.0, 'fii-stk-opt': 0.0
+                    }
+                }
+
+        def fetch_cpr():
+            try:
+                return get_index_cpr_levels(provider, target_index)
+            except Exception as e:
+                logger.warning(f"[MarketPulse] Error fetching {target_index} CPR: {e}")
+                return {}
+
+        def fetch_global_markets():
+            from trading_app.service.global_market_service import GlobalMarketService
+            try:
+                return GlobalMarketService.get_latest_data()
+            except Exception as e:
+                logger.warning(f"[MarketPulse] Error getting global markets data: {e}")
+                return []
+
+        # Execute all 4 tasks in parallel using the global _api_executor
+        future_quotes = _api_executor.submit(fetch_quotes)
+        future_inst = _api_executor.submit(fetch_institutional)
+        future_cpr = _api_executor.submit(fetch_cpr)
+        future_global = _api_executor.submit(fetch_global_markets)
+
+        raw_quotes = future_quotes.result()
+        institutional = future_inst.result()
+        cpr_levels = future_cpr.result()
+        global_markets = future_global.result()
+
+        # Dynamically determine if we actually got Kite or Fyers format in raw_quotes
+        actual_is_kite = is_kite
+        if raw_quotes:
+            if 'NSE:NIFTY 50' in raw_quotes:
+                actual_is_kite = True
+            elif 'NSE:NIFTY50-INDEX' in raw_quotes:
+                actual_is_kite = False
+
+        parsed_index_map = {
+            'NIFTY':      'NSE:NIFTY 50' if actual_is_kite else 'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTY BANK' if actual_is_kite else 'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:NIFTY FIN SERVICE' if actual_is_kite else 'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:NIFTY MID SELECT' if actual_is_kite else 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX' if actual_is_kite else 'BSE:SENSEX-INDEX',
+            'INDIAVIX':   'NSE:INDIA VIX' if actual_is_kite else 'NSE:INDIAVIX-INDEX'
+        }
+
+        quotes = {}
+        # Process Indices
+        for key, token in parsed_index_map.items():
+            q = raw_quotes.get(token, {})
+            ohlc = q.get('ohlc', {})
+            price = q.get('last_price', 0)
+            prev_close = ohlc.get('close', 0)
+            change = price - prev_close if prev_close else 0
+            pchange = (change / prev_close * 100) if prev_close else 0
+            
+            quotes[key] = {
+                'price': price,
+                'change': change,
+                'pChange': pchange
+            }
+
+        # Process Heatmap
+        heatmap_data = []
+        for sym in target_stocks:
+            token = f"NSE:{sym}" if actual_is_kite else f"NSE:{sym}-EQ"
+            q = raw_quotes.get(token, {})
+            ohlc = q.get('ohlc', {})
+            price = q.get('last_price', 0)
+            prev_close = ohlc.get('close', 0)
+            change = price - prev_close if prev_close else 0
+            pchange = (change / prev_close * 100) if prev_close else 0
+            
+            heatmap_data.append({
+                'sym': sym,
+                'price': price,
+                'chg': change,
+                'pct': pchange
+            })
+
+        # Process CPR Status
+        index_price = quotes.get(target_index, {}).get('price', 0)
+        cpr_data = {}
+        if index_price > 0 and cpr_levels:
+            for tf, lvl in cpr_levels.items():
+                if lvl:
+                    tc = lvl['tc']
+                    bc = lvl['bc']
+                    pp = lvl['pp']
+                    
+                    if index_price > tc:
+                        status = 'ABOVE'
+                    elif index_price < bc:
+                        status = 'BELOW'
+                    else:
+                        status = 'IN CPR'
+                    
+                    # Calculate CPR width as a percentage of Pivot Point
+                    cpr_width = abs(tc - bc)
+                    cpr_width_pct = (cpr_width / pp * 100) if pp else 0
+                    
+                    if cpr_width_pct < 0.1:
+                        cpr_type = 'NARROW'
+                    elif cpr_width_pct > 0.25:
+                        cpr_type = 'WIDE'
+                    else:
+                        cpr_type = 'AVERAGE'
+                        
+                    cpr_data[tf] = {
+                        'pp': pp,
+                        'bc': bc,
+                        'tc': tc,
+                        'status': status,
+                        'cpr_type': cpr_type
+                    }
+
+        return jsonify({
+            'success': True,
+            'indices': quotes,
+            'heatmap': heatmap_data,
+            'institutional': institutional,
+            'cpr': cpr_data,
+            'global': global_markets,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error generating market pulse: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @api_bp.route('/symbols', methods=['GET'])
 def get_symbols() -> EndpointResponse:
     """Get list of available symbols (Indices + F&O Stocks)."""
@@ -634,7 +1117,8 @@ def get_symbols() -> EndpointResponse:
         fo_stocks = cpr_service.get_fo_stocks()
         
         # Define Indices - ensure these are always returned even if F&O fails
-        indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']
+        from trading_app.service.dynamic_constituents import HARDCODED_CONSTITUENTS
+        indices = list(HARDCODED_CONSTITUENTS.keys())
         
         if fo_stocks:
             # Combine and Sort
@@ -1160,41 +1644,20 @@ def get_cpr_filter_results() -> EndpointResponse:
         cpr_service = CPRFilterService(kite_instance=current_kite)
         
         # logger.info("Starting CPR filter stocks processing...")
-        results = cpr_service.filter_cpr_stocks(root_date=target_date)
+        results = cpr_service.filter_cpr_stocks(root_date=target_date, skip_iv=True)
         
-        signals = results.get('signals', []) if isinstance(results, dict) else []
-        weekly_cross = results.get('weekly_cross', {}) if isinstance(results, dict) else {}
-        reversal = results.get('reversal', {}) if isinstance(results, dict) else {}
-        high_iv_stocks = results.get('high_iv_stocks', []) if isinstance(results, dict) else []
-        cpr_touch = results.get('cpr_touch', {}) if isinstance(results, dict) else {}
+        camarilla_cpr_reversal = results.get('camarilla_cpr_reversal', {}) if isinstance(results, dict) else {}
         drsi_filter = results.get('drsi_filter', {}) if isinstance(results, dict) else {}
         
         # FILTER RESPONSE DATA before sending to frontend
         # Apply any data validation/filtering here if needed
-        signals = signals if isinstance(signals, list) else []
-        weekly_cross = weekly_cross if isinstance(weekly_cross, dict) else {}
-        reversal = reversal if isinstance(reversal, dict) else {}
-        high_iv_stocks = high_iv_stocks if isinstance(high_iv_stocks, list) else []
-        cpr_touch = cpr_touch if isinstance(cpr_touch, dict) else {}
+        camarilla_cpr_reversal = camarilla_cpr_reversal if isinstance(camarilla_cpr_reversal, dict) else {}
         drsi_filter = drsi_filter if isinstance(drsi_filter, dict) else {}
 
-        # logger.info(
-        #     "CPR filter completed. "
-        #     f"Found {len(signals)} primary signals, "
-        #     f"{len(weekly_cross.get('crossed_above', [])) if isinstance(weekly_cross, dict) else 0} crossed above weekly CPR, "
-        #     f"{len(weekly_cross.get('crossed_below', [])) if isinstance(weekly_cross, dict) else 0} crossed below weekly CPR, "
-        #     f"{len(reversal.get('bullish', [])) if isinstance(reversal, dict) else 0} bullish reversal, "
-        #     f"{len(reversal.get('bearish', [])) if isinstance(reversal, dict) else 0} bearish reversal, "
-        #     f"{len(high_iv_stocks)} high IV percentile."
-        # )
         payload = {
             'success': True, 
-            'data': signals, 
-            'weekly_cross': weekly_cross, 
-            'reversal': reversal,
-            'cpr_touch': cpr_touch,
+            'camarilla_cpr_reversal': camarilla_cpr_reversal,
             'drsi_filter': drsi_filter,
-            'high_iv_stocks': high_iv_stocks,
             'date': target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
         }
 
@@ -1210,6 +1673,80 @@ def get_cpr_filter_results() -> EndpointResponse:
                 'auth_error': True
             }), 401
         return jsonify({'success': False, 'error': f'CPR filter error: {str(e)}'}), 500
+
+
+@api_bp.route('/cpr-filter/high-iv', methods=['GET'])
+@limiter.exempt
+def get_cpr_high_iv_results() -> EndpointResponse:
+    """Get F&O stocks with High IV Percentile (>80%)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    
+    current_kite = get_data_provider()
+    if not current_kite:
+        return jsonify({'success': False, 'error': 'Data Provider initialization failed.'}), 401
+
+    # Get date parameter
+    date_str = request.args.get('date')
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    # Short-term cache to avoid repeated heavy computations from rapid polling.
+    from trading_app.app.utils.cache import cpr_filter_cache
+    cache_user = session.get('username', 'anonymous')
+    cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
+    cache_key = f"cpr_filter_high_iv:{cache_user}:{cache_date}"
+
+    refresh = request.args.get('refresh', 'false').lower() == 'true'
+    if not refresh:
+        cached_response = cpr_filter_cache.get(cache_key)
+        if cached_response is not None:
+            return jsonify(cached_response)
+    else:
+        # If refreshing, clear existing cache entry
+        cpr_filter_cache.delete(cache_key)
+
+    try:
+        # Verify kite has access token
+        if not hasattr(current_kite, 'access_token') or not current_kite.access_token:
+            logger.warning("High IV request: KiteConnect instance has no access token")
+            return jsonify({
+                'success': False,
+                'error': 'No valid access token on KiteConnect instance. Please login again.',
+                'auth_error': True
+            }), 401
+        
+        from trading_app.filters.cpr_filter import CPRFilterService
+        
+        cpr_service = CPRFilterService(kite_instance=current_kite)
+        stocks = cpr_service.get_fo_stocks()
+        
+        logger.info(f"Starting separate High IV scan for {len(stocks)} F&O stocks...")
+        high_iv_stocks = cpr_service._batch_compute_iv_percentiles(stocks)
+        
+        payload = {
+            'success': True,
+            'high_iv_stocks': sorted(high_iv_stocks, key=lambda x: x['iv_percentile'], reverse=True),
+            'date': target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
+        }
+
+        cpr_filter_cache.set(cache_key, payload, timeout=120)  # cache for 2 minutes
+        return jsonify(payload)
+    except Exception as e:
+        logger.error(f"Error in High IV scanner: {type(e).__name__}: {e}", exc_info=True)
+        error_str = str(e).lower()
+        if 'access_token' in error_str or 'unauthorized' in error_str or 'invalid' in error_str:
+            return jsonify({
+                'success': False,
+                'error': 'Authentication failed. Please login again.',
+                'auth_error': True
+            }), 401
+        return jsonify({'success': False, 'error': f'High IV filter error: {str(e)}'}), 500
 
 
 # ====================== EMA/RSI 208 FILTER ======================
@@ -1622,7 +2159,17 @@ def run_apex_reversal_backtest():
                 'NIFTY': 256265,
                 'BANKNIFTY': 260105,
                 'FINNIFTY': 257801,
-                'MIDCPNIFTY': 288009
+                'MIDCPNIFTY': 288009,
+                'NIFTY MIDCAP 150': 266249,
+                'NIFTY AUTO':      263433,
+                'NIFTY Smallcap 100': 267017,
+                'NIFTY SMLCAP 100': 267017,
+                'NIFTY FMCG':      261897,
+                'NIFTY METAL':     263689,
+                'NIFTY PHARAMA':   262409,
+                'NIFTY PHARMA':    262409,
+                'NIFTY PSU BANK':  262921,
+                'NIFTY IT':        259849,
             }
             instrument_token = index_tokens.get(symbol)
             
@@ -1634,7 +2181,17 @@ def run_apex_reversal_backtest():
                 'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
                 'FINNIFTY': 'NSE:FINNIFTY-INDEX',
                 'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-                'SENSEX': 'BSE:SENSEX-INDEX'
+                'SENSEX': 'BSE:SENSEX-INDEX',
+                'NIFTY MIDCAP 150': 'NSE:NIFTYMIDCAP150-INDEX',
+                'NIFTY AUTO':      'NSE:NIFTYAUTO-INDEX',
+                'NIFTY Smallcap 100': 'NSE:NIFTYSMLCAP100-INDEX',
+                'NIFTY SMLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
+                'NIFTY FMCG':      'NSE:NIFTYFMCG-INDEX',
+                'NIFTY METAL':     'NSE:NIFTYMETAL-INDEX',
+                'NIFTY PHARAMA':   'NSE:NIFTYPHARMA-INDEX',
+                'NIFTY PHARMA':    'NSE:NIFTYPHARMA-INDEX',
+                'NIFTY PSU BANK':  'NSE:NIFTYPSUBANK-INDEX',
+                'NIFTY IT':        'NSE:NIFTYIT-INDEX',
             }
             if symbol in fyers_indices:
                 instrument_token = fyers_indices[symbol]
@@ -1745,7 +2302,17 @@ def run_cpr_gap_backtest_api():
                 'NIFTY': 256265,
                 'BANKNIFTY': 260105,
                 'FINNIFTY': 257801,
-                'MIDCPNIFTY': 288009
+                'MIDCPNIFTY': 288009,
+                'NIFTY MIDCAP 150': 266249,
+                'NIFTY AUTO':      263433,
+                'NIFTY Smallcap 100': 267017,
+                'NIFTY SMLCAP 100': 267017,
+                'NIFTY FMCG':      261897,
+                'NIFTY METAL':     263689,
+                'NIFTY PHARAMA':   262409,
+                'NIFTY PHARMA':    262409,
+                'NIFTY PSU BANK':  262921,
+                'NIFTY IT':        259849,
             }
             instrument_token = index_tokens.get(symbol)
             
@@ -1755,7 +2322,17 @@ def run_cpr_gap_backtest_api():
                 'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
                 'FINNIFTY': 'NSE:FINNIFTY-INDEX',
                 'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-                'SENSEX': 'BSE:SENSEX-INDEX'
+                'SENSEX': 'BSE:SENSEX-INDEX',
+                'NIFTY MIDCAP 150': 'NSE:NIFTYMIDCAP150-INDEX',
+                'NIFTY AUTO':      'NSE:NIFTYAUTO-INDEX',
+                'NIFTY Smallcap 100': 'NSE:NIFTYSMLCAP100-INDEX',
+                'NIFTY SMLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
+                'NIFTY FMCG':      'NSE:NIFTYFMCG-INDEX',
+                'NIFTY METAL':     'NSE:NIFTYMETAL-INDEX',
+                'NIFTY PHARAMA':   'NSE:NIFTYPHARMA-INDEX',
+                'NIFTY PHARMA':    'NSE:NIFTYPHARMA-INDEX',
+                'NIFTY PSU BANK':  'NSE:NIFTYPSUBANK-INDEX',
+                'NIFTY IT':        'NSE:NIFTYIT-INDEX',
             }
             if symbol in fyers_indices:
                 instrument_token = fyers_indices[symbol]
@@ -2778,6 +3355,54 @@ def debug_token_status() -> EndpointResponse:
             'error': 'Internal error during token check',
             'details': str(e)
         }), 500
+def split_quantity_by_freeze_limit(symbol: str, total_qty: int, provider) -> list:
+    """Splits the quantity (in units/shares) into chunks of at most 27 lots."""
+    import re
+    tsym_upper = symbol.upper()
+    underlying = 'NIFTY'
+    if tsym_upper.startswith('BANKNIFTY'):
+        underlying = 'BANKNIFTY'
+    elif tsym_upper.startswith('FINNIFTY'):
+        underlying = 'FINNIFTY'
+    elif tsym_upper.startswith('MIDCPNIFTY'):
+        underlying = 'MIDCPNIFTY'
+    elif tsym_upper.startswith('SENSEX'):
+        underlying = 'SENSEX'
+    elif tsym_upper.startswith('NIFTY'):
+        underlying = 'NIFTY'
+    else:
+        match = re.match(r'^([A-Z]+)', tsym_upper)
+        if match:
+            underlying = match.group(1)
+
+    lot_size = 1
+    if provider and hasattr(provider, 'get_lot_size'):
+        try:
+            lot_size = provider.get_lot_size(underlying)
+        except Exception as e:
+            logger.error(f"Error getting lot size for split from provider: {e}")
+
+    if not lot_size or lot_size <= 1:
+        if underlying == 'NIFTY': lot_size = 25
+        elif underlying == 'BANKNIFTY': lot_size = 15
+        elif underlying == 'SENSEX': lot_size = 20
+        elif underlying == 'FINNIFTY': lot_size = 40
+        elif underlying == 'MIDCPNIFTY': lot_size = 75
+        else: lot_size = 1
+
+    max_lots = 27
+    max_qty = max_lots * lot_size
+
+    if total_qty <= max_qty:
+        return [total_qty]
+
+    chunks = []
+    remaining = total_qty
+    while remaining > 0:
+        chunk = min(remaining, max_qty)
+        chunks.append(chunk)
+        remaining -= chunk
+    return chunks
 
 @api_bp.route('/order/exit-all', methods=['POST'])
 def exit_all_orders() -> EndpointResponse:
@@ -2916,22 +3541,26 @@ def exit_all_orders() -> EndpointResponse:
                                 if qty != 0:
                                     try:
                                         side = 'SELL' if qty > 0 else 'BUY'
-                                        logger.info(f"[Zerodha] Exiting {pos['tradingsymbol']}: {qty} (Side: {side}, Product: {pos['product']})")
                                         
                                         from trading_app.service.kite_order_services import KiteService
                                         kite_svc = KiteService(kite_instance=kite)
                                         
-                                        order_id = kite_svc._safe_place_order(
-                                            variety='regular',
-                                            exchange=pos['exchange'],
-                                            tradingsymbol=pos['tradingsymbol'],
-                                            transaction_type=side,
-                                            quantity=abs(int(qty)),
-                                            order_type='MARKET',
-                                            product=pos['product'],
-                                            market_protection=-1
-                                        )
-                                        logger.info(f"[Zerodha] Instance {instance} | Exit MARKET order placed with protection: {order_id}")
+                                        abs_qty = abs(int(qty))
+                                        qty_chunks = split_quantity_by_freeze_limit(pos['tradingsymbol'], abs_qty, kite)
+                                        logger.info(f"[Zerodha] Exiting {pos['tradingsymbol']}: Total quantity {abs_qty} (Side: {side}, Product: {pos['product']}) split into chunks: {qty_chunks}")
+                                        
+                                        for chunk_qty in qty_chunks:
+                                            order_id = kite_svc._safe_place_order(
+                                                variety='regular',
+                                                exchange=pos['exchange'],
+                                                tradingsymbol=pos['tradingsymbol'],
+                                                transaction_type=side,
+                                                quantity=chunk_qty,
+                                                order_type='MARKET',
+                                                product=pos['product'],
+                                                market_protection=-1
+                                            )
+                                            logger.info(f"[Zerodha] Instance {instance} | Exit MARKET order placed with protection: {order_id} (Qty: {chunk_qty})")
                                         broker_res['exited_positions'] += 1
 
                                     except Exception as e:
@@ -3000,13 +3629,19 @@ def exit_all_orders() -> EndpointResponse:
                                     try:
                                         # Use correct Fyers side: 1=BUY, 2=SELL
                                         side = fyers_service.SIDE_SELL if net_qty > 0 else fyers_service.SIDE_BUY
-                                        fyers_service.place_order(
-                                            symbol=pos['symbol'],
-                                            side=side,
-                                            quantity=abs(int(net_qty)),
-                                            order_type=2, # 2: MARKET
-                                            product_type=pos['productType']
-                                        )
+                                        
+                                        abs_qty = abs(int(net_qty))
+                                        qty_chunks = split_quantity_by_freeze_limit(pos['symbol'], abs_qty, fyers_service)
+                                        logger.info(f"[Fyers] Exiting {pos['symbol']}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
+                                        
+                                        for chunk_qty in qty_chunks:
+                                            fyers_service.place_order(
+                                                symbol=pos['symbol'],
+                                                side=side,
+                                                quantity=chunk_qty,
+                                                order_type=2, # 2: MARKET
+                                                product_type=pos['productType']
+                                            )
                                         broker_res['exited_positions'] += 1
                                     except Exception as e:
                                         broker_res['errors'].append(f"Exit {pos['symbol']} failed: {e}")
@@ -3070,15 +3705,21 @@ def exit_all_orders() -> EndpointResponse:
                                 if net_qty != 0:
                                     try:
                                         side = 'SELL' if net_qty > 0 else 'BUY'
-                                        kotak_service.place_order(
-                                            tradingsymbol=pos['trdSym'],
-                                            transaction_type=side,
-                                            quantity=abs(int(net_qty)),
-                                            price=0.0,
-                                            order_type='MKT',
-                                            product_type=pos['prod'],
-                                            exchange_segment=pos['exseg']
-                                        )
+                                        
+                                        abs_qty = abs(int(net_qty))
+                                        qty_chunks = split_quantity_by_freeze_limit(pos['trdSym'], abs_qty, kotak_service)
+                                        logger.info(f"[Kotak] Exiting {pos['trdSym']}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
+                                        
+                                        for chunk_qty in qty_chunks:
+                                            kotak_service.place_order(
+                                                tradingsymbol=pos['trdSym'],
+                                                transaction_type=side,
+                                                quantity=chunk_qty,
+                                                price=0.0,
+                                                order_type='MKT',
+                                                product_type=pos['prod'],
+                                                exchange_segment=pos['exseg']
+                                            )
                                         broker_res['exited_positions'] += 1
                                     except Exception as e:
                                         broker_res['errors'].append(f"Exit {pos.get('trdSym')} failed: {e}")
@@ -3137,14 +3778,20 @@ def exit_all_orders() -> EndpointResponse:
                                 if net_qty != 0:
                                     try:
                                         side = 'SELL' if net_qty > 0 else 'BUY'
-                                        dhan_service.place_order(
-                                            security_id=pos['securityId'],
-                                            transaction_type=side,
-                                            quantity=abs(int(net_qty)),
-                                            order_type='MARKET',
-                                            product_type=pos['productType'],
-                                            exchange_segment=pos['exchangeSegment']
-                                        )
+                                        
+                                        abs_qty = abs(int(net_qty))
+                                        qty_chunks = split_quantity_by_freeze_limit(pos['tradingSymbol'], abs_qty, dhan_service)
+                                        logger.info(f"[Dhan] Exiting {pos['tradingSymbol']}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
+                                        
+                                        for chunk_qty in qty_chunks:
+                                            dhan_service.place_order(
+                                                security_id=pos['securityId'],
+                                                transaction_type=side,
+                                                quantity=chunk_qty,
+                                                order_type='MARKET',
+                                                product_type=pos['productType'],
+                                                exchange_segment=pos['exchangeSegment']
+                                            )
                                         broker_res['exited_positions'] += 1
                                     except Exception as e:
                                         broker_res['errors'].append(f"Exit {pos.get('tradingSymbol')} failed: {e}")
@@ -3212,10 +3859,18 @@ def place_intraday_920_order() -> EndpointResponse:
             if not is_broker_active(_username, i):
                 logger.info(f"[920/place-order] Skipping broker {i} ({b_type}): ACTIVE=false")
                 continue
-            raw_920 = UserEnvManager.get_user_var(_username, f'BROKER_{i}_920_ACTIVE', 'false').strip().lower()
-            if raw_920 not in ('true', '1', 'yes'):
-                logger.info(f"[920/place-order] Skipping broker {i} ({b_type}): 920_ACTIVE not enabled")
-                continue
+            
+            if strategy == 'intrinsic':
+                raw_active = UserEnvManager.get_user_var(_username, f'BROKER_{i}_INTRINSIC_ACTIVE', 'false').strip().lower()
+                if raw_active not in ('true', '1', 'yes'):
+                    logger.info(f"[920/place-order] Skipping broker {i} ({b_type}): INTRINSIC_ACTIVE not enabled")
+                    continue
+            else:
+                raw_920 = UserEnvManager.get_user_var(_username, f'BROKER_{i}_920_ACTIVE', 'false').strip().lower()
+                if raw_920 not in ('true', '1', 'yes'):
+                    logger.info(f"[920/place-order] Skipping broker {i} ({b_type}): 920_ACTIVE not enabled")
+                    continue
+
             if b_type == 'zerodha':
                 targets.append({'type': f'zerodha_{i}', 'instance': i})
             elif b_type in ['kotak', 'kotak_neo']:
@@ -3228,7 +3883,10 @@ def place_intraday_920_order() -> EndpointResponse:
         logger.info(f"[920/place-order] Routing to brokers: {[t['type'] for t in targets]} for user '{_username}'")
 
         if not targets:
-            return jsonify({'success': False, 'error': 'No 9:20-enabled broker found. Set BROKER_N_920_ACTIVE=true in .env'}), 400
+            if strategy == 'intrinsic':
+                return jsonify({'success': False, 'error': 'No Intrinsic-enabled broker found. Set BROKER_N_INTRINSIC_ACTIVE=true in .env'}), 400
+            else:
+                return jsonify({'success': False, 'error': 'No 9:20-enabled broker found. Set BROKER_N_920_ACTIVE=true in .env'}), 400
 
         def _execute_single(broker, _active_instance):
             is_zerodha_instance = (broker == 'zerodha' or broker.startswith('zerodha_'))
@@ -3982,6 +4640,16 @@ def oi_profile_candles() -> EndpointResponse:
         'BANKNIFTY':  260105,   # NSE:NIFTY BANK
         'FINNIFTY':   257801,   # NSE:NIFTY FIN SERVICE
         'MIDCPNIFTY': 288009,   # NSE:NIFTY MIDCAP SELECT
+        'NIFTY MIDCAP 150': 266249,
+        'NIFTY AUTO':      263433,
+        'NIFTY Smallcap 100': 267017,
+        'NIFTY SMLCAP 100': 267017,
+        'NIFTY FMCG':      261897,
+        'NIFTY METAL':     263689,
+        'NIFTY PHARAMA':   262409,
+        'NIFTY PHARMA':    262409,
+        'NIFTY PSU BANK':  262921,
+        'NIFTY IT':        259849,
     }
 
     try:

@@ -75,11 +75,13 @@ const CPRFilterScheduler = (function() {
             const data = await response.json();
             
             if (data.success) {
-                console.log(`[CPR Scheduler] ✓ CPR filter completed: ${data.data?.length || 0} stocks`);
+                const camCount = (data.camarilla_cpr_reversal?.bullish?.length || 0) + (data.camarilla_cpr_reversal?.bearish?.length || 0);
+                const drsiCount = (data.drsi_filter?.reversal_bullish?.length || 0) + (data.drsi_filter?.reversal_bearish?.length || 0);
+                console.log(`[CPR Scheduler] ✓ CPR filter completed: ${camCount} Camarilla, ${drsiCount} Delta-RSI stocks`);
                 
                 // Trigger custom event for other components to react to results
                 const event = new CustomEvent('cprFilterUpdated', {
-                    detail: { results: data.data, timestamp: new Date() }
+                    detail: { data: data, timestamp: new Date() }
                 });
                 document.dispatchEvent(event);
             } else {

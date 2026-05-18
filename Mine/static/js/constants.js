@@ -52,22 +52,8 @@ window.CONSTANTS = {
         API_LOADER: 'api-loader',
 
         // CPR Filter elements
-        ABOVE_RESULTS: 'aboveResults',
-        ABOVE_BODY: 'aboveBody',
-        ABOVE_COUNT: 'aboveCount',
-        ABOVE_TABLE: 'aboveTable',
-        BELOW_RESULTS: 'belowResults',
-        BELOW_BODY: 'belowBody',
-        BELOW_COUNT: 'belowCount',
-        BELOW_TABLE: 'belowTable',
-        CROSS_ABOVE_RESULTS: 'crossAboveResults',
-        CROSS_ABOVE_BODY: 'crossAboveBody',
-        CROSS_ABOVE_COUNT: 'crossAboveCount',
-        CROSS_ABOVE_TABLE: 'crossAboveTable',
-        CROSS_BELOW_RESULTS: 'crossBelowResults',
-        CROSS_BELOW_BODY: 'crossBelowBody',
-        CROSS_BELOW_COUNT: 'crossBelowCount',
-        CROSS_BELOW_TABLE: 'crossBelowTable',
+
+
 
         // Delta-RSI Filter elements
         DRSI_BULLISH_RESULTS: 'drsiBullishResults',
@@ -78,6 +64,14 @@ window.CONSTANTS = {
         DRSI_BEARISH_BODY: 'drsiBearishBody',
         DRSI_BEARISH_COUNT: 'drsiBearishCount',
         DRSI_BEARISH_TABLE: 'drsiBearishTable',
+        CAMARILLA_CPR_REVERSAL_BULLISH_RESULTS: 'camarillaCprReversalBullishResults',
+        CAMARILLA_CPR_REVERSAL_BULLISH_BODY: 'camarillaCprReversalBullishBody',
+        CAMARILLA_CPR_REVERSAL_BULLISH_COUNT: 'camarillaCprReversalBullishCount',
+        CAMARILLA_CPR_REVERSAL_BULLISH_TABLE: 'camarillaCprReversalBullishTable',
+        CAMARILLA_CPR_REVERSAL_BEARISH_RESULTS: 'camarillaCprReversalBearishResults',
+        CAMARILLA_CPR_REVERSAL_BEARISH_BODY: 'camarillaCprReversalBearishBody',
+        CAMARILLA_CPR_REVERSAL_BEARISH_COUNT: 'camarillaCprReversalBearishCount',
+        CAMARILLA_CPR_REVERSAL_BEARISH_TABLE: 'camarillaCprReversalBearishTable',
         DRSI_REVERSAL_BULLISH_RESULTS: 'drsiReversalBullishResults',
         DRSI_REVERSAL_BULLISH_BODY: 'drsiReversalBullishBody',
         DRSI_REVERSAL_BULLISH_COUNT: 'drsiReversalBullishCount',
