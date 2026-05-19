@@ -789,7 +789,29 @@ def get_stock_cpr_endpoint():
     try:
         provider_name = provider.__class__.__name__.lower()
         is_kite = 'kite' in provider_name
-        token = f"NSE:{symbol}" if is_kite else f"NSE:{symbol}-EQ"
+        
+        # Check if the symbol is an index
+        index_map = {
+            'NIFTY':            'NSE:NIFTY 50' if is_kite else 'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':        'NSE:NIFTY BANK' if is_kite else 'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':         'NSE:NIFTY FIN SERVICE' if is_kite else 'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY':       'NSE:NIFTY MID SELECT' if is_kite else 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':           'BSE:SENSEX' if is_kite else 'BSE:SENSEX-INDEX',
+            'INDIAVIX':         'NSE:INDIA VIX' if is_kite else 'NSE:INDIAVIX-INDEX',
+            'NIFTY IT':         'NSE:NIFTY IT' if is_kite else 'NSE:NIFTYIT-INDEX',
+            'NIFTY AUTO':       'NSE:NIFTY AUTO' if is_kite else 'NSE:NIFTYAUTO-INDEX',
+            'NIFTY FMCG':       'NSE:NIFTY FMCG' if is_kite else 'NSE:NIFTYFMCG-INDEX',
+            'NIFTY METAL':      'NSE:NIFTY METAL' if is_kite else 'NSE:NIFTYMETAL-INDEX',
+            'NIFTY PHARMA':     'NSE:NIFTY PHARMA' if is_kite else 'NSE:NIFTYPHARMA-INDEX',
+            'NIFTY PSU BANK':   'NSE:NIFTY PSU BANK' if is_kite else 'NSE:NIFTYPSUBANK-INDEX',
+            'NIFTY MIDCAP 150': 'NSE:NIFTY MIDCAP 150' if is_kite else 'NSE:NIFTYMIDCAP150-INDEX',
+            'NIFTY SMLCAP 100': 'NSE:NIFTY SMALLCAP 100' if is_kite else 'NSE:NIFTYSMLCAP100-INDEX'
+        }
+        
+        if symbol in index_map:
+            token = index_map[symbol]
+        else:
+            token = f"NSE:{symbol}" if is_kite else f"NSE:{symbol}-EQ"
         
         # Fetch current price from quote
         raw_quotes = provider.quote([token])
@@ -871,9 +893,7 @@ def get_market_pulse() -> EndpointResponse:
         provider_name = provider.__class__.__name__.lower()
         is_kite = 'kite' in provider_name
         
-        target_index = request.args.get('index', 'NIFTY').upper()
-        from trading_app.service.dynamic_constituents import DynamicConstituentsService
-        target_stocks = DynamicConstituentsService.get_constituents(target_index)
+        target_index = request.args.get('index', 'INDEX').upper()
         
         # Prepare Fyers index tokens by default
         index_map = {
@@ -909,9 +929,18 @@ def get_market_pulse() -> EndpointResponse:
                 'NIFTY MIDCAP 150': 'NSE:NIFTY MIDCAP 150',
                 'NIFTY SMLCAP 100': 'NSE:NIFTY SMALLCAP 100'
             }
+
+        from trading_app.service.dynamic_constituents import DynamicConstituentsService
+        if target_index == 'INDEX':
+            target_stocks = list(index_map.keys())
+        else:
+            target_stocks = DynamicConstituentsService.get_constituents(target_index)
             
         index_tokens = list(index_map.values())
-        stock_tokens = [f"NSE:{sym}" if is_kite else f"NSE:{sym}-EQ" for sym in target_stocks]
+        if target_index == 'INDEX':
+            stock_tokens = []
+        else:
+            stock_tokens = [f"NSE:{sym}" if is_kite else f"NSE:{sym}-EQ" for sym in target_stocks]
         all_tokens = index_tokens + stock_tokens
 
         # Capture username in main thread before starting the workers
@@ -935,7 +964,7 @@ def get_market_pulse() -> EndpointResponse:
                             'SENSEX':     'BSE:SENSEX',
                             'INDIAVIX':   'NSE:INDIA VIX'
                         }
-                        fb_stock_tokens = [f"NSE:{sym}" for sym in target_stocks]
+                        fb_stock_tokens = [] if target_index == 'INDEX' else [f"NSE:{sym}" for sym in target_stocks]
                         fb_all_tokens = list(fb_index_map.values()) + fb_stock_tokens
                         raw = fallback_provider.quote(fb_all_tokens)
                 return raw or {}
@@ -960,9 +989,11 @@ def get_market_pulse() -> EndpointResponse:
 
         def fetch_cpr():
             try:
-                return get_index_cpr_levels(provider, target_index)
+                cpr_target = 'NIFTY' if target_index == 'INDEX' else target_index
+                return get_index_cpr_levels(provider, cpr_target)
             except Exception as e:
-                logger.warning(f"[MarketPulse] Error fetching {target_index} CPR: {e}")
+                cpr_target = 'NIFTY' if target_index == 'INDEX' else target_index
+                logger.warning(f"[MarketPulse] Error fetching {cpr_target} CPR: {e}")
                 return {}
 
         def fetch_global_markets():
@@ -993,12 +1024,20 @@ def get_market_pulse() -> EndpointResponse:
                 actual_is_kite = False
 
         parsed_index_map = {
-            'NIFTY':      'NSE:NIFTY 50' if actual_is_kite else 'NSE:NIFTY50-INDEX',
-            'BANKNIFTY':  'NSE:NIFTY BANK' if actual_is_kite else 'NSE:NIFTYBANK-INDEX',
-            'FINNIFTY':   'NSE:NIFTY FIN SERVICE' if actual_is_kite else 'NSE:FINNIFTY-INDEX',
-            'MIDCPNIFTY': 'NSE:NIFTY MID SELECT' if actual_is_kite else 'NSE:MIDCPNIFTY-INDEX',
-            'SENSEX':     'BSE:SENSEX' if actual_is_kite else 'BSE:SENSEX-INDEX',
-            'INDIAVIX':   'NSE:INDIA VIX' if actual_is_kite else 'NSE:INDIAVIX-INDEX'
+            'NIFTY':            'NSE:NIFTY 50' if actual_is_kite else 'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':        'NSE:NIFTY BANK' if actual_is_kite else 'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':         'NSE:NIFTY FIN SERVICE' if actual_is_kite else 'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY':       'NSE:NIFTY MID SELECT' if actual_is_kite else 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':           'BSE:SENSEX' if actual_is_kite else 'BSE:SENSEX-INDEX',
+            'INDIAVIX':         'NSE:INDIA VIX' if actual_is_kite else 'NSE:INDIAVIX-INDEX',
+            'NIFTY IT':         'NSE:NIFTY IT' if actual_is_kite else 'NSE:NIFTYIT-INDEX',
+            'NIFTY AUTO':       'NSE:NIFTY AUTO' if actual_is_kite else 'NSE:NIFTYAUTO-INDEX',
+            'NIFTY FMCG':       'NSE:NIFTY FMCG' if actual_is_kite else 'NSE:NIFTYFMCG-INDEX',
+            'NIFTY METAL':      'NSE:NIFTY METAL' if actual_is_kite else 'NSE:NIFTYMETAL-INDEX',
+            'NIFTY PHARMA':     'NSE:NIFTY PHARMA' if actual_is_kite else 'NSE:NIFTYPHARMA-INDEX',
+            'NIFTY PSU BANK':   'NSE:NIFTY PSU BANK' if actual_is_kite else 'NSE:NIFTYPSUBANK-INDEX',
+            'NIFTY MIDCAP 150': 'NSE:NIFTY MIDCAP 150' if actual_is_kite else 'NSE:NIFTYMIDCAP150-INDEX',
+            'NIFTY SMLCAP 100': 'NSE:NIFTY SMALLCAP 100' if actual_is_kite else 'NSE:NIFTYSMLCAP100-INDEX'
         }
 
         quotes = {}
@@ -1020,7 +1059,10 @@ def get_market_pulse() -> EndpointResponse:
         # Process Heatmap
         heatmap_data = []
         for sym in target_stocks:
-            token = f"NSE:{sym}" if actual_is_kite else f"NSE:{sym}-EQ"
+            if target_index == 'INDEX':
+                token = parsed_index_map.get(sym)
+            else:
+                token = f"NSE:{sym}" if actual_is_kite else f"NSE:{sym}-EQ"
             q = raw_quotes.get(token, {})
             ohlc = q.get('ohlc', {})
             price = q.get('last_price', 0)
@@ -1036,7 +1078,8 @@ def get_market_pulse() -> EndpointResponse:
             })
 
         # Process CPR Status
-        index_price = quotes.get(target_index, {}).get('price', 0)
+        cpr_target = 'NIFTY' if target_index == 'INDEX' else target_index
+        index_price = quotes.get(cpr_target, {}).get('price', 0)
         cpr_data = {}
         if index_price > 0 and cpr_levels:
             for tf, lvl in cpr_levels.items():

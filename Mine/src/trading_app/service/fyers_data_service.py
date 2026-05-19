@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
@@ -53,6 +54,37 @@ _FYERS_HIST_LOCK = threading.Lock()
 # Quotes Cache (Symbol -> (QuoteDict, Timestamp))
 _FYERS_SYMBOL_CACHE: Dict[str, tuple] = {}
 _FYERS_SYMBOL_LOCK = threading.Lock()
+_PERSISTENT_QUOTES_FILE = os.path.join(os.path.dirname(__file__), "..", ".cache", "persistent_quotes.json")
+
+def _load_persistent_quotes():
+    try:
+        if os.path.exists(_PERSISTENT_QUOTES_FILE):
+            with open(_PERSISTENT_QUOTES_FILE, 'r') as f:
+                data = json.load(f)
+            # Reconstruct _FYERS_SYMBOL_CACHE with current timestamp
+            now = datetime.now()
+            loaded = {}
+            for sym, q in data.items():
+                loaded[sym] = (q, now)
+            logger.info(f"[FyersAdapter] Loaded {len(loaded)} persistent quotes from disk.")
+            return loaded
+    except Exception as e:
+        logger.warning(f"[FyersAdapter] Failed to load persistent quotes: {e}")
+    return {}
+
+def _save_persistent_quotes(cache_dict):
+    try:
+        os.makedirs(os.path.dirname(_PERSISTENT_QUOTES_FILE), exist_ok=True)
+        serializable = {}
+        for sym, (q, ts) in cache_dict.items():
+            # Only save quotes that are valid (non-zero price and close)
+            if q.get('last_price', 0.0) > 0.0 and q.get('ohlc', {}).get('close', 0.0) > 0.0:
+                serializable[sym] = q
+        if serializable:
+            with open(_PERSISTENT_QUOTES_FILE, 'w') as f:
+                json.dump(serializable, f, indent=4, default=str)
+    except Exception as e:
+        logger.warning(f"[FyersAdapter] Failed to save persistent quotes: {e}")
 
 # Global API Locks to prevent parallel requests per endpoint (Serialization)
 _GLOBAL_FYERS_QUOTE_LOCK = threading.Lock()
@@ -221,6 +253,12 @@ class FyersDataServiceAdapter:
         max_retries = 2
         backoff = 2.0
         
+        # Lazy load cache from disk on first use
+        global _FYERS_SYMBOL_CACHE
+        with _FYERS_SYMBOL_LOCK:
+            if not _FYERS_SYMBOL_CACHE:
+                _FYERS_SYMBOL_CACHE = _load_persistent_quotes()
+
         kite_quotes: Dict[str, Any] = {}
         missing_symbols = []
         now = datetime.now()
@@ -229,7 +267,7 @@ class FyersDataServiceAdapter:
             for s in symbols:
                 if s in _FYERS_SYMBOL_CACHE:
                     cached_q, ts = _FYERS_SYMBOL_CACHE[s]
-                    if (now - ts).total_seconds() < 0.5:
+                    if (now - ts).total_seconds() < 3.0:
                         kite_quotes[s] = cached_q
                         continue
                 missing_symbols.append(s)
@@ -329,6 +367,20 @@ class FyersDataServiceAdapter:
                 v = item.get('v', {})
                 if not v: continue
                 
+                lp = v.get('lp', 0.0)
+                prev_close = v.get('prev_close_price', 0.0)
+                
+                # Check if this new quote is actually zero or invalid (broker reset)
+                if lp <= 0.0 or prev_close <= 0.0:
+                    # Fall back to existing cached valid quote if possible
+                    with _FYERS_SYMBOL_LOCK:
+                        if sym in _FYERS_SYMBOL_CACHE:
+                            cached_q, _ = _FYERS_SYMBOL_CACHE[sym]
+                            if cached_q.get('last_price', 0.0) > 0.0 and cached_q.get('ohlc', {}).get('close', 0.0) > 0.0:
+                                batch_quotes[sym] = cached_q
+                                kite_quotes[sym] = cached_q
+                                continue
+
                 op_oi = 0; op_oich = 0
                 if fsym.endswith('CE') or fsym.endswith('PE'):
                     m = re.match(r'^([A-Z&]+)', fsym.split(':')[-1])
@@ -337,8 +389,8 @@ class FyersDataServiceAdapter:
                         op_oich = oi_caches[m.group(1)][fsym].get('oich', 0)
                 
                 q = {
-                    'last_price': v.get('lp', 0.0),
-                    'ohlc': {'open': v.get('open_price', 0.0), 'high': v.get('high_price', 0.0), 'low': v.get('low_price', 0.0), 'close': v.get('prev_close_price', 0.0)},
+                    'last_price': lp,
+                    'ohlc': {'open': v.get('open_price', 0.0), 'high': v.get('high_price', 0.0), 'low': v.get('low_price', 0.0), 'close': prev_close},
                     'oi': op_oi or v.get('oi', 0),
                     'change_in_oi': op_oich,
                     'timestamp': datetime.now()
@@ -349,6 +401,13 @@ class FyersDataServiceAdapter:
             with _FYERS_SYMBOL_LOCK:
                 for s, q in batch_quotes.items():
                     _FYERS_SYMBOL_CACHE[s] = (q, save_now)
+                _save_persistent_quotes(_FYERS_SYMBOL_CACHE)
+
+        # Fall back to stale memory/persistent cache for any symbols that failed to fetch or returned empty
+        with _FYERS_SYMBOL_LOCK:
+            for s in symbols:
+                if s not in kite_quotes and s in _FYERS_SYMBOL_CACHE:
+                    kite_quotes[s] = _FYERS_SYMBOL_CACHE[s][0]
 
         return kite_quotes
     def ltp(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:

@@ -1074,8 +1074,9 @@
             <div class="mkt-card-hdr"
                 style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
                 <div style="display: flex; align-items: center; gap: 5px;">
-                    <h2 id="heatmap-title">📊 NIFTY Heatmap</h2>
+                    <h2 id="heatmap-title">📊 Index Heatmap</h2>
                     <select id="heatmap-index-select" class="mkt-index-select">
+                        <option value="INDEX" selected>Index</option>
                         <option value="NIFTY">NIFTY 50</option>
                         <option value="BANKNIFTY">BANK NIFTY</option>
                         <option value="FINNIFTY">FIN NIFTY</option>
@@ -1103,7 +1104,7 @@
                 <div class="mkt-card-hdr-meta">DAILY</div>
             </div>
             <div class="mkt-heatmap-grid" id="mkt-heatmap">
-                {% for i in range(50) %}
+                {% for i in range(14) %}
                 <div class="mkt-stock-box skeleton"></div>
                 {% endfor %}
             </div>
@@ -1283,7 +1284,8 @@
                     if (heatmap) {
                         heatmap.innerHTML = '';
                         let blockCount = 10; // Default count for sectoral indices
-                        if (selectedIndex === 'NIFTY') blockCount = 50;
+                        if (selectedIndex === 'INDEX') blockCount = 14;
+                        else if (selectedIndex === 'NIFTY') blockCount = 50;
                         else if (selectedIndex === 'BANKNIFTY') blockCount = 12;
                         else if (selectedIndex === 'FINNIFTY') blockCount = 20;
                         else if (selectedIndex === 'MIDCPNIFTY') blockCount = 25;

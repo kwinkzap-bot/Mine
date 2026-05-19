@@ -349,8 +349,16 @@ if barstate.islast and fsd
     
     // Determine the start and end of the next session
     next_start = time_close(timeframe)
-    session_duration = next_start - time(timeframe)
-    next_end = next_start + session_duration
+    next_end = next_start
+    if timeframe == "D"
+        ONE_DAY = 86400000 // 24 hours in ms
+        next_end := next_start + ONE_DAY
+        // Skip Saturday and Sunday
+        while dayofweek(next_end) == dayofweek.saturday or dayofweek(next_end) == dayofweek.sunday
+            next_end := next_end + ONE_DAY
+    else
+        session_duration = next_start - time(timeframe)
+        next_end := next_start + session_duration
     
     // Draw lines
     f_p := line.new(next_start, ftime_pivot, next_end, ftime_pivot, xloc=xloc.bar_time, color=pivtcol, width=1, style=line.style_dashed)
