@@ -47,9 +47,9 @@
 
 /* ─── Premium Form Controls (Dropdown & Date Picker) ─────────────────── */
 .date-picker {
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: #e2e8f0;
+    background: var(--scan-input-bg);
+    border: 1px solid var(--scan-input-border);
+    color: var(--scan-input-text);
     padding: 5px 12px;
     border-radius: 6px;
     font-size: 12px;
@@ -149,31 +149,26 @@ select.date-picker.tf-picker option {
     margin-top: 0;
 }
 
-/* Table header (weekly = indigo, daily = teal) */
+/* Unified Grid header styling matching CPR filter */
 .results h3 {
     padding: 7px 12px;
     margin: 0;
-    font-size: 13px;
+    font-size: 12.5px;
     font-weight: 700;
+    background: var(--scan-th-bg);
+    color: var(--scan-text) !important;
+    border-bottom: 1.5px solid var(--scan-border);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    color: white;
     letter-spacing: 0.2px;
     text-transform: uppercase;
 }
 
-#weeklyEmaResults h3 {
-    background: linear-gradient(135deg, #4338ca 0%, #6366f1 100%);
-}
-
-#dailyEmaResults h3 {
-    background: linear-gradient(135deg, #0f766e 0%, #14919b 100%);
-}
-
 .results h3 span {
-    background: rgba(255, 255, 255, 0.2);
-    padding: 3px 10px;
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--scan-text) !important;
+    padding: 3px 8px;
     border-radius: 16px;
     font-size: 11px;
     font-weight: 700;
@@ -238,9 +233,9 @@ select.date-picker.tf-picker option {
     transition: background 0.15s;
 }
 
-.results-scroll table tbody tr:hover { background: #f8fafc; }
-.results-scroll table tbody tr:nth-child(even) { background: #fafbfe; }
-.results-scroll table tbody tr:nth-child(even):hover { background: #eef2ff; }
+.results-scroll table tbody tr:hover { background: var(--scan-tr-hover); }
+.results-scroll table tbody tr:nth-child(even) { background: var(--scan-tr-even); }
+.results-scroll table tbody tr:nth-child(even):hover { background: var(--scan-tr-hover); }
 
 /* ─── Hidden ─────────────────────────────────────────────────────── */
 .results-hidden { display: none; }
@@ -324,4 +319,141 @@ select.date-picker.tf-picker option {
     .results-scroll table th,
     .results-scroll table td { padding: 5px 6px; font-size: 11px; }
     .results-scroll { max-height: 300px; }
+}
+
+/* ================================================================= */
+/* Theme Overrides using global variables defined in cpr_filter.css */
+/* ================================================================= */
+/* Modern status bar for Light themes (light, cream, ocean) */
+body.light-theme .ema-status-bar,
+body.cream-theme .ema-status-bar,
+body.ocean-theme .ema-status-bar {
+    background: var(--scan-th-bg) !important;
+    color: var(--scan-text) !important;
+    border: 1px solid var(--scan-border);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+body.light-theme .ema-refresh-btn,
+body.cream-theme .ema-refresh-btn,
+body.ocean-theme .ema-refresh-btn {
+    background: rgba(0, 0, 0, 0.03) !important;
+    border: 1px solid var(--scan-border) !important;
+    color: var(--scan-text) !important;
+}
+
+body.light-theme .ema-refresh-btn:hover,
+body.cream-theme .ema-refresh-btn:hover,
+body.ocean-theme .ema-refresh-btn:hover {
+    background: rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Modern status bar for Dark themes (dark, forest) */
+body.dark-theme .ema-status-bar,
+body.forest-theme .ema-status-bar {
+    background: var(--scan-header-bg);
+    color: var(--scan-text);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.4);
+}
+
+body.light-theme select.date-picker.tf-picker option,
+body.dark-theme select.date-picker.tf-picker option,
+body.forest-theme select.date-picker.tf-picker option,
+body.cream-theme select.date-picker.tf-picker option,
+body.ocean-theme select.date-picker.tf-picker option {
+    background: var(--scan-bg);
+    color: var(--scan-text);
+}
+
+body.light-theme .ema-section-title,
+body.dark-theme .ema-section-title,
+body.forest-theme .ema-section-title,
+body.cream-theme .ema-section-title,
+body.ocean-theme .ema-section-title {
+    color: var(--scan-text);
+}
+
+body.light-theme .results-block,
+body.dark-theme .results-block,
+body.forest-theme .results-block,
+body.cream-theme .results-block,
+body.ocean-theme .results-block {
+    background: var(--scan-bg);
+    border-color: var(--scan-border);
+}
+
+body.light-theme .results-scroll,
+body.dark-theme .results-scroll,
+body.forest-theme .results-scroll,
+body.cream-theme .results-scroll,
+body.ocean-theme .results-scroll {
+    background: var(--scan-bg);
+}
+
+body.light-theme .results-scroll table td,
+body.dark-theme .results-scroll table td,
+body.forest-theme .results-scroll table td,
+body.cream-theme .results-scroll table td,
+body.ocean-theme .results-scroll table td {
+    color: var(--scan-text);
+    border-bottom-color: var(--scan-border);
+}
+
+body.light-theme .symbol-link,
+body.dark-theme .symbol-link,
+body.forest-theme .symbol-link,
+body.cream-theme .symbol-link,
+body.ocean-theme .symbol-link {
+    color: var(--scan-th-text);
+}
+body.light-theme .symbol-link:hover,
+body.dark-theme .symbol-link:hover,
+body.forest-theme .symbol-link:hover,
+body.cream-theme .symbol-link:hover,
+body.ocean-theme .symbol-link:hover {
+    color: var(--scan-text);
+}
+
+body.light-theme #weeklyEmaResults .results-scroll table th,
+body.dark-theme #weeklyEmaResults .results-scroll table th,
+body.forest-theme #weeklyEmaResults .results-scroll table th,
+body.cream-theme #weeklyEmaResults .results-scroll table th,
+body.ocean-theme #weeklyEmaResults .results-scroll table th {
+    background: var(--scan-th-bg);
+    color: var(--scan-th-text);
+}
+
+body.light-theme #dailyEmaResults .results-scroll table th,
+body.dark-theme #dailyEmaResults .results-scroll table th,
+body.forest-theme #dailyEmaResults .results-scroll table th,
+body.cream-theme #dailyEmaResults .results-scroll table th,
+body.ocean-theme #dailyEmaResults .results-scroll table th {
+    background: var(--scan-th-bg);
+    color: var(--scan-th-text);
+}
+
+body.light-theme #weeklyEmaResults .results-scroll table th:hover,
+body.dark-theme #weeklyEmaResults .results-scroll table th:hover,
+body.forest-theme #weeklyEmaResults .results-scroll table th:hover,
+body.cream-theme #weeklyEmaResults .results-scroll table th:hover,
+body.ocean-theme #weeklyEmaResults .results-scroll table th:hover {
+    background: var(--scan-tr-hover);
+}
+
+body.light-theme #dailyEmaResults .results-scroll table th:hover,
+body.dark-theme #dailyEmaResults .results-scroll table th:hover,
+body.forest-theme #dailyEmaResults .results-scroll table th:hover,
+body.cream-theme #dailyEmaResults .results-scroll table th:hover,
+body.ocean-theme #dailyEmaResults .results-scroll table th:hover {
+    background: var(--scan-tr-hover);
+}
+
+/* Color-coded dynamic left borders for all EMA Touch result grids */
+#weeklyEmaResults h3,
+#nearestWeeklySection h3 {
+    border-left: 4px solid #6366f1 !important;
+}
+
+#dailyEmaResults h3 {
+    border-left: 4px solid #10b981 !important;
 }

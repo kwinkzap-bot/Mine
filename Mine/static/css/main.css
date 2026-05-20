@@ -7,70 +7,75 @@
     box-sizing: border-box;
 }
 
-/* Use system font stack for faster rendering */
+/* Use premium typography for a clean Terminal/Dashboard feel */
 body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     font-size: 80%;
-    /* Enable GPU acceleration */
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    /* Optimize text rendering */
-    text-rendering: optimizeSpeed;
+    text-rendering: optimizeLegibility;
 }
 
 /* Content visibility for faster initial render */
 .container {
     max-width: 1800px;
     margin: 0 auto;
-    padding: 10px;
+    padding: 12px;
     content-visibility: auto;
     overflow: visible;
     min-height: 400px;
 }
 
-/* Navigation Bar - Use will-change for animations */
+/* Navigation Bar - Premium Glassmorphic Compact Design */
 .navigation-bar {
-    padding: 5px 5px 5px 10px;
-    background: #f8f9fa;
-    border-radius: 8px;
-    margin-bottom: 10px;
-    border: 1px solid #dee2e6;
+    padding: 4px 10px; /* Reduced from 8px 16px */
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-radius: 10px; /* Reduced from 14px */
+    margin-bottom: 8px; /* Reduced from 12px */
+    border: 1px solid rgba(0, 0, 0, 0.05);
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     position: relative;
     overflow: visible;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.02);
+    gap: 3px; /* Reduced from 4px */
 }
 
 .nav-link,
 .nav-link-login,
 .nav-link-logout {
-    margin-right: 10px;
     text-decoration: none;
-    color: #666;
-    padding: 3px 0;
-    font-weight: 500;
-    font-size: 14px;
+    color: #475569;
+    padding: 4px 10px; /* Reduced from 6px 14px */
+    font-weight: 600;
+    font-size: 11px; /* Reduced from 13px */
+    border-radius: 8px; /* Reduced from 10px */
+    display: inline-flex;
+    align-items: center;
+    gap: 4px; /* Reduced from 6px */
+    border: 1px solid transparent;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    user-select: none;
 }
 
 .home-link {
-    font-size: 18px;
-    margin-right: 15px;
-    padding: 5px 10px;
-    border-radius: 6px;
-    transition: all 0.2s ease;
+    font-size: 13px; /* Reduced from 16px */
+    padding: 4px 8px; /* Reduced from 6px 10px */
+    border-radius: 8px;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .home-link:hover {
-    background: #e8f4f8;
-    color: #0066cc;
-    transform: scale(1.1);
+    background: rgba(0, 102, 204, 0.08);
+    transform: scale(1.05);
 }
 
 .nav-link-login {
     color: #28a745;
-    margin-left: auto;
     background: none;
     border: none;
     cursor: pointer;
@@ -78,22 +83,27 @@ body {
 
 .nav-link-logout {
     color: #dc3545;
-    margin-left: auto;
-    margin-right: 10px;
     background: none;
     border: none;
     cursor: pointer;
     transition: all 0.2s;
 }
 
-.nav-link:hover,
+.nav-link:hover {
+    background: rgba(0, 0, 0, 0.04);
+    color: #0f172a;
+    transform: translateY(-0.5px);
+}
+
 .nav-link-login:hover {
-    color: #000;
+    background: rgba(40, 167, 69, 0.1);
+    color: #218838;
 }
 
 .nav-link-logout:hover {
+    background: rgba(220, 53, 69, 0.1);
     color: #c82333;
-    transform: scale(1.1);
+    transform: scale(1.05);
 }
 
 /* Login Dropdown */
@@ -101,6 +111,51 @@ body {
     position: relative;
     margin-left: auto;
     z-index: 1001;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+#global-theme-btn {
+    background: none;
+    border: none;
+    font-size: 13px; /* Reduced from 16px */
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+#global-theme-btn:hover {
+    transform: scale(1.2) rotate(12deg);
+}
+
+#global-theme-btn:active {
+    transform: scale(0.9);
+}
+
+#loginToggle {
+    background: none;
+    border: none;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+}
+
+#loginToggle:hover {
+    transform: scale(1.15);
+}
+
+#loginToggle:active {
+    transform: scale(0.9);
 }
 
 .dropdown-menu {
@@ -114,8 +169,73 @@ body {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     min-width: 220px;
     z-index: 9999;
-    margin-top: 8px;
+    margin-top: 6px;
     overflow: visible;
+}
+
+.dropdown-menu.show {
+    display: block;
+}
+
+/* --- Theme-Specific Global Custom Tooltip System --- */
+.custom-tooltip-el {
+    position: fixed;
+    pointer-events: none;
+    z-index: 999999;
+    padding: 5px 9px;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+    transition: opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1), transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+    white-space: nowrap;
+    border: 1px solid transparent;
+}
+
+.custom-tooltip-el.show {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+}
+
+/* Theme overrides for custom tooltips */
+body.dark-theme .custom-tooltip-el {
+    background: rgba(17, 24, 39, 0.95);
+    border-color: rgba(59, 130, 246, 0.3);
+    color: #f8fafc;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+body.forest-theme .custom-tooltip-el {
+    background: rgba(10, 20, 16, 0.95);
+    border-color: rgba(16, 185, 129, 0.3);
+    color: #e8f7f0;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+body.cream-theme .custom-tooltip-el {
+    background: #fdfbf7;
+    border-color: #e6dfd3;
+    color: #433c35;
+    box-shadow: 0 4px 12px rgba(139, 92, 26, 0.15);
+}
+
+body.light-theme .custom-tooltip-el {
+    background: rgba(255, 255, 255, 0.95);
+    border-color: rgba(0, 0, 0, 0.1);
+    color: #1e293b;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+body.ocean-theme .custom-tooltip-el {
+    background: rgba(240, 246, 252, 0.95);
+    border-color: rgba(2, 132, 199, 0.2);
+    color: #1e293b;
+    backdrop-filter: blur(4px);
+    box-shadow: 0 4px 12px rgba(2, 132, 199, 0.12);
 }
 
 .dropdown-menu.show {
@@ -172,9 +292,7 @@ body {
 }
 
 .nav-link.active {
-    color: #667eea;
-    font-weight: 600;
-    border-bottom: 2px solid #667eea;
+    font-weight: 700;
 }
 
 /* --- Global Form & Button Styles (Promoted from feature files) --- */
@@ -341,4 +459,217 @@ td {
 .broker-login-btn:active {
     transform: translateY(-1px);
     box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
+/* ================================================================= */
+/* Header / Navigation Bar Theme Overrides */
+/* ================================================================= */
+
+/* Transition background and border colors smoothly */
+body,
+.navigation-bar,
+.nav-link,
+.dropdown-menu,
+.dropdown-item {
+    transition: background 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* ── 1. Dark Theme ───────────────────────────────────────── */
+body.dark-theme {
+    background: #090e17;
+}
+body.dark-theme .navigation-bar {
+    background: rgba(17, 24, 39, 0.85);
+    border-color: rgba(255, 255, 255, 0.06);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+body.dark-theme .nav-link {
+    color: #94a3b8;
+}
+body.dark-theme .nav-link:hover {
+    background: rgba(59, 130, 246, 0.1);
+    color: #3b82f6;
+}
+body.dark-theme .nav-link.active {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa !important;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.25);
+}
+body.dark-theme .login-dropdown button#loginToggle {
+    color: #3b82f6;
+}
+body.dark-theme .dropdown-menu {
+    background: #111827;
+    border-color: #1f2937;
+    color: #f8fafc;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+body.dark-theme .dropdown-item {
+    color: #94a3b8;
+    border-bottom-color: #1f2937;
+}
+body.dark-theme .dropdown-item:hover {
+    background: #1f2937;
+    color: #f8fafc;
+}
+
+/* ── 2. Forest Theme ─────────────────────────────────────── */
+body.forest-theme {
+    background: #060c09;
+}
+body.forest-theme .navigation-bar {
+    background: rgba(10, 20, 16, 0.85);
+    border-color: rgba(16, 185, 129, 0.12);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+body.forest-theme .nav-link {
+    color: #6ba88f;
+}
+body.forest-theme .nav-link:hover {
+    background: rgba(16, 185, 129, 0.08);
+    color: #10b981;
+}
+body.forest-theme .nav-link.active {
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399 !important;
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.25);
+}
+body.forest-theme .login-dropdown button#loginToggle {
+    color: #10b981;
+}
+body.forest-theme .dropdown-menu {
+    background: #0a1410;
+    border-color: #142820;
+    color: #e8f7f0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+body.forest-theme .dropdown-item {
+    color: #6ba88f;
+    border-bottom-color: #142820;
+}
+body.forest-theme .dropdown-item:hover {
+    background: #142820;
+    color: #e8f7f0;
+}
+
+/* ── 3. Cream Theme (Cozy Light) ─────────────────────────── */
+body.cream-theme {
+    background: #fdfbf7;
+}
+body.cream-theme .navigation-bar {
+    background: rgba(245, 240, 230, 0.85);
+    border-color: rgba(180, 83, 9, 0.12);
+    box-shadow: 0 4px 20px rgba(139, 92, 26, 0.03);
+}
+body.cream-theme .nav-link {
+    color: #7c7267;
+}
+body.cream-theme .nav-link:hover {
+    background: rgba(180, 83, 9, 0.06);
+    color: #b45309;
+}
+body.cream-theme .nav-link.active {
+    background: rgba(180, 83, 9, 0.08);
+    color: #b45309 !important;
+    border: 1px solid rgba(180, 83, 9, 0.35);
+    box-shadow: 0 2px 8px rgba(180, 83, 9, 0.1);
+}
+body.cream-theme .login-dropdown button#loginToggle {
+    color: #b45309;
+}
+body.cream-theme .dropdown-menu {
+    background: #fdfbf7;
+    border-color: #e6dfd3;
+    color: #433c35;
+    box-shadow: 0 4px 12px rgba(139, 92, 26, 0.15);
+}
+body.cream-theme .dropdown-item {
+    color: #7c7267;
+    border-bottom-color: #e6dfd3;
+}
+body.cream-theme .dropdown-item:hover {
+    background: #f5f0e6;
+    color: #b45309;
+}
+
+/* ── 4. Light Theme ──────────────────────────────────────── */
+body.light-theme {
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+}
+body.light-theme .navigation-bar {
+    background: rgba(255, 255, 255, 0.8);
+    border-color: rgba(0, 0, 0, 0.06);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02);
+}
+body.light-theme .nav-link {
+    color: #475569;
+}
+body.light-theme .nav-link:hover {
+    background: rgba(0, 102, 204, 0.05);
+    color: #0969da;
+}
+body.light-theme .nav-link.active {
+    background: rgba(9, 105, 218, 0.08);
+    color: #0969da !important;
+    border: 1px solid rgba(9, 105, 218, 0.35);
+    box-shadow: 0 2px 8px rgba(9, 105, 218, 0.1);
+}
+body.light-theme .login-dropdown button#loginToggle {
+    color: #28a745;
+}
+body.light-theme .dropdown-menu {
+    background: white;
+    border-color: #dee2e6;
+    color: #333;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+body.light-theme .dropdown-item {
+    color: #333;
+    border-bottom-color: #f0f0f0;
+}
+body.light-theme .dropdown-item:hover {
+    background: #f8f9fa;
+    color: #28a745;
+}
+
+/* ── 5. Ocean Theme (Light Blue Ice) ─────────────────────── */
+body.ocean-theme {
+    background: linear-gradient(135deg, #f0f6fc 0%, #e0edf8 100%);
+}
+body.ocean-theme .navigation-bar {
+    background: rgba(240, 246, 252, 0.85);
+    border-color: rgba(2, 132, 199, 0.15);
+    box-shadow: 0 4px 20px rgba(2, 132, 199, 0.03);
+}
+body.ocean-theme .nav-link {
+    color: #475569;
+}
+body.ocean-theme .nav-link:hover {
+    background: rgba(2, 132, 199, 0.08);
+    color: #0284c7;
+}
+body.ocean-theme .nav-link.active {
+    background: rgba(2, 132, 199, 0.08);
+    color: #0284c7 !important;
+    border: 1px solid rgba(2, 132, 199, 0.35);
+    box-shadow: 0 2px 8px rgba(2, 132, 199, 0.1);
+}
+body.ocean-theme .login-dropdown button#loginToggle {
+    color: #0284c7;
+}
+body.ocean-theme .dropdown-menu {
+    background: #f0f6fc;
+    border-color: #dbebfa;
+    color: #1e293b;
+    box-shadow: 0 4px 12px rgba(2, 132, 199, 0.12);
+}
+body.ocean-theme .dropdown-item {
+    color: #475569;
+    border-bottom-color: #dbebfa;
+}
+body.ocean-theme .dropdown-item:hover {
+    background: #e0edf8;
+    color: #0284c7;
 }

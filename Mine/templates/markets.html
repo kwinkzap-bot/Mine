@@ -25,8 +25,34 @@
         --mkt-accent: #2563eb;
     }
 
+    .mkt-page.forest-theme {
+        --mkt-bg: #060c09;
+        --mkt-card-bg: #0a1410;
+        --mkt-border: #142820;
+        --mkt-text: #e8f7f0;
+        --mkt-text-muted: #6ba88f;
+        --mkt-accent: #10b981;
+    }
+
+    .mkt-page.cream-theme {
+        --mkt-bg: #fdfbf7;
+        --mkt-card-bg: #fdfbf7;
+        --mkt-border: #e6dfd3;
+        --mkt-text: #433c35;
+        --mkt-text-muted: #7c7267;
+        --mkt-accent: #b45309;
+    }
+
+    .mkt-page.ocean-theme {
+        --mkt-bg: #f3f8fc;
+        --mkt-card-bg: #ffffff;
+        --mkt-border: #dbebfa;
+        --mkt-text: #1e293b;
+        --mkt-text-muted: #64748b;
+        --mkt-accent: #0284c7;
+    }
+
     .mkt-page {
-        padding: 10px;
         background: var(--mkt-bg);
         min-height: calc(100vh - 60px);
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -572,8 +598,134 @@
         background: rgba(0, 0, 0, 0.15);
     }
 
+    .light-theme .mkt-card {
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.03);
+    }
+
+    /* ── Cream Theme Overrides ───────────────────────────────── */
+    .cream-theme .mkt-card {
+        box-shadow: 0 4px 16px rgba(139, 92, 26, 0.05);
+        border: 1px solid var(--mkt-border);
+    }
+
+    .cream-theme .mkt-row {
+        background: rgba(180, 83, 9, 0.015);
+        border: 1px solid rgba(180, 83, 9, 0.04);
+    }
+
+    .cream-theme .mkt-row:hover {
+        background: rgba(180, 83, 9, 0.04);
+        border-color: rgba(180, 83, 9, 0.08);
+    }
+
+    .cream-theme .mkt-index-select {
+        background: #fdfbf7;
+        color: #433c35;
+        border: 1px solid #e6dfd3;
+    }
+
+    .cream-theme .mkt-index-select:hover {
+        background: #f5f0e6;
+        border-color: #b45309;
+    }
+
+    .cream-theme .mkt-index-select option {
+        background: #fdfbf7;
+        color: #433c35;
+    }
+
+    .cream-theme .mkt-card-hdr {
+        border-bottom: 1px solid rgba(180, 83, 9, 0.08);
+    }
+
+    .cream-theme .cpr-type-badge.average {
+        background: rgba(180, 83, 9, 0.05);
+        border: 1px solid rgba(180, 83, 9, 0.08);
+    }
+
+    .cream-theme .mkt-ad-total {
+        background: rgba(180, 83, 9, 0.05);
+        border: 1px solid rgba(180, 83, 9, 0.1);
+    }
+
+    .cream-theme .mkt-ad-unc {
+        background: rgba(180, 83, 9, 0.02);
+        border: 1px solid rgba(180, 83, 9, 0.06);
+    }
+
+    .cream-theme .mkt-card-scrollable::-webkit-scrollbar-thumb {
+        background: rgba(180, 83, 9, 0.15);
+    }
+
+    /* ── Ocean Theme Overrides ───────────────────────────────── */
+    .ocean-theme .mkt-card {
+        box-shadow: 0 4px 16px rgba(2, 132, 199, 0.05);
+        border: 1px solid var(--mkt-border);
+    }
+
+    .ocean-theme .mkt-row {
+        background: rgba(2, 132, 199, 0.015);
+        border: 1px solid rgba(2, 132, 199, 0.04);
+    }
+
+    .ocean-theme .mkt-row:hover {
+        background: rgba(2, 132, 199, 0.04);
+        border-color: rgba(2, 132, 199, 0.08);
+    }
+
+    .ocean-theme .mkt-index-select {
+        background: #ffffff;
+        color: #1e293b;
+        border: 1px solid #dbebfa;
+    }
+
+    .ocean-theme .mkt-index-select:hover {
+        background: #f0f6fc;
+        border-color: #0284c7;
+    }
+
+    .ocean-theme .mkt-index-select option {
+        background: #ffffff;
+        color: #1e293b;
+    }
+
+    .ocean-theme .mkt-card-hdr {
+        border-bottom: 1px solid rgba(2, 132, 199, 0.08);
+    }
+
+    .ocean-theme .cpr-type-badge.average {
+        background: rgba(2, 132, 199, 0.05);
+        border: 1px solid rgba(2, 132, 199, 0.08);
+    }
+
+    .ocean-theme .mkt-ad-total {
+        background: rgba(2, 132, 199, 0.05);
+        border: 1px solid rgba(2, 132, 199, 0.1);
+    }
+
+    .ocean-theme .mkt-ad-unc {
+        background: rgba(2, 132, 199, 0.02);
+        border: 1px solid rgba(2, 132, 199, 0.06);
+    }
+
+    .ocean-theme .mkt-card-scrollable::-webkit-scrollbar-thumb {
+        background: rgba(2, 132, 199, 0.15);
+    }
+
     .light-theme .skeleton {
         background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+    }
+
+    .forest-theme .skeleton {
+        background: linear-gradient(90deg, #0c2018 25%, #153729 50%, #0c2018 75%);
+    }
+
+    .cream-theme .skeleton {
+        background: linear-gradient(90deg, #f5f0e6 25%, #e6dfd3 50%, #f5f0e6 75%);
+    }
+
+    .ocean-theme .skeleton {
+        background: linear-gradient(90deg, #f0f6fc 25%, #dbebfa 50%, #f0f6fc 75%);
     }
 
     .light-theme .theme-toggle-btn {
@@ -744,24 +896,91 @@
         border: 1px solid rgba(245, 158, 11, 0.3);
     }
 
-    /* Light Theme overrides */
+    /* Theme-specific Tooltip Overrides */
+    
+    /* 1. Dark Theme */
+    .dark-theme .mkt-tooltip-cpr-range {
+        color: #cbd5e1;
+    }
+    .dark-theme .mkt-tooltip-cpr-row {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .dark-theme .mkt-tooltip {
+        background: rgba(17, 24, 39, 0.95);
+        color: #f8fafc;
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+    }
+    .dark-theme .mkt-tooltip-hdr {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    /* 2. Forest Theme */
+    .forest-theme .mkt-tooltip-cpr-range {
+        color: #a3d9c9;
+    }
+    .forest-theme .mkt-tooltip-cpr-row {
+        border-bottom: 1px solid rgba(16, 185, 129, 0.06);
+    }
+    .forest-theme .mkt-tooltip {
+        background: rgba(10, 20, 16, 0.95);
+        color: #e8f7f0;
+        border: 1px solid rgba(16, 185, 129, 0.3);
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+    }
+    .forest-theme .mkt-tooltip-hdr {
+        border-bottom: 1px solid rgba(16, 185, 129, 0.15);
+    }
+
+    /* 3. Cream Theme */
+    .cream-theme .mkt-tooltip-cpr-range {
+        color: #7c7267;
+    }
+    .cream-theme .mkt-tooltip-cpr-row {
+        border-bottom: 1px solid rgba(180, 83, 9, 0.04);
+    }
+    .cream-theme .mkt-tooltip {
+        background: #fdfbf7;
+        color: #433c35;
+        border: 1px solid #e6dfd3;
+        box-shadow: 0 10px 25px -5px rgba(139, 92, 26, 0.15);
+    }
+    .cream-theme .mkt-tooltip-hdr {
+        border-bottom: 1px solid rgba(180, 83, 9, 0.08);
+    }
+
+    /* 4. Light Theme */
     .light-theme .mkt-tooltip-cpr-range {
         color: #334155;
     }
-
     .light-theme .mkt-tooltip-cpr-row {
         border-bottom: 1px solid rgba(0, 0, 0, 0.05);
     }
-
     .light-theme .mkt-tooltip {
         background: rgba(255, 255, 255, 0.98);
         color: #0f172a;
         border: 1px solid rgba(0, 0, 0, 0.12);
         box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.12);
     }
-
     .light-theme .mkt-tooltip-hdr {
         border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    }
+
+    /* 5. Ocean Theme */
+    .ocean-theme .mkt-tooltip-cpr-range {
+        color: #475569;
+    }
+    .ocean-theme .mkt-tooltip-cpr-row {
+        border-bottom: 1px solid rgba(2, 132, 199, 0.05);
+    }
+    .ocean-theme .mkt-tooltip {
+        background: rgba(240, 246, 252, 0.95);
+        color: #1e293b;
+        border: 1px solid rgba(2, 132, 199, 0.2);
+        box-shadow: 0 10px 25px -5px rgba(2, 132, 199, 0.12);
+    }
+    .ocean-theme .mkt-tooltip-hdr {
+        border-bottom: 1px solid rgba(2, 132, 199, 0.1);
     }
 </style>
 {% endblock %}
@@ -774,9 +993,6 @@
                 <h1>Market Pulse</h1>
                 <div class="live-dot" title="Live terminal feed active"></div>
             </div>
-            <button id="theme-toggle-btn" class="theme-toggle-btn" title="Toggle Light/Dark Theme">
-                ☀️ Light Mode
-            </button>
         </div>
     </header>
 
@@ -1104,7 +1320,7 @@
                 <div class="mkt-card-hdr-meta">DAILY</div>
             </div>
             <div class="mkt-heatmap-grid" id="mkt-heatmap">
-                {% for i in range(14) %}
+                {% for i in range(13) %}
                 <div class="mkt-stock-box skeleton"></div>
                 {% endfor %}
             </div>
@@ -1119,23 +1335,38 @@
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             // Theme Toggle Logic (strictly scoped to Markets page)
-            const themeBtn = document.getElementById('theme-toggle-btn');
             const mktPage = document.querySelector('.mkt-page');
 
-            // Load saved preference
-            const savedTheme = localStorage.getItem('mkt-theme') || 'dark';
-            if (savedTheme === 'light') {
-                mktPage.classList.add('light-theme');
-                if (themeBtn) themeBtn.innerHTML = '🌙 Dark Mode';
+            function applyTheme(theme) {
+                if (mktPage) {
+                    mktPage.classList.remove('light-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
+                    if (theme === 'light') {
+                        mktPage.classList.add('light-theme');
+                    } else if (theme === 'forest') {
+                        mktPage.classList.add('forest-theme');
+                    } else if (theme === 'cream') {
+                        mktPage.classList.add('cream-theme');
+                    } else if (theme === 'ocean') {
+                        mktPage.classList.add('ocean-theme');
+                    }
+                }
+
+                // Apply to document.body for header / navigation bar styling
+                document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
+                document.body.classList.add(`${theme}-theme`);
+
+                localStorage.setItem('app-theme', theme);
+                localStorage.setItem('mkt-theme', theme);
             }
 
-            if (themeBtn) {
-                themeBtn.addEventListener('click', () => {
-                    const isLight = mktPage.classList.toggle('light-theme');
-                    localStorage.setItem('mkt-theme', isLight ? 'light' : 'dark');
-                    themeBtn.innerHTML = isLight ? '🌙 Dark Mode' : '☀️ Light Mode';
-                });
-            }
+            // Load saved preference
+            const savedTheme = localStorage.getItem('app-theme') || localStorage.getItem('mkt-theme') || 'dark';
+            applyTheme(savedTheme);
+
+            // Listen to global theme change
+            window.addEventListener('themechanged', (e) => {
+                applyTheme(e.detail.theme);
+            });
 
             // ── Hover Tooltip & CPR Caching Logic ───────────────────
             const hoverCache = {};
@@ -1284,7 +1515,7 @@
                     if (heatmap) {
                         heatmap.innerHTML = '';
                         let blockCount = 10; // Default count for sectoral indices
-                        if (selectedIndex === 'INDEX') blockCount = 14;
+                        if (selectedIndex === 'INDEX') blockCount = 13;
                         else if (selectedIndex === 'NIFTY') blockCount = 50;
                         else if (selectedIndex === 'BANKNIFTY') blockCount = 12;
                         else if (selectedIndex === 'FINNIFTY') blockCount = 20;

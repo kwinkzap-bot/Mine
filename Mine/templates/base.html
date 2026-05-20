@@ -8,11 +8,62 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='trading.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/notifications.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <title>{% block title %}Stock Scanner{% endblock %}</title>
     {% block head %}{% endblock %}
 </head>
 
 <body>
+    <script>
+        (function() {
+            // 1. Immediately apply theme class to body to prevent flash
+            const theme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+            document.body.classList.add(theme + '-theme');
+
+            // 2. Setup theme toggle variables & cycle
+            const themes = ['dark', 'forest', 'light', 'cream', 'ocean'];
+            const themeIcons = {
+                'dark': '🌌',
+                'forest': '🌲',
+                'light': '☀️',
+                'cream': '📜',
+                'ocean': '🌊'
+            };
+
+            document.addEventListener('DOMContentLoaded', () => {
+                const themeBtn = document.getElementById('global-theme-btn');
+                if (!themeBtn) return;
+
+                // Load saved preference or fallback
+                const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+                themeBtn.innerHTML = themeIcons[activeTheme] || '🌌';
+                themeBtn.title = "Theme: " + activeTheme.charAt(0).toUpperCase() + activeTheme.slice(1);
+
+                themeBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const currentTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+                    const currentIndex = themes.indexOf(currentTheme);
+                    const nextTheme = themes[(currentIndex + 1) % themes.length];
+
+                    // Apply next theme class to body
+                    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'carbon-theme', 'cream-theme', 'ocean-theme');
+                    document.body.classList.add(nextTheme + '-theme');
+
+                    // Save to local storage
+                    localStorage.setItem('app-theme', nextTheme);
+                    localStorage.setItem('oip-theme', nextTheme);
+                    localStorage.setItem('mkt-theme', nextTheme);
+
+                    // Update UI icon & title
+                    themeBtn.innerHTML = themeIcons[nextTheme] || '🌌';
+                    themeBtn.title = "Theme: " + nextTheme.charAt(0).toUpperCase() + nextTheme.slice(1);
+
+                    // Dispatch custom event to notify all components/pages
+                    window.dispatchEvent(new CustomEvent('themechanged', { detail: { theme: nextTheme } }));
+                });
+            });
+        })();
+    </script>
     <div id="notification-container"></div>
     <div class="container">
         <div class="navigation-bar">
@@ -20,7 +71,13 @@
             <!-- <a href="/historical" class="nav-link {% if request.path == '/historical' %}active{% endif %}">📈 Historical</a>
             <a href="/strategy" class="nav-link {% if request.path == '/strategy' %}active{% endif %}">📊 Strategy</a>
             <a href="/multi-strike" class="nav-link {% if request.path == '/multi-strike' %}active{% endif %}">⚡ Multi Strike</a> -->
-            <a href="/cpr-filter" class="nav-link {% if request.path == '/cpr-filter' or request.path == '/ema-rsi-filter' %}active{% endif %}">🔍 Scanners</a>
+            <a href="/cpr-filter"
+                class="nav-link {% if request.path == '/cpr-filter' or request.path == '/ema-rsi-filter' %}active{% endif %}">🔍
+                Scanners</a>
+            <a href="/chart" class="nav-link {% if request.path == '/chart' %}active{% endif %}">🗺️ Chart</a>
+            <a href="/backtest" class="nav-link {% if request.path == '/backtest' %}active{% endif %}">🧪 Backtest</a>
+            <a href="/replay" class="nav-link {% if request.path == '/replay' %}active{% endif %}">🕒
+                Replay</a>
             <!-- <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉
                 Options Chart</a> -->
             <!-- <a href="/intraday-option" class="nav-link {% if request.path == '/intraday-option' %}active{% endif %}">💹
@@ -31,12 +88,9 @@
                 Interest</a>
             <a href="/oi-profile" class="nav-link {% if request.path == '/oi-profile' %}active{% endif %}">📉 OI
                 Profile</a>
-            <a href="/replay" class="nav-link {% if request.path == '/replay' %}active{% endif %}">🕒
-                Replay</a>
             <a href="/markets" class="nav-link {% if request.path == '/markets' %}active{% endif %}">🏢 Markets</a>
-            <a href="/chart" class="nav-link {% if request.path == '/chart' %}active{% endif %}">🗺️ Chart</a>
-            <a href="/backtest" class="nav-link {% if request.path == '/backtest' %}active{% endif %}">🧪 Backtest</a>
             <div class="login-dropdown">
+                <button id="global-theme-btn" title="Toggle Theme">☀️</button>
                 <button class="nav-link-login" id="loginToggle">🔑</button>
                 <!-- {% if session.username %}
                 <a href="/auth/user-logout" class="nav-link-logout" id="logoutButton" title="Logout">⏻</a>

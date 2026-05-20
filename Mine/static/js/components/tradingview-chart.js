@@ -350,19 +350,29 @@ window.TradingViewChart = (function () {
             let mutablePdh = pdh;
             let mutablePdl = pdl;
 
-            // Create chart with light theme and IST timezone formatting
+            // Create chart with dynamic theme and IST timezone formatting
+            const OIP_CHART_THEMES = {
+                'light': { bg: '#ffffff', text: '#374151', grid: '#f0f0f0' },
+                'dark': { bg: '#111827', text: '#94a3b8', grid: 'rgba(255, 255, 255, 0.06)' },
+                'forest': { bg: '#0a1410', text: '#6ba88f', grid: 'rgba(16, 185, 129, 0.06)' },
+                'cream': { bg: '#fdfbf7', text: '#7c7267', grid: 'rgba(180, 83, 9, 0.05)' },
+                'ocean': { bg: '#f3f8fc', text: '#475569', grid: 'rgba(2, 132, 199, 0.05)' }
+            };
+            const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+            const themeCfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
+
             const chart = LightweightCharts.createChart(container, {
                 layout: {
-                    textColor: '#374151',           // Dark grey text for readability
-                    background: { type: 'solid', color: '#ffffff' }  // White background
+                    textColor: themeCfg.text,           // Dynamic text
+                    background: { type: 'solid', color: themeCfg.bg }  // Dynamic background
                 },
                 grid: {
                     vertLines: {
-                        color: '#f0f0f0',           // Lighter grey vertical grid lines
+                        color: themeCfg.grid,           // Dynamic grid lines
                         style: 0                     // Solid lines
                     },
                     horzLines: {
-                        color: '#f0f0f0',           // Lighter grey horizontal grid lines
+                        color: themeCfg.grid,           // Dynamic grid lines
                         style: 0                     // Solid lines
                     }
                 },
@@ -423,9 +433,11 @@ window.TradingViewChart = (function () {
             let upColor = '#1b9981';      // Green for bullish candles
             let downColor = '#f23645';    // Red for bearish candles
 
+            const isLightTheme = (activeTheme === 'light' || activeTheme === 'cream' || activeTheme === 'ocean');
+
             if (type === 'PE') {
                 upColor = '#8b5cf6';      // Violet for PE up
-                downColor = '#1f2937';    // Black for PE down
+                downColor = isLightTheme ? '#1f2937' : '#6b7280'; // Black for light themes, Grey for dark themes
             }
 
             const borderUpColor = upColor;
@@ -472,14 +484,15 @@ window.TradingViewChart = (function () {
                 });
                 ceSeries.applyOptions({ autoscaleInfoProvider: customAutoscale(ceSeries) });
 
-                // Create PE series (secondary series - violet/black)
+                // Create PE series (secondary series - violet/black or grey based on theme)
+                const peDownColor = isLightTheme ? '#1f2937' : '#6b7280';
                 peSeries = chart.addCandlestickSeries({
                     upColor: '#8b5cf6',      // Violet for PE up
-                    downColor: '#1f2937',    // Black for PE down
+                    downColor: peDownColor,
                     borderUpColor: '#8b5cf6',
-                    borderDownColor: '#1f2937',
+                    borderDownColor: peDownColor,
                     wickUpColor: '#8b5cf6',
-                    wickDownColor: '#1f2937',
+                    wickDownColor: peDownColor,
                     title: 'PE',
                     priceLineStyle: 1, // Dotted
                     priceLineWidth: 1
@@ -685,6 +698,29 @@ window.TradingViewChart = (function () {
 
             // Track if initialization has been done (to prevent re-initialization on updates)
             let isInitialized = false;
+
+            // Listen for theme changes dynamically to update candle colors in real time!
+            window.addEventListener('themechanged', function (e) {
+                const newTheme = e.detail.theme;
+                const isLight = (newTheme === 'light' || newTheme === 'cream' || newTheme === 'ocean');
+                const peDownCol = isLight ? '#1f2937' : '#6b7280';
+                
+                if (type === 'PE' && series) {
+                    series.applyOptions({
+                        downColor: peDownCol,
+                        borderDownColor: peDownCol,
+                        wickDownColor: peDownCol
+                    });
+                }
+                
+                if (peSeries) {
+                    peSeries.applyOptions({
+                        downColor: peDownCol,
+                        borderDownColor: peDownCol,
+                        wickDownColor: peDownCol
+                    });
+                }
+            });
 
             // Return public interface
             return {

@@ -1,18 +1,126 @@
 /*
  * cpr_filter.css
- * Compact, modern design for CPR Filter page with Teal/Navy color scheme
+ * Compact, modern design for CPR Filter page with dynamic theme support.
  */
+
+:root {
+    --scan-bg: #ffffff;
+    --scan-text: #333333;
+    --scan-border: #e0f2f1;
+    --scan-header-bg: linear-gradient(135deg, #0f766e 0%, #14919b 100%);
+    --scan-th-bg: #f0fffe;
+    --scan-th-text: #0f766e;
+    --scan-tr-even: #f8fffe;
+    --scan-tr-hover: #e0f2f1;
+    --scan-input-bg: rgba(255, 255, 255, 0.9);
+    --scan-input-border: #b2dfdb;
+    --scan-input-text: #0f766e;
+    --scan-tabs-bg: #f0fdfa;
+    --scan-tabs-border: #ccfbf1;
+}
+
+body.light-theme {
+    --scan-bg: #ffffff;
+    --scan-text: #1e293b;
+    --scan-border: #e2e8f0;
+    --scan-header-bg: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    --scan-th-bg: #f1f5f9;
+    --scan-th-text: #475569;
+    --scan-tr-even: #f8fafc;
+    --scan-tr-hover: #cbd5e1;
+    --scan-input-bg: #ffffff;
+    --scan-input-border: #cbd5e1;
+    --scan-input-text: #1e293b;
+    --scan-tabs-bg: #f1f5f9;
+    --scan-tabs-border: #cbd5e1;
+}
+
+body.dark-theme {
+    --scan-bg: #0f172a;
+    --scan-text: #f8fafc;
+    --scan-border: #1e293b;
+    --scan-header-bg: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    --scan-th-bg: #1e293b;
+    --scan-th-text: #38bdf8;
+    --scan-tr-even: #131c2e;
+    --scan-tr-hover: #1e293b;
+    --scan-input-bg: #1e293b;
+    --scan-input-border: #334155;
+    --scan-input-text: #f8fafc;
+    --scan-tabs-bg: #0f172a;
+    --scan-tabs-border: #1e293b;
+}
+
+body.forest-theme {
+    --scan-bg: #060e0a;
+    --scan-text: #e8f7f0;
+    --scan-border: #142820;
+    --scan-header-bg: linear-gradient(135deg, #142820 0%, #060e0a 100%);
+    --scan-th-bg: #142820;
+    --scan-th-text: #10b981;
+    --scan-tr-even: #0a1410;
+    --scan-tr-hover: #142820;
+    --scan-input-bg: #142820;
+    --scan-input-border: #0f5132;
+    --scan-input-text: #e8f7f0;
+    --scan-tabs-bg: #060e0a;
+    --scan-tabs-border: #142820;
+}
+
+body.cream-theme {
+    --scan-bg: #fdfbf7;
+    --scan-text: #433c35;
+    --scan-border: #e6dfd3;
+    --scan-header-bg: linear-gradient(135deg, #d97706 0%, #b45309 100%);
+    --scan-th-bg: #f5f0e6;
+    --scan-th-text: #b45309;
+    --scan-tr-even: #faf8f5;
+    --scan-tr-hover: #f5f0e6;
+    --scan-input-bg: #f5f0e6;
+    --scan-input-border: #e6dfd3;
+    --scan-input-text: #433c35;
+    --scan-tabs-bg: #fdfbf7;
+    --scan-tabs-border: #e6dfd3;
+}
+
+body.ocean-theme {
+    --scan-bg: #f3f8fc;
+    --scan-text: #1e293b;
+    --scan-border: #dbebfa;
+    --scan-header-bg: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+    --scan-th-bg: #f0f6fc;
+    --scan-th-text: #0284c7;
+    --scan-tr-even: #f8fafc;
+    --scan-tr-hover: #e0edf8;
+    --scan-input-bg: #ffffff;
+    --scan-input-border: #dbebfa;
+    --scan-input-text: #1e293b;
+    --scan-tabs-bg: #ffffff;
+    --scan-tabs-border: #dbebfa;
+}
 
 /* Page Layout & Container */
 /* Premium Scanner Tab Switcher - Segmented Pill Control */
 .scanner-tabs {
     display: inline-flex;
-    background: #f0fdfa; /* Ultra-light teal */
-    border: 1.5px solid #ccfbf1; /* Soft teal border */
+    background: var(--scan-tabs-bg);
+    border: 1.5px solid var(--scan-tabs-border);
     border-radius: 30px;
     padding: 3px;
-    margin-bottom: 16px;
+    margin-bottom: 0;
     box-shadow: inset 0 2px 4px rgba(15, 118, 110, 0.05);
+}
+
+.scanner-header-row {
+    background: var(--scan-th-bg);
+    border: 1px solid var(--scan-border);
+    padding: 6px 12px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
 }
 
 .scanner-tab-btn {
@@ -21,7 +129,7 @@
     padding: 6px 18px;
     font-size: 11px;
     font-weight: 700;
-    color: #0f766e;
+    color: var(--scan-th-text);
     cursor: pointer;
     border-radius: 20px;
     transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -34,14 +142,14 @@
 }
 
 .scanner-tab-btn:hover {
-    color: #115e59;
-    background: rgba(15, 118, 110, 0.06);
+    color: var(--scan-text);
+    background: var(--scan-tr-hover);
 }
 
 .scanner-tab-btn.active {
-    color: white;
-    background: linear-gradient(135deg, #0f766e 0%, #115e59 100%);
-    box-shadow: 0 4px 10px rgba(15, 118, 110, 0.2);
+    color: white !important;
+    background: var(--scan-th-text) !important;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.12);
 }
 
 .scanner-tab-btn .tab-icon {
@@ -49,14 +157,15 @@
 }
 
 #status-bar {
-    background: linear-gradient(135deg, #0f766e 0%, #164e63 100%);
-    color: white;
-    padding: 6px 10px;
+    background: var(--scan-th-bg);
+    border: 1px solid var(--scan-border);
+    color: var(--scan-text);
+    padding: 8px 12px;
     border-radius: 8px;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
     font-size: 12px;
     font-weight: 500;
-    box-shadow: 0 3px 12px rgba(15, 118, 110, 0.2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
     letter-spacing: 0.3px;
     display: flex;
     justify-content: flex-end;
@@ -93,13 +202,13 @@
 
 /* Results Block - Compact Card Design */
 .results-block {
-    background: white;
+    background: var(--scan-bg);
     border-radius: 12px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     padding: 0;
     overflow: hidden;
     transition: all 0.2s ease;
-    border: 1px solid #e0f2f1;
+    border: 1px solid var(--scan-border);
 }
 
 .results-block:hover {
@@ -113,12 +222,13 @@
 }
 
 .results h3 {
-    padding: 6px 10px;
+    padding: 7px 12px;
     margin: 0;
-    font-size: 13px;
+    font-size: 12.5px;
     font-weight: 700;
-    background: linear-gradient(135deg, #0f766e 0%, #14919b 100%);
-    color: white;
+    background: var(--scan-th-bg);
+    color: var(--scan-text) !important;
+    border-bottom: 1.5px solid var(--scan-border);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -127,12 +237,27 @@
 }
 
 .results h3 span {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--scan-text) !important;
     padding: 3px 8px;
     border-radius: 16px;
     font-size: 11px;
     font-weight: 700;
     margin-left: 10px;
+}
+
+#highIvResults h3 {
+    border-left: 4px solid #f97316 !important;
+}
+
+#camarillaCprReversalBullishResults h3,
+#drsiReversalBullishResults h3 {
+    border-left: 4px solid #10b981 !important;
+}
+
+#camarillaCprReversalBearishResults h3,
+#drsiReversalBearishResults h3 {
+    border-left: 4px solid #ef4444 !important;
 }
 
 /* Scrollable Results Table */
@@ -141,7 +266,7 @@
     overflow-y: auto;
     border: none;
     border-radius: 0;
-    background: white;
+    background: var(--scan-bg);
 }
 
 .results-scroll::-webkit-scrollbar {
@@ -149,16 +274,16 @@
 }
 
 .results-scroll::-webkit-scrollbar-track {
-    background: #f0f0f0;
+    background: var(--scan-bg);
 }
 
 .results-scroll::-webkit-scrollbar-thumb {
-    background: #0f766e;
+    background: var(--scan-th-text);
     border-radius: 3px;
 }
 
 .results-scroll::-webkit-scrollbar-thumb:hover {
-    background: #164e63;
+    background: var(--scan-text);
 }
 
 .results-scroll table {
@@ -168,7 +293,7 @@
 }
 
 .results-scroll table thead {
-    background: #f0fffe;
+    background: var(--scan-th-bg);
     position: sticky;
     top: 0;
     z-index: 10;
@@ -176,27 +301,27 @@
 
 .results-scroll table th {
     padding: 8px;
-    background: #f0fffe;
+    background: var(--scan-th-bg);
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.3px;
-    color: #0f766e;
-    border-bottom: 2px solid #b2dfdb;
+    color: var(--scan-th-text);
+    border-bottom: 2px solid var(--scan-border);
     text-align: left;
     cursor: pointer;
     transition: all 0.2s ease;
 }
 
 .results-scroll table th:hover {
-    background: #e0f2f1;
+    background: var(--scan-tr-hover);
 }
 
 .results-scroll table td {
     padding: 5px;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--scan-border);
     font-size: 12px;
-    color: #333;
+    color: var(--scan-text);
     transition: background-color 0.2s ease;
 }
 
@@ -205,15 +330,15 @@
 }
 
 .results-scroll table tbody tr:hover {
-    background: #f0fffe;
+    background: var(--scan-tr-hover);
 }
 
 .results-scroll table tbody tr:nth-child(even) {
-    background: #f8fffe;
+    background: var(--scan-tr-even);
 }
 
 .results-scroll table tbody tr:nth-child(even):hover {
-    background: #e0f2f1;
+    background: var(--scan-tr-hover);
 }
 
 /* Hidden Results */
@@ -258,7 +383,7 @@
 
 /* Symbol Link Styling - Compact */
 .symbol-link {
-    color: #0f766e;
+    color: var(--scan-th-text);
     text-decoration: none;
     font-weight: 700;
     cursor: pointer;
@@ -276,13 +401,13 @@
     left: 0;
     width: 0;
     height: 2px;
-    background: #14919b;
+    background: var(--scan-th-text);
     transition: width 0.2s ease;
 }
 
 .symbol-link:hover {
-    color: #164e63;
-    background: rgba(15, 118, 110, 0.08);
+    color: var(--scan-text);
+    background: var(--scan-tr-hover);
 }
 
 .symbol-link:hover::after {
@@ -294,9 +419,9 @@
     text-align: center;
     padding: 8px 12px;
     font-size: 11px;
-    color: #0f766e;
-    background: linear-gradient(135deg, #f0fffe 0%, #e0f2f1 100%);
-    border-top: 1px solid #b2dfdb;
+    color: var(--scan-th-text);
+    background: var(--scan-th-bg);
+    border-top: 1px solid var(--scan-border);
     border-radius: 0 0 3px 3px;
     margin-top: 0;
     font-weight: 600;
@@ -363,9 +488,9 @@
 .date-picker {
     padding: 4px 8px;
     border-radius: 4px;
-    border: 1px solid #b2dfdb;
-    background: rgba(255, 255, 255, 0.9);
-    color: #0f766e;
+    border: 1px solid var(--scan-input-border);
+    background: var(--scan-input-bg);
+    color: var(--scan-input-text);
     font-size: 11px;
     font-weight: 500;
     outline: none;
@@ -375,7 +500,7 @@
 
 .date-picker:hover,
 .date-picker:focus {
-    background: white;
+    background: var(--scan-bg);
     box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.3);
 }
 
@@ -438,26 +563,42 @@
 
 /* Refresh Button Styling */
 .refresh-btn {
-    background: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    color: white;
-    padding: 4px 10px;
-    border-radius: 4px;
+    padding: 5px 12px;
+    border-radius: 6px;
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     outline: none;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
-.refresh-btn:hover {
-    background: rgba(255, 255, 255, 0.22);
-    border-color: rgba(255, 255, 255, 0.45);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+#cprRefreshBtn {
+    background: rgba(37, 99, 235, 0.05);
+    border: 1px solid rgba(37, 99, 235, 0.25);
+    color: #2563eb;
+}
+
+#cprRefreshBtn:hover {
+    background: rgba(37, 99, 235, 0.12);
+    border-color: rgba(37, 99, 235, 0.45);
+    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.15);
+    transform: translateY(-0.5px);
+}
+
+#highIvRefreshBtn {
+    background: rgba(234, 88, 12, 0.05);
+    border: 1px solid rgba(234, 88, 12, 0.25);
+    color: #ea580c;
+}
+
+#highIvRefreshBtn:hover {
+    background: rgba(234, 88, 12, 0.12);
+    border-color: rgba(234, 88, 12, 0.45);
+    box-shadow: 0 2px 6px rgba(234, 88, 12, 0.15);
     transform: translateY(-0.5px);
 }
 
@@ -474,3 +615,143 @@
     animation: spin 0.8s linear infinite;
 }
 
+/* ─── Premium Dark Theme Dashboard Custom Style Overrides ─── */
+body.dark-theme .scanner-header-row,
+body.forest-theme .scanner-header-row {
+    background: var(--scan-header-bg);
+    border: 1px solid var(--scan-border);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.35);
+}
+
+body.dark-theme .results h3,
+body.forest-theme .results h3 {
+    background: var(--scan-th-bg) !important;
+    color: var(--scan-text);
+    border-bottom: 1.5px solid var(--scan-border);
+    font-size: 12.5px;
+    font-weight: 700;
+}
+
+/* Glowing left color-coded indicators for each scanner type */
+body.dark-theme #highIvResults h3,
+body.forest-theme #highIvResults h3 {
+    border-left: 4px solid #f97316;
+}
+
+body.dark-theme #camarillaCprReversalBullishResults h3,
+body.dark-theme #drsiReversalBullishResults h3,
+body.forest-theme #camarillaCprReversalBullishResults h3,
+body.forest-theme #drsiReversalBullishResults h3 {
+    border-left: 4px solid #10b981;
+}
+
+body.dark-theme #camarillaCprReversalBearishResults h3,
+body.dark-theme #drsiReversalBearishResults h3,
+body.forest-theme #camarillaCprReversalBearishResults h3,
+body.forest-theme #drsiReversalBearishResults h3 {
+    border-left: 4px solid #ef4444;
+}
+
+/* Segmented console pill tabs */
+body.dark-theme .scanner-tab-btn.active,
+body.forest-theme .scanner-tab-btn.active {
+    background: var(--scan-header-bg);
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+    color: #ffffff;
+}
+
+/* Glowing, color-coded custom action buttons in status bar */
+body.dark-theme #cprRefreshBtn {
+    background: rgba(56, 189, 248, 0.08);
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    color: #38bdf8;
+}
+
+body.dark-theme #cprRefreshBtn:hover {
+    background: rgba(56, 189, 248, 0.16);
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
+}
+
+body.dark-theme #highIvRefreshBtn {
+    background: rgba(249, 115, 22, 0.08);
+    border: 1px solid rgba(249, 115, 22, 0.35);
+    color: #fb923c;
+}
+
+body.dark-theme #highIvRefreshBtn:hover {
+    background: rgba(249, 115, 22, 0.16);
+    box-shadow: 0 0 10px rgba(249, 115, 22, 0.2);
+}
+
+/* Forest Theme equivalents */
+body.forest-theme #cprRefreshBtn {
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    color: #34d399;
+}
+
+body.forest-theme #cprRefreshBtn:hover {
+    background: rgba(16, 185, 129, 0.16);
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.2);
+}
+
+body.forest-theme #highIvRefreshBtn {
+    background: rgba(249, 115, 22, 0.08);
+    border: 1px solid rgba(249, 115, 22, 0.35);
+    color: #fb923c;
+}
+
+body.forest-theme #highIvRefreshBtn:hover {
+    background: rgba(249, 115, 22, 0.16);
+    box-shadow: 0 0 10px rgba(249, 115, 22, 0.2);
+}
+
+/* Enhanced scrollbars in tables for high tech terminal feel */
+body.dark-theme .results-scroll::-webkit-scrollbar-thumb {
+    background: var(--scan-border);
+}
+body.dark-theme .results-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--scan-th-text);
+}
+
+/* ─── High Contrast Font & Background Overrides for Dark/Forest Themes ─── */
+body.dark-theme .buy-signal,
+body.forest-theme .buy-signal {
+    background: rgba(16, 185, 129, 0.12) !important;
+    color: #34d399 !important;
+    border-left: 3px solid #34d399 !important;
+}
+
+body.dark-theme .sell-signal,
+body.forest-theme .sell-signal {
+    background: rgba(239, 68, 68, 0.12) !important;
+    color: #f87171 !important;
+    border-left: 3px solid #f87171 !important;
+}
+
+body.dark-theme .no-trade,
+body.forest-theme .no-trade {
+    background: rgba(148, 163, 184, 0.12) !important;
+    color: #94a3b8 !important;
+    border-left: 3px solid #94a3b8 !important;
+}
+
+body.dark-theme .gap-up,
+body.forest-theme .gap-up {
+    color: #34d399 !important;
+}
+
+body.dark-theme .gap-down,
+body.forest-theme .gap-down {
+    color: #f87171 !important;
+}
+
+body.dark-theme .iv-high,
+body.forest-theme .iv-high {
+    color: #fb923c !important;
+}
+
+body.dark-theme .iv-very-high,
+body.forest-theme .iv-very-high {
+    color: #f43f5e !important;
+}

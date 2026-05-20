@@ -68,7 +68,7 @@ const oipElems = {
     symbolInput: null, symbolList: null, interval: null,
     spotHigh: null, spotLow: null, step: null, multiplier: null,
     view: null, showVwapOI: null, showVwapInt: null,
-    showCpr: null, showFutureCpr: null, showEMA: null, showRSI: null, autoHL: null, chartWrap: null, canvas: null,
+    showCpr: null, showEMA: null, showRSI: null, autoHL: null, chartWrap: null, canvas: null,
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
     hdrPrice: null, hdrPcr: null, hdrMaxPain: null, hdrCeOI: null,
     hdrCeChg: null, hdrPeOI: null,
@@ -93,7 +93,6 @@ function oipInitElems() {
     oipElems.showVwapOI = document.getElementById('oipShowVwapOI');
     oipElems.showVwapInt = document.getElementById('oipShowVwapInt');
     oipElems.showCpr = document.getElementById('oipShowCpr');
-    oipElems.showFutureCpr = document.getElementById('oipShowFutureCpr');
     oipElems.showEMA = document.getElementById('oipShowEMA');
     oipElems.showRSI = document.getElementById('oipShowRSI');
     oipElems.autoHL = document.getElementById('oipAutoHL');
@@ -1246,10 +1245,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     oipInitReplay(); 
 
-    // Add event listeners for indicator toggles
     [
         'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
-        'oipShowCpr', 'oipShowFutureCpr', 'oipShowRSI', 'oipShowSignals',
+        'oipShowCpr', 'oipShowRSI', 'oipShowSignals',
         'oipShowVwapOI', 'oipShowVwapInt', 'oipShowPremium'
     ].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => {

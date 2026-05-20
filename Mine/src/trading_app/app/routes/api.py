@@ -932,7 +932,7 @@ def get_market_pulse() -> EndpointResponse:
 
         from trading_app.service.dynamic_constituents import DynamicConstituentsService
         if target_index == 'INDEX':
-            target_stocks = list(index_map.keys())
+            target_stocks = [k for k in index_map.keys() if k != 'INDIAVIX']
         else:
             target_stocks = DynamicConstituentsService.get_constituents(target_index)
             

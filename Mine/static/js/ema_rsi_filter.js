@@ -111,8 +111,18 @@ async function loadEmaData() {
         if (selectedDate) url += `&date=${selectedDate}`;
 
         // Clear UI tables immediately while waiting for API
+        const container = document.getElementById('weeklyEmaResults');
+        if (container) container.classList.remove('results-hidden');
+
         const tbody = document.getElementById('weeklyEmaBody');
-        if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding: 2rem; color: var(--text-muted);"><div class="loading-spinner" style="display:inline-block; margin-right: 8px;"></div> Scanning market data... This may take up to a minute.</td></tr>`;
+        if (tbody) tbody.innerHTML = `
+            <tr>
+                <td colspan="6" style="text-align: center; padding: 24px; color: var(--scan-th-text); font-weight: 500; background: var(--scan-bg);">
+                    <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid var(--scan-th-text); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
+                    ⚡ Scanning market data and analyzing EMA/RSI crossovers... This may take up to a minute.
+                </td>
+            </tr>
+        `;
         
         const countEl = document.getElementById('weeklyEmaCount');
         if (countEl) countEl.textContent = '(...)';
@@ -152,10 +162,30 @@ async function loadEmaData() {
             );
         } else if (response && !response.needs_login) {
             setEmaStatus(`❌ Error: ${response.message || response.error || 'Unknown error'}`);
+            const tbody = document.getElementById('weeklyEmaBody');
+            if (tbody) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="text-align: center; padding: 20px; color: #dc2626; font-weight: 500; background: var(--scan-bg);">
+                            ❌ Failed to load EMA/RSI crossover data: ${response.message || response.error || 'Unknown error'}
+                        </td>
+                    </tr>
+                `;
+            }
         }
     } catch (err) {
         console.error('EMA filter fetch error:', err);
         setEmaStatus(`❌ Network error: ${err.message}`);
+        const tbody = document.getElementById('weeklyEmaBody');
+        if (tbody) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="6" style="text-align: center; padding: 20px; color: #dc2626; font-weight: 500; background: var(--scan-bg);">
+                        ❌ Network error while loading EMA/RSI Touch data: ${err.message}
+                    </td>
+                </tr>
+            `;
+        }
     } finally {
         _emaInFlight = false;
         if (btn) btn.disabled = false;

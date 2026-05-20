@@ -6,7 +6,6 @@
 {% endblock %}
 {% block content %}
 <div id="ema-status-bar" class="ema-status-bar">
-    <span id="ema-status-text">⏳ Loading data...</span>
     <div class="ema-controls">
         <select id="emaTimeframeFilter" class="date-picker tf-picker" title="Select timeframe">
             <option value="1minute">EMA &amp; RSI 60 1Min</option>
@@ -50,7 +49,8 @@
     <!-- Shown only when 0 matches — nearest stocks to EMA-208 -->
     <div id="nearestWeeklySection" class="results results-block ema-hidden">
         <h3 id="nearest-primary-title">🎯 Nearest to Weekly EMA 208 <span class="nearest-count"></span>
-            <small style="font-weight:400;font-size:0.75rem;opacity:0.7;"> — no touch yet, showing closest stocks</small>
+            <small style="font-weight:400;font-size:0.75rem;opacity:0.7;"> — no touch yet, showing closest
+                stocks</small>
         </h3>
         <div class="results-scroll">
             <table>

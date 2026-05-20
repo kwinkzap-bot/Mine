@@ -34,6 +34,87 @@ let oipPEEma20Series = null;
 let oipPEEma50Series = null;
 let oipMaxPainLine = null;
 
+/* ── Theme Setup ────────────────────────────────────────── */
+const OIP_CHART_THEMES = {
+    'light': { bg: '#ffffff', text: '#374151', grid: '#f0f0f0' },
+    'dark': { bg: '#111827', text: '#94a3b8', grid: 'rgba(255, 255, 255, 0.06)' },
+    'forest': { bg: '#0a1410', text: '#6ba88f', grid: 'rgba(16, 185, 129, 0.06)' },
+    'cream': { bg: '#fdfbf7', text: '#7c7267', grid: 'rgba(180, 83, 9, 0.05)' },
+    'ocean': { bg: '#f3f8fc', text: '#475569', grid: 'rgba(2, 132, 199, 0.05)' }
+};
+
+function updateOIProfileTheme(themeName) {
+    const oipPage = document.querySelector('.oip-page');
+    if (!oipPage) return;
+
+    // 1. Remove all old theme classes
+    oipPage.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'carbon-theme', 'cream-theme', 'ocean-theme');
+    // 2. Add new theme class
+    oipPage.classList.add(`${themeName}-theme`);
+
+    // Also apply to document.body for styling the main template / navigation bar
+    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'carbon-theme', 'cream-theme', 'ocean-theme');
+    document.body.classList.add(`${themeName}-theme`);
+
+    // 3. Save to localStorage
+    localStorage.setItem('app-theme', themeName);
+    localStorage.setItem('oip-theme', themeName);
+
+    // 4. Update the theme toggle button label/icon
+    const themeBtn = document.getElementById('oip-theme-toggle-btn');
+    if (themeBtn) {
+        let label = '☀️ Light';
+        if (themeName === 'dark') label = '🌌 Dark';
+        else if (themeName === 'forest') label = '🌲 Forest';
+        else if (themeName === 'cream') label = '📜 Cream';
+        else if (themeName === 'ocean') label = '🌊 Ocean';
+        themeBtn.textContent = label;
+    }
+
+    // 5. Update lightweight chart colors dynamically
+    const cfg = OIP_CHART_THEMES[themeName] || OIP_CHART_THEMES['light'];
+
+    const applyToChart = (chartInstance) => {
+        if (!chartInstance) return;
+        try {
+            chartInstance.applyOptions({
+                layout: {
+                    textColor: cfg.text,
+                    background: { type: 'solid', color: cfg.bg }
+                },
+                grid: {
+                    vertLines: { color: cfg.grid },
+                    horzLines: { color: cfg.grid }
+                },
+                crosshair: {
+                    vertLine: { color: cfg.text },
+                    horzLine: { color: cfg.text }
+                },
+                timeScale: {
+                    textColor: cfg.text
+                },
+                rightPriceScale: {
+                    textColor: cfg.text
+                }
+            });
+        } catch (e) {
+            console.error('Error applying theme options to chart:', e);
+        }
+    };
+
+    // Apply to oipOIChart (direct lightweight chart instance)
+    applyToChart(oipOIChart);
+
+    // Apply to others (TradingViewChart wrapper instances containing .chart)
+    if (oipIntrinsicChart && oipIntrinsicChart.chart) applyToChart(oipIntrinsicChart.chart);
+    if (oipCEChart && oipCEChart.chart) applyToChart(oipCEChart.chart);
+    if (oipPEChart && oipPEChart.chart) applyToChart(oipPEChart.chart);
+    if (oipCombinedChart && oipCombinedChart.chart) applyToChart(oipCombinedChart.chart);
+
+    // 6. Force immediate redraw of custom Canvas elements
+    oipRequestDraw();
+}
+
 // Replay Data Storage (used in refresh/load logic)
 let oipFullCandles = null;
 let oipFullOptionData = null;
@@ -72,7 +153,7 @@ const oipElems = {
     symbolInput: null, symbolList: null, interval: null,
     spotHigh: null, spotLow: null, step: null, multiplier: null,
     view: null, showVwapOI: null, showVwapInt: null,
-    showCpr: null, showFutureCpr: null, showEMA: null, showRSI: null, autoHL: null, chartWrap: null, canvas: null,
+    showCpr: null, showEMA: null, showRSI: null, autoHL: null, chartWrap: null, canvas: null,
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
     hdrPrice: null, hdrPcr: null, hdrMaxPain: null, hdrCeOI: null,
     hdrCeChg: null, hdrPeOI: null,
@@ -259,10 +340,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (oipOIData && oipOIData.candles) oipDrawCpr(oipOIData.candles);
     });
 
-    oipElems.showFutureCpr?.addEventListener('change', () => {
-        if (oipOIData && oipOIData.candles) oipDrawCpr(oipOIData.candles);
-    });
-
     [oipElems.showEma9, oipElems.showEma20, oipElems.showEma50, oipElems.showEma100, oipElems.showEma200].forEach(el => {
         el?.addEventListener('change', () => oipUpdateEmaVisibility());
     });
@@ -385,6 +462,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Theme setup and handling
+    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+    updateOIProfileTheme(activeTheme);
+
+    // Event listener for global theme changes
+    window.addEventListener('themechanged', function (e) {
+        updateOIProfileTheme(e.detail.theme);
+    });
+
     oipSelectSymbol(oipSymbol);
 });
 
@@ -459,10 +545,12 @@ function oipInitCharts() {
 }
 
 function creatBaseChart(el) {
+    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+    const cfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
     return LightweightCharts.createChart(el, {
         width: el.clientWidth || 1200, height: 360,
-        layout: { textColor: '#374151', background: { type: 'solid', color: '#ffffff' } },
-        grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
+        layout: { textColor: cfg.text, background: { type: 'solid', color: cfg.bg } },
+        grid: { vertLines: { color: cfg.grid }, horzLines: { color: cfg.grid } },
         crosshair: { mode: 0, vertLine: { color: '#9ca3af', style: 3 }, horzLine: { color: '#9ca3af', style: 3, labelBackgroundColor: '#0969da' } },
         timeScale: {
             timeVisible: true,
@@ -538,6 +626,13 @@ function oipDrawOIBars() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     if (!oipAllStrikes.length) return;
+
+    // Resolve dynamic colors based on active theme
+    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+    const cfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
+    const lblColor = activeTheme === 'light' ? '#000000' : cfg.text;
+    const borderCol = activeTheme === 'light' ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.1)';
+
     const priceTop = oipOISeries.coordinateToPrice(0);
     const priceBottom = oipOISeries.coordinateToPrice(H);
     let filtered = [];
@@ -583,25 +678,29 @@ function oipDrawOIBars() {
         if (y === null || y < -50 || y > H + 50) return;
         const valCE = getCE(s), valPE = getPE(s);
         const ceW = (Math.abs(valCE) / maxVal) * MAX_BAR_PX, peW = (Math.abs(valPE) / maxVal) * MAX_BAR_PX;
+        const isLight = (activeTheme === 'light' || activeTheme === 'cream' || activeTheme === 'ocean');
         if (valCE !== 0) {
             ctx.fillStyle = ctx.strokeStyle = (s.strike === ceMaxStr) ? ceColMax : ceCol;
             if (valCE < 0) ctx.strokeRect(plotRight - ceW, y - barH - 0.5, ceW, barH);
             else ctx.fillRect(plotRight - ceW, y - barH - 0.5, ceW, barH);
 
-            // Add value on the left side of the Y-axis (Black color, larger font)
-            ctx.fillStyle = '#000000';
-            ctx.fillText(fmtL(valCE) + ' C', plotRight - 4, y - (barH / 2) - 0.5);
+            // Reverted label positioning back to the right-aligned Y-axis position
+            const textStr = fmtL(valCE) + ' C';
+            ctx.fillStyle = isLight ? '#000000' : '#ffffff';
+            ctx.fillText(textStr, plotRight - 4, y - (barH / 2) - 0.5);
         }
         if (valPE !== 0) {
             ctx.fillStyle = ctx.strokeStyle = (s.strike === peMaxStr) ? peColMax : peCol;
             if (valPE < 0) ctx.strokeRect(plotRight - peW, y + 0.5, peW, barH);
             else ctx.fillRect(plotRight - peW, y + 0.5, peW, barH);
 
-            ctx.fillStyle = '#000000';
-            ctx.fillText(fmtL(valPE) + ' P', plotRight - 4, y + (barH / 2) + 0.5);
+            // Reverted label positioning back to the right-aligned Y-axis position
+            const textStr = fmtL(valPE) + ' P';
+            ctx.fillStyle = isLight ? '#000000' : '#ffffff';
+            ctx.fillText(textStr, plotRight - 4, y + (barH / 2) + 0.5);
         }
     });
-    ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.beginPath(); ctx.moveTo(plotRight, 0); ctx.lineTo(plotRight, H); ctx.stroke();
+    ctx.strokeStyle = borderCol; ctx.beginPath(); ctx.moveTo(plotRight, 0); ctx.lineTo(plotRight, H); ctx.stroke();
 }
 
 function oipFilterStrikes(strikes, price, n) {
@@ -1501,7 +1600,6 @@ function oipDrawCpr(candles) {
 
     const show = oipElems.showCpr?.checked;
     Object.values(oipCprSeriesMap).forEach(s => s.setData([]));
-    oipDrawFutureCpr(candles);
     if (!show || !candles || !candles.length) return;
 
     const daysData = oipCalculateDynamicCPR(candles);
@@ -1569,145 +1667,6 @@ function oipDrawCpr(candles) {
             series.setData(day.times.map(t => ({ time: t, value: box.max })));
         });
     });
-
-    // Draw the Future CPR (next session projection) — dashed lines
-    oipDrawFutureCpr(candles);
-}
-
-/**
- * Draw Future CPR — the CPR projected for tomorrow, calculated from the
- * current (today's) day OHLC. Drawn as dashed lines extending one full
- * session width beyond the last candle, matching the Mine CPR Pine Script.
- */
-function oipDrawFutureCpr(candles) {
-    // Cleanup previous future CPR series
-    if (window.oipFutureCprSeries) {
-        window.oipFutureCprSeries.forEach(s => { try { oipOIChart.removeSeries(s); } catch (e) { } });
-    }
-    window.oipFutureCprSeries = [];
-
-    const show = oipElems.showFutureCpr?.checked;
-    if (!show || !candles || !candles.length) {
-        // Clear series if not showing
-        if (window.oipFutureCprSeries) {
-            window.oipFutureCprSeries.forEach(s => { try { oipOIChart.removeSeries(s); } catch (e) { } });
-            window.oipFutureCprSeries = [];
-        }
-        return;
-    }
-
-    // Build per-day OHLC from candles using UTC methods
-    const days = [];
-    let currentDay = null;
-    for (const c of candles) {
-        const d = new Date(c.time * 1000);
-        const ds = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-        if (!currentDay || currentDay.date !== ds) {
-            if (currentDay) days.push(currentDay);
-            currentDay = { date: ds, startTime: c.time, endTime: c.time, high: c.high, low: c.low, close: c.close };
-        }
-        currentDay.high = Math.max(currentDay.high, c.high);
-        currentDay.low = Math.min(currentDay.low, c.low);
-        currentDay.close = c.close;
-        currentDay.endTime = c.time;
-    }
-    if (currentDay) days.push(currentDay);
-
-    // Need at least the current day to project
-    if (days.length < 1) return;
-
-    // Use the LAST (today's) day as the source of the Future CPR
-    const today = days[days.length - 1];
-
-    // Allow override from daily_ohlc if available
-    let oH = today.high, oL = today.low, oC = today.close;
-    if (oipOIData?.daily_ohlc) {
-        const d = new Date(today.startTime * 1000);
-        const isoDate = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-        const override = oipOIData.daily_ohlc[isoDate];
-        if (override) { oH = override.high; oL = override.low; oC = override.close; }
-    }
-
-    // Calculate Future CPR levels from today's OHLC
-    const range = oH - oL;
-    const pp = (oH + oL + oC) / 3;
-    const bc = (oH + oL) / 2;
-    const tc = (pp - bc) + pp;
-    const r1 = (pp * 2) - oL;
-    const r2 = pp + range;
-    const r3 = r1 + range;
-    const r4 = r3 + (r2 - r1);
-    const s1 = (pp * 2) - oH;
-    const s2 = pp - range;
-    const s3 = s1 - range;
-    const s4 = s3 - (s1 - s2);
-    // Project forward from the last candle to the start of the next session
-    // Find next market start (09:15 IST) — handling weekends and gaps
-    const lastD = new Date(today.endTime * 1000);
-    const nextD = new Date(lastD);
-    nextD.setUTCDate(lastD.getUTCDate() + 1);
-    const dayOfWeek = nextD.getUTCDay();
-    if (dayOfWeek === 6) nextD.setUTCDate(nextD.getUTCDate() + 2); // Sat -> Mon
-    else if (dayOfWeek === 0) nextD.setUTCDate(nextD.getUTCDate() + 1); // Sun -> Mon
-    nextD.setUTCHours(9, 15, 0, 0);
-
-    const nextStart = oipInterval === 'day' ? (today.endTime + 86400) : (nextD.getTime() / 1000);
-    // Project for 1 full session (375 mins) or 7 days for daily
-    const sessionWidth = oipInterval === 'day' ? (7 * 86400) : (375 * 60);
-    const nextEnd = nextStart + sessionWidth;
-
-    // Future CPR levels share same styling as current CPR but drawn dashed (lineStyle: 2)
-    const futureLevels = [
-        { value: pp, color: '#3366ff', lineWidth: 1, label: 'F-PP' },
-        { value: bc, color: '#3366ff', lineWidth: 1, label: 'F-BC' },
-        { value: tc, color: '#3366ff', lineWidth: 1, label: 'F-TC' },
-        { value: r1, color: '#006400', lineWidth: 1, label: 'F-R1' },
-        { value: r2, color: '#006400', lineWidth: 1, label: 'F-R2' },
-        { value: r3, color: '#006400', lineWidth: 1, label: 'F-R3' },
-        { value: r4, color: '#006400', lineWidth: 1, label: 'F-R4' },
-        { value: s1, color: '#ff0000', lineWidth: 1, label: 'F-S1' },
-        { value: s2, color: '#ff0000', lineWidth: 1, label: 'F-S2' },
-        { value: s3, color: '#ff0000', lineWidth: 1, label: 'F-S3' },
-        { value: s4, color: '#ff0000', lineWidth: 1, label: 'F-S4' },
-        { value: oH, color: '#ef07f9', lineWidth: 1, label: 'F-PDH' },
-        { value: oL, color: '#ef07f9', lineWidth: 1, label: 'F-PDL' }
-    ];
-
-    futureLevels.forEach(({ value, color, lineWidth = 1 }) => {
-        if (!isFinite(value) || value <= 0) return;
-        const series = oipOIChart.addLineSeries({
-            color,
-            lineWidth,
-            lineStyle: 2,          // dashed — matches Pine Script style=line.style_dashed
-            lastValueVisible: true, // Show price labels on axis for future projections
-            priceLineVisible: false,
-            crosshairMarkerVisible: false,
-            autoscaleInfoProvider: () => null // Prevent future projections from squashing the current price action
-        });
-        // Three-point line: anchor at last candle, then start of next session, then end of next session
-        // Using three points ensures the line appears attached to the current chart data
-        series.setData([
-            { time: today.endTime, value },
-            { time: nextStart, value },
-            { time: nextEnd, value }
-        ]);
-        window.oipFutureCprSeries.push(series);
-    });
-
-    // Ensure the x-axis shows future dates on first load by adjusting the range AFTER data is set
-    if (!oipHasLoadedCandles && candles.length) {
-        // setTimeout(() => {
-        //     // Re-check flag inside timeout to prevent race conditions
-        //     if (oipHasLoadedCandles) return;
-
-        //     const visibleLen = Math.min(candles.length, 100);
-        //     // Projecting significantly into the future logical space to force x-axis labels
-        //     oipOIChart.timeScale().setVisibleLogicalRange({
-        //         from: candles.length - visibleLen,
-        //         to: candles.length + 600
-        //     });
-        // }, 100);
-    }
 }
 
 function oipAutoFillHighLow() {

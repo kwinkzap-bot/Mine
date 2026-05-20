@@ -77,7 +77,7 @@ document.addEventListener('DOMContentLoaded', function () {
     document.getElementById('refreshNowBtn').addEventListener('click', refreshData);
 
     // Strike range button listeners - only manipulate cached data, no API call
-    document.querySelectorAll('.strike-btn').forEach(btn => {
+    document.querySelectorAll('.strike-btn[data-strikes]').forEach(btn => {
         btn.addEventListener('click', onStrikeRangeChange);
     });
 
@@ -88,6 +88,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Start auto-refresh on every 30 seconds during market hours
         startAutoRefresh();
+    });
+
+    // Bootstrap dynamic theme from localStorage
+    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+    updateOpenInterestTheme(activeTheme);
+
+    // Event listener for global theme changes
+    window.addEventListener('themechanged', function (e) {
+        updateOpenInterestTheme(e.detail.theme);
     });
 });
 
@@ -186,12 +195,15 @@ function selectSymbol(symbol) {
  * Handle strike range change - only updates charts with cached data, no API call
  */
 function onStrikeRangeChange(e) {
-    const newCount = parseInt(e.target.getAttribute('data-strikes'));
+    const strikesAttr = e.target.getAttribute('data-strikes');
+    if (!strikesAttr) return; // Prevent collapse if button doesn't have data-strikes attribute (e.g. theme toggle button)
+    const newCount = parseInt(strikesAttr);
+    if (isNaN(newCount)) return;
     strikeRangeCount = newCount;
     console.log(`Strike range changed to: ${strikeRangeCount}`);
 
     // Update active button styling
-    document.querySelectorAll('.strike-btn').forEach(btn => {
+    document.querySelectorAll('.strike-btn[data-strikes]').forEach(btn => {
         btn.classList.remove('active');
     });
     e.target.classList.add('active');
@@ -424,12 +436,12 @@ function updateSummaryStats(data) {
         if (maxMinOI > 0) {
             straddleElement.textContent = straddleStrike + ' (Active)';
             straddleElement.className = 'value active-straddle'; // Add a class for styling
-            straddleElement.style.color = '#2563eb'; // Blue color for Active Straddle
+            straddleElement.style.color = 'var(--oip-accent)'; // Dynamic theme accent color for Active Straddle
             straddleElement.style.fontWeight = 'bold';
         } else {
             straddleElement.textContent = straddleStrike + ' (ATM)';
             straddleElement.className = 'value';
-            straddleElement.style.color = '#666';
+            straddleElement.style.color = 'var(--oip-text)'; // Dynamic theme text color for ATM fallback
             straddleElement.style.fontWeight = 'normal';
         }
     }
@@ -793,9 +805,10 @@ const currentPriceLinePlugin = {
         }
 
         if (xPixel !== null) {
+            const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
             // Draw vertical dashed line
             ctx.save();
-            ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.strokeStyle = activeTheme === 'light' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)';
             ctx.lineWidth = 2;
             ctx.setLineDash([5, 5]);
 
@@ -807,7 +820,7 @@ const currentPriceLinePlugin = {
             // Draw label text only (no background or border)
             ctx.font = 'bold 11px Arial';
             ctx.textAlign = 'center';
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillStyle = activeTheme === 'light' ? 'rgba(0, 0, 0, 0.8)' : 'rgba(255, 255, 255, 0.8)';
 
             const labelText = `${currentPrice.toFixed(2)}`;
             const labelY = yAxis.top + 15;
@@ -884,6 +897,8 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
     const ceBackgroundColors = ceData.map(val => val >= 0 ? 'rgba(255, 127, 127, 0.8)' : 'rgba(255, 127, 127, 0.4)');
     const ceBorderColors = ceData.map(val => val >= 0 ? 'rgba(220, 20, 60, 1)' : 'rgba(220, 20, 60, 0.6)');
 
+    const themeCfg = getActiveChartTheme();
+
     const chartConfig = {
         type: 'bar',
         data: {
@@ -929,6 +944,7 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                     align: 'center',
                     labels: {
                         padding: 15,
+                        color: themeCfg.text,
                         font: {
                             size: 12,
                             weight: 'bold'
@@ -951,7 +967,8 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                                     text: `${dataset.label}  ${indicator}${decimalValue}L`,
                                     fillStyle: dataset.backgroundColor[0] || '#999',
                                     hidden: false,
-                                    index: index
+                                    index: index,
+                                    fontColor: themeCfg.text
                                 });
                             });
 
@@ -959,13 +976,13 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                         }
                     },
                     border: {
-                        color: 'rgba(0, 0, 0, 0.1)',
+                        color: themeCfg.grid,
                         width: 1
                     },
-                    backgroundColor: 'rgba(255, 255, 255, 0.95)'
+                    backgroundColor: themeCfg.tooltipBg
                 },
                 tooltip: {
-                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                    backgroundColor: themeCfg.tooltipBg,
                     padding: 12,
                     titleFont: {
                         size: 13,
@@ -975,9 +992,9 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                         size: 12,
                         lineHeight: 1.5
                     },
-                    titleColor: '#000000',
-                    bodyColor: '#000000',
-                    borderColor: 'rgba(0, 0, 0, 0.3)',
+                    titleColor: themeCfg.tooltipText,
+                    bodyColor: themeCfg.tooltipText,
+                    borderColor: themeCfg.tooltipBorder,
                     borderWidth: 1,
                     displayColors: true,
                     boxPadding: 8,
@@ -1005,11 +1022,12 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                         display: false
                     },
                     grid: {
-                        color: 'rgba(0, 0, 0, 0.05)',
+                        color: themeCfg.grid,
                         drawBorder: true,
-                        borderColor: 'rgba(0, 0, 0, 0.08)'
+                        borderColor: themeCfg.grid
                     },
                     ticks: {
+                        color: themeCfg.text,
                         font: {
                             size: 10
                         },
@@ -1024,11 +1042,12 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
                         display: false
                     },
                     grid: {
-                        color: 'rgba(0, 0, 0, 0.05)',
+                        color: themeCfg.vgrid || themeCfg.grid,
                         drawBorder: true,
-                        borderColor: 'rgba(0, 0, 0, 0.08)'
+                        borderColor: themeCfg.grid
                     },
                     ticks: {
+                        color: themeCfg.text,
                         font: {
                             size: 10
                         }
@@ -1040,18 +1059,13 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
     };
 
     if (coiChartInstance) {
-        coiChartInstance.data.labels = labels;
-        coiChartInstance.data.datasets[0].data = peData;
-        coiChartInstance.data.datasets[0].backgroundColor = peBackgroundColors;
-        coiChartInstance.data.datasets[0].borderColor = peBorderColors;
-        coiChartInstance.data.datasets[1].data = ceData;
-        coiChartInstance.data.datasets[1].backgroundColor = ceBackgroundColors;
-        coiChartInstance.data.datasets[1].borderColor = ceBorderColors;
-        coiChartInstance.options.plugins.currentPriceLine.price = currentPrice;
-        coiChartInstance.update('active');
-    } else {
-        coiChartInstance = new Chart(ctx, chartConfig);
+        try {
+            coiChartInstance.destroy();
+        } catch (e) {
+            console.debug('Error destroying old coi chart:', e);
+        }
     }
+    coiChartInstance = new Chart(ctx, chartConfig);
 }
 
 /**
@@ -1192,6 +1206,8 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
             val >= 0 ? 'rgba(220, 20, 60, 1)' : 'rgba(220, 20, 60, 1)'
         );
 
+        const themeCfg = getActiveChartTheme();
+
         const chartConfig = {
             type: 'bar',
             data: {
@@ -1267,6 +1283,7 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                         position: 'bottom',
                         labels: {
                             padding: 15,
+                            color: themeCfg.text,
                             font: {
                                 size: 12,
                                 weight: 'bold'
@@ -1274,7 +1291,7 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                         }
                     },
                     tooltip: {
-                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                        backgroundColor: themeCfg.tooltipBg,
                         padding: 15,
                         titleFont: {
                             size: 12,
@@ -1284,9 +1301,9 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                             size: 10,
                             family: 'Arial, sans-serif'
                         },
-                        titleColor: '#000000',
-                        bodyColor: '#000000',
-                        borderColor: 'rgba(0, 0, 0, 0.3)',
+                        titleColor: themeCfg.tooltipText,
+                        bodyColor: themeCfg.tooltipText,
+                        borderColor: themeCfg.tooltipBorder,
                         borderWidth: 1,
                         displayColors: true,
                         boxPadding: 8,
@@ -1356,11 +1373,12 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                             display: false
                         },
                         grid: {
-                            color: 'rgba(0, 0, 0, 0.05)',
+                            color: themeCfg.grid,
                             drawBorder: true,
-                            borderColor: 'rgba(0, 0, 0, 0.08)'
+                            borderColor: themeCfg.grid
                         },
                         ticks: {
+                            color: themeCfg.text,
                             font: {
                                 size: 10
                             },
@@ -1375,11 +1393,12 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                             display: false
                         },
                         grid: {
-                            color: 'rgba(0, 0, 0, 0.05)',
+                            color: themeCfg.vgrid || themeCfg.grid,
                             drawBorder: true,
-                            borderColor: 'rgba(0, 0, 0, 0.08)'
+                            borderColor: themeCfg.grid
                         },
                         ticks: {
+                            color: themeCfg.text,
                             font: {
                                 size: 10
                             }
@@ -1440,3 +1459,52 @@ window.addEventListener('beforeunload', function () {
         combinedChartInstance.destroy();
     }
 });
+
+/**
+ * Dynamic theme setup and switcher for Open Interest Route
+ */
+function updateOpenInterestTheme(themeName) {
+    const oiContainer = document.querySelector('.oi-container');
+    if (!oiContainer) return;
+
+    // 1. Remove all old theme classes
+    oiContainer.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'carbon-theme', 'cream-theme', 'ocean-theme');
+    // 2. Add new theme class
+    oiContainer.classList.add(`${themeName}-theme`);
+
+    // Also apply to document.body for styling the main template / navigation bar
+    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'carbon-theme', 'cream-theme', 'ocean-theme');
+    document.body.classList.add(`${themeName}-theme`);
+
+    // 3. Save to localStorage
+    localStorage.setItem('app-theme', themeName);
+    localStorage.setItem('oip-theme', themeName);
+
+    // 4. Update the theme toggle button label/icon
+    const themeBtn = document.getElementById('oip-theme-toggle-btn');
+    if (themeBtn) {
+        let label = '☀️ Light';
+        if (themeName === 'dark') label = '🌌 Dark';
+        else if (themeName === 'forest') label = '🌲 Forest';
+        else if (themeName === 'cream') label = '📜 Cream';
+        else if (themeName === 'ocean') label = '🌊 Ocean';
+        themeBtn.textContent = label;
+    }
+
+    // 5. Force update of charts if they are already loaded
+    if (cachedData) {
+        updateCharts(cachedData);
+    }
+}
+
+function getActiveChartTheme() {
+    const themeName = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+    const themes = {
+        'light': { text: '#374151', grid: 'rgba(0, 0, 0, 0.06)', vgrid: 'rgba(0, 0, 0, 0.15)', tooltipBg: 'rgba(255, 255, 255, 0.95)', tooltipBorder: 'rgba(0, 0, 0, 0.2)', tooltipText: '#000000' },
+        'dark': { text: '#94a3b8', grid: 'rgba(255, 255, 255, 0.08)', vgrid: 'rgba(255, 255, 255, 0.08)', tooltipBg: 'rgba(17, 24, 39, 0.95)', tooltipBorder: 'rgba(255, 255, 255, 0.2)', tooltipText: '#ffffff' },
+        'forest': { text: '#6ba88f', grid: 'rgba(16, 185, 129, 0.08)', vgrid: 'rgba(16, 185, 129, 0.08)', tooltipBg: 'rgba(10, 20, 16, 0.95)', tooltipBorder: 'rgba(16, 185, 129, 0.2)', tooltipText: '#e8f7f0' },
+        'cream': { text: '#7c7267', grid: 'rgba(180, 83, 9, 0.05)', vgrid: 'rgba(0, 0, 0, 0.15)', tooltipBg: '#fdfbf7', tooltipBorder: '#e6dfd3', tooltipText: '#433c35' },
+        'ocean': { text: '#475569', grid: 'rgba(2, 132, 199, 0.05)', vgrid: 'rgba(0, 0, 0, 0.15)', tooltipBg: '#f0f6fc', tooltipBorder: '#dbebfa', tooltipText: '#1e293b' }
+    };
+    return themes[themeName] || themes['dark'];
+}

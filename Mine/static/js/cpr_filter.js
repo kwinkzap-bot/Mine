@@ -182,8 +182,8 @@ async function loadHighIVData(selectedDate, refresh = false) {
     highIvCountSpan.textContent = '...';
     highIvBody.innerHTML = `
         <tr>
-            <td colspan="9" style="text-align: center; padding: 24px; color: #0f766e; font-weight: 500; background: #fff;">
-                <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid #0f766e; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
+            <td colspan="9" style="text-align: center; padding: 24px; color: var(--scan-th-text); font-weight: 500; background: var(--scan-bg);">
+                <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid var(--scan-th-text); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
                 ⚡ Scanning option chains and computing 1-year Historical Volatility percentile rankings...
             </td>
         </tr>
@@ -255,8 +255,8 @@ function showGridLoadingState() {
             countSpan.textContent = '(...)';
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="${t.cols}" style="text-align: center; padding: 24px; color: #0f766e; font-weight: 500; background: #fff;">
-                        <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid #0f766e; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
+                    <td colspan="${t.cols}" style="text-align: center; padding: 24px; color: var(--scan-th-text); font-weight: 500; background: var(--scan-bg);">
+                        <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid var(--scan-th-text); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
                         Scanning ${t.label}...
                     </td>
                 </tr>

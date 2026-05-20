@@ -263,11 +263,22 @@ class FyersDataServiceAdapter:
         missing_symbols = []
         now = datetime.now()
         
+        # Determine quote cache TTL: 3s during live market hours, 5 mins (300s) after hours/weekends
+        import pytz
+        ist = pytz.timezone('Asia/Kolkata')
+        now_ist = datetime.now(ist)
+        is_weekend = now_ist.weekday() >= 5
+        is_market_hours = not is_weekend and (
+            (now_ist.hour > 9 or (now_ist.hour == 9 and now_ist.minute >= 15)) and
+            (now_ist.hour < 15 or (now_ist.hour == 15 and now_ist.minute <= 30))
+        )
+        cache_ttl = 3.0 if is_market_hours else 300.0
+
         with _FYERS_SYMBOL_LOCK:
             for s in symbols:
                 if s in _FYERS_SYMBOL_CACHE:
                     cached_q, ts = _FYERS_SYMBOL_CACHE[s]
-                    if (now - ts).total_seconds() < 3.0:
+                    if (now - ts).total_seconds() < cache_ttl:
                         kite_quotes[s] = cached_q
                         continue
                 missing_symbols.append(s)
@@ -370,16 +381,40 @@ class FyersDataServiceAdapter:
                 lp = v.get('lp', 0.0)
                 prev_close = v.get('prev_close_price', 0.0)
                 
-                # Check if this new quote is actually zero or invalid (broker reset)
-                if lp <= 0.0 or prev_close <= 0.0:
+                # Check if this new quote is actually zero, invalid, or a morning reset quote (market not open yet)
+                import pytz
+                ist = pytz.timezone('Asia/Kolkata')
+                now_ist = datetime.now(ist)
+                is_weekend = now_ist.weekday() >= 5
+                is_before_market = now_ist.hour < 9 or (now_ist.hour == 9 and now_ist.minute < 15)
+                
+                high_price = v.get('high_price', 0.0)
+                low_price = v.get('low_price', 0.0)
+                open_price = v.get('open_price', 0.0)
+                
+                # A quote is a flat range if open/high/low/close are all equal to lp (no trading activity yet today)
+                is_flat_range = (high_price > 0.0 and 
+                                 abs(high_price - lp) < 0.001 and 
+                                 abs(low_price - lp) < 0.001 and 
+                                 abs(open_price - lp) < 0.001)
+                
+                is_reset_quote = False
+                if (is_before_market or is_weekend or is_flat_range) and abs(lp - prev_close) < 0.001:
+                    is_reset_quote = True
+
+                if lp <= 0.0 or prev_close <= 0.0 or is_reset_quote:
                     # Fall back to existing cached valid quote if possible
                     with _FYERS_SYMBOL_LOCK:
                         if sym in _FYERS_SYMBOL_CACHE:
                             cached_q, _ = _FYERS_SYMBOL_CACHE[sym]
-                            if cached_q.get('last_price', 0.0) > 0.0 and cached_q.get('ohlc', {}).get('close', 0.0) > 0.0:
-                                batch_quotes[sym] = cached_q
-                                kite_quotes[sym] = cached_q
-                                continue
+                            cached_lp = cached_q.get('last_price', 0.0)
+                            cached_close = cached_q.get('ohlc', {}).get('close', 0.0)
+                            if cached_lp > 0.0 and cached_close > 0.0:
+                                # Use cached quote if it represents a real non-zero change
+                                if not is_reset_quote or abs(cached_lp - cached_close) >= 0.001:
+                                    batch_quotes[sym] = cached_q
+                                    kite_quotes[sym] = cached_q
+                                    continue
 
                 op_oi = 0; op_oich = 0
                 if fsym.endswith('CE') or fsym.endswith('PE'):

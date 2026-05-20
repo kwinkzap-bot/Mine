@@ -6,29 +6,49 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/ema_rsi_filter.css') }}">
 {% endblock %}
 {% block content %}
-<!-- Premium Scanner Tab Navigation -->
-<div class="scanner-tabs">
-    <button class="scanner-tab-btn active" data-tab="cpr" onclick="switchScannerTab('cpr')">
-        <span class="tab-icon">🔍</span> CPR & Camarilla Reversal
-    </button>
-    <button class="scanner-tab-btn" data-tab="ema" onclick="switchScannerTab('ema')">
-        <span class="tab-icon">📊</span> EMA & RSI Touch
-    </button>
+<!-- Premium Unified Scanner Header Utility Row -->
+<div class="scanner-header-row">
+    <!-- Left side: Segmented tab buttons -->
+    <div class="scanner-tabs">
+        <button class="scanner-tab-btn active" data-tab="cpr" onclick="switchScannerTab('cpr')">
+            <span class="tab-icon">🔍</span> CPR & Camarilla Reversal
+        </button>
+        <button class="scanner-tab-btn" data-tab="ema" onclick="switchScannerTab('ema')">
+            <span class="tab-icon">📊</span> EMA & RSI Touch
+        </button>
+    </div>
+
+    <!-- Right side: CPR Controls (visible when CPR tab is active) -->
+    <div id="cpr-header-controls" class="header-controls-container"
+        style="display: flex; gap: 8px; align-items: center;">
+        <input type="date" id="cprDateFilter" class="date-picker">
+        <button id="cprRefreshBtn" class="refresh-btn" title="Refresh CPR & D-RSI Scanners">
+            <span class="refresh-icon">🔄</span> CPR Refresh
+        </button>
+        <button id="highIvRefreshBtn" class="refresh-btn" title="Refresh High IV Scanner">
+            <span class="refresh-icon">🔥</span> High IV Scan
+        </button>
+    </div>
+
+    <!-- Right side: EMA Controls (visible when EMA tab is active, hidden by default) -->
+    <div id="ema-header-controls" class="header-controls-container"
+        style="display: none; gap: 8px; align-items: center;">
+        <select id="emaTimeframeFilter" class="date-picker tf-picker" title="Select timeframe">
+            <option value="1minute">EMA &amp; RSI 60 1Min</option>
+            <option value="5minute">EMA &amp; RSI 75 5Min</option>
+            <option value="15minute">EMA &amp; RSI 125 15Min</option>
+            <option value="60minute">EMA &amp; RSI 137 1Hour</option>
+            <option value="daily" selected>EMA &amp; RSI 88 Daily</option>
+            <option value="weekly">EMA &amp; RSI 208 Weekly</option>
+            <option value="monthly">EMA &amp; RSI 48 Monthly</option>
+        </select>
+        <input type="date" id="emaDateFilter" class="date-picker" title="Select analysis date">
+        <button id="ema-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
+    </div>
 </div>
 
 <!-- CPR & Camarilla Scanner Section -->
 <div id="cpr-scanner-content">
-    <div id="status-bar" class="status-bar">
-        <div class="controls" style="display: flex; gap: 8px; align-items: center;">
-            <input type="date" id="cprDateFilter" class="date-picker">
-            <button id="cprRefreshBtn" class="refresh-btn" title="Refresh CPR & D-RSI Scanners">
-                <span class="refresh-icon">🔄</span> CPR Refresh
-            </button>
-            <button id="highIvRefreshBtn" class="refresh-btn" title="Refresh High IV Scanner">
-                <span class="refresh-icon">🔥</span> High IV Scan
-            </button>
-        </div>
-    </div>
     <div class="results-row">
         <div id="highIvResults" class="results results-hidden results-block">
             <h3>🔥 High IV Percentile (>80%) <span id="highIvCount">(0)</span></h3>
@@ -132,22 +152,6 @@
 
 <!-- EMA & RSI Touch Section -->
 <div id="ema-scanner-content" style="display: none;">
-    <div id="ema-status-bar" class="ema-status-bar">
-        <span id="ema-status-text">⏳ Loading data...</span>
-        <div class="ema-controls">
-            <select id="emaTimeframeFilter" class="date-picker tf-picker" title="Select timeframe">
-                <option value="1minute">EMA &amp; RSI 60 1Min</option>
-                <option value="5minute">EMA &amp; RSI 75 5Min</option>
-                <option value="15minute">EMA &amp; RSI 125 15Min</option>
-                <option value="60minute">EMA &amp; RSI 137 1Hour</option>
-                <option value="daily" selected>EMA &amp; RSI 88 Daily</option>
-                <option value="weekly">EMA &amp; RSI 208 Weekly</option>
-                <option value="monthly">EMA &amp; RSI 48 Monthly</option>
-            </select>
-            <input type="date" id="emaDateFilter" class="date-picker" title="Select analysis date">
-            <button id="ema-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
-        </div>
-    </div>
 
     <!-- WEEKLY/MONTHLY GRID -->
     <div class="ema-section-label">
@@ -178,7 +182,8 @@
         <div id="nearestWeeklySection" class="results results-block ema-hidden">
             <div id="nearest-weekly-container">
                 <h3 id="nearest-primary-title">🎯 Nearest to Weekly EMA 208 <span class="nearest-count"></span>
-                    <small style="font-weight:400;font-size:0.75rem;opacity:0.7;"> — no touch yet, showing closest stocks</small>
+                    <small style="font-weight:400;font-size:0.75rem;opacity:0.7;"> — no touch yet, showing closest
+                        stocks</small>
                 </h3>
                 <div class="results-scroll">
                     <table>
@@ -219,19 +224,25 @@
         document.querySelectorAll('.scanner-tab-btn').forEach(btn => {
             btn.classList.toggle('active', btn.getAttribute('data-tab') === tab);
         });
-        
+
         const cprContent = document.getElementById('cpr-scanner-content');
         const emaContent = document.getElementById('ema-scanner-content');
-        
+        const cprControls = document.getElementById('cpr-header-controls');
+        const emaControls = document.getElementById('ema-header-controls');
+
         if (tab === 'cpr') {
             if (cprContent) cprContent.style.display = 'block';
             if (emaContent) emaContent.style.display = 'none';
+            if (cprControls) cprControls.style.display = 'flex';
+            if (emaControls) emaControls.style.display = 'none';
         } else {
             if (cprContent) cprContent.style.display = 'none';
             if (emaContent) emaContent.style.display = 'block';
+            if (cprControls) cprControls.style.display = 'none';
+            if (emaControls) emaControls.style.display = 'flex';
         }
     }
-    
+
     // Auto-detect tab from URL search parameters on load
     document.addEventListener('DOMContentLoaded', () => {
         const urlParams = new URLSearchParams(window.location.search);
