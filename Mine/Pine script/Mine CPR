@@ -270,10 +270,10 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
             draw_label(i, array.get(p, i), "P", p_color)
         if array.size(r3) > 0 and s3r3_show and carmarilla
             draw_line(i, r3, s3r3_color)
-            draw_label(i, array.get(r3, i), "R3", s3r3_color)
+            draw_label(i, array.get(r3, i), "", s3r3_color)
         if array.size(s3) > 0 and s3r3_show and carmarilla
             draw_line(i, s3, s3r3_color)
-            draw_label(i, array.get(s3, i), "S3", s3r3_color)
+            draw_label(i, array.get(s3, i), "", s3r3_color)
         
         // Draw CPR Lines
         if sp and array.size(arr_p) > i
@@ -332,10 +332,13 @@ ss4 = ss3 - (ss1 - ss2)
 ftime_pdh = request.security(syminfo.tickerid, timeframe, high[0], lookahead=barmerge.lookahead_on)
 ftime_pdl = request.security(syminfo.tickerid, timeframe, low[0], lookahead=barmerge.lookahead_on)
 
+ftime_close = request.security(syminfo.tickerid, timeframe, close[0], lookahead=barmerge.lookahead_on)
+
 var line f_p = na, var line f_bc = na, var line f_tc = na
 var line f_r1 = na, var line f_r2 = na, var line f_r3 = na, var line f_r4 = na
 var line f_s1 = na, var line f_s2 = na, var line f_s3 = na, var line f_s4 = na
 var line f_pdh = na, var line f_pdl = na
+var line f_cam_r3 = na, var line f_cam_s3 = na
 
 var linefill f_fill_c = na
 var linefill f_fill_r12 = na, var linefill f_fill_r23 = na, var linefill f_fill_r34 = na
@@ -346,6 +349,7 @@ if barstate.islast and fsd
     line.delete(f_r1), line.delete(f_r2), line.delete(f_r3), line.delete(f_r4)
     line.delete(f_s1), line.delete(f_s2), line.delete(f_s3), line.delete(f_s4)
     line.delete(f_pdh), line.delete(f_pdl)
+    line.delete(f_cam_r3), line.delete(f_cam_s3)
     
     // Determine the start and end of the next session
     next_start = time_close(timeframe)
@@ -377,7 +381,15 @@ if barstate.islast and fsd
     
     f_pdh := line.new(next_start, ftime_pdh, next_end, ftime_pdh, xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1, style=line.style_dashed)
     f_pdl := line.new(next_start, ftime_pdl, next_end, ftime_pdl, xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1, style=line.style_dashed)
-    
+
+    // Future Camarilla S3/R3 — computed from fetched raw OHLC (same as historical formula)
+    if s3r3_show and carmarilla
+        _f_range     = ftime_pdh - ftime_pdl
+        _f_cam_r3    = ftime_close + _f_range * 1.1 / 4.0
+        _f_cam_s3    = ftime_close - _f_range * 1.1 / 4.0
+        f_cam_r3 := line.new(next_start, _f_cam_r3, next_end, _f_cam_r3, xloc=xloc.bar_time, color=s3r3_color, width=1, style=line.style_dashed)
+        f_cam_s3 := line.new(next_start, _f_cam_s3, next_end, _f_cam_s3, xloc=xloc.bar_time, color=s3r3_color, width=1, style=line.style_dashed)
+
     // Fills
     if not na(f_fill_c)
         linefill.delete(f_fill_c), linefill.delete(f_fill_r12), linefill.delete(f_fill_r23), linefill.delete(f_fill_r34)

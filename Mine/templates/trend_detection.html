@@ -1,0 +1,517 @@
+{% extends "base.html" %}
+
+{% block title %}Trend Detection - Stock Scanner{% endblock %}
+
+{% block head %}
+<style>
+    :root {
+        --td-bg:      #090e17;
+        --td-card:    #111827;
+        --td-border:  #1f2937;
+        --td-text:    #f8fafc;
+        --td-muted:   #94a3b8;
+        --td-accent:  #3b82f6;
+        --td-up:      #10b981;
+        --td-down:    #f43f5e;
+        --td-warn:    #f59e0b;
+        --td-neutral: #64748b;
+    }
+
+    .td-page.light-theme {
+        --td-bg:     #f1f5f9;
+        --td-card:   #ffffff;
+        --td-border: #cbd5e1;
+        --td-text:   #0f172a;
+        --td-muted:  #475569;
+        --td-accent: #2563eb;
+    }
+
+    .td-page.forest-theme {
+        --td-bg:     #060c09;
+        --td-card:   #0a1410;
+        --td-border: #142820;
+        --td-text:   #e8f7f0;
+        --td-muted:  #6ba88f;
+        --td-accent: #10b981;
+    }
+
+    .td-page.cream-theme {
+        --td-bg:     #fdfbf7;
+        --td-card:   #fdfbf7;
+        --td-border: #e6dfd3;
+        --td-text:   #433c35;
+        --td-muted:  #7c7267;
+        --td-accent: #b45309;
+    }
+
+    .td-page.ocean-theme {
+        --td-bg:     #f3f8fc;
+        --td-card:   #ffffff;
+        --td-border: #dbebfa;
+        --td-text:   #1e293b;
+        --td-muted:  #64748b;
+        --td-accent: #0284c7;
+    }
+
+    .td-page {
+        background: var(--td-bg);
+        min-height: calc(100vh - 60px);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        color: var(--td-text);
+        font-size: 12px;
+    }
+
+    /* ── Controls ─────────────────────────────────────────────── */
+    .td-controls {
+        background: var(--td-card);
+        border: 1px solid var(--td-border);
+        border-radius: 8px;
+        padding: 8px 12px;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    }
+
+    .td-ctrl-title {
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--td-text);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .td-ctrl-title .td-mode-pill {
+        font-size: 9px;
+        font-weight: 700;
+        padding: 1px 6px;
+        border-radius: 3px;
+        background: rgba(59,130,246,0.12);
+        color: var(--td-accent);
+        border: 1px solid rgba(59,130,246,0.2);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .td-ctrl-inputs {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .td-ctrl-group {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .td-ctrl-label {
+        font-size: 9px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--td-muted);
+    }
+
+    .td-select, .td-date-input {
+        background: var(--td-bg);
+        border: 1px solid var(--td-border);
+        border-radius: 4px;
+        color: var(--td-text);
+        font-size: 11px;
+        font-weight: 600;
+        padding: 3px 8px;
+        outline: none;
+        transition: border-color 0.15s;
+        cursor: pointer;
+        font-family: inherit;
+    }
+
+    .td-select:focus, .td-date-input:focus { border-color: var(--td-accent); }
+
+    /* ── Grid Layout ──────────────────────────────────────────── */
+    .td-grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+
+    @media (max-width: 680px) { .td-grid-2 { grid-template-columns: 1fr; } }
+
+    /* ── Card ─────────────────────────────────────────────────── */
+    .td-card {
+        background: var(--td-card);
+        border: 1px solid var(--td-border);
+        border-radius: 8px;
+        padding: 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    }
+
+    .td-card-hdr {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        border-bottom: 1px solid var(--td-border);
+        padding-bottom: 6px;
+    }
+
+    .td-card-hdr h2 {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--td-text);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 0;
+    }
+
+    .td-card-hdr-meta {
+        font-size: 10px;
+        color: var(--td-muted);
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+
+    /* ── Row ──────────────────────────────────────────────────── */
+    .td-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 4px 8px;
+        background: rgba(255,255,255,0.015);
+        border: 1px solid rgba(255,255,255,0.03);
+        border-radius: 4px;
+        height: 30px;
+        margin-bottom: 5px;
+    }
+
+    .td-row:last-child { margin-bottom: 0; }
+
+    .td-row:hover {
+        background: rgba(255,255,255,0.04);
+        border-color: rgba(255,255,255,0.06);
+    }
+
+    .td-page.light-theme .td-row,
+    .td-page.cream-theme .td-row,
+    .td-page.ocean-theme .td-row {
+        background: rgba(0,0,0,0.015);
+        border: 1px solid rgba(0,0,0,0.03);
+    }
+
+    .td-page.light-theme .td-row:hover,
+    .td-page.cream-theme .td-row:hover,
+    .td-page.ocean-theme .td-row:hover {
+        background: rgba(0,0,0,0.04);
+        border-color: rgba(0,0,0,0.06);
+    }
+
+    .td-row-label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--td-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        min-width: 70px;
+    }
+
+    .td-row-data {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .td-row-val {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--td-text);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .td-row-hint {
+        font-size: 10px;
+        color: var(--td-muted);
+        font-weight: 600;
+        min-width: 64px;
+        text-align: right;
+    }
+
+    /* ── Regime Badge ─────────────────────────────────────────── */
+    .td-regime-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+        padding: 8px 10px;
+        border-radius: 6px;
+    }
+
+    .td-regime-wrap.trend-up   { background: rgba(16,185,129,0.1);  border: 1px solid rgba(16,185,129,0.25); }
+    .td-regime-wrap.trend-down { background: rgba(244,63,94,0.1);   border: 1px solid rgba(244,63,94,0.25); }
+    .td-regime-wrap.sideways   { background: rgba(245,158,11,0.1);  border: 1px solid rgba(245,158,11,0.25); }
+
+    .td-regime-arrow { font-size: 20px; line-height: 1; }
+    .td-regime-name  { font-size: 13px; font-weight: 800; letter-spacing: 0.03em; }
+    .td-regime-wrap.trend-up   .td-regime-name { color: var(--td-up); }
+    .td-regime-wrap.trend-down .td-regime-name { color: var(--td-down); }
+    .td-regime-wrap.sideways   .td-regime-name { color: var(--td-warn); }
+
+    .td-regime-conf {
+        font-size: 10px;
+        color: var(--td-muted);
+        margin-left: auto;
+    }
+
+    /* ── Signal bar ───────────────────────────────────────────── */
+    .td-bar-track {
+        flex: 1;
+        height: 5px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 3px;
+        overflow: hidden;
+        margin: 0 8px;
+    }
+
+    .td-page.light-theme .td-bar-track,
+    .td-page.cream-theme .td-bar-track,
+    .td-page.ocean-theme .td-bar-track { background: rgba(0,0,0,0.06); }
+
+    .td-bar-fill {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 0.45s ease;
+        min-width: 2px;
+    }
+
+    .td-bar-fill.bull    { background: var(--td-up); }
+    .td-bar-fill.bear    { background: var(--td-down); }
+    .td-bar-fill.neutral { background: var(--td-warn); }
+
+    /* ── VIX range bar ────────────────────────────────────────── */
+    .td-vix-track {
+        flex: 1;
+        height: 5px;
+        background: rgba(255,255,255,0.05);
+        border-radius: 3px;
+        position: relative;
+        overflow: visible;
+        margin: 0 6px;
+        min-width: 60px;
+    }
+
+    .td-page.light-theme .td-vix-track,
+    .td-page.cream-theme .td-vix-track,
+    .td-page.ocean-theme .td-vix-track { background: rgba(0,0,0,0.06); }
+
+    .td-vix-fill {
+        position: absolute; left: 0; top: 0; height: 100%;
+        background: linear-gradient(90deg, var(--td-up), var(--td-warn), var(--td-down));
+        border-radius: 3px;
+        pointer-events: none;
+    }
+
+    .td-vix-marker {
+        position: absolute; top: 50%;
+        transform: translate(-50%, -50%);
+        width: 8px; height: 8px;
+        background: #fff;
+        border: 2px solid var(--td-accent);
+        border-radius: 50%;
+        z-index: 2;
+        transition: left 0.45s ease;
+    }
+
+    /* ── Status badges (reuse markets style) ──────────────────── */
+    .td-status-badge {
+        font-size: 9px;
+        font-weight: 800;
+        padding: 2px 6px;
+        border-radius: 3px;
+        text-align: center;
+        min-width: 56px;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+    }
+
+    .td-status-badge.up {
+        background: rgba(16,185,129,0.12);
+        color: var(--td-up);
+        border: 1px solid rgba(16,185,129,0.2);
+    }
+
+    .td-status-badge.down {
+        background: rgba(244,63,94,0.12);
+        color: var(--td-down);
+        border: 1px solid rgba(244,63,94,0.2);
+    }
+
+    .td-status-badge.neutral {
+        background: rgba(245,158,11,0.12);
+        color: var(--td-warn);
+        border: 1px solid rgba(245,158,11,0.2);
+    }
+
+    /* ── Error & Loading ──────────────────────────────────────── */
+    .td-error {
+        background: rgba(244,63,94,0.1);
+        border: 1px solid var(--td-down);
+        border-radius: 6px;
+        color: var(--td-down);
+        padding: 8px 12px;
+        margin-bottom: 10px;
+        font-size: 12px;
+    }
+
+    .td-loading {
+        display: flex; align-items: center; justify-content: center;
+        gap: 10px; padding: 30px;
+    }
+
+    .td-spinner {
+        width: 18px; height: 18px;
+        border: 2px solid var(--td-border);
+        border-top-color: var(--td-accent);
+        border-radius: 50%;
+        animation: td-spin 0.7s linear infinite;
+    }
+
+    @keyframes td-spin { to { transform: rotate(360deg); } }
+
+    .td-loading-text { color: var(--td-muted); font-size: 12px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="td-page" id="tdPage">
+
+    <!-- Controls -->
+    <div class="td-controls">
+        <div class="td-ctrl-title">
+            📈 Trend Detection
+            <span class="td-mode-pill" id="tdModePill">—</span>
+        </div>
+        <div class="td-ctrl-inputs">
+            <div class="td-ctrl-group">
+                <div class="td-ctrl-label">Symbol</div>
+                <select id="tdSymbol" class="td-select">
+                    <option value="NIFTY" selected>NIFTY</option>
+                    <option value="BANKNIFTY">BANKNIFTY</option>
+                    <option value="FINNIFTY">FINNIFTY</option>
+                    <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+                    <option value="SENSEX">SENSEX</option>
+                    <option value="NIFTYNXT50">NIFTYNXT50</option>
+                </select>
+            </div>
+            <div class="td-ctrl-group">
+                <div class="td-ctrl-label">Lookback</div>
+                <select id="tdLookback" class="td-select">
+                    <option value="10">10 days</option>
+                    <option value="15">15 days</option>
+                    <option value="20" selected>20 days</option>
+                    <option value="30">30 days</option>
+                    <option value="45">45 days</option>
+                </select>
+            </div>
+            <div class="td-ctrl-group">
+                <div class="td-ctrl-label">Date</div>
+                <input type="date" id="tdDate" class="td-date-input" />
+            </div>
+        </div>
+    </div>
+
+    <!-- Error -->
+    <div class="td-error" id="tdError" style="display:none;"></div>
+
+    <!-- Results -->
+    <div id="tdResults" style="display:none;">
+
+        <!-- Row 1: Regime + Projection -->
+        <div class="td-grid-2">
+
+            <!-- Regime card -->
+            <div class="td-card">
+                <div class="td-card-hdr">
+                    <h2>Regime</h2>
+                    <div class="td-card-hdr-meta" id="tdMetaAtr"></div>
+                </div>
+                <div class="td-regime-wrap" id="tdRegimeWrap">
+                    <div class="td-regime-arrow" id="tdRegimeArrow"></div>
+                    <div class="td-regime-name"  id="tdRegimeName"></div>
+                    <div class="td-regime-conf"  id="tdRegimeConf"></div>
+                </div>
+                <div id="tdIndRows"></div>
+            </div>
+
+            <!-- Projection card -->
+            <div class="td-card">
+                <div class="td-card-hdr">
+                    <h2>Next-Day Range</h2>
+                    <div class="td-card-hdr-meta" id="tdProjMeta"></div>
+                </div>
+                <div id="tdProjRows"></div>
+            </div>
+
+        </div>
+
+        <!-- Signal breakdown -->
+        <div class="td-card" style="margin-bottom:10px;">
+            <div class="td-card-hdr">
+                <h2>Signal Breakdown</h2>
+                <div class="td-card-hdr-meta" id="tdSigMeta"></div>
+            </div>
+            <div id="tdBarsContainer"></div>
+        </div>
+
+        <!-- VIX & OI (indices only) -->
+        <div class="td-card" id="tdVixSection" style="display:none; margin-bottom:10px;">
+            <div class="td-card-hdr">
+                <h2>India VIX &amp; OI Context</h2>
+                <div class="td-card-hdr-meta" id="tdVixMeta"></div>
+            </div>
+            <div id="tdVixOiRows"></div>
+        </div>
+
+    </div>
+
+    <!-- Loading -->
+    <div class="td-loading" id="tdLoading" style="display:none;">
+        <div class="td-spinner"></div>
+        <span class="td-loading-text">Analysing market regime…</span>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/trend_detection.js') }}"></script>
+<script>
+    (function () {
+        const page = document.getElementById('tdPage');
+        const themes = ['light', 'forest', 'cream', 'ocean'];
+
+        function applyTheme(theme) {
+            page.classList.remove(...themes.map(t => t + '-theme'));
+            if (themes.includes(theme)) page.classList.add(theme + '-theme');
+            document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
+            document.body.classList.add(theme + '-theme');
+            localStorage.setItem('app-theme', theme);
+        }
+
+        const saved = localStorage.getItem('app-theme') || localStorage.getItem('mkt-theme') || 'dark';
+        applyTheme(saved);
+
+        window.addEventListener('themechanged', e => applyTheme(e.detail.theme));
+    })();
+</script>
+{% endblock %}

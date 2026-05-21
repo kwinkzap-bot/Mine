@@ -1867,6 +1867,89 @@ def get_cpr_high_iv_results() -> EndpointResponse:
         return jsonify({'success': False, 'error': f'High IV filter error: {str(e)}'}), 500
 
 
+# ====================== TREND DETECTION ======================
+
+_TREND_INDEX_SYMBOLS = {'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'NIFTYNXT50'}
+
+
+@api_bp.route('/trend-detection', methods=['GET'])
+@limiter.exempt
+def get_trend_detection() -> EndpointResponse:
+    """Classify market regime (TREND_UP / TREND_DOWN / SIDEWAYS) and project next-day range."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    current_kite = get_data_provider()
+    if not current_kite:
+        return jsonify({'success': False, 'error': 'Data provider not ready'}), 401
+
+    symbol = request.args.get('symbol', 'NIFTY').strip().upper()
+    try:
+        lookback = min(max(int(request.args.get('lookback', 20)), 10), 60)
+    except (ValueError, TypeError):
+        lookback = 20
+
+    date_str = request.args.get('date')
+    try:
+        end_date = datetime.strptime(date_str, '%Y-%m-%d') if date_str else datetime.now()
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    cpr_svc = _get_cpr_service(current_kite)
+    df = cpr_svc.get_hist_data(symbol, days=lookback + 80, end_date=end_date)
+    if df is None or len(df) < lookback + 20:
+        return jsonify({'success': False, 'error': 'Insufficient historical data for this symbol'}), 400
+
+    vix_data = None
+    oi_data  = None
+    if symbol in _TREND_INDEX_SYMBOLS:
+        try:
+            from trading_app.service.open_interest_service import OpenInterestService
+            oi_svc   = OpenInterestService(kite_instance=current_kite)
+            vix_data = oi_svc._get_india_vix_data()
+            db_snap  = oi_svc.get_latest_oi_from_db(symbol, max_age_mins=10)
+            if db_snap:
+                oi_data = {
+                    'pcr_oi':        db_snap.get('pcr_oi'),
+                    'max_pain':      db_snap.get('max_pain'),
+                    'atm_iv':        db_snap.get('atm_iv'),
+                    'iv_percentile': db_snap.get('iv_percentile'),
+                }
+        except Exception as ve:
+            logger.warning(f"VIX/OI fetch skipped for {symbol}: {ve}")
+
+    try:
+        from trading_app.filters.trend_filter import TrendFilterService
+        result = TrendFilterService().analyse(
+            df, lookback=lookback, vix_data=vix_data, oi_data=oi_data, symbol=symbol)
+
+        if vix_data:
+            vix_range = max(vix_data['high'] - vix_data['low'], 0.01)
+            result['india_vix'] = {
+                'current':    round(float(vix_data['current']), 2),
+                'year_high':  round(float(vix_data['high']), 2),
+                'year_low':   round(float(vix_data['low']), 2),
+                'percentile': round((vix_data['current'] - vix_data['low']) / vix_range * 100, 1),
+            }
+        if oi_data:
+            result['oi_context'] = {
+                'pcr':           round(float(oi_data.get('pcr_oi') or 0), 2),
+                'max_pain':      oi_data.get('max_pain'),
+                'atm_iv':        round(float(oi_data.get('atm_iv') or 0) * 100, 1),
+                'iv_percentile': round(float(oi_data.get('iv_percentile') or 0), 1),
+            }
+
+        return jsonify({
+            'success': True,
+            'symbol': symbol,
+            'date': end_date.strftime('%Y-%m-%d'),
+            **result,
+        })
+    except Exception as e:
+        logger.error(f"Trend detection failed for {symbol}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ====================== EMA/RSI 208 FILTER ======================
 
 @api_bp.route('/ema-rsi-filter', methods=['GET'])

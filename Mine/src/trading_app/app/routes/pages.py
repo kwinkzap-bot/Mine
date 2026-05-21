@@ -155,6 +155,13 @@ def chart_page():
     """Multi-timeframe chart page."""
     return render_template('chart.html')
 
+@pages_bp.route('/trend-detection')
+@require_user_auth
+@login_required
+def trend_detection():
+    """Market regime trend detection page."""
+    return render_template('trend_detection.html')
+
 @pages_bp.route('/login')
 def login():
     """Login page - redirects to user login."""
