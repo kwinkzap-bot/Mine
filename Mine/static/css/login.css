@@ -46,6 +46,7 @@
     display: flex;
     align-items: center;
     gap: 5px;
+    z-index: 9999999;
 }
 
 .dropdown-menu {
@@ -55,11 +56,12 @@
     right: 0;
     background: white;
     border: 1px solid #dee2e6;
-    border-radius: 6px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    min-width: 180px;
-    z-index: 1000;
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    min-width: 240px;
+    z-index: 9999999;
     margin-top: 8px;
+    overflow: hidden;
 }
 
 .dropdown-menu.show {

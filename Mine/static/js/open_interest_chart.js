@@ -5,6 +5,8 @@
 
 let coiChartInstance = null;
 let combinedChartInstance = null;
+// Shared state for combinedChart tooltip callbacks — avoids closure-over-param stale data.
+let _combinedChartState = { ceOI: [], peOI: [], ceCOI: [], peCOI: [] };
 let autoRefreshInterval = null;
 let currentSymbol = 'NIFTY';
 let strikeRangeCount = 15; // Default strike range
@@ -806,9 +808,10 @@ const currentPriceLinePlugin = {
 
         if (xPixel !== null) {
             const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+            const isLightBg = ['light', 'cream', 'ocean'].includes(activeTheme);
             // Draw vertical dashed line
             ctx.save();
-            ctx.strokeStyle = activeTheme === 'light' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)';
+            ctx.strokeStyle = isLightBg ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)';
             ctx.lineWidth = 2;
             ctx.setLineDash([5, 5]);
 
@@ -820,7 +823,7 @@ const currentPriceLinePlugin = {
             // Draw label text only (no background or border)
             ctx.font = 'bold 11px Arial';
             ctx.textAlign = 'center';
-            ctx.fillStyle = activeTheme === 'light' ? 'rgba(0, 0, 0, 0.8)' : 'rgba(255, 255, 255, 0.8)';
+            ctx.fillStyle = isLightBg ? 'rgba(0, 0, 0, 0.8)' : 'rgba(255, 255, 255, 0.8)';
 
             const labelText = `${currentPrice.toFixed(2)}`;
             const labelY = yAxis.top + 15;
@@ -1059,11 +1062,26 @@ function updateCOIChart(labels, ceData, peData, currentPrice) {
     };
 
     if (coiChartInstance) {
-        try {
-            coiChartInstance.destroy();
-        } catch (e) {
-            console.debug('Error destroying old coi chart:', e);
-        }
+        // Fast update path — avoids DOM teardown on every 60s poll.
+        coiChartInstance.data.labels = labels;
+        coiChartInstance.data.datasets[0].data = peData;
+        coiChartInstance.data.datasets[0].backgroundColor = peBackgroundColors;
+        coiChartInstance.data.datasets[0].borderColor = peBorderColors;
+        coiChartInstance.data.datasets[1].data = ceData;
+        coiChartInstance.data.datasets[1].backgroundColor = ceBackgroundColors;
+        coiChartInstance.data.datasets[1].borderColor = ceBorderColors;
+        coiChartInstance.options.plugins.currentPriceLine.price = currentPrice;
+        coiChartInstance.options.plugins.legend.labels.color = themeCfg.text;
+        coiChartInstance.options.plugins.tooltip.backgroundColor = themeCfg.tooltipBg;
+        coiChartInstance.options.plugins.tooltip.titleColor = themeCfg.tooltipText;
+        coiChartInstance.options.plugins.tooltip.bodyColor = themeCfg.tooltipText;
+        coiChartInstance.options.plugins.tooltip.borderColor = themeCfg.tooltipBorder;
+        coiChartInstance.options.scales.y.grid.color = themeCfg.grid;
+        coiChartInstance.options.scales.y.ticks.color = themeCfg.text;
+        coiChartInstance.options.scales.x.grid.color = themeCfg.vgrid || themeCfg.grid;
+        coiChartInstance.options.scales.x.ticks.color = themeCfg.text;
+        coiChartInstance.update('none');
+        return;
     }
     coiChartInstance = new Chart(ctx, chartConfig);
 }
@@ -1138,6 +1156,12 @@ function formatNumberForGrid(num) {
  * Update Combined Stacked Chart - Shows OI with Change direction overlay
  */
 function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
+    // Update shared state so tooltip callbacks always read the latest data.
+    _combinedChartState.ceOI = ceOI;
+    _combinedChartState.peOI = peOI;
+    _combinedChartState.ceCOI = ceCOI;
+    _combinedChartState.peCOI = peCOI;
+
     try {
         // Get fresh canvas context each time
         const canvasElement = document.getElementById('combinedChart');
@@ -1313,10 +1337,11 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                             },
                             label: function (context) {
                                 const idx = context.dataIndex;
+                                const { ceOI: ceOIData, peOI: peOIData, ceCOI: ceCOIData, peCOI: peCOIData } = _combinedChartState;
 
                                 // Calculate OI at 9:15 AM (opening OI)
-                                const peOIOpening = peOI[idx] - peCOI[idx];
-                                const ceOIOpening = ceOI[idx] - ceCOI[idx];
+                                const peOIOpening = peOIData[idx] - peCOIData[idx];
+                                const ceOIOpening = ceOIData[idx] - ceCOIData[idx];
 
                                 // Format based on dataset
                                 if (context.datasetIndex === 0) {
@@ -1324,21 +1349,22 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                                     return `Put OI at 9:15 AM   ${formatNumber(peOIOpening)}`;
                                 } else if (context.datasetIndex === 1) {
                                     // Put OI Change
-                                    const changeIndicator = peCOI[idx] >= 0 ? '+' : '';
-                                    return `Put OI chg          ${changeIndicator}${formatNumber(peCOI[idx])}`;
+                                    const changeIndicator = peCOIData[idx] >= 0 ? '+' : '';
+                                    return `Put OI chg          ${changeIndicator}${formatNumber(peCOIData[idx])}`;
                                 } else if (context.datasetIndex === 2) {
                                     // Call OI
                                     return `Call OI at 9:15 AM  ${formatNumber(ceOIOpening)}`;
                                 } else if (context.datasetIndex === 3) {
                                     // Call OI Change
-                                    const changeIndicator = ceCOI[idx] >= 0 ? '+' : '';
-                                    return `Call OI chg         ${changeIndicator}${formatNumber(ceCOI[idx])}`;
+                                    const changeIndicator = ceCOIData[idx] >= 0 ? '+' : '';
+                                    return `Call OI chg         ${changeIndicator}${formatNumber(ceCOIData[idx])}`;
                                 }
 
                                 return '';
                             },
                             afterLabel: function (context) {
                                 const idx = context.dataIndex;
+                                const { ceOI: ceOIData, peOI: peOIData } = _combinedChartState;
 
                                 // Get current time in HH:MM AM/PM format
                                 const now = new Date();
@@ -1352,10 +1378,10 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
                                 // Show current OI at current time
                                 if (context.datasetIndex === 1) {
                                     // After Put OI Change, show Put OI at current time
-                                    return `Put OI at ${currentTime}   ${formatNumber(peOI[idx])}`;
+                                    return `Put OI at ${currentTime}   ${formatNumber(peOIData[idx])}`;
                                 } else if (context.datasetIndex === 3) {
                                     // After Call OI Change, show Call OI at current time
-                                    return `Call OI at ${currentTime}  ${formatNumber(ceOI[idx])}`;
+                                    return `Call OI at ${currentTime}  ${formatNumber(ceOIData[idx])}`;
                                 }
 
                                 return '';
@@ -1409,29 +1435,42 @@ function updateCombinedChart(labels, ceOI, peOI, ceCOI, peCOI, currentPrice) {
             plugins: [currentPriceLinePlugin]
         };
 
-        // Always destroy and recreate instead of updating - avoids Chart.js state issues
         if (combinedChartInstance) {
-            try {
-                combinedChartInstance.destroy();
-            } catch (e) {
-                console.debug('Error destroying old combined chart:', e);
-            }
+            // Fast update path — avoids DOM teardown on every 60s poll.
+            combinedChartInstance.data.labels = labels;
+            combinedChartInstance.data.datasets[0].data = peOI.map((val, idx) => { const c = peCOI[idx]; return c > 0 ? val - c : val; });
+            combinedChartInstance.data.datasets[0].backgroundColor = peColors;
+            combinedChartInstance.data.datasets[0].borderColor = peBorders;
+            combinedChartInstance.data.datasets[1].label = peCOILabel;
+            combinedChartInstance.data.datasets[1].data = peCOI;
+            combinedChartInstance.data.datasets[1].backgroundColor = peCoiColors;
+            combinedChartInstance.data.datasets[1].borderColor = peCoiBorders;
+            combinedChartInstance.data.datasets[2].data = ceOI.map((val, idx) => { const c = ceCOI[idx]; return c > 0 ? val - c : val; });
+            combinedChartInstance.data.datasets[2].backgroundColor = ceColors;
+            combinedChartInstance.data.datasets[2].borderColor = ceBorders;
+            combinedChartInstance.data.datasets[3].label = ceCOILabel;
+            combinedChartInstance.data.datasets[3].data = ceCOI;
+            combinedChartInstance.data.datasets[3].backgroundColor = ceCoiColors;
+            combinedChartInstance.data.datasets[3].borderColor = ceCoiBorders;
+            combinedChartInstance.options.plugins.currentPriceLine.price = currentPrice;
+            combinedChartInstance.options.plugins.legend.labels.color = themeCfg.text;
+            combinedChartInstance.options.plugins.tooltip.backgroundColor = themeCfg.tooltipBg;
+            combinedChartInstance.options.plugins.tooltip.titleColor = themeCfg.tooltipText;
+            combinedChartInstance.options.plugins.tooltip.bodyColor = themeCfg.tooltipText;
+            combinedChartInstance.options.plugins.tooltip.borderColor = themeCfg.tooltipBorder;
+            combinedChartInstance.options.scales.y.grid.color = themeCfg.grid;
+            combinedChartInstance.options.scales.y.ticks.color = themeCfg.text;
+            combinedChartInstance.options.scales.x.grid.color = themeCfg.vgrid || themeCfg.grid;
+            combinedChartInstance.options.scales.x.ticks.color = themeCfg.text;
+            combinedChartInstance.update('none');
+            return;
         }
 
-        // Create fresh chart instance
         combinedChartInstance = new Chart(ctx, chartConfig);
 
     } catch (error) {
         console.error('Error in updateCombinedChart:', error);
-        try {
-            if (combinedChartInstance) {
-                combinedChartInstance.destroy();
-                combinedChartInstance = null;
-            }
-        } catch (destroyError) {
-            console.error('Error destroying chart during recovery:', destroyError);
-            combinedChartInstance = null;
-        }
+        combinedChartInstance = null;
     }
 }
 
@@ -1468,30 +1507,19 @@ function updateOpenInterestTheme(themeName) {
     if (!oiContainer) return;
 
     // 1. Remove all old theme classes
-    oiContainer.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'carbon-theme', 'cream-theme', 'ocean-theme');
+    oiContainer.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
     // 2. Add new theme class
     oiContainer.classList.add(`${themeName}-theme`);
 
     // Also apply to document.body for styling the main template / navigation bar
-    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'carbon-theme', 'cream-theme', 'ocean-theme');
+    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
     document.body.classList.add(`${themeName}-theme`);
 
     // 3. Save to localStorage
     localStorage.setItem('app-theme', themeName);
     localStorage.setItem('oip-theme', themeName);
 
-    // 4. Update the theme toggle button label/icon
-    const themeBtn = document.getElementById('oip-theme-toggle-btn');
-    if (themeBtn) {
-        let label = '☀️ Light';
-        if (themeName === 'dark') label = '🌌 Dark';
-        else if (themeName === 'forest') label = '🌲 Forest';
-        else if (themeName === 'cream') label = '📜 Cream';
-        else if (themeName === 'ocean') label = '🌊 Ocean';
-        themeBtn.textContent = label;
-    }
-
-    // 5. Force update of charts if they are already loaded
+    // 4. Force update of charts if they are already loaded
     if (cachedData) {
         updateCharts(cachedData);
     }

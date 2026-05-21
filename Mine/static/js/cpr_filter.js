@@ -9,65 +9,72 @@ let cprRefreshIntervalId = null;
 let cprRequestInFlight = false;
 let cprLastRequestAt = 0;
 
+// Cached DOM references (populated on DOMContentLoaded)
+const cprElems = {};
+
+// Cached sort header references per table (avoids full querySelectorAll on every sort click)
+const _lastSortedTh = {};
+
+// Debounce timer for date picker
+let _dateDebounceTid = null;
+
 const CPR_MIN_REQUEST_GAP_MS = 60 * 1000; // hard throttle: 1 request/minute
 const CPR_AUTO_REFRESH_MS = 15 * 60 * 1000; // auto refresh every 15 minutes
 
 // Auto-load data when page loads
 window.addEventListener('load', function () {
-    // Debug: Log all expected elements
-    console.log('Checking for required DOM elements...');
-    console.log('status-bar:', !!document.getElementById('status-bar'));
-
-    let statusBar = document.getElementById('status-text');
-
-
+    // Cache frequently-used DOM refs once (avoids repeated getElementById calls)
+    cprElems.statusBar   = document.getElementById('status-text');
+    cprElems.datePicker  = document.getElementById('cprDateFilter');
+    cprElems.refreshBtn  = document.getElementById('cprRefreshBtn');
+    cprElems.highIvRefreshBtn = document.getElementById('highIvRefreshBtn');
+    cprElems.highIvBody  = document.getElementById('highIvBody');
+    cprElems.highIvResults = document.getElementById('highIvResults');
+    cprElems.highIvCount = document.getElementById('highIvCount');
+    cprElems.controls    = document.getElementById('controls');
 
     const scheduler = window.CPRFilterScheduler;
     const schedulerActive = scheduler && typeof scheduler.isActive === 'function' && scheduler.isActive();
     const schedulerMarketOpen = scheduler && typeof scheduler.isMarketOpen === 'function' && scheduler.isMarketOpen();
 
     // Initialize date picker with today's date
-    const datePicker = document.getElementById('cprDateFilter');
-    if (datePicker) {
+    if (cprElems.datePicker) {
         const today = new Date().toISOString().split('T')[0];
-        datePicker.value = today;
+        cprElems.datePicker.value = today;
 
-        // Add change listener
-        datePicker.addEventListener('change', () => {
-            loadCPRData(true);
+        // Debounced change listener — avoids concurrent requests on rapid keyboard navigation
+        cprElems.datePicker.addEventListener('change', () => {
+            clearTimeout(_dateDebounceTid);
+            _dateDebounceTid = setTimeout(() => loadCPRData(true), 300);
         });
     }
 
     // Initialize Refresh Button
-    const refreshBtn = document.getElementById('cprRefreshBtn');
-    if (refreshBtn) {
-        refreshBtn.addEventListener('click', () => {
+    if (cprElems.refreshBtn) {
+        cprElems.refreshBtn.addEventListener('click', () => {
             loadCPRData(true);
         });
     }
 
     // Initialize High IV Refresh Button
-    const highIvRefreshBtn = document.getElementById('highIvRefreshBtn');
-    if (highIvRefreshBtn) {
-        highIvRefreshBtn.addEventListener('click', () => {
-            const datePicker = document.getElementById('cprDateFilter');
-            const selectedDate = datePicker ? datePicker.value : null;
+    if (cprElems.highIvRefreshBtn) {
+        cprElems.highIvRefreshBtn.addEventListener('click', () => {
+            const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : null;
             loadHighIVData(selectedDate, true);
         });
     }
 
     // Avoid double-triggering the API when the scheduler is already running during market hours
     if (schedulerActive && schedulerMarketOpen) {
-        if (statusBar) statusBar.textContent = '⏳ Scheduler active - waiting for next run...';
+        if (cprElems.statusBar) cprElems.statusBar.textContent = '⏳ Scheduler active - waiting for next run...';
     } else {
-        if (statusBar) statusBar.textContent = '⏳ Loading initial data...';
+        if (cprElems.statusBar) cprElems.statusBar.textContent = '⏳ Loading initial data...';
         loadCPRData(false);
-        const selectedDate = datePicker ? datePicker.value : null;
+        const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : null;
         loadHighIVData(selectedDate, false);
     }
 
     // Set interval for controlled refresh - only if scheduler is not already running
-    // NOTE: Keep this conservative to avoid API call loops.
     if (!schedulerActive) {
         if (cprRefreshIntervalId) {
             clearInterval(cprRefreshIntervalId);
@@ -75,103 +82,48 @@ window.addEventListener('load', function () {
         }
 
         cprRefreshIntervalId = setInterval(() => {
-            if (document.visibilityState !== 'visible') {
-                return;
-            }
-
-            const picker = document.getElementById('cprDateFilter');
-            const selectedDate = picker ? picker.value : '';
+            if (document.visibilityState !== 'visible') return;
+            const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : '';
             const today = new Date().toISOString().split('T')[0];
-
-            // Do not poll historical dates repeatedly.
-            if (selectedDate && selectedDate !== today) {
-                return;
-            }
-
+            if (selectedDate && selectedDate !== today) return;
             loadCPRData();
         }, CPR_AUTO_REFRESH_MS);
     }
 
-
-
-    // Add sort listeners for High IV Percentile table
-    const highIvTable = document.getElementById('highIvTable');
-    if (highIvTable) {
-        highIvTable.querySelectorAll('th').forEach(header => {
-            header.addEventListener('click', () => {
-                sortTable('highIvTable', header.dataset.columnIndex);
+    // Event delegation for sort — one listener per table, survives innerHTML re-renders
+    const sortableTableIds = [
+        'highIvTable',
+        CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE,
+        CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE,
+        CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_TABLE,
+        CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_TABLE,
+        CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_TABLE,
+        CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_TABLE,
+    ];
+    sortableTableIds.forEach(tableId => {
+        const table = document.getElementById(tableId);
+        if (table) {
+            table.addEventListener('click', e => {
+                const th = e.target.closest('th[data-column-index]');
+                if (th) sortTable(tableId, th.dataset.columnIndex);
             });
-        });
-    }
-
-    // Add sort listeners for D-RSI tables
-    const drsiBullTable = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE);
-    if (drsiBullTable) {
-        drsiBullTable.querySelectorAll('th').forEach(header => {
-            header.addEventListener('click', () => {
-                sortTable(CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE, header.dataset.columnIndex);
-            });
-        });
-    }
-    const drsiBearTable = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE);
-    if (drsiBearTable) {
-        drsiBearTable.querySelectorAll('th').forEach(header => {
-            header.addEventListener('click', () => {
-                sortTable(CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE, header.dataset.columnIndex);
-            });
-        });
-    }
-
-    // Add sort listeners for D-RSI Reversal tables
-    const drsiRevBullTable = document.getElementById(CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_TABLE);
-    if (drsiRevBullTable) {
-        drsiRevBullTable.querySelectorAll('th').forEach(header => {
-            header.addEventListener('click', () => {
-                sortTable(CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_TABLE, header.dataset.columnIndex);
-            });
-        });
-    }
-    const drsiRevBearTable = document.getElementById(CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_TABLE);
-    if (drsiRevBearTable) {
-        drsiRevBearTable.querySelectorAll('th').forEach(header => {
-            header.addEventListener('click', () => {
-                sortTable(CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_TABLE, header.dataset.columnIndex);
-            });
-        });
-    }
-
-    // Add sort listeners for Camarilla CPR Reversal tables
-    const camCprRevBullTable = document.getElementById(CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_TABLE);
-    if (camCprRevBullTable) {
-        camCprRevBullTable.querySelectorAll('th').forEach(header => {
-            header.addEventListener('click', () => {
-                sortTable(CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_TABLE, header.dataset.columnIndex);
-            });
-        });
-    }
-    const camCprRevBearTable = document.getElementById(CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_TABLE);
-    if (camCprRevBearTable) {
-        camCprRevBearTable.querySelectorAll('th').forEach(header => {
-            header.addEventListener('click', () => {
-                sortTable(CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_TABLE, header.dataset.columnIndex);
-            });
-        });
-    }
+        }
+    });
 });
 
 /**
  * Fetches High IV Percentile data from the backend API separately.
  */
 async function loadHighIVData(selectedDate, refresh = false) {
-    const highIvBody = document.getElementById('highIvBody');
-    const highIvResultsDiv = document.getElementById('highIvResults');
-    const highIvCountSpan = document.getElementById('highIvCount');
+    const highIvBody = cprElems.highIvBody || document.getElementById('highIvBody');
+    const highIvResultsDiv = cprElems.highIvResults || document.getElementById('highIvResults');
+    const highIvCountSpan = cprElems.highIvCount || document.getElementById('highIvCount');
 
     if (!highIvBody || !highIvResultsDiv || !highIvCountSpan) {
         return;
     }
 
-    const highIvRefreshBtn = document.getElementById('highIvRefreshBtn');
+    const highIvRefreshBtn = cprElems.highIvRefreshBtn;
     if (highIvRefreshBtn) {
         highIvRefreshBtn.classList.add('loading');
         highIvRefreshBtn.disabled = true;
@@ -280,10 +232,10 @@ async function loadCPRData(refresh = false) {
     cprRequestInFlight = true;
     cprLastRequestAt = now;
 
-    let statusBar = document.getElementById('status-text');
+    const statusBar = cprElems.statusBar;
 
     // Toggle button state
-    const refreshBtn = document.getElementById('cprRefreshBtn');
+    const refreshBtn = cprElems.refreshBtn;
     if (refreshBtn) {
         refreshBtn.classList.add('loading');
         refreshBtn.disabled = true;
@@ -300,8 +252,7 @@ async function loadCPRData(refresh = false) {
 
     try {
         // Get selected date
-        const datePicker = document.getElementById('cprDateFilter');
-        const selectedDate = datePicker ? datePicker.value : null;
+        const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : null;
 
         // Use the global fetchJson utility
         let url = '/api/cpr-filter';
@@ -345,61 +296,15 @@ async function loadCPRData(refresh = false) {
             updateStats(drsiReversalBullishCount, drsiReversalBearishCount);
 
             // Hide the controls section if we have data to show results
-            const controls = document.getElementById('controls');
-            if (controls) {
-                controls.classList.add('results-hidden');
-            }
+            if (cprElems.controls) cprElems.controls.classList.add('results-hidden');
 
-            // Show/hide D-RSI results
-            // const drsiBullDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BULLISH_RESULTS);
-            // if (drsiBullDiv) {
-            //     if (drsiBullishCount > 0) {
-            //         drsiBullDiv.classList.remove('results-hidden');
-            //     } else {
-            //         drsiBullDiv.classList.add('results-hidden');
-            //     }
-            // }
-            // const drsiBearDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_BEARISH_RESULTS);
-            // if (drsiBearDiv) {
-            //     if (drsiBearishCount > 0) {
-            //         drsiBearDiv.classList.remove('results-hidden');
-            //     } else {
-            //         drsiBearDiv.classList.add('results-hidden');
-            //     }
-            // }
-            const drsiRevBullDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_RESULTS);
-            if (drsiRevBullDiv) {
-                if (drsiReversalBullishCount > 0) {
-                    drsiRevBullDiv.classList.remove('results-hidden');
-                } else {
-                    drsiRevBullDiv.classList.add('results-hidden');
-                }
-            }
-            const drsiRevBearDiv = document.getElementById(CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_RESULTS);
-            if (drsiRevBearDiv) {
-                if (drsiReversalBearishCount > 0) {
-                    drsiRevBearDiv.classList.remove('results-hidden');
-                } else {
-                    drsiRevBearDiv.classList.add('results-hidden');
-                }
-            }
-
-            const camCprRevBullDiv = document.getElementById(CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_RESULTS);
-            if (camCprRevBullDiv) {
-                if (camarillaCprReversalBullishCount > 0) {
-                    camCprRevBullDiv.classList.remove('results-hidden');
-                } else {
-                    camCprRevBullDiv.classList.add('results-hidden');
-                }
-            }
-            const camCprRevBearDiv = document.getElementById(CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_RESULTS);
-            if (camCprRevBearDiv) {
-                if (camarillaCprReversalBearishCount > 0) {
-                    camCprRevBearDiv.classList.remove('results-hidden');
-                } else {
-                    camCprRevBearDiv.classList.add('results-hidden');
-                }
-            }
+            // Batch show/hide result sections
+            toggleResultSections({
+                [CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_RESULTS]:        drsiReversalBullishCount,
+                [CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_RESULTS]:        drsiReversalBearishCount,
+                [CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_RESULTS]: camarillaCprReversalBullishCount,
+                [CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_RESULTS]: camarillaCprReversalBearishCount,
+            });
             if (statusBar) {
                 statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | S3 Rev↑: ${camarillaCprReversalBullishCount}, R3 Rev↓: ${camarillaCprReversalBearishCount} | D-RSI Flip↑: ${drsiReversalBullishCount}, D-RSI Flip↓: ${drsiReversalBearishCount}`;
             }
@@ -414,10 +319,9 @@ async function loadCPRData(refresh = false) {
         if (statusBar) statusBar.textContent = `❌ Network Error: ${error.message}`;
     } finally {
         cprRequestInFlight = false;
-        const refreshBtn = document.getElementById('cprRefreshBtn');
-        if (refreshBtn) {
-            refreshBtn.classList.remove('loading');
-            refreshBtn.disabled = false;
+        if (cprElems.refreshBtn) {
+            cprElems.refreshBtn.classList.remove('loading');
+            cprElems.refreshBtn.disabled = false;
         }
     }
 }
@@ -430,6 +334,92 @@ window.addEventListener('beforeunload', function () {
 });
 
 /**
+ * Shows or hides result sections based on result counts.
+ * @param {Object} counts - Map of DOM ID -> count
+ */
+function toggleResultSections(counts) {
+    Object.entries(counts).forEach(([id, count]) => {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle('results-hidden', count === 0);
+    });
+}
+
+/**
+ * Builds the inner HTML string for a single result row.
+ */
+function _buildRowHTML(stock, config) {
+    const tradingViewUrl = `https://in.tradingview.com/chart/?symbol=NSE:${stock.symbol}`;
+    const symbolCell = `<a href="${tradingViewUrl}" target="_blank" rel="noopener noreferrer" class="symbol-link">${stock.symbol}</a>`;
+
+    if (config.isHighIv) {
+        const ivPercentile = Number(stock.iv_percentile || 0);
+        const ivClass = ivPercentile >= 90 ? 'iv-very-high' : 'iv-high';
+        const atmIv = Number(stock.atm_iv || 0);
+        const dayChangePct = Number(stock.day_change_pct || 0);
+        const volume = stock.volume || 0;
+        const oiChangePct = Number(stock.oi_change_pct || 0);
+        const pcr = Number(stock.pcr || 0);
+        const maxPain = Number(stock.max_pain || 0);
+
+        const fmtVol = (v) => {
+            if (v >= 10000000) return (v / 10000000).toFixed(1) + 'Cr';
+            if (v >= 100000)   return (v / 100000).toFixed(1) + 'L';
+            if (v >= 1000)     return (v / 1000).toFixed(1) + 'K';
+            return v.toString();
+        };
+
+        const oiClass      = oiChangePct > 0 ? 'gap-up' : (oiChangePct < 0 ? 'gap-down' : '');
+        const dayChgClass  = dayChangePct > 0 ? 'gap-up' : (dayChangePct < 0 ? 'gap-down' : '');
+        const pcrClass     = pcr > 1 ? 'gap-up' : (pcr < 0.7 ? 'gap-down' : '');
+
+        return `<tr>
+            <td>${symbolCell}</td>
+            <td>${stock.current_price.toFixed(2)}</td>
+            <td class="${ivClass}">${ivPercentile.toFixed(1)}%</td>
+            <td>${atmIv.toFixed(1)}%</td>
+            <td class="${dayChgClass}">${dayChangePct.toFixed(2)}%</td>
+            <td>${fmtVol(volume)}</td>
+            <td class="${oiClass}">${oiChangePct.toFixed(1)}%</td>
+            <td class="${pcrClass}">${pcr.toFixed(2)}</td>
+            <td>${maxPain.toFixed(0)}</td>
+        </tr>`;
+    }
+
+    if (config.isDrsi) {
+        const rsi     = Number(stock.rsi || 0);
+        const drsi    = Number(stock.drsi || 0);
+        const signal  = Number(stock.signal || 0);
+        const trigger = stock.trigger || '';
+        return `<tr>
+            <td>${symbolCell}</td>
+            <td>${stock.current_price.toFixed(2)}</td>
+            <td>${rsi.toFixed(1)}</td>
+            <td>${drsi.toFixed(4)}</td>
+            <td>${signal.toFixed(4)}</td>
+            <td><span style="color:#e11d48;font-weight:700;">${trigger}</span></td>
+        </tr>`;
+    }
+
+    if (config.isCamarilla) {
+        const levelVal  = config.isBullish ? Number(stock.monthly_cam_s3 || 0) : Number(stock.monthly_cam_r3 || 0);
+        const monthlyTc = Number(stock.monthly_tc || 0);
+        const monthlyBc = Number(stock.monthly_bc || 0);
+        const monthlyPp = Number(stock.monthly_pp || 0);
+        const color     = config.isBullish ? '#10b981' : '#ef4444';
+        return `<tr>
+            <td>${symbolCell}</td>
+            <td>${stock.current_price.toFixed(2)}</td>
+            <td style="font-weight:bold;color:${color};">${levelVal.toFixed(2)}</td>
+            <td>${monthlyTc.toFixed(2)}</td>
+            <td>${monthlyBc.toFixed(2)}</td>
+            <td>${monthlyPp.toFixed(2)}</td>
+        </tr>`;
+    }
+
+    return '';
+}
+
+/**
  * Populates the results table with data.
  * @param {string} type - The table type identifier.
  * @param {Array<Object>} results - The list of stock objects.
@@ -439,13 +429,8 @@ function displayResults(type, results) {
     const container = document.getElementById(`${type}Results`);
     const countSpan = document.getElementById(`${type}Count`);
 
-    // Check if all required elements exist
-    if (!tbody || !container || !countSpan) {
-        // console.error(`Missing elements for type '${type}':`, { tbody: !!tbody, container: !!container, countSpan: !!countSpan });
-        return;
-    }
+    if (!tbody || !container || !countSpan) return;
 
-    // Check if results is valid
     if (!results || !Array.isArray(results)) {
         console.error(`Invalid results for type '${type}':`, results);
         tbody.innerHTML = '';
@@ -454,111 +439,27 @@ function displayResults(type, results) {
         return;
     }
 
-    tbody.innerHTML = ''; // Clear existing rows
-
     if (results.length === 0) {
+        tbody.innerHTML = '';
         container.classList.add('results-hidden');
         countSpan.textContent = '(0)';
         return;
     }
 
-    container.classList.remove('results-hidden');
-    countSpan.textContent = `(${results.length})`;
-
     const tableConfig = {
-        // drsiBullish: { isDrsi: true },
-        // drsiBearish: { isDrsi: true },
         drsiReversalBullish: { isDrsi: true },
         drsiReversalBearish: { isDrsi: true },
         highIv: { isHighIv: true },
         camarillaCprReversalBullish: { isCamarilla: true, isBullish: true },
         camarillaCprReversalBearish: { isCamarilla: true, isBullish: false }
     };
-    const config = tableConfig[type] || { showGaps: false };
-    const showGaps = config.showGaps;
+    const config = tableConfig[type] || {};
 
-    results.forEach(stock => {
-        let rowHtml = '';
+    // Build all rows as a single HTML string — one DOM mutation instead of N
+    tbody.innerHTML = results.map(stock => _buildRowHTML(stock, config)).join('');
 
-        // Create TradingView link for symbol
-        const tradingViewUrl = `https://in.tradingview.com/chart/?symbol=NSE:${stock.symbol}`;
-        const symbolCell = `<a href="${tradingViewUrl}" target="_blank" rel="noopener noreferrer" class="symbol-link">${stock.symbol}</a>`;
-
-        if (config.isHighIv) {
-            // High IV Percentile table - 9 columns
-            const ivPercentile = Number(stock.iv_percentile || 0);
-            const ivClass = ivPercentile >= 90 ? 'iv-very-high' : 'iv-high';
-            const atmIv = Number(stock.atm_iv || 0);
-            const dayChangePct = Number(stock.day_change_pct || 0);
-            const volume = stock.volume || 0;
-            const oiChangePct = Number(stock.oi_change_pct || 0);
-            const pcr = Number(stock.pcr || 0);
-            const maxPain = Number(stock.max_pain || 0);
-
-            // Format volume with K/L/Cr suffixes
-            const formatVolume = (v) => {
-                if (v >= 10000000) return (v / 10000000).toFixed(1) + 'Cr';
-                if (v >= 100000) return (v / 100000).toFixed(1) + 'L';
-                if (v >= 1000) return (v / 1000).toFixed(1) + 'K';
-                return v.toString();
-            };
-
-            // OI% change color
-            const oiClass = oiChangePct > 0 ? 'gap-up' : (oiChangePct < 0 ? 'gap-down' : '');
-            // Day change color
-            const dayChgClass = dayChangePct > 0 ? 'gap-up' : (dayChangePct < 0 ? 'gap-down' : '');
-            // PCR color
-            const pcrClass = pcr > 1 ? 'gap-up' : (pcr < 0.7 ? 'gap-down' : '');
-
-            rowHtml = `
-                <td>${symbolCell}</td>
-                <td>${stock.current_price.toFixed(2)}</td>
-                <td class="${ivClass}">${ivPercentile.toFixed(1)}%</td>
-                <td>${atmIv.toFixed(1)}%</td>
-                <td class="${dayChgClass}">${dayChangePct.toFixed(2)}%</td>
-                <td>${formatVolume(volume)}</td>
-                <td class="${oiClass}">${oiChangePct.toFixed(1)}%</td>
-                <td class="${pcrClass}">${pcr.toFixed(2)}</td>
-                <td>${maxPain.toFixed(0)}</td>
-            `;
-        } else if (config.isDrsi) {
-            // Delta-RSI table - 6 columns
-            const rsi = Number(stock.rsi || 0);
-            const drsi = Number(stock.drsi || 0);
-            const signal = Number(stock.signal || 0);
-            const trigger = stock.trigger || "";
-
-            const triggerHtml = `<span style="color: #e11d48; font-weight: 700;">${trigger}</span>`;
-
-            rowHtml = `
-                <td>${symbolCell}</td>
-                <td>${stock.current_price.toFixed(2)}</td>
-                <td>${rsi.toFixed(1)}</td>
-                <td>${drsi.toFixed(4)}</td>
-                <td>${signal.toFixed(4)}</td>
-                <td>${triggerHtml}</td>
-            `;
-        } else if (config.isCamarilla) {
-            // Camarilla Reversal table - 6 columns: Symbol, Price, Camarilla Level (C-S3/C-R3), Monthly TC, Monthly BC, Monthly PP
-            const levelVal = config.isBullish ? Number(stock.monthly_cam_s3 || 0) : Number(stock.monthly_cam_r3 || 0);
-            const monthlyTc = Number(stock.monthly_tc || 0);
-            const monthlyBc = Number(stock.monthly_bc || 0);
-            const monthlyPp = Number(stock.monthly_pp || 0);
-
-            rowHtml = `
-                <td>${symbolCell}</td>
-                <td>${stock.current_price.toFixed(2)}</td>
-                <td style="font-weight: bold; color: ${config.isBullish ? '#10b981' : '#ef4444'};">${levelVal.toFixed(2)}</td>
-                <td>${monthlyTc.toFixed(2)}</td>
-                <td>${monthlyBc.toFixed(2)}</td>
-                <td>${monthlyPp.toFixed(2)}</td>
-            `;
-        }
-
-        const row = document.createElement('tr');
-        row.innerHTML = rowHtml;
-        tbody.appendChild(row);
-    });
+    container.classList.remove('results-hidden');
+    countSpan.textContent = `(${results.length})`;
 }
 
 /**
@@ -606,11 +507,12 @@ function sortTable(tableId, columnIndexStr) {
 
     sortDirection[tableId] = { index: columnIndex, direction: newDirection };
 
-    // Update header classes for visual feedback
-    table.querySelectorAll('th').forEach(th => {
-        th.classList.remove('sort-asc', 'sort-desc');
-    });
+    // Update header classes for visual feedback — only touch the previously sorted th
+    const prevTh = _lastSortedTh[tableId];
+    if (prevTh && prevTh !== header) prevTh.classList.remove('sort-asc', 'sort-desc');
+    header.classList.remove('sort-asc', 'sort-desc');
     header.classList.add(newDirection === 'asc' ? 'sort-asc' : 'sort-desc');
+    _lastSortedTh[tableId] = header;
 
     const isAsc = newDirection === 'asc';
 

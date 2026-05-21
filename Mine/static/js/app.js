@@ -233,7 +233,7 @@
     window.showKotakLoginModal = function (loginUrl = '/auth/login/kotak') {
         // Create modal HTML
         const modalHtml = `
-        <div id="kotakLoginModal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;">
+        <div id="kotakLoginModal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 9999999;">
             <div style="background: white; padding: 30px; border-radius: 8px; max-width: 500px; width: 90%; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <h2 style="margin-top: 0; color: #333;">Kotak Neo Authentication</h2>
                 <p style="color: #666; margin-bottom: 20px;">Please enter your TOTP secret to authenticate with Kotak Neo.</p>
@@ -404,7 +404,7 @@
     window.showDhanLoginModal = function (loginUrl = '/auth/login/dhan') {
         // Create modal HTML
         const modalHtml = `
-        <div id="dhanLoginModal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 10000;">
+        <div id="dhanLoginModal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 9999999;">
             <div style="background: white; padding: 30px; border-radius: 8px; max-width: 500px; width: 90%; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 <h2 style="margin-top: 0; color: #333;">Dhan Authentication</h2>
                 <p style="color: #666; margin-bottom: 20px;">Please enter your Dhan Access Token to authenticate.</p>

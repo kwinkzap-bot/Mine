@@ -46,7 +46,7 @@
                     const nextTheme = themes[(currentIndex + 1) % themes.length];
 
                     // Apply next theme class to body
-                    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'carbon-theme', 'cream-theme', 'ocean-theme');
+                    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
                     document.body.classList.add(nextTheme + '-theme');
 
                     // Save to local storage
@@ -96,19 +96,19 @@
                 <a href="/auth/user-logout" class="nav-link-logout" id="logoutButton" title="Logout">⏻</a>
                 {% endif %} -->
                 <div class="dropdown-menu" id="dropdownMenu">
-                    <div
-                        style="padding: 8px 12px; font-weight: bold; border-bottom: 1px solid #ddd; color: #666; font-size: 12px;">
+                    <div class="dropdown-header">
                         {% if session.username %}
-                        Logged in as: {{ session.username }}
+                        👤 {{ session.username }}
                         {% else %}
                         Not logged in
                         {% endif %}
                     </div>
-                    <div id="dynamicBrokersList" style="max-height: 200px; overflow-y: auto;">
-                        <p style="padding: 8px 16px; font-size: 12px; color: #999;">Loading brokers...</p>
+                    <div id="dynamicBrokersList" style="max-height: 220px; overflow-y: auto;">
+                        <p style="padding: 10px 16px; font-size: 12px; color: #999;">Loading brokers...</p>
                     </div>
-                    <div style="border-top: 1px solid #ddd; margin-top: 4px; padding-top: 4px;"></div>
-                    <a href="/auth/user-logout" class="dropdown-item" style="color: #dc3545;">⏻ Logout</a>
+                    <div style="border-top: 1px solid var(--border-color, #eee); padding: 4px 0;">
+                        <a href="/auth/user-logout" class="dropdown-item" style="color: #dc3545; font-weight: 600;">⏻ Logout</a>
+                    </div>
                 </div>
             </div>
         </div>

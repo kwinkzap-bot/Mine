@@ -71,6 +71,72 @@ _daily_5m_atm_cache = LruCache(max_size=20)
 # Global executor for background data fetching (prevents thread-per-request OOM)
 _api_executor = ThreadPoolExecutor(max_workers=10)
 
+# ── Strike-token cache: (symbol, strike, opt_type) → (token, symbol_str, expires_ts) ──
+# Eliminates repeated get_option_symbol + get_instrument_token calls within the same expiry day.
+_strike_token_cache: Dict[Tuple, Any] = {}
+_strike_token_cache_lock = threading.Lock()
+
+def _get_cached_strike_token(kite_service, data_provider, is_fyers: bool, symbol: str, strike: int, opt_type: str):
+    """Return (token, symbol_str) from cache; populate on miss. TTL = end of current trading day."""
+    key = (symbol, strike, opt_type)
+    now_ts = _time.time()
+    with _strike_token_cache_lock:
+        cached = _strike_token_cache.get(key)
+        if cached and cached[2] > now_ts:
+            return cached[0], cached[1]
+    if is_fyers:
+        sym = data_provider.find_option_symbol(symbol, strike, opt_type)
+        tok = sym
+    else:
+        sym = kite_service.get_option_symbol(symbol, strike, opt_type)
+        tok = kite_service.get_instrument_token(sym) if sym else None
+    today = datetime.now()
+    expire_ts = today.replace(hour=15, minute=30, second=0, microsecond=0).timestamp()
+    if now_ts > expire_ts:
+        expire_ts = now_ts + 18 * 3600
+    with _strike_token_cache_lock:
+        _strike_token_cache[key] = (tok, sym, expire_ts)
+    return tok, sym
+
+# ── Dhan security-ID async cache ─────────────────────────────────────────────
+# Populated lazily in background; request path reads from dict (never blocks).
+_dhan_secid_cache: Dict[str, str] = {}
+
+def _trigger_dhan_secid_fetch(*symbols: Optional[str]) -> None:
+    """Submit background task to populate Dhan security IDs for any cache-missing symbols."""
+    missing = [s for s in symbols if s and s not in _dhan_secid_cache]
+    if not missing:
+        return
+    def _do_fetch():
+        try:
+            from trading_app.service.dhan_order_services import DhanOrderService
+            svc = DhanOrderService()
+            for sym in missing:
+                try:
+                    result = svc.search_symbol(sym)
+                    _dhan_secid_cache[sym] = result.get('security_id', sym)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    _api_executor.submit(_do_fetch)
+
+# ── Market-hours TTL cache (60 s) ─────────────────────────────────────────────
+_market_hours_cache: Dict[str, Any] = {'value': None, 'ts': 0.0}
+_market_hours_lock = threading.Lock()
+
+def _cached_market_hours() -> bool:
+    """Returns is_market_hours() & is_trading_day() with 60-second TTL."""
+    now_ts = _time.time()
+    with _market_hours_lock:
+        if now_ts - _market_hours_cache['ts'] < 60 and _market_hours_cache['value'] is not None:
+            return _market_hours_cache['value']
+    result = is_market_hours() and is_trading_day()
+    with _market_hours_lock:
+        _market_hours_cache['value'] = result
+        _market_hours_cache['ts'] = _time.time()
+    return result
+
 # Fyers index symbol map
 FYERS_INDEX_SYMBOLS = {
     'NIFTY':      'NSE:NIFTY50-INDEX',
@@ -697,29 +763,30 @@ def get_index_cpr_levels(provider, index_name="NIFTY"):
             if df['date'].dt.tz is not None:
                 df['date'] = df['date'].dt.tz_localize(None)
             df.set_index('date', inplace=True)
-            
+            dti = pd.DatetimeIndex(df.index)
+
             # Daily CPR
-            last_idx = -2 if df.index[-1].date() == now.date() else -1
+            last_idx = -2 if dti[-1].date() == now.date() else -1
             if len(df) >= abs(last_idx):
                 day_row = df.iloc[last_idx]
                 daily_cpr = calculate_cpr_from_ohlc(day_row['high'], day_row['low'], day_row['close'])
-                
+
             # Weekly CPR
             current_week_start = now - timedelta(days=now.weekday())
             prev_week_start = current_week_start - timedelta(days=7)
             prev_week_end = prev_week_start + timedelta(days=4)
-            week_df = df[(df.index.date >= prev_week_start.date()) & (df.index.date <= prev_week_end.date())]
+            week_df = df[(dti.date >= prev_week_start.date()) & (dti.date <= prev_week_end.date())]
             if not week_df.empty:
                 weekly_cpr = calculate_cpr_from_ohlc(week_df['high'].max(), week_df['low'].min(), week_df['close'].iloc[-1])
-                
+
             # Monthly CPR
             first_current = now.replace(day=1)
             last_prev = first_current - timedelta(days=1)
             first_prev = last_prev.replace(day=1)
-            month_df = df[(df.index.date >= first_prev.date()) & (df.index.date <= last_prev.date())]
+            month_df = df[(dti.date >= first_prev.date()) & (dti.date <= last_prev.date())]
             if not month_df.empty:
                 monthly_cpr = calculate_cpr_from_ohlc(month_df['high'].max(), month_df['low'].min(), month_df['close'].iloc[-1])
-                
+
             # 6-Month CPR
             year = now.year
             month = now.month
@@ -729,14 +796,14 @@ def get_index_cpr_levels(provider, index_name="NIFTY"):
             else:
                 half_start = datetime(year, 1, 1)
                 half_end = datetime(year, 6, 30)
-            half_df = df[(df.index.date >= half_start.date()) & (df.index.date <= half_end.date())]
+            half_df = df[(dti.date >= half_start.date()) & (dti.date <= half_end.date())]
             if not half_df.empty:
                 half_yearly_cpr = calculate_cpr_from_ohlc(half_df['high'].max(), half_df['low'].min(), half_df['close'].iloc[-1])
-                
+
             # Yearly CPR
             year_start = datetime(now.year - 1, 1, 1)
             year_end = datetime(now.year - 1, 12, 31)
-            year_df = df[(df.index.date >= year_start.date()) & (df.index.date <= year_end.date())]
+            year_df = df[(dti.date >= year_start.date()) & (dti.date <= year_end.date())]
             if not year_df.empty:
                 yearly_cpr = calculate_cpr_from_ohlc(year_df['high'].max(), year_df['low'].min(), year_df['close'].iloc[-1])
                 
@@ -1635,6 +1702,19 @@ def get_options_pdh_pdl() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+_cpr_service_cache: Dict[str, Tuple[Any, float]] = {}
+
+def _get_cpr_service(kite_instance: Any) -> Any:
+    key = str(id(kite_instance))
+    cached = _cpr_service_cache.get(key)
+    if cached and _time.time() - cached[1] < 3600:
+        return cached[0]
+    from trading_app.filters.cpr_filter import CPRFilterService
+    svc = CPRFilterService(kite_instance=kite_instance)
+    _cpr_service_cache[key] = (svc, _time.time())
+    return svc
+
+
 @api_bp.route('/cpr-filter', methods=['GET'])
 @limiter.exempt
 def get_cpr_filter_results() -> EndpointResponse:
@@ -1681,10 +1761,7 @@ def get_cpr_filter_results() -> EndpointResponse:
                 'auth_error': True
             }), 401
         
-        from trading_app.filters.cpr_filter import CPRFilterService
-        
-        # logger.info(f"Initializing CPRFilterService with target date: {target_date if target_date else 'current'}")
-        cpr_service = CPRFilterService(kite_instance=current_kite)
+        cpr_service = _get_cpr_service(current_kite)
         
         # logger.info("Starting CPR filter stocks processing...")
         results = cpr_service.filter_cpr_stocks(root_date=target_date, skip_iv=True)
@@ -1764,9 +1841,7 @@ def get_cpr_high_iv_results() -> EndpointResponse:
                 'auth_error': True
             }), 401
         
-        from trading_app.filters.cpr_filter import CPRFilterService
-        
-        cpr_service = CPRFilterService(kite_instance=current_kite)
+        cpr_service = _get_cpr_service(current_kite)
         stocks = cpr_service.get_fo_stocks()
         
         logger.info(f"Starting separate High IV scan for {len(stocks)} F&O stocks...")
@@ -1892,20 +1967,18 @@ def get_instrument_token() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
     
     try:
-        from trading_app.app.intraday_option.Kite_data_fetch_services import get_merged_options_data
-        
-        # Pass the current provider (Kite or Fyers) to the data fetch service
+        current_kite = get_kite()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Kite not connected. Please login.'}), 401
         symbol = request.args.get('symbol', '').upper()
-        combined_data = get_merged_options_data(current_provider, symbol)
-        
         symbol_type = request.args.get('type', 'fno').lower()
         fno_type = request.args.get('fno_type', 'futures').lower()
-        
+
         if not symbol:
             return jsonify({'success': False, 'error': 'Symbol parameter is required'}), 400
-        
+
         instrument_token = None
-        
+
         if symbol == 'NIFTY':
             try:
                 kite_service = KiteService(kite_instance=current_kite)
@@ -2447,6 +2520,7 @@ def place_live_order() -> EndpointResponse:
         option_type = data.get('option_type')
         strike = data.get('strike')
         symbol = data.get('symbol', 'NIFTY')
+        quantity = data.get('quantity')
         
         # Validation
         if not option_type or option_type not in ['CE', 'PE']:
@@ -2463,12 +2537,16 @@ def place_live_order() -> EndpointResponse:
         from trading_app.service.kite_order_services import KiteService
         kite_service = KiteService(kite_instance=kite)
         
+        if not quantity:
+            _lot_map = {'NIFTY': 25, 'BANKNIFTY': 15, 'FINNIFTY': 40, 'MIDCPNIFTY': 75, 'SENSEX': 20}
+            quantity = _lot_map.get(symbol, 1)
+
         result = kite_service.place_option_order(
             symbol=symbol,
             strike=strike,
             option_type=option_type,
-            transaction_type=kite.TRANSACTION_TYPE_BUY
-            # quantity: None uses dynamic lot size from Kite
+            transaction_type=kite.TRANSACTION_TYPE_BUY,
+            quantity=quantity,
         )
         
         if result['success']:
@@ -3501,7 +3579,7 @@ def exit_all_orders() -> EndpointResponse:
                         
                         try:
                             orders = kite.orders()
-                            pending_statuses = ['OPEN', 'MODIFY', 'TRIGGER PENDING']
+                            pending_statuses = ['OPEN', 'OPEN PENDING', 'MODIFY PENDING', 'TRIGGER PENDING', 'AMO REQ RECEIVED']
                             for order in orders:
                                 if order['status'] in pending_statuses:
                                     tsym = str(order.get('tradingsymbol', '')).strip().upper()
@@ -3544,7 +3622,7 @@ def exit_all_orders() -> EndpointResponse:
                             day_positions = pos_response.get('day', [])
                             
                             # Combine positions to ensure nothing is missed (unique by tradingsymbol)
-                            all_positions = {p['tradingsymbol']: p for p in (net_positions + day_positions)}.values()
+                            all_positions = {p['tradingsymbol']: p for p in (day_positions + net_positions)}.values()
                             
                             logger.info(f"[Zerodha] Instance {instance} | Found {len(all_positions)} total unique positions.")
                         
@@ -3552,63 +3630,61 @@ def exit_all_orders() -> EndpointResponse:
                             raw_syms = [p.get('tradingsymbol') for p in all_positions]
                             logger.info(f"[Zerodha] Instance {instance} | RAW POSITIONS: {raw_syms}")
                             logger.info(f"[Zerodha] Instance {instance} | BOT REGISTRY: {normalized_bot_symbols}")
-                            
+
+                            from trading_app.service.kite_order_services import KiteService
+                            kite_svc = KiteService(kite_instance=kite)
+
                             for pos in all_positions:
                                 tsym = str(pos.get('tradingsymbol', '')).strip().upper()
                                 qty = pos.get('quantity', 0)
                                 product = str(pos.get('product', '')).strip().upper()
                                 exchange = str(pos.get('exchange', '')).strip().upper()
-                                
+
                                 logger.info(f"[Zerodha] Instance {instance} | Analyzing: {tsym} | Qty: {qty} | Product: {product} | Exchange: {exchange}")
-                                
+
                                 # 1. Bot Tracking Check
                                 # If registry is enabled, we only exit what's in the registry.
                                 # If registry is empty, we exit everything (full liquidation mode).
                                 is_bot_tracked = (not normalized_bot_symbols) or (tsym in normalized_bot_symbols)
-                                
+
                                 if not is_bot_tracked:
                                     logger.info(f"[Zerodha] Instance {instance} | SKIPPING {tsym}: Not in Bot Registry.")
                                     continue
-                                
+
                                 # 2. CNC Check
                                 if product == 'CNC':
                                     logger.info(f"[Zerodha] Instance {instance} | SKIPPING {tsym}: CNC/Delivery position.")
                                     continue
-                                
+
                                 if qty == 0:
                                     logger.info(f"[Zerodha] Instance {instance} | SKIPPING {tsym}: Zero quantity.")
                                     continue
 
                                 logger.info(f"[Zerodha] Instance {instance} | TARGET FOUND: {tsym} | Qty: {qty}")
-                                    
-                                if qty != 0:
-                                    try:
-                                        side = 'SELL' if qty > 0 else 'BUY'
-                                        
-                                        from trading_app.service.kite_order_services import KiteService
-                                        kite_svc = KiteService(kite_instance=kite)
-                                        
-                                        abs_qty = abs(int(qty))
-                                        qty_chunks = split_quantity_by_freeze_limit(pos['tradingsymbol'], abs_qty, kite)
-                                        logger.info(f"[Zerodha] Exiting {pos['tradingsymbol']}: Total quantity {abs_qty} (Side: {side}, Product: {pos['product']}) split into chunks: {qty_chunks}")
-                                        
-                                        for chunk_qty in qty_chunks:
-                                            order_id = kite_svc._safe_place_order(
-                                                variety='regular',
-                                                exchange=pos['exchange'],
-                                                tradingsymbol=pos['tradingsymbol'],
-                                                transaction_type=side,
-                                                quantity=chunk_qty,
-                                                order_type='MARKET',
-                                                product=pos['product'],
-                                                market_protection=-1
-                                            )
-                                            logger.info(f"[Zerodha] Instance {instance} | Exit MARKET order placed with protection: {order_id} (Qty: {chunk_qty})")
-                                        broker_res['exited_positions'] += 1
 
-                                    except Exception as e:
-                                        logger.error(f"[Zerodha] Position exit failed for {pos['tradingsymbol']}: {e}")
-                                        broker_res['errors'].append(f"Exit {pos['tradingsymbol']} failed: {e}")
+                                try:
+                                    side = 'SELL' if qty > 0 else 'BUY'
+                                    abs_qty = abs(int(qty))
+                                    qty_chunks = split_quantity_by_freeze_limit(pos['tradingsymbol'], abs_qty, kite)
+                                    logger.info(f"[Zerodha] Exiting {pos['tradingsymbol']}: Total quantity {abs_qty} (Side: {side}, Product: {pos['product']}) split into chunks: {qty_chunks}")
+
+                                    for chunk_qty in qty_chunks:
+                                        order_id = kite_svc._safe_place_order(
+                                            variety='regular',
+                                            exchange=pos['exchange'],
+                                            tradingsymbol=pos['tradingsymbol'],
+                                            transaction_type=side,
+                                            quantity=chunk_qty,
+                                            order_type='MARKET',
+                                            product=pos['product'],
+                                            market_protection=-1
+                                        )
+                                        logger.info(f"[Zerodha] Instance {instance} | Exit MARKET order placed with protection: {order_id} (Qty: {chunk_qty})")
+                                    broker_res['exited_positions'] += 1
+
+                                except Exception as e:
+                                    logger.error(f"[Zerodha] Position exit failed for {pos['tradingsymbol']}: {e}")
+                                    broker_res['errors'].append(f"Exit {pos['tradingsymbol']} failed: {e}")
                             
                         except Exception as e:
                             logger.error(f"[Zerodha] Error fetching positions: {e}")
@@ -3646,48 +3722,49 @@ def exit_all_orders() -> EndpointResponse:
                         pos_book = fyers_service.get_positions()
                         if pos_book.get('success'):
                             for pos in pos_book.get('positions', []):
-                                fsym = pos.get('symbol', '')
+                                fsym = str(pos.get('symbol', '')).strip().upper()
+                                alt_sym = fsym.split(':')[-1] if ':' in fsym else fsym
                                 net_qty = pos.get('netQty', 0)
                                 product = pos.get('productType', '')
-                                
+
                                 # Skip if not bot-tracked
-                                if bot_symbols and fsym not in bot_symbols:
-                                    # Fyers symbols sometimes have NSE: prefix, check both
-                                    alt_sym = fsym.split(':')[-1] if ':' in fsym else fsym
-                                    if fsym not in bot_symbols and alt_sym not in bot_symbols:
-                                        logger.info(f"[Fyers] Skipping non-bot position: {fsym}")
-                                        continue
-                                
+                                is_bot_tracked = (not normalized_bot_symbols) or (fsym in normalized_bot_symbols) or (alt_sym in normalized_bot_symbols)
+                                if not is_bot_tracked:
+                                    logger.info(f"[Fyers] Skipping non-bot position: {fsym}")
+                                    continue
+
                                 # Skip CNC positions
                                 if product == 'CNC':
-                                    logger.info(f"[Fyers] Skipping CNC position {pos['symbol']}")
+                                    logger.info(f"[Fyers] Skipping CNC position {fsym}")
                                     continue
-                                
+
                                 # Skip Equity positions (usually end with -EQ in Fyers)
-                                if '-EQ' in str(pos.get('symbol', '')):
-                                    logger.info(f"[Fyers] Skipping Equity position {pos['symbol']}")
+                                if '-EQ' in fsym:
+                                    logger.info(f"[Fyers] Skipping Equity position {fsym}")
                                     continue
-                                    
-                                if net_qty != 0:
-                                    try:
-                                        # Use correct Fyers side: 1=BUY, 2=SELL
-                                        side = fyers_service.SIDE_SELL if net_qty > 0 else fyers_service.SIDE_BUY
-                                        
-                                        abs_qty = abs(int(net_qty))
-                                        qty_chunks = split_quantity_by_freeze_limit(pos['symbol'], abs_qty, fyers_service)
-                                        logger.info(f"[Fyers] Exiting {pos['symbol']}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
-                                        
-                                        for chunk_qty in qty_chunks:
-                                            fyers_service.place_order(
-                                                symbol=pos['symbol'],
-                                                side=side,
-                                                quantity=chunk_qty,
-                                                order_type=2, # 2: MARKET
-                                                product_type=pos['productType']
-                                            )
-                                        broker_res['exited_positions'] += 1
-                                    except Exception as e:
-                                        broker_res['errors'].append(f"Exit {pos['symbol']} failed: {e}")
+
+                                if net_qty == 0:
+                                    continue
+
+                                try:
+                                    # Use correct Fyers side: 1=BUY, 2=SELL
+                                    side = fyers_service.SIDE_SELL if net_qty > 0 else fyers_service.SIDE_BUY
+
+                                    abs_qty = abs(int(net_qty))
+                                    qty_chunks = split_quantity_by_freeze_limit(fsym, abs_qty, fyers_service)
+                                    logger.info(f"[Fyers] Exiting {fsym}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
+
+                                    for chunk_qty in qty_chunks:
+                                        fyers_service.place_order(
+                                            symbol=pos['symbol'],
+                                            side=side,
+                                            quantity=chunk_qty,
+                                            order_type=2,
+                                            product_type=pos['productType']
+                                        )
+                                    broker_res['exited_positions'] += 1
+                                except Exception as e:
+                                    broker_res['errors'].append(f"Exit {fsym} failed: {e}")
 
                 # 3. Handle Kotak Neo
                 elif broker_type == 'kotak':
@@ -3723,49 +3800,50 @@ def exit_all_orders() -> EndpointResponse:
                         pos_book = kotak_service.get_positions()
                         if pos_book.get('success'):
                             for pos in pos_book.get('positions', []):
-                                ksym = pos.get('trdSym', '')
-                                # Kotak positions often have 'flNetQty' or similar
+                                ksym = str(pos.get('trdSym', '')).strip().upper()
                                 net_qty = float(pos.get('flNetQty', pos.get('netQty', 0)))
                                 product = pos.get('prod', '')
-                                
+
                                 # Skip if not bot-tracked
-                                if bot_symbols and ksym not in bot_symbols:
+                                is_bot_tracked = (not normalized_bot_symbols) or (ksym in normalized_bot_symbols)
+                                if not is_bot_tracked:
                                     logger.info(f"[Kotak] Skipping non-bot position: {ksym}")
                                     continue
-                                    
+
                                 # Skip CNC positions
                                 if product == 'CNC':
-                                    logger.info(f"[Kotak] Skipping CNC position {pos.get('trdSym')}")
+                                    logger.info(f"[Kotak] Skipping CNC position {ksym}")
                                     continue
-                                
+
                                 # Target only F&O segments (nse_fo, bse_fo, mcx_fo)
-                                # Skip Equity segments (nse_cm, bse_cm)
                                 exseg = str(pos.get('exseg', '')).lower()
                                 if 'fo' not in exseg:
-                                    logger.info(f"[Kotak] Skipping non-F&O position {pos.get('trdSym')} ({exseg})")
+                                    logger.info(f"[Kotak] Skipping non-F&O position {ksym} ({exseg})")
                                     continue
-                                    
-                                if net_qty != 0:
-                                    try:
-                                        side = 'SELL' if net_qty > 0 else 'BUY'
-                                        
-                                        abs_qty = abs(int(net_qty))
-                                        qty_chunks = split_quantity_by_freeze_limit(pos['trdSym'], abs_qty, kotak_service)
-                                        logger.info(f"[Kotak] Exiting {pos['trdSym']}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
-                                        
-                                        for chunk_qty in qty_chunks:
-                                            kotak_service.place_order(
-                                                tradingsymbol=pos['trdSym'],
-                                                transaction_type=side,
-                                                quantity=chunk_qty,
-                                                price=0.0,
-                                                order_type='MKT',
-                                                product_type=pos['prod'],
-                                                exchange_segment=pos['exseg']
-                                            )
-                                        broker_res['exited_positions'] += 1
-                                    except Exception as e:
-                                        broker_res['errors'].append(f"Exit {pos.get('trdSym')} failed: {e}")
+
+                                if net_qty == 0:
+                                    continue
+
+                                try:
+                                    side = 'SELL' if net_qty > 0 else 'BUY'
+
+                                    abs_qty = abs(int(net_qty))
+                                    qty_chunks = split_quantity_by_freeze_limit(ksym, abs_qty, kotak_service)
+                                    logger.info(f"[Kotak] Exiting {ksym}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
+
+                                    for chunk_qty in qty_chunks:
+                                        kotak_service.place_order(
+                                            tradingsymbol=pos['trdSym'],
+                                            transaction_type=side,
+                                            quantity=chunk_qty,
+                                            price=0.0,
+                                            order_type='MKT',
+                                            product_type=pos['prod'],
+                                            exchange_segment=pos['exseg']
+                                        )
+                                    broker_res['exited_positions'] += 1
+                                except Exception as e:
+                                    broker_res['errors'].append(f"Exit {ksym} failed: {e}")
 
                 # 4. Handle Dhan
                 elif broker_type == 'dhan':
@@ -3798,46 +3876,49 @@ def exit_all_orders() -> EndpointResponse:
                         pos_book = dhan_service.get_positions()
                         if pos_book.get('success'):
                             for pos in pos_book.get('positions', []):
-                                dsym = pos.get('tradingSymbol', '')
+                                dsym = str(pos.get('tradingSymbol', '')).strip().upper()
                                 net_qty = pos.get('netQty', 0)
                                 product = pos.get('productType', '')
-                                
+
                                 # Skip if not bot-tracked
-                                if bot_symbols and dsym not in bot_symbols:
+                                is_bot_tracked = (not normalized_bot_symbols) or (dsym in normalized_bot_symbols)
+                                if not is_bot_tracked:
                                     logger.info(f"[Dhan] Skipping non-bot position: {dsym}")
                                     continue
-                                    
+
                                 # Skip CNC positions
                                 if product == 'CNC':
-                                    logger.info(f"[Dhan] Skipping CNC position {pos.get('tradingSymbol')}")
+                                    logger.info(f"[Dhan] Skipping CNC position {dsym}")
                                     continue
-                                
+
                                 # Target only F&O segments
                                 exseg = str(pos.get('exchangeSegment', '')).upper()
                                 if 'FNO' not in exseg and 'COMM' not in exseg and 'CURR' not in exseg:
-                                    logger.info(f"[Dhan] Skipping non-Derivatives position {pos.get('tradingSymbol')} ({exseg})")
+                                    logger.info(f"[Dhan] Skipping non-Derivatives position {dsym} ({exseg})")
                                     continue
-                                    
-                                if net_qty != 0:
-                                    try:
-                                        side = 'SELL' if net_qty > 0 else 'BUY'
-                                        
-                                        abs_qty = abs(int(net_qty))
-                                        qty_chunks = split_quantity_by_freeze_limit(pos['tradingSymbol'], abs_qty, dhan_service)
-                                        logger.info(f"[Dhan] Exiting {pos['tradingSymbol']}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
-                                        
-                                        for chunk_qty in qty_chunks:
-                                            dhan_service.place_order(
-                                                security_id=pos['securityId'],
-                                                transaction_type=side,
-                                                quantity=chunk_qty,
-                                                order_type='MARKET',
-                                                product_type=pos['productType'],
-                                                exchange_segment=pos['exchangeSegment']
-                                            )
-                                        broker_res['exited_positions'] += 1
-                                    except Exception as e:
-                                        broker_res['errors'].append(f"Exit {pos.get('tradingSymbol')} failed: {e}")
+
+                                if net_qty == 0:
+                                    continue
+
+                                try:
+                                    side = 'SELL' if net_qty > 0 else 'BUY'
+
+                                    abs_qty = abs(int(net_qty))
+                                    qty_chunks = split_quantity_by_freeze_limit(dsym, abs_qty, dhan_service)
+                                    logger.info(f"[Dhan] Exiting {dsym}: Total quantity {abs_qty} split into chunks: {qty_chunks}")
+
+                                    for chunk_qty in qty_chunks:
+                                        dhan_service.place_order(
+                                            security_id=pos['securityId'],
+                                            transaction_type=side,
+                                            quantity=chunk_qty,
+                                            order_type='MARKET',
+                                            product_type=pos['productType'],
+                                            exchange_segment=pos['exchangeSegment']
+                                        )
+                                    broker_res['exited_positions'] += 1
+                                except Exception as e:
+                                    broker_res['errors'].append(f"Exit {dsym} failed: {e}")
 
             except Exception as broker_err:
                 broker_res['errors'].append(str(broker_err))
@@ -4080,10 +4161,12 @@ def place_intraday_920_order() -> EndpointResponse:
                             if not entry_price or entry_price == 0:
                                 kite = get_kite()
                                 try:
-                                    ks = KiteService(kite_instance=kite)
-                                    kite_opt_sym = ks.get_option_symbol(symbol, strike, option_type)
-                                    ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
-                                    entry_price = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', 0)
+                                    from trading_app.service.kite_order_services import KiteService
+                                    if kite:
+                                        ks = KiteService(kite_instance=kite)
+                                        kite_opt_sym = ks.get_option_symbol(symbol, strike, option_type)
+                                        ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
+                                        entry_price = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', 0)
                                 except: pass
                             if entry_price and entry_price > 0:
                                 k_symbol = tradingsymbol_override
@@ -4195,8 +4278,9 @@ def place_intraday_920_order() -> EndpointResponse:
                         try:
                             entry = result.get('price', 0)
                             if not entry or entry == 0:
-                                ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
-                                entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
+                                if kite and kite_opt_sym:
+                                    ltp_data = kite.ltp([f'NSE:{kite_opt_sym}'])
+                                    entry = ltp_data.get(f'NSE:{kite_opt_sym}', {}).get('last_price', strike)
                             
                             if entry and entry > 0:
                                 sl_order_ids = []
@@ -4595,36 +4679,23 @@ def resolve_itm_strikes(kite_service, symbol, spot_high, spot_low, step_value, o
     itm_ce_strike = int(math.ceil((spot_low - offset) / step_value) * step_value)
     itm_pe_strike = int(math.floor((spot_high + offset) / step_value) * step_value)
 
-    # Detect provider
     is_fyers = data_provider is not None and hasattr(data_provider, 'find_option_symbol')
 
-    if is_fyers:
-        ce_token = data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
-        pe_token = data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
-        ce_symbol = ce_token
-        pe_symbol = pe_token
-    else:
-        ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-        pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-        ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
-        pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+    ce_token, ce_symbol = _get_cached_strike_token(kite_service, data_provider, is_fyers, symbol, itm_ce_strike, 'CE')
+    pe_token, pe_symbol = _get_cached_strike_token(kite_service, data_provider, is_fyers, symbol, itm_pe_strike, 'PE')
 
-    # Fallback if symbols not found
-    if not ce_token or not pe_token:
-        # For Kite, try to find nearest
-        if not is_fyers:
-            all_options = kite_service.get_nfo_instruments(symbol)
-            available_strikes = sorted(list(set([i['strike'] for i in all_options if i.get('strike') is not None])))
-            if available_strikes:
-                if not ce_token:
-                    itm_ce_strike = min(available_strikes, key=lambda x: abs(x - (spot_low - offset)))
-                    ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                    ce_token = kite_service.get_instrument_token(ce_symbol)
-                if not pe_token:
-                    itm_pe_strike = min(available_strikes, key=lambda x: abs(x - (spot_high + offset)))
-                    pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-                    pe_token = kite_service.get_instrument_token(pe_symbol)
-    
+    # Fallback: nearest available strike (Kite only)
+    if (not ce_token or not pe_token) and not is_fyers:
+        all_options = kite_service.get_nfo_instruments(symbol)
+        available_strikes = sorted(list(set([i['strike'] for i in all_options if i.get('strike') is not None])))
+        if available_strikes:
+            if not ce_token:
+                itm_ce_strike = min(available_strikes, key=lambda x: abs(x - (spot_low - offset)))
+                ce_token, ce_symbol = _get_cached_strike_token(kite_service, None, False, symbol, itm_ce_strike, 'CE')
+            if not pe_token:
+                itm_pe_strike = min(available_strikes, key=lambda x: abs(x - (spot_high + offset)))
+                pe_token, pe_symbol = _get_cached_strike_token(kite_service, None, False, symbol, itm_pe_strike, 'PE')
+
     return itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token
 
 @api_bp.route('/chart/multi-live', methods=['GET'])
@@ -4737,7 +4808,7 @@ def oi_profile_candles() -> EndpointResponse:
                         _candle_response_cache.pop(k, None)
 
         # ── 2. Market Hours Check ──────────────
-        market_is_open = is_market_hours() and is_trading_day()
+        market_is_open = _cached_market_hours()
         
         # If market is closed, we can use a much longer cache (1 hour)
         if not market_is_open:
@@ -4861,7 +4932,7 @@ def oi_profile_candles() -> EndpointResponse:
 
         def fetch_task(token, from_dt, to_dt, inter):
             try:
-                if _is_fyers_provider:
+                if _is_fyers_provider and _data_provider:
                     # Use Fyers data provider for historical data
                     from_str = from_dt.strftime('%Y-%m-%d')
                     to_str = to_dt.strftime('%Y-%m-%d')
@@ -4906,32 +4977,18 @@ def oi_profile_candles() -> EndpointResponse:
             if custom_strike:
                 itm_ce_strike = custom_strike
                 itm_pe_strike = custom_strike
-                if _is_fyers_provider:
-                    ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
-                    pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
-                    ce_symbol = ce_token
-                    pe_symbol = pe_token
-                else:
-                    ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                    pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-                    ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
-                    pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+                ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
+                pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
             else:
                 itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
                     kite_service, symbol, spot_high, spot_low, step_value, data_provider=(_data_provider if _is_fyers_provider else None)
                 )
         elif first_5m_atm and atm_cache_key in _daily_5m_atm_cache:
-            # FAST-LANE PARALLELIZATION: 5m ATM is static after 9:20. Use cached strike to concurrently fetch Options!
+            # FAST-LANE: 5m ATM is static after 9:20 — use cached strike to concurrently fetch options.
             atm_strike = _daily_5m_atm_cache[atm_cache_key]
             itm_ce_strike, itm_pe_strike = atm_strike, atm_strike
-            ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-            pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-            if _is_fyers_provider:
-                ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
-                pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
-            else:
-                ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
-                pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+            ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
+            pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
 
         # 3. Fetch Option Candles if tokens known
         future_ce = None
@@ -4943,6 +5000,7 @@ def oi_profile_candles() -> EndpointResponse:
         index_raw = future_index.result()
         
         # Filter strictly by the last N actual trading days
+        target_dates: list = []
         if index_raw:
             unique_dates = sorted(list(set(c['date'].date() for c in index_raw)))
             target_dates = unique_dates[-days:] if len(unique_dates) >= days else unique_dates
@@ -4991,28 +5049,14 @@ def oi_profile_candles() -> EndpointResponse:
                 _daily_5m_atm_cache[atm_cache_key] = atm_strike
                 
                 itm_ce_strike, itm_pe_strike = atm_strike, atm_strike
-                ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-                if _is_fyers_provider:
-                    # For Fyers: resolve option tokens as Fyers symbol strings
-                    ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
-                    pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
-                else:
-                    ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
-                    pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+                ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
+                pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
                 logger.info(f"[OI-Profile] First 5m ATM: 5m Mark close {close_p} (at {datetime.fromtimestamp(five_m_close_candle['time'] - ist_offset).strftime('%H:%M')}) -> Strike {atm_strike}, CE_token={ce_token}, PE_token={pe_token}")
             else:
                 if custom_strike:
                     itm_ce_strike, itm_pe_strike = custom_strike, custom_strike
-                    if _is_fyers_provider:
-                        ce_token = _data_provider.find_option_symbol(symbol, itm_ce_strike, 'CE')
-                        pe_token = _data_provider.find_option_symbol(symbol, itm_pe_strike, 'PE')
-                        ce_symbol, pe_symbol = ce_token, pe_token
-                    else:
-                        ce_symbol = kite_service.get_option_symbol(symbol, itm_ce_strike, 'CE')
-                        pe_symbol = kite_service.get_option_symbol(symbol, itm_pe_strike, 'PE')
-                        ce_token = kite_service.get_instrument_token(ce_symbol) if ce_symbol else None
-                        pe_token = kite_service.get_instrument_token(pe_symbol) if pe_symbol else None
+                    ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
+                    pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
                 else:
                     itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token = resolve_itm_strikes(
                         kite_service, symbol, spot_high, spot_low, step_value, data_provider=(_data_provider if _is_fyers_provider else None)
@@ -5031,7 +5075,7 @@ def oi_profile_candles() -> EndpointResponse:
         pe_raw = future_pe.result() if future_pe else []
 
         # Synchronize option data window with index data window
-        if 'target_dates' in locals():
+        if target_dates:
             if ce_raw: ce_raw = [c for c in ce_raw if c['date'].date() in target_dates]
             if pe_raw: pe_raw = [c for c in pe_raw if c['date'].date() in target_dates]
 
@@ -5053,16 +5097,10 @@ def oi_profile_candles() -> EndpointResponse:
             ce_levels = [ce_intrinsic + (step_value * i) for i in range(1, multiplier + 1)]
             pe_levels = [pe_intrinsic + (step_value * i) for i in range(1, multiplier + 1)]
             
-            # Pre-resolve broker-specific security keys for ultra-fast execution
-            ce_sec_id = None
-            pe_sec_id = None
-            try:
-                from trading_app.service.dhan_order_services import DhanOrderService
-                dhan_service = DhanOrderService()
-                ce_sec_id = dhan_service.search_symbol(ce_symbol).get('security_id', ce_symbol) if ce_symbol else None
-                pe_sec_id = dhan_service.search_symbol(pe_symbol).get('security_id', pe_symbol) if pe_symbol else None
-            except Exception as e:
-                logger.error(f"[Pre-Resolve] Dhan sec_id error: {e}")
+            # Serve Dhan security IDs from async-populated cache (never blocks request path).
+            ce_sec_id = _dhan_secid_cache.get(ce_symbol) if ce_symbol else None
+            pe_sec_id = _dhan_secid_cache.get(pe_symbol) if pe_symbol else None
+            _trigger_dhan_secid_fetch(ce_symbol, pe_symbol)
             
             intrinsic_data = {
                 'spot_high': spot_high, 'spot_low': spot_low,
@@ -5084,10 +5122,11 @@ def oi_profile_candles() -> EndpointResponse:
                 cursor = conn.cursor()
                 days_ago = (now - timedelta(days=days+5)).strftime('%Y-%m-%d')
                 cursor.execute('''
-                    SELECT timestamp, max_pain FROM oi_history 
+                    SELECT timestamp, max_pain FROM oi_history
                     WHERE symbol = ? AND max_pain IS NOT NULL AND max_pain > 0
                     AND timestamp >= ?
                     ORDER BY timestamp ASC
+                    LIMIT 2000
                 ''', (symbol, days_ago))
                 
                 rows = cursor.fetchall()
@@ -5104,7 +5143,7 @@ def oi_profile_candles() -> EndpointResponse:
                             continue
                             
                         # Only include Max Pain data for the exact same trading days as the candlesticks
-                        if 'target_dates' in locals() and dt.date() not in target_dates:
+                        if target_dates and dt.date() not in target_dates:
                             continue
                             
                         unix_time = int(dt.timestamp()) + ist_offset

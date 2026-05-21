@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, Tuple, cast, Union
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+from collections import OrderedDict
 from trading_app.service.cpr_service import CPRService
 from trading_app.service.kite_order_services import get_global_rate_limiter
 from trading_app.service.greeks_calculator import GreeksCalculator
@@ -19,8 +20,10 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Global persistent cache (survives between filter requests)
-_global_cache = {}
+_MAX_HIST_CACHE = 800
+
+# Global persistent cache (survives between filter requests, bounded LRU)
+_global_cache: OrderedDict = OrderedDict()
 _global_cache_lock = threading.Lock()
 
 import pickle
@@ -35,6 +38,8 @@ def _load_cpr_cache():
                 loaded = pickle.load(f)
                 if isinstance(loaded, dict):
                     _global_cache.update(loaded)
+                    while len(_global_cache) > _MAX_HIST_CACHE:
+                        _global_cache.popitem(last=False)
                     logger.info(f"Loaded {len(_global_cache)} cached historical series from disk cache.")
         except Exception as e:
             logger.warning(f"Failed to load CPR disk cache: {e}")
@@ -48,6 +53,17 @@ def _save_cpr_cache():
             pickle.dump(data_to_save, f)
     except Exception as e:
         logger.warning(f"Failed to save CPR disk cache: {e}")
+
+_pending_save_count = 0
+_SAVE_EVERY_N = 10
+
+def _schedule_cache_save():
+    global _pending_save_count
+    _pending_save_count += 1
+    if _pending_save_count < _SAVE_EVERY_N:
+        return
+    _pending_save_count = 0
+    threading.Thread(target=_save_cpr_cache, daemon=True).start()
 
 # Load on module load
 _load_cpr_cache()
@@ -114,6 +130,7 @@ class CPRFilterService:
         self.kite = kite_instance or get_data_provider()
         
         self._instruments = []
+        self._token_by_symbol: Dict[str, int] = {}
         self._fo_stocks = None
         # Use global cache for persistence between requests
         self._historical_data_cache = _global_cache
@@ -137,32 +154,37 @@ class CPRFilterService:
             except Exception as e:
                 logger.error(f"Instruments load failed: {e}")
                 self._instruments = []
+            self._token_by_symbol = {}
+            for inst in self._instruments:
+                ts = inst.get('tradingsymbol')
+                tok = inst.get('instrument_token')
+                if ts and tok:
+                    if ts not in self._token_by_symbol or inst.get('instrument_type') == 'EQ':
+                        self._token_by_symbol[ts] = tok
 
     def get_token(self, symbol: str) -> Optional[int]:
         if not self._instruments:
             self._load_instruments()
-        
-        # Priority 1: Exact tradingsymbol match (any type)
-        for inst in self._instruments:
-            if inst.get('tradingsymbol') == symbol:
-                return inst.get('instrument_token')
-                
-        # Priority 2: Name match for Equity (EQ)
+
+        # O(1) exact tradingsymbol lookup (covers >99% of calls)
+        if symbol in self._token_by_symbol:
+            return self._token_by_symbol[symbol]
+
+        # Fallback: name match for Equity (EQ)
         for inst in self._instruments:
             if inst.get('instrument_type') == 'EQ' and inst.get('name') == symbol:
                 return inst.get('instrument_token')
-                
-        # Priority 3: Name match for Future (FUT) - Nearest Expiry
-        fut_matches = [inst for inst in self._instruments 
+
+        # Fallback: name match for Future (FUT) — nearest expiry
+        fut_matches = [inst for inst in self._instruments
                       if inst.get('instrument_type') == 'FUT' and inst.get('name') == symbol]
         if fut_matches:
-            # Sort by expiry if available, otherwise just pick first
             try:
                 fut_matches.sort(key=lambda x: x.get('expiry') or datetime.max.date())
-            except:
+            except Exception:
                 pass
             return fut_matches[0].get('instrument_token')
-            
+
         return None
 
     def get_hist_data(self, symbol: str, days: int = 300, interval='day', end_date: Optional[datetime] = None) -> Optional[pd.DataFrame]:
@@ -192,8 +214,10 @@ class CPRFilterService:
             
             with self._cache_lock:
                 self._historical_data_cache[key] = df
-            
-            _save_cpr_cache()
+                if len(self._historical_data_cache) > _MAX_HIST_CACHE:
+                    self._historical_data_cache.popitem(last=False)
+
+            _schedule_cache_save()
             return df
         except Exception as e:
             logger.error(f"Hist data failed for {symbol}: {e}")
@@ -258,7 +282,9 @@ class CPRFilterService:
             df.index = pd.to_datetime(df.index)
             with self._cache_lock:
                 self._historical_data_cache[key] = df
-            _save_cpr_cache()
+                if len(self._historical_data_cache) > _MAX_HIST_CACHE:
+                    self._historical_data_cache.popitem(last=False)
+            _schedule_cache_save()
             logger.debug(f"Cached {len(df)} rows for {symbol} {from_date.date()} to {to_date.date()}")
             return df
         except Exception as e:
@@ -278,7 +304,8 @@ class CPRFilterService:
         
         # Filter to data on or before root_date
         idx_dates = pd.to_datetime(all_data.index)
-        df = all_data[idx_dates.date <= root_date.date()]  # type: ignore
+        date_arr = idx_dates.date  # computed once, reused across all masks
+        df = all_data[date_arr <= root_date.date()]  # type: ignore
         
         if len(df) < 2:
             logger.debug(f"Insufficient data for {symbol}")
@@ -305,7 +332,7 @@ class CPRFilterService:
         
         # Weekly CPR - slice for prev week Mon-Fri
         mon, fri = self.get_prev_week_range(root_date)
-        week_mask = (idx_dates.date >= mon.date()) & (idx_dates.date <= fri.date())  # type: ignore
+        week_mask = (date_arr >= mon.date()) & (date_arr <= fri.date())  # type: ignore
         week_df = all_data[week_mask]
         if week_df.empty:
             return None
@@ -314,7 +341,7 @@ class CPRFilterService:
         
         # Monthly CPR - slice for prev month
         mon_start, mon_end = self.get_prev_month_range(root_date)
-        month_mask = (idx_dates.date >= mon_start.date()) & (idx_dates.date <= mon_end.date())  # type: ignore
+        month_mask = (date_arr >= mon_start.date()) & (date_arr <= mon_end.date())  # type: ignore
         month_df = all_data[month_mask]
         if month_df.empty:
             return None
@@ -334,7 +361,7 @@ class CPRFilterService:
         
         # Yearly CPR - slice for prev year
         year_start, year_end = self.get_prev_year_range(root_date)
-        year_mask = (idx_dates.date >= year_start.date()) & (idx_dates.date <= year_end.date())  # type: ignore
+        year_mask = (date_arr >= year_start.date()) & (date_arr <= year_end.date())  # type: ignore
         year_df = all_data[year_mask]
         if year_df.empty:
             return None
@@ -399,19 +426,19 @@ class CPRFilterService:
         """
         if len(rsi) < window:
             return [], []
-            
-        drsi = [0.0] * len(rsi)
+
+        rsi_arr = np.array(rsi)
         x = np.arange(window)
-        
-        # Calculate polynomial derivative at each point where we have enough window
+        # Build pseudo-inverse once — O(window²) cost paid once instead of per iteration
+        vander = np.vander(x, degree + 1, increasing=True)       # shape (window, 3): [1, x, x²] columns
+        pinv = np.linalg.pinv(vander)                             # shape (3, window)
+        # Derivative at x=(window-1): d/dx(a0+a1·x+a2·x²) = a1 + 2·a2·(window-1)
+        slope_row = np.array([0, 1, 2 * (window - 1)], dtype=float)
+
+        drsi = np.zeros(len(rsi))
         for i in range(window - 1, len(rsi)):
-            y = np.array(rsi[i - window + 1 : i + 1])
-            # Polynomial fit: a2*x^2 + a1*x + a0 -> returns [a2, a1, a0]
-            poly = np.polyfit(x, y, degree)
-            # Derivative at the last point (x = window - 1)
-            # D = 2*a2*x + a1
-            d_val = 2 * poly[0] * (window - 1) + poly[1]
-            drsi[i] = d_val
+            coeffs = pinv @ rsi_arr[i - window + 1 : i + 1]      # [a0, a1, a2] in O(window)
+            drsi[i] = slope_row @ coeffs
             
         # Signal Line: 9-period EMA of D-RSI
         signal_len = 9

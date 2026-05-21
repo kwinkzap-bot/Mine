@@ -48,12 +48,12 @@ function updateOIProfileTheme(themeName) {
     if (!oipPage) return;
 
     // 1. Remove all old theme classes
-    oipPage.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'carbon-theme', 'cream-theme', 'ocean-theme');
+    oipPage.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
     // 2. Add new theme class
     oipPage.classList.add(`${themeName}-theme`);
 
     // Also apply to document.body for styling the main template / navigation bar
-    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'carbon-theme', 'cream-theme', 'ocean-theme');
+    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
     document.body.classList.add(`${themeName}-theme`);
 
     // 3. Save to localStorage
@@ -601,7 +601,9 @@ function syncSize(chart, wrap) {
 }
 
 function oipRequestDraw() {
-    if (!oipRafId) oipRafId = requestAnimationFrame(oipDrawOIBars);
+    // Cancel any pending frame so we always draw with the latest chart state.
+    if (oipRafId) cancelAnimationFrame(oipRafId);
+    oipRafId = requestAnimationFrame(oipDrawOIBars);
 }
 
 /* ── Canvas OI overlay ────────────────────────────────────── */
@@ -728,6 +730,40 @@ function oipCalculateFixedEMA(data, period) {
         }
     });
     return ema;
+}
+
+// Computes EMA9/20/50/100/200 in a single pass — 5x fewer iterations than calling oipCalculateFixedEMA five times.
+function oipCalculateAllEMAs(data) {
+    if (!data || data.length === 0) return { ema9: [], ema20: [], ema50: [], ema100: [], ema200: [] };
+    const periods = [9, 20, 50, 100, 200];
+    const k = periods.map(p => 2 / (p + 1));
+    const emas = periods.map(() => []);
+    let prev = periods.map(() => data[0].close);
+    data.forEach(d => {
+        if (d.close == null || isNaN(d.close)) return;
+        for (let i = 0; i < 5; i++) {
+            const val = d.close * k[i] + prev[i] * (1 - k[i]);
+            if (!isNaN(val)) { emas[i].push({ time: d.time, value: val }); prev[i] = val; }
+        }
+    });
+    return { ema9: emas[0], ema20: emas[1], ema50: emas[2], ema100: emas[3], ema200: emas[4] };
+}
+
+// Computes EMA9/20/50 in a single pass for CE/PE option charts.
+function oipCalculate3EMAs(data) {
+    if (!data || data.length === 0) return { ema9: [], ema20: [], ema50: [] };
+    const periods = [9, 20, 50];
+    const k = periods.map(p => 2 / (p + 1));
+    const emas = periods.map(() => []);
+    let prev = periods.map(() => data[0].close);
+    data.forEach(d => {
+        if (d.close == null || isNaN(d.close)) return;
+        for (let i = 0; i < 3; i++) {
+            const val = d.close * k[i] + prev[i] * (1 - k[i]);
+            if (!isNaN(val)) { emas[i].push({ time: d.time, value: val }); prev[i] = val; }
+        }
+    });
+    return { ema9: emas[0], ema20: emas[1], ema50: emas[2] };
 }
 
 function oipCalculateVWAP(candles) {
@@ -978,12 +1014,15 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                 } catch (e) { console.warn('[OIP] SetData Err:', e); }
             }
 
-            // Fixed EMAs
-            if (oipEma9Series) oipEma9Series.setData(oipCalculateFixedEMA(validCandles, 9));
-            if (oipEma20Series) oipEma20Series.setData(oipCalculateFixedEMA(validCandles, 20));
-            if (oipEma50Series) oipEma50Series.setData(oipCalculateFixedEMA(validCandles, 50));
-            if (oipEma100Series) oipEma100Series.setData(oipCalculateFixedEMA(validCandles, 100));
-            if (oipEma200Series) oipEma200Series.setData(oipCalculateFixedEMA(validCandles, 200));
+            // Fixed EMAs — single-pass over candles for all 5 periods
+            if (oipEma9Series || oipEma20Series || oipEma50Series || oipEma100Series || oipEma200Series) {
+                const allEmas = oipCalculateAllEMAs(validCandles);
+                if (oipEma9Series) oipEma9Series.setData(allEmas.ema9);
+                if (oipEma20Series) oipEma20Series.setData(allEmas.ema20);
+                if (oipEma50Series) oipEma50Series.setData(allEmas.ema50);
+                if (oipEma100Series) oipEma100Series.setData(allEmas.ema100);
+                if (oipEma200Series) oipEma200Series.setData(allEmas.ema200);
+            }
 
             oipUpdateEmaVisibility();
             oipDrawCpr(validCandles);
@@ -1422,20 +1461,23 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         const ce_levels = oipOIData.intrinsic?.ce_levels || [];
         const pe_levels = oipOIData.intrinsic?.pe_levels || [];
 
+        // Compute both VWAPs once — reused by individual series and combined VWAP below.
+        const ceVwapData = oipCalculateVWAP(ceRaw);
+        const peVwapData = oipCalculateVWAP(peRaw);
+
         // Update Individual Premium Chart
         if (view === 'combined') {
             oipIntrinsicChart.update(ceData, peData, resetZoom);
-            // Only use valid candles for VWAP
-            if (oipVwapIntSeries) oipVwapIntSeries.setData(oipCalculateVWAP(ceRaw));
-            if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(oipCalculateVWAP(peRaw));
+            if (oipVwapIntSeries) oipVwapIntSeries.setData(ceVwapData);
+            if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(peVwapData);
         } else if (view === 'ce') {
             oipIntrinsicChart.update(ceData, null, resetZoom);
-            if (oipVwapIntSeries) oipVwapIntSeries.setData(oipCalculateVWAP(ceRaw));
+            if (oipVwapIntSeries) oipVwapIntSeries.setData(ceVwapData);
             if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData([]);
         } else {
             oipIntrinsicChart.update(null, peData, resetZoom);
             if (oipVwapIntSeries) oipVwapIntSeries.setData([]);
-            if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(oipCalculateVWAP(peRaw));
+            if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(peVwapData);
         }
 
         // Update NEW Combined Premium Chart
@@ -1478,18 +1520,13 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
                 }
             }
 
-            // Calculate and Update Combined VWAP (Sum of individual VWAPs)
+            // Combined VWAP — reuse ceVwapData/peVwapData already computed above (no extra O(n) passes).
             if (oipCombinedVwapSeries) {
-                const ceVwap = oipCalculateVWAP(ceRaw);
-                const peVwap = oipCalculateVWAP(peRaw);
                 const combinedVwapData = [];
-                // Align by time
-                const peMap = new Map(peVwap.map(d => [d.time, d.value]));
-                ceVwap.forEach(ceV => {
+                const peMap = new Map(peVwapData.map(d => [d.time, d.value]));
+                ceVwapData.forEach(ceV => {
                     const peVal = peMap.get(ceV.time);
-                    if (peVal !== undefined) {
-                        combinedVwapData.push({ time: ceV.time, value: ceV.value + peVal });
-                    }
+                    if (peVal !== undefined) combinedVwapData.push({ time: ceV.time, value: ceV.value + peVal });
                 });
                 oipCombinedVwapSeries.setData(combinedVwapData);
             }
@@ -1513,10 +1550,13 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         // Update Individual CE Only Chart
         if (oipCEChart) {
             oipCEChart.update(ceData, null, resetZoom);
-            // EMAs
-            if (oipCEEma9Series) oipCEEma9Series.setData(oipCalculateFixedEMA(ceRaw, 9));
-            if (oipCEEma20Series) oipCEEma20Series.setData(oipCalculateFixedEMA(ceRaw, 20));
-            if (oipCEEma50Series) oipCEEma50Series.setData(oipCalculateFixedEMA(ceRaw, 50));
+            // EMAs — single pass for all 3 CE periods
+            if (oipCEEma9Series || oipCEEma20Series || oipCEEma50Series) {
+                const ceEmas = oipCalculate3EMAs(ceRaw);
+                if (oipCEEma9Series) oipCEEma9Series.setData(ceEmas.ema9);
+                if (oipCEEma20Series) oipCEEma20Series.setData(ceEmas.ema20);
+                if (oipCEEma50Series) oipCEEma50Series.setData(ceEmas.ema50);
+            }
 
             const strike = oipElems.customStrikeDropdown?.value || '--';
             if (document.getElementById('oipLegendCEOnly')) document.getElementById('oipLegendCEOnly').textContent = `${strike} CE`;
@@ -1525,10 +1565,13 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         // Update Individual PE Only Chart
         if (oipPEChart) {
             oipPEChart.update(peData, null, resetZoom);
-            // EMAs
-            if (oipPEEma9Series) oipPEEma9Series.setData(oipCalculateFixedEMA(peRaw, 9));
-            if (oipPEEma20Series) oipPEEma20Series.setData(oipCalculateFixedEMA(peRaw, 20));
-            if (oipPEEma50Series) oipPEEma50Series.setData(oipCalculateFixedEMA(peRaw, 50));
+            // EMAs — single pass for all 3 PE periods
+            if (oipPEEma9Series || oipPEEma20Series || oipPEEma50Series) {
+                const peEmas = oipCalculate3EMAs(peRaw);
+                if (oipPEEma9Series) oipPEEma9Series.setData(peEmas.ema9);
+                if (oipPEEma20Series) oipPEEma20Series.setData(peEmas.ema20);
+                if (oipPEEma50Series) oipPEEma50Series.setData(peEmas.ema50);
+            }
 
             const strike = oipElems.customStrikeDropdown?.value || '--';
             if (document.getElementById('oipLegendPEOnly')) document.getElementById('oipLegendPEOnly').textContent = `${strike} PE`;
