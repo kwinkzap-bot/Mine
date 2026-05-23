@@ -44,14 +44,36 @@ _global_rate_limiter = GlobalRateLimiter(3.0)
 def get_global_rate_limiter():
     return _global_rate_limiter
 
+def _is_proxy_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
 def apply_kite_proxy(kite) -> None:
-    """Apply SOCKS5 proxy to KiteConnect session if KITE_PROXY_URL is set."""
+    """Apply SOCKS5 proxy to KiteConnect session if KITE_PROXY_URL is set and reachable."""
     if not isinstance(kite, KiteConnect):
         return
     proxy_url = os.getenv("KITE_PROXY_URL", "").strip()
-    if proxy_url:
-        kite.reqsession.proxies = {'http': proxy_url, 'https': proxy_url}
-        logging.info(f"[KiteService] SOCKS5 proxy configured: {proxy_url}")
+    if not proxy_url:
+        return
+    # Parse host:port from socks5h://host:port
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(proxy_url)
+        host, port = parsed.hostname, parsed.port or 1080
+    except Exception:
+        host, port = "127.0.0.1", 1080
+    if not _is_proxy_reachable(host, port):
+        logging.warning(
+            f"[KiteService] SOCKS5 proxy {proxy_url} not reachable — "
+            f"run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D {port} opc@68.233.118.234"
+        )
+        return
+    kite.reqsession.proxies = {'http': proxy_url, 'https': proxy_url}
+    logging.info(f"[KiteService] SOCKS5 proxy active: {proxy_url}")
 
 # ── HISTORICAL CACHE ─────────────────────────────────────────────────────
 class HistoricalDataCache:

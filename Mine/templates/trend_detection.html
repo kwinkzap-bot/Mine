@@ -508,7 +508,7 @@
             localStorage.setItem('app-theme', theme);
         }
 
-        const saved = localStorage.getItem('app-theme') || localStorage.getItem('mkt-theme') || 'dark';
+        const saved = localStorage.getItem('app-theme') || localStorage.getItem('mkt-theme') || 'ocean';
         applyTheme(saved);
 
         window.addEventListener('themechanged', e => applyTheme(e.detail.theme));

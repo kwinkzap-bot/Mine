@@ -5195,6 +5195,8 @@ def oi_profile_candles() -> EndpointResponse:
         auto_hl    = request.args.get('auto_hl', 'false').lower() == 'true'
         first_5m_atm = request.args.get('first_5m_atm', 'false').lower() == 'true'
         custom_strike = request.args.get('custom_strike', type=int)
+        ce_strike = request.args.get('ce_strike', type=int)
+        pe_strike = request.args.get('pe_strike', type=int)
 
         # Sentinel Check: Ignore UI placeholders (20000 for Nifty, 50000 for BankNifty)
         # and fallback to ATM calculation to prevent fetching wrong data on first load.
@@ -5206,7 +5208,7 @@ def oi_profile_candles() -> EndpointResponse:
 
         # ── 1. Check Response Cache & Coalesce Requests ──────────────
         # Use request parameters as cache key (ignore _t timestamp)
-        cache_key = (symbol, interval, days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike)
+        cache_key = (symbol, interval, days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike)
         
         # Request Coalescing: Only one thread fetches for this key at a time
         req_lock = _get_request_lock(cache_key)
@@ -5391,7 +5393,15 @@ def oi_profile_candles() -> EndpointResponse:
         today_str = now.strftime('%Y-%m-%d')
         atm_cache_key = (symbol, today_str)
         
-        if custom_strike:
+        if ce_strike or pe_strike:
+            # Separate CE / PE strikes selected from the UI
+            itm_ce_strike = ce_strike if ce_strike else None
+            itm_pe_strike = pe_strike if pe_strike else None
+            if itm_ce_strike:
+                ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
+            if itm_pe_strike:
+                pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
+        elif custom_strike:
             # Strike is known upfront — resolve tokens and submit CE/PE in parallel with index,
             # regardless of auto_hl mode (auto_hl still computes spot_high/low for intrinsic calc).
             itm_ce_strike = custom_strike
@@ -5508,7 +5518,14 @@ def oi_profile_candles() -> EndpointResponse:
                 pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
                 logger.info(f"[OI-Profile] First 5m ATM: 5m Mark close {close_p} (at {datetime.fromtimestamp(five_m_close_candle['time'] - ist_offset).strftime('%H:%M')}) -> Strike {atm_strike}, CE_token={ce_token}, PE_token={pe_token}")
             else:
-                if custom_strike:
+                if ce_strike or pe_strike:
+                    itm_ce_strike = ce_strike if ce_strike else None
+                    itm_pe_strike = pe_strike if pe_strike else None
+                    if itm_ce_strike:
+                        ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
+                    if itm_pe_strike:
+                        pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
+                elif custom_strike:
                     itm_ce_strike, itm_pe_strike = custom_strike, custom_strike
                     ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
                     pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')

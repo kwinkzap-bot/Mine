@@ -93,7 +93,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     // Bootstrap dynamic theme from localStorage
-    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
     updateOpenInterestTheme(activeTheme);
 
     // Event listener for global theme changes
@@ -807,7 +807,7 @@ const currentPriceLinePlugin = {
         }
 
         if (xPixel !== null) {
-            const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+            const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
             const isLightBg = ['light', 'cream', 'ocean'].includes(activeTheme);
             // Draw vertical dashed line
             ctx.save();
@@ -1526,7 +1526,7 @@ function updateOpenInterestTheme(themeName) {
 }
 
 function getActiveChartTheme() {
-    const themeName = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+    const themeName = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
     const themes = {
         'light': { text: '#374151', grid: 'rgba(0, 0, 0, 0.06)', vgrid: 'rgba(0, 0, 0, 0.15)', tooltipBg: 'rgba(255, 255, 255, 0.95)', tooltipBorder: 'rgba(0, 0, 0, 0.2)', tooltipText: '#000000' },
         'dark': { text: '#94a3b8', grid: 'rgba(255, 255, 255, 0.08)', vgrid: 'rgba(255, 255, 255, 0.08)', tooltipBg: 'rgba(17, 24, 39, 0.95)', tooltipBorder: 'rgba(255, 255, 255, 0.2)', tooltipText: '#ffffff' },

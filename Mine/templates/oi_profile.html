@@ -206,17 +206,22 @@
 
                     <div class="oip-prem-sep" style="display:none"></div>
 
-                    <!-- Strike group -->
+                    <!-- Strike group: hidden compat checkboxes + mode dropdown -->
+                    <input type="checkbox" id="oipFirst5mATM" style="display:none">
+                    <input type="checkbox" id="oipCustomStrikeCheck" checked style="display:none">
                     <div class="oip-prem-group">
-                        <label class="oip-checkbox" title="First 5m ATM Strike">
-                            <input type="checkbox" id="oipFirst5mATM"><span>Prem. Str.</span>
-                        </label>
-                        <label class="oip-checkbox" title="Custom Strike">
-                            <input type="checkbox" id="oipCustomStrikeCheck" checked><span>Custom</span>
-                        </label>
-                        <select id="oipCustomStrikeDropdown" class="oip-select oip-select--xs">
-                            <!-- Options generated in JS -->
+                        <span class="oip-label">Strike</span>
+                        <select id="oipStrikeMode" class="oip-select oip-select--xs" title="Strike selection mode">
+                            <option value="atm">ATM</option>
+                            <option value="custom" selected>Custom</option>
+                            <option value="ce_pe">CE &amp; PE</option>
                         </select>
+                        <!-- Shared strike: visible for mode=custom -->
+                        <select id="oipCustomStrikeDropdown" class="oip-select oip-select--xs"></select>
+                        <!-- CE strike: visible for mode=ce_pe -->
+                        <select id="oipCEStrikeDropdown" class="oip-select oip-select--xs" style="display:none" title="CE Strike"></select>
+                        <!-- PE strike: visible for mode=ce_pe -->
+                        <select id="oipPEStrikeDropdown" class="oip-select oip-select--xs" style="display:none" title="PE Strike"></select>
                     </div>
 
                     <div class="oip-prem-sep"></div>

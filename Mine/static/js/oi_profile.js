@@ -159,6 +159,7 @@ const oipElems = {
     hdrCeChg: null, hdrPeOI: null,
     hdrPeChg: null, hdrTrend: null, hdrAtm: null, brokerSelect: null,
     showPremium: null, showSignals: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
+    strikeMode: null, ceStrikeDropdown: null, peStrikeDropdown: null,
     showEma9: null, showEma20: null, showEma50: null, showEma100: null, showEma200: null,
     exitAll: null
 };
@@ -224,6 +225,9 @@ function oipInitElems() {
     oipElems.first5mATM = document.getElementById('oipFirst5mATM');
     oipElems.customStrikeCheck = document.getElementById('oipCustomStrikeCheck');
     oipElems.customStrikeDropdown = document.getElementById('oipCustomStrikeDropdown');
+    oipElems.strikeMode = document.getElementById('oipStrikeMode');
+    oipElems.ceStrikeDropdown = document.getElementById('oipCEStrikeDropdown');
+    oipElems.peStrikeDropdown = document.getElementById('oipPEStrikeDropdown');
     oipElems.targetDistance = document.getElementById('oipTargetDistance');
     oipElems.showEma9 = document.getElementById('oipShowEma9');
     oipElems.showEma20 = document.getElementById('oipShowEma20');
@@ -356,39 +360,41 @@ document.addEventListener('DOMContentLoaded', () => {
         oipRefreshLocalView(oipElems.view?.value);
     });
 
+    // Strike mode dropdown — controls which strike input is visible and syncs hidden checkboxes
+    function oipApplyStrikeMode(mode) {
+        const isAtm    = mode === 'atm';
+        const isCustom = mode === 'custom';
+        const isCePe   = mode === 'ce_pe';
+
+        // Sync hidden compat checkboxes
+        if (oipElems.first5mATM) oipElems.first5mATM.checked = isAtm;
+        if (oipElems.customStrikeCheck) oipElems.customStrikeCheck.checked = isCustom;
+
+        // Show / hide strike dropdowns
+        if (oipElems.customStrikeDropdown) oipElems.customStrikeDropdown.style.display = isCustom ? '' : 'none';
+        if (oipElems.ceStrikeDropdown) oipElems.ceStrikeDropdown.style.display = isCePe ? '' : 'none';
+        if (oipElems.peStrikeDropdown) oipElems.peStrikeDropdown.style.display = isCePe ? '' : 'none';
+    }
+
+    oipElems.strikeMode?.addEventListener('change', () => {
+        oipApplyStrikeMode(oipElems.strikeMode.value);
+        oipLoadCandles(true, false);
+    });
+
     oipElems.customStrikeDropdown?.addEventListener('change', () => {
-        if (oipElems.customStrikeCheck?.checked) {
-            console.log(`[OIP] Custom strike changed to: ${oipElems.customStrikeDropdown.value}`);
-            oipLoadCandles(true, true);
-        }
+        if (oipElems.strikeMode?.value === 'custom') oipLoadCandles(true, true);
+    });
+
+    oipElems.ceStrikeDropdown?.addEventListener('change', () => {
+        if (oipElems.strikeMode?.value === 'ce_pe') oipLoadCandles(true, true);
+    });
+
+    oipElems.peStrikeDropdown?.addEventListener('change', () => {
+        if (oipElems.strikeMode?.value === 'ce_pe') oipLoadCandles(true, true);
     });
 
     oipElems.showSignals?.addEventListener('change', () => {
         oipRefreshLocalView(oipElems.view?.value);
-    });
-
-    oipElems.first5mATM?.addEventListener('change', (e) => {
-        if (e.target.checked && oipElems.customStrikeCheck) {
-            oipElems.customStrikeCheck.checked = false;
-        }
-        oipLoadCandles(true, false);
-    });
-
-    oipElems.customStrikeCheck?.addEventListener('change', (e) => {
-        if (e.target.checked && oipElems.first5mATM) {
-            oipElems.first5mATM.checked = false;
-            if (oipElems.customStrikeDropdown) {
-                const step = parseInt(oipElems.step?.value) || 50;
-                let refPrice = oipCurrentPrice;
-                if (!refPrice && oipElems.spotHigh?.value && oipElems.spotLow?.value) {
-                    refPrice = (parseFloat(oipElems.spotHigh?.value) + parseFloat(oipElems.spotLow?.value)) / 2;
-                }
-                if (refPrice > 0) {
-                    oipElems.customStrikeDropdown.value = Math.round(refPrice / step) * step;
-                }
-            }
-        }
-        oipLoadCandles(true, false);
     });
 
     oipElems.targetDistance?.addEventListener('change', () => {
@@ -463,7 +469,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Theme setup and handling
-    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
     updateOIProfileTheme(activeTheme);
 
     // Event listener for global theme changes
@@ -540,12 +546,16 @@ function oipInitCharts() {
         }
         oipOIChart.subscribeCrosshairMove(() => oipRequestDraw());
         new ResizeObserver(() => { syncSize(oipOIChart, wrapOI); oipRequestDraw(); }).observe(wrapOI);
+
+        if (typeof TradingViewChart !== 'undefined' && TradingViewChart.addScrollButton) {
+            TradingViewChart.addScrollButton(oipOIChart, oipOISeries, elOI);
+        }
     }
     if (window.oipInitSecondaryCharts) window.oipInitSecondaryCharts();
 }
 
 function creatBaseChart(el) {
-    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
     const cfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
     return LightweightCharts.createChart(el, {
         width: el.clientWidth || 1200, height: 360,
@@ -630,7 +640,7 @@ function oipDrawOIBars() {
     if (!oipAllStrikes.length) return;
 
     // Resolve dynamic colors based on active theme
-    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
     const cfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
     const lblColor = activeTheme === 'light' ? '#000000' : cfg.text;
     const borderCol = activeTheme === 'light' ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.1)';
@@ -956,10 +966,13 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         const view = oipElems.view?.value || 'combined';
 
         const needsOptionData = (view !== 'index') && !oipOptionData;
-        const autoHL = true; // Favored default for the current template
-        const first5m = oipElems.first5mATM?.checked || false;
-        const customStrike = (oipElems.customStrikeCheck?.checked && oipElems.customStrikeDropdown?.value) ? oipElems.customStrikeDropdown?.value : '';
-        
+        const autoHL = true;
+        const strikeMode = oipElems.strikeMode?.value || 'custom';
+        const first5m = strikeMode === 'atm';
+        const customStrike = strikeMode === 'custom' ? (oipElems.customStrikeDropdown?.value || '') : '';
+        const ceStrike = strikeMode === 'ce_pe' ? (oipElems.ceStrikeDropdown?.value || '') : '';
+        const peStrike = strikeMode === 'ce_pe' ? (oipElems.peStrikeDropdown?.value || '') : '';
+
         let days = parseInt(oipElems.days?.value) || 5;
         let dateRangeParams = "";
         if (window.oipReplayMode && oipElems.startDate?.value && oipElems.endDate?.value) {
@@ -968,7 +981,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
 
         if (!forceFetch && oipOIData && !needsOptionData) { oipRefreshLocalView(view, resetZoom); return; }
 
-        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}${dateRangeParams}&_t=${Date.now()}`;
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${dateRangeParams}&_t=${Date.now()}`;
 
         const res = await fetch(url);
         const data = await res.json();
@@ -1968,23 +1981,30 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
         }
     }
 
-    const currentVal = oipElems.customStrikeDropdown.value;
-    oipElems.customStrikeDropdown.innerHTML = opts;
-
-    let finalStrike = atm;
-    // Snap to ATM if this is a fresh load/symbol change
-    if (centerPrice && !oipCustomStrikeSetOnLoad) {
-        oipElems.customStrikeDropdown.value = atm;
-        oipCustomStrikeSetOnLoad = true;
-        finalStrike = atm;
-    } else if (currentVal && opts.includes(`value="${currentVal}"`)) {
-        oipElems.customStrikeDropdown.value = currentVal;
-        finalStrike = parseFloat(currentVal);
-    } else {
-        oipElems.customStrikeDropdown.value = atm;
-        finalStrike = atm;
+    // Populate all three strike dropdowns with the same options
+    function syncDropdown(el, prevVal) {
+        if (!el) return;
+        el.innerHTML = opts;
+        if (centerPrice && !oipCustomStrikeSetOnLoad) {
+            el.value = atm;
+        } else if (prevVal && opts.includes(`value="${prevVal}"`)) {
+            el.value = prevVal;
+        } else {
+            el.value = atm;
+        }
     }
-    return finalStrike;
+
+    const prevCustom = oipElems.customStrikeDropdown.value;
+    const prevCE = oipElems.ceStrikeDropdown?.value;
+    const prevPE = oipElems.peStrikeDropdown?.value;
+
+    syncDropdown(oipElems.customStrikeDropdown, prevCustom);
+    syncDropdown(oipElems.ceStrikeDropdown, prevCE);
+    syncDropdown(oipElems.peStrikeDropdown, prevPE);
+
+    if (centerPrice && !oipCustomStrikeSetOnLoad) oipCustomStrikeSetOnLoad = true;
+
+    return parseFloat(oipElems.customStrikeDropdown.value) || atm;
 }
 
 let oipRSISeriesObj = null;

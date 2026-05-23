@@ -323,33 +323,6 @@
     cursor: not-allowed;
 }
 
-.tv-chart-scroll-btn {
-    position: absolute;
-    bottom: 20px;
-    right: 20px;
-    background: var(--oip-card-bg);
-    border: 1px solid var(--oip-border);
-    border-radius: 50%;
-    width: 32px;
-    height: 32px;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-    z-index: 10;
-    color: var(--oip-text);
-}
-
-.tv-chart-scroll-btn.show {
-    display: flex;
-}
-
-.tv-chart-scroll-btn:hover {
-    background: var(--oip-header-bg);
-    color: var(--oip-accent);
-}
-
 .spin {
     animation: spin 0.8s linear infinite;
 }
@@ -672,34 +645,31 @@
 /* ── Chart Scroll to Latest Button ───────────────────────── */
 .tv-chart-scroll-btn {
     position: absolute;
-    bottom: 60px;
-    right: 20px;
-    width: 36px;
-    height: 36px;
-    background: var(--oip-card-bg);
-    border: 1px solid var(--oip-border);
-    border-radius: 50%;
+    bottom: 30px;
+    right: 30px;
+    width: 27px;
+    height: 27px;
+    background: rgba(250, 250, 250, 0.6);
+    border: none;
+    border-radius: 4px;
     display: none;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
     z-index: 100;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    color: var(--oip-text);
+    color: #4c525e;
 }
 
 .tv-chart-scroll-btn:hover {
-    background: var(--oip-header-bg);
-    border-color: var(--oip-accent);
-    color: var(--oip-accent);
-    transform: scale(1.1);
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+    background: rgba(250, 250, 250, 1);
+    color: #000;
 }
 
 .tv-chart-scroll-btn svg {
-    width: 20px;
-    height: 20px;
+    width: 14px;
+    height: 14px;
+    display: block;
 }
 
 .tv-chart-scroll-btn.show {

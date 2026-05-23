@@ -358,7 +358,7 @@ window.TradingViewChart = (function () {
                 'cream': { bg: '#fdfbf7', text: '#7c7267', grid: 'rgba(180, 83, 9, 0.05)' },
                 'ocean': { bg: '#f3f8fc', text: '#475569', grid: 'rgba(2, 132, 199, 0.05)' }
             };
-            const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'dark';
+            const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
             const themeCfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
 
             const chart = LightweightCharts.createChart(container, {
@@ -1285,11 +1285,17 @@ window.TradingViewChart = (function () {
      * Internal helper to add the "Scroll to Latest" button to a chart
      */
     function addScrollButton(chart, series, container) {
-        if (!chart || !series || !container) return;
+        if (!chart || !container) return;
+
+        const existingPos = window.getComputedStyle(container).position;
+        if (!existingPos || existingPos === 'static') {
+            container.style.position = 'relative';
+        }
 
         const scrollBtn = document.createElement('div');
         scrollBtn.className = 'tv-chart-scroll-btn';
-        scrollBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m5.25 4.5 7.5 7.5-7.5 7.5m6-15 7.5 7.5-7.5 7.5" /></svg>`;
+        // Official TradingView SVG icon (14×14 viewBox, matches JSFiddle reference)
+        scrollBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14" width="14" height="14"><path fill="currentColor" d="M4.438 11.375L8.813 7 4.438 2.625l1.124-1.125L11.063 7l-5.5 5.5z"/></svg>`;
         container.appendChild(scrollBtn);
 
         scrollBtn.onclick = (e) => {
@@ -1297,22 +1303,16 @@ window.TradingViewChart = (function () {
             chart.timeScale().scrollToRealTime();
         };
 
-        chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-            const timeScale = chart.timeScale();
-            const visibleRange = timeScale.getVisibleLogicalRange();
-            const data = series.data();
-            
-            if (!visibleRange || !data || data.length === 0) return;
+        // Official pattern from TradingView JSFiddle:
+        // scrollPosition() is the rightOffset — negative means user scrolled left
+        // (latest bar is off-screen to the right), so show the "go to realtime" button.
+        const updateVisibility = () => {
+            try {
+                const visible = chart.timeScale().scrollPosition() < 0;
+                scrollBtn.classList.toggle('show', visible);
+            } catch (_) {}
+        };
 
-            // If the right-most visible bar is less than the total data count minus some buffer,
-            // it means we've scrolled back in time.
-            const isScrolledBack = visibleRange.to < data.length - 2;
-            
-            if (isScrolledBack) {
-                scrollBtn.classList.add('show');
-            } else {
-                scrollBtn.classList.remove('show');
-            }
-        });
+        chart.timeScale().subscribeVisibleLogicalRangeChange(updateVisibility);
     }
 })();
