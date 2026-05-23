@@ -551,6 +551,8 @@ async function displayLineChartsInternal(data, skipPdhPdlFetch = false) {
         },
         crosshair: {
             mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: { color: '#9ca3af', width: 1, style: 3 },
+            horzLine: { color: '#9ca3af', width: 1, style: 3 },
         }
     };
     
@@ -939,8 +941,8 @@ async function displayCandlestickChartsInternal(data, skipPdhPdlFetch = false) {
                     },
                     crosshair: {
                         mode: 1,
-                        vertLine: { color: '#d4d4d5', width: 1, style: 0 },
-                        horzLine: { color: '#d4d4d5', width: 1, style: 0 },
+                        vertLine: { color: '#9ca3af', width: 1, style: 3 },
+                        horzLine: { color: '#9ca3af', width: 1, style: 3 },
                     },
                 });
 

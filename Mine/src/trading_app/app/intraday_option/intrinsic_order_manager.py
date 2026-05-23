@@ -4,24 +4,40 @@ import time
 
 logger = logging.getLogger(__name__)
 
+_active_monitors: dict = {}  # key → threading.Event
+
 class IntrinsicOrderManager:
     @staticmethod
     def start_monitoring(broker_type, instance_id, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, sec_id, kite_opt_sym, username, session_data):
+        stop_event = threading.Event()
+        key = f"{username}_{broker_type}_{instance_id}_{symbol}_{strike}_{option_type}"
+        _active_monitors[key] = stop_event
         thread = threading.Thread(
             target=IntrinsicOrderManager._monitor_trade,
-            args=(broker_type, instance_id, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, sec_id, kite_opt_sym, username, session_data),
+            args=(broker_type, instance_id, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, sec_id, kite_opt_sym, username, session_data, stop_event, key),
             daemon=True
         )
         thread.start()
 
+    @classmethod
+    def stop_all_for_user(cls, username):
+        prefix = f"{username}_"
+        keys = [k for k in list(_active_monitors.keys()) if k.startswith(prefix)]
+        for k in keys:
+            ev = _active_monitors.pop(k, None)
+            if ev:
+                ev.set()
+        logger.info(f"[Intrinsic Monitor] Stopped {len(keys)} monitor(s) for user '{username}'")
+
     @staticmethod
-    def _monitor_trade(broker_type, instance_id, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, sec_id, kite_opt_sym, username, session_data):
+    def _monitor_trade(broker_type, instance_id, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, sec_id, kite_opt_sym, username, session_data, stop_event, key):
         from trading_app.service.provider_logic import get_kite
         from trading_app.app.utils.user_env import UserEnvManager
 
         kite = get_kite(user=username, instance=1)
         if not kite:
             logger.error("[Intrinsic Monitor] Kite not available")
+            _active_monitors.pop(key, None)
             return
 
         targets_reached = [False]
@@ -59,56 +75,68 @@ class IntrinsicOrderManager:
                 return FyersOrderService(app_id=app_id, access_token=access_token)
             return None
 
-        # Try to get service once to ensure it works
         service = get_service()
         if not service:
             logger.error("[Intrinsic Monitor] Failed to initialize broker service")
+            _active_monitors.pop(key, None)
             return
 
-        while not all(targets_reached):
-            time.sleep(1)
-            try:
-                # Use correct exchange prefix for LTP
-                prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
-                ltp_data = kite.ltp([f'{prefix}:{kite_opt_sym}'])
-                ltp = ltp_data.get(f'{prefix}:{kite_opt_sym}', {}).get('last_price', 0)
-                if ltp == 0:
-                    continue
+        try:
+            while not all(targets_reached) and not stop_event.is_set():
+                time.sleep(1)
+                if stop_event.is_set():
+                    break
+                try:
+                    prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
+                    ltp_data = kite.ltp([f'{prefix}:{kite_opt_sym}'])
+                    ltp = ltp_data.get(f'{prefix}:{kite_opt_sym}', {}).get('last_price', 0)
+                    if ltp == 0:
+                        continue
 
-                for i, target_price in enumerate(target_prices):
-                    if not targets_reached[i] and ltp >= target_price:
-                        targets_reached[i] = True
-                        logger.info(f"[Intrinsic Monitor] Target {i+1} reached at {ltp} for {kite_opt_sym}")
-                        
-                        # Re-init service just in case token refreshed or connection dropped
-                        service = get_service()
+                    for i, target_price in enumerate(target_prices):
+                        if not targets_reached[i] and ltp >= target_price:
+                            targets_reached[i] = True
+                            logger.info(f"[Intrinsic Monitor] Target {i+1} reached at {ltp} for {kite_opt_sym}")
 
-                        # 1. Cancel SL Order
-                        if i < len(sl_orders) and sl_orders[i]:
-                            sl_order_id = sl_orders[i]
-                            logger.info(f"[Intrinsic Monitor] Cancelling SL order {sl_order_id}")
+                            service = get_service()
+
+                            # 1. Cancel SL Order
+                            if i < len(sl_orders) and sl_orders[i]:
+                                sl_order_id = sl_orders[i]
+                                logger.info(f"[Intrinsic Monitor] Cancelling SL order {sl_order_id}")
+                                try:
+                                    if hasattr(service, 'cancel_order'):
+                                        service.cancel_order(sl_order_id)
+                                    elif broker_type == 'kite' or broker_type.startswith('zerodha_'):
+                                        service.kite.cancel_order(variety='regular', order_id=sl_order_id)
+                                except Exception as e:
+                                    logger.error(f"[Intrinsic Monitor] Failed to cancel SL {sl_order_id}: {e}")
+
+                            # 2. Place Market SELL Order (split by freeze limit)
                             try:
-                                if hasattr(service, 'cancel_order'):
-                                    service.cancel_order(sl_order_id)
-                                elif broker_type == 'kite' or broker_type.startswith('zerodha_'):
-                                    service.kite.cancel_order(variety='regular', order_id=sl_order_id)
-                            except Exception as e:
-                                logger.error(f"[Intrinsic Monitor] Failed to cancel SL {sl_order_id}: {e}")
+                                from trading_app.app.routes.api import split_quantity_by_freeze_limit
+                                qty_chunks = split_quantity_by_freeze_limit(kite_opt_sym, qty_per_target, service)
+                                logger.info(f"[Intrinsic Monitor] Placing exit for {kite_opt_sym}: qty {qty_per_target} → chunks {qty_chunks}")
 
-                        # 2. Place Market SELL Order
-                        try:
-                            if broker_type == 'kite' or broker_type.startswith('zerodha_'):
-                                service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=service.kite.TRANSACTION_TYPE_SELL, quantity=qty_per_target)
-                            elif broker_type == 'kotak_neo':
-                                service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type='SELL', quantity=qty_per_target)
-                            elif broker_type == 'dhan':
-                                exchange_seg = 'BSE_FNO' if symbol.upper() == 'SENSEX' else 'NSE_FNO'
-                                service.place_order(security_id=sec_id, transaction_type='SELL', quantity=qty_per_target, order_type='MARKET', product_type='INTRADAY', exchange_segment=exchange_seg)
-                            elif broker_type == 'fyers':
-                                prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
-                                service.place_order(symbol=f'{prefix}:{kite_opt_sym}', side=-1, quantity=qty_per_target, order_type=2, product_type='INTRADAY')
-                        except Exception as e:
-                            logger.error(f"[Intrinsic Monitor] Failed to place target EXIT order: {e}")
-            except Exception as e:
-                logger.error(f"[Intrinsic Monitor] Loop error: {e}")
-                time.sleep(5)
+                                for chunk_qty in qty_chunks:
+                                    if broker_type == 'kite' or broker_type.startswith('zerodha_'):
+                                        service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=service.kite.TRANSACTION_TYPE_SELL, quantity=chunk_qty)
+                                    elif broker_type == 'kotak_neo':
+                                        service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type='SELL', quantity=chunk_qty)
+                                    elif broker_type == 'dhan':
+                                        exchange_seg = 'BSE_FNO' if symbol.upper() == 'SENSEX' else 'NSE_FNO'
+                                        service.place_order(security_id=sec_id, transaction_type='SELL', quantity=chunk_qty, order_type='MARKET', product_type='INTRADAY', exchange_segment=exchange_seg)
+                                    elif broker_type == 'fyers':
+                                        fyers_prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
+                                        service.place_order(symbol=f'{fyers_prefix}:{kite_opt_sym}', side=-1, quantity=chunk_qty, order_type=2, product_type='INTRADAY')
+                            except Exception as e:
+                                logger.error(f"[Intrinsic Monitor] Failed to place target EXIT order: {e}")
+                except Exception as e:
+                    logger.error(f"[Intrinsic Monitor] Loop error: {e}")
+                    time.sleep(5)
+        finally:
+            _active_monitors.pop(key, None)
+            if stop_event.is_set():
+                logger.info(f"[Intrinsic Monitor] Stopped by external signal for key: {key}")
+            else:
+                logger.info(f"[Intrinsic Monitor] Completed naturally for key: {key}")

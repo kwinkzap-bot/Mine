@@ -236,6 +236,10 @@
 
                     <!-- Order controls -->
                     <div class="oip-prem-group">
+                        <select id="oipOrderMode" class="oip-select oip-select--xs" title="Order Mode">
+                            <option value="broker" selected>Broker</option>
+                            <option value="mine">Mine</option>
+                        </select>
                         <input type="number" id="oipLimitPrice" class="oip-input oip-input--price" placeholder="Limit ₹"
                             step="0.05" title="Limit Price">
                         <div class="oip-order-side-group oip-order-side-group--ce">
@@ -310,6 +314,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/orders.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile.js') }}?v=2.9"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_init.js') }}?v=1.0"></script>
 {% endblock %}

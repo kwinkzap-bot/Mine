@@ -87,8 +87,8 @@ function updateOIProfileTheme(themeName) {
                     horzLines: { color: cfg.grid }
                 },
                 crosshair: {
-                    vertLine: { color: cfg.text },
-                    horzLine: { color: cfg.text }
+                    vertLine: { color: '#9ca3af', style: 3 },
+                    horzLine: { color: '#9ca3af', style: 3 }
                 },
                 timeScale: {
                     textColor: cfg.text
@@ -1790,42 +1790,85 @@ async function oipPlaceOrder(side, action, btn) {
     const strike = (side === 'CE') ? oipCurrentCEStrike : oipCurrentPEStrike;
     if (!strike) { showNotification(`No ${side} strike available.`, 'error'); return; }
 
+    const mode = document.getElementById('oipOrderMode')?.value || 'broker';
     const limitPriceInput = document.getElementById('oipLimitPrice');
-    const limitPrice = limitPriceInput ? parseFloat(limitPriceInput.value) : null;
+    const rawLimit = limitPriceInput ? parseFloat(limitPriceInput.value) : null;
+    const limitPrice = rawLimit && !isNaN(rawLimit) && rawLimit > 0 ? rawLimit : null;
+    const orderType = limitPrice ? 'LIMIT' : 'MARKET';
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
 
-    btn.disabled = true; const ot = btn.title; btn.title = "Placing...";
+    btn.disabled = true; const ot = btn.title; btn.title = 'Placing...';
     try {
-        const res = await fetch('/api/intraday-920/place-order', {
-            method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content },
+        if (mode === 'mine') {
+            // Mine mode: store in backend DB; Python monitors and auto-executes LIMIT orders.
+            const res = await fetch('/api/mine-orders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
+                body: JSON.stringify({
+                    symbol: oipSymbol,
+                    strike: strike,
+                    option_type: side,
+                    action: action,
+                    strategy: 'intrinsic',
+                    order_type: orderType,
+                    limit_price: limitPrice,
+                    price: limitPrice || 0
+                })
+            });
+            const r = await res.json();
+            if (r.success) {
+                if (orderType === 'LIMIT') {
+                    showNotification(`Mine: Limit ₹${limitPrice} queued — backend monitoring`, 'success');
+                } else {
+                    const details = _oipBrokerDetails(r);
+                    showNotification(`Mine: ${action} ${side} ${strike} dispatched${details}`, 'success');
+                }
+            } else {
+                showNotification(`Mine: ${r.error || 'Order failed'}`, 'error');
+            }
+            return;
+        }
+
+        // Broker mode: place directly to all active brokers; backend saves record to JSON.
+        const res = await fetch('/api/orders/place', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
             body: JSON.stringify({
                 symbol: oipSymbol,
                 strike: strike,
                 option_type: side,
                 action: action,
                 strategy: 'intrinsic',
-                limit_price: limitPrice && !isNaN(limitPrice) ? limitPrice : null
+                order_type: orderType,
+                limit_price: limitPrice
             })
         });
         const r = await res.json();
         if (r.success) {
-            showNotification(`✅ Success! ${action} ${side} ${strike}`, 'success');
-        } else {
-            // Build detailed error summary from broker results
-            let details = '';
-            if (r.summary && Array.isArray(r.summary)) {
-                details = r.summary.map(s => {
-                    const broker = s.broker.replace(/_/g, ' ').toUpperCase();
-                    const msg = s.result?.error || (s.result?.success ? 'OK' : 'Err');
-                    return `• ${broker}: ${msg}`;
-                }).join('\n');
+            if (orderType === 'LIMIT') {
+                showNotification(`Broker: Limit ₹${limitPrice} placed to broker`, 'success');
+            } else {
+                const details = _oipBrokerDetails(r);
+                showNotification(`Broker: ${action} ${side} ${strike}${details}`, 'success');
             }
-            const mainErr = r.error || 'Order Failed';
-            showNotification(`❌ ${mainErr}${details ? '\n' + details : ''}`, 'error');
+        } else {
+            const details = _oipBrokerDetails(r);
+            showNotification(`${r.error || 'Order Failed'}${details ? '\n' + details : ''}`, 'error');
         }
     } catch (e) {
         showNotification(`Order error: ${e.message}`, 'error');
+    } finally {
+        btn.disabled = false; btn.title = ot;
     }
-    finally { btn.disabled = false; btn.title = ot; }
+}
+
+function _oipBrokerDetails(r) {
+    if (!r.summary || !Array.isArray(r.summary)) return '';
+    return '\n' + r.summary.map(s => {
+        const broker = s.broker.replace(/_/g, ' ').toUpperCase();
+        const msg = s.result?.error || (s.result?.success ? 'OK' : 'Err');
+        return `• ${broker}: ${msg}`;
+    }).join('\n');
 }
 
 function oipRenderDropdown(filter, list) {

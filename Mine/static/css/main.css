@@ -53,7 +53,7 @@ body {
 .nav-link-logout {
     text-decoration: none;
     color: #475569;
-    padding: 4px 10px; /* Reduced from 6px 14px */
+    padding: 4px 8px; /* Reduced from 6px 14px */
     font-weight: 600;
     font-size: 11px; /* Reduced from 13px */
     border-radius: 8px; /* Reduced from 10px */

@@ -3,6 +3,7 @@ import logging
 from typing import Optional, Any
 from flask import has_request_context, session
 from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+from trading_app.service.kite_order_services import apply_kite_proxy
 
 logger = logging.getLogger(__name__)
 _fyers_adapter_cache = {}
@@ -34,6 +35,7 @@ def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Opti
             return None
 
         kite = KiteConnect(api_key=api_key)
+        apply_kite_proxy(kite)
         kite.set_access_token(access_token)
         return kite
     except Exception as e:

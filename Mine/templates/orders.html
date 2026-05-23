@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Orders{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/orders.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="orders-page">
+
+    <!-- ── Top bar ─────────────────────────────────────────────── -->
+    <div class="ord-topbar">
+        <div class="ord-topbar-left">
+            <span class="ord-title">Orders</span>
+            <div class="ord-stats">
+                <span class="ord-stat" id="ordStatPending">
+                    <span class="ord-stat-dot pending"></span>
+                    <span id="ordStatPendingCount">0</span> Pending
+                </span>
+                <span class="ord-stat" id="ordStatExecuted">
+                    <span class="ord-stat-dot executed"></span>
+                    <span id="ordStatExecutedCount">0</span> Executed
+                </span>
+            </div>
+        </div>
+        <div class="ord-topbar-right">
+            <span class="ord-monitor-pill" id="ordMonitorPill">
+                <span class="ord-monitor-dot" id="ordMonitorDot"></span>
+                <span id="ordMonitorLabel">–</span>
+            </span>
+            <div class="ord-tab-group">
+                <button class="ord-tab active" data-tab="pending">Pending</button>
+                <button class="ord-tab" data-tab="executed">Executed</button>
+                <button class="ord-tab" data-tab="all">All</button>
+            </div>
+            <button class="ord-history-btn" id="ordersRefreshBtn" title="Refresh orders">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+            </button>
+            <button class="ord-history-btn" id="ordersHistoryBtn">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+                History
+            </button>
+        </div>
+    </div>
+
+    <!-- ── Table ──────────────────────────────────────────────── -->
+    <div class="ord-table-wrap">
+        <table class="ord-table" id="ordersTable">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>Instrument</th>
+                    <th>Action</th>
+                    <th>Price</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="ordersTableBody"></tbody>
+        </table>
+        <div class="ord-empty hidden" id="ordersEmpty">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="12" x2="12" y2="12"/>
+            </svg>
+            <p>No orders for today</p>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/orders.js') }}"></script>
+<script>
+(function () {
+    function tick() {
+        const open = typeof window._isMarketOpen === 'function' && window._isMarketOpen();
+        const dot   = document.getElementById('ordMonitorDot');
+        const label = document.getElementById('ordMonitorLabel');
+        if (!dot) return;
+        dot.className = 'ord-monitor-dot' + (open ? ' live' : '');
+        label.textContent = open ? 'Live' : 'Closed';
+    }
+    document.addEventListener('DOMContentLoaded', tick);
+    setInterval(tick, 3000);
+})();
+</script>
+{% endblock %}

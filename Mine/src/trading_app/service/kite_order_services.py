@@ -44,6 +44,15 @@ _global_rate_limiter = GlobalRateLimiter(3.0)
 def get_global_rate_limiter():
     return _global_rate_limiter
 
+def apply_kite_proxy(kite) -> None:
+    """Apply SOCKS5 proxy to KiteConnect session if KITE_PROXY_URL is set."""
+    if not isinstance(kite, KiteConnect):
+        return
+    proxy_url = os.getenv("KITE_PROXY_URL", "").strip()
+    if proxy_url:
+        kite.reqsession.proxies = {'http': proxy_url, 'https': proxy_url}
+        logging.info(f"[KiteService] SOCKS5 proxy configured: {proxy_url}")
+
 # ── HISTORICAL CACHE ─────────────────────────────────────────────────────
 class HistoricalDataCache:
     """Thread-safe LRU cache for historical data with TTL."""
@@ -89,6 +98,8 @@ class KiteService:
     
     def __init__(self, kite_instance: Optional[KiteConnect] = None):
         self.kite: KiteConnect = kite_instance or self._create_kite_instance()
+        if kite_instance is not None:
+            apply_kite_proxy(self.kite)
         self._instrument_tokens_by_symbol: Dict[str, Union[int, str]] = {}
         self._instrument_tokens_by_name: Dict[str, Union[int, str]] = {}
         self._nfo_by_name: Dict[str, List[Dict[str, Any]]] = {}
@@ -484,6 +495,7 @@ class KiteService:
         access_token = os.getenv("ACCESS_TOKEN")
         kite = KiteConnect(api_key=api_key)
         kite.timeout = 30
+        apply_kite_proxy(kite)
         if access_token: kite.set_access_token(access_token)
         return kite
 

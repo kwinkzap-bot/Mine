@@ -141,19 +141,25 @@ def backtest():
     """Backtest page for various strategies."""
     return render_template('backtest.html')
 
+@pages_bp.route('/orders')
+@require_user_auth
+@login_required
+def orders():
+    """Order management page — IndexedDB-backed order book with limit order monitoring."""
+    return render_template('orders.html')
+
+@pages_bp.route('/portfolio')
+@require_user_auth
+def portfolio():
+    """Portfolio page — positions and holdings across all logged-in brokers."""
+    return render_template('portfolio.html')
+
 @pages_bp.route('/markets')
 @require_user_auth
 @login_required
 def markets():
     """Markets overview page."""
     return render_template('markets.html')
-
-@pages_bp.route('/chart')
-@require_user_auth
-@login_required
-def chart_page():
-    """Multi-timeframe chart page."""
-    return render_template('chart.html')
 
 @pages_bp.route('/trend-detection')
 @require_user_auth

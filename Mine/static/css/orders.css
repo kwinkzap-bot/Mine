@@ -1,0 +1,449 @@
+/* ================================================================
+   Orders — terminal-style order book
+   Themes handled via CSS custom properties on .orders-page,
+   overridden per body.THEME with a single rule each.
+================================================================ */
+
+/* ── Custom properties (light defaults) ─────────────────────── */
+.orders-page {
+    --ord-bg:         #f8fafc;
+    --ord-surface:    #ffffff;
+    --ord-border:     #e2e8f0;
+    --ord-border-sub: #f1f5f9;
+    --ord-text:       #1e293b;
+    --ord-text-2:     #64748b;
+    --ord-text-3:     #94a3b8;
+    --ord-accent:     #3b82f6;
+    --ord-accent-dim: rgba(59,130,246,0.08);
+    --ord-row-hover:  #f8fafc;
+    --ord-input-bg:   #f1f5f9;
+    --ord-btn-hover:  #f1f5f9;
+    --ord-shadow:     0 1px 3px rgba(0,0,0,0.06);
+
+    /* status colours */
+    --ord-pending-fg:   #c2410c;  --ord-pending-bg:   #fff7ed;  --ord-pending-bd:   #fed7aa;
+    --ord-executing-fg: #a16207;  --ord-executing-bg: #fefce8;  --ord-executing-bd: #fde68a;
+    --ord-executed-fg:  #15803d;  --ord-executed-bg:  #f0fdf4;  --ord-executed-bd:  #bbf7d0;
+    --ord-cancelled-fg: #64748b;  --ord-cancelled-bg: #f8fafc;  --ord-cancelled-bd: #e2e8f0;
+    --ord-rejected-fg:  #be123c;  --ord-rejected-bg:  #fff1f2;  --ord-rejected-bd:  #fecdd3;
+}
+
+/* ── Theme overrides ─────────────────────────────────────────── */
+body.dark-theme .orders-page {
+    --ord-bg:         #090e17;
+    --ord-surface:    #111827;
+    --ord-border:     #1e293b;
+    --ord-border-sub: #1a2332;
+    --ord-text:       #f1f5f9;
+    --ord-text-2:     #94a3b8;
+    --ord-text-3:     #475569;
+    --ord-accent:     #60a5fa;
+    --ord-accent-dim: rgba(96,165,250,0.1);
+    --ord-row-hover:  rgba(59,130,246,0.04);
+    --ord-input-bg:   #1e293b;
+    --ord-btn-hover:  #1e293b;
+    --ord-shadow:     none;
+    --ord-pending-fg:   #fb923c; --ord-pending-bg:   #431407; --ord-pending-bd:   #7c2d12;
+    --ord-executing-fg: #fbbf24; --ord-executing-bg: #422006; --ord-executing-bd: #92400e;
+    --ord-executed-fg:  #4ade80; --ord-executed-bg:  #14321e; --ord-executed-bd:  #166534;
+    --ord-cancelled-fg: #475569; --ord-cancelled-bg: #1e293b; --ord-cancelled-bd: #334155;
+    --ord-rejected-fg:  #f87171; --ord-rejected-bg:  #3b1219; --ord-rejected-bd:  #991b1b;
+}
+
+body.forest-theme .orders-page {
+    --ord-bg:         #060c09;
+    --ord-surface:    #0a1810;
+    --ord-border:     #14532d;
+    --ord-border-sub: #0a1e14;
+    --ord-text:       #ecfdf5;
+    --ord-text-2:     #6ba88f;
+    --ord-text-3:     #4d8068;
+    --ord-accent:     #34d399;
+    --ord-accent-dim: rgba(52,211,153,0.1);
+    --ord-row-hover:  rgba(16,185,129,0.04);
+    --ord-input-bg:   #0a1e14;
+    --ord-btn-hover:  #0a1e14;
+    --ord-shadow:     none;
+    --ord-pending-fg:   #fb923c; --ord-pending-bg:   #431407; --ord-pending-bd:   #7c2d12;
+    --ord-executing-fg: #fcd34d; --ord-executing-bg: #422006; --ord-executing-bd: #92400e;
+    --ord-executed-fg:  #86efac; --ord-executed-bg:  #14532d; --ord-executed-bd:  #166534;
+    --ord-cancelled-fg: #4d8068; --ord-cancelled-bg: #0a1e14; --ord-cancelled-bd: #14532d;
+    --ord-rejected-fg:  #fca5a5; --ord-rejected-bg:  #450a0a; --ord-rejected-bd:  #991b1b;
+}
+
+body.cream-theme .orders-page {
+    --ord-bg:         #fdfbf7;
+    --ord-surface:    #fdf6e9;
+    --ord-border:     #d4b896;
+    --ord-border-sub: #eeddc4;
+    --ord-text:       #3b2f20;
+    --ord-text-2:     #9b7a52;
+    --ord-text-3:     #c4a882;
+    --ord-accent:     #b45309;
+    --ord-accent-dim: rgba(180,83,9,0.08);
+    --ord-row-hover:  #f5ead8;
+    --ord-input-bg:   #f5ead8;
+    --ord-btn-hover:  #f5ead8;
+}
+
+body.ocean-theme .orders-page {
+    --ord-bg:         #f0f6fc;
+    --ord-surface:    #ffffff;
+    --ord-border:     #bae0f8;
+    --ord-border-sub: #dbedf8;
+    --ord-text:       #0f172a;
+    --ord-text-2:     #475569;
+    --ord-text-3:     #94a3b8;
+    --ord-accent:     #0284c7;
+    --ord-accent-dim: rgba(2,132,199,0.08);
+    --ord-row-hover:  #f0f6fc;
+    --ord-input-bg:   #e0edf8;
+    --ord-btn-hover:  #e0edf8;
+}
+
+/* ── Page shell — flush to container, no extra padding ───────── */
+.orders-page {
+    /* no padding here — container already provides 12px */
+    background: var(--ord-bg);
+    min-height: calc(100vh - 80px);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: var(--ord-text);
+}
+
+/* ── Top bar ─────────────────────────────────────────────────── */
+.ord-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--ord-surface);
+    border: 1px solid var(--ord-border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    box-shadow: var(--ord-shadow);
+}
+
+.ord-topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.ord-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--ord-text);
+    letter-spacing: -0.01em;
+}
+
+.ord-stats {
+    display: flex;
+    gap: 12px;
+}
+
+.ord-stat {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ord-text-2);
+}
+
+.ord-stat-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.ord-stat-dot.pending  { background: #f97316; }
+.ord-stat-dot.executed { background: #22c55e; }
+
+.ord-topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ── Monitor pill ────────────────────────────────────────────── */
+.ord-monitor-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ord-text-3);
+    padding: 3px 9px;
+    border-radius: 20px;
+    border: 1px solid var(--ord-border);
+}
+
+.ord-monitor-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ord-text-3);
+    flex-shrink: 0;
+    transition: background 0.3s, box-shadow 0.3s;
+}
+
+.ord-monitor-dot.live {
+    background: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34,197,94,0.2);
+}
+
+/* ── Tab group ───────────────────────────────────────────────── */
+.ord-tab-group {
+    display: flex;
+    border: 1px solid var(--ord-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.ord-tab {
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    border: none;
+    background: transparent;
+    color: var(--ord-text-2);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    border-right: 1px solid var(--ord-border);
+}
+
+.ord-tab:last-child { border-right: none; }
+
+.ord-tab.active {
+    background: var(--ord-accent);
+    color: #fff;
+}
+
+.ord-tab:hover:not(.active) {
+    background: var(--ord-accent-dim);
+    color: var(--ord-text);
+}
+
+/* ── History button ──────────────────────────────────────────── */
+.ord-history-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ord-text-2);
+    background: transparent;
+    border: 1px solid var(--ord-border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.ord-history-btn:hover,
+.ord-history-btn.active {
+    background: var(--ord-accent-dim);
+    color: var(--ord-accent);
+    border-color: var(--ord-accent);
+}
+
+/* ── Table wrapper ───────────────────────────────────────────── */
+.ord-table-wrap {
+    border: 1px solid var(--ord-border);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: var(--ord-shadow);
+}
+
+/* ── Table ───────────────────────────────────────────────────── */
+.ord-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--ord-surface);
+    font-size: 12px;
+}
+
+.ord-table thead th {
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--ord-text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: var(--ord-bg);
+    border-bottom: 1px solid var(--ord-border);
+    white-space: nowrap;
+}
+
+/* ── Rows ────────────────────────────────────────────────────── */
+.ord-row { transition: background 0.1s; background: var(--ord-surface); }
+.ord-row:nth-child(even) { background: var(--ord-surface); }
+.ord-row:hover { background: var(--ord-row-hover); }
+
+/* Left accent strip by action */
+.ord-row.ord-action-buy  td:first-child { border-left: 3px solid #22c55e; }
+.ord-row.ord-action-sell td:first-child { border-left: 3px solid #ef4444; }
+
+.ord-td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--ord-border-sub);
+    vertical-align: middle;
+    color: var(--ord-text);
+}
+
+.ord-row:last-child .ord-td { border-bottom: none; }
+
+/* ── Column specifics ────────────────────────────────────────── */
+.ord-td-time {
+    color: var(--ord-text-2);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    font-size: 11px;
+}
+
+.ord-date {
+    color: var(--ord-text-3);
+    margin-right: 3px;
+    font-size: 10px;
+}
+
+.ord-td-inst {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.ord-td-price { font-variant-numeric: tabular-nums; }
+
+.ord-price-val { font-weight: 600; }
+
+/* ── Type chip ───────────────────────────────────────────────── */
+.ord-type {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.ord-type-market { background: var(--ord-accent-dim); color: var(--ord-accent); }
+.ord-type-limit  { background: rgba(124,58,237,0.08); color: #7c3aed; }
+
+body.dark-theme .orders-page .ord-type-limit   { background: rgba(167,139,250,0.12); color: #a78bfa; }
+body.forest-theme .orders-page .ord-type-limit { background: rgba(167,139,250,0.12); color: #a78bfa; }
+
+/* ── Action chip ─────────────────────────────────────────────── */
+.ord-action-badge-buy,
+.ord-action-badge-sell {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.ord-action-badge-buy  { background: rgba(34,197,94,0.1);  color: #15803d; }
+.ord-action-badge-sell { background: rgba(239,68,68,0.1);  color: #be123c; }
+
+body.dark-theme   .orders-page .ord-action-badge-buy  { background: #14321e; color: #4ade80; }
+body.dark-theme   .orders-page .ord-action-badge-sell { background: #3b1219; color: #f87171; }
+body.forest-theme .orders-page .ord-action-badge-buy  { background: #14532d; color: #86efac; }
+body.forest-theme .orders-page .ord-action-badge-sell { background: #450a0a; color: #fca5a5; }
+
+/* ── Status badge ────────────────────────────────────────────── */
+.ord-status {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+.ord-status-pending   { background: var(--ord-pending-bg);   color: var(--ord-pending-fg);   border: 1px solid var(--ord-pending-bd); }
+.ord-status-executing { background: var(--ord-executing-bg); color: var(--ord-executing-fg); border: 1px solid var(--ord-executing-bd); }
+.ord-status-executed  { background: var(--ord-executed-bg);  color: var(--ord-executed-fg);  border: 1px solid var(--ord-executed-bd); }
+.ord-status-cancelled { background: var(--ord-cancelled-bg); color: var(--ord-cancelled-fg); border: 1px solid var(--ord-cancelled-bd); }
+.ord-status-rejected  { background: var(--ord-rejected-bg);  color: var(--ord-rejected-fg);  border: 1px solid var(--ord-rejected-bd); }
+
+/* ── Inline price input ──────────────────────────────────────── */
+.ord-price-input {
+    width: 72px;
+    padding: 3px 6px;
+    border: 1px solid var(--ord-border);
+    border-radius: 4px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--ord-text);
+    background: var(--ord-input-bg);
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.ord-price-input:focus {
+    outline: none;
+    border-color: var(--ord-accent);
+    background: var(--ord-surface);
+}
+
+/* ── Action icon buttons ─────────────────────────────────────── */
+.ord-td-actions { white-space: nowrap; }
+
+.ord-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: 1px solid var(--ord-border);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--ord-text-2);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.ord-btn + .ord-btn { margin-left: 4px; }
+
+.ord-btn:hover { background: var(--ord-btn-hover); color: var(--ord-text); }
+
+.ord-btn.save-price:hover   { color: #15803d; border-color: #22c55e; background: rgba(34,197,94,0.06); }
+.ord-btn.cancel-order:hover { color: #be123c; border-color: #ef4444; background: rgba(239,68,68,0.06); }
+.ord-btn.delete-order:hover { color: var(--ord-text-2); border-color: var(--ord-border); }
+
+/* ── Empty state ─────────────────────────────────────────────── */
+.ord-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 52px 24px;
+    color: var(--ord-text-3);
+    background: var(--ord-surface);
+    font-size: 12px;
+}
+
+.ord-empty p { margin: 0; }
+.ord-empty.hidden { display: none; }
+
+/* ── Source badges (Mine / Broker) ───────────────────────────── */
+.ord-src-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    margin-left: 5px;
+    vertical-align: middle;
+    line-height: 1.4;
+    letter-spacing: 0.03em;
+}
+.ord-src-mine   { background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd; }
+.ord-src-broker { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }

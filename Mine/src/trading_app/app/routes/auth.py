@@ -9,6 +9,7 @@ from trading_app.app.utils.token_manager import save_access_token, clear_access_
 from trading_app.app.utils.user_auth import (
     verify_user, is_user_authenticated, login_user, logout_user
 )
+from trading_app.service.kite_order_services import apply_kite_proxy
 
 # Server-side store for pending Zerodha OAuth logins, keyed by username.
 # Using a server-side dict instead of Flask's cookie-based session, because
@@ -232,7 +233,8 @@ def login():
     try:
         # Initialize KiteConnect
         kite = KiteConnect(api_key=api_key)
-        
+        apply_kite_proxy(kite)
+
         # Get login URL for OAuth
         login_url = kite.login_url()
         logger.info(f"Redirecting to Zerodha login for {username} - instance {instance_num}: {login_url}")
@@ -312,6 +314,7 @@ def callback():
 
             # Single generate_session call — request_token is single-use
             kite_obj = KiteConnect(api_key=api_key)
+            apply_kite_proxy(kite_obj)
             session_data = kite_obj.generate_session(request_token, api_secret=api_secret)
             access_token = session_data['access_token']  # type: ignore[index]
 
@@ -337,6 +340,7 @@ def callback():
                     logger.info(f"[session-fallback] Identified callback for instance {instance_num} (api_key {api_key[:10]}...)")
 
                     kite_obj = KiteConnect(api_key=api_key)
+                    apply_kite_proxy(kite_obj)
                     session_data = kite_obj.generate_session(request_token, api_secret=api_secret)
                     access_token = session_data['access_token']  # type: ignore[index]
         
@@ -353,6 +357,7 @@ def callback():
             
             # Generate session
             kite = KiteConnect(api_key=api_key)
+            apply_kite_proxy(kite)
             data = kite.generate_session(request_token, api_secret=api_secret)
             access_token = data['access_token']  # type: ignore[index]
         
@@ -412,6 +417,7 @@ def callback():
                     """Start monitoring in background thread."""
                     try:
                         kite_instance = KiteConnect(api_key=final_api_key)
+                        apply_kite_proxy(kite_instance)
                         kite_instance.set_access_token(final_access_token)
                         
                         monitor = Intraday920LiveSignal(kite_instance, symbol='NIFTY', username=username)

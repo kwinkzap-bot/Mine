@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Portfolio{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/portfolio.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="portfolio-page">
+
+    <!-- ── Top bar ─────────────────────────────────────────────── -->
+    <div class="pf-topbar">
+        <div class="pf-topbar-left">
+            <span class="pf-title">Portfolio</span>
+            <div class="pf-stats">
+                <span class="pf-stat">
+                    <span class="pf-stat-dot pf-dot-pos"></span>
+                    <span id="pfStatPositions">0</span>&nbsp;Positions
+                </span>
+                <span class="pf-stat">
+                    <span class="pf-stat-dot pf-dot-hld"></span>
+                    <span id="pfStatHoldings">0</span>&nbsp;Holdings
+                </span>
+                <span class="pf-stat pf-pnl-stat">
+                    Day P&amp;L:&nbsp;<span id="pfDayPnl" class="pf-pnl-inline">—</span>
+                </span>
+            </div>
+        </div>
+        <div class="pf-topbar-right">
+            <select class="pf-broker-dropdown" id="pfBrokerSelect">
+                <option value="">Loading…</option>
+            </select>
+            <div class="pf-tab-group">
+                <button class="pf-tab active" data-tab="positions">Positions</button>
+                <button class="pf-tab" data-tab="holdings">Holdings</button>
+            </div>
+            <button class="pf-icon-btn" id="pfRefreshBtn" title="Refresh">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 4 23 10 17 10"/>
+                    <polyline points="1 20 1 14 7 14"/>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- ── Loading ─────────────────────────────────────────────── -->
+    <div class="pf-loading hidden" id="pfLoading">
+        <div class="pf-spinner"></div>
+        <span>Fetching portfolio…</span>
+    </div>
+
+    <!-- ── Positions panel ─────────────────────────────────────── -->
+    <div class="pf-table-wrap" id="pfPanelPositions">
+        <table class="pf-table" id="pfPositionsTable">
+            <thead>
+                <tr>
+                    <th data-col="0">Symbol</th>
+                    <th data-col="1">Product</th>
+                    <th data-col="2" class="col-r">Qty</th>
+                    <th data-col="3" class="col-r">Avg</th>
+                    <th data-col="4" class="col-r">LTP</th>
+                    <th data-col="5" class="col-r">Chg&nbsp;%</th>
+                    <th data-col="6" class="col-r">P&amp;L</th>
+                </tr>
+            </thead>
+            <tbody id="pfPositionsBody"></tbody>
+        </table>
+        <div class="pf-empty hidden" id="pfPositionsEmpty">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+            <p>No open positions</p>
+            <small>Intraday positions will appear here</small>
+        </div>
+    </div>
+
+    <!-- ── Holdings panel ──────────────────────────────────────── -->
+    <div class="pf-table-wrap hidden" id="pfPanelHoldings">
+        <table class="pf-table" id="pfHoldingsTable">
+            <thead>
+                <tr>
+                    <th data-col="0">Symbol</th>
+                    <th data-col="1" class="col-r">Qty</th>
+                    <th data-col="2" class="col-r">Avg Cost</th>
+                    <th data-col="3" class="col-r">LTP</th>
+                    <th data-col="4" class="col-r">Value</th>
+                    <th data-col="5" class="col-r">P&amp;L</th>
+                    <th data-col="6" class="col-r">P&amp;L %</th>
+                    <th data-col="7" class="col-r">Day Chg %</th>
+                    <th class="col-action"></th>
+                </tr>
+            </thead>
+            <tbody id="pfHoldingsBody"></tbody>
+        </table>
+        <div class="pf-empty hidden" id="pfHoldingsEmpty">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+                <rect x="2" y="7" width="20" height="14" rx="2"/>
+                <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>
+            </svg>
+            <p>No holdings</p>
+            <small>Long-term holdings will appear here</small>
+        </div>
+    </div>
+
+
+    <!-- ── CNC Order Modal ─────────────────────────────────────── -->
+    <div class="pf-modal-overlay hidden" id="pfOrderOverlay">
+        <div class="pf-modal" id="pfOrderModal">
+            <div class="pf-modal-header">
+                <span class="pf-modal-title">Buy — <span id="pfOrderSymbol"></span></span>
+                <button class="pf-modal-close" id="pfOrderClose" aria-label="Close">✕</button>
+            </div>
+            <div class="pf-modal-body">
+                <div class="pf-field-row">
+                    <div class="pf-field">
+                        <label class="pf-label">Order Type</label>
+                        <div class="pf-order-type-group">
+                            <button class="pf-ot-btn active" data-ot="LIMIT">Limit</button>
+                            <button class="pf-ot-btn" data-ot="MARKET">Market</button>
+                        </div>
+                    </div>
+                    <div class="pf-field">
+                        <label class="pf-label" for="pfOrderQty">Quantity</label>
+                        <input class="pf-input" type="number" id="pfOrderQty" min="1" step="1" placeholder="0">
+                    </div>
+                    <div class="pf-field" id="pfPriceField">
+                        <label class="pf-label" for="pfOrderPrice">Limit Price</label>
+                        <input class="pf-input" type="number" id="pfOrderPrice" min="0" step="0.05" placeholder="0.00">
+                    </div>
+                </div>
+                <div class="pf-modal-status hidden" id="pfOrderStatus"></div>
+            </div>
+            <div class="pf-modal-footer">
+                <button class="pf-modal-cancel" id="pfOrderCancel">Cancel</button>
+                <button class="pf-modal-submit" id="pfOrderSubmit">Place Order</button>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/portfolio.js') }}"></script>
+{% endblock %}
