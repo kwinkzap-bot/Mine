@@ -25,7 +25,8 @@ class GlobalMarketService:
         "^GDAXI": {"name": "DAX", "id": "daxi"},
         "^FCHI": {"name": "CAC", "id": "fchi"},
         "^KS11": {"name": "KOSPI", "id": "ks11"},
-        "^FTSE": {"name": "FTSE 100", "id": "ftse"}
+        "^FTSE": {"name": "FTSE 100", "id": "ftse"},
+        "^NSEI": {"name": "Gift Nifty", "id": "gift_nifty"},
     }
 
     @classmethod

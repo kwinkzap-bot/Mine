@@ -982,6 +982,129 @@
     .ocean-theme .mkt-tooltip-hdr {
         border-bottom: 1px solid rgba(2, 132, 199, 0.1);
     }
+
+    /* ── Validation Button ──────────────────────────────── */
+    .mkt-validation-btn {
+        padding: 5px 13px;
+        border-radius: 7px;
+        border: 1px solid var(--mkt-accent);
+        background: transparent;
+        color: var(--mkt-accent);
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        letter-spacing: 0.02em;
+        transition: background 0.15s, color 0.15s;
+        white-space: nowrap;
+    }
+    .mkt-validation-btn:hover {
+        background: var(--mkt-accent);
+        color: #fff;
+    }
+
+    /* ── Signal Modal ───────────────────────────────────── */
+    .mkt-signal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.55);
+        z-index: 1100;
+        align-items: center;
+        justify-content: center;
+    }
+    .mkt-signal-overlay.open { display: flex; }
+
+    .mkt-signal-modal {
+        background: var(--mkt-card-bg);
+        border: 1px solid var(--mkt-border);
+        border-radius: 14px;
+        width: min(580px, 96vw);
+        max-height: 82vh;
+        overflow-y: auto;
+        padding: 0;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    .mkt-signal-modal-hdr {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 14px 18px 12px;
+        border-bottom: 1px solid var(--mkt-border);
+        position: sticky;
+        top: 0;
+        background: var(--mkt-card-bg);
+        z-index: 1;
+    }
+    .mkt-signal-modal-title { font-size: 15px; font-weight: 800; color: var(--mkt-text); }
+    .mkt-signal-modal-sym   { font-size: 11px; color: var(--mkt-text-muted); margin-left: 8px; font-weight: 600; }
+    .mkt-signal-close {
+        background: none; border: none; color: var(--mkt-text-muted);
+        font-size: 16px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+    }
+    .mkt-signal-close:hover { color: var(--mkt-text); background: var(--mkt-border); }
+
+    .mkt-sig-loading { text-align: center; padding: 30px; color: var(--mkt-text-muted); font-size: 13px; }
+    .mkt-sig-error   { padding: 16px 18px; color: var(--mkt-down); font-size: 13px; font-weight: 600; }
+
+    /* Signal grid inside modal */
+    .mkt-sig-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        padding: 14px 18px 10px;
+    }
+    @media (max-width: 480px) { .mkt-sig-grid { grid-template-columns: repeat(2,1fr); } }
+
+    .mkt-sig-card {
+        background: var(--mkt-bg);
+        border: 1px solid var(--mkt-border);
+        border-radius: 9px;
+        padding: 9px 11px;
+    }
+    .mkt-sig-card-name   { font-size: 10px; font-weight: 600; color: var(--mkt-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .mkt-sig-card-val    { font-size: 18px; font-weight: 800; color: var(--mkt-text); margin: 2px 0 4px; }
+    .mkt-sig-card-vote   { display: inline-block; border-radius: 4px; padding: 2px 7px; font-size: 11px; font-weight: 700; }
+    .mkt-sig-vote-pe      { background: rgba(244,63,94,0.15);  color: #f43f5e; }
+    .mkt-sig-vote-ce      { background: rgba(16,185,129,0.15); color: var(--mkt-up); }
+    .mkt-sig-vote-neutral { background: var(--mkt-border);     color: var(--mkt-text-muted); }
+    .mkt-sig-vote-avoid   { background: rgba(234,179,8,0.15);  color: #ca8a04; }
+    .mkt-sig-card-detail  { font-size: 10px; color: var(--mkt-text-muted); margin-top: 5px; line-height: 1.3; }
+
+    /* Verdict inside modal */
+    .mkt-sig-verdict {
+        margin: 0 18px 10px;
+        border: 1px solid var(--mkt-border);
+        border-radius: 9px;
+        padding: 14px 16px;
+        text-align: center;
+    }
+    .mkt-sig-verdict-lbl  { font-size: 10px; font-weight: 600; color: var(--mkt-text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+    .mkt-sig-verdict-text { font-size: 24px; font-weight: 900; }
+    .mkt-sig-verdict-text.pe    { color: #f43f5e; }
+    .mkt-sig-verdict-text.ce    { color: var(--mkt-up); }
+    .mkt-sig-verdict-text.avoid { color: #ca8a04; }
+    .mkt-sig-score { font-size: 12px; color: var(--mkt-text-muted); margin-top: 5px; }
+    .mkt-sig-score .pe-s { color: #f43f5e; font-weight: 700; }
+    .mkt-sig-score .ce-s { color: var(--mkt-up); font-weight: 700; }
+    .mkt-sig-avoid-reason { font-size: 11px; color: #ca8a04; margin-top: 4px; }
+
+    /* Spread table inside modal */
+    .mkt-sig-spread {
+        margin: 0 18px 16px;
+        border: 1px solid var(--mkt-border);
+        border-radius: 9px;
+        overflow: hidden;
+    }
+    .mkt-sig-spread-title { font-size: 10px; font-weight: 700; color: var(--mkt-text-muted); text-transform: uppercase; letter-spacing: 0.04em; padding: 9px 12px 0; }
+    .mkt-sig-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .mkt-sig-tbl th { text-align: left; padding: 6px 10px; font-size: 10px; font-weight: 600; color: var(--mkt-text-muted); text-transform: uppercase; border-bottom: 1px solid var(--mkt-border); }
+    .mkt-sig-tbl td { padding: 8px 10px; border-bottom: 1px solid var(--mkt-border); color: var(--mkt-text); }
+    .mkt-sig-tbl tr:last-child td { border-bottom: none; }
+    .mkt-sig-tbl .sell { color: #f43f5e; font-weight: 700; }
+    .mkt-sig-tbl .buy  { color: var(--mkt-up); font-weight: 700; }
+    .mkt-sig-net { font-size: 12px; font-weight: 700; text-align: right; padding: 8px 12px 10px; }
+    .mkt-sig-net.credit { color: var(--mkt-up); }
+    .mkt-sig-net.debit  { color: #f43f5e; }
 </style>
 {% endblock %}
 
@@ -993,8 +1116,27 @@
                 <h1>Market Pulse</h1>
                 <div class="live-dot" title="Live terminal feed active"></div>
             </div>
+            <button class="mkt-validation-btn" id="mktValidationBtn" onclick="mktOpenSignal()">
+                🎯 PE/CE Signal
+            </button>
         </div>
     </header>
+
+    <!-- Strategy Signal Modal -->
+    <div id="mktSignalOverlay" class="mkt-signal-overlay" onclick="if(event.target===this)mktCloseSignal()">
+        <div class="mkt-signal-modal">
+            <div class="mkt-signal-modal-hdr">
+                <div>
+                    <span class="mkt-signal-modal-title">🎯 Strategy Signal</span>
+                    <span class="mkt-signal-modal-sym" id="mktSigSym"></span>
+                </div>
+                <button class="mkt-signal-close" onclick="mktCloseSignal()">✕</button>
+            </div>
+            <div id="mktSigBody">
+                <div class="mkt-sig-loading">Loading signals…</div>
+            </div>
+        </div>
+    </div>
 
     <div class="mkt-grid">
         <!-- Indices (Perfect 6 Rows Alignment) -->
@@ -1729,5 +1871,127 @@
             // Poll every 5 seconds for absolute high fidelity live terminal updates
             setInterval(fetchMarketPulse, 5000);
         });
+    </script>
+
+    <script>
+    // ── Strategy Signal Modal ──────────────────────────────────────────────────
+
+    function mktOpenSignal() {
+        const overlay = document.getElementById('mktSignalOverlay');
+        if (!overlay) return;
+        overlay.classList.add('open');
+        document.body.style.overflow = 'hidden';
+        _mktLoadSignal();
+    }
+
+    function mktCloseSignal() {
+        const overlay = document.getElementById('mktSignalOverlay');
+        if (!overlay) return;
+        overlay.classList.remove('open');
+        document.body.style.overflow = '';
+    }
+
+    // Close on Escape
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') mktCloseSignal(); });
+
+    async function _mktLoadSignal() {
+        const body = document.getElementById('mktSigBody');
+        const symEl = document.getElementById('mktSigSym');
+        if (!body) return;
+
+        body.innerHTML = '<div class="mkt-sig-loading">Loading signals…</div>';
+
+        try {
+            const res = await fetch('/api/strategy-signal?symbol=NIFTY');
+            const data = await res.json();
+
+            if (!data.success) {
+                body.innerHTML = `<div class="mkt-sig-error">⚠ ${_mktEsc(data.error || 'Failed to load')}</div>`;
+                return;
+            }
+
+            if (symEl) symEl.textContent = `${data.symbol} · ${data.current_price} · ATM ${data.atm}`;
+            body.innerHTML = _mktBuildSignalHtml(data);
+
+        } catch (e) {
+            body.innerHTML = `<div class="mkt-sig-error">⚠ Network error: ${_mktEsc(e.message)}</div>`;
+        }
+    }
+
+    function _mktBuildSignalHtml(data) {
+        const signals = data.signals || [];
+
+        // Signal grid
+        const gridCards = signals.map(sig => {
+            const vc = sig.avoid_override ? 'mkt-sig-vote-avoid'
+                     : sig.vote === 'PE'  ? 'mkt-sig-vote-pe'
+                     : sig.vote === 'CE'  ? 'mkt-sig-vote-ce'
+                     : 'mkt-sig-vote-neutral';
+            const vl = sig.avoid_override ? '⚠ AVOID'
+                     : sig.vote === 'PE'  ? '▼ PE'
+                     : sig.vote === 'CE'  ? '▲ CE'
+                     : '— NEUTRAL';
+            return `
+            <div class="mkt-sig-card">
+              <div class="mkt-sig-card-name">${_mktEsc(sig.name)}</div>
+              <div class="mkt-sig-card-val">${_mktEsc(sig.display_value)}</div>
+              <span class="mkt-sig-card-vote ${vc}">${vl}</span>
+              <div class="mkt-sig-card-detail">${_mktEsc(sig.detail)}</div>
+            </div>`;
+        }).join('');
+
+        // Verdict
+        const v = data.verdict || 'AVOID';
+        const vText = v === 'PE' ? 'TAKE PE SIDE' : v === 'CE' ? 'TAKE CE SIDE' : 'AVOID';
+        const verdict = `
+        <div class="mkt-sig-verdict">
+          <div class="mkt-sig-verdict-lbl">Verdict</div>
+          <div class="mkt-sig-verdict-text ${v.toLowerCase()}">${vText}</div>
+          <div class="mkt-sig-score">Score: <span class="pe-s">PE ${data.pe_score}</span> : <span class="ce-s">CE ${data.ce_score}</span></div>
+          ${data.avoid_reason ? `<div class="mkt-sig-avoid-reason">${_mktEsc(data.avoid_reason)}</div>` : ''}
+        </div>`;
+
+        // Spread table
+        let spread = '';
+        if (data.spread && data.spread.legs?.length) {
+            const sp = data.spread;
+            const rows = sp.legs.map(leg => {
+                const ac = leg.action === 'SELL' ? 'sell' : 'buy';
+                const q  = leg.quantity > 1 ? `${leg.quantity}×` : '1×';
+                const ltp = leg.ltp > 0 ? `₹${leg.ltp}` : '—';
+                const exp = _mktFmtExpiry(leg.expiry);
+                return `<tr>
+                  <td><span class="${ac}">${leg.action}</span></td>
+                  <td>${q}</td>
+                  <td>${leg.strike} ${leg.option_type}</td>
+                  <td>${exp} <span style="font-size:10px;opacity:.6">${leg.expiry_label}</span></td>
+                  <td>${ltp}</td>
+                </tr>`;
+            }).join('');
+
+            const isCredit = sp.net_per_lot >= 0;
+            spread = `
+            <div class="mkt-sig-spread">
+              <div class="mkt-sig-spread-title">Spread Legs</div>
+              <table class="mkt-sig-tbl">
+                <thead><tr><th>Action</th><th>Qty</th><th>Strike</th><th>Expiry</th><th>LTP</th></tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+              <div class="mkt-sig-net ${isCredit ? 'credit' : 'debit'}">${_mktEsc(sp.net_label)}</div>
+            </div>`;
+        }
+
+        return `<div class="mkt-sig-grid">${gridCards}</div>${verdict}${spread}`;
+    }
+
+    function _mktFmtExpiry(s) {
+        if (!s) return '—';
+        try { return new Date(s + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }); }
+        catch { return s; }
+    }
+
+    function _mktEsc(s) {
+        return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
     </script>
     {% endblock %}

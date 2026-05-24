@@ -115,9 +115,14 @@ def create_app(config=None):
             'error': 'Internal Server Error'
         }), 500
     
+    # Inject PWA flag into every template
+    @app.context_processor
+    def inject_pwa():
+        return {'pwa_enabled': os.getenv('PWA_ENABLED', 'false').lower() == 'true'}
+
     # Register blueprints
     from trading_app.app.routes import register_blueprints
     register_blueprints(app)
-    
+
     return app
 

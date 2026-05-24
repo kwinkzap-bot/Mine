@@ -1,5 +1,5 @@
 """Page routes for rendering templates."""
-from flask import Blueprint, render_template, session, redirect, url_for, jsonify
+from flask import Blueprint, render_template, session, redirect, url_for, jsonify, send_from_directory, current_app
 from functools import wraps
 import os
 from trading_app.app.utils.user_auth import require_user_auth
@@ -120,13 +120,6 @@ def oi_profile():
     """OI Profile – NIFTY candlestick chart + OI profile bars."""
     return render_template('oi_profile.html')
 
-@pages_bp.route('/replay')
-@require_user_auth
-@login_required
-def oi_replay():
-    """Replay – Step-by-step playback of OI Profile charts."""
-    return render_template('oi_replay.html')
-
 @pages_bp.route('/ema-rsi-filter')
 @require_user_auth
 @login_required
@@ -134,12 +127,24 @@ def ema_rsi_filter():
     """EMA/RSI Filter is now merged into CPR Filter - redirect there."""
     return redirect(url_for('pages.cpr_filter', tab='ema'))
 
+@pages_bp.route('/dashboard')
+@require_user_auth
+@login_required
+def dashboard():
+    """Dashboard — Backtest and Replay tabs."""
+    return render_template('dashboard.html')
+
 @pages_bp.route('/backtest')
 @require_user_auth
 @login_required
 def backtest():
-    """Backtest page for various strategies."""
-    return render_template('backtest.html')
+    return redirect(url_for('pages.dashboard') + '#backtest')
+
+@pages_bp.route('/replay')
+@require_user_auth
+@login_required
+def oi_replay():
+    return redirect(url_for('pages.dashboard') + '#replay')
 
 @pages_bp.route('/orders')
 @require_user_auth
@@ -173,3 +178,20 @@ def login():
     """Login page - redirects to user login."""
     from flask import redirect, url_for
     return redirect(url_for('auth.user_login'))
+
+# ── PWA routes ────────────────────────────────────────────────────────────────
+
+@pages_bp.route('/manifest.json')
+def pwa_manifest():
+    """Web app manifest — must be served from root for PWA scope to cover all pages."""
+    return send_from_directory(current_app.static_folder, 'manifest.json',
+                               mimetype='application/manifest+json')
+
+@pages_bp.route('/sw.js')
+def service_worker():
+    """Minimal passthrough service worker — required by Chrome to show the install button."""
+    resp = send_from_directory(current_app.static_folder, 'sw.js',
+                               mimetype='application/javascript')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['Service-Worker-Allowed'] = '/'
+    return resp

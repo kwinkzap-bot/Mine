@@ -376,6 +376,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (oipElems.peStrikeDropdown) oipElems.peStrikeDropdown.style.display = isCePe ? '' : 'none';
     }
 
+    // Apply on page load to match the HTML default (custom selected)
+    oipApplyStrikeMode(oipElems.strikeMode?.value || 'custom');
+
     oipElems.strikeMode?.addEventListener('change', () => {
         oipApplyStrikeMode(oipElems.strikeMode.value);
         oipLoadCandles(true, false);

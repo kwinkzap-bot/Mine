@@ -5159,6 +5159,29 @@ def resolve_itm_strikes(kite_service, symbol, spot_high, spot_low, step_value, o
 
     return itm_ce_strike, itm_pe_strike, ce_symbol, pe_symbol, ce_token, pe_token
 
+@api_bp.route('/strategy-signal', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def get_strategy_signal() -> EndpointResponse:
+    """Evaluate PE vs CE market signals and return a spread recommendation."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    symbol = request.args.get('symbol', 'NIFTY').upper()
+    try:
+        provider = get_data_provider()
+        if not provider:
+            return jsonify({'success': False, 'error': 'Data provider not connected'}), 401
+
+        from trading_app.service.strategy_signal_service import StrategySignalService
+        result = StrategySignalService(provider).evaluate(symbol)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'[strategy-signal] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/oi-profile/candles', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
