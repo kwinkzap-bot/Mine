@@ -17,7 +17,7 @@ load_dotenv()
 
 # Global singleton cache for instruments (shared across all KiteService instances)
 # Partitioned by provider to avoid token contamination between Kite and Fyers
-_global_instruments_cache = {
+_global_instruments_cache: Dict[str, Any] = {
     'lock': threading.Lock()
     # Structure:
     # 'kite': { 'tokens_by_symbol': {}, 'cache_date': None, ... }
@@ -52,28 +52,37 @@ def _is_proxy_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
     except OSError:
         return False
 
-def apply_kite_proxy(kite) -> None:
-    """Apply SOCKS5 proxy to KiteConnect session if KITE_PROXY_URL is set and reachable."""
+def apply_kite_proxy(kite, raise_if_unreachable: bool = False) -> bool:
+    """Apply SOCKS5 proxy to a KiteConnect instance.
+
+    Returns True if proxy was applied, False if skipped (not configured or unreachable).
+    If raise_if_unreachable=True, raises RuntimeError when KITE_PROXY_URL is set but tunnel is down.
+    """
     if not isinstance(kite, KiteConnect):
-        return
+        return False
     proxy_url = os.getenv("KITE_PROXY_URL", "").strip()
     if not proxy_url:
-        return
-    # Parse host:port from socks5h://host:port
+        return False
     try:
         from urllib.parse import urlparse
         parsed = urlparse(proxy_url)
-        host, port = parsed.hostname, parsed.port or 1080
+        host: str = parsed.hostname or "127.0.0.1"
+        port: int = parsed.port or 1080
     except Exception:
         host, port = "127.0.0.1", 1080
     if not _is_proxy_reachable(host, port):
-        logging.warning(
-            f"[KiteService] SOCKS5 proxy {proxy_url} not reachable — "
-            f"run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D {port} opc@68.233.118.234"
+        msg = (
+            f"SOCKS5 proxy {proxy_url} not reachable. "
+            f"Start the SSH tunnel: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D {port} opc@68.233.118.234"
         )
-        return
-    kite.reqsession.proxies = {'http': proxy_url, 'https': proxy_url}
+        if raise_if_unreachable:
+            raise RuntimeError(f"[KiteService] {msg}")
+        logging.warning(f"[KiteService] {msg}")
+        return False
+    # KiteConnect._request passes proxies=self.proxies, NOT reqsession.proxies
+    kite.proxies = {'http': proxy_url, 'https': proxy_url}
     logging.info(f"[KiteService] SOCKS5 proxy active: {proxy_url}")
+    return True
 
 # ── HISTORICAL CACHE ─────────────────────────────────────────────────────
 class HistoricalDataCache:
@@ -253,7 +262,7 @@ class KiteService:
         except Exception as e: logging.error(f"Instrument fetch error: {e}")
 
     def get_instrument_token(self, symbol: str) -> Optional[Union[int, str]]:
-        if not self._instrument_tokens_by_symbol: self._init_instruments()
+        if not self._instrument_tokens_by_symbol: self._load_instruments_from_cache_or_api()
         token = self._instrument_tokens_by_symbol.get(symbol)
         if token: return token
         index_map = {
@@ -284,9 +293,10 @@ class KiteService:
             token = self.get_instrument_token(symbol)
             if not token: return None
             _global_rate_limiter.wait()
-            quote = self.kite.quote([token])
+            quote: Dict[Any, Any] = self.kite.quote([token]) or {}
             token_key = token if token in quote else str(token)
-            if token_key in quote: return float(quote[token_key]['last_price'])
+            if token_key in quote:
+                return float((quote[token_key] or {}).get('last_price', 0))
         except Exception as e:
             logging.warning(f"[KiteService] LTP fetch failed for {symbol}: {e}")
         return None
@@ -360,7 +370,7 @@ class KiteService:
             if ls: return int(ls)
 
         # 2. Final fallback (Avoid hardcoding specific indices as they change)
-        logger.warning(f"[KiteService] Lot size for {symbol} not found in NFO cache. Falling back to 1.")
+        logging.warning(f"[KiteService] Lot size for {symbol} not found in NFO cache. Falling back to 1.")
         return 1
 
     def get_nearest_option_expiry(self, symbol: str, strike: int, option_type: str) -> Optional[date]:
@@ -402,10 +412,9 @@ class KiteService:
             elif transaction_type.upper() == 'SELL': txn_const = self.kite.TRANSACTION_TYPE_SELL
             
             mapped_product = self.kite.PRODUCT_NRML if product.upper() in ['NRML', 'CARRYFORWARD'] else self.kite.PRODUCT_MIS
-            
+            exchange = self.kite.EXCHANGE_BFO if symbol.upper() == 'SENSEX' else self.kite.EXCHANGE_NFO
+
             try:
-                exchange = self.kite.EXCHANGE_BFO if symbol.upper() == 'SENSEX' else self.kite.EXCHANGE_NFO
-                
                 # Use internal _safe_place_order to include market_protection parameter
                 order_id = self._safe_place_order(
                     tradingsymbol=ts,
@@ -426,7 +435,8 @@ class KiteService:
                     
                     # Fetch LTP to calculate padded limit price
                     prefix = 'BFO' if symbol.upper() == 'SENSEX' else 'NFO'
-                    ltp_res = self.kite.ltp(f"{prefix}:{ts}")
+                    _ltp_raw = self.kite.ltp(f"{prefix}:{ts}")
+                    ltp_res: Dict[str, Any] = _ltp_raw if isinstance(_ltp_raw, dict) else {}
                     if f"{prefix}:{ts}" in ltp_res:
                         current_price = ltp_res[f"{prefix}:{ts}"]['last_price']
                         
@@ -487,7 +497,7 @@ class KiteService:
             logging.error(f"[KiteService] Failed to place SL order: {e}")
             return {'success': False, 'error': str(e)}
 
-    def _safe_place_order(self, variety: str, exchange: str, tradingsymbol: str, transaction_type: str, quantity: int, product: str, order_type: str, price: Optional[float] = None, trigger_price: Optional[float] = None, tag: Optional[str] = None, market_protection: int = -1) -> str:
+    def _safe_place_order(self, variety: str, exchange: str, tradingsymbol: str, transaction_type: str, quantity: int, product: str, order_type: str, price: Optional[float] = None, trigger_price: Optional[float] = None, tag: Optional[str] = None, market_protection: Optional[int] = -1) -> Any:
         """
         Internal helper to place orders with market_protection parameter.
         Bypasses the standard library's place_order if the version doesn't support the parameter.
@@ -507,10 +517,11 @@ class KiteService:
         }
         # Remove None values
         params = {k: v for k, v in params.items() if v is not None}
-        
+
         # Access the private _post method to inject market_protection
         # variety is passed in url_args for the /orders/{variety} route
-        return self.kite._post("order.place", url_args={"variety": variety}, params=params)
+        result = self.kite._post("order.place", url_args={"variety": variety}, params=params)
+        return str(result) if isinstance(result, bytes) else result
 
     def _create_kite_instance(self) -> KiteConnect:
         api_key = os.getenv("API_KEY")
@@ -521,7 +532,7 @@ class KiteService:
         if access_token: kite.set_access_token(access_token)
         return kite
 
-    def _historical_with_retry(self, instrument_token: int, from_date, to_date, interval: str, retries: int = 3) -> List[Dict[str, Any]]:
+    def _historical_with_retry(self, instrument_token: Union[int, str], from_date, to_date, interval: str, retries: int = 3) -> List[Dict[str, Any]]:
         # Apply rate limiting
         _global_rate_limiter.wait()
         

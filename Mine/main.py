@@ -3,6 +3,15 @@
 Main entry point for the trading application.
 This is the recommended way to run the application.
 """
+import socket as _socket
+
+# Force IPv4 for all outbound connections.
+# Zerodha Kite API rejects dynamic IPv6 addresses that aren't whitelisted.
+_orig_getaddrinfo = _socket.getaddrinfo
+def _ipv4_only(host, port, _family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, _socket.AF_INET, type, proto, flags)
+_socket.getaddrinfo = _ipv4_only
+
 import os
 import sys
 import threading
@@ -36,6 +45,54 @@ def load_local_env():
 
 # Load env before importing other modules that might use os.getenv
 load_local_env()
+
+def ensure_ssh_tunnel():
+    """Auto-start SOCKS5 SSH tunnel if KITE_PROXY_URL is set but port is not listening."""
+    import subprocess, socket, time
+    proxy_url = os.getenv('KITE_PROXY_URL', '').strip()
+    if not proxy_url:
+        return
+
+    # Parse port from proxy URL (default 1080)
+    try:
+        from urllib.parse import urlparse
+        port = urlparse(proxy_url).port or 1080
+    except Exception:
+        port = 1080
+
+    # Already running?
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=1.0):
+            logger.info(f'[Proxy] SSH tunnel already running on port {port}')
+            return
+    except OSError:
+        pass
+
+    ssh_key = os.path.expanduser(os.getenv('SSH_TUNNEL_KEY', ''))
+    ssh_host = os.getenv('SSH_TUNNEL_HOST', '')
+    if not ssh_key or not ssh_host:
+        logger.warning('[Proxy] KITE_PROXY_URL set but SSH_TUNNEL_KEY/SSH_TUNNEL_HOST missing — orders will use local IP')
+        return
+    if not os.path.exists(ssh_key):
+        logger.warning(f'[Proxy] SSH key not found: {ssh_key} — orders will use local IP')
+        return
+
+    cmd = [
+        'ssh', '-i', ssh_key, '-N', '-D', str(port), ssh_host,
+        '-o', 'StrictHostKeyChecking=no',
+        '-o', 'ServerAliveInterval=30',
+        '-o', 'ServerAliveCountMax=3',
+        '-o', 'ExitOnForwardFailure=yes',
+    ]
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)  # give SSH a moment to establish the tunnel
+        with socket.create_connection(('127.0.0.1', port), timeout=2.0):
+            logger.info(f'[Proxy] SSH tunnel auto-started → {ssh_host} (port {port})')
+    except OSError:
+        logger.warning(f'[Proxy] SSH tunnel started but port {port} not yet ready — check key/host')
+    except Exception as e:
+        logger.warning(f'[Proxy] Could not auto-start SSH tunnel: {e}')
 
 # Global reference to live monitoring instances
 live_monitors = {}
@@ -118,6 +175,7 @@ def start_live_monitoring():
 
 def main():
     """Run the Flask application and live monitoring."""
+    ensure_ssh_tunnel()
     app = create_app()
 
     # Note: Live monitoring will be started via API endpoint after user login
