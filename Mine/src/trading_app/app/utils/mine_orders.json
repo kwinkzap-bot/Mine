@@ -3100,5 +3100,947 @@
     ],
     "id": "6d9493b7-05ef-464a-a84d-c30e02baf6c9",
     "created_at": 1779688537214
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24000,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 110.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1779689396433,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058792663238762496"
+          },
+          "price": 110.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058792663238762496"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058792664476082176"
+          },
+          "price": 110.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058792664476082176"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "08bb16cd-1a22-468a-9f93-4c60e450d341",
+    "created_at": 1779689396434
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24000,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 107.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1779689438193,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058792838590029824"
+          },
+          "price": 107.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058792838590029824"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058792839722491904"
+          },
+          "price": 107.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058792839722491904"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "663c3510-82a5-4dff-80b7-16373419be16",
+    "created_at": 1779689438194
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24000,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 94.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1779689456383,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058792914733424640"
+          },
+          "price": 94.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058792914733424640"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058792915995910144"
+          },
+          "price": 94.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058792915995910144"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "f0de9499-e2df-4079-ab6d-180bb7d8e356",
+    "created_at": 1779689456385
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24000,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 104.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1779689465276,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058792951928512512"
+          },
+          "price": 104.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058792951928512512"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058792953321021440"
+          },
+          "price": 104.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058792953321021440"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "47eb2771-c41c-4b97-b3be-ad2c61640596",
+    "created_at": 1779689465277
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24000,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 95.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1779690755897,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058798365306970112"
+          },
+          "price": 95.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058798365306970112"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058798366544289792"
+          },
+          "price": 95.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058798366544289792"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "50992993-43c0-4fb0-ad5e-5fe732556ace",
+    "created_at": 1779690755897
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23950,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 95.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "429db506-a837-4937-b246-83b3888fe8cb",
+    "created_at": 1779697736260
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23950,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 93.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "e261aa3d-7625-480b-aa51-eb42d06bd588",
+    "created_at": 1779697756639
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23950,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 93.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "52a06dec-2b06-42ca-adb8-c44c1f90cc2a",
+    "created_at": 1779697785091
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23950,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 93.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "89d3671f-a5a9-4a0f-84be-04fd00b6fc18",
+    "created_at": 1779697802517
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23950,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 93.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "042e33e4-ced7-4e4d-b0ef-fb666b40834f",
+    "created_at": 1779697802621
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23950,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 93.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "3174fc59-3c62-4a9f-b553-a2914310ab66",
+    "created_at": 1779697809288
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23950,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 93.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "abf3542e-68fb-4dab-bf8e-786fd8da6ee1",
+    "created_at": 1779698030188
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23950,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 93.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "44e1ec57-c4a5-4dbf-839b-e58a3401f5d3",
+    "created_at": 1779698059213
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23950,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 90.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1779698313927,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058830064921272320"
+          },
+          "price": 90.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058830064921272320"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058830067022618624"
+          },
+          "price": 90.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058830067022618624"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "1e5a0ecf-060e-40da-a015-c2fd84f5bff4",
+    "created_at": 1779698313929
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23900,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 170.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1779701740956,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058844440050982912"
+          },
+          "price": 170.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058844440050982912"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058844441212805120"
+          },
+          "price": 170.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058844441212805120"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "3774755d-db19-46dc-b92d-bf83feaf61f9",
+    "created_at": 1779701740958
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23900,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 165.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1779701754250,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058844495856197632"
+          },
+          "price": 165.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058844495856197632"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2058844496955105280"
+          },
+          "price": 165.0,
+          "response": {
+            "order_id": {
+              "order_id": "2058844496955105280"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "bf40e7c0-7486-4fe0-8031-341127328630",
+    "created_at": 1779701754252
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23900,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 185.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SOCKSHTTPSConnectionPool(host='api.kite.trade', port=443): Max retries exceeded with url: /orders/regular (Caused by ConnectTimeoutError(<urllib3.contrib.socks.SOCKSHTTPSConnection object at 0x1542eb070>, 'Connection to api.kite.trade timed out. (connect timeout=7)'))"
+        },
+        "status": 400
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SOCKSHTTPSConnectionPool(host='api.kite.trade', port=443): Max retries exceeded with url: /orders/regular (Caused by ConnectTimeoutError(<urllib3.contrib.socks.SOCKSHTTPSConnection object at 0x154114910>, 'Connection to api.kite.trade timed out. (connect timeout=7)'))"
+        },
+        "status": 400
+      }
+    ],
+    "id": "33991adc-3a5d-4c7c-a95e-3b9833905557",
+    "created_at": 1779702127011
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23900,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 185.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SOCKSHTTPSConnectionPool(host='api.kite.trade', port=443): Max retries exceeded with url: /orders/regular (Caused by ConnectTimeoutError(<urllib3.contrib.socks.SOCKSHTTPSConnection object at 0x15417ca00>, 'Connection to api.kite.trade timed out. (connect timeout=7)'))"
+        },
+        "status": 400
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SOCKSHTTPSConnectionPool(host='api.kite.trade', port=443): Max retries exceeded with url: /orders/regular (Caused by ConnectTimeoutError(<urllib3.contrib.socks.SOCKSHTTPSConnection object at 0x151ec4c10>, 'Connection to api.kite.trade timed out. (connect timeout=7)'))"
+        },
+        "status": 400
+      }
+    ],
+    "id": "ff228dd9-2928-4e46-bd78-69a05f52969b",
+    "created_at": 1779702148090
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23900,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 185.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "dd8f08c9-5652-487b-9626-2e32ba192951",
+    "created_at": 1779702184208
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23900,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 185.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "f4b72fa7-c039-4d51-93ad-98afc8116edc",
+    "created_at": 1779702590874
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24050,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234"
+        },
+        "status": 503
+      }
+    ],
+    "id": "ddcb3588-7f43-43ba-bcf8-4c13e771f344",
+    "created_at": 1779703666821
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24050,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "Markets are closed right now. Try placing an after market order (AMO) post 3:45PM. [Read more.](https://support.zerodha.com/category/trading-and-markets/kite-web-and-mobile/articles/what-is-amo-and-when-can-we-place-it)"
+        },
+        "status": 400
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "Markets are closed right now. Try placing an after market order (AMO) post 3:45PM. [Read more.](https://support.zerodha.com/category/trading-and-markets/kite-web-and-mobile/articles/what-is-amo-and-when-can-we-place-it)"
+        },
+        "status": 400
+      }
+    ],
+    "id": "b1c27865-2316-45af-9374-bbde448a8980",
+    "created_at": 1779703961891
   }
 ]

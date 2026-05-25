@@ -52,6 +52,123 @@ def _is_proxy_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
     except OSError:
         return False
 
+def ensure_ssh_tunnel() -> bool:
+    """Start the SOCKS5 SSH tunnel if KITE_PROXY_URL is set and port is not yet listening.
+
+    Returns True if tunnel is up (either was already running or just started).
+    """
+    import subprocess, time
+    proxy_url = os.getenv('KITE_PROXY_URL', '').strip()
+    if not proxy_url:
+        return True  # no proxy required
+
+    try:
+        from urllib.parse import urlparse
+        port: int = urlparse(proxy_url).port or 1080
+        host: str = urlparse(proxy_url).hostname or '127.0.0.1'
+    except Exception:
+        host, port = '127.0.0.1', 1080
+
+    if _is_proxy_reachable(host, port):
+        return True  # already running
+
+    ssh_key = os.path.expanduser(os.getenv('SSH_TUNNEL_KEY', ''))
+    ssh_host = os.getenv('SSH_TUNNEL_HOST', '')
+    if not ssh_key or not ssh_host or not os.path.exists(ssh_key):
+        logging.warning(f'[Proxy] SSH_TUNNEL_KEY or SSH_TUNNEL_HOST not set — cannot auto-start tunnel')
+        return False
+
+    # Kill whatever process is holding the port (by port, not by name).
+    # pkill by name misses zombies; killing by port owner is reliable.
+    try:
+        _pids = subprocess.run(['lsof', '-t', f'-i:{port}'], capture_output=True, text=True).stdout.split()
+        for _pid in _pids:
+            subprocess.run(['kill', _pid.strip()], capture_output=True)
+        if _pids:
+            time.sleep(1)
+    except Exception:
+        pass
+
+    # Pre-flight: verify Oracle SSH daemon actually sends a banner (not just accepts TCP).
+    try:
+        import socket as _sock
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(5)
+        _oracle_host = ssh_host.split('@')[-1]
+        s.connect((_oracle_host, 22))
+        s.settimeout(5)
+        banner = s.recv(64)
+        s.close()
+        if not banner:
+            logging.error('[Proxy] Oracle SSH (port 22) accepts TCP but sends no banner — instance may be stopped. Check Oracle Cloud Console.')
+            return False
+        logging.info(f'[Proxy] Oracle SSH banner: {banner.decode(errors="replace").strip()}')
+    except Exception as e:
+        logging.error(f'[Proxy] Cannot reach Oracle SSH at {ssh_host}: {e}')
+        return False
+
+    cmd = [
+        'ssh', '-i', ssh_key, '-N', f'-D127.0.0.1:{port}', ssh_host,
+        '-o', 'StrictHostKeyChecking=no',
+        '-o', 'ServerAliveInterval=30',
+        '-o', 'ServerAliveCountMax=3',
+        '-o', 'ExitOnForwardFailure=yes',
+        '-o', 'ConnectTimeout=10',
+    ]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        for _ in range(15):  # wait up to 15 seconds
+            time.sleep(1)
+            if _is_proxy_reachable(host, port):
+                logging.info(f'[Proxy] SSH tunnel started → {ssh_host} (port {port})')
+                return True
+            if proc.poll() is not None:  # process already exited
+                stderr_out = (proc.stderr.read() if proc.stderr else b'').decode(errors='replace').strip()
+                logging.error(f'[Proxy] SSH exited (code {proc.returncode}): {stderr_out}')
+                return False
+        if proc.stderr:
+            proc.stderr.close()
+        logging.warning(f'[Proxy] SSH running but port {port} not open after 15s')
+        return False
+    except Exception as e:
+        logging.warning(f'[Proxy] Could not start SSH tunnel: {e}')
+        return False
+
+_tunnel_watchdog_started = False
+
+def start_tunnel_watchdog(interval: int = 30) -> None:
+    """Start a background thread that keeps the SSH tunnel alive.
+
+    Checks port 1080 every `interval` seconds. If the tunnel has dropped
+    (Oracle Cloud kills idle SSH connections), it calls ensure_ssh_tunnel()
+    to bring it back up automatically.
+    """
+    global _tunnel_watchdog_started
+    if _tunnel_watchdog_started:
+        return
+    if not os.getenv('KITE_PROXY_URL', '').strip():
+        return
+
+    _tunnel_watchdog_started = True
+
+    def _watch():
+        while True:
+            time.sleep(interval)
+            try:
+                from urllib.parse import urlparse
+                _port: int = urlparse(os.getenv('KITE_PROXY_URL', '')).port or 1080
+                _host: str = urlparse(os.getenv('KITE_PROXY_URL', '')).hostname or '127.0.0.1'
+            except Exception:
+                _host, _port = '127.0.0.1', 1080
+
+            if not _is_proxy_reachable(_host, _port):
+                logging.warning('[Proxy] Watchdog: tunnel dropped — restarting...')
+                ensure_ssh_tunnel()
+
+    t = threading.Thread(target=_watch, daemon=True, name='ssh-tunnel-watchdog')
+    t.start()
+    logging.info(f'[Proxy] Tunnel watchdog started (checks every {interval}s)')
+
 def apply_kite_proxy(kite, raise_if_unreachable: bool = False) -> bool:
     """Apply SOCKS5 proxy to a KiteConnect instance.
 
@@ -438,7 +555,7 @@ class KiteService:
                     _ltp_raw = self.kite.ltp(f"{prefix}:{ts}")
                     ltp_res: Dict[str, Any] = _ltp_raw if isinstance(_ltp_raw, dict) else {}
                     if f"{prefix}:{ts}" in ltp_res:
-                        current_price = ltp_res[f"{prefix}:{ts}"]['last_price']
+                        current_price = (ltp_res.get(f"{prefix}:{ts}") or {}).get('last_price', 0)
                         
                         # Pad by 5% to practically act as a market order safely
                         if txn_const == self.kite.TRANSACTION_TYPE_BUY:

@@ -47,52 +47,13 @@ def load_local_env():
 load_local_env()
 
 def ensure_ssh_tunnel():
-    """Auto-start SOCKS5 SSH tunnel if KITE_PROXY_URL is set but port is not listening."""
-    import subprocess, socket, time
-    proxy_url = os.getenv('KITE_PROXY_URL', '').strip()
-    if not proxy_url:
-        return
-
-    # Parse port from proxy URL (default 1080)
-    try:
-        from urllib.parse import urlparse
-        port = urlparse(proxy_url).port or 1080
-    except Exception:
-        port = 1080
-
-    # Already running?
-    try:
-        with socket.create_connection(('127.0.0.1', port), timeout=1.0):
-            logger.info(f'[Proxy] SSH tunnel already running on port {port}')
-            return
-    except OSError:
-        pass
-
-    ssh_key = os.path.expanduser(os.getenv('SSH_TUNNEL_KEY', ''))
-    ssh_host = os.getenv('SSH_TUNNEL_HOST', '')
-    if not ssh_key or not ssh_host:
-        logger.warning('[Proxy] KITE_PROXY_URL set but SSH_TUNNEL_KEY/SSH_TUNNEL_HOST missing — orders will use local IP')
-        return
-    if not os.path.exists(ssh_key):
-        logger.warning(f'[Proxy] SSH key not found: {ssh_key} — orders will use local IP')
-        return
-
-    cmd = [
-        'ssh', '-i', ssh_key, '-N', '-D', str(port), ssh_host,
-        '-o', 'StrictHostKeyChecking=no',
-        '-o', 'ServerAliveInterval=30',
-        '-o', 'ServerAliveCountMax=3',
-        '-o', 'ExitOnForwardFailure=yes',
-    ]
-    try:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2)  # give SSH a moment to establish the tunnel
-        with socket.create_connection(('127.0.0.1', port), timeout=2.0):
-            logger.info(f'[Proxy] SSH tunnel auto-started → {ssh_host} (port {port})')
-    except OSError:
-        logger.warning(f'[Proxy] SSH tunnel started but port {port} not yet ready — check key/host')
-    except Exception as e:
-        logger.warning(f'[Proxy] Could not auto-start SSH tunnel: {e}')
+    """Delegate to the shared implementation in kite_order_services."""
+    from trading_app.service.kite_order_services import ensure_ssh_tunnel as _ensure
+    ok = _ensure()
+    if ok:
+        logger.info('[Proxy] SSH tunnel is up')
+    else:
+        logger.warning('[Proxy] SSH tunnel could not be started — orders requiring proxy will fail')
 
 # Global reference to live monitoring instances
 live_monitors = {}
@@ -176,6 +137,8 @@ def start_live_monitoring():
 def main():
     """Run the Flask application and live monitoring."""
     ensure_ssh_tunnel()
+    from trading_app.service.kite_order_services import start_tunnel_watchdog
+    start_tunnel_watchdog(interval=30)
     app = create_app()
 
     # Note: Live monitoring will be started via API endpoint after user login

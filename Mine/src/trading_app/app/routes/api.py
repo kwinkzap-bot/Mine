@@ -4394,17 +4394,16 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
             kite = get_kite(instance=zerodha_instance)
             if not kite:
                 return {'success': False, 'error': f'Zerodha {zerodha_instance} not connected'}, 401
-            # If proxy is configured but not applied, the order would go through the local IP
-            # which Zerodha will reject — fail early with a clear message.
-            from trading_app.service.kite_order_services import _is_proxy_reachable
+            # If proxy is configured but not applied, try to start the tunnel then re-apply.
             _proxy_url = os.getenv('KITE_PROXY_URL', '').strip()
             if _proxy_url and not kite.proxies:
-                from urllib.parse import urlparse as _up
-                _p = _up(_proxy_url)
-                if not _is_proxy_reachable(_p.hostname, _p.port or 1080):
+                from trading_app.service.kite_order_services import ensure_ssh_tunnel, apply_kite_proxy
+                if ensure_ssh_tunnel():
+                    apply_kite_proxy(kite)
+                if not kite.proxies:
                     return {
                         'success': False,
-                        'error': 'SSH tunnel is down. Start it first: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234'
+                        'error': 'SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234'
                     }, 503
 
             from trading_app.service.kite_order_services import KiteService
