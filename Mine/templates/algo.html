@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Algo — NIFTY Weekly Straddle{% endblock %}
+
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/algo.css') }}?v=1.0">
+{% endblock %}
+
+{% block content %}
+<div class="algo-page">
+<div class="algo-inner">
+
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <div class="ag-header">
+        <span class="ag-title">NIFTY Weekly Straddle</span>
+        <span id="algoBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="algoBadgeText">Inactive</span>
+        </span>
+        <div class="ag-actions" style="margin-left:auto; gap:8px;">
+            <button class="ag-btn ag-btn-preview" onclick="algoPreview(this)">Preview Strikes</button>
+            <span class="ag-last-upd" id="algoLastUpd"></span>
+        </div>
+    </div>
+
+    <!-- ── Message bar ─────────────────────────────────────────── -->
+    <div id="algoMsg" class="ag-msg"></div>
+
+    <!-- ── Status card ─────────────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Trade Status</span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid">
+                <div class="ag-stat">
+                    <span class="ag-stat-label">Status</span>
+                    <span class="ag-stat-value" id="algoStatusVal">—</span>
+                </div>
+                <div class="ag-stat">
+                    <span class="ag-stat-label">Current Expiry</span>
+                    <span class="ag-stat-value" id="algoExpiry">—</span>
+                </div>
+                <div class="ag-stat">
+                    <span class="ag-stat-label">Next Expiry</span>
+                    <span class="ag-stat-value" id="algoNextExpiry">—</span>
+                </div>
+                <div class="ag-stat">
+                    <span class="ag-stat-label">Underlying at Entry</span>
+                    <span class="ag-stat-value" id="algoUnderlying">—</span>
+                </div>
+                <div class="ag-stat">
+                    <span class="ag-stat-label">Entry Time</span>
+                    <span class="ag-stat-value" id="algoEntryTime">—</span>
+                </div>
+                <div class="ag-stat">
+                    <span class="ag-stat-label">Lots × Lot Size</span>
+                    <span class="ag-stat-value" id="algoLots">—</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Legs table ──────────────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Legs</span>
+        </div>
+        <table class="ag-table">
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Strike</th>
+                    <th>Symbol</th>
+                    <th>Entry LTP</th>
+                    <th>Current LTP</th>
+                    <th>P&amp;L / lot</th>
+                </tr>
+            </thead>
+            <tbody id="algoLegsBody">
+                <tr><td colspan="6" class="ag-empty">No active trade</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- ── Combined P&L card ───────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Combined P&amp;L</span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid">
+                <div class="ag-stat">
+                    <span class="ag-stat-label">Entry Premium</span>
+                    <span class="ag-stat-value" id="agCombEntry">—</span>
+                </div>
+                <div class="ag-stat">
+                    <span class="ag-stat-label">Current Premium</span>
+                    <span class="ag-stat-value" id="agCombCurrent">—</span>
+                </div>
+                <div class="ag-stat">
+                    <span class="ag-stat-label">SL Trigger</span>
+                    <span class="ag-stat-value ag-warn" id="agSL">—</span>
+                </div>
+                <div class="ag-stat">
+                    <span class="ag-stat-label">SL Distance</span>
+                    <span class="ag-stat-value" id="agSLDist">—</span>
+                </div>
+                <div class="ag-stat">
+                    <span class="ag-stat-label">P&amp;L / lot</span>
+                    <span class="ag-stat-value" id="agPnlLot">—</span>
+                </div>
+                <div class="ag-stat">
+                    <span class="ag-stat-label">Total P&amp;L</span>
+                    <span class="ag-stat-value" id="agPnlTotal">—</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Action buttons ──────────────────────────────────────── -->
+    <div class="ag-actions">
+        <button class="ag-btn ag-btn-enter" id="algoEnterBtn" onclick="algoEnterNow(this)">
+            Enter Straddle Now
+        </button>
+        <button class="ag-btn ag-btn-exit" id="algoExitBtn" onclick="algoExitNow(this)" disabled>
+            Exit Now
+        </button>
+    </div>
+
+</div><!-- .algo-inner -->
+</div><!-- .algo-page -->
+
+<script src="{{ url_for('static', filename='js/algo.js') }}?v=1.1"></script>
+<script>algoLoad();</script>
+{% endblock %}

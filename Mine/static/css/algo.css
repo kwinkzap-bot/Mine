@@ -1,0 +1,451 @@
+/* ================================================================
+   Algo — NIFTY Weekly Straddle page
+   CSS custom properties on .algo-page, theme-overridden.
+   Follows the same pattern as portfolio.css / orders.css.
+================================================================ */
+
+/* ── Default / Light-theme properties ─────────────────────────── */
+.algo-page {
+    --ag-bg:            #f8fafc;
+    --ag-surface:       #ffffff;
+    --ag-border:        #e2e8f0;
+    --ag-border-sub:    #f1f5f9;
+    --ag-text:          #1e293b;
+    --ag-text-2:        #475569;
+    --ag-text-3:        #94a3b8;
+    --ag-accent:        #3b82f6;
+    --ag-accent-dim:    rgba(59,130,246,0.08);
+    --ag-row-hover:     #f8fafc;
+    --ag-shadow:        0 1px 4px rgba(0,0,0,0.07);
+    --ag-shadow-card:   0 2px 8px rgba(0,0,0,0.06);
+    --ag-pos:           #16a34a;
+    --ag-neg:           #dc2626;
+    --ag-warning:       #d97706;
+    --ag-ce:            #2563eb;
+    --ag-pe:            #dc2626;
+    --ag-badge-active-bg:     rgba(22,163,74,0.12);
+    --ag-badge-active-text:   #15803d;
+    --ag-badge-active-border: rgba(22,163,74,0.3);
+    --ag-badge-inactive-bg:     rgba(100,116,139,0.1);
+    --ag-badge-inactive-text:   #64748b;
+    --ag-badge-inactive-border: rgba(100,116,139,0.2);
+    --ag-btn-enter:     #16a34a;
+    --ag-btn-enter-h:   #15803d;
+    --ag-btn-exit:      #dc2626;
+    --ag-btn-exit-h:    #b91c1c;
+    --ag-btn-preview:   #3b82f6;
+    --ag-btn-preview-h: #2563eb;
+    --ag-msg-ok-bg:     rgba(22,163,74,0.08);
+    --ag-msg-ok-text:   #15803d;
+    --ag-msg-ok-border: rgba(22,163,74,0.25);
+    --ag-msg-err-bg:    rgba(220,38,38,0.08);
+    --ag-msg-err-text:  #b91c1c;
+    --ag-msg-err-border:rgba(220,38,38,0.25);
+}
+
+/* ── Dark Theme ───────────────────────────────────────────────── */
+body.dark-theme .algo-page {
+    --ag-bg:            #090e17;
+    --ag-surface:       #111827;
+    --ag-border:        #1e293b;
+    --ag-border-sub:    #1a2332;
+    --ag-text:          #f1f5f9;
+    --ag-text-2:        #94a3b8;
+    --ag-text-3:        #475569;
+    --ag-accent:        #60a5fa;
+    --ag-accent-dim:    rgba(96,165,250,0.1);
+    --ag-row-hover:     rgba(59,130,246,0.04);
+    --ag-shadow:        none;
+    --ag-shadow-card:   none;
+    --ag-pos:           #4ade80;
+    --ag-neg:           #f87171;
+    --ag-warning:       #fbbf24;
+    --ag-ce:            #60a5fa;
+    --ag-pe:            #f87171;
+    --ag-badge-active-bg:     rgba(74,222,128,0.12);
+    --ag-badge-active-text:   #4ade80;
+    --ag-badge-active-border: rgba(74,222,128,0.3);
+    --ag-badge-inactive-bg:     rgba(71,85,105,0.2);
+    --ag-badge-inactive-text:   #64748b;
+    --ag-badge-inactive-border: rgba(71,85,105,0.3);
+    --ag-btn-enter:     #16a34a;
+    --ag-btn-enter-h:   #15803d;
+    --ag-btn-exit:      #ef4444;
+    --ag-btn-exit-h:    #dc2626;
+    --ag-btn-preview:   #3b82f6;
+    --ag-btn-preview-h: #2563eb;
+    --ag-msg-ok-bg:     rgba(74,222,128,0.1);
+    --ag-msg-ok-text:   #4ade80;
+    --ag-msg-ok-border: rgba(74,222,128,0.25);
+    --ag-msg-err-bg:    rgba(248,113,113,0.1);
+    --ag-msg-err-text:  #f87171;
+    --ag-msg-err-border:rgba(248,113,113,0.25);
+}
+
+/* ── Forest Theme ────────────────────────────────────────────── */
+body.forest-theme .algo-page {
+    --ag-bg:            #060c09;
+    --ag-surface:       #0a1810;
+    --ag-border:        #14532d;
+    --ag-border-sub:    #0a1e14;
+    --ag-text:          #ecfdf5;
+    --ag-text-2:        #6ba88f;
+    --ag-text-3:        #4d8068;
+    --ag-accent:        #34d399;
+    --ag-accent-dim:    rgba(52,211,153,0.1);
+    --ag-row-hover:     rgba(16,185,129,0.04);
+    --ag-shadow:        none;
+    --ag-shadow-card:   none;
+    --ag-pos:           #86efac;
+    --ag-neg:           #fca5a5;
+    --ag-warning:       #fcd34d;
+    --ag-ce:            #93c5fd;
+    --ag-pe:            #fca5a5;
+    --ag-badge-active-bg:     rgba(52,211,153,0.12);
+    --ag-badge-active-text:   #34d399;
+    --ag-badge-active-border: rgba(52,211,153,0.3);
+    --ag-badge-inactive-bg:     rgba(77,128,104,0.15);
+    --ag-badge-inactive-text:   #4d8068;
+    --ag-badge-inactive-border: rgba(77,128,104,0.25);
+    --ag-btn-enter:     #059669;
+    --ag-btn-enter-h:   #047857;
+    --ag-btn-exit:      #dc2626;
+    --ag-btn-exit-h:    #b91c1c;
+    --ag-btn-preview:   #34d399;
+    --ag-btn-preview-h: #10b981;
+    --ag-msg-ok-bg:     rgba(52,211,153,0.1);
+    --ag-msg-ok-text:   #34d399;
+    --ag-msg-ok-border: rgba(52,211,153,0.25);
+    --ag-msg-err-bg:    rgba(252,165,165,0.1);
+    --ag-msg-err-text:  #fca5a5;
+    --ag-msg-err-border:rgba(252,165,165,0.25);
+}
+
+/* ── Cream Theme ─────────────────────────────────────────────── */
+body.cream-theme .algo-page {
+    --ag-bg:            #fdfbf7;
+    --ag-surface:       #fdf6e9;
+    --ag-border:        #d4b896;
+    --ag-border-sub:    #eeddc4;
+    --ag-text:          #3b2f20;
+    --ag-text-2:        #9b7a52;
+    --ag-text-3:        #c4a882;
+    --ag-accent:        #b45309;
+    --ag-accent-dim:    rgba(180,83,9,0.08);
+    --ag-row-hover:     #f5ead8;
+    --ag-shadow:        0 1px 4px rgba(139,92,26,0.08);
+    --ag-shadow-card:   0 2px 8px rgba(139,92,26,0.06);
+    --ag-pos:           #15803d;
+    --ag-neg:           #b91c1c;
+    --ag-warning:       #b45309;
+    --ag-ce:            #1d4ed8;
+    --ag-pe:            #b91c1c;
+    --ag-badge-active-bg:     rgba(21,128,61,0.1);
+    --ag-badge-active-text:   #15803d;
+    --ag-badge-active-border: rgba(21,128,61,0.25);
+    --ag-badge-inactive-bg:     rgba(196,168,130,0.2);
+    --ag-badge-inactive-text:   #9b7a52;
+    --ag-badge-inactive-border: rgba(196,168,130,0.3);
+    --ag-btn-enter:     #15803d;
+    --ag-btn-enter-h:   #166534;
+    --ag-btn-exit:      #b91c1c;
+    --ag-btn-exit-h:    #991b1b;
+    --ag-btn-preview:   #b45309;
+    --ag-btn-preview-h: #92400e;
+    --ag-msg-ok-bg:     rgba(21,128,61,0.08);
+    --ag-msg-ok-text:   #15803d;
+    --ag-msg-ok-border: rgba(21,128,61,0.2);
+    --ag-msg-err-bg:    rgba(185,28,28,0.08);
+    --ag-msg-err-text:  #b91c1c;
+    --ag-msg-err-border:rgba(185,28,28,0.2);
+}
+
+/* ── Ocean Theme ─────────────────────────────────────────────── */
+body.ocean-theme .algo-page {
+    --ag-bg:            #f0f6fc;
+    --ag-surface:       #ffffff;
+    --ag-border:        #bae0f8;
+    --ag-border-sub:    #dbedf8;
+    --ag-text:          #0f172a;
+    --ag-text-2:        #475569;
+    --ag-text-3:        #94a3b8;
+    --ag-accent:        #0284c7;
+    --ag-accent-dim:    rgba(2,132,199,0.08);
+    --ag-row-hover:     #e8f4fd;
+    --ag-shadow:        0 1px 4px rgba(2,132,199,0.06);
+    --ag-shadow-card:   0 2px 8px rgba(2,132,199,0.06);
+    --ag-pos:           #15803d;
+    --ag-neg:           #dc2626;
+    --ag-warning:       #d97706;
+    --ag-ce:            #1d4ed8;
+    --ag-pe:            #dc2626;
+    --ag-badge-active-bg:     rgba(21,128,61,0.1);
+    --ag-badge-active-text:   #15803d;
+    --ag-badge-active-border: rgba(21,128,61,0.25);
+    --ag-badge-inactive-bg:     rgba(148,163,184,0.15);
+    --ag-badge-inactive-text:   #64748b;
+    --ag-badge-inactive-border: rgba(148,163,184,0.25);
+    --ag-btn-enter:     #15803d;
+    --ag-btn-enter-h:   #166534;
+    --ag-btn-exit:      #dc2626;
+    --ag-btn-exit-h:    #b91c1c;
+    --ag-btn-preview:   #0284c7;
+    --ag-btn-preview-h: #0369a1;
+    --ag-msg-ok-bg:     rgba(21,128,61,0.08);
+    --ag-msg-ok-text:   #15803d;
+    --ag-msg-ok-border: rgba(21,128,61,0.2);
+    --ag-msg-err-bg:    rgba(220,38,38,0.08);
+    --ag-msg-err-text:  #b91c1c;
+    --ag-msg-err-border:rgba(220,38,38,0.2);
+}
+
+/* ── Page shell ───────────────────────────────────────────────── */
+.algo-page {
+    background: var(--ag-bg);
+    min-height: calc(100vh - 80px);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: var(--ag-text);
+    padding: 20px 16px 40px;
+}
+
+.algo-inner {
+    max-width: 900px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* ── Header ───────────────────────────────────────────────────── */
+.ag-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.ag-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--ag-text);
+    letter-spacing: -0.01em;
+}
+
+.ag-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+    border: 1px solid;
+}
+.ag-badge.active {
+    background: var(--ag-badge-active-bg);
+    color: var(--ag-badge-active-text);
+    border-color: var(--ag-badge-active-border);
+}
+.ag-badge.inactive {
+    background: var(--ag-badge-inactive-bg);
+    color: var(--ag-badge-inactive-text);
+    border-color: var(--ag-badge-inactive-border);
+}
+.ag-badge-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+.ag-badge.active .ag-badge-dot { animation: ag-pulse 1.8s ease-in-out infinite; }
+@keyframes ag-pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.ag-last-upd {
+    font-size: 0.73rem;
+    color: var(--ag-text-3);
+    margin-left: auto;
+}
+
+/* ── Message bar ──────────────────────────────────────────────── */
+.ag-msg {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    border: 1px solid;
+    display: none;
+}
+.ag-msg.success {
+    background: var(--ag-msg-ok-bg);
+    color: var(--ag-msg-ok-text);
+    border-color: var(--ag-msg-ok-border);
+}
+.ag-msg.error {
+    background: var(--ag-msg-err-bg);
+    color: var(--ag-msg-err-text);
+    border-color: var(--ag-msg-err-border);
+}
+
+/* ── Card ─────────────────────────────────────────────────────── */
+.ag-card {
+    background: var(--ag-surface);
+    border: 1px solid var(--ag-border);
+    border-radius: 10px;
+    box-shadow: var(--ag-shadow-card);
+    overflow: hidden;
+}
+
+.ag-card-hdr {
+    padding: 10px 16px 8px;
+    border-bottom: 1px solid var(--ag-border-sub);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ag-card-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--ag-text-3);
+}
+
+.ag-card-body {
+    padding: 14px 16px;
+}
+
+/* ── Stat grid ────────────────────────────────────────────────── */
+.ag-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    gap: 12px 16px;
+}
+
+.ag-stat { display: flex; flex-direction: column; gap: 3px; }
+
+.ag-stat-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    color: var(--ag-text-3);
+}
+
+.ag-stat-value {
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: var(--ag-text);
+}
+
+/* ── Table ────────────────────────────────────────────────────── */
+.ag-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.83rem;
+}
+
+.ag-table thead tr {
+    border-bottom: 2px solid var(--ag-border);
+}
+
+.ag-table th {
+    padding: 9px 14px;
+    text-align: left;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    color: var(--ag-text-3);
+    white-space: nowrap;
+}
+
+.ag-table td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--ag-border-sub);
+    color: var(--ag-text);
+    vertical-align: middle;
+}
+
+.ag-table tbody tr:last-child td { border-bottom: none; }
+
+.ag-table tbody tr:hover td { background: var(--ag-row-hover); }
+
+.ag-table .ce-row td:first-child { color: var(--ag-ce); font-weight: 700; }
+.ag-table .pe-row td:first-child { color: var(--ag-pe); font-weight: 700; }
+
+.ag-sym { font-size: 0.75rem; color: var(--ag-text-2); font-family: 'SF Mono', 'Fira Code', monospace; }
+
+.ag-empty {
+    color: var(--ag-text-3);
+    font-size: 0.82rem;
+    text-align: center;
+    padding: 22px 0;
+}
+
+/* ── P&L colors ───────────────────────────────────────────────── */
+.ag-pos     { color: var(--ag-pos) !important; font-weight: 700; }
+.ag-neg     { color: var(--ag-neg) !important; font-weight: 700; }
+.ag-warn    { color: var(--ag-warning) !important; }
+.ag-muted   { color: var(--ag-text-2); }
+
+/* ── Actions row ──────────────────────────────────────────────── */
+.ag-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.ag-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 20px;
+    border-radius: 8px;
+    font-size: 0.83rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: background .15s, opacity .15s, transform .1s;
+    line-height: 1;
+    white-space: nowrap;
+}
+.ag-btn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.ag-btn:active:not(:disabled) { transform: translateY(0); }
+.ag-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+
+.ag-btn-enter {
+    background: var(--ag-btn-enter);
+    color: #fff;
+}
+.ag-btn-exit {
+    background: var(--ag-btn-exit);
+    color: #fff;
+}
+.ag-btn-preview {
+    background: transparent;
+    color: var(--ag-btn-preview);
+    border: 1.5px solid var(--ag-btn-preview);
+}
+.ag-btn-preview:hover:not(:disabled) {
+    background: var(--ag-accent-dim);
+    filter: none;
+}
+
+/* ── Divider ──────────────────────────────────────────────────── */
+.ag-divider {
+    height: 1px;
+    background: var(--ag-border);
+    margin: 2px 0;
+}
+
+/* ── Responsive ───────────────────────────────────────────────── */
+@media (max-width: 600px) {
+    .algo-page { padding: 12px 10px 32px; }
+    .ag-grid { grid-template-columns: repeat(2, 1fr); }
+    .ag-table th, .ag-table td { padding: 8px 10px; }
+    .ag-btn { padding: 8px 14px; font-size: 0.8rem; }
+}

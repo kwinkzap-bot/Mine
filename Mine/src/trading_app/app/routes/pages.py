@@ -173,6 +173,14 @@ def trend_detection():
     """Market regime trend detection page."""
     return render_template('trend_detection.html')
 
+@pages_bp.route('/algo')
+@require_user_auth
+@login_required
+def algo():
+    """NIFTY Weekly Straddle algo trading page."""
+    return render_template('algo.html')
+
+
 @pages_bp.route('/login')
 def login():
     """Login page - redirects to user login."""

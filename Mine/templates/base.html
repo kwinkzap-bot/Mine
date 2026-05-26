@@ -6,7 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-    <link rel="icon" type="image/png" href="{{ url_for('static', filename='trading.png') }}">
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="512x512" href="{{ url_for('static', filename='icons/icon-512.png') }}">
     {% if pwa_enabled %}
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#0284c7">
@@ -96,6 +97,7 @@
             <a href="/portfolio" class="nav-link {% if request.path == '/portfolio' %}active{% endif %}">💼 Portfolio</a>
             <a href="/markets" class="nav-link {% if request.path == '/markets' %}active{% endif %}">🏢 Markets</a>
             <a href="/trend-detection" class="nav-link {% if request.path == '/trend-detection' %}active{% endif %}">📈 Trend</a>
+            <a href="/algo" class="nav-link {% if request.path == '/algo' %}active{% endif %}">⚡ Algo</a>
             <div class="login-dropdown">
                 {% if pwa_enabled %}
                 <button id="pwa-install-btn" title="Install as App" style="display:none">⬇️</button>

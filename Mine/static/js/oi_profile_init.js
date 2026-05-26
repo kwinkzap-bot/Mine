@@ -21,7 +21,7 @@ window.oipInitSecondaryCharts = function() {
     if (elInt && typeof TradingViewChart !== 'undefined') {
         oipIntrinsicChart = TradingViewChart.create({
             containerId: 'oipIntrinsicChart', data: [], type: 'COMBINED',
-            isCombined: true, timeframe: oipInterval, options: { height: 360 }
+            isCombined: true, timeframe: oipInterval, options: { height: 310 }
         });
         oipIntrinsicSeries = oipIntrinsicChart.ceSeries || oipIntrinsicChart.series;
         oipIntrinsicPeSeries = oipIntrinsicChart.peSeries;
@@ -38,14 +38,14 @@ window.oipInitSecondaryCharts = function() {
         // Initialize Individual CE Chart
         oipCEChart = TradingViewChart.create({
             containerId: 'oipCEChart', data: [], type: 'CE',
-            timeframe: oipInterval, options: { height: 320 }
+            timeframe: oipInterval, options: { height: 220 }
         });
         oipCESeries = oipCEChart.series;
 
         // Initialize Individual PE Chart
         oipPEChart = TradingViewChart.create({
             containerId: 'oipPEChart', data: [], type: 'PE',
-            timeframe: oipInterval, options: { height: 320 }
+            timeframe: oipInterval, options: { height: 220 }
         });
         oipPESeries = oipPEChart.series;
 
@@ -108,7 +108,7 @@ window.oipInitSecondaryCharts = function() {
         if (elComb && typeof TradingViewChart !== 'undefined') {
             oipCombinedChart = TradingViewChart.create({
                 containerId: 'oipCombinedChart', data: [], type: 'LINE',
-                lineColor: '#6366f1', timeframe: oipInterval, options: { height: 280 }
+                lineColor: '#6366f1', timeframe: oipInterval, options: { height: 230 }
             });
             oipCombinedSeries = oipCombinedChart.series;
             

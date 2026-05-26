@@ -8,20 +8,11 @@ from trading_app.app.utils.logger import logger
 
 # Optional: APScheduler for background scheduling
 try:
-    # Fix for APScheduler 3.10+ compatibility with Python 3.9+
-    # The issue is with entry_points() API change in Python 3.10+
-    import sys
-    if sys.version_info >= (3, 10):
-        from importlib.metadata import entry_points
-    else:
-        from importlib_metadata import entry_points
-    
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
     APSCHEDULER_AVAILABLE = True
-except (ImportError, KeyError) as e:
+except Exception as e:
     APSCHEDULER_AVAILABLE = False
-    # Define as None for type checking when not available
     BackgroundScheduler = None  # type: ignore
     CronTrigger = None  # type: ignore
     logger.warning(f"APScheduler not available. Background scheduler disabled. Error: {e}")
@@ -98,10 +89,26 @@ class MarketScheduler:
             misfire_grace_time=60
         )
         
+        self.scheduler.add_job(
+            self._run_straddle_rollover,
+            CronTrigger(
+                day_of_week='tue',
+                hour=15,
+                minute=15,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='nifty_straddle_rollover',
+            name='NIFTY Weekly Straddle Rollover',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
         self.scheduler.start()
         logger.info("Market scheduler started")
         logger.info("CPR filter job scheduled: Every 5 minutes during market hours")
         logger.info("OI persistence job scheduled: Every 1 minute during market hours")
+        logger.info("NIFTY straddle rollover job scheduled: Tuesday 15:15 IST")
     
     def stop(self):
         """Stop the background scheduler."""
@@ -110,6 +117,30 @@ class MarketScheduler:
         self.scheduler.shutdown()
         logger.info("Market scheduler stopped")
     
+    def _run_straddle_rollover(self):
+        """Tuesday 3:15 PM: exit current week straddle and enter next week."""
+        import os
+        try:
+            if not self.is_trading_day():
+                return
+            from trading_app.app.routes.api import _get_straddle_broker
+            from trading_app.service.provider_logic import get_data_provider, get_kite
+            username = os.getenv('MONITORING_USERNAME', 'Mine')
+            broker_instance = _get_straddle_broker(username)
+            if not broker_instance:
+                logger.info("[Straddle Scheduler] No broker with STRADDLE_ACTIVE=true — skipping")
+                return
+            provider = get_data_provider(user=username)
+            kite = get_kite(user=username, instance=broker_instance)
+            if not provider or not kite:
+                logger.warning("[Straddle Scheduler] Provider or Kite not available — skipping")
+                return
+            from trading_app.algo.nifty_weekly_straddle import NiftyWeeklyStraddle
+            result = NiftyWeeklyStraddle(provider, kite, broker_instance, username).rollover_or_enter()
+            logger.info(f"[Straddle Scheduler] Rollover result: {result.get('success')} — {result.get('error', '')}")
+        except Exception as e:
+            logger.error(f"[Straddle Scheduler] Error in rollover: {e}", exc_info=True)
+
     def _run_cpr_filter_task(self):
         """Execute CPR filter task (called by scheduler)."""
         try:
@@ -186,21 +217,11 @@ def init_scheduler(app):
     if not APSCHEDULER_AVAILABLE:
         logger.info("APScheduler not installed - backend scheduler disabled")
         return market_scheduler
-    
+
     logger.info("Initializing market scheduler...")
-    
-    # Flask 3.0+ doesn't have before_first_request, use app.config instead
     with app.app_context():
-        @app.before_request
-        def start_scheduler_once():
-            """Start scheduler on first request (using flag)."""
-            if not getattr(app, '_scheduler_started', False):
-                app._scheduler_started = True
-                if market_scheduler.scheduler and not market_scheduler.scheduler.running:
-                    market_scheduler.start()
-    
-    # Register shutdown handler
+        market_scheduler.start()
+
     import atexit
     atexit.register(market_scheduler.stop)
-    
     return market_scheduler

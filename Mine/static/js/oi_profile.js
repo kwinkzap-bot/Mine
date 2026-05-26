@@ -413,62 +413,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    oipOIChart.subscribeCrosshairMove(param => {
-        if (window.oipReplayMode) {
-            oipElems.tooltip?.classList.add('hidden');
-            return;
-        }
-        if (!param.point || !oipAllStrikes.length) {
-            oipElems.tooltip?.classList.add('hidden');
-            return;
-        }
-        const W = oipElems.canvas?.width / window.devicePixelRatio;
-        const plotRight = W - 70;
-        const MAX_BAR_PX = Math.min(plotRight * 0.35, 300);
-        if (param.point.x < (plotRight - MAX_BAR_PX - 20) || param.point.x > plotRight + 10) {
-            oipElems.tooltip?.classList.add('hidden');
-            return;
-        }
-        const price = oipOISeries.coordinateToPrice(param.point.y);
-        if (!price) return;
-        let nearest = oipAllStrikes[0];
-        let minDist = Math.abs(oipAllStrikes[0].strike - price);
-        for (let i = 0; i < oipAllStrikes.length; i++) {
-            const s = oipAllStrikes[i];
-            const d = Math.abs(s.strike - price);
-            if (d < minDist) { minDist = d; nearest = s; }
-        }
-        if (minDist > 100) { oipElems.tooltip?.classList.add('hidden'); return; }
-        const isChg = (oipMode === 'change');
-
-        // Fair Pricing (Current IV) vs Theory (90d Avg IV)
-        const ceFair = nearest.ce_fair || 0, peFair = nearest.pe_fair || 0;
-        const ceTheory = nearest.ce_theory || 0, peTheory = nearest.pe_theory || 0;
-        const ceIV = nearest.ce_iv ? (nearest.ce_iv * 100).toFixed(1) : '--';
-        const peIV = nearest.pe_iv ? (nearest.pe_iv * 100).toFixed(1) : '--';
-
-        if (oipElems.tooltip) oipElems.tooltip.innerHTML = `
-            <div class="oip-tt-box">
-                <div class="tt-header">STRIKE: ${nearest.strike}</div>
-                <div class="tt-grid">
-                    <div class="tt-col ce">
-                        <div class="type">CALLS (CE)</div>
-                        <div class="metric"><span class="l">Fair:</span> <span class="v">₹${ceFair.toFixed(1)}</span></div>
-                        <div class="metric"><span class="l">IV:</span> <span class="v">${ceIV}%</span></div>
-                    </div>
-                    <div class="tt-col pe">
-                        <div class="type">PUTS (PE)</div>
-                        <div class="metric"><span class="l">Fair:</span> <span class="v">₹${peFair.toFixed(1)}</span></div>
-                        <div class="metric"><span class="l">IV:</span> <span class="v">${peIV}%</span></div>
-                    </div>
-                </div>
-            </div>
-        `;
-        oipElems.tooltip?.classList.remove('hidden');
-        if (oipElems.tooltip) {
-            oipElems.tooltip.style.left = (param.point.x - oipElems.tooltip.offsetWidth - 15) + 'px';
-            oipElems.tooltip.style.top = (param.point.y - oipElems.tooltip.offsetHeight / 2) + 'px';
-        }
+    oipOIChart.subscribeCrosshairMove(() => {
+        oipElems.tooltip?.classList.add('hidden');
     });
 
     // Theme setup and handling
@@ -561,7 +507,7 @@ function creatBaseChart(el) {
     const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
     const cfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
     return LightweightCharts.createChart(el, {
-        width: el.clientWidth || 1200, height: 360,
+        width: el.clientWidth || 1200, height: 310,
         layout: { textColor: cfg.text, background: { type: 'solid', color: cfg.bg } },
         grid: { vertLines: { color: cfg.grid }, horzLines: { color: cfg.grid } },
         crosshair: { mode: 0, vertLine: { color: '#9ca3af', style: 3 }, horzLine: { color: '#9ca3af', style: 3, labelBackgroundColor: '#0969da' } },
@@ -1984,16 +1930,29 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
         }
     }
 
+    // CE & PE defaults: exactly 100 pts from the nearest round-hundred ATM
+    const availStrikes = sortedStrikes.length > 0
+        ? sortedStrikes
+        : Array.from({ length: 21 }, (_, i) => atm + (i - 10) * step);
+    const refBase = Math.round(refPrice / 100) * 100;
+    const ceDefaultArr = availStrikes.filter(s => s >= refBase + 100 && s % 100 === 0);
+    const peDefaultArr = availStrikes.filter(s => s <= refBase - 100 && s % 100 === 0);
+    const ceDefault = ceDefaultArr.length ? Math.min(...ceDefaultArr) : atm;
+    const peDefault = peDefaultArr.length ? Math.max(...peDefaultArr) : atm;
+
     // Populate all three strike dropdowns with the same options
-    function syncDropdown(el, prevVal) {
+    function syncDropdown(el, prevVal, defaultVal = atm) {
         if (!el) return;
         el.innerHTML = opts;
+        const defStr = String(defaultVal);
         if (centerPrice && !oipCustomStrikeSetOnLoad) {
-            el.value = atm;
+            el.value = defStr;
+            if (!opts.includes(`value="${defStr}"`)) el.value = String(atm);
         } else if (prevVal && opts.includes(`value="${prevVal}"`)) {
             el.value = prevVal;
         } else {
-            el.value = atm;
+            el.value = defStr;
+            if (!opts.includes(`value="${defStr}"`)) el.value = String(atm);
         }
     }
 
@@ -2002,8 +1961,8 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
     const prevPE = oipElems.peStrikeDropdown?.value;
 
     syncDropdown(oipElems.customStrikeDropdown, prevCustom);
-    syncDropdown(oipElems.ceStrikeDropdown, prevCE);
-    syncDropdown(oipElems.peStrikeDropdown, prevPE);
+    syncDropdown(oipElems.ceStrikeDropdown, prevCE, peDefault);
+    syncDropdown(oipElems.peStrikeDropdown, prevPE, ceDefault);
 
     if (centerPrice && !oipCustomStrikeSetOnLoad) oipCustomStrikeSetOnLoad = true;
 

@@ -540,7 +540,7 @@
 /* ── Chart ───────────────────────────────────────────────── */
 .oip-chart-wrap {
     position: relative;
-    height: 360px;
+    height: 310px;
     /* fixed — both OI and Premium charts are same height */
     flex-shrink: 0;
     background: var(--oip-bg);
@@ -560,15 +560,9 @@
 }
 
 .oip-charts-row .oip-chart-wrap {
-    height: 320px;
+    height: 220px;
     flex: 1;
     min-width: 0;
-}
-
-@media (max-width: 1024px) {
-    .oip-charts-row .oip-chart-wrap {
-        height: 360px;
-    }
 }
 
 #oipCandleChart {

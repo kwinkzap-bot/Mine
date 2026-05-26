@@ -44,11 +44,20 @@ _global_rate_limiter = GlobalRateLimiter(3.0)
 def get_global_rate_limiter():
     return _global_rate_limiter
 
-def _is_proxy_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
+def _is_socks5_healthy(host: str, port: int, timeout: float = 2.0) -> bool:
+    """Verify SOCKS5 tunnel is functional by completing the greeting handshake.
+
+    A TCP-only check allows zombie SSH processes (port open, no forwarding) to
+    pass. Sending the SOCKS5 method-selection request and expecting a valid
+    server-choice response confirms the proxy is actually forwarding.
+    """
     import socket
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall(b'\x05\x01\x00')      # VER=5, NMETHODS=1, METHOD=NO_AUTH
+            resp = s.recv(2)
+            return len(resp) == 2 and resp[0] == 0x05 and resp[1] == 0x00
     except OSError:
         return False
 
@@ -69,7 +78,7 @@ def ensure_ssh_tunnel() -> bool:
     except Exception:
         host, port = '127.0.0.1', 1080
 
-    if _is_proxy_reachable(host, port):
+    if _is_socks5_healthy(host, port):
         return True  # already running
 
     ssh_key = os.path.expanduser(os.getenv('SSH_TUNNEL_KEY', ''))
@@ -119,7 +128,7 @@ def ensure_ssh_tunnel() -> bool:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         for _ in range(15):  # wait up to 15 seconds
             time.sleep(1)
-            if _is_proxy_reachable(host, port):
+            if _is_socks5_healthy(host, port):
                 logging.info(f'[Proxy] SSH tunnel started → {ssh_host} (port {port})')
                 return True
             if proc.poll() is not None:  # process already exited
@@ -161,7 +170,7 @@ def start_tunnel_watchdog(interval: int = 30) -> None:
             except Exception:
                 _host, _port = '127.0.0.1', 1080
 
-            if not _is_proxy_reachable(_host, _port):
+            if not _is_socks5_healthy(_host, _port):
                 logging.warning('[Proxy] Watchdog: tunnel dropped — restarting...')
                 ensure_ssh_tunnel()
 
@@ -187,7 +196,7 @@ def apply_kite_proxy(kite, raise_if_unreachable: bool = False) -> bool:
         port: int = parsed.port or 1080
     except Exception:
         host, port = "127.0.0.1", 1080
-    if not _is_proxy_reachable(host, port):
+    if not _is_socks5_healthy(host, port):
         msg = (
             f"SOCKS5 proxy {proxy_url} not reachable. "
             f"Start the SSH tunnel: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D {port} opc@68.233.118.234"
