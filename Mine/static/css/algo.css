@@ -253,6 +253,11 @@ body.ocean-theme .algo-page {
     color: var(--ag-badge-inactive-text);
     border-color: var(--ag-badge-inactive-border);
 }
+.ag-badge.preview {
+    background: rgba(217,119,6,0.12);
+    color: #d97706;
+    border-color: rgba(217,119,6,0.3);
+}
 .ag-badge-dot {
     width: 6px; height: 6px;
     border-radius: 50%;
@@ -286,6 +291,11 @@ body.ocean-theme .algo-page {
     color: var(--ag-msg-err-text);
     border-color: var(--ag-msg-err-border);
 }
+.ag-msg.info {
+    background: rgba(59,130,246,0.08);
+    color: #3b82f6;
+    border-color: rgba(59,130,246,0.25);
+}
 
 /* ── Card ─────────────────────────────────────────────────────── */
 .ag-card {
@@ -313,75 +323,163 @@ body.ocean-theme .algo-page {
 }
 
 .ag-card-body {
-    padding: 14px 16px;
+    padding: 10px 12px;
 }
 
-/* ── Stat grid ────────────────────────────────────────────────── */
+/* ── Stat grid — compact pill tiles (matches OI Profile style) ── */
 .ag-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
-    gap: 12px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
 }
 
-.ag-stat { display: flex; flex-direction: column; gap: 3px; }
+.ag-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1 1 90px;
+    min-width: 80px;
+    padding: 6px 10px;
+    background: var(--ag-bg);
+    border: 1px solid var(--ag-border);
+    border-radius: 6px;
+    text-align: center;
+    gap: 3px;
+    transition: background 0.15s;
+}
+
+.ag-stat:hover { background: var(--ag-row-hover); }
 
 .ag-stat-label {
-    font-size: 0.7rem;
+    font-size: 9px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: .4px;
+    letter-spacing: 0.05em;
     color: var(--ag-text-3);
+    line-height: 1;
 }
 
 .ag-stat-value {
-    font-size: 0.92rem;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 800;
     color: var(--ag-text);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
 }
 
-/* ── Table ────────────────────────────────────────────────────── */
-.ag-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.83rem;
+/* ── Legs grid ────────────────────────────────────────────────── */
+.ag-legs-grid {
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px;
 }
 
-.ag-table thead tr {
-    border-bottom: 2px solid var(--ag-border);
+.ag-leg-card {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--ag-bg);
+    border: 1px solid var(--ag-border);
+    border-radius: 8px;
+    border-left-width: 3px;
 }
 
-.ag-table th {
-    padding: 9px 14px;
-    text-align: left;
-    font-size: 0.7rem;
-    font-weight: 700;
+.ag-leg-card.ce-leg { border-left-color: var(--ag-ce); }
+.ag-leg-card.pe-leg { border-left-color: var(--ag-pe); }
+
+.ag-leg-hdr {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ag-leg-type {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    border: 1px solid;
+}
+
+.ag-leg-type.ce {
+    color: var(--ag-ce);
+    background: var(--ag-accent-dim);
+    border-color: var(--ag-ce);
+}
+
+.ag-leg-type.pe {
+    color: var(--ag-pe);
+    background: rgba(220,38,38,0.08);
+    border-color: var(--ag-pe);
+}
+
+.ag-leg-strike {
+    font-size: 16px;
+    font-weight: 800;
+    color: var(--ag-text);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+}
+
+.ag-leg-sym {
+    font-size: 10px;
+    color: var(--ag-text-2);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    margin-left: auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+}
+
+.ag-leg-metrics {
+    display: flex;
+    gap: 4px;
+}
+
+.ag-leg-metric {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 5px 6px;
+    background: var(--ag-surface);
+    border: 1px solid var(--ag-border);
+    border-radius: 5px;
+    text-align: center;
+}
+
+.ag-leg-lbl {
+    font-size: 9px;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: .4px;
+    letter-spacing: 0.05em;
     color: var(--ag-text-3);
+    line-height: 1;
     white-space: nowrap;
 }
 
-.ag-table td {
-    padding: 11px 14px;
-    border-bottom: 1px solid var(--ag-border-sub);
+.ag-leg-val {
+    font-size: 12px;
+    font-weight: 800;
     color: var(--ag-text);
-    vertical-align: middle;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    line-height: 1.2;
 }
-
-.ag-table tbody tr:last-child td { border-bottom: none; }
-
-.ag-table tbody tr:hover td { background: var(--ag-row-hover); }
-
-.ag-table .ce-row td:first-child { color: var(--ag-ce); font-weight: 700; }
-.ag-table .pe-row td:first-child { color: var(--ag-pe); font-weight: 700; }
-
-.ag-sym { font-size: 0.75rem; color: var(--ag-text-2); font-family: 'SF Mono', 'Fira Code', monospace; }
 
 .ag-empty {
     color: var(--ag-text-3);
     font-size: 0.82rem;
     text-align: center;
     padding: 22px 0;
+    width: 100%;
 }
 
 /* ── P&L colors ───────────────────────────────────────────────── */
@@ -445,7 +543,8 @@ body.ocean-theme .algo-page {
 /* ── Responsive ───────────────────────────────────────────────── */
 @media (max-width: 600px) {
     .algo-page { padding: 12px 10px 32px; }
-    .ag-grid { grid-template-columns: repeat(2, 1fr); }
-    .ag-table th, .ag-table td { padding: 8px 10px; }
+    .ag-stat { flex: 1 1 72px; min-width: 72px; }
+    .ag-legs-grid { flex-direction: column; }
+    .ag-leg-sym { max-width: 120px; }
     .ag-btn { padding: 8px 14px; font-size: 0.8rem; }
 }

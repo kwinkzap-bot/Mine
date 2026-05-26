@@ -302,6 +302,8 @@ class NiftyWeeklyStraddle:
                 'pe_strike': pe_strike,
                 'ce_symbol': ce_sym,
                 'pe_symbol': pe_sym,
+                'ce_kite_tradingsymbol': ce_inst.get('tradingsymbol', '') if ce_inst else '',
+                'pe_kite_tradingsymbol': pe_inst.get('tradingsymbol', '') if pe_inst else '',
                 'ce_ltp': ce_ltp,
                 'pe_ltp': pe_ltp,
                 'combined_premium': round(combined, 2),

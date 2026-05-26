@@ -67,35 +67,49 @@ function _renderState(data) {
         _setText('agPnlTotal', '—');
     }
 
-    // Buttons
-    document.getElementById('algoEnterBtn').disabled = active;
-    document.getElementById('algoExitBtn').disabled  = !active;
+    // Buttons — Preview and Enter both disabled while trade is active
+    document.getElementById('algoPreviewBtn').disabled = active;
+    document.getElementById('algoEnterBtn').disabled   = active;
+    document.getElementById('algoExitBtn').disabled    = !active;
 }
 
 function _renderLegs(state, live) {
-    const tbody = document.getElementById('algoLegsBody');
+    const grid = document.getElementById('algoLegsGrid');
     if (!state.active) {
-        tbody.innerHTML = '<tr><td colspan="6" class="ag-empty">No active trade</td></tr>';
+        grid.innerHTML = '<div class="ag-empty">No active trade</div>';
         return;
     }
     const lot_size = state.lot_size || 1;
-    const rows = [
-        { type: 'CE', cls: 'ce-row', strike: state.ce_strike, sym: state.ce_kite_tradingsymbol, entry: state.ce_entry_ltp, curr: live ? live.ce_ltp : null },
-        { type: 'PE', cls: 'pe-row', strike: state.pe_strike, sym: state.pe_kite_tradingsymbol, entry: state.pe_entry_ltp, curr: live ? live.pe_ltp : null },
+    const legs = [
+        { type: 'CE', cls: 'ce', strike: state.ce_strike, sym: state.ce_kite_tradingsymbol, entry: state.ce_entry_ltp, curr: live ? live.ce_ltp : null },
+        { type: 'PE', cls: 'pe', strike: state.pe_strike, sym: state.pe_kite_tradingsymbol, entry: state.pe_entry_ltp, curr: live ? live.pe_ltp : null },
     ];
-    tbody.innerHTML = rows.map(r => {
+    grid.innerHTML = legs.map(r => {
         const currStr = r.curr != null ? r.curr.toFixed(2) : '…';
         const pnl     = r.curr != null ? (r.entry - r.curr) * lot_size : null;
-        const pnlStr  = pnl != null ? (pnl >= 0 ? '+₹' : '-₹') + Math.abs(pnl).toFixed(2) : '—';
+        const pnlStr  = pnl != null ? (pnl >= 0 ? '+₹' : '−₹') + Math.abs(pnl).toFixed(2) : '—';
         const pnlCls  = pnl == null ? '' : pnl >= 0 ? 'ag-pos' : 'ag-neg';
-        return `<tr class="${r.cls}">
-            <td>${r.type}</td>
-            <td>${r.strike ?? '—'}</td>
-            <td class="ag-sym">${r.sym || '—'}</td>
-            <td>${r.entry != null ? r.entry.toFixed(2) : '—'}</td>
-            <td>${currStr}</td>
-            <td class="${pnlCls}">${pnlStr}</td>
-        </tr>`;
+        return `<div class="ag-leg-card ${r.cls}-leg">
+            <div class="ag-leg-hdr">
+                <span class="ag-leg-type ${r.cls}">${r.type}</span>
+                <span class="ag-leg-strike">${r.strike ?? '—'}</span>
+                <span class="ag-leg-sym">${r.sym || '—'}</span>
+            </div>
+            <div class="ag-leg-metrics">
+                <div class="ag-leg-metric">
+                    <span class="ag-leg-lbl">Entry</span>
+                    <span class="ag-leg-val">${r.entry != null ? r.entry.toFixed(2) : '—'}</span>
+                </div>
+                <div class="ag-leg-metric">
+                    <span class="ag-leg-lbl">Current</span>
+                    <span class="ag-leg-val">${currStr}</span>
+                </div>
+                <div class="ag-leg-metric">
+                    <span class="ag-leg-lbl">P&amp;L / lot</span>
+                    <span class="ag-leg-val ${pnlCls}">${pnlStr}</span>
+                </div>
+            </div>
+        </div>`;
     }).join('');
 }
 
@@ -110,16 +124,81 @@ function algoPreview(btn) {
         .then(r => r.json())
         .then(d => {
             if (!d.success) { _showMsg('error', d.error || 'Preview failed'); return; }
-            _showMsg('success',
-                `Preview — NIFTY ₹${d.underlying?.toFixed(2)} | Expiry: ${d.current_expiry} | ` +
-                `CE ${d.ce_strike} @ ₹${d.ce_ltp?.toFixed(2)} | ` +
-                `PE ${d.pe_strike} @ ₹${d.pe_ltp?.toFixed(2)} | ` +
-                `Combined ₹${d.combined_premium} | SL ₹${d.sl_trigger} | ` +
-                `Lot ${d.lot_size} | δ ${d.delta_target}`
-            );
+            _renderPreviewState(d);
         })
         .catch(e => _showMsg('error', 'Preview failed: ' + e))
         .finally(() => { btn.disabled = false; btn.textContent = orig; });
+}
+
+function _renderPreviewState(d) {
+    // Fabricate a state object that matches the live-state shape so all
+    // existing render helpers work without modification.
+    const state = {
+        active: true,
+        ce_strike: d.ce_strike,
+        pe_strike: d.pe_strike,
+        ce_kite_tradingsymbol: d.ce_kite_tradingsymbol,
+        pe_kite_tradingsymbol: d.pe_kite_tradingsymbol,
+        ce_entry_ltp: d.ce_ltp,
+        pe_entry_ltp: d.pe_ltp,
+        combined_entry: d.combined_premium,
+        sl_trigger: d.sl_trigger,
+        current_expiry: d.current_expiry,
+        next_expiry: d.next_expiry,
+        underlying_at_entry: d.underlying,
+        lots: d.lots,
+        lot_size: d.lot_size,
+        entry_time: null,
+    };
+    // At preview time entry == current, so P&L is zero — exactly right for a just-entered position.
+    const live = {
+        ce_ltp: d.ce_ltp,
+        pe_ltp: d.pe_ltp,
+        combined_current: d.combined_premium,
+        sl_distance: d.sl_trigger - d.combined_premium,
+        pnl_per_lot: 0,
+        pnl_total: 0,
+    };
+
+    // Badge
+    const badge = document.getElementById('algoBadge');
+    badge.className = 'ag-badge preview';
+    document.getElementById('algoBadgeText').textContent = 'Preview';
+
+    _setText('algoLastUpd', new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+
+    // Status grid
+    _setText('algoStatusVal',  'Preview');
+    _setText('algoExpiry',     state.current_expiry  || '—');
+    _setText('algoNextExpiry', state.next_expiry      || '—');
+    _setText('algoUnderlying', '₹' + _num(state.underlying_at_entry));
+    _setText('algoEntryTime',  '—');
+    _setText('algoLots',       `${state.lots} × ${state.lot_size}`);
+
+    // Legs table
+    _renderLegs(state, live);
+
+    // P&L card
+    _setText('agCombEntry',   state.combined_entry.toFixed(2));
+    _setText('agCombCurrent', live.combined_current.toFixed(2));
+    _setText('agSL',          state.sl_trigger.toFixed(2));
+
+    const dist = live.sl_distance;
+    const distEl = document.getElementById('agSLDist');
+    distEl.textContent = dist.toFixed(2);
+    distEl.className = 'ag-stat-value ' + (dist < 5 ? 'ag-neg' : dist < 15 ? 'ag-warn' : 'ag-pos');
+
+    _setPnl('agPnlLot',   0);
+    _setPnl('agPnlTotal', 0);
+
+    // Keep Enter enabled (not yet placed), Exit disabled
+    document.getElementById('algoEnterBtn').disabled = false;
+    document.getElementById('algoExitBtn').disabled  = true;
+
+    _showMsg('info',
+        `Preview — δ ${d.delta_target} | SL cap ₹${Number(d.sl_cap).toLocaleString('en-IN')} | ` +
+        `Strikes computed at NIFTY ₹${_num(d.underlying)}`
+    );
 }
 
 // ── Enter ─────────────────────────────────────────────────────────────────────
