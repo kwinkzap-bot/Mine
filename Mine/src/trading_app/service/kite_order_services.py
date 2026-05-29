@@ -99,28 +99,40 @@ def ensure_ssh_tunnel() -> bool:
         pass
 
     # Pre-flight: verify Oracle SSH daemon actually sends a banner (not just accepts TCP).
-    try:
-        import socket as _sock
-        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
-        s.settimeout(5)
-        _oracle_host = ssh_host.split('@')[-1]
-        s.connect((_oracle_host, 22))
-        s.settimeout(5)
-        banner = s.recv(64)
-        s.close()
-        if not banner:
-            logging.error('[Proxy] Oracle SSH (port 22) accepts TCP but sends no banner — instance may be stopped. Check Oracle Cloud Console.')
-            return False
-        logging.info(f'[Proxy] Oracle SSH banner: {banner.decode(errors="replace").strip()}')
-    except Exception as e:
-        logging.error(f'[Proxy] Cannot reach Oracle SSH at {ssh_host}: {e}')
+    import socket as _sock
+    _oracle_host = ssh_host.split('@')[-1]
+    _banner_ok = False
+    for _pf_attempt in range(2):
+        try:
+            s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+            s.settimeout(6)
+            s.connect((_oracle_host, 22))
+            s.settimeout(6)
+            banner = s.recv(64)
+            s.close()
+            if not banner:
+                logging.error('[Proxy] Oracle SSH (port 22) accepts TCP but sends no banner — instance may be stopped. Check Oracle Cloud Console.')
+                return False
+            logging.info(f'[Proxy] Oracle SSH banner: {banner.decode(errors="replace").strip()}')
+            _banner_ok = True
+            break
+        except Exception as e:
+            try: s.close()
+            except Exception: pass
+            if _pf_attempt == 1:
+                logging.error(f'[Proxy] Cannot reach Oracle SSH at {ssh_host}: {e}')
+                return False
+            logging.warning(f'[Proxy] Pre-flight attempt 1 failed ({e}), retrying in 2s...')
+            time.sleep(2)
+    if not _banner_ok:
         return False
 
     cmd = [
         'ssh', '-i', ssh_key, '-N', f'-D127.0.0.1:{port}', ssh_host,
         '-o', 'StrictHostKeyChecking=no',
-        '-o', 'ServerAliveInterval=30',
-        '-o', 'ServerAliveCountMax=3',
+        '-o', 'ServerAliveInterval=10',
+        '-o', 'ServerAliveCountMax=6',
+        '-o', 'TCPKeepAlive=yes',
         '-o', 'ExitOnForwardFailure=yes',
         '-o', 'ConnectTimeout=10',
     ]
@@ -145,7 +157,7 @@ def ensure_ssh_tunnel() -> bool:
 
 _tunnel_watchdog_started = False
 
-def start_tunnel_watchdog(interval: int = 30) -> None:
+def start_tunnel_watchdog(interval: int = 10) -> None:
     """Start a background thread that keeps the SSH tunnel alive.
 
     Checks port 1080 every `interval` seconds. If the tunnel has dropped
@@ -172,7 +184,12 @@ def start_tunnel_watchdog(interval: int = 30) -> None:
 
             if not _is_socks5_healthy(_host, _port):
                 logging.warning('[Proxy] Watchdog: tunnel dropped — restarting...')
-                ensure_ssh_tunnel()
+                for _attempt in range(3):
+                    if ensure_ssh_tunnel():
+                        break
+                    if _attempt < 2:
+                        logging.warning(f'[Proxy] Watchdog restart attempt {_attempt + 1}/3 failed, retrying in 3s...')
+                        time.sleep(3)
 
     t = threading.Thread(target=_watch, daemon=True, name='ssh-tunnel-watchdog')
     t.start()
@@ -197,14 +214,21 @@ def apply_kite_proxy(kite, raise_if_unreachable: bool = False) -> bool:
     except Exception:
         host, port = "127.0.0.1", 1080
     if not _is_socks5_healthy(host, port):
-        msg = (
-            f"SOCKS5 proxy {proxy_url} not reachable. "
-            f"Start the SSH tunnel: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D {port} opc@68.233.118.234"
-        )
-        if raise_if_unreachable:
-            raise RuntimeError(f"[KiteService] {msg}")
-        logging.warning(f"[KiteService] {msg}")
-        return False
+        logging.warning(f"[KiteService] SOCKS5 proxy {proxy_url} not reachable — auto-restarting tunnel...")
+        tunnel_up = False
+        for attempt in range(1, 4):
+            if ensure_ssh_tunnel():
+                tunnel_up = True
+                break
+            if attempt < 3:
+                logging.warning(f"[KiteService] Tunnel restart attempt {attempt}/3 failed, retrying in 3s...")
+                time.sleep(3)
+        if not tunnel_up:
+            msg = f"SSH tunnel could not be started. Run manually: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D {port} opc@68.233.118.234"
+            if raise_if_unreachable:
+                raise RuntimeError(f"[KiteService] {msg}")
+            logging.error(f"[KiteService] {msg}")
+            return False
     # KiteConnect._request passes proxies=self.proxies, NOT reqsession.proxies
     kite.proxies = {'http': proxy_url, 'https': proxy_url}
     logging.info(f"[KiteService] SOCKS5 proxy active: {proxy_url}")
@@ -623,11 +647,12 @@ class KiteService:
             logging.error(f"[KiteService] Failed to place SL order: {e}")
             return {'success': False, 'error': str(e)}
 
+    @staticmethod
+    def _is_socks_error(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return any(k in msg for k in ('socks', 'connect timeout', 'connectionerror', 'proxies', 'proxyerror', 'connect timed out'))
+
     def _safe_place_order(self, variety: str, exchange: str, tradingsymbol: str, transaction_type: str, quantity: int, product: str, order_type: str, price: Optional[float] = None, trigger_price: Optional[float] = None, tag: Optional[str] = None, market_protection: Optional[int] = -1) -> Any:
-        """
-        Internal helper to place orders with market_protection parameter.
-        Bypasses the standard library's place_order if the version doesn't support the parameter.
-        """
         params = {
             "variety": variety,
             "exchange": exchange,
@@ -641,19 +666,25 @@ class KiteService:
             "tag": tag,
             "market_protection": market_protection
         }
-        # Remove None values
         params = {k: v for k, v in params.items() if v is not None}
 
-        # Access the private _post method to inject market_protection
-        # variety is passed in url_args for the /orders/{variety} route
-        result = self.kite._post("order.place", url_args={"variety": variety}, params=params)
-        return str(result) if isinstance(result, bytes) else result
+        for attempt in range(2):
+            try:
+                result = self.kite._post("order.place", url_args={"variety": variety}, params=params)
+                return str(result) if isinstance(result, bytes) else result
+            except Exception as exc:
+                if attempt == 0 and self._is_socks_error(exc):
+                    logging.warning(f"[KiteService] SOCKS error on order attempt 1 — restarting tunnel and retrying: {exc}")
+                    if ensure_ssh_tunnel():
+                        apply_kite_proxy(self.kite)
+                    time.sleep(1)
+                    continue
+                raise
 
     def _create_kite_instance(self) -> KiteConnect:
         api_key = os.getenv("API_KEY")
         access_token = os.getenv("ACCESS_TOKEN")
-        kite = KiteConnect(api_key=api_key)
-        kite.timeout = 30
+        kite = KiteConnect(api_key=api_key, timeout=30)
         apply_kite_proxy(kite)
         if access_token: kite.set_access_token(access_token)
         return kite

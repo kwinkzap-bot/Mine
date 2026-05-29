@@ -1520,8 +1520,9 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
                 if (oipCEEma50Series) oipCEEma50Series.setData(ceEmas.ema50);
             }
 
-            const strike = oipElems.customStrikeDropdown?.value || '--';
-            if (document.getElementById('oipLegendCEOnly')) document.getElementById('oipLegendCEOnly').textContent = `${strike} CE`;
+            const isCePeMode = oipElems.strikeMode?.value === 'ce_pe';
+            const ceStrike = isCePeMode ? (oipElems.ceStrikeDropdown?.value || '--') : (oipElems.customStrikeDropdown?.value || '--');
+            if (document.getElementById('oipLegendCEOnly')) document.getElementById('oipLegendCEOnly').textContent = `${ceStrike} CE`;
         }
 
         // Update Individual PE Only Chart
@@ -1535,8 +1536,9 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
                 if (oipPEEma50Series) oipPEEma50Series.setData(peEmas.ema50);
             }
 
-            const strike = oipElems.customStrikeDropdown?.value || '--';
-            if (document.getElementById('oipLegendPEOnly')) document.getElementById('oipLegendPEOnly').textContent = `${strike} PE`;
+            const isCePeMode = oipElems.strikeMode?.value === 'ce_pe';
+            const peStrike = isCePeMode ? (oipElems.peStrikeDropdown?.value || '--') : (oipElems.customStrikeDropdown?.value || '--');
+            if (document.getElementById('oipLegendPEOnly')) document.getElementById('oipLegendPEOnly').textContent = `${peStrike} PE`;
         }
     }
     if (oipOIData.intrinsic) oipDrawIntrinsicLines(oipOIData.intrinsic, view);

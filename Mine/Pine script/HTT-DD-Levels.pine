@@ -1,0 +1,518 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © kwinkzap
+
+//@version=5
+indicator("DD-Levels by KK", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+// ─── TIMEFRAME SOURCE ─────────────────────────────────────────────────────────
+activeTF = input.string("Daily", "Active Timeframe", options=["Off","Daily"], tooltip="Off = no daily levels (useful when you only want the 2nd-candle box). Daily = D pairs only.", group="TIMEFRAME SOURCE")
+showBox  = input.bool(true, "Show 2nd Candle High-Low Box", group="TIMEFRAME SOURCE")
+refTFSel = input.string("5-min", "Reference TF for 2nd Candle", options=["5-min","1-min","30-sec","Chart TF"], tooltip="5-min: for Nifty/BankNifty index (2nd candle = 09:20-09:25). 1-min: for options (all plans). 30-sec: for options (Premium/Pro+ only). Chart TF: uses current chart TF.", group="TIMEFRAME SOURCE")
+
+// ─── DETECTION — DAILY ────────────────────────────────────────────────────────
+dOO_on  = input.bool(true, "D Open-Open levels",  inline="doo", tooltip="Daily candle pairs where two OPENS match within threshold.", group="DETECTION — DAILY")
+dOO_thr = input.int(10,    "Thr",                  inline="doo", group="DETECTION — DAILY")
+dOO_lb  = input.int(100,   "Lb",                   inline="doo", maxval=100, group="DETECTION — DAILY")
+
+dCC_on  = input.bool(true, "D Close-Close levels", inline="dcc", tooltip="Daily candle pairs where two CLOSES match within threshold.", group="DETECTION — DAILY")
+dCC_thr = input.int(10,    "Thr",                  inline="dcc", group="DETECTION — DAILY")
+dCC_lb  = input.int(100,   "Lb",                   inline="dcc", maxval=100, group="DETECTION — DAILY")
+
+dOC_on  = input.bool(true, "D Open-Close levels",  inline="doc", tooltip="Today's OPEN matches a prior day's CLOSE (or vice versa).", group="DETECTION — DAILY")
+dOC_thr = input.int(10,    "Thr",                  inline="doc", group="DETECTION — DAILY")
+dOC_lb  = input.int(100,   "Lb",                   inline="doc", maxval=100, group="DETECTION — DAILY")
+
+dMinRange = input.int(0, "Min Daily Range (points)", group="DETECTION — DAILY")
+
+
+// ─── LINE ─────────────────────────────────────────────────────────────────────
+showAllLevels = input.bool(true,  "Show All Levels", tooltip="Master toggle for all pair-based horizontal lines.", group="LINE")
+supColor = input.color(#39e986,    "Support Color (LTP above)",    group="LINE")
+resColor = input.color(color.red, "Resistance Color (LTP below)", group="LINE")
+
+lineWidth    = input.int(1,      "Line Width",                               minval=1, maxval=4, group="LINE")
+dotSizeStr   = input.string("normal",  "Dot Size",   options=["tiny","small","normal","large"],    group="LINE")
+lineStyleStr = input.string("Solid", "Line Style", options=["Solid","Dashed","Dotted"],          group="LINE")
+extendRight  = input.bool(false, "Extend Line to Right Edge",                group="LINE")
+extendBars   = input.int(30,     "Extend Forward (bars, if not right edge)", minval=1,           group="LINE")
+
+
+// ─── PROXIMITY FILTER ─────────────────────────────────────────────────────────
+proximityOn  = input.bool(true,  "Only show levels near reference price", tooltip="Points = absolute distance. Percentage = distance as % of reference price.", group="PROXIMITY FILTER")
+distanceMode = input.string("Points", "Distance Mode", options=["Points","Percentage"], group="PROXIMITY FILTER")
+maxDistPts   = input.int(300,   "Max Distance (points)", minval=1,              tooltip="Lines beyond this distance from reference are hidden. Used when mode = Points.", group="PROXIMITY FILTER")
+maxDistPct   = input.float(1.5, "Max Distance (%)",      minval=0.01, step=0.1, tooltip="Lines beyond this % of reference price are hidden. E.g. 1.5% of 24000 = 360 pts.", group="PROXIMITY FILTER")
+refPriceMode = input.string("Today's Open", "Reference Price", options=["Today's Open","Yesterday's Close","Both"], tooltip="Today Open = day's 09:15 open. Yesterday Close = prior day's close. Both = line must be within range of BOTH.", group="PROXIMITY FILTER")
+
+// ─── CONFLUENCE MERGE ─────────────────────────────────────────────────────────
+mergeOn         = input.bool(true, "Merge nearby lines into confluence", tooltip="When multiple OO/CC/OC lines are within cluster distance, merge into one combined line.", group="CONFLUENCE MERGE")
+clusterDist     = input.int(30,    "Cluster Distance (points)", minval=1, tooltip="Lines within this distance of each other get merged into a confluence zone.", group="CONFLUENCE MERGE")
+confBorderWidth = input.int(2, "Confluence Border Width", minval=1, maxval=4, group="CONFLUENCE MERGE")
+
+// ─── RECENT DAILY CANDLE LINES ───────────────────────────────────────────────
+showRecentD      = input.bool(true,  "Show Recent Daily O/C Lines", group="RECENT DAILY CANDLE LINES")
+recentDCount     = input.int(5,      "Number of Past Days",  minval=1, maxval=20, group="RECENT DAILY CANDLE LINES")
+recentDOpenCol   = input.color(color.new(color.white,  30), "Open Line Color",   group="RECENT DAILY CANDLE LINES")
+recentDCloseCol  = input.color(color.new(color.silver, 30), "Close Line Color",  group="RECENT DAILY CANDLE LINES")
+recentDWidth     = input.int(1, "Width", minval=1, maxval=4, group="RECENT DAILY CANDLE LINES")
+recentDStyleStr  = input.string("Solid",  "Style", options=["Solid","Dashed","Dotted"], group="RECENT DAILY CANDLE LINES")
+recentDShowOpen  = input.bool(true,  "Show Open",  inline="rdoc", group="RECENT DAILY CANDLE LINES")
+recentDShowClose = input.bool(false, "Show Close", inline="rdoc", group="RECENT DAILY CANDLE LINES")
+recentDIncToday  = input.bool(true,  "Include Today's Open", tooltip="Draws today's opening price as an additional reference line.", group="RECENT DAILY CANDLE LINES")
+
+// ─── 2ND CANDLE BOX ───────────────────────────────────────────────────────────
+boxBorderCol   = input.color(color.yellow,               "Box Border Color",   group="2ND CANDLE BOX")
+boxFillCol     = input.color(color.new(color.yellow, 93), "Box Fill Color",     group="2ND CANDLE BOX")
+boxBorderWidth = input.int(1,      "Box Border Width", minval=1, maxval=4,      group="2ND CANDLE BOX")
+showHistBoxes  = input.bool(false, "Show Historical Boxes (all past days)",     group="2ND CANDLE BOX")
+boxExtMode     = input.string("End of Session", "Box Extension", options=["End of Session","End of Day","Fixed Bars"], group="2ND CANDLE BOX")
+maxHistBoxes   = input.int(20,  "Max Historical Boxes (FIFO)", minval=1,        group="2ND CANDLE BOX")
+sessionStr     = input.session("0915-1530", "Session (IST)",                    group="2ND CANDLE BOX")
+
+// ─── ALERTS ───────────────────────────────────────────────────────────────────
+alertNewLevel = input.bool(true,  "Alert on new daily level",                    group="ALERTS")
+alertTouch    = input.bool(true,  "Alert when price touches level",               group="ALERTS")
+alertBoxHL    = input.bool(false, "Alert when price touches 2nd candle box H/L",  group="ALERTS")
+
+// ─── STYLE HELPERS ────────────────────────────────────────────────────────────
+
+f_lineStyle() =>
+    lineStyleStr == "Dashed" ? line.style_dashed : lineStyleStr == "Dotted" ? line.style_dotted : line.style_solid
+
+f_dotSize() =>
+    dotSizeStr == "tiny" ? size.tiny : dotSizeStr == "small" ? size.small : dotSizeStr == "large" ? size.large : size.normal
+
+f_extMode() => extendRight ? extend.right : extend.none
+
+f_levelColor(lvl) =>
+    close >= lvl ? supColor : resColor
+
+
+// ─── PROXIMITY HELPERS ────────────────────────────────────────────────────────
+
+f_inRange(p, ref) =>
+    distanceMode == "Points" ? math.abs(p - ref) <= maxDistPts : math.abs(p - ref) / ref * 100 <= maxDistPct
+
+f_proximityOk(lvl, refO, refY) =>
+    if not proximityOn
+        true
+    else if refPriceMode == "Both"
+        f_inRange(lvl, refO) or f_inRange(lvl, refY)
+    else if refPriceMode == "Today's Open"
+        f_inRange(lvl, refO)
+    else
+        f_inRange(lvl, refY)
+
+// ─── TIMEFRAME STRING MAPPING ────────────────────────────────────────────────
+refTFStr = refTFSel == "5-min" ? "5" : refTFSel == "1-min" ? "1" : refTFSel == "30-sec" ? "30S" : timeframe.period
+runDaily  = activeTF == "Daily" and not timeframe.ismonthly
+
+// ─── DATA: BUILD OHLC ARRAYS IN TF CONTEXT ───────────────────────────────────
+// Runs inside request.security so open[k]/close[k] mean k TF-bars ago — CORRECT!
+
+f_buildData() =>
+    o = array.new_float(100, na)
+    c = array.new_float(100, na)
+    r = array.new_float(100, na)
+    for k = 1 to 100
+        array.set(o, k - 1, open[k])
+        array.set(c, k - 1, close[k])
+        array.set(r, k - 1, high[k] - low[k])
+    [o, c, r]
+
+[dOArr, dCArr, dRArr] = request.security(syminfo.tickerid, "D", f_buildData())
+
+// Reference prices
+todayOpen      = request.security(syminfo.tickerid, "D", open,     lookahead=barmerge.lookahead_on)
+yesterdayClose = request.security(syminfo.tickerid, "D", close[1], lookahead=barmerge.lookahead_on)
+
+// ─── 2ND CANDLE OF DAY ───────────────────────────────────────────────────────
+
+f_barOfDay() =>
+    var int n = 0
+    if ta.change(time("D")) != 0
+        n := 0
+    n += 1
+    n
+
+c2High      = request.security(syminfo.tickerid, refTFStr, ta.valuewhen(f_barOfDay() == 2, high, 0), lookahead=barmerge.lookahead_off)
+c2Low       = request.security(syminfo.tickerid, refTFStr, ta.valuewhen(f_barOfDay() == 2, low,  0), lookahead=barmerge.lookahead_off)
+c2StartTime = request.security(syminfo.tickerid, refTFStr, ta.valuewhen(f_barOfDay() == 2, time, 0), lookahead=barmerge.lookahead_off)
+
+// Find main-chart bar_index that contains the 2nd candle open time
+isAt2ndCandleBar = not na(c2StartTime) and time <= c2StartTime and time + timeframe.in_seconds() * 1000 > c2StartTime
+c2BarIdx = ta.valuewhen(isAt2ndCandleBar, bar_index, 0)
+
+// ─── APPROXIMATE BARS PER DAY (for dot placement on intraday charts) ──────────
+
+barsPerDay = timeframe.isdaily ? 1 : timeframe.isweekly ? 5 : math.max(1, math.round(22500.0 / timeframe.in_seconds()))
+
+// ─── BAR-INDEX TRACKING ───────────────────────────────────────────────────────
+// Track bar_index of first/last bar of each trading day and week.
+// This avoids xloc.bar_time midnight-timestamp issues on NSE instruments.
+
+var int[] _dOpBars = array.new_int()   // [0]=today open bar, [1]=yesterday, ...
+var int[] _dClBars = array.new_int()   // [0]=today last bar (running), [1]=yesterday last, ...
+
+_nd = ta.change(time("D")) != 0
+
+if _nd
+    if array.size(_dClBars) > 0
+        array.set(_dClBars, 0, bar_index - 1)
+    array.unshift(_dOpBars, bar_index)
+    array.unshift(_dClBars, bar_index)
+    if array.size(_dOpBars) > 102
+        array.pop(_dOpBars)
+        array.pop(_dClBars)
+else if array.size(_dClBars) > 0
+    array.set(_dClBars, 0, bar_index)
+
+// ─── ARRAY-BASED DETECTION ───────────────────────────────────────────────────
+// arr indices: 0 = 1 TF-bar ago, 1 = 2 TF-bars ago, etc.
+
+// OO / CC: price at index `self` must match at least one OTHER index within lb
+f_hasPairArr(price, arr, lb, thr, self) =>
+    found = false
+    for k = 0 to math.min(lb, array.size(arr)) - 1
+        p = array.get(arr, k)
+        if not na(p) and k != self and math.abs(price - p) <= thr
+            found := true
+    found
+
+// OC: price must match at least one element in cross-series arr within lb
+f_hasCrossArr(price, arr, lb, thr) =>
+    found = false
+    for k = 0 to math.min(lb, array.size(arr)) - 1
+        p = array.get(arr, k)
+        if not na(p) and math.abs(price - p) <= thr
+            found := true
+    found
+
+// ─── DRAWING STATE ────────────────────────────────────────────────────────────
+
+var line[]  drawnLines  = array.new_line()
+var label[] drawnDots   = array.new_label()
+var box[]   drawnBoxes  = array.new_box()
+var float[] levelPrices = array.new_float()
+
+f_clearAll() =>
+    for ln in drawnLines
+        line.delete(ln)
+    array.clear(drawnLines)
+    for lb_ in drawnDots
+        label.delete(lb_)
+    array.clear(drawnDots)
+    for bx in drawnBoxes
+        box.delete(bx)
+    array.clear(drawnBoxes)
+    array.clear(levelPrices)
+
+
+// dotBars: int[] of bar_index positions where this level was detected
+// Draws one line from the earliest bar, with a dot at every bar in dotBars
+f_drawLevelMulti(lvl, col, wid, dotBars) =>
+    nDots  = array.size(dotBars)
+    minBar = nDots > 0 ? array.get(dotBars, 0) : bar_index
+    maxBar = minBar
+    if nDots > 1
+        for k = 1 to nDots - 1
+            b = array.get(dotBars, k)
+            if b < minBar
+                minBar := b
+            if b > maxBar
+                maxBar := b
+    x2      = extendRight ? bar_index + 1 : bar_index + extendBars
+    safeMin = math.max(minBar, bar_index - 4900)
+    ln = line.new(safeMin, lvl, x2, lvl, color=col, width=wid, style=f_lineStyle(), extend=f_extMode(), xloc=xloc.bar_index)
+    array.push(drawnLines, ln)
+    if nDots > 0
+        for k = 0 to nDots - 1
+            b = array.get(dotBars, k)
+            if b >= bar_index - 4900
+                dot = label.new(b, lvl, text="●", style=label.style_none, textcolor=col, size=f_dotSize(), xloc=xloc.bar_index)
+                array.push(drawnDots, dot)
+    array.push(levelPrices, lvl)
+
+f_drawConfluence(topLvl, botLvl, col, x1) =>
+    bCol   = col
+    fCol   = color.new(col, 92)
+    x2     = extendRight ? bar_index + 1 : bar_index + extendBars
+    safeX1 = math.max(x1, bar_index - 4900)
+    bx     = box.new(safeX1, topLvl, x2, botLvl, border_color=bCol, border_width=confBorderWidth, bgcolor=fCol, extend=f_extMode(), xloc=xloc.bar_index)
+    array.push(drawnBoxes, bx)
+
+// ─── SORT (bubble sort ascending by price) ────────────────────────────────────
+
+f_sortLevels(prices, cols, kinds, bars, widths, thrs) =>
+    n = array.size(prices)
+    if n > 1
+        for i = 0 to n - 2
+            for j = 0 to n - i - 2
+                if array.get(prices, j) > array.get(prices, j + 1)
+                    pA  = array.get(prices, j)
+                    pB  = array.get(prices, j + 1)
+                    array.set(prices, j, pB)
+                    array.set(prices, j + 1, pA)
+                    cA  = array.get(cols, j)
+                    cB  = array.get(cols, j + 1)
+                    array.set(cols, j, cB)
+                    array.set(cols, j + 1, cA)
+                    kA  = array.get(kinds, j)
+                    kB  = array.get(kinds, j + 1)
+                    array.set(kinds, j, kB)
+                    array.set(kinds, j + 1, kA)
+                    bA  = array.get(bars, j)
+                    bB  = array.get(bars, j + 1)
+                    array.set(bars, j, bB)
+                    array.set(bars, j + 1, bA)
+                    wiA = array.get(widths, j)
+                    wiB = array.get(widths, j + 1)
+                    array.set(widths, j, wiB)
+                    array.set(widths, j + 1, wiA)
+                    tA  = array.get(thrs, j)
+                    tB  = array.get(thrs, j + 1)
+                    array.set(thrs, j, tB)
+                    array.set(thrs, j + 1, tA)
+
+// ─── 2ND CANDLE BOX ───────────────────────────────────────────────────────────
+
+var box[] histBoxes = array.new_box()
+
+f_draw2ndBox(hi, lo, x1, x2) =>
+    bx = box.new(x1, hi, x2, lo, border_color=boxBorderCol, border_width=boxBorderWidth, bgcolor=boxFillCol)
+    if array.size(histBoxes) >= maxHistBoxes
+        box.delete(array.shift(histBoxes))
+    array.push(histBoxes, bx)
+
+// ─── HISTORICAL 2ND CANDLE BOXES (fires at start of each new day) ────────────
+
+if _nd and showBox and showHistBoxes and not na(c2High) and not na(c2Low) and timeframe.in_seconds() < 3600
+    histBoxX1 = na(c2BarIdx) ? bar_index - barsPerDay : c2BarIdx
+    histBoxX2 = boxExtMode == "Fixed Bars" ? histBoxX1 + extendBars : bar_index - 1
+    if not na(histBoxX1) and histBoxX1 < histBoxX2
+        f_draw2ndBox(c2High, c2Low, histBoxX1, histBoxX2)
+
+// ─── MAIN LOGIC ───────────────────────────────────────────────────────────────
+
+if barstate.islast
+    f_clearAll()
+
+    refO = todayOpen
+    refY = yesterdayClose
+
+    var float[] cPrices = array.new_float()
+    var color[] cCols   = array.new_color()
+    var string[]cKinds  = array.new_string()
+    var int[]   cBars   = array.new_int()
+    var int[]   cWidths = array.new_int()
+    var int[]   cThrs   = array.new_int()
+
+    array.clear(cPrices)
+    array.clear(cCols)
+    array.clear(cKinds)
+    array.clear(cBars)
+    array.clear(cWidths)
+    array.clear(cThrs)
+
+    // ── Daily candidates ─────────────────────────────────────────────────────
+    if showAllLevels and runDaily
+        maxDLb = math.min(math.max(dOO_lb, dCC_lb, dOC_lb), 100)
+        if maxDLb > 0
+            for i = 0 to maxDLb - 1
+                rng = array.get(dRArr, i)
+                if na(rng) or rng < dMinRange
+                    continue
+                dOff     = i + 1  // lookahead_off: open[0]=today (in-progress) → dOArr[i]=open[i+1]=i+1 days ago → _dOpBars[i+1]
+                openBar  = dOff < array.size(_dOpBars) ? array.get(_dOpBars, dOff) : math.max(0, bar_index - dOff * barsPerDay)
+                closeBar = dOff < array.size(_dClBars) ? array.get(_dClBars, dOff) : math.max(0, bar_index - (dOff - 1) * barsPerDay - 1)
+                if dOO_on and i < dOO_lb
+                    lvl = array.get(dOArr, i)
+                    if not na(lvl) and f_hasPairArr(lvl, dOArr, dOO_lb, dOO_thr, i) and f_proximityOk(lvl, refO, refY)
+                        array.push(cPrices, lvl)
+                        array.push(cCols,   f_levelColor(lvl))
+                        array.push(cKinds,  "OO")
+
+                        array.push(cBars,   openBar)
+                        array.push(cWidths, lineWidth)
+                        array.push(cThrs,   dOO_thr)
+                if dCC_on and i < dCC_lb
+                    lvl = array.get(dCArr, i)
+                    if not na(lvl) and f_hasPairArr(lvl, dCArr, dCC_lb, dCC_thr, i) and f_proximityOk(lvl, refO, refY)
+                        array.push(cPrices, lvl)
+                        array.push(cCols,   f_levelColor(lvl))
+                        array.push(cKinds,  "CC")
+
+                        array.push(cBars,   closeBar)
+                        array.push(cWidths, lineWidth)
+                        array.push(cThrs,   dCC_thr)
+                if dOC_on and i < dOC_lb
+                    lvlO = array.get(dOArr, i)
+                    if not na(lvlO) and f_hasCrossArr(lvlO, dCArr, dOC_lb, dOC_thr) and f_proximityOk(lvlO, refO, refY)
+                        array.push(cPrices, lvlO)
+                        array.push(cCols,   f_levelColor(lvlO))
+                        array.push(cKinds,  "OC")
+
+                        array.push(cBars,   openBar)
+                        array.push(cWidths, lineWidth)
+                        array.push(cThrs,   dOC_thr)
+                    lvlC = array.get(dCArr, i)
+                    if not na(lvlC) and f_hasCrossArr(lvlC, dOArr, dOC_lb, dOC_thr) and f_proximityOk(lvlC, refO, refY)
+                        array.push(cPrices, lvlC)
+                        array.push(cCols,   f_levelColor(lvlC))
+                        array.push(cKinds,  "OC")
+
+                        array.push(cBars,   closeBar)
+                        array.push(cWidths, lineWidth)
+                        array.push(cThrs,   dOC_thr)
+
+    // ── Sort and draw ────────────────────────────────────────────────────────
+    f_sortLevels(cPrices, cCols, cKinds, cBars, cWidths, cThrs)
+
+    n = array.size(cPrices)
+    if n > 0
+        processed = array.new_bool(n, false)
+        for i = 0 to n - 1
+            if array.get(processed, i)
+                continue
+
+            lvl  = array.get(cPrices, i)
+            col  = array.get(cCols,   i)
+            kind = array.get(cKinds,  i)
+            wid  = array.get(cWidths, i)
+            thr  = array.get(cThrs,   i)
+
+            // Collect all bars for this level: same kind, price within thr
+            dotBars = array.new_int()
+            array.push(dotBars, array.get(cBars, i))
+            array.set(processed, i, true)
+
+            if i < n - 1
+                for j = i + 1 to n - 1
+                    if array.get(processed, j)
+                        continue
+                    jLvl  = array.get(cPrices, j)
+                    jKind = array.get(cKinds,  j)
+                    jThr  = array.get(cThrs,   j)
+                    maxT  = math.max(thr, jThr)
+                    if jLvl > lvl + maxT
+                        break
+                    if jKind == kind and math.abs(jLvl - lvl) <= maxT
+                        array.push(dotBars, array.get(cBars, j))
+                        array.set(processed, j, true)
+
+            // Check confluence: next distinct unprocessed level within clusterDist
+            confluenceFound = false
+            if mergeOn
+                nextI = -1
+                if i < n - 1
+                    for j = i + 1 to n - 1
+                        if not array.get(processed, j)
+                            nextI := j
+                            break
+                if nextI >= 0
+                    if math.abs(array.get(cPrices, nextI) - lvl) <= clusterDist
+                        nextLvl  = array.get(cPrices, nextI)
+                        nextCol  = array.get(cCols,   nextI)
+                        nextKind = array.get(cKinds,  nextI)
+                        nextThr  = array.get(cThrs,   nextI)
+
+                        nextDotBars = array.new_int()
+                        array.push(nextDotBars, array.get(cBars, nextI))
+                        array.set(processed, nextI, true)
+
+                        if nextI < n - 1
+                            for j = nextI + 1 to n - 1
+                                if array.get(processed, j)
+                                    continue
+                                j2Lvl  = array.get(cPrices, j)
+                                j2Kind = array.get(cKinds,  j)
+                                j2Thr  = array.get(cThrs,   j)
+                                maxT2  = math.max(nextThr, j2Thr)
+                                if j2Lvl > nextLvl + maxT2
+                                    break
+                                if j2Kind == nextKind and math.abs(j2Lvl - nextLvl) <= maxT2
+                                    array.push(nextDotBars, array.get(cBars, j))
+                                    array.set(processed, j, true)
+
+                        // compute x1/x2 = earliest/latest bar across both dot groups
+                        confX1 = array.get(dotBars, 0)
+                        confX2 = confX1
+                        if array.size(dotBars) > 1
+                            for k = 1 to array.size(dotBars) - 1
+                                b = array.get(dotBars, k)
+                                if b < confX1
+                                    confX1 := b
+                                if b > confX2
+                                    confX2 := b
+                        if array.size(nextDotBars) > 0
+                            for k = 0 to array.size(nextDotBars) - 1
+                                b = array.get(nextDotBars, k)
+                                if b < confX1
+                                    confX1 := b
+                                if b > confX2
+                                    confX2 := b
+                        nextWid = array.get(cWidths, nextI)
+                        f_drawConfluence(nextLvl, lvl, col, confX1)
+                        f_drawLevelMulti(lvl,     col,     wid,     dotBars)
+                        f_drawLevelMulti(nextLvl, nextCol, nextWid, nextDotBars)
+                        confluenceFound := true
+
+            if not confluenceFound
+                f_drawLevelMulti(lvl, col, wid, dotBars)
+
+    // ── Recent Daily O/C lines ───────────────────────────────────────────────
+    if showRecentD
+        rStyle = recentDStyleStr == "Dashed" ? line.style_dashed : recentDStyleStr == "Dotted" ? line.style_dotted : line.style_solid
+        x2r    = extendRight ? bar_index + 1 : bar_index + extendBars
+        // Today's open
+        if recentDIncToday and not na(todayOpen) and array.size(_dOpBars) > 0
+            todayBar = array.get(_dOpBars, 0)
+            ln  = line.new(todayBar, todayOpen, x2r, todayOpen, color=recentDOpenCol, width=recentDWidth, style=rStyle, extend=f_extMode(), xloc=xloc.bar_index)
+            dot = label.new(todayBar, todayOpen, text="●", style=label.style_none, textcolor=recentDOpenCol, size=f_dotSize(), xloc=xloc.bar_index)
+            array.push(drawnLines, ln)
+            array.push(drawnDots,  dot)
+        // Past N completed days' O/C
+        for i = 0 to recentDCount - 1
+            dOff2 = i + 1
+            oBar2 = dOff2 < array.size(_dOpBars) ? array.get(_dOpBars, dOff2) : math.max(0, bar_index - dOff2 * barsPerDay)
+            cBar2 = dOff2 < array.size(_dClBars) ? array.get(_dClBars, dOff2) : math.max(0, bar_index - (dOff2 - 1) * barsPerDay - 1)
+            if recentDShowOpen
+                oLvl = array.get(dOArr, i)
+                if not na(oLvl)
+                    ln  = line.new(oBar2, oLvl, x2r, oLvl, color=recentDOpenCol,  width=recentDWidth, style=rStyle, extend=f_extMode(), xloc=xloc.bar_index)
+                    dot = label.new(oBar2, oLvl, text="●", style=label.style_none, textcolor=recentDOpenCol,  size=f_dotSize(), xloc=xloc.bar_index)
+                    array.push(drawnLines, ln)
+                    array.push(drawnDots,  dot)
+            if recentDShowClose
+                cLvl = array.get(dCArr, i)
+                if not na(cLvl)
+                    ln  = line.new(cBar2, cLvl, x2r, cLvl, color=recentDCloseCol, width=recentDWidth, style=rStyle, extend=f_extMode(), xloc=xloc.bar_index)
+                    dot = label.new(cBar2, cLvl, text="●", style=label.style_none, textcolor=recentDCloseCol, size=f_dotSize(), xloc=xloc.bar_index)
+                    array.push(drawnLines, ln)
+                    array.push(drawnDots,  dot)
+
+    // ── 2nd Candle Box ───────────────────────────────────────────────────────
+    // x1 = bar where 2nd candle opened; x2 = end of trading session (~15:30 IST)
+    // 22200 sec = 370 min = duration from 09:20 to 15:30 IST
+    if showBox and not na(c2High) and not na(c2Low) and timeframe.in_seconds() < 3600
+        boxX1 = na(c2BarIdx) ? bar_index - barsPerDay + 2 : c2BarIdx
+        boxX2 = boxExtMode == "Fixed Bars" ? boxX1 + extendBars : boxX1 + math.round(22200.0 / timeframe.in_seconds()) + 1
+        f_draw2ndBox(c2High, c2Low, boxX1, boxX2)
+
+
+// ─── ALERTS ───────────────────────────────────────────────────────────────────
+
+newDailyBar = ta.change(time("D")) != 0
+alertcondition(alertNewLevel and newDailyBar, title="New Daily Level", message="HTT/DD: New daily level detected")
+
+touchedLevel = false
+if array.size(levelPrices) > 0
+    for lvl_ in levelPrices
+        if low[1] > lvl_ and low <= lvl_
+            touchedLevel := true
+        if high[1] < lvl_ and high >= lvl_
+            touchedLevel := true
+alertcondition(alertTouch and touchedLevel, title="Price Touches Level", message="HTT/DD: Price touched a level")
+
+touchBox = not na(c2High) and ((low[1] > c2Low and low <= c2Low) or (high[1] < c2High and high >= c2High))
+alertcondition(alertBoxHL and touchBox, title="Price Touches 2nd Candle Box H/L", message="HTT/DD: Price touched 2nd candle box H/L")

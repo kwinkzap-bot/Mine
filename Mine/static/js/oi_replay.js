@@ -1008,9 +1008,11 @@ function oipRefreshLocalView(view, resetZoom, index) {
     const peVal = oipFullPeData[index]?.close || 0;
     const sumVal = ceVal + peVal;
     const strike = oipElems.customStrikeDropdown?.value || '--';
+    const ceStrike = oipOIData?.intrinsic?.itm_ce_strike ?? strike;
+    const peStrike = oipOIData?.intrinsic?.itm_pe_strike ?? strike;
     if (document.getElementById('oipLegendStrike')) document.getElementById('oipLegendStrike').textContent = strike;
-    if (document.getElementById('oipLegendStrikeCE')) document.getElementById('oipLegendStrikeCE').textContent = strike;
-    if (document.getElementById('oipLegendStrikePE')) document.getElementById('oipLegendStrikePE').textContent = strike;
+    if (document.getElementById('oipLegendStrikeCE')) document.getElementById('oipLegendStrikeCE').textContent = ceStrike;
+    if (document.getElementById('oipLegendStrikePE')) document.getElementById('oipLegendStrikePE').textContent = peStrike;
 
     if (document.getElementById('oipLegendCE')) document.getElementById('oipLegendCE').textContent = ceVal ? ceVal.toFixed(2) : '--';
     if (document.getElementById('oipLegendPE')) document.getElementById('oipLegendPE').textContent = peVal ? peVal.toFixed(2) : '--';

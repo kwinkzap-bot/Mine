@@ -137,9 +137,7 @@ def start_live_monitoring():
 def main():
     """Run the Flask application and live monitoring."""
     ensure_ssh_tunnel()
-    from trading_app.service.kite_order_services import start_tunnel_watchdog
-    start_tunnel_watchdog(interval=30)
-    app = create_app()
+    app = create_app()  # __init__.py starts watchdog at 10s interval
 
     # Note: Live monitoring will be started via API endpoint after user login
     # This ensures per-user credentials and Excel logging

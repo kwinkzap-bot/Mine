@@ -4394,16 +4394,15 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
             kite = get_kite(instance=zerodha_instance)
             if not kite:
                 return {'success': False, 'error': f'Zerodha {zerodha_instance} not connected'}, 401
-            # If proxy is configured but not applied, try to start the tunnel then re-apply.
+            # Ensure proxy is applied (apply_kite_proxy auto-restarts tunnel if needed).
             _proxy_url = os.getenv('KITE_PROXY_URL', '').strip()
-            if _proxy_url and not kite.proxies:
-                from trading_app.service.kite_order_services import ensure_ssh_tunnel, apply_kite_proxy
-                if ensure_ssh_tunnel():
-                    apply_kite_proxy(kite)
+            if _proxy_url:
+                from trading_app.service.kite_order_services import apply_kite_proxy
+                apply_kite_proxy(kite)
                 if not kite.proxies:
                     return {
                         'success': False,
-                        'error': 'SSH tunnel is down. Run: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D 1080 opc@68.233.118.234'
+                        'error': 'SSH tunnel could not be started. Check Oracle Cloud instance status.'
                     }, 503
 
             from trading_app.service.kite_order_services import KiteService
