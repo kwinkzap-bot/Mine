@@ -57,10 +57,10 @@
                             <input type="checkbox" id="oipShowVwapOI"><span>VWAP</span>
                         </label>
                         <label class="oip-checkbox" title="CPR Levels">
-                            <input type="checkbox" id="oipShowCpr" checked><span>CPR</span>
+                            <input type="checkbox" id="oipShowCpr"><span>CPR</span>
                         </label>
                         <label class="oip-checkbox" title="Entry Signals">
-                            <input type="checkbox" id="oipShowSignals" checked><span>Sig</span>
+                            <input type="checkbox" id="oipShowSignals"><span>Sig</span>
                         </label>
                     </div>
 
@@ -268,16 +268,6 @@
             </div>
         </div>
 
-        <div class="oip-chart-wrap" id="oipIntrinsicChartWrap">
-            <div class="oip-chart-legend">
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
-                        id="oipLegendCE">--</span></div>
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
-                        id="oipLegendPE">--</span></div>
-            </div>
-            <div id="oipIntrinsicChart"></div>
-        </div>
-
         <div class="oip-charts-row">
             <!-- CE Individual Chart -->
             <div class="oip-chart-wrap" id="oipCEChartWrap">
@@ -298,20 +288,16 @@
             </div>
         </div>
 
-        <!-- NEW: Combined Premium Chart (Straddle/Strangle Tracker) -->
-        <div class="oip-chart-wrap" id="oipCombinedChartWrap"
-            style="margin-top: 10px; border-top: 1px dashed #cbd5e1; padding-top: 5px;">
+        <div class="oip-chart-wrap" id="oipIntrinsicChartWrap">
             <div class="oip-chart-legend">
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #6366f1;"></span> COMBINED:
-                    <span id="oipCombinedStrikeDisplay">--</span>
-                </div>
-
-                <div class="oip-legend-item" style="margin-left: auto; color: #0f172a; font-weight: 800;">
-                    <span id="oipLegendSum">SUM: --</span>
-                </div>
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
+                        id="oipLegendCE">--</span></div>
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
+                        id="oipLegendPE">--</span></div>
             </div>
-            <div id="oipCombinedChart"></div>
+            <div id="oipIntrinsicChart"></div>
         </div>
+
 
     </div>
 </div>

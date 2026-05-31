@@ -233,44 +233,6 @@
         });
     </script>
     {% block scripts %}{% endblock %}
-    {% if pwa_enabled %}
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js', { scope: '/' })
-                    .then(() => console.log('[PWA] Service worker registered'))
-                    .catch(e => console.warn('[PWA] Service worker registration failed:', e));
-            });
-        }
-
-        // Capture the install prompt and show our install button
-        let _pwaPrompt = null;
-        window.addEventListener('beforeinstallprompt', (e) => {
-            e.preventDefault();
-            _pwaPrompt = e;
-            const btn = document.getElementById('pwa-install-btn');
-            if (btn) btn.style.display = '';
-        });
-
-        // Hide button once installed
-        window.addEventListener('appinstalled', () => {
-            _pwaPrompt = null;
-            const btn = document.getElementById('pwa-install-btn');
-            if (btn) btn.style.display = 'none';
-        });
-
-        document.addEventListener('DOMContentLoaded', () => {
-            const btn = document.getElementById('pwa-install-btn');
-            if (!btn) return;
-            btn.addEventListener('click', async () => {
-                if (!_pwaPrompt) return;
-                _pwaPrompt.prompt();
-                const { outcome } = await _pwaPrompt.userChoice;
-                if (outcome === 'accepted') _pwaPrompt = null;
-            });
-        });
-    </script>
-    {% endif %}
 </body>
 
 </html>

@@ -133,7 +133,21 @@ class IntrinsicOrderManager:
                                 logger.error(f"[Intrinsic Monitor] Failed to place target EXIT order: {e}")
                 except Exception as e:
                     logger.error(f"[Intrinsic Monitor] Loop error: {e}")
-                    time.sleep(5)
+                    _err = str(e).lower()
+                    if any(k in _err for k in ('socks', 'connection refused', 'connectionerror', 'proxyerror', 'newconnectionerror')):
+                        logger.warning("[Intrinsic Monitor] SOCKS tunnel error — attempting recovery...")
+                        try:
+                            from trading_app.service.kite_order_services import ensure_ssh_tunnel, apply_kite_proxy
+                            if ensure_ssh_tunnel():
+                                apply_kite_proxy(kite)
+                                logger.info("[Intrinsic Monitor] Tunnel restored, resuming monitoring")
+                            else:
+                                logger.error("[Intrinsic Monitor] Tunnel recovery failed, will retry")
+                        except Exception as _te:
+                            logger.error(f"[Intrinsic Monitor] Tunnel recovery exception: {_te}")
+                        time.sleep(10)
+                    else:
+                        time.sleep(5)
         finally:
             _active_monitors.pop(key, None)
             if stop_event.is_set():

@@ -6296,6 +6296,23 @@ def place_portfolio_cnc_order() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/proxy-status', methods=['GET'])
+def proxy_status():
+    """Returns SSH tunnel / SOCKS5 proxy health without blocking."""
+    proxy_url = os.getenv('KITE_PROXY_URL', '').strip()
+    if not proxy_url:
+        return jsonify({'proxy_required': False, 'tunnel_up': True})
+    try:
+        from trading_app.service.kite_order_services import _is_socks5_healthy, _tunnel_known_down
+        from urllib.parse import urlparse
+        parsed = urlparse(proxy_url)
+        up = _is_socks5_healthy(parsed.hostname or '127.0.0.1', parsed.port or 1080, timeout=1.5)
+    except Exception:
+        up = False
+        _tunnel_known_down = True
+    return jsonify({'proxy_required': True, 'tunnel_up': up})
+
+
 @api_bp.errorhandler(404)
 def not_found(error):
     """Handle 404 errors."""

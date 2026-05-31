@@ -124,13 +124,17 @@ def create_app(config=None):
     from trading_app.app.routes import register_blueprints
     register_blueprints(app)
 
-    # Start SSH tunnel and watchdog on boot so proxy is ready before first request
-    try:
-        from trading_app.service.kite_order_services import ensure_ssh_tunnel, start_tunnel_watchdog
-        ensure_ssh_tunnel()
-        start_tunnel_watchdog()
-    except Exception as _e:
-        logger.warning(f"SSH tunnel init skipped: {_e}")
+    # Start SSH tunnel and watchdog in background — app boots immediately even if Oracle is down
+    def _init_tunnel():
+        try:
+            from trading_app.service.kite_order_services import ensure_ssh_tunnel, start_tunnel_watchdog
+            ensure_ssh_tunnel()
+            start_tunnel_watchdog()
+        except Exception as _e:
+            logger.warning(f"SSH tunnel init skipped: {_e}")
+
+    import threading as _threading
+    _threading.Thread(target=_init_tunnel, daemon=True, name='ssh-tunnel-init').start()
 
     return app
 

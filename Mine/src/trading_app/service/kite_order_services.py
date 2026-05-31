@@ -98,34 +98,27 @@ def ensure_ssh_tunnel() -> bool:
     except Exception:
         pass
 
-    # Pre-flight: verify Oracle SSH daemon actually sends a banner (not just accepts TCP).
+    # Pre-flight: verify Oracle SSH daemon is up by reading its banner.
+    # Only hard-fail if TCP connects but sends NO banner (instance stopped/starting).
+    # A timeout just means Oracle is slow — SSH itself has ConnectTimeout=10, so
+    # we let it proceed and let the SSH process handle genuine unreachability.
     import socket as _sock
     _oracle_host = ssh_host.split('@')[-1]
-    _banner_ok = False
-    for _pf_attempt in range(2):
-        try:
-            s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
-            s.settimeout(6)
-            s.connect((_oracle_host, 22))
-            s.settimeout(6)
-            banner = s.recv(64)
-            s.close()
-            if not banner:
-                logging.error('[Proxy] Oracle SSH (port 22) accepts TCP but sends no banner — instance may be stopped. Check Oracle Cloud Console.')
-                return False
-            logging.info(f'[Proxy] Oracle SSH banner: {banner.decode(errors="replace").strip()}')
-            _banner_ok = True
-            break
-        except Exception as e:
-            try: s.close()
-            except Exception: pass
-            if _pf_attempt == 1:
-                logging.error(f'[Proxy] Cannot reach Oracle SSH at {ssh_host}: {e}')
-                return False
-            logging.warning(f'[Proxy] Pre-flight attempt 1 failed ({e}), retrying in 2s...')
-            time.sleep(2)
-    if not _banner_ok:
-        return False
+    try:
+        s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+        s.settimeout(8)
+        s.connect((_oracle_host, 22))
+        s.settimeout(8)
+        banner = s.recv(64)
+        s.close()
+        if not banner:
+            logging.error('[Proxy] Oracle SSH (port 22) accepts TCP but sends no banner — instance may be stopped. Check Oracle Cloud Console.')
+            return False
+        logging.info(f'[Proxy] Oracle SSH banner: {banner.decode(errors="replace").strip()}')
+    except Exception as e:
+        try: s.close()
+        except Exception: pass
+        logging.warning(f'[Proxy] Pre-flight could not verify Oracle SSH ({e}) — attempting SSH anyway...')
 
     cmd = [
         'ssh', '-i', ssh_key, '-N', f'-D127.0.0.1:{port}', ssh_host,
@@ -157,6 +150,11 @@ def ensure_ssh_tunnel() -> bool:
 
 _tunnel_watchdog_started = False
 
+# Cache tunnel status so apply_kite_proxy never blocks on a known-dead tunnel.
+# Watchdog resets _tunnel_known_down=False when it succeeds, so recovery is automatic.
+_tunnel_known_down: bool = False
+_tunnel_status_lock = threading.Lock()
+
 def start_tunnel_watchdog(interval: int = 10) -> None:
     """Start a background thread that keeps the SSH tunnel alive.
 
@@ -173,6 +171,7 @@ def start_tunnel_watchdog(interval: int = 10) -> None:
     _tunnel_watchdog_started = True
 
     def _watch():
+        global _tunnel_known_down
         while True:
             time.sleep(interval)
             try:
@@ -184,12 +183,21 @@ def start_tunnel_watchdog(interval: int = 10) -> None:
 
             if not _is_socks5_healthy(_host, _port):
                 logging.warning('[Proxy] Watchdog: tunnel dropped — restarting...')
+                recovered = False
                 for _attempt in range(3):
                     if ensure_ssh_tunnel():
+                        recovered = True
                         break
                     if _attempt < 2:
                         logging.warning(f'[Proxy] Watchdog restart attempt {_attempt + 1}/3 failed, retrying in 3s...')
                         time.sleep(3)
+                with _tunnel_status_lock:
+                    _tunnel_known_down = not recovered
+            else:
+                with _tunnel_status_lock:
+                    if _tunnel_known_down:
+                        logging.info('[Proxy] Watchdog: tunnel is back up')
+                    _tunnel_known_down = False
 
     t = threading.Thread(target=_watch, daemon=True, name='ssh-tunnel-watchdog')
     t.start()
@@ -214,21 +222,13 @@ def apply_kite_proxy(kite, raise_if_unreachable: bool = False) -> bool:
     except Exception:
         host, port = "127.0.0.1", 1080
     if not _is_socks5_healthy(host, port):
-        logging.warning(f"[KiteService] SOCKS5 proxy {proxy_url} not reachable — auto-restarting tunnel...")
-        tunnel_up = False
-        for attempt in range(1, 4):
-            if ensure_ssh_tunnel():
-                tunnel_up = True
-                break
-            if attempt < 3:
-                logging.warning(f"[KiteService] Tunnel restart attempt {attempt}/3 failed, retrying in 3s...")
-                time.sleep(3)
-        if not tunnel_up:
-            msg = f"SSH tunnel could not be started. Run manually: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D {port} opc@68.233.118.234"
-            if raise_if_unreachable:
-                raise RuntimeError(f"[KiteService] {msg}")
-            logging.error(f"[KiteService] {msg}")
-            return False
+        with _tunnel_status_lock:
+            _tunnel_known_down = True
+        msg = f"SSH tunnel not reachable — watchdog will retry. Run manually: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D {port} opc@68.233.118.234"
+        if raise_if_unreachable:
+            raise RuntimeError(f"[KiteService] {msg}")
+        logging.warning(f"[KiteService] {msg}")
+        return False
     # KiteConnect._request passes proxies=self.proxies, NOT reqsession.proxies
     kite.proxies = {'http': proxy_url, 'https': proxy_url}
     logging.info(f"[KiteService] SOCKS5 proxy active: {proxy_url}")

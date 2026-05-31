@@ -1,5 +1,9 @@
-// Minimal service worker — required by Chrome to show the install button.
-// No caching: every request goes straight to the network as normal.
-self.addEventListener('fetch', (event) => {
-    event.respondWith(fetch(event.request));
+// Self-unregistering service worker — cleans up any previously installed SW.
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => {
+    event.waitUntil(
+        self.registration.unregister().then(() => self.clients.matchAll()).then((clients) => {
+            clients.forEach((client) => client.navigate(client.url));
+        })
+    );
 });

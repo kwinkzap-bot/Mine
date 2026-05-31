@@ -8,8 +8,6 @@
 let oipOIChart = null;
 let oipOISeries = null;
 let oipIntrinsicChart = null;
-let oipCombinedChart = null;
-let oipCombinedSeries = null;
 let oipIntrinsicSeries = null;
 let oipIntrinsicPeSeries = null;
 let oipOIData = null;
@@ -17,10 +15,9 @@ let oipOptionData = null;
 let oipVwapSeries = null;
 let oipVwapIntSeries = null;
 let oipVwapIntPeSeries = null;
-let oipCombinedVwapSeries = null;
-let oipCprSeriesMap = {}; 
+let oipCprSeriesMap = {};
 let oipRSISeriesObj = null;
-let oipSignalMarkers = [];
+let oipSignalMarkers = []; // kept for oipUpdateAllMarkers compat (always empty)
 let oipRSIMarkers = [];
 let oipLevelLines = [];
 let oipEma9Series = null, oipEma20Series = null, oipEma50Series = null, oipEma100Series = null, oipEma200Series = null;
@@ -60,7 +57,6 @@ let oipOIChartReady = false;
 let oipIntChartReady = false;
 let oipCEChartReady = false;
 let oipPEChartReady = false;
-let oipCombChartReady = false;
 let oipCustomStrikeSetOnLoad = false;
 
 // DOM Cache
@@ -73,10 +69,11 @@ const oipElems = {
     hdrPrice: null, hdrPcr: null, hdrMaxPain: null, hdrCeOI: null,
     hdrCeChg: null, hdrPeOI: null,
     hdrPeChg: null, hdrTrend: null, hdrAtm: null, brokerSelect: null,
-    showPremium: null, showSignals: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
+    showPremium: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
+    strikeMode: null, ceStrikeDropdown: null, peStrikeDropdown: null,
     showEma9: null, showEma20: null, showEma50: null, showEma100: null, showEma200: null,
     exitAll: null, days: null, startDate: null, endDate: null,
-    hdrLotSize: null, legendSum: null, combStrikeDisplay: null,
+    hdrLotSize: null,
     hdrIVP: null, ivpGaugeBar: null, ivCrushAlert: null
 };
 
@@ -112,7 +109,6 @@ function oipInitElems() {
     oipElems.hdrLotSize = document.getElementById('hdrLotSize');
     oipElems.brokerSelect = document.getElementById('oipBrokerSelect');
     oipElems.showPremium = document.getElementById('oipShowPremium');
-    oipElems.showSignals = document.getElementById('oipShowSignals');
     oipElems.first5mATM = document.getElementById('oipFirst5mATM');
     oipElems.customStrikeCheck = document.getElementById('oipCustomStrikeCheck');
     oipElems.customStrikeDropdown = document.getElementById('oipCustomStrikeDropdown');
@@ -122,8 +118,9 @@ function oipInitElems() {
     oipElems.showEma50 = document.getElementById('oipShowEma50');
     oipElems.showEma100 = document.getElementById('oipShowEma100');
     oipElems.showEma200 = document.getElementById('oipShowEma200');
-    oipElems.legendSum = document.getElementById('oipLegendSum');
-    oipElems.combStrikeDisplay = document.getElementById('oipCombinedStrikeDisplay');
+    oipElems.strikeMode = document.getElementById('oipStrikeMode');
+    oipElems.ceStrikeDropdown = document.getElementById('oipCEStrikeDropdown');
+    oipElems.peStrikeDropdown = document.getElementById('oipPEStrikeDropdown');
     oipElems.days = document.getElementById('oipDays');
     oipElems.startDate = document.getElementById('oipStartDate');
     oipElems.endDate = document.getElementById('oipEndDate');
@@ -155,7 +152,7 @@ window.oipInitSecondaryCharts = function() {
     if (elInt && typeof TradingViewChart !== 'undefined') {
         oipIntrinsicChart = TradingViewChart.create({
             containerId: 'oipIntrinsicChart', data: [], type: 'COMBINED',
-            isCombined: true, timeframe: oipInterval, options: { height: 360 }
+            isCombined: true, timeframe: oipInterval, options: { height: 310 }
         });
         oipIntrinsicSeries = oipIntrinsicChart.ceSeries || oipIntrinsicChart.series;
         oipIntrinsicPeSeries = oipIntrinsicChart.peSeries;
@@ -172,14 +169,14 @@ window.oipInitSecondaryCharts = function() {
         // Individual CE Chart
         oipCEChart = TradingViewChart.create({
             containerId: 'oipCEChart', data: [], type: 'CE',
-            timeframe: oipInterval, options: { height: 320 }
+            timeframe: oipInterval, options: { height: 310 }
         });
         oipCESeries = oipCEChart.series;
 
         // Individual PE Chart
         oipPEChart = TradingViewChart.create({
             containerId: 'oipPEChart', data: [], type: 'PE',
-            timeframe: oipInterval, options: { height: 320 }
+            timeframe: oipInterval, options: { height: 310 }
         });
         oipPESeries = oipPEChart.series;
 
@@ -187,40 +184,16 @@ window.oipInitSecondaryCharts = function() {
         const showEma20 = oipElems.showEma20?.checked ?? false;
         const showEma50 = oipElems.showEma50?.checked ?? false;
 
-        const customAutoscale = (seriesObj, chartInstance) => () => {
-            const data = seriesObj.data();
-            const range = chartInstance.timeScale().getVisibleLogicalRange();
-            if (!data || data.length === 0 || !range) return null;
-            let min = Infinity, max = -Infinity;
-            const start = Math.max(0, Math.floor(range.from));
-            const end = Math.min(data.length - 1, Math.ceil(range.to));
-            for (let i = start; i <= end; i++) {
-                const c = data[i];
-                if (c && c.high !== undefined) {
-                    if (c.high > max) max = c.high;
-                    if (c.low < min) min = c.low;
-                }
-            }
-            if (min === Infinity) return null;
-            if (min === max) { min -= 1; max += 1; }
-            const pad = (max - min) * 0.1;
-            return { priceRange: { minValue: min - pad, maxValue: max + pad } };
-        };
-
-        // No custom autoscale needed for single charts, defaults work best
-        // oipCESeries.applyOptions({ autoscaleInfoProvider: customAutoscale(oipCESeries, oipCEChart.chart) });
-        // oipPESeries.applyOptions({ autoscaleInfoProvider: customAutoscale(oipPESeries, oipPEChart.chart) });
-
-        oipCEEma9Series = oipCEChart.chart.addLineSeries({ color: '#8b5cf6', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
+        oipCEEma9Series = oipCEChart.chart.addLineSeries({ color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
         oipCEEma20Series = oipCEChart.chart.addLineSeries({ color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma20, autoscaleInfoProvider: () => null });
-        oipCEEma50Series = oipCEChart.chart.addLineSeries({ color: '#000000', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
+        oipCEEma50Series = oipCEChart.chart.addLineSeries({ color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
 
-        oipPEEma9Series = oipPEChart.chart.addLineSeries({ color: '#8b5cf6', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
+        oipPEEma9Series = oipPEChart.chart.addLineSeries({ color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
         oipPEEma20Series = oipPEChart.chart.addLineSeries({ color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma20, autoscaleInfoProvider: () => null });
-        oipPEEma50Series = oipPEChart.chart.addLineSeries({ color: '#000000', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
+        oipPEEma50Series = oipPEChart.chart.addLineSeries({ color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
 
         oipInitPremiumSeries();
-        
+
         oipIntChartReady = true;
         oipCEChartReady = true;
         oipPEChartReady = true;
@@ -234,38 +207,30 @@ window.oipInitSecondaryCharts = function() {
             document.getElementById('oipPEChart')?.addEventListener(e, () => setActive('pe'), {passive: true});
         });
 
-        const syncRange = (sourceChart, targetCharts) => {
-            const timeScale = sourceChart.timeScale();
-            const range = timeScale.getVisibleLogicalRange();
-            const offset = timeScale.options().rightOffset;
-            
-            if (!range) return;
-
+        const syncRange = (range, targetCharts) => {
+            if (!range || range.from == null || range.to == null) return;
             targetCharts.forEach(t => {
                 if (!t) return;
-                try {
-                    t.timeScale().applyOptions({ rightOffset: offset });
-                    t.timeScale().setVisibleLogicalRange(range);
-                } catch(e) {}
+                try { t.timeScale().setVisibleLogicalRange(range); } catch(e) {}
             });
         };
 
         if (oipOIChart && oipIntrinsicChart && oipIntrinsicChart.chart) {
-            oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-                if (activeChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return; 
-                syncRange(oipOIChart, [oipIntrinsicChart.chart, oipCEChart?.chart, oipPEChart?.chart]);
+            oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+                if (activeChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(range, [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart]);
             });
-            oipIntrinsicChart.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-                if (activeChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady) return; 
-                syncRange(oipIntrinsicChart.chart, [oipOIChart, oipCEChart?.chart, oipPEChart?.chart]);
+            oipIntrinsicChart.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+                if (activeChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(range, [oipOIChart, oipCEChart?.chart, oipPEChart?.chart]);
             });
-            oipCEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-                if (activeChartId !== 'ce' || !oipOIChartReady || !oipCEChartReady) return; 
-                syncRange(oipCEChart.chart, [oipOIChart, oipIntrinsicChart.chart, oipPEChart?.chart]);
+            oipCEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+                if (activeChartId !== 'ce' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(range, [oipOIChart, oipIntrinsicChart?.chart, oipPEChart?.chart]);
             });
-            oipPEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-                if (activeChartId !== 'pe' || !oipOIChartReady || !oipPEChartReady) return; 
-                syncRange(oipPEChart.chart, [oipOIChart, oipIntrinsicChart.chart, oipCEChart?.chart]);
+            oipPEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+                if (activeChartId !== 'pe' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(range, [oipOIChart, oipIntrinsicChart?.chart, oipCEChart?.chart]);
             });
         }
 
@@ -371,7 +336,7 @@ function oipInitCharts() {
         };
 
         oipOIChart = LightweightCharts.createChart(elOI, {
-            width: elOI.clientWidth || 1200, height: 360,
+            width: elOI.clientWidth || 1200, height: 310,
             layout: { textColor: '#374151', background: { type: 'solid', color: '#ffffff' } },
             grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
             crosshair: { mode: 0, vertLine: { color: '#9ca3af', style: 3 }, horzLine: { color: '#9ca3af', style: 3, labelBackgroundColor: '#0969da' } },
@@ -638,59 +603,9 @@ function oipDrawRSI(candles) {
 
 function oipUpdateAllMarkers() {
     if (!oipOISeries) return;
-    const combined = [...oipSignalMarkers, ...oipRSIMarkers].sort((a, b) => a.time - b.time);
-    oipOISeries.setMarkers(combined);
+    oipOISeries.setMarkers([]);
 }
 
-function oipCalculateSignals(candles) {
-    if (!candles || candles.length < 20) return [];
-    
-    // We need EMA maps for the entire candle set
-    const ema9 = oipCalculateFixedEMA(candles, 9);
-    const ema20 = oipCalculateFixedEMA(candles, 20);
-    const ema50 = oipCalculateFixedEMA(candles, 50);
-    const e9Map = new Map(ema9.map(d => [d.time, d.value]));
-    const e20Map = new Map(ema20.map(d => [d.time, d.value]));
-    const e50Map = new Map(ema50.map(d => [d.time, d.value]));
-    
-    const signals = [];
-    let buyState = 'IDLE', sellState = 'IDLE';
-    let inBuyTrade = false, inSellTrade = false;
-
-    for (let i = 1; i < candles.length - 1; i++) {
-        const c = candles[i], t = c.time;
-        const e9 = e9Map.get(t), e20 = e20Map.get(t), e50 = e50Map.get(t);
-        if (!e9 || !e20 || !e50) continue;
-
-        if (inBuyTrade && c.close < e50) { signals.push({ time: t, position: 'aboveBar', color: '#800000', shape: 'circle', text: 'B SL' }); inBuyTrade = false; }
-        if (inSellTrade && c.close > e50) { signals.push({ time: t, position: 'belowBar', color: '#800000', shape: 'circle', text: 'S SL' }); inSellTrade = false; }
-
-        if (c.close < e9 && c.close < e20) buyState = 'BELOW';
-        else if (buyState === 'BELOW' && c.close > e9 && c.close > e20) buyState = 'CROSSED';
-        else if (buyState === 'CROSSED' && c.open > e9 && c.open > e20 && c.close > e9 && c.close > e20 && c.high > e9 && c.high > e20 && c.low > e9 && c.low > e20) buyState = 'CONFIRMED';
-        else if (buyState === 'CONFIRMED' && !inBuyTrade && c.low <= Math.max(e9, e20) && c.close > e9 && c.close > e20 && c.close > c.open && c.close > e50) {
-            signals.push({ time: t, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: 'BUY' });
-            buyState = 'IDLE'; inBuyTrade = true; inSellTrade = false;
-        }
-
-        if (c.close > e9 && c.close > e20) sellState = 'ABOVE';
-        else if (sellState === 'ABOVE' && c.close < e9 && c.close < e20) sellState = 'CROSSED';
-        else if (sellState === 'CROSSED' && c.open < e9 && c.open < e20 && c.close < e9 && c.close < e20 && c.high < e9 && c.high < e20 && c.low < e9 && c.low < e20) sellState = 'CONFIRMED';
-        else if (sellState === 'CONFIRMED' && !inSellTrade && c.high >= Math.min(e9, e20) && c.close < e9 && c.close < e20 && c.close < c.open && c.close < e50) {
-            signals.push({ time: t, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: 'SELL' });
-            sellState = 'IDLE'; inSellTrade = true; inBuyTrade = false;
-        }
-    }
-    return signals;
-}
-
-function oipDrawSignals(signals, maxTime) {
-    if (!oipOIChart || !oipOISeries) return;
-    const show = oipElems.showSignals?.checked;
-    if (!show) { oipSignalMarkers = []; oipUpdateAllMarkers(); return; }
-    oipSignalMarkers = signals.filter(s => s.time <= maxTime);
-    oipUpdateAllMarkers();
-}
 
 function oipDrawIntrinsicLines(intrinsic, view) {
     if (!oipIntrinsicSeries) return;
@@ -744,8 +659,13 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     await oipLoadMetadata();
     const h = parseFloat(oipElems.spotHigh?.value || 0), l = parseFloat(oipElems.spotLow?.value || 0);
     const s = parseInt(oipElems.step?.value || 50), m = parseInt(oipElems.multiplier?.value || 3);
-    const customStrike = (oipElems.customStrikeCheck?.checked && oipElems.customStrikeDropdown?.value) ? oipElems.customStrikeDropdown?.value : '';
-    
+
+    const strikeMode = oipElems.strikeMode?.value || 'ce_pe';
+    const first5m = strikeMode === 'atm';
+    const customStrike = strikeMode === 'custom' ? (oipElems.customStrikeDropdown?.value || '') : '';
+    const ceStrike = strikeMode === 'ce_pe' ? (oipElems.ceStrikeDropdown?.value || '') : '';
+    const peStrike = strikeMode === 'ce_pe' ? (oipElems.peStrikeDropdown?.value || '') : '';
+
     let days = parseInt(oipElems.days?.value) || 5;
     let dateRangeParams = '';
     if (oipElems.startDate?.value && oipElems.endDate?.value) {
@@ -758,7 +678,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         }
     }
 
-    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=true&custom_strike=${customStrike}${dateRangeParams}&_t=${Date.now()}`;
+    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=true&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${dateRangeParams}&_t=${Date.now()}`;
     const res = await fetch(url); const data = await res.json();
     if (!data.success) return;
 
@@ -767,7 +687,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     oipFullCeData = [];
     oipFullPeData = [];
     oipCachedIndicators = {
-        index: { vwap: [], ema9: [], ema20: [], ema50: [], ema100: [], ema200: [], rsi: null, signals: [] },
+        index: { vwap: [], ema9: [], ema20: [], ema50: [], ema100: [], ema200: [], rsi: null },
         ce: { vwap: [], ema9: [], ema20: [], ema50: [] },
         pe: { vwap: [], ema9: [], ema20: [], ema50: [] },
         premium: { entry: [], current: [], t1: [], t2: [] },
@@ -811,11 +731,19 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     const ceRaw = (data.ce_opt_candles || []);
     const peRaw = (data.pe_opt_candles || []);
     
+    oipOptionData = [
+        ...ceRaw.map(c => ({...c, type:'CE'})),
+        ...peRaw.map(c => ({...c, type:'PE'}))
+    ];
     oipFullOptionData = [
-        ...alignToIndices(ceRaw).map(c => ({...c, type:'CE'})), 
+        ...alignToIndices(ceRaw).map(c => ({...c, type:'CE'})),
         ...alignToIndices(peRaw).map(c => ({...c, type:'PE'}))
     ];
     oipAllStrikes = data.strikes || []; oipCurrentPrice = data.current_price || 0;
+
+    // Draw 2nd candle boxes (OI, CE Only, PE Only) for all days
+    oipDraw2ndCandle30sBox(oipFullCandles);
+    oipDraw2nd5mCandleBox(oipFullCandles);
 
     oipPrecalculateIndicators();
     oipSetupReplaySlider();
@@ -885,7 +813,6 @@ function oipPrecalculateIndicators() {
     oipCachedIndicators.index.ema100 = oipCalculateFixedEMA(oipFullCandles, 100);
     oipCachedIndicators.index.ema200 = oipCalculateFixedEMA(oipFullCandles, 200);
     oipCachedIndicators.index.rsi = oipCalculateRSISnR(oipFullCandles);
-    oipCachedIndicators.index.signals = oipCalculateSignals(oipFullCandles);
     oipCachedIndicators.cpr = oipCalculateDynamicCPR(oipFullCandles);
 
     oipCachedIndicators.ce.vwap = oipCalculateVWAP(oipFullCeData);
@@ -955,11 +882,8 @@ function oipRefreshLocalView(view, resetZoom, index) {
         }
     }
     
-    // Update Markers (RSI + Signals)
-    const rsiMarkers = oipCachedIndicators.index.rsi?.markers.filter(m => m.time <= timeAtIdx) || [];
-    const stratSignals = oipCachedIndicators.index.signals.filter(s => s.time <= timeAtIdx) || [];
-    oipSignalMarkers = [...rsiMarkers, ...stratSignals];
-    oipUpdateAllMarkers();
+    oipSignalMarkers = [];
+    oipOISeries?.setMarkers([]);
 
     // CPR Redraw
     if (oipCachedIndicators.cpr) {
@@ -1004,22 +928,15 @@ function oipRefreshLocalView(view, resetZoom, index) {
     }
 
     // 4. Legend & Metadata
-    const ceVal = oipFullCeData[index]?.close || 0;
-    const peVal = oipFullPeData[index]?.close || 0;
-    const sumVal = ceVal + peVal;
-    const strike = oipElems.customStrikeDropdown?.value || '--';
-    const ceStrike = oipOIData?.intrinsic?.itm_ce_strike ?? strike;
-    const peStrike = oipOIData?.intrinsic?.itm_pe_strike ?? strike;
-    if (document.getElementById('oipLegendStrike')) document.getElementById('oipLegendStrike').textContent = strike;
-    if (document.getElementById('oipLegendStrikeCE')) document.getElementById('oipLegendStrikeCE').textContent = ceStrike;
-    if (document.getElementById('oipLegendStrikePE')) document.getElementById('oipLegendStrikePE').textContent = peStrike;
+    const isCePeMode = oipElems.strikeMode?.value === 'ce_pe';
+    const customStrikeVal = oipElems.customStrikeDropdown?.value || '--';
+    const ceStrikeVal = isCePeMode ? (oipElems.ceStrikeDropdown?.value || '--') : customStrikeVal;
+    const peStrikeVal = isCePeMode ? (oipElems.peStrikeDropdown?.value || '--') : customStrikeVal;
 
-    if (document.getElementById('oipLegendCE')) document.getElementById('oipLegendCE').textContent = ceVal ? ceVal.toFixed(2) : '--';
-    if (document.getElementById('oipLegendPE')) document.getElementById('oipLegendPE').textContent = peVal ? peVal.toFixed(2) : '--';
-    if (document.getElementById('oipLegendSum')) document.getElementById('oipLegendSum').textContent = `SUM: ${sumVal.toFixed(2)}`;
-
-    if (document.getElementById('oipLegendCEOnly')) document.getElementById('oipLegendCEOnly').textContent = ceVal ? ceVal.toFixed(2) : '--';
-    if (document.getElementById('oipLegendPEOnly')) document.getElementById('oipLegendPEOnly').textContent = peVal ? peVal.toFixed(2) : '--';
+    if (oipElems.itmCE) oipElems.itmCE.textContent = `${ceStrikeVal} CE`;
+    if (oipElems.itmPE) oipElems.itmPE.textContent = `${peStrikeVal} PE`;
+    if (document.getElementById('oipLegendCEOnly')) document.getElementById('oipLegendCEOnly').textContent = `${ceStrikeVal} CE`;
+    if (document.getElementById('oipLegendPEOnly')) document.getElementById('oipLegendPEOnly').textContent = `${peStrikeVal} PE`;
 
     oipUpdateEmaVisibility();
     
@@ -1089,6 +1006,65 @@ function oipRenderPrecalculatedCPR(daysData, maxTime) {
 
 /* ── Replay Core ───────────────────────────────────────────── */
 function oipResetReplay() { oipFullCandles = null; oipFullOptionData = null; oipReplayIndex = 0; oipLoadCandles(); }
+
+async function oipReloadStrikeOnly() {
+    const toolbar = document.getElementById('oipReplayToolbar');
+    const replayActive = toolbar && !toolbar.classList.contains('hidden') && oipReplayIndex > 0 && oipFullCandles?.length;
+    if (!replayActive) { oipResetReplay(); return; }
+
+    const h = parseFloat(oipElems.spotHigh?.value || 0), l = parseFloat(oipElems.spotLow?.value || 0);
+    const s = parseInt(oipElems.step?.value || 50), m = parseInt(oipElems.multiplier?.value || 3);
+    const strikeMode = oipElems.strikeMode?.value || 'ce_pe';
+    const first5m = strikeMode === 'atm';
+    const customStrike = strikeMode === 'custom' ? (oipElems.customStrikeDropdown?.value || '') : '';
+    const ceStrike = strikeMode === 'ce_pe' ? (oipElems.ceStrikeDropdown?.value || '') : '';
+    const peStrike = strikeMode === 'ce_pe' ? (oipElems.peStrikeDropdown?.value || '') : '';
+    let days = parseInt(oipElems.days?.value) || 5;
+    let dateRangeParams = '';
+    if (oipElems.startDate?.value && oipElems.endDate?.value) {
+        dateRangeParams = `&start_date=${oipElems.startDate.value}&end_date=${oipElems.endDate.value}`;
+        const diffDays = Math.ceil((new Date(oipElems.endDate.value) - new Date(oipElems.startDate.value)) / 86400000) + 1;
+        if (diffDays > 0) days = diffDays;
+    }
+    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=true&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${dateRangeParams}&_t=${Date.now()}`;
+
+    try {
+        const res = await fetch(url); const data = await res.json();
+        if (!data.success) return;
+
+        const alignToIndices = (optCandles) => {
+            const optMap = new Map(optCandles.map(c => [c.time, c]));
+            return oipFullCandles.map(ic => optMap.get(ic.time) || { time: ic.time });
+        };
+        const ceRaw = data.ce_opt_candles || [], peRaw = data.pe_opt_candles || [];
+        oipFullOptionData = [
+            ...alignToIndices(ceRaw).map(c => ({...c, type:'CE'})),
+            ...alignToIndices(peRaw).map(c => ({...c, type:'PE'}))
+        ];
+
+        oipFullCeData = oipFullOptionData.filter(d => d.type === 'CE');
+        oipFullPeData = oipFullOptionData.filter(d => d.type === 'PE');
+        oipCachedIndicators.ce.vwap = oipCalculateVWAP(oipFullCeData);
+        oipCachedIndicators.ce.ema9  = oipCalculateFixedEMA(oipFullCeData, 9);
+        oipCachedIndicators.ce.ema20 = oipCalculateFixedEMA(oipFullCeData, 20);
+        oipCachedIndicators.ce.ema50 = oipCalculateFixedEMA(oipFullCeData, 50);
+        oipCachedIndicators.pe.vwap  = oipCalculateVWAP(oipFullPeData);
+        oipCachedIndicators.pe.ema9  = oipCalculateFixedEMA(oipFullPeData, 9);
+        oipCachedIndicators.pe.ema20 = oipCalculateFixedEMA(oipFullPeData, 20);
+        oipCachedIndicators.pe.ema50 = oipCalculateFixedEMA(oipFullPeData, 50);
+        const dist = parseInt(oipElems.targetDistance?.value) || 50;
+        const entry = [], current = [];
+        oipCachedIndicators.ce.vwap.forEach((v, i) => { const pv = oipCachedIndicators.pe.vwap[i]; if (pv) entry.push({ time: v.time, value: (v.value + pv.value) / 2 }); });
+        oipFullCeData.forEach((v, i) => { const pv = oipFullPeData[i]; if (pv) current.push({ time: v.time, value: (v.close + pv.close) / 2 }); });
+        oipCachedIndicators.premium = { entry, current, t1: entry.map(v => ({time: v.time, value: v.value + dist})), t2: entry.map(v => ({time: v.time, value: v.value + dist * 2})) };
+
+        if (oipIntrinsicChart) { oipIntrinsicChart.series.setData([]); oipIntrinsicChart.peSeries.setData([]); }
+        if (oipCEChart) oipCEChart.series.setData([]);
+        if (oipPEChart) oipPEChart.series.setData([]);
+        oipLastRefreshIndex = -1;
+        oipRefreshLocalView('combined', false, oipReplayIndex);
+    } catch(e) { console.error('[OIP] Strike reload failed:', e); }
+}
 
 function oipInitReplay() {
     const btnPlay = document.getElementById('oipReplayPlay'), btnPause = document.getElementById('oipReplayPause'), btnNext = document.getElementById('oipReplayNext'), btnJump = document.getElementById('oipJumpReplay');
@@ -1202,6 +1178,7 @@ function oipInitPremiumSeries() {
 document.addEventListener('DOMContentLoaded', () => {
     window.oipReplayMode = true;
     oipInitElems(); oipInitCharts();
+    oipUpdateEmaVisibility();
     const today = new Date().toISOString().split('T')[0];
     const prev = new Date(); prev.setDate(prev.getDate() - 30);
     if (oipElems.startDate) oipElems.startDate.value = prev.toISOString().split('T')[0];
@@ -1239,24 +1216,56 @@ document.addEventListener('DOMContentLoaded', () => {
         oipResetReplay();
     });
     oipElems.days?.addEventListener('change', () => oipResetReplay());
-    oipElems.customStrikeDropdown?.addEventListener('change', () => oipResetReplay());
-    oipElems.customStrikeCheck?.addEventListener('change', () => oipResetReplay());
-    oipElems.first5mATM?.addEventListener('change', () => oipResetReplay());
     oipElems.targetDistance?.addEventListener('change', () => {
         if (oipFullCandles) oipRefreshLocalView('combined', false, oipReplayIndex);
     });
-    oipInitReplay(); 
+
+    // Strike mode dropdown — controls which strike input is visible
+    function oipApplyStrikeMode(mode) {
+        const isAtm    = mode === 'atm';
+        const isCustom = mode === 'custom';
+        const isCePe   = mode === 'ce_pe';
+
+        if (oipElems.first5mATM) oipElems.first5mATM.checked = isAtm;
+        if (oipElems.customStrikeCheck) oipElems.customStrikeCheck.checked = isCustom;
+
+        if (oipElems.customStrikeDropdown) oipElems.customStrikeDropdown.style.display = isCustom ? '' : 'none';
+        if (oipElems.ceStrikeDropdown) oipElems.ceStrikeDropdown.style.display = isCePe ? '' : 'none';
+        if (oipElems.peStrikeDropdown) oipElems.peStrikeDropdown.style.display = isCePe ? '' : 'none';
+    }
+
+    document.querySelectorAll('input[name="oipMode"]').forEach(radio => {
+        radio.addEventListener('change', e => {
+            oipMode = e.target.value;
+            oipRequestDraw();
+        });
+    });
+
+    oipApplyStrikeMode(oipElems.strikeMode?.value || 'ce_pe');
+
+    oipElems.strikeMode?.addEventListener('change', () => {
+        oipApplyStrikeMode(oipElems.strikeMode.value);
+        oipReloadStrikeOnly();
+    });
+    oipElems.customStrikeDropdown?.addEventListener('change', () => {
+        if (oipElems.strikeMode?.value === 'custom') oipReloadStrikeOnly();
+    });
+    oipElems.ceStrikeDropdown?.addEventListener('change', () => {
+        if (oipElems.strikeMode?.value === 'ce_pe') oipReloadStrikeOnly();
+    });
+    oipElems.peStrikeDropdown?.addEventListener('change', () => {
+        if (oipElems.strikeMode?.value === 'ce_pe') oipReloadStrikeOnly();
+    });
+
+    oipInitReplay();
 
     [
         'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
-        'oipShowCpr', 'oipShowRSI', 'oipShowSignals',
+        'oipShowCpr', 'oipShowRSI',
         'oipShowVwapOI', 'oipShowVwapInt', 'oipShowPremium'
     ].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => {
             oipUpdateEmaVisibility();
-            if (id === 'oipShowVwapInt' && oipCombinedVwapSeries) {
-                oipCombinedVwapSeries.applyOptions({ visible: document.getElementById(id).checked });
-            }
             if (oipFullCandles) oipRefreshLocalView('combined', false, oipReplayIndex);
         });
     });
@@ -1329,51 +1338,61 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
     const refPrice = centerPrice || oipCurrentPrice || 25000;
     const step = oipStrikeStep || 50;
     const atm = Math.round(refPrice / step) * step;
-    if (sortedStrikes.length > 20) {
+    if (sortedStrikes.length > 30) {
         let atmIndex = sortedStrikes.findIndex(s => s >= refPrice);
         if (atmIndex === -1) atmIndex = sortedStrikes.length - 1;
-        let start = Math.max(0, atmIndex - 10);
-        let end = Math.min(sortedStrikes.length, start + 20);
-        if (end === sortedStrikes.length) start = Math.max(0, end - 20);
+        let start = Math.max(0, atmIndex - 15);
+        let end = Math.min(sortedStrikes.length, start + 30);
+        if (end === sortedStrikes.length) start = Math.max(0, end - 30);
         sortedStrikes = sortedStrikes.slice(start, end);
     }
     let opts = '';
     if (sortedStrikes.length > 0) {
         sortedStrikes.forEach(s => { opts += `<option value="${s}">${s}</option>`; });
     } else {
-        for (let i = -10; i <= 10; i++) {
+        for (let i = -15; i <= 15; i++) {
             const s = atm + (i * step);
             if (s <= 0) continue;
             opts += `<option value="${s}">${s}</option>`;
         }
     }
-    const currentVal = oipElems.customStrikeDropdown.value;
-    oipElems.customStrikeDropdown.innerHTML = opts;
-    
-    let finalStrike = atm;
-    const atmStr = atm.toString();
 
-    // Check if atm exists in current options
-    const hasAtm = opts.includes(`value="${atmStr}"`);
+    // CE & PE defaults: 100 pts from nearest round-hundred ATM
+    const availStrikes = sortedStrikes.length > 0
+        ? sortedStrikes
+        : Array.from({ length: 31 }, (_, i) => atm + (i - 15) * step);
+    const refBase = Math.round(refPrice / 100) * 100;
+    const ceDefaultArr = availStrikes.filter(s => s >= refBase + 100 && s % 100 === 0);
+    const peDefaultArr = availStrikes.filter(s => s <= refBase - 100 && s % 100 === 0);
+    const ceDefault = ceDefaultArr.length ? Math.min(...ceDefaultArr) : atm;
+    const peDefault = peDefaultArr.length ? Math.max(...peDefaultArr) : atm;
 
-    if (centerPrice && !oipCustomStrikeSetOnLoad) {
-        if (hasAtm) {
-            oipElems.customStrikeDropdown.value = atmStr;
+    function syncDropdown(el, prevVal, defaultVal = atm) {
+        if (!el) return;
+        el.innerHTML = opts;
+        const defStr = String(defaultVal);
+        if (centerPrice && !oipCustomStrikeSetOnLoad) {
+            el.value = defStr;
+            if (!opts.includes(`value="${defStr}"`)) el.value = String(atm);
+        } else if (prevVal && opts.includes(`value="${prevVal}"`)) {
+            el.value = prevVal;
         } else {
-            // Fallback to first available if ATM not found in slice
-            oipElems.customStrikeDropdown.selectedIndex = Math.floor(sortedStrikes.length / 2);
+            el.value = defStr;
+            if (!opts.includes(`value="${defStr}"`)) el.value = String(atm);
         }
-        oipCustomStrikeSetOnLoad = true;
-        finalStrike = parseFloat(oipElems.customStrikeDropdown.value);
-    } else if (currentVal && opts.includes(`value="${currentVal}"`)) {
-        oipElems.customStrikeDropdown.value = currentVal;
-        finalStrike = parseFloat(currentVal);
-    } else {
-        if (hasAtm) oipElems.customStrikeDropdown.value = atmStr;
-        else oipElems.customStrikeDropdown.selectedIndex = Math.floor(sortedStrikes.length / 2);
-        finalStrike = parseFloat(oipElems.customStrikeDropdown.value);
     }
-    return finalStrike;
+
+    const prevCustom = oipElems.customStrikeDropdown.value;
+    const prevCE = oipElems.ceStrikeDropdown?.value;
+    const prevPE = oipElems.peStrikeDropdown?.value;
+
+    syncDropdown(oipElems.customStrikeDropdown, prevCustom);
+    syncDropdown(oipElems.ceStrikeDropdown, prevCE, peDefault);
+    syncDropdown(oipElems.peStrikeDropdown, prevPE, ceDefault);
+
+    if (centerPrice && !oipCustomStrikeSetOnLoad) oipCustomStrikeSetOnLoad = true;
+
+    return parseFloat(oipElems.customStrikeDropdown.value) || atm;
 }
 
 function oipRenderDropdown(filter, list) {
@@ -1397,4 +1416,138 @@ async function oipSelectSymbol(s) {
     if (oipElems.symbolInput) oipElems.symbolInput.value = s;
     oipCustomStrikeSetOnLoad = false;
     oipResetReplay();
+}
+
+// ── 2nd candle box shared helpers ─────────────────────────────────────────────
+
+function _oipColorAlpha(color, alpha) {
+    if (color.startsWith('#')) {
+        const r = parseInt(color.slice(1, 3), 16);
+        const g = parseInt(color.slice(3, 5), 16);
+        const b = parseInt(color.slice(5, 7), 16);
+        return `rgba(${r},${g},${b},${alpha})`;
+    }
+    const m = color.match(/\d+/g);
+    if (m && m.length >= 3) return `rgba(${m[0]},${m[1]},${m[2]},${alpha})`;
+    return color;
+}
+
+function _oipDrawCandleBox(chart, hi, lo, times, color) {
+    const fillCol   = _oipColorAlpha(color, 0.10);
+    const borderCol = _oipColorAlpha(color, 0.65);
+    const shared = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
+
+    const fill = chart.addBaselineSeries({
+        baseValue: { type: 'price', price: lo },
+        topFillColor1: fillCol, topFillColor2: fillCol, topLineColor: 'transparent',
+        bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
+        lineWidth: 1, ...shared
+    });
+    fill.setData(times.map(t => ({ time: t, value: hi })));
+
+    const top = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+    top.setData(times.map(t => ({ time: t, value: hi })));
+
+    const bottom = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+    bottom.setData(times.map(t => ({ time: t, value: lo })));
+
+    return { chart, fill, top, bottom };
+}
+
+function _oipRemoveBoxSeries(box) {
+    if (!box) return;
+    ['fill', 'top', 'bottom'].forEach(k => {
+        if (box[k]) { try { box.chart.removeSeries(box[k]); } catch (_) {} }
+    });
+}
+
+function _oipGroupByDay(candles) {
+    if (!candles || !candles.length) return {};
+    const dayMap = {};
+    candles.forEach(c => {
+        const d = new Date(c.time * 1000);
+        const ds = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        if (!dayMap[ds]) dayMap[ds] = [];
+        dayMap[ds].push(c);
+    });
+    Object.keys(dayMap).forEach(k => dayMap[k].sort((a, b) => a.time - b.time));
+    return dayMap;
+}
+
+function _oipH(c) { return parseFloat(c.high ?? c.h); }
+function _oipL(c) { return parseFloat(c.low  ?? c.l); }
+
+// ── 2nd 30-second candle box — all days ──────────────────────────────────────
+let oip2ndCandle30sBox = { oi: [], ce: [], pe: [] };
+
+function oipDraw2ndCandle30sBox(candles) {
+    oip2ndCandle30sBox.oi.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.oi = [];
+    oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
+    oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
+
+    if (oipInterval !== '30second' || !candles || !candles.length) return;
+
+    function _draw30sAllDays(chart, src) {
+        const boxes = [];
+        const map = _oipGroupByDay(src);
+        Object.keys(map).sort().forEach(dk => {
+            const day = map[dk];
+            if (day.length < 2) return;
+            const c2 = day[1];
+            const hi = _oipH(c2), lo = _oipL(c2);
+            if (hi === lo) return;
+            const times = day.filter(c => c.time >= c2.time).map(c => c.time);
+            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#FFC800'));
+        });
+        return boxes;
+    }
+
+    if (oipOIChart)
+        oip2ndCandle30sBox.oi = _draw30sAllDays(oipOIChart, candles);
+
+    if (oipCEChart?.chart && oipOptionData)
+        oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+
+    if (oipPEChart?.chart && oipOptionData)
+        oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+}
+
+// ── 2nd 5-minute candle box (09:20–09:25) — all days, 1m/2m/3m/5m ───────────
+let oip2nd5mCandleBox = { oi: [], ce: [], pe: [] };
+
+function oipDraw2nd5mCandleBox(candles) {
+    oip2nd5mCandleBox.oi.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.oi = [];
+    oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
+    oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
+
+    const allowedIntervals = ['minute', '2minute', '3minute', '5minute'];
+    if (!allowedIntervals.includes(oipInterval) || !candles || !candles.length) return;
+
+    function _draw5mAllDays(chart, src) {
+        const boxes = [];
+        const map = _oipGroupByDay(src);
+        Object.keys(map).sort().forEach(dk => {
+            const day = map[dk];
+            const w = day.filter(c => {
+                const d = new Date(c.time * 1000);
+                return d.getUTCHours() === 9 && d.getUTCMinutes() >= 20 && d.getUTCMinutes() < 25;
+            });
+            if (!w.length) return;
+            const hi = Math.max(...w.map(_oipH));
+            const lo = Math.min(...w.map(_oipL));
+            if (hi === lo) return;
+            const times = day.filter(c => c.time >= w[0].time).map(c => c.time);
+            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#00D2FF'));
+        });
+        return boxes;
+    }
+
+    if (oipOIChart)
+        oip2nd5mCandleBox.oi = _draw5mAllDays(oipOIChart, candles);
+
+    if (oipCEChart?.chart && oipOptionData)
+        oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+
+    if (oipPEChart?.chart && oipOptionData)
+        oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
 }

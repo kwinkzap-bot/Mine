@@ -1,5 +1,5 @@
 //@version=5
-indicator("CPR", "Mine CPR", overlay=true, max_lines_count=500, max_labels_count=500)
+indicator("CPR", "Mine CPR", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=500)
 //FLAG
 sp = input(true, title="Show CPR")
 fsd = input(false, title="Show Future CPR")
@@ -622,3 +622,32 @@ d = plot(showPivots and not na(mtc) ? mtc : na,
 fill(c, d, color=showPivots ? color.new(color.yellow, mcprTransp) : na)
 
 //===============================================================================================================================
+
+// ─── 2nd 5-min Candle Box ─────────────────────────────────────────────────────
+show2ndCandleBox = input.bool(true,  "Show 2nd 5-min Candle Box",   group = "2nd 5-min Candle")
+box2FillColor    = input.color(color.new(#00D2FF, 90), "Fill Color",   group = "2nd 5-min Candle")
+box2BorderColor  = input.color(#00D2FF, "Border Color", group = "2nd 5-min Candle")
+
+// Only visible on 5-min and below timeframes
+is_5min_or_below = timeframe.isintraday and timeframe.multiplier <= 5
+
+// Fetch second 5-min candle data (5-min context)
+m5_is_2nd = request.security(syminfo.tickerid, "5", ta.barssince(ta.change(time("D"))) == 1, lookahead = barmerge.lookahead_off)
+m5_high2  = request.security(syminfo.tickerid, "5", high, lookahead = barmerge.lookahead_off)
+m5_low2   = request.security(syminfo.tickerid, "5", low,  lookahead = barmerge.lookahead_off)
+m5_time2  = request.security(syminfo.tickerid, "5", time, lookahead = barmerge.lookahead_off)
+
+var box[] boxes2nd    = array.new_box()
+var int   last2ndTime = na
+
+if show2ndCandleBox and is_5min_or_below and m5_is_2nd
+    if na(last2ndTime) or last2ndTime != m5_time2
+        // New day's second 5-min candle — box extends to end of day
+        b = box.new(m5_time2, m5_high2, time_close("D"), m5_low2, border_color = box2BorderColor, bgcolor = box2FillColor, xloc = xloc.bar_time)
+        array.push(boxes2nd, b)
+        last2ndTime := m5_time2
+    else if array.size(boxes2nd) > 0
+        // Live update while the candle is forming
+        b = array.last(boxes2nd)
+        box.set_top(b, m5_high2)
+        box.set_bottom(b, m5_low2)

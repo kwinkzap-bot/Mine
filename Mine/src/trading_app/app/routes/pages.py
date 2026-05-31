@@ -195,11 +195,3 @@ def pwa_manifest():
     return send_from_directory(current_app.static_folder, 'manifest.json',
                                mimetype='application/manifest+json')
 
-@pages_bp.route('/sw.js')
-def service_worker():
-    """Minimal passthrough service worker — required by Chrome to show the install button."""
-    resp = send_from_directory(current_app.static_folder, 'sw.js',
-                               mimetype='application/javascript')
-    resp.headers['Cache-Control'] = 'no-cache'
-    resp.headers['Service-Worker-Allowed'] = '/'
-    return resp

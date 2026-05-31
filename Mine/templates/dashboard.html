@@ -12,7 +12,6 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 10px 14px 0;
     border-bottom: 1px solid var(--oip-border, #e2e8f0);
     background: var(--oip-header-bg, #fff);
     position: sticky;
@@ -295,8 +294,7 @@
                     <div class="oip-prem-sep"></div>
                     <div class="oip-prem-group">
                         <label class="oip-checkbox"><input type="checkbox" id="oipShowVwapOI"><span>VWAP</span></label>
-                        <label class="oip-checkbox"><input type="checkbox" id="oipShowCpr" checked><span>CPR</span></label>
-                        <label class="oip-checkbox"><input type="checkbox" id="oipShowSignals" checked><span>Sig</span></label>
+                        <label class="oip-checkbox"><input type="checkbox" id="oipShowCpr"><span>CPR</span></label>
                     </div>
                     <div class="oip-prem-sep"></div>
                     <div class="oip-prem-group oip-ema-group">
@@ -308,6 +306,10 @@
                         <label class="oip-ema-chk"><input type="checkbox" id="oipShowEma200" checked><span>200</span></label>
                     </div>
                     <div class="oip-prem-sep"></div>
+                    <div class="oip-mode-group oip-mode-group--xs">
+                        <label class="oip-radio"><input type="radio" name="oipMode" value="total"><span>OI</span></label>
+                        <label class="oip-radio"><input type="radio" name="oipMode" value="change" checked><span>CHG</span></label>
+                    </div>
                     <div class="oip-prem-sep"></div>
                     <div class="oip-prem-group">
                         <button id="oipToggleReplayToolbar" class="oip-btn oip-btn--xs" style="background:#fffbeb;color:#854d0e;border-color:#fef08a;display:flex;align-items:center;gap:4px;">
@@ -318,6 +320,7 @@
                     <input type="checkbox" id="oipShowRSI" style="display:none">
                 </div>
             </div>
+
             <div id="ivCrushAlert" class="oip-alert-banner hidden">
                 <div class="oip-alert-content">
                     <span class="oip-alert-icon">⚠️</span>
@@ -364,10 +367,11 @@
 
         <div class="oip-chart-wrap" id="oipChartWrap">
             <div id="oipCandleChart"></div>
+            <canvas id="oipOICanvas"></canvas>
             <div id="oipTooltip" class="oip-tooltip hidden"></div>
         </div>
 
-        <div style="margin-top:20px;border-top:1px solid var(--oip-border);padding-top:10px;">
+        <div style="border-top:1px solid var(--oip-border);">
             <div class="oip-header oip-header--compact">
                 <input type="hidden" id="oipIntrinsicView" value="combined">
                 <input type="hidden" id="oipStep"       value="50">
@@ -383,10 +387,18 @@
                             <label class="oip-checkbox"><input type="checkbox" id="oipShowPremium" checked><span>Prem.</span></label>
                         </div>
                         <div class="oip-prem-sep" style="display:none"></div>
+                        <input type="checkbox" id="oipFirst5mATM" style="display:none">
+                        <input type="checkbox" id="oipCustomStrikeCheck" checked style="display:none">
                         <div class="oip-prem-group">
-                            <label class="oip-checkbox"><input type="checkbox" id="oipFirst5mATM"><span>Prem. Str.</span></label>
-                            <label class="oip-checkbox"><input type="checkbox" id="oipCustomStrikeCheck" checked><span>Custom</span></label>
+                            <span class="oip-label"></span>
+                            <select id="oipStrikeMode" class="oip-select oip-select--xs" title="Strike selection mode">
+                                <option value="atm">Prem. Str.</option>
+                                <option value="custom">Custom</option>
+                                <option value="ce_pe" selected>CE &amp; PE</option>
+                            </select>
                             <select id="oipCustomStrikeDropdown" class="oip-select oip-select--xs"></select>
+                            <select id="oipCEStrikeDropdown" class="oip-select oip-select--xs" style="display:none" title="CE Strike"></select>
+                            <select id="oipPEStrikeDropdown" class="oip-select oip-select--xs" style="display:none" title="PE Strike"></select>
                         </div>
                         <div class="oip-prem-sep"></div>
                         <div class="oip-prem-group">
@@ -402,29 +414,27 @@
                 </div>
             </div>
 
-            <div class="oip-chart-wrap" id="oipIntrinsicChartWrap">
-                <div class="oip-chart-legend">
-                    <div class="oip-legend-item" style="color:#4f46e5;border-right:1px solid #e2e8f0;padding-right:10px;margin-right:5px;">STRIKE: <span id="oipLegendStrike">--</span></div>
-                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#1b9981;"></span> CE: <span id="oipLegendCE">--</span></div>
-                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#8b5cf6;"></span> PE: <span id="oipLegendPE">--</span></div>
-                    <div class="oip-legend-item" style="margin-left:auto;color:#0f172a;font-weight:800;"><span id="oipLegendSum">SUM: --</span></div>
-                </div>
-                <div id="oipIntrinsicChart"></div>
-            </div>
-
             <div class="oip-charts-row">
                 <div class="oip-chart-wrap" id="oipCEChartWrap">
                     <div class="oip-chart-legend">
-                        <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#1b9981;"></span> <span id="oipLegendStrikeCE">--</span> CE: <span id="oipLegendCEOnly">--</span></div>
+                        <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#1b9981;"></span> CE ONLY: <span id="oipLegendCEOnly">--</span></div>
                     </div>
                     <div id="oipCEChart"></div>
                 </div>
                 <div class="oip-chart-wrap" id="oipPEChartWrap">
                     <div class="oip-chart-legend">
-                        <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#8b5cf6;"></span> <span id="oipLegendStrikePE">--</span> PE: <span id="oipLegendPEOnly">--</span></div>
+                        <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#8b5cf6;"></span> PE ONLY: <span id="oipLegendPEOnly">--</span></div>
                     </div>
                     <div id="oipPEChart"></div>
                 </div>
+            </div>
+
+            <div class="oip-chart-wrap" id="oipIntrinsicChartWrap">
+                <div class="oip-chart-legend">
+                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#1b9981;"></span> CE: <span id="oipLegendCE">--</span></div>
+                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#8b5cf6;"></span> PE: <span id="oipLegendPE">--</span></div>
+                </div>
+                <div id="oipIntrinsicChart"></div>
             </div>
         </div>
     </div>
@@ -465,5 +475,5 @@ window.addEventListener('hashchange', () => {
 });
 </script>
 <script src="{{ url_for('static', filename='js/backtest.js') }}"></script>
-<script src="{{ url_for('static', filename='js/oi_replay.js') }}?v=1.1"></script>
+<script src="{{ url_for('static', filename='js/oi_replay.js') }}?v=2.4"></script>
 {% endblock %}

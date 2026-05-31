@@ -38,14 +38,14 @@ window.oipInitSecondaryCharts = function() {
         // Initialize Individual CE Chart
         oipCEChart = TradingViewChart.create({
             containerId: 'oipCEChart', data: [], type: 'CE',
-            timeframe: oipInterval, options: { height: 220 }
+            timeframe: oipInterval, options: { height: 310 }
         });
         oipCESeries = oipCEChart.series;
 
         // Initialize Individual PE Chart
         oipPEChart = TradingViewChart.create({
             containerId: 'oipPEChart', data: [], type: 'PE',
-            timeframe: oipInterval, options: { height: 220 }
+            timeframe: oipInterval, options: { height: 310 }
         });
         oipPESeries = oipPEChart.series;
 
@@ -70,7 +70,6 @@ window.oipInitSecondaryCharts = function() {
             document.getElementById('oipIntrinsicChart')?.addEventListener(e, () => setActive('intrinsic'), {passive: true});
             document.getElementById('oipCEChart')?.addEventListener(e, () => setActive('ce'), {passive: true});
             document.getElementById('oipPEChart')?.addEventListener(e, () => setActive('pe'), {passive: true});
-            document.getElementById('oipCombinedChart')?.addEventListener(e, () => setActive('combined'), {passive: true});
         });
 
         const syncRange = (range, targetCharts) => {
@@ -85,49 +84,25 @@ window.oipInitSecondaryCharts = function() {
         if (oipOIChart && oipIntrinsicChart && oipIntrinsicChart.chart) {
             oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
                 if (activeChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return; 
-                syncRange(range, [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart, oipCombinedChart?.chart]);
+                syncRange(range, [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart]);
             });
             
             oipIntrinsicChart.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-                if (activeChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady || !oipCombChartReady) return; 
-                syncRange(range, [oipOIChart, oipCEChart?.chart, oipPEChart?.chart, oipCombinedChart?.chart]);
+                if (activeChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(range, [oipOIChart, oipCEChart?.chart, oipPEChart?.chart]);
             });
 
             oipCEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-                if (activeChartId !== 'ce' || !oipOIChartReady || !oipIntChartReady || !oipCombChartReady) return; 
-                syncRange(range, [oipOIChart, oipIntrinsicChart?.chart, oipPEChart?.chart, oipCombinedChart?.chart]);
+                if (activeChartId !== 'ce' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(range, [oipOIChart, oipIntrinsicChart?.chart, oipPEChart?.chart]);
             });
 
             oipPEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-                if (activeChartId !== 'pe' || !oipOIChartReady || !oipIntChartReady || !oipCombChartReady) return; 
-                syncRange(range, [oipOIChart, oipIntrinsicChart?.chart, oipCEChart?.chart, oipCombinedChart?.chart]);
+                if (activeChartId !== 'pe' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(range, [oipOIChart, oipIntrinsicChart?.chart, oipCEChart?.chart]);
             });
         }
 
-        const elComb = document.getElementById('oipCombinedChart');
-        if (elComb && typeof TradingViewChart !== 'undefined') {
-            oipCombinedChart = TradingViewChart.create({
-                containerId: 'oipCombinedChart', data: [], type: 'LINE',
-                lineColor: '#6366f1', timeframe: oipInterval, options: { height: 230 }
-            });
-            oipCombinedSeries = oipCombinedChart.series;
-            
-            // Add Combined VWAP series
-            oipCombinedVwapSeries = oipCombinedChart.chart.addLineSeries({
-                color: '#94a3b8', lineWidth: 1, lineStyle: 3, title: 'VWAP',
-                priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
-            });
-            oipCombinedVwapSeries.applyOptions({ visible: document.getElementById('oipShowVwapInt')?.checked });
-
-            // Sync time with other charts
-            if (oipCombinedChart.chart) {
-                oipCombinedChart.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-                    if (activeChartId !== 'combined' || !oipOIChartReady || !oipIntChartReady || !oipCombChartReady) return;
-                    syncRange(range, [oipOIChart, oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart]);
-                });
-            }
-        }
-        
         // --- Finalize Synchronization (All charts ready) ---
         // Add ResizeObservers for all secondary charts
         const syncSize = (chart, wrap) => {
@@ -147,18 +122,12 @@ window.oipInitSecondaryCharts = function() {
             const wrap = document.getElementById('oipPEChartWrap');
             if (wrap) new ResizeObserver(() => syncSize(oipPEChart.chart, wrap)).observe(wrap);
         }
-        if (oipCombinedChart?.chart) {
-            const wrap = document.getElementById('oipCombinedChartWrap');
-            if (wrap) new ResizeObserver(() => syncSize(oipCombinedChart.chart, wrap)).observe(wrap);
-        }
-
         if (oipOIChart) {
             oipOIChart.subscribeCrosshairMove(param => {
                 if (activeChartId !== 'index') return;
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipOIChart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipOIChart, oipCEChart.chart, param, oipCESeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipOIChart, oipPEChart.chart, param, oipPESeries);
-                if (oipCombinedChart?.chart && oipCombinedSeries) syncCrosshair(oipOIChart, oipCombinedChart.chart, param, oipCombinedSeries);
             });
         }
         if (oipIntrinsicChart?.chart) {
@@ -167,7 +136,6 @@ window.oipInitSecondaryCharts = function() {
                 if (oipOIChart && oipOISeries) syncCrosshair(oipIntrinsicChart.chart, oipOIChart, param, oipOISeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipIntrinsicChart.chart, oipCEChart.chart, param, oipCESeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipIntrinsicChart.chart, oipPEChart.chart, param, oipPESeries);
-                if (oipCombinedChart?.chart && oipCombinedSeries) syncCrosshair(oipIntrinsicChart.chart, oipCombinedChart.chart, param, oipCombinedSeries);
             });
         }
         if (oipCEChart?.chart) {
@@ -176,7 +144,6 @@ window.oipInitSecondaryCharts = function() {
                 if (oipOIChart && oipOISeries) syncCrosshair(oipCEChart.chart, oipOIChart, param, oipOISeries);
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipCEChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipCEChart.chart, oipPEChart.chart, param, oipPESeries);
-                if (oipCombinedChart?.chart && oipCombinedSeries) syncCrosshair(oipCEChart.chart, oipCombinedChart.chart, param, oipCombinedSeries);
             });
         }
         if (oipPEChart?.chart) {
@@ -185,16 +152,6 @@ window.oipInitSecondaryCharts = function() {
                 if (oipOIChart && oipOISeries) syncCrosshair(oipPEChart.chart, oipOIChart, param, oipOISeries);
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipPEChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipPEChart.chart, oipCEChart.chart, param, oipCESeries);
-                if (oipCombinedChart?.chart && oipCombinedSeries) syncCrosshair(oipPEChart.chart, oipCombinedChart.chart, param, oipCombinedSeries);
-            });
-        }
-        if (oipCombinedChart?.chart) {
-            oipCombinedChart.chart.subscribeCrosshairMove(param => {
-                if (activeChartId !== 'combined') return;
-                if (oipOIChart && oipOISeries) syncCrosshair(oipCombinedChart.chart, oipOIChart, param, oipOISeries);
-                if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipCombinedChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
-                if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipCombinedChart.chart, oipCEChart.chart, param, oipCESeries);
-                if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipCombinedChart.chart, oipPEChart.chart, param, oipPESeries);
             });
         }
     }

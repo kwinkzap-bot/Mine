@@ -555,12 +555,12 @@
 .oip-charts-row {
     display: flex;
     gap: 10px;
-    margin-top: 10px;
     width: 100%;
+    margin-bottom: 10px;
 }
 
 .oip-charts-row .oip-chart-wrap {
-    height: 220px;
+    height: 310px;
     flex: 1;
     min-width: 0;
 }

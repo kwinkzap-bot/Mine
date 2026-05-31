@@ -9,9 +9,6 @@
 let oipOIChart = null;
 let oipOISeries = null;
 let oipIntrinsicChart = null;
-let oipCombinedChart = null;
-let oipCombinedSeries = null;
-let oipCombinedSlSeries = null;
 let oipIntrinsicSeries = null;
 let oipIntrinsicPeSeries = null;
 let oipOIData = null;
@@ -19,7 +16,6 @@ let oipOptionData = null;
 let oipVwapSeries = null;
 let oipVwapIntSeries = null;
 let oipVwapIntPeSeries = null;
-let oipCombinedVwapSeries = null;
 let oipCprSeriesObj = null;
 let oipEma9Series = null, oipEma20Series = null, oipEma50Series = null, oipEma100Series = null, oipEma200Series = null;
 let oipCEChart = null;
@@ -109,8 +105,6 @@ function updateOIProfileTheme(themeName) {
     if (oipIntrinsicChart && oipIntrinsicChart.chart) applyToChart(oipIntrinsicChart.chart);
     if (oipCEChart && oipCEChart.chart) applyToChart(oipCEChart.chart);
     if (oipPEChart && oipPEChart.chart) applyToChart(oipPEChart.chart);
-    if (oipCombinedChart && oipCombinedChart.chart) applyToChart(oipCombinedChart.chart);
-
     // 6. Force immediate redraw of custom Canvas elements
     oipRequestDraw();
 }
@@ -144,7 +138,6 @@ let oipOIChartReady = false;   // true after OI chart receives first data
 let oipIntChartReady = false;  // true after Intrinsic chart receives first data
 let oipCEChartReady = false;   // true after CE chart receives first data
 let oipPEChartReady = false;   // true after PE chart receives first data
-let oipCombChartReady = false; // true after Combined chart receives first data
 let oipFutureWhitespace = []; // Stores whitespace bars to extend timeline for all charts
 let oipAllSymbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTY MIDCAP 150', 'NIFTY AUTO', 'NIFTY Smallcap 100', 'NIFTY FMCG', 'NIFTY METAL', 'NIFTY PHARMA', 'NIFTY PSU BANK', 'NIFTY IT'];
 
@@ -234,9 +227,6 @@ function oipInitElems() {
     oipElems.showEma50 = document.getElementById('oipShowEma50');
     oipElems.showEma100 = document.getElementById('oipShowEma100');
     oipElems.exitAll = document.getElementById('oipExitAll');
-    oipElems.legendSum = document.getElementById('oipLegendSum');
-    oipElems.combStrikeDisplay = document.getElementById('oipCombinedStrikeDisplay');
-    oipElems.combSL = document.getElementById('oipCombinedSL');
     oipElems.days = document.getElementById('oipDays');
     oipElems.startDate = document.getElementById('oipStartDate');
     oipElems.endDate = document.getElementById('oipEndDate');
@@ -910,7 +900,6 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         // Always reset readiness flags to prevent sync jumps between old and new data updates
         oipOIChartReady = false;
         oipIntChartReady = false;
-        oipCombChartReady = false;
 
         const view = oipElems.view?.value || 'combined';
 
@@ -1000,6 +989,9 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
             if (view === 'index') {
                 if (oipElems.itmCE) if (oipElems.itmCE) oipElems.itmCE.textContent = 'NIFTY';
                 if (oipElems.itmPE) if (oipElems.itmPE) oipElems.itmPE.textContent = 'Index';
+                // No option data in index view — draw OI-chart boxes only
+                oipDraw2ndCandle30sBox(validCandles);
+                oipDraw2nd5mCandleBox(validCandles);
             } else {
                 const ceStrike = data.intrinsic?.itm_ce_strike, peStrike = data.intrinsic?.itm_pe_strike;
                 oipCurrentCEStrike = ceStrike; oipCurrentPEStrike = peStrike;
@@ -1015,6 +1007,9 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                         if (oipElems.itmPE) if (oipElems.itmPE) oipElems.itmPE.textContent = `${peStrike} PE`;
                     }
                 }
+                // Draw boxes after oipOptionData is refreshed so CE/PE charts use the new strike's candles
+                oipDraw2ndCandle30sBox(validCandles);
+                oipDraw2nd5mCandleBox(validCandles);
             }
 
             oipFullCandles = validCandles;
@@ -1308,32 +1303,6 @@ function oipIsMarketOpen() {
  * Calculates the sum of CE and PE premiums for Straddle/Strangle tracking.
  * Aligns data by timestamp.
  */
-function oipCalculateCombinedPremium(ceData, peData) {
-    if (!ceData || !peData || ceData.length === 0 || peData.length === 0) return [];
-
-    // Map PE data by time for fast lookup (handling both raw and formatted data)
-    const peMap = new Map();
-    peData.forEach(c => {
-        const t = c.time || (c.date ? Math.floor(new Date(c.date).getTime() / 1000) : null);
-        if (t) peMap.set(t, c.close || c.c);
-    });
-
-    const combined = [];
-    ceData.forEach(c => {
-        const t = c.time || (c.date ? Math.floor(new Date(c.date).getTime() / 1000) : null);
-        if (t && peMap.has(t)) {
-            const cePrice = c.close || c.c;
-            const pePrice = peMap.get(t);
-            combined.push({
-                time: t,
-                value: parseFloat((cePrice + pePrice).toFixed(2))
-            });
-        }
-    });
-
-    return combined.sort((a, b) => a.time - b.time);
-}
-
 function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
     if (!oipOIData || !oipIntrinsicChart) return;
 
@@ -1440,66 +1409,6 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             oipIntrinsicChart.update(null, peData, resetZoom);
             if (oipVwapIntSeries) oipVwapIntSeries.setData([]);
             if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(peVwapData);
-        }
-
-        // Update NEW Combined Premium Chart
-        if (oipCombinedChart && ceRaw.length > 0 && peRaw.length > 0) {
-            const sumData = oipCalculateCombinedPremium(ceRaw, peRaw);
-
-            // Align combined data to Master Timeline
-            const sumDataMap = new Map();
-            let firstSumValue = null;
-            sumData.forEach(c => {
-                const t = getSec(c.time || c.date);
-                if (t) {
-                    sumDataMap.set(t, c);
-                    if (firstSumValue === null) firstSumValue = c.value;
-                }
-            });
-            const sumAnchor = firstSumValue || 100;
-
-            const sumAlignedRaw = masterData.map((mc, index) => {
-                const sCandle = sumDataMap.get(mc.time);
-                if (sCandle) return { time: mc.time, value: sCandle.value };
-
-                if (index === 0) return { time: mc.time, value: sumAnchor, color: 'transparent' };
-                return { time: mc.time };
-            });
-            const sumAligned = sumAlignedRaw;
-
-            oipCombinedChart.update(sumAligned, null, resetZoom);
-            oipCombChartReady = true;
-
-            // Update the UI legend immediately
-            if (sumData && sumData.length > 0) {
-                const strike = oipElems.customStrikeDropdown?.value || '--';
-                const lastSum = sumData[sumData.length - 1].value;
-                if (document.getElementById('oipCombinedStrikeDisplay')) {
-                    document.getElementById('oipCombinedStrikeDisplay').textContent = `${strike} CE + PE`;
-                }
-                if (document.getElementById('oipLegendSum')) {
-                    document.getElementById('oipLegendSum').textContent = `SUM: ${lastSum.toFixed(2)}`;
-                }
-            }
-
-            // Combined VWAP — reuse ceVwapData/peVwapData already computed above (no extra O(n) passes).
-            if (oipCombinedVwapSeries) {
-                const combinedVwapData = [];
-                const peMap = new Map(peVwapData.map(d => [d.time, d.value]));
-                ceVwapData.forEach(ceV => {
-                    const peVal = peMap.get(ceV.time);
-                    if (peVal !== undefined) combinedVwapData.push({ time: ceV.time, value: ceV.value + peVal });
-                });
-                oipCombinedVwapSeries.setData(combinedVwapData);
-            }
-            // Update Sum & Strike Legend
-            if (oipElems.legendSum && sumData.length > 0) {
-                oipElems.legendSum.innerText = `SUM: ₹${sumData[sumData.length - 1].value.toFixed(1)}`;
-            }
-            if (oipElems.combStrikeDisplay) {
-                const strike = oipElems.customStrikeDropdown?.value || '--';
-                oipElems.combStrikeDisplay.innerText = `STRIKE: ${strike}`;
-            }
         }
 
         oipIntChartReady = true;
@@ -1674,6 +1583,151 @@ function oipDrawCpr(candles) {
             series.setData(day.times.map(t => ({ time: t, value: box.max })));
         });
     });
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+function _oipColorAlpha(color, alpha) {
+    if (color.startsWith('#')) {
+        const r = parseInt(color.slice(1, 3), 16);
+        const g = parseInt(color.slice(3, 5), 16);
+        const b = parseInt(color.slice(5, 7), 16);
+        return `rgba(${r},${g},${b},${alpha})`;
+    }
+    const m = color.match(/\d+/g);
+    if (m && m.length >= 3) return `rgba(${m[0]},${m[1]},${m[2]},${alpha})`;
+    return color;
+}
+
+// Draw a 1px-border + fill box on the given LightweightCharts instance.
+// Returns { chart, fill, top, bottom } for later cleanup.
+function _oipDrawCandleBox(chart, hi, lo, times, color) {
+    const fillCol   = _oipColorAlpha(color, 0.10);
+    const borderCol = _oipColorAlpha(color, 0.65);
+    const shared = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
+
+    const fill = chart.addBaselineSeries({
+        baseValue: { type: 'price', price: lo },
+        topFillColor1: fillCol, topFillColor2: fillCol, topLineColor: 'transparent',
+        bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
+        lineWidth: 1, ...shared
+    });
+    fill.setData(times.map(t => ({ time: t, value: hi })));
+
+    const top = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+    top.setData(times.map(t => ({ time: t, value: hi })));
+
+    const bottom = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+    bottom.setData(times.map(t => ({ time: t, value: lo })));
+
+    return { chart, fill, top, bottom };
+}
+
+function _oipRemoveBoxSeries(box) {
+    if (!box) return;
+    ['fill', 'top', 'bottom'].forEach(k => {
+        if (box[k]) { try { box.chart.removeSeries(box[k]); } catch (_) {} }
+    });
+}
+
+// Group candles by Fake-IST date → returns { dateKey: [sorted candles] } for all days.
+function _oipGroupByDay(candles) {
+    if (!candles || !candles.length) return {};
+    const dayMap = {};
+    candles.forEach(c => {
+        const d = new Date(c.time * 1000);
+        const ds = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        if (!dayMap[ds]) dayMap[ds] = [];
+        dayMap[ds].push(c);
+    });
+    Object.keys(dayMap).forEach(k => dayMap[k].sort((a, b) => a.time - b.time));
+    return dayMap;
+}
+
+// Group candles by Fake-IST date and return today's sorted candles.
+function _oipTodayCandles(candles) {
+    const map = _oipGroupByDay(candles);
+    const key = Object.keys(map).sort().pop();
+    return key ? map[key] : [];
+}
+
+// Normalise high/low from either { high, low } or { h, l } candle shapes.
+function _oipH(c) { return parseFloat(c.high ?? c.h); }
+function _oipL(c) { return parseFloat(c.low  ?? c.l); }
+
+// ── 2nd 30-second candle box — all days ──────────────────────────────────────
+let oip2ndCandle30sBox = { oi: [], ce: [], pe: [] };
+
+function oipDraw2ndCandle30sBox(candles) {
+    oip2ndCandle30sBox.oi.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.oi = [];
+    oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
+    oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
+
+    if (oipInterval !== '30second' || !candles || !candles.length) return;
+
+    function _draw30sAllDays(chart, src) {
+        const boxes = [];
+        const map = _oipGroupByDay(src);
+        Object.keys(map).sort().forEach(dk => {
+            const day = map[dk];
+            if (day.length < 2) return;
+            const c2 = day[1];
+            const hi = _oipH(c2), lo = _oipL(c2);
+            if (hi === lo) return;
+            const times = day.filter(c => c.time >= c2.time).map(c => c.time);
+            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#FFC800'));
+        });
+        return boxes;
+    }
+
+    if (oipOIChart)
+        oip2ndCandle30sBox.oi = _draw30sAllDays(oipOIChart, candles);
+
+    if (oipCEChart?.chart && oipOptionData)
+        oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+
+    if (oipPEChart?.chart && oipOptionData)
+        oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+}
+
+// ── 2nd 5-minute candle box (09:20–09:25) — all days, 1m/2m/3m/5m ───────────
+let oip2nd5mCandleBox = { oi: [], ce: [], pe: [] };
+
+function oipDraw2nd5mCandleBox(candles) {
+    oip2nd5mCandleBox.oi.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.oi = [];
+    oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
+    oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
+
+    const allowedIntervals = ['minute', '2minute', '3minute', '5minute'];
+    if (!allowedIntervals.includes(oipInterval) || !candles || !candles.length) return;
+
+    function _draw5mAllDays(chart, src) {
+        const boxes = [];
+        const map = _oipGroupByDay(src);
+        Object.keys(map).sort().forEach(dk => {
+            const day = map[dk];
+            const w = day.filter(c => {
+                const d = new Date(c.time * 1000);
+                return d.getUTCHours() === 9 && d.getUTCMinutes() >= 20 && d.getUTCMinutes() < 25;
+            });
+            if (!w.length) return;
+            const hi = Math.max(...w.map(_oipH));
+            const lo = Math.min(...w.map(_oipL));
+            if (hi === lo) return;
+            const times = day.filter(c => c.time >= w[0].time).map(c => c.time);
+            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#00D2FF'));
+        });
+        return boxes;
+    }
+
+    if (oipOIChart)
+        oip2nd5mCandleBox.oi = _draw5mAllDays(oipOIChart, candles);
+
+    if (oipCEChart?.chart && oipOptionData)
+        oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+
+    if (oipPEChart?.chart && oipOptionData)
+        oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
 }
 
 function oipAutoFillHighLow() {
@@ -1901,17 +1955,17 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
     const step = oipStrikeStep || 50;
     const atm = Math.round(refPrice / step) * step;
 
-    if (sortedStrikes.length > 20) {
+    if (sortedStrikes.length > 30) {
         // Find index closest to ATM
         let atmIndex = sortedStrikes.findIndex(s => s >= refPrice);
         if (atmIndex === -1) atmIndex = sortedStrikes.length - 1;
 
-        let start = Math.max(0, atmIndex - 10);
-        let end = Math.min(sortedStrikes.length, start + 20);
+        let start = Math.max(0, atmIndex - 15);
+        let end = Math.min(sortedStrikes.length, start + 30);
 
-        // Adjust start if end hit the boundary to keep 20 items if possible
+        // Adjust start if end hit the boundary to keep 30 items if possible
         if (end === sortedStrikes.length) {
-            start = Math.max(0, end - 20);
+            start = Math.max(0, end - 30);
         }
 
         sortedStrikes = sortedStrikes.slice(start, end);
@@ -1925,7 +1979,7 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
         });
     } else {
         // Fallback: Generate strikes if chain not available yet
-        for (let i = -10; i <= 10; i++) {
+        for (let i = -15; i <= 15; i++) {
             const s = atm + (i * step);
             if (s <= 0) continue;
             opts += `<option value="${s}">${s}</option>`;
@@ -1935,7 +1989,7 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
     // CE & PE defaults: exactly 100 pts from the nearest round-hundred ATM
     const availStrikes = sortedStrikes.length > 0
         ? sortedStrikes
-        : Array.from({ length: 21 }, (_, i) => atm + (i - 10) * step);
+        : Array.from({ length: 31 }, (_, i) => atm + (i - 15) * step);
     const refBase = Math.round(refPrice / 100) * 100;
     const ceDefaultArr = availStrikes.filter(s => s >= refBase + 100 && s % 100 === 0);
     const peDefaultArr = availStrikes.filter(s => s <= refBase - 100 && s % 100 === 0);

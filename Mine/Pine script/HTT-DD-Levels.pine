@@ -3,6 +3,7 @@
 
 //@version=5
 indicator("DD-Levels by KK", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+max_bars_back(bar_index, 5000)
 
 // ─── TIMEFRAME SOURCE ─────────────────────────────────────────────────────────
 activeTF = input.string("Daily", "Active Timeframe", options=["Off","Daily"], tooltip="Off = no daily levels (useful when you only want the 2nd-candle box). Daily = D pairs only.", group="TIMEFRAME SOURCE")
