@@ -204,34 +204,22 @@ def start_tunnel_watchdog(interval: int = 10) -> None:
     logging.info(f'[Proxy] Tunnel watchdog started (checks every {interval}s)')
 
 def apply_kite_proxy(kite, raise_if_unreachable: bool = False) -> bool:
-    """Apply SOCKS5 proxy to a KiteConnect instance.
+    """Apply authenticated HTTPS static IP proxy to a KiteConnect instance.
 
-    Returns True if proxy was applied, False if skipped (not configured or unreachable).
-    If raise_if_unreachable=True, raises RuntimeError when KITE_PROXY_URL is set but tunnel is down.
+    Reads STATIC_IP_KEY, STATIC_IP_SECRET, STATIC_IP_HOST from env.
+    Returns True if proxy was applied, False if env vars are not set.
     """
     if not isinstance(kite, KiteConnect):
         return False
-    proxy_url = os.getenv("KITE_PROXY_URL", "").strip()
-    if not proxy_url:
+    key = os.getenv("STATIC_IP_KEY", "").strip()
+    secret = os.getenv("STATIC_IP_SECRET", "").strip()
+    host = os.getenv("STATIC_IP_HOST", "").strip()
+    if not all([key, secret, host]):
         return False
-    try:
-        from urllib.parse import urlparse
-        parsed = urlparse(proxy_url)
-        host: str = parsed.hostname or "127.0.0.1"
-        port: int = parsed.port or 1080
-    except Exception:
-        host, port = "127.0.0.1", 1080
-    if not _is_socks5_healthy(host, port):
-        with _tunnel_status_lock:
-            _tunnel_known_down = True
-        msg = f"SSH tunnel not reachable — watchdog will retry. Run manually: ssh -i ~/Downloads/ssh-key-2026-05-22.key -N -D {port} opc@68.233.118.234"
-        if raise_if_unreachable:
-            raise RuntimeError(f"[KiteService] {msg}")
-        logging.warning(f"[KiteService] {msg}")
-        return False
+    proxy_url = f"https://{key}:{secret}@{host}"
     # KiteConnect._request passes proxies=self.proxies, NOT reqsession.proxies
     kite.proxies = {'http': proxy_url, 'https': proxy_url}
-    logging.info(f"[KiteService] SOCKS5 proxy active: {proxy_url}")
+    logging.info(f"[KiteService] Static IP proxy active: {host}")
     return True
 
 # ── HISTORICAL CACHE ─────────────────────────────────────────────────────

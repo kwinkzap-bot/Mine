@@ -4394,16 +4394,10 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
             kite = get_kite(instance=zerodha_instance)
             if not kite:
                 return {'success': False, 'error': f'Zerodha {zerodha_instance} not connected'}, 401
-            # Ensure proxy is applied (apply_kite_proxy auto-restarts tunnel if needed).
-            _proxy_url = os.getenv('KITE_PROXY_URL', '').strip()
-            if _proxy_url:
+            # Apply static IP proxy if configured
+            if os.getenv('STATIC_IP_KEY', '').strip():
                 from trading_app.service.kite_order_services import apply_kite_proxy
                 apply_kite_proxy(kite)
-                if not kite.proxies:
-                    return {
-                        'success': False,
-                        'error': 'SSH tunnel could not be started. Check Oracle Cloud instance status.'
-                    }, 503
 
             from trading_app.service.kite_order_services import KiteService
             kite_service = KiteService(kite_instance=kite)
@@ -6298,18 +6292,20 @@ def place_portfolio_cnc_order() -> EndpointResponse:
 
 @api_bp.route('/proxy-status', methods=['GET'])
 def proxy_status():
-    """Returns SSH tunnel / SOCKS5 proxy health without blocking."""
-    proxy_url = os.getenv('KITE_PROXY_URL', '').strip()
-    if not proxy_url:
+    """Returns static IP proxy reachability status."""
+    host = os.getenv('STATIC_IP_HOST', '').strip()
+    if not host or not os.getenv('STATIC_IP_KEY', '').strip():
         return jsonify({'proxy_required': False, 'tunnel_up': True})
     try:
-        from trading_app.service.kite_order_services import _is_socks5_healthy, _tunnel_known_down
-        from urllib.parse import urlparse
-        parsed = urlparse(proxy_url)
-        up = _is_socks5_healthy(parsed.hostname or '127.0.0.1', parsed.port or 1080, timeout=1.5)
+        import socket
+        parts = host.rsplit(':', 1)
+        hostname = parts[0]
+        port = int(parts[1]) if len(parts) == 2 else 443
+        s = socket.create_connection((hostname, port), timeout=3)
+        s.close()
+        up = True
     except Exception:
         up = False
-        _tunnel_known_down = True
     return jsonify({'proxy_required': True, 'tunnel_up': up})
 
 

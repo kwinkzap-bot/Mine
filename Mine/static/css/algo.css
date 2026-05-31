@@ -205,11 +205,10 @@ body.ocean-theme .algo-page {
     min-height: calc(100vh - 80px);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color: var(--ag-text);
-    padding: 20px 16px 40px;
 }
 
 .algo-inner {
-    max-width: 900px;
+    max-width: 100%;
     margin: 0 auto;
     display: flex;
     flex-direction: column;

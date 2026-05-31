@@ -16988,5 +16988,153 @@
     ],
     "id": "ea6ca6f0-3304-4193-8236-e9695e94e479",
     "created_at": 1780045401063
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23400,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "Incorrect `api_key` or `access_token`."
+        },
+        "status": 400
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "Incorrect `api_key` or `access_token`."
+        },
+        "status": 400
+      }
+    ],
+    "id": "3965c416-3e9d-4be7-b33f-5eb2328e0bfa",
+    "created_at": 1780214217945
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23400,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "IP (2401:c080:2400:2ce2:9d87:20a:7805:4728) is not allowed to place orders for this app. Update allowed IPs on the Kite developer console. Learn more - https://support.zerodha.com/category/trading-and-markets/general-kite/kite-api/articles/static-ip"
+        },
+        "status": 400
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "Incorrect `api_key` or `access_token`."
+        },
+        "status": 400
+      }
+    ],
+    "id": "43a4dfd2-9584-409c-b527-97b8f62014a0",
+    "created_at": 1780214270482
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23400,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "Markets are closed right now. Use GTT for placing long standing orders instead. [Read more.](https://support.zerodha.com/category/trading-and-markets/gtt/articles/what-is-the-good-till-triggered-gtt-feature)"
+        },
+        "status": 400
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "Incorrect `api_key` or `access_token`."
+        },
+        "status": 400
+      }
+    ],
+    "id": "510236da-e2c0-4790-b933-0e0e4665b925",
+    "created_at": 1780214507679
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23400,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "Markets are closed right now. Use GTT for placing long standing orders instead. [Read more.](https://support.zerodha.com/category/trading-and-markets/gtt/articles/what-is-the-good-till-triggered-gtt-feature)"
+        },
+        "status": 400
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "Markets are closed right now. Use GTT for placing long standing orders instead. [Read more.](https://support.zerodha.com/category/trading-and-markets/gtt/articles/what-is-the-good-till-triggered-gtt-feature)"
+        },
+        "status": 400
+      }
+    ],
+    "id": "a08f6967-8e2f-4738-8c7a-217985717d35",
+    "created_at": 1780214581660
   }
 ]

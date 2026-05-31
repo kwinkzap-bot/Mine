@@ -106,9 +106,9 @@ class IntrinsicOrderManager:
                                 logger.info(f"[Intrinsic Monitor] Cancelling SL order {sl_order_id}")
                                 try:
                                     if hasattr(service, 'cancel_order'):
-                                        service.cancel_order(sl_order_id)
+                                        service.cancel_order(sl_order_id)  # type: ignore[union-attr]
                                     elif broker_type == 'kite' or broker_type.startswith('zerodha_'):
-                                        service.kite.cancel_order(variety='regular', order_id=sl_order_id)
+                                        service.kite.cancel_order(variety='regular', order_id=sl_order_id)  # type: ignore[union-attr]
                                 except Exception as e:
                                     logger.error(f"[Intrinsic Monitor] Failed to cancel SL {sl_order_id}: {e}")
 
@@ -120,31 +120,28 @@ class IntrinsicOrderManager:
 
                                 for chunk_qty in qty_chunks:
                                     if broker_type == 'kite' or broker_type.startswith('zerodha_'):
-                                        service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=service.kite.TRANSACTION_TYPE_SELL, quantity=chunk_qty)
+                                        service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type=service.kite.TRANSACTION_TYPE_SELL, quantity=chunk_qty)  # type: ignore[union-attr]
                                     elif broker_type == 'kotak_neo':
-                                        service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type='SELL', quantity=chunk_qty)
+                                        service.place_option_order(symbol=symbol, strike=strike, option_type=option_type, transaction_type='SELL', quantity=chunk_qty)  # type: ignore[union-attr]
                                     elif broker_type == 'dhan':
                                         exchange_seg = 'BSE_FNO' if symbol.upper() == 'SENSEX' else 'NSE_FNO'
-                                        service.place_order(security_id=sec_id, transaction_type='SELL', quantity=chunk_qty, order_type='MARKET', product_type='INTRADAY', exchange_segment=exchange_seg)
+                                        service.place_order(security_id=sec_id, transaction_type='SELL', quantity=chunk_qty, order_type='MARKET', product_type='INTRADAY', exchange_segment=exchange_seg)  # type: ignore[union-attr]
                                     elif broker_type == 'fyers':
                                         fyers_prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
-                                        service.place_order(symbol=f'{fyers_prefix}:{kite_opt_sym}', side=-1, quantity=chunk_qty, order_type=2, product_type='INTRADAY')
+                                        service.place_order(symbol=f'{fyers_prefix}:{kite_opt_sym}', side=-1, quantity=chunk_qty, order_type=2, product_type='INTRADAY')  # type: ignore[union-attr]
                             except Exception as e:
                                 logger.error(f"[Intrinsic Monitor] Failed to place target EXIT order: {e}")
                 except Exception as e:
                     logger.error(f"[Intrinsic Monitor] Loop error: {e}")
                     _err = str(e).lower()
-                    if any(k in _err for k in ('socks', 'connection refused', 'connectionerror', 'proxyerror', 'newconnectionerror')):
-                        logger.warning("[Intrinsic Monitor] SOCKS tunnel error — attempting recovery...")
+                    if any(k in _err for k in ('connection refused', 'connectionerror', 'proxyerror', 'newconnectionerror')):
+                        logger.warning("[Intrinsic Monitor] Proxy connection error — re-applying static IP proxy...")
                         try:
-                            from trading_app.service.kite_order_services import ensure_ssh_tunnel, apply_kite_proxy
-                            if ensure_ssh_tunnel():
-                                apply_kite_proxy(kite)
-                                logger.info("[Intrinsic Monitor] Tunnel restored, resuming monitoring")
-                            else:
-                                logger.error("[Intrinsic Monitor] Tunnel recovery failed, will retry")
+                            from trading_app.service.kite_order_services import apply_kite_proxy
+                            apply_kite_proxy(kite)
+                            logger.info("[Intrinsic Monitor] Proxy re-applied, resuming monitoring")
                         except Exception as _te:
-                            logger.error(f"[Intrinsic Monitor] Tunnel recovery exception: {_te}")
+                            logger.error(f"[Intrinsic Monitor] Proxy re-apply exception: {_te}")
                         time.sleep(10)
                     else:
                         time.sleep(5)
