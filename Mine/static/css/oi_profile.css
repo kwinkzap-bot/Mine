@@ -3,9 +3,8 @@
    Full-width Chart with In-chart OI bar overlay
    ================================================================ */
 
-/* Themes setup */
-.oip-page {
-    /* Default is light theme */
+/* Default values on :root so body.{theme} can override via cascade */
+:root {
     --oip-bg: #ffffff;
     --oip-text: #1f2328;
     --oip-border: #cbd5e1;
@@ -16,7 +15,8 @@
     --oip-accent: #0969da;
 }
 
-.oip-page.light-theme {
+/* Theme variables on body — cascade to ALL .oip-* children regardless of .oip-page */
+body.light-theme, .oip-page.light-theme {
     --oip-bg: #ffffff;
     --oip-text: #1f2328;
     --oip-border: #cbd5e1;
@@ -27,7 +27,7 @@
     --oip-accent: #0969da;
 }
 
-.oip-page.dark-theme {
+body.dark-theme, .oip-page.dark-theme {
     --oip-bg: #090e17;
     --oip-text: #f8fafc;
     --oip-border: #1f2937;
@@ -38,7 +38,7 @@
     --oip-accent: #3b82f6;
 }
 
-.oip-page.forest-theme {
+body.forest-theme, .oip-page.forest-theme {
     --oip-bg: #060c09;
     --oip-text: #e8f7f0;
     --oip-border: #142820;
@@ -49,7 +49,7 @@
     --oip-accent: #10b981;
 }
 
-.oip-page.cream-theme {
+body.cream-theme, .oip-page.cream-theme {
     --oip-bg: #fdfbf7;
     --oip-text: #433c35;
     --oip-border: #e6dfd3;
@@ -60,13 +60,13 @@
     --oip-accent: #b45309;
 }
 
-.oip-page.ocean-theme {
+body.ocean-theme, .oip-page.ocean-theme {
     --oip-bg: #f3f8fc;
     --oip-text: #1e293b;
     --oip-border: #dbebfa;
     --oip-header-bg: #f0f6fc;
     --oip-metric-lbl: #64748b;
-    --oip-card-bg: #ffffff;
+    --oip-card-bg: #f3f8fc;
     --oip-grid: rgba(2, 132, 199, 0.05);
     --oip-accent: #0284c7;
 }
@@ -781,6 +781,7 @@ body.ocean-theme .oip-tooltip {
     backdrop-filter: blur(4px);
     box-shadow: 0 4px 12px rgba(2, 132, 199, 0.12);
 }
+
 
 .oip-tt-box {
     display: flex;

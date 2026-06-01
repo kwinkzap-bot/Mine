@@ -35,8 +35,8 @@ const OIP_CHART_THEMES = {
     'light': { bg: '#ffffff', text: '#374151', grid: '#f0f0f0' },
     'dark': { bg: '#111827', text: '#94a3b8', grid: 'rgba(255, 255, 255, 0.06)' },
     'forest': { bg: '#0a1410', text: '#6ba88f', grid: 'rgba(16, 185, 129, 0.06)' },
-    'cream': { bg: '#fdfbf7', text: '#7c7267', grid: 'rgba(180, 83, 9, 0.05)' },
-    'ocean': { bg: '#f3f8fc', text: '#475569', grid: 'rgba(2, 132, 199, 0.05)' }
+    'cream': { bg: '#ffffff', text: '#7c7267', grid: 'rgba(180, 83, 9, 0.05)' },
+    'ocean': { bg: '#ffffff', text: '#475569', grid: 'rgba(2, 132, 199, 0.05)' }
 };
 
 function updateOIProfileTheme(themeName) {

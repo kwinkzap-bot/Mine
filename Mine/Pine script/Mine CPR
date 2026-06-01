@@ -53,7 +53,10 @@ CAMARILLA = "Camarilla"
 
 kind = input.string(title="Type", defval="Camarilla", options=[TRADITIONAL, FIBONACCI, CAMARILLA])
 pivot_time_frame = input.string(title="Pivots Timeframe", defval=AUTO, options=[AUTO, DAILY, WEEKLY, MONTHLY, QUARTERLY, YEARLY, BIYEARLY, TRIYEARLY, QUINQUENNIALLY, DECENNIALLY])
-look_back = input.int(title="Number of Pivots Back", defval=15, minval=1, maxval=5000)
+look_back = input.int(title="Number of Pivots Back", defval=15, minval=1, maxval=5000, tooltip="Pine Script allows max 500 line objects. Each pivot uses ~15 lines by default (~33 pivots max). Enable 'CPR Only in History' for ~160 pivots, or disable R/S and PDH/PDL toggles for ~50 pivots.")
+hist_cpr_only  = input.bool(false, "Historical CPR Lines Only (allows more pivots back)", tooltip="When ON, only P/BC/TC are drawn for historical pivots (~160 pivots max). When OFF, all R/S/PDH/PDL lines are drawn (~33 pivots max).")
+hist_show_rs   = input.bool(true,  "Show R/S Levels in History",  tooltip="Disable to allow ~50 pivots back instead of ~33.")
+hist_show_pdhl = input.bool(true,  "Show PDH/PDL in History",      tooltip="Disable to save 2 lines per pivot.")
 is_daily_based = input.bool(title="Use Daily-based Values", defval=true, tooltip="When this option is unchecked, Pivot Points will use intraday data while calculating on intraday charts. If Extended Hours are displayed on the chart, they will be taken into account during the pivot level calculation. If intraday OHLC values are different from daily-based values (normal for stocks), the pivot levels will also differ.")
 show_labels = input.bool(title="Show Labels", defval=true, inline="labels")
 position_labels = input.string("Left", "", options=["Left", "Right"], inline="labels")
@@ -283,30 +286,32 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
             array.push(lines, _lp), array.push(lines, _lbc), array.push(lines, _ltc)
             if shadow
                 array.push(fills, linefill.new(_lbc, _ltc, color.new(pivotColor, cprTransp)))
-            
-            _lr1 = line.new(array.get(arr_time, i), array.get(arr_r1, i), array.get(arr_time, i+1), array.get(arr_r1, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
-            _lr2 = line.new(array.get(arr_time, i), array.get(arr_r2, i), array.get(arr_time, i+1), array.get(arr_r2, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
-            _lr3 = line.new(array.get(arr_time, i), array.get(arr_r3, i), array.get(arr_time, i+1), array.get(arr_r3, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
-            _lr4 = line.new(array.get(arr_time, i), array.get(arr_r4, i), array.get(arr_time, i+1), array.get(arr_r4, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
-            array.push(lines, _lr1), array.push(lines, _lr2), array.push(lines, _lr3), array.push(lines, _lr4)
-            
-            _ls1 = line.new(array.get(arr_time, i), array.get(arr_s1, i), array.get(arr_time, i+1), array.get(arr_s1, i), xloc=xloc.bar_time, color=redColor, width=1)
-            _ls2 = line.new(array.get(arr_time, i), array.get(arr_s2, i), array.get(arr_time, i+1), array.get(arr_s2, i), xloc=xloc.bar_time, color=redColor, width=1)
-            _ls3 = line.new(array.get(arr_time, i), array.get(arr_s3, i), array.get(arr_time, i+1), array.get(arr_s3, i), xloc=xloc.bar_time, color=redColor, width=1)
-            _ls4 = line.new(array.get(arr_time, i), array.get(arr_s4, i), array.get(arr_time, i+1), array.get(arr_s4, i), xloc=xloc.bar_time, color=redColor, width=1)
-            array.push(lines, _ls1), array.push(lines, _ls2), array.push(lines, _ls3), array.push(lines, _ls4)
-            
-            _lpdh = line.new(array.get(arr_time, i), array.get(arr_pdh, i), array.get(arr_time, i+1), array.get(arr_pdh, i), xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1)
-            _lpdl = line.new(array.get(arr_time, i), array.get(arr_pdl, i), array.get(arr_time, i+1), array.get(arr_pdl, i), xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1)
-            array.push(lines, _lpdh), array.push(lines, _lpdl)
-            
-            if shadow
-                array.push(fills, linefill.new(_lr1, _lr2, color.new(greenColor, rsTransp)))
-                array.push(fills, linefill.new(_lr2, _lr3, color.new(greenColor, rsTransp)))
-                array.push(fills, linefill.new(_lr3, _lr4, color.new(greenColor, rsTransp)))
-                array.push(fills, linefill.new(_ls1, _ls2, color.new(redColor, rsTransp)))
-                array.push(fills, linefill.new(_ls2, _ls3, color.new(redColor, rsTransp)))
-                array.push(fills, linefill.new(_ls3, _ls4, color.new(redColor, rsTransp)))
+
+            if not hist_cpr_only and hist_show_rs
+                _lr1 = line.new(array.get(arr_time, i), array.get(arr_r1, i), array.get(arr_time, i+1), array.get(arr_r1, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
+                _lr2 = line.new(array.get(arr_time, i), array.get(arr_r2, i), array.get(arr_time, i+1), array.get(arr_r2, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
+                _lr3 = line.new(array.get(arr_time, i), array.get(arr_r3, i), array.get(arr_time, i+1), array.get(arr_r3, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
+                _lr4 = line.new(array.get(arr_time, i), array.get(arr_r4, i), array.get(arr_time, i+1), array.get(arr_r4, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
+                array.push(lines, _lr1), array.push(lines, _lr2), array.push(lines, _lr3), array.push(lines, _lr4)
+
+                _ls1 = line.new(array.get(arr_time, i), array.get(arr_s1, i), array.get(arr_time, i+1), array.get(arr_s1, i), xloc=xloc.bar_time, color=redColor, width=1)
+                _ls2 = line.new(array.get(arr_time, i), array.get(arr_s2, i), array.get(arr_time, i+1), array.get(arr_s2, i), xloc=xloc.bar_time, color=redColor, width=1)
+                _ls3 = line.new(array.get(arr_time, i), array.get(arr_s3, i), array.get(arr_time, i+1), array.get(arr_s3, i), xloc=xloc.bar_time, color=redColor, width=1)
+                _ls4 = line.new(array.get(arr_time, i), array.get(arr_s4, i), array.get(arr_time, i+1), array.get(arr_s4, i), xloc=xloc.bar_time, color=redColor, width=1)
+                array.push(lines, _ls1), array.push(lines, _ls2), array.push(lines, _ls3), array.push(lines, _ls4)
+
+                if shadow
+                    array.push(fills, linefill.new(_lr1, _lr2, color.new(greenColor, rsTransp)))
+                    array.push(fills, linefill.new(_lr2, _lr3, color.new(greenColor, rsTransp)))
+                    array.push(fills, linefill.new(_lr3, _lr4, color.new(greenColor, rsTransp)))
+                    array.push(fills, linefill.new(_ls1, _ls2, color.new(redColor, rsTransp)))
+                    array.push(fills, linefill.new(_ls2, _ls3, color.new(redColor, rsTransp)))
+                    array.push(fills, linefill.new(_ls3, _ls4, color.new(redColor, rsTransp)))
+
+            if not hist_cpr_only and hist_show_pdhl
+                _lpdh = line.new(array.get(arr_time, i), array.get(arr_pdh, i), array.get(arr_time, i+1), array.get(arr_pdh, i), xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1)
+                _lpdl = line.new(array.get(arr_time, i), array.get(arr_pdl, i), array.get(arr_time, i+1), array.get(arr_pdl, i), xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1)
+                array.push(lines, _lpdh), array.push(lines, _lpdl)
             
 //---------------------------------------------------------------------------------------------------------------------------------------------------------
 // Previous High/Low (Kept as plots for now or moved to lines)
@@ -651,3 +656,37 @@ if show2ndCandleBox and is_5min_or_below and m5_is_2nd
         b = array.last(boxes2nd)
         box.set_top(b, m5_high2)
         box.set_bottom(b, m5_low2)
+
+// ─── Monday High/Low Box ─────────────────────────────────────────────────────
+show_monday_box     = input.bool(true, "Show Monday H/L Box",  group = "Monday Box")
+monday_weeks_back   = input.int(100,  "Weeks Back", minval=1, maxval=500, group = "Monday Box")
+monday_fill_color   = input.color(color.new(#FFD700, 100), "Fill Color",   group = "Monday Box")
+monday_border_color = input.color(color.new(#00BCD4, 20),  "Border Color", group = "Monday Box")
+monday_line_width   = input.int(1, "Border Width", minval=1, maxval=4, group = "Monday Box")
+
+var float mon_high    = na
+var float mon_low     = na
+var box   cur_mon_box = na
+var box[] mon_boxes   = array.new_box()
+
+is_monday           = dayofweek == dayofweek.monday
+is_first_monday_bar = ta.change(time("D")) != 0 and is_monday
+
+if show_monday_box
+    if is_first_monday_bar
+        mon_high    := high
+        mon_low     := low
+        cur_mon_box := box.new(time, high, time_close("W"), low,
+                               border_color = monday_border_color,
+                               bgcolor      = monday_fill_color,
+                               border_width = monday_line_width,
+                               xloc         = xloc.bar_time)
+        array.push(mon_boxes, cur_mon_box)
+        if array.size(mon_boxes) > monday_weeks_back
+            box.delete(array.shift(mon_boxes))
+
+    else if is_monday and not na(cur_mon_box)
+        mon_high := math.max(mon_high, high)
+        mon_low  := math.min(mon_low, low)
+        box.set_top(cur_mon_box, mon_high)
+        box.set_bottom(cur_mon_box, mon_low)

@@ -932,7 +932,7 @@ async function displayCandlestickChartsInternal(data, skipPdhPdlFetch = false) {
                 // Create the chart
                 const chartWidth = chartDiv.clientWidth || 1000;
                 multiStrikeChart = createChart(chartDiv, {
-                    layout: { textColor: '#333', background: { color: '#fafafa' } },
+                    layout: { textColor: '#333', background: { color: '#ffffff' } },
                     width: chartWidth,
                     height: 500,
                     timeScale: {
