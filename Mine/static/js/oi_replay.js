@@ -15,22 +15,13 @@ let oipOptionData = null;
 let oipVwapSeries = null;
 let oipVwapIntSeries = null;
 let oipVwapIntPeSeries = null;
-let oipCprSeriesMap = {};
-let oipRSISeriesObj = null;
-let oipSignalMarkers = []; // kept for oipUpdateAllMarkers compat (always empty)
-let oipRSIMarkers = [];
+// oipCprSeriesMap, oipRSISeriesObj, oipSignalMarkers, oipRSIMarkers — defined in oi_indicators.js
+// oipEma9-200Series, oipCEEma9-50Series, oipPEEma9-50Series — defined in oi_indicators.js
 let oipLevelLines = [];
-let oipEma9Series = null, oipEma20Series = null, oipEma50Series = null, oipEma100Series = null, oipEma200Series = null;
 let oipCEChart = null;
 let oipPEChart = null;
 let oipCESeries = null;
 let oipPESeries = null;
-let oipCEEma9Series = null;
-let oipCEEma20Series = null;
-let oipCEEma50Series = null;
-let oipPEEma9Series = null;
-let oipPEEma20Series = null;
-let oipPEEma50Series = null;
 let oipMaxPainLine = null;
 
 const oipPremiumSeries = { entry: null, current: null, t1: null, t2: null };
@@ -64,7 +55,7 @@ const oipElems = {
     symbolInput: null, symbolList: null, interval: null,
     spotHigh: null, spotLow: null, step: null, multiplier: null,
     view: null, showVwapOI: null, showVwapInt: null,
-    showCpr: null, showEMA: null, showRSI: null, autoHL: null, chartWrap: null, canvas: null,
+    showCpr: null, showEMA: null, showRSI: null, showOIBars: null, autoHL: null, chartWrap: null, canvas: null,
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
     hdrPrice: null, hdrPcr: null, hdrMaxPain: null, hdrCeOI: null,
     hdrCeChg: null, hdrPeOI: null,
@@ -87,6 +78,7 @@ function oipInitElems() {
     oipElems.step = document.getElementById('oipStep');
     oipElems.multiplier = document.getElementById('oipMultiplier');
     oipElems.view = document.getElementById('oipIntrinsicView');
+    oipElems.showOIBars = document.getElementById('oipShowOIBars');
     oipElems.showVwapOI = document.getElementById('oipShowVwapOI');
     oipElems.showVwapInt = document.getElementById('oipShowVwapInt');
     oipElems.showCpr = document.getElementById('oipShowCpr');
@@ -288,27 +280,7 @@ window.oipInitSecondaryCharts = function() {
 };
 
 /* ── Logic Functions ───────────────────────────────────────── */
-function oipUpdateEmaVisibility() {
-    const s9 = oipElems.showEma9?.checked ?? false;
-    const s20 = oipElems.showEma20?.checked ?? false;
-    const s50 = oipElems.showEma50?.checked ?? false;
-    const s100 = oipElems.showEma100?.checked ?? false;
-    const s200 = oipElems.showEma200?.checked ?? false;
-
-    if (oipEma9Series) oipEma9Series.applyOptions({ visible: s9 });
-    if (oipEma20Series) oipEma20Series.applyOptions({ visible: s20 });
-    if (oipEma50Series) oipEma50Series.applyOptions({ visible: s50 });
-    if (oipEma100Series) oipEma100Series.applyOptions({ visible: s100 });
-    if (oipEma200Series) oipEma200Series.applyOptions({ visible: s200 });
-
-    if (oipCEEma9Series) oipCEEma9Series.applyOptions({ visible: s9 });
-    if (oipCEEma20Series) oipCEEma20Series.applyOptions({ visible: s20 });
-    if (oipCEEma50Series) oipCEEma50Series.applyOptions({ visible: s50 });
-
-    if (oipPEEma9Series) oipPEEma9Series.applyOptions({ visible: s9 });
-    if (oipPEEma20Series) oipPEEma20Series.applyOptions({ visible: s20 });
-    if (oipPEEma50Series) oipPEEma50Series.applyOptions({ visible: s50 });
-}
+// oipUpdateEmaVisibility — defined in oi_indicators.js
 
 function oipInitCharts() {
     const elOI = document.getElementById('oipCandleChart');
@@ -381,7 +353,8 @@ function oipDrawOIBars() {
     const W = wrap.clientWidth, H = wrap.clientHeight, dpr = window.devicePixelRatio || 1;
     if (canvas.width !== W * dpr) { canvas.width = W * dpr; canvas.height = H * dpr; canvas.style.width = W + 'px'; canvas.style.height = H + 'px'; }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
-    
+    if (!(oipElems.showOIBars?.checked ?? true)) return;
+
     const plotRight = W - 70; const MAX_BAR_PX = Math.min(plotRight * 0.18, 140);
     const getCE = (s) => (oipMode === 'total' ? (s.ce_oi || 0) : (s.ce_change_in_oi || 0));
     const getPE = (s) => (oipMode === 'total' ? (s.pe_oi || 0) : (s.pe_change_in_oi || 0));
@@ -397,215 +370,8 @@ function oipDrawOIBars() {
     });
 }
 
-function oipCalculateVWAP(candles) {
-    if (!candles || !candles.length) return [];
-    let cumPV = 0, cumV = 0, lastDate = null, result = [], lastValidPrice = 0;
-    candles.forEach(c => {
-        const d = new Date(c.time * 1000), date = d.getUTCDate();
-        if (date !== lastDate) { cumPV = 0; cumV = 0; lastDate = date; }
-        
-        const price = (c.close != null) ? (c.high + c.low + c.close) / 3 : lastValidPrice;
-        if (c.close != null) lastValidPrice = price;
-        
-        const v = c.volume || 1; 
-        cumPV += price * v; cumV += v;
-        result.push({ time: c.time, value: cumPV / cumV });
-    });
-    return result;
-}
-
-function oipCalculateFixedEMA(data, period) {
-    if (!data || !data.length) return [];
-    let ema = [], k = 2 / (period + 1), lastValid = data.find(d => d.close != null)?.close || 0;
-    let prev = lastValid;
-    data.forEach(d => {
-        let current = (d.close != null) ? d.close : prev;
-        let val = (current * k) + (prev * (1 - k)); 
-        ema.push({ time: d.time, value: val }); 
-        prev = val;
-    });
-    return ema;
-}
-
-function oipCalculateDynamicCPR(candles) {
-    if (!candles || !candles.length) return null;
-    const days = []; let currentDay = null;
-    candles.forEach(c => {
-        const d = new Date(c.time * 1000);
-        const ds = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-        if (!currentDay || currentDay.date !== ds) {
-            if (currentDay) days.push(currentDay);
-            currentDay = { date: ds, isoDate: ds, high: c.high, low: c.low, close: c.close, times: [], closes: [] };
-        }
-        currentDay.high = Math.max(currentDay.high, c.high);
-        currentDay.low = Math.min(currentDay.low, c.low);
-        currentDay.close = c.close;
-        currentDay.times.push(c.time);
-        currentDay.closes.push(c.close);
-    });
-    if (currentDay) days.push(currentDay);
-    let daysData = [];
-    for (let i = 1; i < days.length; i++) {
-        const prev = days[i - 1], curr = days[i];
-        let oH = prev.high, oL = prev.low, oC = prev.close;
-        const pp = (oH + oL + oC) / 3;
-        const bc = (oH + oL) / 2;
-        const tc = (pp - bc) + pp;
-        const range = oH - oL;
-        const r1 = (pp * 2) - oL, s1 = (pp * 2) - oH;
-        const r2 = pp + range, s2 = pp - range;
-        const r3 = r1 + range, s3 = s1 - range;
-        const r4 = r3 + (r2 - r1), s4 = s3 - (s1 - s2);
-        const cr3 = oC + (range * 1.1) / 4, cs3 = oC - (range * 1.1) / 4;
-        daysData.push({
-            times: curr.times,
-            levels: { prevH: oH, prevL: oL, r1, r2, r3, r4, s1, s2, s3, s4, cr3, cs3, pp, tc, bc },
-            boxes: [{ type: 'cpr', min: Math.min(tc, bc), max: Math.max(tc, bc), times: curr.times }]
-        });
-    }
-    return daysData;
-}
-
-function oipDrawCpr(candles) {
-    if (!oipOIChart) return;
-    const show = oipElems.showCpr?.checked;
-    Object.values(oipCprSeriesMap).forEach(s => s.setData([]));
-    if (!show || !candles || !candles.length) return;
-    const daysData = oipCalculateDynamicCPR(candles);
-    if (!daysData) return;
-    const lineStyles = {
-        prevH: { color: '#ef07f9', lineWidth: 1 }, prevL: { color: '#ef07f9', lineWidth: 1 },
-        pp: { color: '#3366ff', lineWidth: 1 }, bc: { color: '#3366ff', lineWidth: 1 }, tc: { color: '#3366ff', lineWidth: 1 },
-        r1: { color: '#006400', lineWidth: 1 }, r2: { color: '#006400', lineWidth: 1 }, r3: { color: '#006400', lineWidth: 1 }, r4: { color: '#006400', lineWidth: 1 },
-        s1: { color: '#ff0000', lineWidth: 1 }, s2: { color: '#ff0000', lineWidth: 1 }, s3: { color: '#ff0000', lineWidth: 1 }, s4: { color: '#ff0000', lineWidth: 1 },
-        cr3: { color: '#a020f0', lineWidth: 2 }, cs3: { color: '#a020f0', lineWidth: 2 }
-    };
-    daysData.forEach((day, dayIdx) => {
-        Object.keys(day.levels).forEach(key => {
-            const seriesKey = `line_${key}_${dayIdx}`;
-            let series = oipCprSeriesMap[seriesKey];
-            if (!series) {
-                series = oipOIChart.addLineSeries({ ...lineStyles[key], lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
-                oipCprSeriesMap[seriesKey] = series;
-            }
-            series.setData(day.times.map(t => ({ time: t, value: day.levels[key] })));
-        });
-        day.boxes.forEach((box, boxIdx) => {
-            const seriesKey = `box_${box.type}_${dayIdx}_${boxIdx}`;
-            let series = oipCprSeriesMap[seriesKey];
-            if (!series) {
-                const col = 'rgba(51, 102, 255, 0.05)';
-                series = oipOIChart.addBaselineSeries({ baseValue: { type: 'price', price: box.min }, topFillColor1: col, topFillColor2: col, topLineColor: 'transparent', bottomFillColor1: col, bottomFillColor2: col, bottomLineColor: 'transparent', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
-                oipCprSeriesMap[seriesKey] = series;
-            }
-            series.applyOptions({ baseValue: { type: 'price', price: box.min } });
-            series.setData(day.times.map(t => ({ time: t, value: box.max })));
-        });
-    });
-}
-
-function oipCalculateRSISnR(candles) {
-    if (!candles || candles.length < 15) return null;
-    const len = 14; const rsi = new Array(candles.length).fill(null);
-    let gains = 0, losses = 0;
-    for (let i = 1; i <= len; i++) {
-        const diff = candles[i].close - candles[i-1].close;
-        if (diff >= 0) gains += diff; else losses -= diff;
-    }
-    let avgG = gains / len, avgL = losses / len;
-    rsi[len] = avgL === 0 ? 100 : 100 - (100 / (1 + avgG / avgL));
-    for (let i = len + 1; i < candles.length; i++) {
-        const diff = candles[i].close - candles[i-1].close;
-        avgG = (avgG * (len - 1) + (diff >= 0 ? diff : 0)) / len;
-        avgL = (avgL * (len - 1) + (diff < 0 ? -diff : 0)) / len;
-        rsi[i] = avgL === 0 ? 100 : 100 - (100 / (1 + avgG / avgL));
-    }
-    let level_ob = null, level_os = null, level_bull = null, level_bear = null;
-    const ob_series = [], os_series = [], bull_series = [], bear_series = [], markers = [];
-    const thresh_ob = 70, thresh_bull = 60, thresh_bear = 40, thresh_os = 30;
-    let in_short = false, in_long = false, short_sl = null, long_sl = null;
-    const L_OB = new Array(candles.length).fill(null), L_OS = new Array(candles.length).fill(null);
-
-    for (let i = 1; i < candles.length; i++) {
-        const c = candles[i], r = rsi[i], r_prev = rsi[i - 1];
-        if (r === null || r_prev === null) continue;
-        const avgHigh = (c.high + c.close) / 2, avgLow = (c.low + c.close) / 2;
-        if (r_prev <= thresh_ob && r > thresh_ob) level_ob = avgHigh;
-        if (r_prev >= thresh_os && r < thresh_os) level_os = avgLow;
-        if ((r_prev <= thresh_bull && r > thresh_bull) || (r_prev >= thresh_bull && r < thresh_bull)) level_bull = avgHigh;
-        if ((r_prev <= thresh_bear && r > thresh_bear) || (r_prev >= thresh_bear && r < thresh_bear)) level_bear = avgLow;
-        L_OB[i] = level_ob; L_OS[i] = level_os;
-        if (level_ob !== null) ob_series.push({ time: c.time, value: level_ob });
-        if (level_os !== null) os_series.push({ time: c.time, value: level_os });
-        if (level_bull !== null) bull_series.push({ time: c.time, value: level_bull });
-        if (level_bear !== null) bear_series.push({ time: c.time, value: level_bear });
-
-        if (i >= 2) {
-            const pC = candles[i - 1], ppC = candles[i - 2];
-            const pL_OB = L_OB[i - 1], ppL_OB = L_OB[i - 2], pL_OS = L_OS[i - 1], ppL_OS = L_OS[i - 2];
-            if (pL_OB !== null && i < candles.length - 1) {
-                const setup_ob_rej = (pC.close < pL_OB) && (pC.high >= pL_OB || ppC.close >= ppL_OB);
-                if (setup_ob_rej && (c.close < pC.low)) {
-                    in_short = true; in_long = false; short_sl = pC.high;
-                    markers.push({ time: c.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: 'REJ' });
-                }
-            }
-            if (pL_OS !== null && i < candles.length - 1) {
-                const setup_os_rej = (pC.close > pL_OS) && (pC.low <= pL_OS || ppC.close <= ppL_OS);
-                if (setup_os_rej && (c.close > pC.high)) {
-                    in_long = true; in_short = false; long_sl = pC.low;
-                    markers.push({ time: c.time, position: 'belowBar', color: '#14b8a6', shape: 'arrowUp', text: 'REJ' });
-                }
-            }
-            if (in_short && i < candles.length - 1) {
-                const tgtHit = level_bear !== null && c.low <= level_bear;
-                const slHit = short_sl !== null && c.high >= short_sl;
-                if (tgtHit || slHit) { in_short = false; markers.push({ time: c.time, position: 'aboveBar', color: tgtHit ? '#f97316' : '#800000', shape: 'circle', text: tgtHit ? '🎯' : 'SL' }); }
-            }
-            if (in_long && i < candles.length - 1) {
-                const tgtHit = level_bull !== null && c.high >= level_bull;
-                const slHit = long_sl !== null && c.low <= long_sl;
-                if (tgtHit || slHit) { in_long = false; markers.push({ time: c.time, position: 'belowBar', color: tgtHit ? '#f97316' : '#800000', shape: 'circle', text: tgtHit ? '🎯' : 'SL' }); }
-            }
-        }
-    }
-    return { ob_series, os_series, bull_series, bear_series, markers };
-}
-
-function oipDrawRSI(candles) {
-    if (!oipOIChart) return;
-    if (!oipRSISeriesObj) {
-        const base = { lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false };
-        oipRSISeriesObj = {
-            ob: oipOIChart.addLineSeries({ ...base, color: '#14b8a6', lineWidth: 2 }),
-            bull: oipOIChart.addLineSeries({ ...base, color: '#14b8a6', lineWidth: 1 }),
-            os: oipOIChart.addLineSeries({ ...base, color: '#ef4444', lineWidth: 2 }),
-            bear: oipOIChart.addLineSeries({ ...base, color: '#ef4444', lineWidth: 1 })
-        };
-    }
-    const show = oipElems.showRSI?.checked;
-    Object.values(oipRSISeriesObj).forEach(s => s.applyOptions({ visible: !!show }));
-    if (!show || !candles || !candles.length) {
-        oipRSIMarkers = [];
-        oipUpdateAllMarkers();
-        return;
-    }
-    const res = oipCalculateRSISnR(candles);
-    if (res) {
-        oipRSISeriesObj.ob.setData(res.ob_series); oipRSISeriesObj.bull.setData(res.bull_series);
-        oipRSISeriesObj.os.setData(res.os_series); oipRSISeriesObj.bear.setData(res.bear_series);
-        oipRSIMarkers = res.markers || [];
-    } else {
-        oipRSIMarkers = [];
-    }
-    oipUpdateAllMarkers();
-}
-
-function oipUpdateAllMarkers() {
-    if (!oipOISeries) return;
-    oipOISeries.setMarkers([]);
-}
-
+// oipCalculateVWAP, oipCalculateFixedEMA, oipCalculateDynamicCPR, oipDrawCpr,
+// oipCalculateRSISnR, oipDrawRSI, oipUpdateAllMarkers — defined in oi_indicators.js
 
 function oipDrawIntrinsicLines(intrinsic, view) {
     if (!oipIntrinsicSeries) return;
@@ -1193,6 +959,7 @@ function oipInitPremiumSeries() {
 document.addEventListener('DOMContentLoaded', () => {
     window.oipReplayMode = true;
     oipInitElems(); oipInitCharts();
+    oipInitIndicatorsPopup();
     oipUpdateEmaVisibility();
     const today = new Date().toISOString().split('T')[0];
     const prev = new Date(); prev.setDate(prev.getDate() - 30);
@@ -1200,6 +967,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (oipElems.endDate) oipElems.endDate.value = today;
     
     oipElems.startDate?.addEventListener('change', () => oipResetReplay());
+    oipElems.showOIBars?.addEventListener('change', () => oipRequestDraw());
 
     // Dropdown Logic
     oipElems.symbolInput?.addEventListener('input', (e) => oipRenderDropdown(e.target.value.toUpperCase(), oipElems.symbolList));
