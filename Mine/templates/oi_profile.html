@@ -5,7 +5,7 @@
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}">
 <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v=2.3"></script>
+<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
 {% endblock %}
 
 {% block content %}
@@ -227,7 +227,7 @@
                     <div class="oip-prem-sep"></div>
 
                     <!-- Target Distance -->
-                    <div class="oip-prem-group">
+                    <!-- <div class="oip-prem-group">
                         <span class="oip-label">Tgt</span>
                         <select id="oipTargetDistance" class="oip-select oip-select--xs">
                             <option value="50" selected>50</option>
@@ -235,7 +235,7 @@
                             <option value="150">150</option>
                             <option value="200">200</option>
                         </select>
-                    </div>
+                    </div> -->
 
                     <div class="oip-prem-sep"></div>
 
@@ -306,6 +306,6 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/orders.js') }}"></script>
-<script src="{{ url_for('static', filename='js/oi_profile.js') }}?v=2.9"></script>
-<script src="{{ url_for('static', filename='js/oi_profile_init.js') }}?v=1.0"></script>
+<script src="{{ url_for('static', filename='js/oi_profile.js') }}?v={{ sv('js/oi_profile.js') }}"></script>
+<script src="{{ url_for('static', filename='js/oi_profile_init.js') }}?v={{ sv('js/oi_profile_init.js') }}"></script>
 {% endblock %}

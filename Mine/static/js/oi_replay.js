@@ -404,8 +404,8 @@ function oipCalculateVWAP(candles) {
         const d = new Date(c.time * 1000), date = d.getUTCDate();
         if (date !== lastDate) { cumPV = 0; cumV = 0; lastDate = date; }
         
-        const price = (c.close !== undefined) ? (c.high + c.low + c.close) / 3 : lastValidPrice;
-        if (c.close !== undefined) lastValidPrice = price;
+        const price = (c.close != null) ? (c.high + c.low + c.close) / 3 : lastValidPrice;
+        if (c.close != null) lastValidPrice = price;
         
         const v = c.volume || 1; 
         cumPV += price * v; cumV += v;
@@ -416,10 +416,10 @@ function oipCalculateVWAP(candles) {
 
 function oipCalculateFixedEMA(data, period) {
     if (!data || !data.length) return [];
-    let ema = [], k = 2 / (period + 1), lastValid = data.find(d => d.close !== undefined)?.close || 0;
+    let ema = [], k = 2 / (period + 1), lastValid = data.find(d => d.close != null)?.close || 0;
     let prev = lastValid;
     data.forEach(d => {
-        let current = (d.close !== undefined) ? d.close : prev;
+        let current = (d.close != null) ? d.close : prev;
         let val = (current * k) + (prev * (1 - k)); 
         ema.push({ time: d.time, value: val }); 
         prev = val;
@@ -680,7 +680,16 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
 
     const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=true&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${dateRangeParams}&_t=${Date.now()}`;
     const res = await fetch(url); const data = await res.json();
-    if (!data.success) return;
+    if (!data.success) {
+        console.error('[Replay] API error:', data.error || 'Unknown error');
+        if (typeof showNotification === 'function') showNotification(data.error || 'Failed to load candle data. Check broker login.', 'error');
+        return;
+    }
+    if (!data.candles || !data.candles.length) {
+        const reason = data.fetch_error ? `Broker error: ${data.fetch_error}` : 'No candle data for the selected date range. Check broker login.';
+        if (typeof showNotification === 'function') showNotification(reason, 'error');
+        return;
+    }
 
     // --- RESET STATE FOR NEW LOAD ---
     oipLastRefreshIndex = -1;
@@ -717,7 +726,9 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     }
 
     oipOIData = data;
-    oipFullCandles = data.candles || [];
+    oipFullCandles = (data.candles || []).filter(
+        c => c.open != null && c.high != null && c.low != null && c.close != null
+    );
     
     const alignToIndices = (optCandles) => {
         if (!oipFullCandles.length) return optCandles;
@@ -830,11 +841,13 @@ function oipPrecalculateIndicators() {
     const entry = [], current = [];
     oipCachedIndicators.ce.vwap.forEach((v, i) => {
         const pv = oipCachedIndicators.pe.vwap[i];
-        if (pv) entry.push({ time: v.time, value: (v.value + pv.value) / 2 });
+        if (pv && isFinite(v.value) && isFinite(pv.value))
+            entry.push({ time: v.time, value: (v.value + pv.value) / 2 });
     });
     oipFullCeData.forEach((v, i) => {
         const pv = oipFullPeData[i];
-        if (pv) current.push({ time: v.time, value: (v.close + pv.close) / 2 });
+        if (pv && isFinite(v.close) && isFinite(pv.close))
+            current.push({ time: v.time, value: (v.close + pv.close) / 2 });
     });
     oipCachedIndicators.premium.entry = entry;
     oipCachedIndicators.premium.current = current;
@@ -894,8 +907,10 @@ function oipRefreshLocalView(view, resetZoom, index) {
     // 3. Option Charts
     if (oipIntrinsicChart) {
         if (isIncremental) {
-            oipIntrinsicChart.series.update(TradingViewChart.formatData([oipFullCeData[index]])[0]);
-            oipIntrinsicChart.peSeries.update(TradingViewChart.formatData([oipFullPeData[index]])[0]);
+            const ceFormatted = TradingViewChart.formatData([oipFullCeData[index]])[0];
+            const peFormatted = TradingViewChart.formatData([oipFullPeData[index]])[0];
+            if (ceFormatted) oipIntrinsicChart.series.update(ceFormatted);
+            if (peFormatted) oipIntrinsicChart.peSeries.update(peFormatted);
         } else {
             oipIntrinsicChart.update(oipFullCeData.slice(0, index + 1), oipFullPeData.slice(0, index + 1), false);
         }
@@ -1054,8 +1069,8 @@ async function oipReloadStrikeOnly() {
         oipCachedIndicators.pe.ema50 = oipCalculateFixedEMA(oipFullPeData, 50);
         const dist = parseInt(oipElems.targetDistance?.value) || 50;
         const entry = [], current = [];
-        oipCachedIndicators.ce.vwap.forEach((v, i) => { const pv = oipCachedIndicators.pe.vwap[i]; if (pv) entry.push({ time: v.time, value: (v.value + pv.value) / 2 }); });
-        oipFullCeData.forEach((v, i) => { const pv = oipFullPeData[i]; if (pv) current.push({ time: v.time, value: (v.close + pv.close) / 2 }); });
+        oipCachedIndicators.ce.vwap.forEach((v, i) => { const pv = oipCachedIndicators.pe.vwap[i]; if (pv && isFinite(v.value) && isFinite(pv.value)) entry.push({ time: v.time, value: (v.value + pv.value) / 2 }); });
+        oipFullCeData.forEach((v, i) => { const pv = oipFullPeData[i]; if (pv && isFinite(v.close) && isFinite(pv.close)) current.push({ time: v.time, value: (v.close + pv.close) / 2 }); });
         oipCachedIndicators.premium = { entry, current, t1: entry.map(v => ({time: v.time, value: v.value + dist})), t2: entry.map(v => ({time: v.time, value: v.value + dist * 2})) };
 
         if (oipIntrinsicChart) { oipIntrinsicChart.series.setData([]); oipIntrinsicChart.peSeries.setData([]); }
@@ -1433,25 +1448,31 @@ function _oipColorAlpha(color, alpha) {
 }
 
 function _oipDrawCandleBox(chart, hi, lo, times, color) {
+    const safeTimes = times.filter(t => t != null && isFinite(t) && t > 0);
+    if (!safeTimes.length) return null;
     const fillCol   = _oipColorAlpha(color, 0.10);
     const borderCol = _oipColorAlpha(color, 0.65);
     const shared = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
+    try {
+        const fill = chart.addBaselineSeries({
+            baseValue: { type: 'price', price: lo },
+            topFillColor1: fillCol, topFillColor2: fillCol, topLineColor: 'transparent',
+            bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
+            lineWidth: 1, ...shared
+        });
+        fill.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-    const fill = chart.addBaselineSeries({
-        baseValue: { type: 'price', price: lo },
-        topFillColor1: fillCol, topFillColor2: fillCol, topLineColor: 'transparent',
-        bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
-        lineWidth: 1, ...shared
-    });
-    fill.setData(times.map(t => ({ time: t, value: hi })));
+        const top = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+        top.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-    const top = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
-    top.setData(times.map(t => ({ time: t, value: hi })));
+        const bottom = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+        bottom.setData(safeTimes.map(t => ({ time: t, value: lo })));
 
-    const bottom = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
-    bottom.setData(times.map(t => ({ time: t, value: lo })));
-
-    return { chart, fill, top, bottom };
+        return { chart, fill, top, bottom };
+    } catch (e) {
+        console.warn('[CandleBox] skipped box hi=%s lo=%s:', hi, lo, e.message);
+        return null;
+    }
 }
 
 function _oipRemoveBoxSeries(box) {
@@ -1465,6 +1486,7 @@ function _oipGroupByDay(candles) {
     if (!candles || !candles.length) return {};
     const dayMap = {};
     candles.forEach(c => {
+        if (c.time == null || !isFinite(c.time) || c.time <= 0) return;
         const d = new Date(c.time * 1000);
         const ds = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
         if (!dayMap[ds]) dayMap[ds] = [];
@@ -1495,7 +1517,7 @@ function oipDraw2ndCandle30sBox(candles) {
             if (day.length < 2) return;
             const c2 = day[1];
             const hi = _oipH(c2), lo = _oipL(c2);
-            if (hi === lo) return;
+            if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
             const times = day.filter(c => c.time >= c2.time).map(c => c.time);
             if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#FFC800'));
         });
@@ -1535,7 +1557,7 @@ function oipDraw2nd5mCandleBox(candles) {
             if (!w.length) return;
             const hi = Math.max(...w.map(_oipH));
             const lo = Math.min(...w.map(_oipL));
-            if (hi === lo) return;
+            if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
             const times = day.filter(c => c.time >= w[0].time).map(c => c.time);
             if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#00D2FF'));
         });

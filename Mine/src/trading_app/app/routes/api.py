@@ -4588,8 +4588,13 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
         final_responses.append({'broker': target['type'], 'instance': target['instance'], 'result': res, 'status': code})
 
     any_success = any(r['result'].get('success') for r in final_responses)
+    top_error = None
+    if not any_success and final_responses:
+        errors = [r['result'].get('error') for r in final_responses if r['result'].get('error')]
+        top_error = errors[0] if errors else 'Order failed'
     return {
         'success': any_success,
+        'error': top_error,
         'brokers_targeted': len(final_responses),
         'summary': final_responses,
     }
@@ -5325,6 +5330,8 @@ def oi_profile_candles() -> EndpointResponse:
         custom_strike = request.args.get('custom_strike', type=int)
         ce_strike = request.args.get('ce_strike', type=int)
         pe_strike = request.args.get('pe_strike', type=int)
+        start_date_str = request.args.get('start_date')
+        end_date_str   = request.args.get('end_date')
 
         # Sentinel Check: Ignore UI placeholders (20000 for Nifty, 50000 for BankNifty)
         # and fallback to ATM calculation to prevent fetching wrong data on first load.
@@ -5336,7 +5343,8 @@ def oi_profile_candles() -> EndpointResponse:
 
         # ── 1. Check Response Cache & Coalesce Requests ──────────────
         # Use request parameters as cache key (ignore _t timestamp)
-        cache_key = (symbol, interval, days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike)
+        # Include start_date/end_date so historical range requests are cached independently
+        cache_key = (symbol, interval, days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str)
         
         # Request Coalescing: Only one thread fetches for this key at a time
         req_lock = _get_request_lock(cache_key)
@@ -5395,9 +5403,6 @@ def oi_profile_candles() -> EndpointResponse:
         ist_offset = int(5.5 * 3600)  # 19 800 s
         now = datetime.now()
         
-        start_date_str = request.args.get('start_date')
-        end_date_str = request.args.get('end_date')
-
         if start_date_str and end_date_str:
             try:
                 from_date = datetime.strptime(start_date_str, '%Y-%m-%d').replace(hour=9, minute=0, second=0, microsecond=0)
@@ -5478,6 +5483,8 @@ def oi_profile_candles() -> EndpointResponse:
                 return aggregated
             return temp
 
+        _fetch_errors = []
+
         def fetch_task(token, from_dt, to_dt, inter):
             try:
                 if _is_fyers_provider and _data_provider:
@@ -5492,7 +5499,9 @@ def oi_profile_candles() -> EndpointResponse:
                     return []
                 return res
             except Exception as e:
-                logger.error(f"[OI-Profile] Fetch error for token {token}: {e}")
+                msg = str(e)
+                logger.error(f"[OI-Profile] Fetch error for token {token}: {msg}")
+                _fetch_errors.append(msg)
                 return []
 
         # ── Parallel execution ──────────────────────────────────────
@@ -5727,6 +5736,7 @@ def oi_profile_candles() -> EndpointResponse:
             logger.warn(f"[OI-Profile] Strike fetch failed: {e}")
 
         # ── 6. Update Cache and Return ────────────────────────────────
+        fetch_error_msg = _fetch_errors[0] if _fetch_errors and not candles else None
         response_data = {
             'success': True,
             'symbol': symbol,
@@ -5742,7 +5752,8 @@ def oi_profile_candles() -> EndpointResponse:
             'current_price': candles[-1]['close'] if candles else 0,
             'timestamp': datetime.now().isoformat(),
             'optimized': True,
-            'cached': False
+            'cached': False,
+            'fetch_error': fetch_error_msg,
         }
         
         with _candle_cache_lock:

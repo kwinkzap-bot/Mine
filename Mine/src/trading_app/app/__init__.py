@@ -120,6 +120,18 @@ def create_app(config=None):
     def inject_pwa():
         return {'pwa_enabled': os.getenv('PWA_ENABLED', 'false').lower() == 'true'}
 
+    # Auto cache-busting: sv('js/foo.js') returns the file's mtime so browsers
+    # always load the latest version without manual version bumps in templates.
+    @app.context_processor
+    def inject_static_ver():
+        def sv(filename):
+            try:
+                path = os.path.join(app.static_folder, filename)
+                return int(os.path.getmtime(path))
+            except OSError:
+                return 0
+        return {'sv': sv}
+
     # Register blueprints
     from trading_app.app.routes import register_blueprints
     register_blueprints(app)

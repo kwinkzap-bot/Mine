@@ -5,7 +5,7 @@
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}">
 <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v=2.4"></script>
+<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
 <script>
     window.oipReplayMode = true;
 </script>
@@ -337,5 +337,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/oi_replay.js') }}?v=2.4"></script>
+<script src="{{ url_for('static', filename='js/oi_replay.js') }}?v={{ sv('js/oi_replay.js') }}"></script>
 {% endblock %}

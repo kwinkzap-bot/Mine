@@ -656,11 +656,18 @@ class KiteService:
         }
         params = {k: v for k, v in params.items() if v is not None}
 
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 result = self.kite._post("order.place", url_args={"variety": variety}, params=params)
                 return str(result) if isinstance(result, bytes) else result
             except Exception as exc:
+                msg = str(exc)
+                is_rate_limit = 'Too many requests' in msg or '429' in msg
+                if is_rate_limit and attempt < 2:
+                    wait = 1.0 * (attempt + 1)
+                    logging.warning(f"[KiteService] Rate-limited on order attempt {attempt + 1} — waiting {wait}s: {exc}")
+                    time.sleep(wait)
+                    continue
                 if attempt == 0 and self._is_socks_error(exc):
                     logging.warning(f"[KiteService] SOCKS error on order attempt 1 — restarting tunnel and retrying: {exc}")
                     if ensure_ssh_tunnel():
