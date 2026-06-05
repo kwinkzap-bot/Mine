@@ -126,13 +126,13 @@ function syncCrosshair(sourceChart, targetChart, param, targetSeries) {
     try {
         const isValid = param && param.point && param.time != null;
         if (!isValid) {
-            targetChart.clearCrosshairPosition();
+            requestAnimationFrame(() => { try { targetChart.clearCrosshairPosition(); } catch(e) {} });
         } else {
             const price = targetSeries.coordinateToPrice(param.point.y);
             if (price != null) {
-                targetChart.setCrosshairPosition(price, param.time, targetSeries);
+                requestAnimationFrame(() => { try { targetChart.setCrosshairPosition(price, param.time, targetSeries); } catch(e) {} });
             } else {
-                targetChart.clearCrosshairPosition();
+                requestAnimationFrame(() => { try { targetChart.clearCrosshairPosition(); } catch(e) {} });
             }
         }
     } catch(e) {}
@@ -227,7 +227,7 @@ window.oipInitSecondaryCharts = function() {
         }
 
         const syncSize = (chart, wrap) => {
-            if (!chart || !wrap) return;
+            if (!chart || !wrap || !wrap.clientWidth) return;
             chart.applyOptions({ width: wrap.clientWidth });
         };
 
@@ -338,7 +338,7 @@ function oipInitCharts() {
 
         oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(() => oipRequestDraw());
         oipOIChart.timeScale().subscribeVisibleTimeRangeChange(() => oipRequestDraw());
-        if (wrapOI) new ResizeObserver(() => { oipOIChart.applyOptions({ width: wrapOI.clientWidth }); oipRequestDraw(); }).observe(wrapOI);
+        if (wrapOI) new ResizeObserver(() => { if (wrapOI.clientWidth > 0) oipOIChart.applyOptions({ width: wrapOI.clientWidth }); oipRequestDraw(); }).observe(wrapOI);
     }
     if (window.oipInitSecondaryCharts) window.oipInitSecondaryCharts();
 }
@@ -469,21 +469,34 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         cpr: null
     };
     
-    // Clear all chart series
-    if (oipOISeries) oipOISeries.setData([]);
-    if (oipVwapSeries) oipVwapSeries.setData([]);
-    [oipEma9Series, oipEma20Series, oipEma50Series, oipEma100Series, oipEma200Series].forEach(s => s?.setData([]));
-    
-    // Clear CPR lines from chart and map
+    // Remove ALL Baseline series before any setData triggers a render — LC renders every
+    // attached series on each setData call, and uninitialized/stale Baseline renderers
+    // will throw "Value is null".
     Object.values(oipCprSeriesMap).forEach(s => { try { oipOIChart.removeSeries(s); } catch(e) {} });
     oipCprSeriesMap = {};
+    oip2ndCandle30sBox.oi.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.oi = [];
+    oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
+    oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
+    oip2nd5mCandleBox.oi.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.oi = [];
+    oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
+    oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
 
+    // Clear all chart series
+    try { if (oipOISeries) oipOISeries.setData([]); } catch(e) {}
+    try { if (oipVwapSeries) oipVwapSeries.setData([]); } catch(e) {}
+    [oipEma9Series, oipEma20Series, oipEma50Series, oipEma100Series, oipEma200Series].forEach(s => { try { s?.setData([]); } catch(e) {} });
+
+    // Clear secondary chart series synchronously — all Baseline series were removed above,
+    // so rendering these empty candlestick series is safe. RAF-deferral caused a race where
+    // fast fetches resulted in real data being overwritten by a delayed setData([]).
+    try { if (oipVwapIntSeries) oipVwapIntSeries.setData([]); } catch(e) {}
+    try { if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData([]); } catch(e) {}
     if (oipIntrinsicChart) {
-        oipIntrinsicChart.series.setData([]);
-        oipIntrinsicChart.peSeries.setData([]);
+        try { oipIntrinsicChart.series?.setData([]); } catch(e) {}
+        try { oipIntrinsicChart.peSeries?.setData([]); } catch(e) {}
     }
-    if (oipCEChart) oipCEChart.series.setData([]);
-    if (oipPEChart) oipPEChart.series.setData([]);
+    if (oipCEChart) { try { oipCEChart.series?.setData([]); } catch(e) {} }
+    if (oipPEChart) { try { oipPEChart.series?.setData([]); } catch(e) {} }
     // --------------------------------
 
     if (data.strikes) {
@@ -538,10 +551,16 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     if (oipCEChart) oipCEChart.update(oipFullCeData, [], true);
     if (oipPEChart) oipPEChart.update(oipFullPeData, [], true);
 
+    // Fit secondary charts to their own data immediately so they render even if
+    // the 100ms range-sync below is skipped (e.g. OI chart range is null).
+    try { oipIntrinsicChart?.chart?.timeScale().fitContent(); } catch(e) {}
+    try { oipCEChart?.chart?.timeScale().fitContent(); } catch(e) {}
+    try { oipPEChart?.chart?.timeScale().fitContent(); } catch(e) {}
+
     // Ensure Replay Toolbar is hidden by default
     const toolbar = document.getElementById('oipReplayToolbar');
     if (toolbar) toolbar.classList.add('hidden');
-    
+
     // Fit content so it looks normal
     if (oipOIChartReady) {
         oipOIChart.timeScale().fitContent();
@@ -557,8 +576,8 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                 if (range) {
                     [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart].forEach(c => {
                         if (c) {
-                            c.timeScale().applyOptions({ barSpacing, rightOffset });
-                            c.timeScale().setVisibleLogicalRange(range);
+                            try { c.timeScale().applyOptions({ barSpacing, rightOffset }); } catch(e) {}
+                            try { c.timeScale().setVisibleLogicalRange(range); } catch(e) {}
                         }
                     });
                 }
@@ -748,7 +767,7 @@ function oipRefreshLocalView(view, resetZoom, index) {
 
 function oipRenderPrecalculatedCPR(daysData, maxTime) {
     if (!oipOIChart || !oipElems.showCpr?.checked) return;
-    Object.values(oipCprSeriesMap).forEach(s => s.setData([]));
+    Object.values(oipCprSeriesMap).forEach(s => { try { s.setData([]); } catch(e) {} });
     
     const lineStyles = {
         prevH: { color: '#ef07f9', lineWidth: 1 }, prevL: { color: '#ef07f9', lineWidth: 1 },
@@ -958,9 +977,8 @@ function oipInitPremiumSeries() {
 /* ── Bootstrap ────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
     window.oipReplayMode = true;
-    oipInitElems(); oipInitCharts();
+    oipInitElems();
     oipInitIndicatorsPopup();
-    oipUpdateEmaVisibility();
     const today = new Date().toISOString().split('T')[0];
     const prev = new Date(); prev.setDate(prev.getDate() - 30);
     if (oipElems.startDate) oipElems.startDate.value = prev.toISOString().split('T')[0];
@@ -1053,8 +1071,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    oipLoadCandles();
-
     // Toggle Replay Toolbar visibility
     const btnToggleReplay = document.getElementById('oipToggleReplayToolbar');
     const replayToolbar = document.getElementById('oipReplayToolbar');
@@ -1092,6 +1108,31 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         };
+    }
+
+    // Defer chart creation and initial data load until the panel is visible.
+    // On the standalone /replay page the panel is visible immediately.
+    // On the dashboard the replay panel starts as display:none — creating LC charts
+    // inside a hidden container causes the Baseline renderer to receive null values
+    // and crash. dashSwitch('replay') dispatches a resize event, so we use that as
+    // the trigger to initialize once the panel actually has layout.
+    function oipStartCharts() {
+        oipInitCharts();
+        oipUpdateEmaVisibility();
+        oipLoadCandles();
+    }
+
+    const oipChartWrap = document.getElementById('oipChartWrap');
+    if (!oipChartWrap || oipChartWrap.offsetParent !== null) {
+        oipStartCharts();
+    } else {
+        const onReplayShow = () => {
+            if (document.getElementById('oipChartWrap')?.offsetParent !== null) {
+                window.removeEventListener('resize', onReplayShow);
+                oipStartCharts();
+            }
+        };
+        window.addEventListener('resize', onReplayShow);
     }
 });
 function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
@@ -1173,7 +1214,12 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
     syncDropdown(oipElems.ceStrikeDropdown, prevCE, peDefault);
     syncDropdown(oipElems.peStrikeDropdown, prevPE, ceDefault);
 
-    if (centerPrice && !oipCustomStrikeSetOnLoad) oipCustomStrikeSetOnLoad = true;
+    if (centerPrice && !oipCustomStrikeSetOnLoad) {
+        oipCustomStrikeSetOnLoad = true;
+        // Strikes were just auto-selected for the first time — reload so the API
+        // is called again with the now-populated CE/PE strike dropdowns.
+        requestAnimationFrame(() => oipResetReplay());
+    }
 
     return parseFloat(oipElems.customStrikeDropdown.value) || atm;
 }
@@ -1295,11 +1341,18 @@ function oipDraw2ndCandle30sBox(candles) {
     if (oipOIChart)
         oip2ndCandle30sBox.oi = _draw30sAllDays(oipOIChart, candles);
 
-    if (oipCEChart?.chart && oipOptionData)
-        oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
-
-    if (oipPEChart?.chart && oipOptionData)
-        oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+    // Defer CE/PE draws past their charts' init RAF — addBaselineSeries triggers
+    // LC's async render RAF which crashes if the chart isn't yet initialized.
+    requestAnimationFrame(() => {
+        try {
+            oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
+            oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
+            if (oipCEChart?.chart && oipOptionData)
+                oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+            if (oipPEChart?.chart && oipOptionData)
+                oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+        } catch(e) {}
+    });
 }
 
 // ── 2nd 5-minute candle box (09:20–09:25) — all days, 1m/2m/3m/5m ───────────
@@ -1335,9 +1388,16 @@ function oipDraw2nd5mCandleBox(candles) {
     if (oipOIChart)
         oip2nd5mCandleBox.oi = _draw5mAllDays(oipOIChart, candles);
 
-    if (oipCEChart?.chart && oipOptionData)
-        oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
-
-    if (oipPEChart?.chart && oipOptionData)
-        oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+    // Defer CE/PE draws past their charts' init RAF — addBaselineSeries triggers
+    // LC's async render RAF which crashes if the chart isn't yet initialized.
+    requestAnimationFrame(() => {
+        try {
+            oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
+            oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
+            if (oipCEChart?.chart && oipOptionData)
+                oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+            if (oipPEChart?.chart && oipOptionData)
+                oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+        } catch(e) {}
+    });
 }

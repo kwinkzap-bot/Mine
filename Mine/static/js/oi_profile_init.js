@@ -6,13 +6,15 @@ window.oipInitSecondaryCharts = function() {
         try {
             const isValid = param && param.point && param.time != null;
             if (!isValid) {
-                targetChart.clearCrosshairPosition();
+                // Defer past LC's init RAF — clearCrosshairPosition triggers an
+                // async render RAF that crashes if the chart isn't yet initialized.
+                requestAnimationFrame(() => { try { targetChart.clearCrosshairPosition(); } catch(e) {} });
             } else {
                 const price = targetSeries.coordinateToPrice(param.point.y);
                 if (price != null) {
-                    targetChart.setCrosshairPosition(price, param.time, targetSeries);
+                    requestAnimationFrame(() => { try { targetChart.setCrosshairPosition(price, param.time, targetSeries); } catch(e) {} });
                 } else {
-                    targetChart.clearCrosshairPosition();
+                    requestAnimationFrame(() => { try { targetChart.clearCrosshairPosition(); } catch(e) {} });
                 }
             }
         } catch(e) {}
@@ -106,7 +108,7 @@ window.oipInitSecondaryCharts = function() {
         // --- Finalize Synchronization (All charts ready) ---
         // Add ResizeObservers for all secondary charts
         const syncSize = (chart, wrap) => {
-            if (!chart || !wrap) return;
+            if (!chart || !wrap || !wrap.clientWidth) return;
             chart.applyOptions({ width: wrap.clientWidth });
         };
 

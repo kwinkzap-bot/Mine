@@ -590,7 +590,7 @@ body.forest-theme .intraday-920-container .signal-inactive {
     padding: 6px 10px;
     border: 1px solid var(--border);
     border-radius: 6px;
-    font-size: 12px;
+    font-size: 10px;
     background: var(--bg-white);
     color: var(--text-primary);
 }

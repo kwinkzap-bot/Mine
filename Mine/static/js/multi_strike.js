@@ -60,34 +60,6 @@ document.addEventListener('DOMContentLoaded', function() {
     startAutoRefresh();
 });
 
-/**
- * Check if current time is within market hours (IST)
- */
-function isMarketHours() {
-    const now = new Date();
-    const day = now.getDay(); // 0=Sun, 6=Sat
-    
-    // Check if it's a weekday (Monday-Friday)
-    if (day === 0 || day === 6) {
-        console.log('[Auto-Refresh] Weekend detected, skipping auto-refresh');
-        return false;
-    }
-    
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentTimeInMinutes = currentHour * 60 + currentMinute;
-    
-    const marketOpenInMinutes = MARKET_OPEN_HOUR * 60 + MARKET_OPEN_MINUTE;
-    const marketCloseInMinutes = MARKET_CLOSE_HOUR * 60 + MARKET_CLOSE_MINUTE;
-    
-    const isWithinHours = currentTimeInMinutes >= marketOpenInMinutes && currentTimeInMinutes < marketCloseInMinutes;
-    
-    if (!isWithinHours) {
-        console.log(`[Auto-Refresh] Outside market hours (${currentHour}:${String(currentMinute).padStart(2, '0')}). Market: ${MARKET_OPEN_HOUR}:${String(MARKET_OPEN_MINUTE).padStart(2, '0')} - ${MARKET_CLOSE_HOUR}:${String(MARKET_CLOSE_MINUTE).padStart(2, '0')}`);
-    }
-    
-    return isWithinHours;
-}
 
 /**
  * Start auto-refresh timer for multi-strike data during market hours
@@ -103,7 +75,7 @@ function startAutoRefresh() {
     
     // Create interval that checks every second
     autoRefreshInterval = setInterval(() => {
-        if (isMarketHours()) {
+        if (isMarketOpen()) {
             console.log('[Auto-Refresh] Fetching data at', new Date().toLocaleTimeString());
             fetchMultiStrikeData(true); // true = silent mode (no loader messages)
         }

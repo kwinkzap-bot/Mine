@@ -21,7 +21,7 @@ body {
 .container {
     max-width: 1800px;
     margin: 0 auto;
-    padding: 12px;
+    padding: 12px 12px 0px 12px;
     content-visibility: auto;
     overflow: visible;
     min-height: 400px;

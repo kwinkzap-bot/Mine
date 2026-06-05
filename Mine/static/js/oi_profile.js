@@ -147,7 +147,8 @@ const oipElems = {
     showPremium: null, showSignals: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
     strikeMode: null, ceStrikeDropdown: null, peStrikeDropdown: null,
     showEma9: null, showEma20: null, showEma50: null, showEma100: null, showEma200: null,
-    exitAll: null
+    exitAll: null,
+    slPrice: null, slCEBtn: null, slPEBtn: null
 };
 
 
@@ -199,6 +200,9 @@ function oipInitElems() {
     oipElems.showEma50 = document.getElementById('oipShowEma50');
     oipElems.showEma100 = document.getElementById('oipShowEma100');
     oipElems.exitAll = document.getElementById('oipExitAll');
+    oipElems.slPrice  = document.getElementById('oipLimitPrice'); // shared with BUY/SELL
+    oipElems.slCEBtn  = document.getElementById('oipSLCE');
+    oipElems.slPEBtn  = document.getElementById('oipSLPE');
     oipElems.days = document.getElementById('oipDays');
     oipElems.startDate = document.getElementById('oipStartDate');
     oipElems.endDate = document.getElementById('oipEndDate');
@@ -372,9 +376,20 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.oip-order-btn').forEach(btn => {
         if (btn.id === 'oipExitAll') {
             btn.addEventListener('click', () => oipExitAllOrders(btn));
+        } else if (btn.id === 'oipSLCE') {
+            btn.addEventListener('click', () => oipPlaceSLOrders(btn, 'CE'));
+        } else if (btn.id === 'oipSLPE') {
+            btn.addEventListener('click', () => oipPlaceSLOrders(btn, 'PE'));
         } else {
             btn.addEventListener('click', () => oipPlaceOrder(btn.dataset.side, btn.dataset.action, btn));
         }
+    });
+
+    // SL price input — enable/disable SL CE/PE buttons
+    oipElems.slPrice?.addEventListener('input', () => {
+        const enabled = parseFloat(oipElems.slPrice.value) > 0;
+        if (oipElems.slCEBtn) oipElems.slCEBtn.disabled = !enabled;
+        if (oipElems.slPEBtn) oipElems.slPEBtn.disabled = !enabled;
     });
 
     oipOIChart.subscribeCrosshairMove(() => {
@@ -596,6 +611,7 @@ function oipDrawOIBars() {
         if (c > maxCEV) { maxCEV = c; ceMaxStr = s.strike; }
         if (p > maxPEV) { maxPEV = p; peMaxStr = s.strike; }
     });
+    const isLight = (activeTheme === 'light' || activeTheme === 'cream' || activeTheme === 'ocean');
     ctx.font = 'bold 10px sans-serif';
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'right';
@@ -604,26 +620,22 @@ function oipDrawOIBars() {
         if (y === null || y < -50 || y > H + 50) return;
         const valCE = getCE(s), valPE = getPE(s);
         const ceW = (Math.abs(valCE) / maxVal) * MAX_BAR_PX, peW = (Math.abs(valPE) / maxVal) * MAX_BAR_PX;
-        const isLight = (activeTheme === 'light' || activeTheme === 'cream' || activeTheme === 'ocean');
+        const hasBoth = valCE !== 0 && valPE !== 0;
         if (valCE !== 0) {
             ctx.fillStyle = ctx.strokeStyle = (s.strike === ceMaxStr) ? ceColMax : ceCol;
             if (valCE < 0) ctx.strokeRect(plotRight - ceW, y - barH - 0.5, ceW, barH);
             else ctx.fillRect(plotRight - ceW, y - barH - 0.5, ceW, barH);
-
-            // Reverted label positioning back to the right-aligned Y-axis position
-            const textStr = fmtL(valCE) + ' C';
             ctx.fillStyle = isLight ? '#000000' : '#ffffff';
-            ctx.fillText(textStr, plotRight - 4, y - (barH / 2) - 0.5);
+            const ceLbl = (hasBoth ? '(' + fmtS(Math.abs(valPE - valCE)) + ')' : '') + fmtL(valCE) + ' C';
+            ctx.fillText(ceLbl, plotRight - 4, y - (barH / 2) - 0.5);
         }
         if (valPE !== 0) {
             ctx.fillStyle = ctx.strokeStyle = (s.strike === peMaxStr) ? peColMax : peCol;
             if (valPE < 0) ctx.strokeRect(plotRight - peW, y + 0.5, peW, barH);
             else ctx.fillRect(plotRight - peW, y + 0.5, peW, barH);
-
-            // Reverted label positioning back to the right-aligned Y-axis position
-            const textStr = fmtL(valPE) + ' P';
             ctx.fillStyle = isLight ? '#000000' : '#ffffff';
-            ctx.fillText(textStr, plotRight - 4, y + (barH / 2) + 0.5);
+            const peLbl = (hasBoth ? '(' + fmtS(Math.abs(valCE - valPE)) + ')' : '') + fmtL(valPE) + ' P';
+            ctx.fillText(peLbl, plotRight - 4, y + (barH / 2) + 0.5);
         }
     });
     ctx.strokeStyle = borderCol; ctx.beginPath(); ctx.moveTo(plotRight, 0); ctx.lineTo(plotRight, H); ctx.stroke();
@@ -1194,6 +1206,16 @@ function fmtL(n) {
     return n.toLocaleString('en-IN');
 }
 
+// Compact formatter for bracket diff labels — no sign, no spaces, 1 decimal
+function fmtS(n) {
+    if (n == null) return '0';
+    const abs = Math.abs(n);
+    if (abs >= 10000000) return (abs / 10000000).toFixed(1) + 'Cr';
+    if (abs >= 100000) return (abs / 100000).toFixed(1) + 'L';
+    if (abs >= 1000) return (abs / 1000).toFixed(0) + 'K';
+    return String(Math.round(abs));
+}
+
 function setRefreshBtn(l) { oipElems.refreshIcon?.classList.toggle('spin', l); }
 
 function oipIsMarketOpen() {
@@ -1381,25 +1403,31 @@ function _oipColorAlpha(color, alpha) {
 // Draw a 1px-border + fill box on the given LightweightCharts instance.
 // Returns { chart, fill, top, bottom } for later cleanup.
 function _oipDrawCandleBox(chart, hi, lo, times, color) {
+    const safeTimes = times.filter(t => t != null && isFinite(t) && t > 0);
+    if (!safeTimes.length) return null;
     const fillCol   = _oipColorAlpha(color, 0.10);
     const borderCol = _oipColorAlpha(color, 0.65);
     const shared = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
+    try {
+        const fill = chart.addBaselineSeries({
+            baseValue: { type: 'price', price: lo },
+            topFillColor1: fillCol, topFillColor2: fillCol, topLineColor: 'transparent',
+            bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
+            lineWidth: 1, ...shared
+        });
+        fill.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-    const fill = chart.addBaselineSeries({
-        baseValue: { type: 'price', price: lo },
-        topFillColor1: fillCol, topFillColor2: fillCol, topLineColor: 'transparent',
-        bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
-        lineWidth: 1, ...shared
-    });
-    fill.setData(times.map(t => ({ time: t, value: hi })));
+        const top = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+        top.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-    const top = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
-    top.setData(times.map(t => ({ time: t, value: hi })));
+        const bottom = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+        bottom.setData(safeTimes.map(t => ({ time: t, value: lo })));
 
-    const bottom = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
-    bottom.setData(times.map(t => ({ time: t, value: lo })));
-
-    return { chart, fill, top, bottom };
+        return { chart, fill, top, bottom };
+    } catch (e) {
+        console.warn('[CandleBox] skipped box hi=%s lo=%s:', hi, lo, e.message);
+        return null;
+    }
 }
 
 function _oipRemoveBoxSeries(box) {
@@ -1452,7 +1480,7 @@ function oipDraw2ndCandle30sBox(candles) {
             if (day.length < 2) return;
             const c2 = day[1];
             const hi = _oipH(c2), lo = _oipL(c2);
-            if (hi === lo) return;
+            if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
             const times = day.filter(c => c.time >= c2.time).map(c => c.time);
             if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#FFC800'));
         });
@@ -1462,11 +1490,16 @@ function oipDraw2ndCandle30sBox(candles) {
     if (oipOIChart)
         oip2ndCandle30sBox.oi = _draw30sAllDays(oipOIChart, candles);
 
-    if (oipCEChart?.chart && oipOptionData)
-        oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
-
-    if (oipPEChart?.chart && oipOptionData)
-        oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+    requestAnimationFrame(() => {
+        try {
+            oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
+            oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
+            if (oipCEChart?.chart && oipOptionData)
+                oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+            if (oipPEChart?.chart && oipOptionData)
+                oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+        } catch(e) {}
+    });
 }
 
 // ── 2nd 5-minute candle box (09:20–09:25) — all days, 1m/2m/3m/5m ───────────
@@ -1492,7 +1525,7 @@ function oipDraw2nd5mCandleBox(candles) {
             if (!w.length) return;
             const hi = Math.max(...w.map(_oipH));
             const lo = Math.min(...w.map(_oipL));
-            if (hi === lo) return;
+            if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
             const times = day.filter(c => c.time >= w[0].time).map(c => c.time);
             if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#00D2FF'));
         });
@@ -1502,11 +1535,18 @@ function oipDraw2nd5mCandleBox(candles) {
     if (oipOIChart)
         oip2nd5mCandleBox.oi = _draw5mAllDays(oipOIChart, candles);
 
-    if (oipCEChart?.chart && oipOptionData)
-        oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
-
-    if (oipPEChart?.chart && oipOptionData)
-        oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+    // Defer CE/PE draws past their charts' init RAF — addBaselineSeries triggers
+    // LC's async render RAF which crashes if the chart isn't yet initialized.
+    requestAnimationFrame(() => {
+        try {
+            oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
+            oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
+            if (oipCEChart?.chart && oipOptionData)
+                oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+            if (oipPEChart?.chart && oipOptionData)
+                oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+        } catch(e) {}
+    });
 }
 
 function oipAutoFillHighLow() {
@@ -1530,12 +1570,32 @@ function oipAutoFillHighLow() {
 
 // oipCalculateDynamicEMA — defined in oi_indicators.js
 
-async function oipExitAllOrders(btn) {
-    if (!confirm("⚠️ CANCEL all pending orders and EXIT all positions at MARKET price?")) return;
+let _exitArmTimer = null;
 
-    const originalText = btn.innerText;
+async function oipExitAllOrders(btn) {
+    // Double-click confirm: first click arms, second click within 3s executes
+    if (!btn._exitArmed) {
+        btn._exitArmed = true;
+        const prev = btn.innerText;
+        btn.innerText = 'CONFIRM?';
+        btn.style.background = '#7f1d1d';
+        if (_exitArmTimer) clearTimeout(_exitArmTimer);
+        _exitArmTimer = setTimeout(() => {
+            btn._exitArmed = false;
+            btn.innerText = prev;
+            btn.style.background = '';
+        }, 3000);
+        return;
+    }
+
+    // Second click — execute
+    btn._exitArmed = false;
+    if (_exitArmTimer) { clearTimeout(_exitArmTimer); _exitArmTimer = null; }
+
+    const originalText = 'EXIT';
     btn.disabled = true;
     btn.innerText = 'EXITING...';
+    btn.style.background = '';
     btn.style.opacity = '0.7';
 
     try {
@@ -1548,20 +1608,73 @@ async function oipExitAllOrders(btn) {
         });
         const r = await res.json();
         if (r.success) {
-            const summary = r.summary.map(s =>
-                `${s.broker}_${s.instance}: 🛑 ${s.cancelled_orders} Cancelled, ⚡ ${s.exited_positions} Exited`
-            ).join('\n');
-            showNotification(`✅ Global Exit Complete!\n${summary}`, 'success');
+            const summary = (r.summary || []).map(s =>
+                `${s.broker}_${s.instance}: ${s.cancelled_orders} Cancelled, ${s.exited_positions} Exited`
+            ).join(' | ');
+            showNotification(`Exit complete: ${summary || 'Done'}`, 'success');
         } else {
-            showNotification(`❌ Exit Failed: ${r.error || 'Unknown error'}`, 'error');
+            showNotification(`Exit failed: ${r.error || 'Unknown error'}`, 'error');
         }
     } catch (e) {
+        console.error('[Exit] Error:', e);
         showNotification(`Exit error: ${e.message}`, 'error');
     } finally {
         btn.disabled = false;
         btn.innerText = originalText;
         btn.style.opacity = '1';
     }
+}
+
+async function oipPlaceSLOrders(btn, side = null) {
+    const triggerPrice = parseFloat(oipElems.slPrice?.value);
+    if (!(triggerPrice > 0)) return;
+
+    if (!oipCurrentCEStrike && !oipCurrentPEStrike) {
+        showNotification('No CE/PE strike loaded — load OI data first.', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    const origText = btn.innerText;
+    btn.innerText = 'PLACING...';
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+
+    const legs = [];
+    if ((!side || side === 'CE') && oipCurrentCEStrike) legs.push({ option_type: 'CE', strike: oipCurrentCEStrike });
+    if ((!side || side === 'PE') && oipCurrentPEStrike) legs.push({ option_type: 'PE', strike: oipCurrentPEStrike });
+
+    const results = await Promise.allSettled(legs.map(leg =>
+        fetch('/api/order/place-sl', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
+            body: JSON.stringify({ symbol: oipSymbol, strike: leg.strike, option_type: leg.option_type, trigger_price: triggerPrice })
+        }).then(r => r.json())
+    ));
+
+    const ok      = results.filter(r => r.status === 'fulfilled' && r.value?.success);
+    const failed  = results.filter(r => r.status !== 'fulfilled' || !r.value?.success);
+
+    const extractErr = r => {
+        if (r.status === 'rejected') return r.reason?.message || 'Network error';
+        // errors are nested inside results[] array from the backend
+        const brokerErrors = (r.value?.results || [])
+            .filter(b => !b.success)
+            .map(b => b.error || b.message || 'Unknown error');
+        return brokerErrors.length ? brokerErrors.join(', ') : (r.value?.error || r.value?.message || 'Unknown error');
+    };
+
+    if (ok.length > 0 && failed.length === 0) {
+        showNotification(`SL placed for ${ok.length} leg(s).`, 'success');
+    } else if (ok.length > 0) {
+        const errMsgs = failed.map(extractErr).join('; ');
+        showNotification(`${ok.length} placed, ${failed.length} failed: ${errMsgs}`, 'warning');
+    } else {
+        const errMsgs = failed.map(extractErr).join('; ');
+        showNotification(`SL failed: ${errMsgs}`, 'error');
+    }
+
+    btn.innerText = origText;
+    // Stay disabled — user must re-enter/change price to re-fire (prevents accidental double placement)
 }
 
 async function oipPlaceOrder(side, action, btn) {

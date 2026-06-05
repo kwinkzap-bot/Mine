@@ -127,19 +127,6 @@ const OptionsChartApp = (function () {
     }
 
     /**
-     * Check if current time is within Indian market hours (Mon-Fri 09:15-15:30 IST).
-     */
-    function isMarketHours() {
-        const now = new Date();
-        const day = now.getDay(); // 0=Sun, 6=Sat
-        if (day === 0 || day === 6) return false;
-        const minutes = now.getHours() * 60 + now.getMinutes();
-        const open = 9 * 60 + 15;   // 555
-        const close = 15 * 60 + 30; // 930
-        return minutes >= open && minutes <= close;
-    }
-
-    /**
      * Converts raw data to the Lightweight Charts format.
      * Backend sends UTC timestamps.
      */
@@ -1323,7 +1310,7 @@ const OptionsChartApp = (function () {
             }
 
             // Check if it's within Indian market hours (9:15 AM - 3:30 PM, Monday-Friday)
-            if (!isMarketHours()) {
+            if (!isMarketOpen()) {
                 console.log('Auto-update paused: Outside market hours');
                 return;
             }

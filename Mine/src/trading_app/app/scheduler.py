@@ -11,11 +11,16 @@ try:
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
     APSCHEDULER_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    APSCHEDULER_AVAILABLE = False
+    BackgroundScheduler = None  # type: ignore
+    CronTrigger = None  # type: ignore
+    logger.warning("APScheduler not installed — background scheduler disabled")
 except Exception as e:
     APSCHEDULER_AVAILABLE = False
     BackgroundScheduler = None  # type: ignore
     CronTrigger = None  # type: ignore
-    logger.warning(f"APScheduler not available. Background scheduler disabled. Error: {e}")
+    logger.error(f"APScheduler failed to initialize (unexpected error) — scheduler disabled: {e}", exc_info=True)
 
 
 class MarketScheduler:
@@ -105,10 +110,9 @@ class MarketScheduler:
         )
 
         self.scheduler.start()
-        logger.info("Market scheduler started")
-        logger.info("CPR filter job scheduled: Every 5 minutes during market hours")
-        logger.info("OI persistence job scheduled: Every 1 minute during market hours")
-        logger.info("NIFTY straddle rollover job scheduled: Tuesday 15:15 IST")
+        jobs = {j.id: str(j.next_run_time) for j in self.scheduler.get_jobs()}
+        logger.info(f"Market scheduler started — jobs registered: {list(jobs.keys())}")
+        logger.info(f"[Straddle Rollover] next run: {jobs.get('nifty_straddle_rollover', 'NOT REGISTERED')}")
     
     def stop(self):
         """Stop the background scheduler."""
@@ -161,9 +165,6 @@ class MarketScheduler:
             
         except Exception as e:
             logger.error(f"Unexpected error in CPR filter background task: {e}", exc_info=True)
-
-        except Exception as e:
-            logger.error(f"Unexpected error in OI persistence task: {e}", exc_info=True)
 
     def _run_oi_persistence_task(self):
         """Fetch and store Open Interest data."""

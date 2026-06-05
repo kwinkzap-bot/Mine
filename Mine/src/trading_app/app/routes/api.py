@@ -4077,6 +4077,87 @@ def exit_all_orders() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/order/place-sl', methods=['POST'])
+def place_sl_order() -> EndpointResponse:
+    """Place SL-Market order for a single option leg across all active brokers."""
+    _LOT_MAP = {'NIFTY': 25, 'BANKNIFTY': 15, 'SENSEX': 20, 'FINNIFTY': 40, 'MIDCPNIFTY': 75}
+    try:
+        _username = session.get('username', 'Mine')
+        data = request.get_json() or {}
+        symbol        = (data.get('symbol') or 'NIFTY').strip().upper()
+        strike        = int(data.get('strike', 0))
+        option_type   = (data.get('option_type') or '').strip().upper()
+        trigger_price = float(data.get('trigger_price', 0))
+
+        if option_type not in ('CE', 'PE') or strike <= 0 or trigger_price <= 0:
+            return jsonify({'success': False, 'error': 'Invalid parameters: need option_type CE/PE, strike > 0, trigger_price > 0'}), 400
+
+        from trading_app.app.utils.user_env import UserEnvManager
+        from trading_app.service.kite_order_services import KiteService
+
+        standard_lot = _LOT_MAP.get(symbol, 1)
+        results = []
+
+        for i in range(1, 21):
+            b_type = UserEnvManager.get_user_var(_username, f'BROKER_{i}_TYPE', '').strip().lower()
+            if not b_type or not is_broker_active(_username, i):
+                continue
+
+            if b_type in ('kite', 'zerodha'):
+                kite = get_kite(instance=i)
+                if not kite:
+                    results.append({'broker': 'zerodha', 'instance': i, 'success': False, 'error': 'Kite init failed'})
+                    continue
+                try:
+                    svc = KiteService(kite_instance=kite)
+                    lot_qty = get_broker_lot_size(_username, i, standard_lot)
+                    tradingsymbol = svc.get_option_symbol(symbol, strike, option_type)
+                    if not tradingsymbol:
+                        results.append({'broker': 'zerodha', 'instance': i, 'success': False,
+                                        'error': f'Could not resolve tradingsymbol for {symbol} {strike} {option_type}'})
+                        continue
+                    r = svc.place_stoploss_order(tradingsymbol=tradingsymbol,
+                                                  trigger_price=trigger_price,
+                                                  quantity=lot_qty,
+                                                  transaction_type='SELL')
+                    results.append({'broker': 'zerodha', 'instance': i, **r})
+                except Exception as e:
+                    logger.error(f'[place-sl] zerodha_{i} error: {e}')
+                    results.append({'broker': 'zerodha', 'instance': i, 'success': False, 'error': str(e)})
+
+            elif b_type == 'fyers':
+                try:
+                    from trading_app.service.fyers_order_services import FyersOrderService
+                    fyers_at = session.get(f'fyers_{i}_access_token') or \
+                               UserEnvManager.get_user_var(_username, f'BROKER_{i}_ACCESS_TOKEN')
+                    fyers_id = UserEnvManager.get_user_var(_username, f'BROKER_{i}_APP_ID')
+                    if not fyers_at:
+                        results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': 'No access token'})
+                        continue
+                    fyers_svc = FyersOrderService(app_id=fyers_id, access_token=fyers_at)
+                    lot_qty = get_broker_lot_size(_username, i, standard_lot)
+                    fyers_sym = fyers_svc.get_option_symbol(symbol, strike, option_type) if hasattr(fyers_svc, 'get_option_symbol') else None
+                    if not fyers_sym:
+                        results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': 'Symbol resolution failed'})
+                        continue
+                    r = fyers_svc.place_stoploss_order(symbol=fyers_sym, trigger_price=trigger_price,
+                                                        quantity=lot_qty, transaction_type='SELL')
+                    results.append({'broker': 'fyers', 'instance': i, **r})
+                except Exception as e:
+                    logger.error(f'[place-sl] fyers_{i} error: {e}')
+                    results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': str(e)})
+
+        if not results:
+            return jsonify({'success': False, 'error': 'No active brokers found'}), 400
+
+        overall = any(r.get('success') for r in results)
+        return jsonify({'success': overall, 'results': results})
+
+    except Exception as e:
+        logger.error(f'[place-sl] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/orders/place', methods=['POST'])
 def place_order_unified() -> EndpointResponse:
     """Broker mode: dispatch order (MARKET or LIMIT) to all active brokers and save record to server JSON."""
@@ -5264,13 +5345,11 @@ def algo_straddle_exit() -> EndpointResponse:
         username = session.get('username') or 'Mine'
         data = request.get_json(silent=True) or {}
         broker_instance = int(data.get('broker_instance') or _get_straddle_broker(username) or 1)
-        from trading_app.service.provider_logic import get_kite
+        from trading_app.service.provider_logic import get_kite, get_data_provider as _gdp
         kite = get_kite(user=username, instance=broker_instance)
         if not kite:
             return jsonify({'success': False, 'error': f'Broker {broker_instance} not connected'}), 401
-        from trading_app.algo.nifty_weekly_straddle import NiftyWeeklyStraddle, _load_state
-        state = _load_state()
-        from trading_app.service.provider_logic import get_data_provider as _gdp
+        from trading_app.algo.nifty_weekly_straddle import NiftyWeeklyStraddle
         provider = _gdp(user=username)
         result = NiftyWeeklyStraddle(provider, kite, broker_instance, username).exit_straddle('MANUAL')
         return jsonify(result)
@@ -5290,6 +5369,25 @@ def _get_straddle_broker(username: str) -> Optional[int]:
     except Exception:
         pass
     return None
+
+
+@api_bp.route('/pcr/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def pcr_history() -> EndpointResponse:
+    """Return intraday PCR + OI change time-series from oi_history DB."""
+    try:
+        from datetime import date as _date
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        date_str = request.args.get('date', _date.today().isoformat())
+        from trading_app.service.open_interest_service import OpenInterestService
+        svc = OpenInterestService(None)
+        data = svc.get_intraday_pcr_history(symbol, date_str)
+        return jsonify({'success': True, 'symbol': symbol, 'date': date_str, 'data': data})
+    except Exception as e:
+        logger.error(f'[pcr/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @api_bp.route('/oi-profile/candles', methods=['GET'])

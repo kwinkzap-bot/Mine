@@ -1,0 +1,85 @@
+/* ── PCR Tab ────────────────────────────────────────────────── */
+
+.pcr-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0 5px;
+    flex-wrap: wrap;
+}
+.pcr-title { font-size: 11px; font-weight: 700; color: var(--oip-text, #0f172a); }
+.pcr-last-upd { font-size: 11px; color: var(--oip-metric-lbl, #64748b); margin-left: 4px; }
+
+.pcr-section {
+    position: relative;
+    margin-bottom: 5px;
+    background: var(--oip-bg, #ffffff);
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.pcr-section-header {
+    display: flex;
+    align-items: center;
+    padding: 6px 12px;
+    gap: 5px;
+}
+.pcr-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--oip-text, #0f172a);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.pcr-legend {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--oip-metric-lbl, #64748b);
+    flex-wrap: wrap;
+    flex: 1;
+}
+.pcr-legend-item { display: flex; align-items: center; gap: 5px; }
+.pcr-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.pcr-live-val { margin-left: auto; font-size: 12px; font-weight: 700; color: var(--oip-text, #0f172a); }
+
+.pcr-oi-metrics { display: flex; gap: 10px; margin-left: auto; align-items: center; }
+.pcr-oi-metric  { display: flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 600; color: var(--oip-metric-lbl, #64748b); }
+.pcr-oi-label   { white-space: nowrap; }
+.pcr-oi-val     { font-size: 12px; font-weight: 700; white-space: nowrap; }
+
+/* Chart-wrap: viewport-relative height so both charts always fit on screen.
+   calc(50vh - 110px) accounts for nav + toolbar + two section headers + margins. */
+.pcr-chart-wrap {
+    position: relative;
+    height: calc(50vh - 110px);
+    min-height: 180px;
+    overflow: hidden;
+}
+
+/* Chart div fills the wrap so LC autoSize reads the correct height. */
+.pcr-chart-wrap > div:first-child {
+    width: 100%;
+    height: 100%;
+}
+
+/* Tooltip sits above the LC canvas layers. */
+.pcr-tooltip {
+    position: absolute;
+    top: 0px;
+    left: 50px;
+    z-index: 100;
+    background: var(--oip-header-bg, #f8fafc);
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--oip-text, #0f172a);
+    pointer-events: none;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.pcr-tooltip.hidden { display: none; }

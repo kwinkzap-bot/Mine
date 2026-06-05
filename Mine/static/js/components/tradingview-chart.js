@@ -121,6 +121,36 @@ window.TradingViewChart = (function () {
     }
 
     /**
+     * Calculates EMA for given period from formatted candlestick data
+     */
+    function calculateEMA(data, period) {
+        if (!data || data.length < period) return [];
+
+        const k = 2 / (period + 1);
+        const result = [];
+
+        // Seed: SMA of first `period` closes
+        let sum = 0;
+        let seedCount = 0;
+        for (let i = 0; i < period; i++) {
+            if (data[i].close !== undefined) { sum += data[i].close; seedCount++; }
+        }
+        if (seedCount === 0) return [];
+
+        let ema = sum / seedCount;
+        result.push({ time: data[period - 1].time, value: ema });
+
+        for (let i = period; i < data.length; i++) {
+            if (data[i].close !== undefined) {
+                ema = data[i].close * k + ema * (1 - k);
+                result.push({ time: data[i].time, value: ema });
+            }
+        }
+
+        return result;
+    }
+
+    /**
      * Adds all 4 PDH/PDL price lines to chart
      * For CE Charts: CE PDH/PDL (dark grey), PE PDH (green), PE PDL (red)
      * For PE Charts: PE PDH/PDL (dark grey), CE PDH (green), CE PDL (red)
@@ -425,7 +455,7 @@ window.TradingViewChart = (function () {
                     timezone: 'Etc/UTC' // Use UTC to prevent double-shifting of already IST-shifted timestamps
                 },
                 height: height,
-                width: window.innerWidth > 600 ? container.offsetWidth : container.offsetWidth
+                width: (container.offsetWidth || 600)
             });
 
             // Create candlestick series
@@ -806,11 +836,15 @@ window.TradingViewChart = (function () {
                         const peFormatted = (referenceOrPeData && Array.isArray(referenceOrPeData)) ? formatChartData(referenceOrPeData) : [];
 
                         if (ceSeries) {
-                            ceSeries.setData(ceFormatted);
-                            if (ceFormatted.length > 0) this.data = ceFormatted;
+                            const hasRealCe = ceFormatted.some(c => c.open !== undefined);
+                            if (hasRealCe) {
+                                try { ceSeries.setData(ceFormatted); } catch(e) {}
+                                if (ceFormatted.length > 0) this.data = ceFormatted;
+                            }
                         }
                         if (peSeries) {
-                            peSeries.setData(peFormatted);
+                            const hasRealPe = peFormatted.some(c => c.open !== undefined);
+                            if (hasRealPe) { try { peSeries.setData(peFormatted); } catch(e) {} }
                         }
 
                     } else if (type === 'LINE') {
@@ -840,9 +874,11 @@ window.TradingViewChart = (function () {
                     } else {
                         // Single series chart
                         const updatedData = formatChartData(newData);
-                        if (updatedData.length > 0) {
-                            series.setData(updatedData);
+                        const hasRealData = updatedData.some(c => c.open !== undefined);
+                        if (hasRealData && updatedData.length > 0) {
+                            try { series.setData(updatedData); } catch(e) {}
                             this.data = updatedData;
+
                         }
                     }
 

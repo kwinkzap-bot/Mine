@@ -216,7 +216,7 @@ def apply_kite_proxy(kite, raise_if_unreachable: bool = False) -> bool:
     host = os.getenv("STATIC_IP_HOST", "").strip()
     if not all([key, secret, host]):
         return False
-    proxy_url = f"https://{key}:{secret}@{host}"
+    proxy_url = f"http://{key}:{secret}@{host}"
     # KiteConnect._request passes proxies=self.proxies, NOT reqsession.proxies
     kite.proxies = {'http': proxy_url, 'https': proxy_url}
     logging.info(f"[KiteService] Static IP proxy active: {host}")

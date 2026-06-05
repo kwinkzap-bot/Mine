@@ -12,7 +12,7 @@ import threading
 import gc
 import math
 import time
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta, time as dt_time, timezone
 from typing import Dict, List, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from kiteconnect import KiteConnect
@@ -672,10 +672,55 @@ class OpenInterestService:
             logger.error(f"Failed to save OI snapshot: {e}")
 
 
+    def get_intraday_pcr_history(self, symbol: str, date_str: str) -> List[Dict[str, Any]]:
+        """Return per-minute PCR + OI change time-series for a given day from oi_history."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT timestamp, current_price, pcr, total_ce_change, total_pe_change
+                    FROM oi_history
+                    WHERE symbol = ?
+                      AND date(timestamp) = ?
+                      AND time(timestamp) BETWEEN '09:15:00' AND '15:30:00'
+                      AND current_price > 0
+                      AND pcr > 0
+                    ORDER BY timestamp ASC
+                ''', (symbol, date_str))
+                rows = cursor.fetchall()
+
+            # Deduplicate by minute: sub-second snapshots can share the same
+            # integer Unix timestamp after truncation, causing LC to throw on
+            # duplicate time values. Keep the last row per minute.
+            seen: dict = {}
+            for row in rows:
+                try:
+                    dt = datetime.fromisoformat(row['timestamp'])
+                    # Treat naive IST datetime as UTC (fake-UTC) so getUTCHours()
+                    # in the browser returns the IST hour directly, matching oi_profile.js.
+                    unix_ts = int(dt.replace(tzinfo=timezone.utc).timestamp())
+                    # Truncate to the minute so snapshots within the same minute
+                    # collapse to a single data point.
+                    minute_ts = unix_ts - (unix_ts % 60)
+                    seen[minute_ts] = {
+                        'time': minute_ts,
+                        'price': row['current_price'],
+                        'pcr': round(row['pcr'], 3),
+                        'ce_change': row['total_ce_change'],
+                        'pe_change': row['total_pe_change'],
+                    }
+                except Exception:
+                    continue
+            return sorted(seen.values(), key=lambda x: x['time'])
+        except Exception as e:
+            logger.error(f"[OI] get_intraday_pcr_history error: {e}")
+            return []
+
     def get_latest_oi_from_db(self, symbol: str, max_age_minutes: int = 5) -> Optional[Dict[str, Any]]:
         """
         Get the most recent OI snapshot from the database.
-        
+
         Args:
             symbol: Trading symbol
             max_age_minutes: Maximum age of data in minutes to consider valid (default 5)

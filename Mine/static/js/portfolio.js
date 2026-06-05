@@ -31,21 +31,11 @@
         });
     });
 
-    // ── Market hours ───────────────────────────────────────────────
-    function isMarketHours() {
-        const now = new Date();
-        const day = now.getDay();
-        if (day === 0 || day === 6) return false;
-        const mins = now.getHours() * 60 + now.getMinutes();
-        return mins >= MARKET_OPEN.h * 60 + MARKET_OPEN.m &&
-               mins <  MARKET_CLOSE.h * 60 + MARKET_CLOSE.m;
-    }
-
     // ── Auto-refresh ───────────────────────────────────────────────
     function startAutoRefresh() {
         stopAutoRefresh();
         _refreshTimer = setInterval(() => {
-            if (_activeBroker && isMarketHours()) loadPortfolio(false, true);
+            if (_activeBroker && isMarketOpen()) loadPortfolio(false, true);
         }, AUTO_REFRESH_MS);
         updateLiveDot();
     }
@@ -56,7 +46,7 @@
 
     function updateLiveDot() {
         const dot  = $('pfLiveDot');
-        const live = isMarketHours();
+        const live = isMarketOpen();
         if (dot) dot.className = 'pf-live-dot' + (live ? ' live' : ' closed');
     }
 

@@ -209,7 +209,7 @@
                         <path d="m2 17 10 5 10-5" />
                         <path d="m2 12 10 5 10-5" />
                     </svg>
-                    Option Premium
+                    Opt Prem
                 </div>
 
                 <!-- Compact single-row controls -->
@@ -266,19 +266,17 @@
                             <option value="broker" selected>Broker</option>
                             <option value="mine">Mine</option>
                         </select>
-                        <input type="number" id="oipLimitPrice" class="oip-input oip-input--price" placeholder="Limit ₹"
-                            step="0.05" title="Limit Price">
+                        <input type="number" id="oipLimitPrice" class="oip-input oip-input--price" placeholder="Price ₹"
+                            step="0.05" title="Limit / SL Trigger Price">
                         <div class="oip-order-side-group oip-order-side-group--ce">
-                            <button class="oip-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B
-                                CE</button>
-                            <button class="oip-order-btn ce-sell" data-side="CE" data-action="SELL" title="Sell CE">S
-                                CE</button>
+                            <button class="oip-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B CE</button>
+                            <button class="oip-order-btn ce-sell" data-side="CE" data-action="SELL" title="Sell CE">S CE</button>
+                            <button id="oipSLCE" class="oip-order-btn sl-btn" disabled title="Place SL order for CE">SL CE</button>
                         </div>
                         <div class="oip-order-side-group oip-order-side-group--pe">
-                            <button class="oip-order-btn pe-buy" data-side="PE" data-action="BUY" title="Buy PE">B
-                                PE</button>
-                            <button class="oip-order-btn pe-sell" data-side="PE" data-action="SELL" title="Sell PE">S
-                                PE</button>
+                            <button class="oip-order-btn pe-buy" data-side="PE" data-action="BUY" title="Buy PE">B PE</button>
+                            <button class="oip-order-btn pe-sell" data-side="PE" data-action="SELL" title="Sell PE">S PE</button>
+                            <button id="oipSLPE" class="oip-order-btn sl-btn" disabled title="Place SL order for PE">SL PE</button>
                         </div>
                         <div class="oip-prem-sep"></div>
                         <button id="oipExitAll" class="oip-order-btn exit-all"

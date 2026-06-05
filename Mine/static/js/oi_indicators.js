@@ -34,13 +34,16 @@ function oipUpdateEmaVisibility() {
     if (oipEma100Series) oipEma100Series.applyOptions({ visible: s100 });
     if (oipEma200Series) oipEma200Series.applyOptions({ visible: s200 });
 
-    if (oipCEEma9Series)  oipCEEma9Series.applyOptions({ visible: s9 });
-    if (oipCEEma20Series) oipCEEma20Series.applyOptions({ visible: s20 });
-    if (oipCEEma50Series) oipCEEma50Series.applyOptions({ visible: s50 });
-
-    if (oipPEEma9Series)  oipPEEma9Series.applyOptions({ visible: s9 });
-    if (oipPEEma20Series) oipPEEma20Series.applyOptions({ visible: s20 });
-    if (oipPEEma50Series) oipPEEma50Series.applyOptions({ visible: s50 });
+    // Defer CE/PE series past their charts' init RAF — applyOptions triggers
+    // LC's async render RAF which crashes if the chart isn't yet initialized.
+    requestAnimationFrame(() => {
+        try { if (oipCEEma9Series)  oipCEEma9Series.applyOptions({ visible: s9 }); } catch(e) {}
+        try { if (oipCEEma20Series) oipCEEma20Series.applyOptions({ visible: s20 }); } catch(e) {}
+        try { if (oipCEEma50Series) oipCEEma50Series.applyOptions({ visible: s50 }); } catch(e) {}
+        try { if (oipPEEma9Series)  oipPEEma9Series.applyOptions({ visible: s9 }); } catch(e) {}
+        try { if (oipPEEma20Series) oipPEEma20Series.applyOptions({ visible: s20 }); } catch(e) {}
+        try { if (oipPEEma50Series) oipPEEma50Series.applyOptions({ visible: s50 }); } catch(e) {}
+    });
 }
 
 /* ── Calculation functions ────────────────────────────────── */

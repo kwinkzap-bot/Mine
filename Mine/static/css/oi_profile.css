@@ -114,7 +114,6 @@ body.ocean-theme, .oip-page.ocean-theme {
     justify-content: space-between;
     align-items: center;
     width: 100%;
-    gap: 12px;
 }
 
 .oip-intrinsic-controls {
@@ -283,6 +282,21 @@ body.ocean-theme, .oip-page.ocean-theme {
 .exit-all:hover {
     background: #b91c1c;
     box-shadow: 0 2px 5px rgba(220, 38, 38, 0.3);
+}
+
+.sl-btn {
+    background: #d97706;
+    font-weight: 900;
+    padding: 0 10px;
+    box-shadow: 0 1px 3px rgba(217, 119, 6, 0.25);
+}
+.sl-btn:hover:not(:disabled) {
+    background: #b45309;
+    box-shadow: 0 2px 5px rgba(180, 83, 9, 0.35);
+}
+.sl-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
 }
 
 .oip-btn:hover:not(:disabled) {
@@ -1069,9 +1083,10 @@ body.ocean-theme .oip-tooltip {
 
 /* Price input: narrower */
 .oip-input--price {
-    width: 72px;
+    width: 50px;
     font-size: 10px;
     height: 20px;
+    padding: 0 0 0 6px;
 }
 
 /* Order buttons — compact pill style */

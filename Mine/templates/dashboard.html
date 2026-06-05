@@ -4,6 +4,7 @@
 {% block head %}
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/pcr.css') }}?v={{ sv('css/pcr.css') }}">
 <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 <script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
 <style>
@@ -19,8 +20,8 @@
     z-index: 900;
 }
 .dash-tab {
-    padding: 7px 20px 9px;
-    font-size: 13px;
+    padding: 5px 10px 5px;
+    font-size: 11px;
     font-weight: 700;
     color: var(--oip-metric-lbl, #64748b);
     background: none;
@@ -116,6 +117,7 @@
 <div class="dash-tab-bar">
     <button class="dash-tab" id="dash-tab-backtest" onclick="dashSwitch('backtest')">🧪 Backtest</button>
     <button class="dash-tab" id="dash-tab-replay"   onclick="dashSwitch('replay')">🕒 Replay</button>
+    <button class="dash-tab" id="dash-tab-pcr"      onclick="dashSwitch('pcr')">📊 PCR</button>
 </div>
 
 <!-- ── Backtest panel ─────────────────────────────────────────── -->
@@ -309,9 +311,6 @@
                             <div class="oip-ind-section">
                                 <div class="oip-ind-section-title">Overlays</div>
                                 <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowOIBars" checked><span>OI Bars</span>
-                                </label>
-                                <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowVwapOI"><span>VWAP</span>
                                 </label>
                                 <label class="oip-ind-item">
@@ -351,11 +350,6 @@
                         </div>
                     </div>
 
-                    <div class="oip-prem-sep"></div>
-                    <div class="oip-mode-group oip-mode-group--xs">
-                        <label class="oip-radio"><input type="radio" name="oipMode" value="total"><span>OI</span></label>
-                        <label class="oip-radio"><input type="radio" name="oipMode" value="change" checked><span>CHG</span></label>
-                    </div>
                     <div class="oip-prem-sep"></div>
                     <div class="oip-prem-group">
                         <button id="oipToggleReplayToolbar" class="oip-btn oip-btn--xs" style="background:#fffbeb;color:#854d0e;border-color:#fef08a;display:flex;align-items:center;gap:4px;">
@@ -486,6 +480,64 @@
 </div>
 </div><!-- /replay panel -->
 
+<!-- ── PCR panel ──────────────────────────────────────────────── -->
+<div class="dash-panel" id="dash-pcr-panel">
+  <div class="pcr-page">
+    <div class="pcr-toolbar">
+      <span class="pcr-title">PCR &amp; OI Change</span>
+      <select id="pcrSymbol" class="oip-select oip-select--xs">
+        <option value="NIFTY" selected>NIFTY</option>
+        <option value="BANKNIFTY">BANKNIFTY</option>
+        <option value="FINNIFTY">FINNIFTY</option>
+      </select>
+      <button id="pcrRefreshBtn" class="oip-btn" type="button" onclick="pcrRefresh()">&#8635; Refresh</button>
+      <span id="pcrLastUpd" class="pcr-last-upd"></span>
+    </div>
+
+    <!-- Chart 1: Put-Call Ratio -->
+    <div class="pcr-section">
+      <div class="pcr-section-header">
+        <div class="pcr-section-title">Put-Call Ratio</div>
+        <div class="pcr-legend">
+          <span class="pcr-legend-item"><span class="pcr-dot" style="background:#94a3b8"></span>Future</span>
+          <span class="pcr-legend-item"><span class="pcr-dot" style="background:#2962ff"></span>Put-Call Ratio</span>
+          <span id="pcrLiveVal" class="pcr-live-val"></span>
+        </div>
+      </div>
+      <div class="pcr-chart-wrap" id="pcrChart1Wrap">
+        <div id="pcrChart1"></div>
+        <div id="pcrTooltip1" class="pcr-tooltip hidden"></div>
+      </div>
+    </div>
+
+    <!-- Chart 2: OI Change -->
+    <div class="pcr-section">
+      <div class="pcr-section-header">
+        <div class="pcr-section-title">OI Change (Call vs Put)</div>
+        <div class="pcr-legend">
+          <span class="pcr-legend-item"><span class="pcr-dot" style="background:#94a3b8"></span>Future</span>
+          <div class="pcr-oi-metrics">
+            <span class="pcr-oi-metric">
+              <span class="pcr-dot" style="background:#ef4444"></span>
+              <span class="pcr-oi-label">Call OI Change</span>
+              <span id="pcrCEVal" class="pcr-oi-val" style="color:#ef4444"></span>
+            </span>
+            <span class="pcr-oi-metric">
+              <span class="pcr-dot" style="background:#22c55e"></span>
+              <span class="pcr-oi-label">Put OI Change</span>
+              <span id="pcrPEVal" class="pcr-oi-val" style="color:#22c55e"></span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="pcr-chart-wrap" id="pcrChart2Wrap">
+        <div id="pcrChart2"></div>
+        <div id="pcrTooltip2" class="pcr-tooltip hidden"></div>
+      </div>
+    </div>
+  </div>
+</div><!-- /pcr panel -->
+
 {% endblock %}
 
 {% block scripts %}
@@ -495,31 +547,36 @@ window.oipReplayMode = true;
 
 // ── Tab switching ──────────────────────────────────────────────
 function dashSwitch(tab, pushState) {
-    ['backtest', 'replay'].forEach(t => {
+    ['backtest', 'replay', 'pcr'].forEach(t => {
         document.getElementById('dash-' + t + '-panel').classList.toggle('active', t === tab);
         document.getElementById('dash-tab-' + t).classList.toggle('active', t === tab);
     });
     if (pushState !== false) {
         history.replaceState(null, '', '#' + tab);
     }
-    // When switching to Replay, force chart resize via ResizeObserver trigger
     if (tab === 'replay') {
         requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    }
+    if (tab === 'pcr') {
+        // setTimeout gives the browser time to finish layout on the newly-visible panel
+        // before LightweightCharts measures clientWidth for canvas sizing.
+        setTimeout(() => { if (typeof pcrLoad === 'function') pcrLoad(); }, 50);
     }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    const hash = location.hash.replace('#', '') || 'backtest';
-    const initial = ['backtest', 'replay'].includes(hash) ? hash : 'backtest';
+    const hash = location.hash.replace('#', '') || 'pcr';
+    const initial = ['backtest', 'replay', 'pcr'].includes(hash) ? hash : 'pcr';
     dashSwitch(initial, false);
 });
 
 window.addEventListener('hashchange', () => {
     const tab = location.hash.replace('#', '');
-    if (['backtest', 'replay'].includes(tab)) dashSwitch(tab, false);
+    if (['backtest', 'replay', 'pcr'].includes(tab)) dashSwitch(tab, false);
 });
 </script>
 <script src="{{ url_for('static', filename='js/backtest.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_replay.js') }}?v={{ sv('js/oi_replay.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pcr.js') }}?v={{ sv('js/pcr.js') }}"></script>
 {% endblock %}

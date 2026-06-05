@@ -6,19 +6,6 @@
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function _isMarketOpen() {
-    const now = new Date();
-    const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'Asia/Kolkata',
-        weekday: 'short', hour: 'numeric', minute: 'numeric', hour12: false
-    }).formatToParts(now);
-    const get = (type) => parts.find(p => p.type === type)?.value;
-    const day = get('weekday');
-    if (day === 'Sat' || day === 'Sun') return false;
-    const h = parseInt(get('hour'), 10);
-    const m = parseInt(get('minute'), 10);
-    return (h * 60 + m) >= 555 && (h * 60 + m) <= 930; // 9:15–15:30
-}
 
 function _formatTime(epochMs) {
     return new Intl.DateTimeFormat('en-IN', {
@@ -177,7 +164,7 @@ function _attachGridListeners() {
 // ─── Page Initialization ──────────────────────────────────────────────────────
 
 async function initOrdersPage() {
-    window._isMarketOpen = _isMarketOpen;
+    window._isMarketOpen = isMarketOpen;
 
     const onOrdersPage = window.location.pathname.startsWith('/orders');
     if (!onOrdersPage) return;

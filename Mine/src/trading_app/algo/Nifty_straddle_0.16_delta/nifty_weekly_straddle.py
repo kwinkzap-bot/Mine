@@ -105,22 +105,33 @@ def _select_delta_strike(
     atm = round(underlying / strike_step) * strike_step
     candidates = [atm + i * strike_step for i in range(-15, 16)]
 
+    # Collect all valid instruments first, then batch a single LTP call
+    candidate_insts: List[Tuple[float, Dict]] = []
+    for strike in candidates:
+        inst = _find_option(instruments, strike, opt_type, expiry)
+        if inst and inst.get('instrument_token'):
+            candidate_insts.append((strike, inst))
+
+    if not candidate_insts:
+        return atm, None
+
+    all_syms = [inst['instrument_token'] for _, inst in candidate_insts]
+    try:
+        ltp_data = provider.ltp(all_syms)
+    except Exception as e:
+        logger.warning(f"[Straddle] Batch LTP call failed for {opt_type}: {e}")
+        return atm, None
+
     best_strike = atm
     best_inst: Optional[Dict] = None
     best_diff = float('inf')
 
-    for strike in candidates:
-        inst = _find_option(instruments, strike, opt_type, expiry)
-        if not inst:
-            continue
-        fyers_sym = inst.get('instrument_token')
-        if not fyers_sym:
+    for strike, inst in candidate_insts:
+        fyers_sym = inst['instrument_token']
+        ltp = ltp_data.get(fyers_sym, {}).get('last_price', 0)
+        if ltp < 0.5:
             continue
         try:
-            ltp_data = provider.ltp([fyers_sym])
-            ltp = ltp_data.get(fyers_sym, {}).get('last_price', 0)
-            if ltp < 0.5:
-                continue
             greeks = GreeksCalculator.calculate_greeks(opt_type, ltp, underlying, strike, expiry)
             d = greeks.get('Delta', 0)
             # CE delta must be positive; PE delta must be negative
@@ -352,18 +363,38 @@ class NiftyWeeklyStraddle:
             ltps = self.provider.ltp([ce_fyers_sym, pe_fyers_sym])
             ce_entry_ltp = ltps.get(ce_fyers_sym, {}).get('last_price', 0)
             pe_entry_ltp = ltps.get(pe_fyers_sym, {}).get('last_price', 0)
+            if ce_entry_ltp <= 0 or pe_entry_ltp <= 0:
+                return {'success': False, 'error': f'Invalid entry LTPs: CE={ce_entry_ltp} PE={pe_entry_ltp} — aborting'}
+
             quantity = lots * lot_size
 
-            ce_order_id = self.broker_kite.place_order(
-                variety='regular', exchange='NFO', tradingsymbol=ce_kite_ts,
-                transaction_type='SELL', quantity=quantity,
-                product=product_type, order_type='MARKET',
-            )
-            pe_order_id = self.broker_kite.place_order(
-                variety='regular', exchange='NFO', tradingsymbol=pe_kite_ts,
-                transaction_type='SELL', quantity=quantity,
-                product=product_type, order_type='MARKET',
-            )
+            try:
+                ce_order_id = self.broker_kite.place_order(
+                    variety='regular', exchange='NFO', tradingsymbol=ce_kite_ts,
+                    transaction_type='SELL', quantity=quantity,
+                    product=product_type, order_type='MARKET',
+                )
+            except Exception as e:
+                return {'success': False, 'error': f'CE order failed: {e}'}
+
+            try:
+                pe_order_id = self.broker_kite.place_order(
+                    variety='regular', exchange='NFO', tradingsymbol=pe_kite_ts,
+                    transaction_type='SELL', quantity=quantity,
+                    product=product_type, order_type='MARKET',
+                )
+            except Exception as e:
+                logger.error(f"[Straddle] PE order failed after CE placed — squaring off CE: {e}")
+                try:
+                    self.broker_kite.place_order(
+                        variety='regular', exchange='NFO', tradingsymbol=ce_kite_ts,
+                        transaction_type='BUY', quantity=quantity,
+                        product=product_type, order_type='MARKET',
+                    )
+                    logger.info("[Straddle] CE squared off after PE failure")
+                except Exception as sq_e:
+                    logger.error(f"[Straddle] CRITICAL: CE squareoff also failed: {sq_e}")
+                return {'success': False, 'error': f'PE order failed (CE squared off): {e}'}
 
             combined_entry = ce_entry_ltp + pe_entry_ltp
             sl_trigger = round(combined_entry + min(combined_entry, sl_cap / lot_size), 2)
