@@ -1,0 +1,26 @@
+[
+  {
+    "date": "2026-06-05",
+    "symbol": "NIFTY",
+    "ce_oi": 186307160,
+    "pe_oi": 133662165,
+    "chng_ce_oi": 54826980,
+    "chng_pe_oi": 3033165
+  },
+  {
+    "date": "2026-06-05",
+    "symbol": "BANKNIFTY",
+    "ce_oi": 10865910,
+    "pe_oi": 10360950,
+    "chng_ce_oi": 287640,
+    "chng_pe_oi": 207390
+  },
+  {
+    "date": "2026-06-05",
+    "symbol": "FINNIFTY",
+    "ce_oi": 268500,
+    "pe_oi": 171000,
+    "chng_ce_oi": 8640,
+    "chng_pe_oi": 5880
+  }
+]

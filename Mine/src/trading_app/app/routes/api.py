@@ -6418,6 +6418,48 @@ def proxy_status():
     return jsonify({'proxy_required': True, 'tunnel_up': up})
 
 
+# ── Historic OI endpoints ─────────────────────────────────────────────────────
+
+@api_bp.route('/oi-historic', methods=['GET'])
+@require_user_auth
+def get_oi_historic():
+    """Return all historic OI records sorted newest-first."""
+    from trading_app.dashboard.oi_historic_data import get_all_records
+    records = get_all_records()
+    return jsonify({'success': True, 'records': records})
+
+
+@api_bp.route('/oi-historic/record', methods=['POST'])
+@require_user_auth
+def record_oi_historic():
+    """Manually trigger OI fetch for all symbols and store today's record."""
+    from trading_app.dashboard.oi_historic_data import fetch_and_store_all, get_all_records
+    from trading_app.service.provider_logic import get_data_provider
+    provider = get_data_provider(user='Mine')
+    results = fetch_and_store_all(provider=provider)
+    errors = [r for r in results if not r.get('success')]
+    records = get_all_records()
+    return jsonify({
+        'success': True,
+        'results': results,
+        'errors': errors,
+        'records': records,
+    })
+
+
+@api_bp.route('/oi-historic/<date>/<symbol>', methods=['DELETE'])
+@require_user_auth
+def delete_oi_historic(date: str, symbol: str):
+    """Delete a specific historic OI record by date and symbol."""
+    from trading_app.dashboard.oi_historic_data import delete_record
+    deleted = delete_record(date, symbol.upper())
+    if not deleted:
+        return jsonify({'success': False, 'error': 'Record not found'}), 404
+    return jsonify({'success': True})
+
+
+# ── Error handlers ────────────────────────────────────────────────────────────
+
 @api_bp.errorhandler(404)
 def not_found(error):
     """Handle 404 errors."""

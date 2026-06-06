@@ -108,6 +108,120 @@
     .form-row-5,.form-row-4,.form-row-3 { grid-template-columns: 1fr; }
     .results-summary { grid-template-columns: 1fr; }
 }
+
+/* ── Historic OI — mirrors Orders table theme ─────────────────── */
+.hoi-wrap {
+    --hoi-bg:         #f8fafc;  --hoi-surface:    #ffffff;
+    --hoi-border:     #e2e8f0;  --hoi-border-sub: #f1f5f9;
+    --hoi-text:       #1e293b;  --hoi-text-2:     #64748b;  --hoi-text-3: #94a3b8;
+    --hoi-accent:     #3b82f6;  --hoi-accent-dim: rgba(59,130,246,0.08);
+    --hoi-row-hover:  #f8fafc;  --hoi-btn-hover:  #f1f5f9;
+    --hoi-shadow:     0 1px 3px rgba(0,0,0,0.06);
+    max-width: 1100px; margin: 0 auto; padding: 14px 16px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: var(--hoi-text);
+}
+body.dark-theme .hoi-wrap {
+    --hoi-bg: #090e17; --hoi-surface: #111827; --hoi-border: #1e293b; --hoi-border-sub: #1a2332;
+    --hoi-text: #f1f5f9; --hoi-text-2: #94a3b8; --hoi-text-3: #475569;
+    --hoi-accent: #60a5fa; --hoi-accent-dim: rgba(96,165,250,0.1);
+    --hoi-row-hover: rgba(59,130,246,0.04); --hoi-btn-hover: #1e293b; --hoi-shadow: none;
+}
+body.forest-theme .hoi-wrap {
+    --hoi-bg: #060c09; --hoi-surface: #0a1810; --hoi-border: #14532d; --hoi-border-sub: #0a1e14;
+    --hoi-text: #ecfdf5; --hoi-text-2: #6ba88f; --hoi-text-3: #4d8068;
+    --hoi-accent: #34d399; --hoi-accent-dim: rgba(52,211,153,0.1);
+    --hoi-row-hover: rgba(16,185,129,0.04); --hoi-btn-hover: #0a1e14; --hoi-shadow: none;
+}
+body.cream-theme .hoi-wrap {
+    --hoi-bg: #fdfbf7; --hoi-surface: #fdf6e9; --hoi-border: #d4b896; --hoi-border-sub: #eeddc4;
+    --hoi-text: #3b2f20; --hoi-text-2: #9b7a52; --hoi-text-3: #c4a882;
+    --hoi-accent: #b45309; --hoi-accent-dim: rgba(180,83,9,0.08);
+    --hoi-row-hover: #f5ead8; --hoi-btn-hover: #f5ead8;
+}
+body.ocean-theme .hoi-wrap {
+    --hoi-bg: #f0f6fc; --hoi-surface: #ffffff; --hoi-border: #bae0f8; --hoi-border-sub: #dbedf8;
+    --hoi-text: #0f172a; --hoi-text-2: #475569; --hoi-text-3: #94a3b8;
+    --hoi-accent: #0284c7; --hoi-accent-dim: rgba(2,132,199,0.08);
+    --hoi-row-hover: #f0f6fc; --hoi-btn-hover: #e0edf8;
+}
+
+/* topbar — mirrors .ord-topbar */
+.hoi-topbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px; margin-bottom: 8px;
+    background: var(--hoi-surface); border: 1px solid var(--hoi-border);
+    border-radius: 8px; box-shadow: var(--hoi-shadow);
+}
+.hoi-title  { font-size: 14px; font-weight: 700; color: var(--hoi-text); letter-spacing: -0.01em; }
+.hoi-status { font-size: 11px; color: var(--hoi-text-2); margin-left: 4px; }
+
+/* Record button — filled accent, mirrors .ord-tab.active */
+.hoi-btn-record {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 12px; font-size: 11px; font-weight: 700;
+    color: #fff; background: var(--hoi-accent);
+    border: 1px solid var(--hoi-accent); border-radius: 6px;
+    cursor: pointer; letter-spacing: .03em; transition: opacity .15s;
+}
+.hoi-btn-record:disabled { opacity: .55; cursor: not-allowed; }
+
+/* symbol tab group — mirrors .ord-tab-group / .ord-tab */
+.hoi-tab-group {
+    display: flex; border: 1px solid var(--hoi-border);
+    border-radius: 6px; overflow: hidden; margin-bottom: 8px;
+}
+.hoi-sym-tab {
+    padding: 4px 16px; font-size: 11px; font-weight: 600;
+    border: none; background: transparent; color: var(--hoi-text-2);
+    cursor: pointer; transition: background .15s, color .15s;
+    border-right: 1px solid var(--hoi-border);
+}
+.hoi-sym-tab:last-child { border-right: none; }
+.hoi-sym-tab.active { background: var(--hoi-accent); color: #fff; }
+.hoi-sym-tab:hover:not(.active) { background: var(--hoi-accent-dim); color: var(--hoi-text); }
+
+/* table wrap — mirrors .ord-table-wrap */
+.hoi-table-wrap { border: 1px solid var(--hoi-border); border-radius: 8px; overflow: hidden; box-shadow: var(--hoi-shadow); }
+
+/* table — mirrors .ord-table */
+.hoi-table { width: 100%; border-collapse: collapse; background: var(--hoi-surface); font-size: 12px; }
+.hoi-table thead th {
+    padding: 8px 12px; text-align: left; font-size: 10px; font-weight: 700;
+    color: var(--hoi-text-3); text-transform: uppercase; letter-spacing: 0.06em;
+    background: var(--hoi-bg); border-bottom: 1px solid var(--hoi-border); white-space: nowrap;
+}
+.hoi-table thead th.r { text-align: right; }
+.hoi-table thead th.c { text-align: center; }
+
+/* rows — mirror .ord-row / .ord-td */
+.hoi-row { background: var(--hoi-surface); transition: background .1s; }
+.hoi-row:hover { background: var(--hoi-row-hover); }
+.hoi-td { padding: 8px 12px; border-bottom: 1px solid var(--hoi-border-sub); vertical-align: middle; color: var(--hoi-text); }
+.hoi-row:last-child .hoi-td { border-bottom: none; }
+.hoi-td.r { text-align: right; font-variant-numeric: tabular-nums; }
+.hoi-td.c { text-align: center; }
+
+/* semantic colours */
+.hoi-ce   { color: var(--hoi-accent)  !important; }
+.hoi-pe   { color: #ef4444            !important; }
+.hoi-up   { color: #16a34a !important; font-weight: 700; }
+.hoi-down { color: #ef4444 !important; font-weight: 700; }
+.hoi-flat { color: var(--hoi-text-3)  !important; }
+
+/* delete button — mirrors .ord-btn + .delete-order:hover */
+.hoi-del-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px;
+    border: 1px solid var(--hoi-border); border-radius: 5px;
+    background: transparent; color: var(--hoi-text-2);
+    cursor: pointer; font-size: 12px;
+    transition: background .15s, color .15s, border-color .15s;
+}
+.hoi-del-btn:hover { color: #be123c; border-color: #ef4444; background: rgba(239,68,68,0.06); }
+
+/* empty state */
+.hoi-empty .hoi-td { text-align: center; padding: 36px 12px; color: var(--hoi-text-3); }
 </style>
 {% endblock %}
 
@@ -115,9 +229,10 @@
 
 <!-- Tab bar -->
 <div class="dash-tab-bar">
-    <button class="dash-tab" id="dash-tab-backtest" onclick="dashSwitch('backtest')">🧪 Backtest</button>
-    <button class="dash-tab" id="dash-tab-replay"   onclick="dashSwitch('replay')">🕒 Replay</button>
-    <button class="dash-tab" id="dash-tab-pcr"      onclick="dashSwitch('pcr')">📊 PCR</button>
+    <button class="dash-tab" id="dash-tab-backtest"    onclick="dashSwitch('backtest')">🧪 Backtest</button>
+    <button class="dash-tab" id="dash-tab-replay"      onclick="dashSwitch('replay')">🕒 Replay</button>
+    <button class="dash-tab" id="dash-tab-pcr"         onclick="dashSwitch('pcr')">📊 PCR</button>
+    <button class="dash-tab" id="dash-tab-historic-oi" onclick="dashSwitch('historic-oi')">📈 Historic OI</button>
 </div>
 
 <!-- ── Backtest panel ─────────────────────────────────────────── -->
@@ -456,13 +571,13 @@
             <div class="oip-charts-row">
                 <div class="oip-chart-wrap" id="oipCEChartWrap">
                     <div class="oip-chart-legend">
-                        <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#1b9981;"></span> CE ONLY: <span id="oipLegendCEOnly">--</span></div>
+                        <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#1b9981;"></span><span id="oipLegendCEOnly">--</span></div>
                     </div>
                     <div id="oipCEChart"></div>
                 </div>
                 <div class="oip-chart-wrap" id="oipPEChartWrap">
                     <div class="oip-chart-legend">
-                        <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#8b5cf6;"></span> PE ONLY: <span id="oipLegendPEOnly">--</span></div>
+                        <div class="oip-legend-item"><span class="oip-legend-dot" style="background:#8b5cf6;"></span><span id="oipLegendPEOnly">--</span></div>
                     </div>
                     <div id="oipPEChart"></div>
                 </div>
@@ -538,6 +653,49 @@
   </div>
 </div><!-- /pcr panel -->
 
+<!-- ── Historic OI panel ──────────────────────────────────────── -->
+<div class="dash-panel" id="dash-historic-oi-panel">
+  <div class="hoi-wrap">
+
+    <!-- Topbar -->
+    <div class="hoi-topbar">
+      <span class="hoi-title">Historic OI</span>
+      <span id="hoiStatus" class="hoi-status" style="margin-left:auto;margin-right:8px;"></span>
+      <button id="hoiRecordBtn" class="hoi-btn-record" onclick="recordHistoricOI()">⏺ Record</button>
+    </div>
+
+    <!-- Symbol tab group -->
+    <div class="hoi-tab-group">
+      <button class="hoi-sym-tab active" id="hoi-tab-NIFTY"     onclick="hoiSymbolSwitch('NIFTY')">NIFTY</button>
+      <button class="hoi-sym-tab"        id="hoi-tab-BANKNIFTY" onclick="hoiSymbolSwitch('BANKNIFTY')">BANKNIFTY</button>
+      <button class="hoi-sym-tab"        id="hoi-tab-FINNIFTY"  onclick="hoiSymbolSwitch('FINNIFTY')">FINNIFTY</button>
+    </div>
+
+    <!-- Per-symbol grids -->
+    {% for sym in ['NIFTY', 'BANKNIFTY', 'FINNIFTY'] %}
+    <div class="hoi-table-wrap" id="hoi-panel-{{ sym }}"{% if not loop.first %} style="display:none"{% endif %}>
+      <table class="hoi-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th class="r">Chng CE OI</th>
+            <th class="r">Chng PE OI</th>
+            <th class="r hoi-ce">CE OI</th>
+            <th class="r hoi-pe">PE OI</th>
+            <th class="r">PE−CE Diff</th>
+            <th class="c"></th>
+          </tr>
+        </thead>
+        <tbody id="hoiTbody-{{ sym }}">
+          <tr class="hoi-empty"><td class="hoi-td" colspan="7">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+
+  </div>
+</div><!-- /historic-oi panel -->
+
 {% endblock %}
 
 {% block scripts %}
@@ -546,8 +704,10 @@
 window.oipReplayMode = true;
 
 // ── Tab switching ──────────────────────────────────────────────
+const _DASH_TABS = ['backtest', 'replay', 'pcr', 'historic-oi'];
+
 function dashSwitch(tab, pushState) {
-    ['backtest', 'replay', 'pcr'].forEach(t => {
+    _DASH_TABS.forEach(t => {
         document.getElementById('dash-' + t + '-panel').classList.toggle('active', t === tab);
         document.getElementById('dash-tab-' + t).classList.toggle('active', t === tab);
     });
@@ -562,18 +722,114 @@ function dashSwitch(tab, pushState) {
         // before LightweightCharts measures clientWidth for canvas sizing.
         setTimeout(() => { if (typeof pcrLoad === 'function') pcrLoad(); }, 50);
     }
+    if (tab === 'historic-oi') {
+        loadHistoricOI();
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     const hash = location.hash.replace('#', '') || 'pcr';
-    const initial = ['backtest', 'replay', 'pcr'].includes(hash) ? hash : 'pcr';
+    const initial = _DASH_TABS.includes(hash) ? hash : 'pcr';
     dashSwitch(initial, false);
 });
 
 window.addEventListener('hashchange', () => {
     const tab = location.hash.replace('#', '');
-    if (['backtest', 'replay', 'pcr'].includes(tab)) dashSwitch(tab, false);
+    if (_DASH_TABS.includes(tab)) dashSwitch(tab, false);
 });
+
+// ── Historic OI ────────────────────────────────────────────────
+const _HOI_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
+let _hoiActiveSymbol = 'NIFTY';
+
+function hoiSymbolSwitch(sym) {
+    _hoiActiveSymbol = sym;
+    _HOI_SYMBOLS.forEach(s => {
+        document.getElementById('hoi-tab-' + s).classList.toggle('active', s === sym);
+        document.getElementById('hoi-panel-' + s).style.display = (s === sym) ? '' : 'none';
+    });
+}
+
+function _hoiFmt(n) {
+    if (n == null) return '—';
+    return Number(n).toLocaleString('en-IN');
+}
+
+function _hoiChngCls(v) {
+    return v > 0 ? 'hoi-up' : v < 0 ? 'hoi-down' : 'hoi-flat';
+}
+
+function _hoiRenderAll(records) {
+    _HOI_SYMBOLS.forEach(sym => {
+        const tbody = document.getElementById('hoiTbody-' + sym);
+        const rows = (records || []).filter(r => r.symbol === sym);
+        if (rows.length === 0) {
+            tbody.innerHTML = `<tr class="hoi-empty"><td class="hoi-td" colspan="7">No records for ${sym}. Click ⏺ Record to capture today's OI.</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = rows.map(r => {
+            const cv   = Number(r.chng_ce_oi), pv = Number(r.chng_pe_oi);
+            const diff = Number(r.pe_oi) - Number(r.ce_oi);
+            const cSign = cv > 0 ? '+' : '', pSign = pv > 0 ? '+' : '', dSign = diff > 0 ? '+' : '';
+            return `<tr class="hoi-row">
+              <td class="hoi-td">${r.date}</td>
+              <td class="hoi-td r ${_hoiChngCls(cv)}">${cSign}${_hoiFmt(cv)}</td>
+              <td class="hoi-td r ${_hoiChngCls(pv)}">${pSign}${_hoiFmt(pv)}</td>
+              <td class="hoi-td r hoi-ce">${_hoiFmt(r.ce_oi)}</td>
+              <td class="hoi-td r hoi-pe">${_hoiFmt(r.pe_oi)}</td>
+              <td class="hoi-td r ${_hoiChngCls(diff)}">${dSign}${_hoiFmt(diff)}</td>
+              <td class="hoi-td c"><button class="hoi-del-btn" title="Delete"
+                onclick="deleteHistoricOI('${r.date}','${r.symbol}')">&#x2715;</button></td>
+            </tr>`;
+        }).join('');
+    });
+}
+
+function loadHistoricOI() {
+    fetch('/api/oi-historic')
+        .then(r => r.json())
+        .then(d => { if (d.success) _hoiRenderAll(d.records); })
+        .catch(() => {
+            _HOI_SYMBOLS.forEach(s => {
+                document.getElementById('hoiTbody-' + s).innerHTML =
+                    '<tr class="hoi-empty"><td class="hoi-td hoi-down" colspan="7">Failed to load records.</td></tr>';
+            });
+        });
+}
+
+function recordHistoricOI() {
+    const btn = document.getElementById('hoiRecordBtn');
+    const status = document.getElementById('hoiStatus');
+    btn.disabled = true;
+    btn.textContent = '⏳ Recording…';
+    status.textContent = '';
+    fetch('/api/oi-historic/record', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            btn.textContent = '⏺ Record';
+            if (d.success) {
+                _hoiRenderAll(d.records);
+                const errs = (d.errors || []).filter(e => !e.success).map(e => e.symbol).join(', ');
+                status.textContent = errs ? `⚠️ Errors: ${errs}` : '✅ Saved';
+            } else {
+                status.textContent = '❌ ' + (d.error || 'Failed');
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.textContent = '⏺ Record';
+            status.textContent = '❌ Network error';
+        });
+}
+
+function deleteHistoricOI(date, symbol) {
+    if (!confirm(`Delete OI record for ${symbol} on ${date}?`)) return;
+    fetch(`/api/oi-historic/${date}/${symbol}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(d => { if (d.success) loadHistoricOI(); })
+        .catch(() => alert('Delete failed'));
+}
 </script>
 <script src="{{ url_for('static', filename='js/backtest.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>

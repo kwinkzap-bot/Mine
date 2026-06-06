@@ -35,6 +35,7 @@ class MarketScheduler:
         self.scheduler: Optional[Any] = None
         self.cpr_filter_job: Optional[Any] = None
         self.oi_persistence_job: Optional[Any] = None
+        self.historic_oi_job: Optional[Any] = None
         
         if not APSCHEDULER_AVAILABLE:
             return
@@ -107,6 +108,21 @@ class MarketScheduler:
             name='NIFTY Weekly Straddle Rollover',
             replace_existing=True,
             misfire_grace_time=120,
+        )
+
+        self.historic_oi_job = self.scheduler.add_job(
+            self._run_historic_oi_record_task,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=15,
+                minute=30,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='historic_oi_record',
+            name='Historic OI Daily Record',
+            replace_existing=True,
+            misfire_grace_time=300,
         )
 
         self.scheduler.start()
@@ -207,6 +223,28 @@ class MarketScheduler:
                     
         except Exception as e:
             logger.error(f"Unexpected error in OI persistence task: {e}", exc_info=True)
+
+
+    def _run_historic_oi_record_task(self):
+        """3:30 PM IST: fetch and persist daily OI snapshot for all symbols."""
+        try:
+            if not self.is_trading_day():
+                return
+            logger.info("[HistoricOI Scheduler] Recording daily OI snapshot...")
+            from trading_app.service.provider_logic import get_data_provider
+            provider = get_data_provider(user='Mine')
+            if not provider:
+                logger.warning("[HistoricOI Scheduler] No data provider — skipping")
+                return
+            from trading_app.dashboard.oi_historic_data import fetch_and_store_all
+            results = fetch_and_store_all(provider=provider)
+            for r in results:
+                if r.get('success'):
+                    logger.info(f"[HistoricOI Scheduler] ✅ {r['symbol']} recorded")
+                else:
+                    logger.warning(f"[HistoricOI Scheduler] ⚠️ {r['symbol']}: {r.get('error')}")
+        except Exception as e:
+            logger.error(f"[HistoricOI Scheduler] Unexpected error: {e}", exc_info=True)
 
 
 # Global scheduler instance
