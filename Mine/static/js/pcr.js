@@ -12,24 +12,27 @@ const PCR_CHART_THEMES = {
 const PCR_CR = 1e7;
 
 // ── State ─────────────────────────────────────────────────────────────────
-let _pcrChart1 = null, _pcrChart2 = null;
+let _pcrChart1 = null, _pcrChart2 = null, _pcrChart3 = null;
 let _pcrPriceSeries1 = null, _pcrRatioSeries = null;
 let _pcrPriceSeries2 = null, _pcrCESeries = null, _pcrPESeries = null;
+let _pcrPriceSeries3 = null, _pcrCEOISeries = null, _pcrPEOISeries = null;
 let _pcrTimer = null;
 let _pcrRawData = [];
 let _pcrInited = false;
 let _pcrActiveChart = null;   // which chart the user is hovering (prevents sync loop)
 let _pcrRangeSyncing = false; // re-entrancy guard for time-scale sync
-let _pcrDataReady = false;    // blocks range sync until both charts have data loaded
+let _pcrDataReady = false;    // blocks range sync until all charts have data loaded
 
 // ── Cleanup (called before each init attempt to remove partial state) ───────
 function _pcrCleanup() {
     _pcrDataReady = false;
     try { if (_pcrChart1) _pcrChart1.remove(); } catch (e) {}
     try { if (_pcrChart2) _pcrChart2.remove(); } catch (e) {}
-    _pcrChart1 = _pcrChart2 = null;
+    try { if (_pcrChart3) _pcrChart3.remove(); } catch (e) {}
+    _pcrChart1 = _pcrChart2 = _pcrChart3 = null;
     _pcrPriceSeries1 = _pcrRatioSeries = null;
     _pcrPriceSeries2 = _pcrCESeries = _pcrPESeries = null;
+    _pcrPriceSeries3 = _pcrCEOISeries = _pcrPEOISeries = null;
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────
@@ -50,7 +53,7 @@ function pcrLoad() {
 }
 
 function pcrRefresh() {
-    if (!_pcrChart1 || !_pcrChart2) { pcrLoad(); return; }
+    if (!_pcrChart1 || !_pcrChart2 || !_pcrChart3) { pcrLoad(); return; }
     const symbol = document.getElementById('pcrSymbol')?.value || 'NIFTY';
     const btn = document.getElementById('pcrRefreshBtn');
     if (btn) btn.textContent = '↻ Loading…';
@@ -86,6 +89,7 @@ function _pcrApplyTheme(themeName) {
     };
     try { if (_pcrChart1) _pcrChart1.applyOptions(opts); } catch (e) {}
     try { if (_pcrChart2) _pcrChart2.applyOptions(opts); } catch (e) {}
+    try { if (_pcrChart3) _pcrChart3.applyOptions(opts); } catch (e) {}
 }
 
 // ── Chart creation ─────────────────────────────────────────────────────────
@@ -141,7 +145,8 @@ function _pcrBuildOpts(cfg) {
 function _pcrInitCharts() {
     const el1 = document.getElementById('pcrChart1');
     const el2 = document.getElementById('pcrChart2');
-    if (!el1 || !el2) throw new Error('PCR chart containers not found');
+    const el3 = document.getElementById('pcrChart3');
+    if (!el1 || !el2 || !el3) throw new Error('PCR chart containers not found');
     // If the panel was just made visible the browser may not have reflowed yet
     if (!el1.clientWidth) throw new Error('PCR container not laid out yet (width=0)');
 
@@ -199,21 +204,56 @@ function _pcrInitCharts() {
         priceFormat: { type: 'custom', formatter: _fmtOI, minMove: 0.01 },
     });
 
+    _pcrChart3 = LightweightCharts.createChart(el3, _pcrBuildOpts(cfg));
+    _pcrPriceSeries3 = _pcrChart3.addLineSeries({
+        priceScaleId: 'left',
+        color: '#94a3b8', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false,
+        priceFormat: { type: 'custom', formatter: _fmtPrice, minMove: 0.5 },
+    });
+    _pcrCEOISeries = _pcrChart3.addLineSeries({
+        priceScaleId: 'right',
+        color: '#ef4444', lineWidth: 2,
+        lastValueVisible: true, priceLineVisible: true, priceLineColor: '#ef4444',
+        priceFormat: { type: 'custom', formatter: _fmtOI, minMove: 0.01 },
+    });
+    _pcrPEOISeries = _pcrChart3.addLineSeries({
+        priceScaleId: 'right',
+        color: '#22c55e', lineWidth: 2,
+        lastValueVisible: true, priceLineVisible: true, priceLineColor: '#22c55e',
+        priceFormat: { type: 'custom', formatter: _fmtOI, minMove: 0.01 },
+    });
+
     // Track hover source to avoid sync feedback loop
     const setActive = id => { _pcrActiveChart = id; };
     ['mouseenter', 'touchstart'].forEach(ev => {
         el1.addEventListener(ev, () => setActive('chart1'), { passive: true });
         el2.addEventListener(ev, () => setActive('chart2'), { passive: true });
+        el3.addEventListener(ev, () => setActive('chart3'), { passive: true });
     });
 
     // Crosshair sync
     _pcrChart1.subscribeCrosshairMove(p => {
         _pcrShowTooltip(1, p);
-        if (_pcrActiveChart === 'chart1') _pcrSyncCross(_pcrChart2, p, _pcrPriceSeries2);
+        if (_pcrActiveChart === 'chart1') {
+            _pcrSyncCross(_pcrChart2, p, _pcrPriceSeries2);
+            _pcrSyncCross(_pcrChart3, p, _pcrPriceSeries3);
+        }
     });
     _pcrChart2.subscribeCrosshairMove(p => {
         _pcrShowTooltip(2, p);
-        if (_pcrActiveChart === 'chart2') _pcrSyncCross(_pcrChart1, p, _pcrPriceSeries1);
+        if (_pcrActiveChart === 'chart2') {
+            _pcrSyncCross(_pcrChart1, p, _pcrPriceSeries1);
+            _pcrSyncCross(_pcrChart3, p, _pcrPriceSeries3);
+        }
+    });
+    _pcrChart3.subscribeCrosshairMove(p => {
+        _pcrShowTooltip(3, p);
+        if (_pcrActiveChart === 'chart3') {
+            _pcrSyncCross(_pcrChart1, p, _pcrPriceSeries1);
+            _pcrSyncCross(_pcrChart2, p, _pcrPriceSeries2);
+        }
     });
 
     // Time-scale sync (source-guarded + re-entrancy guard)
@@ -225,12 +265,21 @@ function _pcrInitCharts() {
         if (!_pcrDataReady || _pcrRangeSyncing || _pcrActiveChart !== 'chart1') return;
         _pcrRangeSyncing = true;
         syncRange(r, _pcrChart2);
+        syncRange(r, _pcrChart3);
         _pcrRangeSyncing = false;
     });
     _pcrChart2.timeScale().subscribeVisibleLogicalRangeChange(r => {
         if (!_pcrDataReady || _pcrRangeSyncing || _pcrActiveChart !== 'chart2') return;
         _pcrRangeSyncing = true;
         syncRange(r, _pcrChart1);
+        syncRange(r, _pcrChart3);
+        _pcrRangeSyncing = false;
+    });
+    _pcrChart3.timeScale().subscribeVisibleLogicalRangeChange(r => {
+        if (!_pcrDataReady || _pcrRangeSyncing || _pcrActiveChart !== 'chart3') return;
+        _pcrRangeSyncing = true;
+        syncRange(r, _pcrChart1);
+        syncRange(r, _pcrChart2);
         _pcrRangeSyncing = false;
     });
 
@@ -251,10 +300,12 @@ function _pcrRender(data) {
     data.forEach(d => seen.set(d.time, d));
     data = [...seen.values()].sort((a, b) => a.time - b.time);
 
-    const priceData = data.map(d => ({ time: d.time, value: d.price }));
-    const pcrData   = data.map(d => ({ time: d.time, value: d.pcr }));
-    const ceData    = data.map(d => ({ time: d.time, value: +(d.ce_change / PCR_CR).toFixed(2) }));
-    const peData    = data.map(d => ({ time: d.time, value: +(d.pe_change / PCR_CR).toFixed(2) }));
+    const priceData  = data.map(d => ({ time: d.time, value: d.price }));
+    const pcrData    = data.map(d => ({ time: d.time, value: d.pcr }));
+    const ceData     = data.map(d => ({ time: d.time, value: +(d.ce_change / PCR_CR).toFixed(2) }));
+    const peData     = data.map(d => ({ time: d.time, value: +(d.pe_change / PCR_CR).toFixed(2) }));
+    const ceOIData   = data.map(d => ({ time: d.time, value: +((d.ce_oi || 0) / PCR_CR).toFixed(2) }));
+    const peOIData   = data.map(d => ({ time: d.time, value: +((d.pe_oi || 0) / PCR_CR).toFixed(2) }));
 
     // RAF-1: deferred past LC's init RAF so left price scale is ready.
     // _pcrDataReady=false blocks range-sync while setData fires internal
@@ -268,16 +319,20 @@ function _pcrRender(data) {
             _pcrPriceSeries2.setData(priceData);
             _pcrCESeries.setData(ceData);
             _pcrPESeries.setData(peData);
+            _pcrPriceSeries3.setData(priceData);
+            _pcrCEOISeries.setData(ceOIData);
+            _pcrPEOISeries.setData(peOIData);
         } catch (e) {
             console.error('[PCR] setData error', e);
             return;
         }
         // RAF-2: fitContent fires after LC's data-processing RAFs (registered
-        // above) so both charts have a valid data model before sync can fire.
+        // above) so all charts have a valid data model before sync can fire.
         requestAnimationFrame(() => {
             _pcrDataReady = true;
             try { if (_pcrChart1) _pcrChart1.timeScale().fitContent(); } catch (e) {}
             try { if (_pcrChart2) _pcrChart2.timeScale().fitContent(); } catch (e) {}
+            try { if (_pcrChart3) _pcrChart3.timeScale().fitContent(); } catch (e) {}
             const last = data[data.length - 1];
             const lv = document.getElementById('pcrLiveVal');
             if (lv) lv.textContent = 'PCR: ' + last.pcr;
@@ -285,6 +340,10 @@ function _pcrRender(data) {
             if (ce) ce.textContent = (last.ce_change / PCR_CR).toFixed(2) + 'Cr';
             const pe = document.getElementById('pcrPEVal');
             if (pe) pe.textContent = (last.pe_change / PCR_CR).toFixed(2) + 'Cr';
+            const ceOI = document.getElementById('pcrCEOIVal');
+            if (ceOI) ceOI.textContent = ((last.ce_oi || 0) / PCR_CR).toFixed(2) + 'Cr';
+            const peOI = document.getElementById('pcrPEOIVal');
+            if (peOI) peOI.textContent = ((last.pe_oi || 0) / PCR_CR).toFixed(2) + 'Cr';
         });
     });
 }
@@ -318,8 +377,10 @@ function _pcrShowTooltip(chartNum, param) {
     const timeStr = h12 + ':' + m + ' ' + ampm;
     if (chartNum === 1) {
         tt.innerHTML = '<b>' + timeStr + '</b> &nbsp; Fut: <b>' + d.price.toFixed(2) + '</b> &nbsp; PCR: <b style="color:#2962ff">' + d.pcr + '</b>';
-    } else {
+    } else if (chartNum === 2) {
         tt.innerHTML = '<b>' + timeStr + '</b> &nbsp; Fut: <b>' + d.price.toFixed(2) + '</b> &nbsp; CE: <b style="color:#ef4444">' + (d.ce_change / PCR_CR).toFixed(2) + 'Cr</b> &nbsp; PE: <b style="color:#22c55e">' + (d.pe_change / PCR_CR).toFixed(2) + 'Cr</b>';
+    } else {
+        tt.innerHTML = '<b>' + timeStr + '</b> &nbsp; Fut: <b>' + d.price.toFixed(2) + '</b> &nbsp; CE OI: <b style="color:#ef4444">' + ((d.ce_oi || 0) / PCR_CR).toFixed(2) + 'Cr</b> &nbsp; PE OI: <b style="color:#22c55e">' + ((d.pe_oi || 0) / PCR_CR).toFixed(2) + 'Cr</b>';
     }
     tt.classList.remove('hidden');
 }

@@ -1,6 +1,6 @@
 [
   {
-    "date": "2026-06-05",
+    "date": "2026-06-06",
     "symbol": "NIFTY",
     "ce_oi": 186307160,
     "pe_oi": 133662165,
@@ -8,7 +8,7 @@
     "chng_pe_oi": 3033165
   },
   {
-    "date": "2026-06-05",
+    "date": "2026-06-06",
     "symbol": "BANKNIFTY",
     "ce_oi": 10865910,
     "pe_oi": 10360950,
@@ -16,11 +16,59 @@
     "chng_pe_oi": 207390
   },
   {
-    "date": "2026-06-05",
+    "date": "2026-06-06",
     "symbol": "FINNIFTY",
     "ce_oi": 268500,
     "pe_oi": 171000,
     "chng_ce_oi": 8640,
     "chng_pe_oi": 5880
+  },
+  {
+    "date": "2026-06-08",
+    "symbol": "NIFTY",
+    "ce_oi": 207069590,
+    "pe_oi": 136536530,
+    "chng_ce_oi": 20762430,
+    "chng_pe_oi": 2874365
+  },
+  {
+    "date": "2026-06-08",
+    "symbol": "BANKNIFTY",
+    "ce_oi": 11344410,
+    "pe_oi": 11252010,
+    "chng_ce_oi": 478500,
+    "chng_pe_oi": 891060
+  },
+  {
+    "date": "2026-06-08",
+    "symbol": "FINNIFTY",
+    "ce_oi": 261960,
+    "pe_oi": 199560,
+    "chng_ce_oi": -6540,
+    "chng_pe_oi": 28560
+  },
+  {
+    "date": "2026-06-09",
+    "symbol": "NIFTY",
+    "ce_oi": 212844255,
+    "pe_oi": 177441485,
+    "chng_ce_oi": 5774665,
+    "chng_pe_oi": 40904955
+  },
+  {
+    "date": "2026-06-09",
+    "symbol": "BANKNIFTY",
+    "ce_oi": 13085520,
+    "pe_oi": 11742780,
+    "chng_ce_oi": 1741110,
+    "chng_pe_oi": 490770
+  },
+  {
+    "date": "2026-06-09",
+    "symbol": "FINNIFTY",
+    "ce_oi": 311400,
+    "pe_oi": 208560,
+    "chng_ce_oi": 49440,
+    "chng_pe_oi": 9000
   }
 ]

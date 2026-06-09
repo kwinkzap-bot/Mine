@@ -32,6 +32,8 @@ let oipReplayTimer = null;
 let oipFullCandles = null;
 let oipFullOptionData = null;
 window.oipSelectionMode = false;
+let _oipSuppressRangeSync = false;
+let _oip30mLastBucket = -1; // 30m bucket index of the last candle when reversal lines were last drawn
 
 let oipCurrentCEStrike = null;
 let oipCurrentPEStrike = null;
@@ -199,30 +201,47 @@ window.oipInitSecondaryCharts = function() {
             document.getElementById('oipPEChart')?.addEventListener(e, () => setActive('pe'), {passive: true});
         });
 
-        const syncRange = (range, targetCharts) => {
-            if (!range || range.from == null || range.to == null) return;
+        // Sync both barSpacing (zoom level) and scrollPosition (right-edge offset) across charts.
+        // scrollPosition alone is insufficient: the same value means a different pixel offset
+        // when charts have different barSpacings, causing the charts to visually drift apart.
+        // setVisibleRange is intentionally avoided — it pins from/to as hard edges and
+        // eliminates the rightOffset gap between the last candle and the Y-axis.
+        // _oipSyncDepth prevents the target's subscribeVisibleLogicalRangeChange (fired
+        // synchronously by applyOptions/scrollToPosition) from triggering a reverse sync.
+        let _oipSyncDepth = 0;
+        const syncRange = (sourceChart, targetCharts) => {
+            if (_oipSyncDepth > 0) return;
+            const ts = sourceChart.timeScale();
+            const barSpacing = ts.options().barSpacing;
+            const scrollPos  = ts.scrollPosition();
+            if (!barSpacing) return;
+            _oipSyncDepth++;
             targetCharts.forEach(t => {
                 if (!t) return;
-                try { t.timeScale().setVisibleLogicalRange(range); } catch(e) {}
+                try {
+                    t.timeScale().applyOptions({ barSpacing });
+                    t.timeScale().scrollToPosition(scrollPos, false);
+                } catch(e) {}
             });
+            _oipSyncDepth--;
         };
 
         if (oipOIChart && oipIntrinsicChart && oipIntrinsicChart.chart) {
-            oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-                if (activeChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(range, [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart]);
+            oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
+                if (_oipSuppressRangeSync || _oipSyncDepth > 0 || activeChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(oipOIChart, [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart]);
             });
-            oipIntrinsicChart.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-                if (activeChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(range, [oipOIChart, oipCEChart?.chart, oipPEChart?.chart]);
+            oipIntrinsicChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
+                if (_oipSuppressRangeSync || _oipSyncDepth > 0 || activeChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(oipIntrinsicChart.chart, [oipOIChart, oipCEChart?.chart, oipPEChart?.chart]);
             });
-            oipCEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-                if (activeChartId !== 'ce' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(range, [oipOIChart, oipIntrinsicChart?.chart, oipPEChart?.chart]);
+            oipCEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
+                if (_oipSuppressRangeSync || _oipSyncDepth > 0 || activeChartId !== 'ce' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(oipCEChart.chart, [oipOIChart, oipIntrinsicChart?.chart, oipPEChart?.chart]);
             });
-            oipPEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-                if (activeChartId !== 'pe' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(range, [oipOIChart, oipIntrinsicChart?.chart, oipCEChart?.chart]);
+            oipPEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
+                if (_oipSuppressRangeSync || _oipSyncDepth > 0 || activeChartId !== 'pe' || !oipOIChartReady || !oipIntChartReady) return;
+                syncRange(oipPEChart.chart, [oipOIChart, oipIntrinsicChart?.chart, oipCEChart?.chart]);
             });
         }
 
@@ -246,7 +265,7 @@ window.oipInitSecondaryCharts = function() {
 
         if (oipOIChart) {
             oipOIChart.subscribeCrosshairMove(param => {
-                if (activeChartId !== 'index') return;
+                if (_oipSuppressRangeSync || activeChartId !== 'index') return;
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipOIChart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipOIChart, oipCEChart.chart, param, oipCESeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipOIChart, oipPEChart.chart, param, oipPESeries);
@@ -254,7 +273,7 @@ window.oipInitSecondaryCharts = function() {
         }
         if (oipIntrinsicChart?.chart) {
             oipIntrinsicChart.chart.subscribeCrosshairMove(param => {
-                if (activeChartId !== 'intrinsic') return;
+                if (_oipSuppressRangeSync || activeChartId !== 'intrinsic') return;
                 if (oipOIChart && oipOISeries) syncCrosshair(oipIntrinsicChart.chart, oipOIChart, param, oipOISeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipIntrinsicChart.chart, oipCEChart.chart, param, oipCESeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipIntrinsicChart.chart, oipPEChart.chart, param, oipPESeries);
@@ -262,7 +281,7 @@ window.oipInitSecondaryCharts = function() {
         }
         if (oipCEChart?.chart) {
             oipCEChart.chart.subscribeCrosshairMove(param => {
-                if (activeChartId !== 'ce') return;
+                if (_oipSuppressRangeSync || activeChartId !== 'ce') return;
                 if (oipOIChart && oipOISeries) syncCrosshair(oipCEChart.chart, oipOIChart, param, oipOISeries);
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipCEChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipCEChart.chart, oipPEChart.chart, param, oipPESeries);
@@ -270,7 +289,7 @@ window.oipInitSecondaryCharts = function() {
         }
         if (oipPEChart?.chart) {
             oipPEChart.chart.subscribeCrosshairMove(param => {
-                if (activeChartId !== 'pe') return;
+                if (_oipSuppressRangeSync || activeChartId !== 'pe') return;
                 if (oipOIChart && oipOISeries) syncCrosshair(oipPEChart.chart, oipOIChart, param, oipOISeries);
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipPEChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipPEChart.chart, oipCEChart.chart, param, oipCESeries);
@@ -308,7 +327,7 @@ function oipInitCharts() {
         };
 
         oipOIChart = LightweightCharts.createChart(elOI, {
-            width: elOI.clientWidth || 1200, height: 310,
+            width: elOI.clientWidth || 1200, height: 375,
             layout: { textColor: '#374151', background: { type: 'solid', color: '#ffffff' } },
             grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
             crosshair: { mode: 0, vertLine: { color: '#9ca3af', style: 3 }, horzLine: { color: '#9ca3af', style: 3, labelBackgroundColor: '#0969da' } },
@@ -420,6 +439,7 @@ async function oipLoadMetadata() {
 }
 
 async function oipLoadCandles(forceFetch = true, resetZoom = false) {
+    _oip30mLastBucket = -1; // force redraw on fresh load
     const btnPause = document.getElementById('oipReplayPause');
     if (btnPause && btnPause.style.display !== 'none') btnPause.click(); // Stop active replay
     await oipLoadMetadata();
@@ -480,6 +500,8 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     oip2nd5mCandleBox.oi.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.oi = [];
     oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
     oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
+    oipClear30mReversalLines();
+    oipClear1DReversalLines();
 
     // Clear all chart series
     try { if (oipOISeries) oipOISeries.setData([]); } catch(e) {}
@@ -525,15 +547,14 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         ...ceRaw.map(c => ({...c, type:'CE'})),
         ...peRaw.map(c => ({...c, type:'PE'}))
     ];
+    oip30sSecondCandle.oi = data.second_30s_candle_oi || [];
+    oip30sSecondCandle.ce = data.second_30s_candle_ce || [];
+    oip30sSecondCandle.pe = data.second_30s_candle_pe || [];
     oipFullOptionData = [
         ...alignToIndices(ceRaw).map(c => ({...c, type:'CE'})),
         ...alignToIndices(peRaw).map(c => ({...c, type:'PE'}))
     ];
     oipAllStrikes = data.strikes || []; oipCurrentPrice = data.current_price || 0;
-
-    // Draw 2nd candle boxes (OI, CE Only, PE Only) for all days
-    oipDraw2ndCandle30sBox(oipFullCandles);
-    oipDraw2nd5mCandleBox(oipFullCandles);
 
     oipPrecalculateIndicators();
     oipSetupReplaySlider();
@@ -551,36 +572,26 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     if (oipCEChart) oipCEChart.update(oipFullCeData, [], true);
     if (oipPEChart) oipPEChart.update(oipFullPeData, [], true);
 
-    // Fit secondary charts to their own data immediately so they render even if
-    // the 100ms range-sync below is skipped (e.g. OI chart range is null).
-    try { oipIntrinsicChart?.chart?.timeScale().fitContent(); } catch(e) {}
-    try { oipCEChart?.chart?.timeScale().fitContent(); } catch(e) {}
-    try { oipPEChart?.chart?.timeScale().fitContent(); } catch(e) {}
-
     // Ensure Replay Toolbar is hidden by default
     const toolbar = document.getElementById('oipReplayToolbar');
     if (toolbar) toolbar.classList.add('hidden');
 
-    // Fit content so it looks normal
     if (oipOIChartReady) {
         oipOIChart.timeScale().fitContent();
-        
-        // Wait a small bit for secondary charts to be fully ready before syncing
+
         setTimeout(() => {
             if (oipOIChartReady && oipIntChartReady) {
                 const ts = oipOIChart.timeScale();
-                const range = ts.getVisibleLogicalRange();
                 const barSpacing = ts.options().barSpacing;
-                const rightOffset = ts.options().rightOffset;
-
-                if (range) {
-                    [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart].forEach(c => {
-                        if (c) {
-                            try { c.timeScale().applyOptions({ barSpacing, rightOffset }); } catch(e) {}
-                            try { c.timeScale().setVisibleLogicalRange(range); } catch(e) {}
-                        }
-                    });
-                }
+                const scrollPos  = ts.scrollPosition();
+                if (!barSpacing) return;
+                [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart].forEach(c => {
+                    if (!c) return;
+                    try {
+                        c.timeScale().applyOptions({ barSpacing });
+                        c.timeScale().scrollToPosition(scrollPos, false);
+                    } catch(e) {}
+                });
             }
         }, 100);
     }
@@ -640,11 +651,18 @@ function oipPrecalculateIndicators() {
     oipCachedIndicators.premium.t2 = entry.map(v => ({ time: v.time, value: v.value + (2 * dist) }));
 }
 
-let oipLastRefreshIndex = -1;
+let oipLastRefreshIndex = -2; // -2 so first replay call (index=0) is always non-incremental
 
 function oipRefreshLocalView(view, resetZoom, index) {
     if (!oipFullCandles || index < 0) return;
-    
+
+    // Suppress cross-chart range sync for the entire refresh. series.update() and
+    // series.setData() fire subscribeVisibleLogicalRangeChange synchronously; without
+    // this guard, the active chart's callback runs syncRange mid-update and calls
+    // applyOptions on the OI chart while it still has a partially-rendered series →
+    // LC Candlestick renderer crashes with "Value is null".
+    _oipSuppressRangeSync = true;
+
     if (!oipFullCeData.length) oipPrecalculateIndicators();
 
     const isIncremental = index === oipLastRefreshIndex + 1;
@@ -652,7 +670,7 @@ function oipRefreshLocalView(view, resetZoom, index) {
 
     const updateOrSet = (series, fullData, idx) => {
         if (!series || !fullData) return;
-        if (isIncremental) series.update(fullData[idx]);
+        if (isIncremental) { if (fullData[idx] != null) series.update(fullData[idx]); }
         else series.setData(fullData.slice(0, idx + 1));
     };
 
@@ -690,12 +708,18 @@ function oipRefreshLocalView(view, resetZoom, index) {
     }
 
     // 3. Option Charts
+    const hasOHLC = (d) => d && d.open != null;
+    // For incremental steps, advance each chart's invisible alignment series to the
+    // current OI timestamp so scrollToPosition sync lands at the same clock time.
+    const oiAlignTime = isIncremental ? (oipFullCandles[index]?.time ?? null) : null;
+
     if (oipIntrinsicChart) {
         if (isIncremental) {
             const ceFormatted = TradingViewChart.formatData([oipFullCeData[index]])[0];
             const peFormatted = TradingViewChart.formatData([oipFullPeData[index]])[0];
-            if (ceFormatted) oipIntrinsicChart.series.update(ceFormatted);
-            if (peFormatted) oipIntrinsicChart.peSeries.update(peFormatted);
+            if (hasOHLC(ceFormatted)) oipIntrinsicChart.series.update(ceFormatted);
+            if (hasOHLC(peFormatted)) oipIntrinsicChart.peSeries.update(peFormatted);
+            if (oiAlignTime) try { oipIntrinsicChart.alignSeries?.update({ time: oiAlignTime, value: 0 }); } catch(e) {}
         } else {
             oipIntrinsicChart.update(oipFullCeData.slice(0, index + 1), oipFullPeData.slice(0, index + 1), false);
         }
@@ -706,25 +730,31 @@ function oipRefreshLocalView(view, resetZoom, index) {
     if (oipCEChart) {
         if (isIncremental) {
             const formatted = TradingViewChart.formatData([oipFullCeData[index]])[0];
-            if (formatted) oipCEChart.series.update(formatted);
+            if (hasOHLC(formatted)) oipCEChart.series.update(formatted);
+            if (oiAlignTime) try { oipCEChart.alignSeries?.update({ time: oiAlignTime, value: 0 }); } catch(e) {}
         } else {
             oipCEChart.update(oipFullCeData.slice(0, index + 1), [], false);
         }
-        updateOrSet(oipCEEma9Series, oipCachedIndicators.ce.ema9, index);
-        updateOrSet(oipCEEma20Series, oipCachedIndicators.ce.ema20, index);
-        updateOrSet(oipCEEma50Series, oipCachedIndicators.ce.ema50, index);
+        // CE EMA is indexed by trade count, not OI bar index — filter by time like profile does
+        const ceEmaT = d => d.time <= timeAtIdx;
+        if (oipCEEma9Series) oipCEEma9Series.setData(oipCachedIndicators.ce.ema9.filter(ceEmaT));
+        if (oipCEEma20Series) oipCEEma20Series.setData(oipCachedIndicators.ce.ema20.filter(ceEmaT));
+        if (oipCEEma50Series) oipCEEma50Series.setData(oipCachedIndicators.ce.ema50.filter(ceEmaT));
     }
 
     if (oipPEChart) {
         if (isIncremental) {
             const formatted = TradingViewChart.formatData([oipFullPeData[index]])[0];
-            if (formatted) oipPEChart.series.update(formatted);
+            if (hasOHLC(formatted)) oipPEChart.series.update(formatted);
+            if (oiAlignTime) try { oipPEChart.alignSeries?.update({ time: oiAlignTime, value: 0 }); } catch(e) {}
         } else {
             oipPEChart.update(oipFullPeData.slice(0, index + 1), [], false);
         }
-        updateOrSet(oipPEEma9Series, oipCachedIndicators.pe.ema9, index);
-        updateOrSet(oipPEEma20Series, oipCachedIndicators.pe.ema20, index);
-        updateOrSet(oipPEEma50Series, oipCachedIndicators.pe.ema50, index);
+        // PE EMA same fix
+        const peEmaT = d => d.time <= timeAtIdx;
+        if (oipPEEma9Series) oipPEEma9Series.setData(oipCachedIndicators.pe.ema9.filter(peEmaT));
+        if (oipPEEma20Series) oipPEEma20Series.setData(oipCachedIndicators.pe.ema20.filter(peEmaT));
+        if (oipPEEma50Series) oipPEEma50Series.setData(oipCachedIndicators.pe.ema50.filter(peEmaT));
     }
 
     // 4. Legend & Metadata
@@ -739,28 +769,60 @@ function oipRefreshLocalView(view, resetZoom, index) {
     if (document.getElementById('oipLegendPEOnly')) document.getElementById('oipLegendPEOnly').textContent = `${peStrikeVal} PE`;
 
     oipUpdateEmaVisibility();
-    
+
     // Restore missing drawing calls
     if (oipOIData?.intrinsic) oipDrawIntrinsicLines(oipOIData.intrinsic, view);
     oipDrawPremiumLines(view, index);
     oipUpdateHeader(oipOIData);
     oipRequestDraw();
 
+    // Defer box/reversal indicator redraws to the next animation frame so they don't
+    // interfere with the render RAF already queued by series.update() calls above.
+    // Reversal line functions previously added future timestamps that expanded the time
+    // scale and caused "Value is null" crashes — that is now prevented at the source
+    // (oipDraw30mReversalLines / oipDraw1DReversalLines skip future timestamps in replay
+    // mode), so no save/restore of the visible range is required here.
+    const _idxSnap = index;
+    requestAnimationFrame(() => {
+        if (!oipFullCandles || _idxSnap >= oipFullCandles.length) {
+            requestAnimationFrame(() => { _oipSuppressRangeSync = false; });
+            return;
+        }
+        const _vis  = oipFullCandles.slice(0, _idxSnap + 1);
+        // 30m reversal lines: always repaint (extend to current candle) but only detect
+        // new signals when a 30m candle closes (bucket changes).
+        const _tCur  = oipFullCandles[_idxSnap]?.time ?? 0;
+        oipDraw2ndCandle30sBox(_vis, _tCur);
+        oipDraw2nd5mCandleBox(_vis, _tCur);
+        const _tPrev = _idxSnap > 0 ? (oipFullCandles[_idxSnap - 1]?.time ?? _tCur) : _tCur;
+        const _cur30mBucket = Math.floor(_tCur / 1800);
+        const _recompute30m = _oip30mLastBucket < 0 || _cur30mBucket !== Math.floor(_tPrev / 1800);
+        if (_recompute30m) _oip30mLastBucket = _cur30mBucket;
+        oipDraw30mReversalLines(_vis, _recompute30m);
+        oipDraw1DReversalLines(_vis);
+        // Defer the suppress reset by one extra RAF so it runs AFTER the inner RAFs
+        // that oipDraw2ndCandle30sBox and oipDraw2nd5mCandleBox schedule for CE/PE
+        // series creation. RAF callbacks run FIFO; the inner RAFs were queued first,
+        // so they execute before this reset fires.
+        requestAnimationFrame(() => { _oipSuppressRangeSync = false; });
+    });
+
     if (resetZoom && oipOIChartReady) {
-        const ts = oipOIChart.timeScale();
-        ts.fitContent();
-        
+        oipOIChart.timeScale().fitContent();
+
         if (oipIntChartReady) {
-            const range = ts.getVisibleLogicalRange();
+            const ts = oipOIChart.timeScale();
             const barSpacing = ts.options().barSpacing;
-            const rightOffset = ts.options().rightOffset;
-            
-            [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart].forEach(c => {
-                if (c) {
-                    c.timeScale().applyOptions({ barSpacing, rightOffset });
-                    if (range) c.timeScale().setVisibleLogicalRange(range);
-                }
-            });
+            const scrollPos  = ts.scrollPosition();
+            if (barSpacing) {
+                [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart].forEach(c => {
+                    if (!c) return;
+                    try {
+                        c.timeScale().applyOptions({ barSpacing });
+                        c.timeScale().scrollToPosition(scrollPos, false);
+                    } catch(e) {}
+                });
+            }
         }
     }
 }
@@ -781,6 +843,20 @@ function oipRenderPrecalculatedCPR(daysData, maxTime) {
         const visibleTimes = day.times.filter(t => t <= maxTime);
         if (!visibleTimes.length) return;
 
+        const keyGroup = {
+            prevH: 'oipCprShowPrevHL', prevL: 'oipCprShowPrevHL',
+            pp: 'oipCprShowBand',      bc: 'oipCprShowBand',    tc: 'oipCprShowBand',
+            r1: 'oipCprShowResistance', r2: 'oipCprShowResistance', r3: 'oipCprShowResistance', r4: 'oipCprShowResistance',
+            s1: 'oipCprShowSupport',   s2: 'oipCprShowSupport', s3: 'oipCprShowSupport', s4: 'oipCprShowSupport',
+            cr3: 'oipCprShowCumR3S3',  cs3: 'oipCprShowCumR3S3'
+        };
+        const boxGroup = {
+            'cpr': 'oipCprShowBand',
+            'r1_r2': 'oipCprShowResistance', 'r2_r3': 'oipCprShowResistance', 'r3_r4': 'oipCprShowResistance',
+            's1_s2': 'oipCprShowSupport',    's2_s3': 'oipCprShowSupport',    's3_s4': 'oipCprShowSupport'
+        };
+        const subChecked = id => document.getElementById(id)?.checked !== false;
+
         Object.keys(day.levels).forEach(key => {
             const seriesKey = `line_${key}_${dayIdx}`;
             let s = oipCprSeriesMap[seriesKey];
@@ -788,7 +864,7 @@ function oipRenderPrecalculatedCPR(daysData, maxTime) {
                 s = oipOIChart.addLineSeries({ ...lineStyles[key], lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
                 oipCprSeriesMap[seriesKey] = s;
             }
-            s.setData(visibleTimes.map(t => ({ time: t, value: day.levels[key] })));
+            s.setData(subChecked(keyGroup[key]) ? visibleTimes.map(t => ({ time: t, value: day.levels[key] })) : []);
         });
         day.boxes.forEach((box, bIdx) => {
             const seriesKey = `box_${box.type}_${dayIdx}_${bIdx}`;
@@ -798,6 +874,7 @@ function oipRenderPrecalculatedCPR(daysData, maxTime) {
                 s = oipOIChart.addBaselineSeries({ baseValue: { type: 'price', price: box.min }, topFillColor1: col, topFillColor2: col, topLineColor: 'transparent', bottomFillColor1: col, bottomFillColor2: col, bottomLineColor: 'transparent', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
                 oipCprSeriesMap[seriesKey] = s;
             }
+            if (!subChecked(boxGroup[box.type])) { s.setData([]); return; }
             s.applyOptions({ baseValue: { type: 'price', price: box.min } });
             s.setData(visibleTimes.map(t => ({ time: t, value: box.max })));
         });
@@ -915,9 +992,10 @@ function oipInitReplay() {
     };
 
     btnNext.onclick = () => step();
-    slider.oninput = (e) => { 
-        oipReplayIndex = parseInt(e.target.value); 
-        update(); 
+    slider.oninput = (e) => {
+        oipReplayIndex = parseInt(e.target.value);
+        _oip30mLastBucket = -1; // position jumped — force reversal redraw
+        update();
     };
 
     speed.onchange = () => {
@@ -978,7 +1056,7 @@ function oipInitPremiumSeries() {
 document.addEventListener('DOMContentLoaded', () => {
     window.oipReplayMode = true;
     oipInitElems();
-    oipInitIndicatorsPopup();
+    oipInitIndicatorsPopup('oip-ind-replay');
     const today = new Date().toISOString().split('T')[0];
     const prev = new Date(); prev.setDate(prev.getDate() - 30);
     if (oipElems.startDate) oipElems.startDate.value = prev.toISOString().split('T')[0];
@@ -1058,16 +1136,42 @@ document.addEventListener('DOMContentLoaded', () => {
         if (oipElems.strikeMode?.value === 'ce_pe') oipReloadStrikeOnly();
     });
 
-    oipInitReplay();
-
     [
         'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
         'oipShowCpr', 'oipShowRSI',
-        'oipShowVwapOI', 'oipShowVwapInt', 'oipShowPremium'
+        'oipShowVwapOI', 'oipShowVwapInt', 'oipShowPremium',
+        'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3'
     ].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => {
             oipUpdateEmaVisibility();
             if (oipFullCandles) oipRefreshLocalView('combined', false, oipReplayIndex);
+        });
+    });
+
+    document.getElementById('oipShow2ndCandle30s')?.addEventListener('change', () => {
+        if (!oipFullCandles) return;
+        const vis = oipFullCandles.slice(0, oipReplayIndex + 1);
+        oipDraw2ndCandle30sBox(vis, oipFullCandles[oipReplayIndex]?.time ?? 0);
+    });
+    document.getElementById('oipShow2nd5mCandle')?.addEventListener('change', () => {
+        if (!oipFullCandles) return;
+        const vis = oipFullCandles.slice(0, oipReplayIndex + 1);
+        oipDraw2nd5mCandleBox(vis, oipFullCeData.slice(0, oipReplayIndex + 1), oipFullPeData.slice(0, oipReplayIndex + 1));
+    });
+    document.getElementById('oipShow30mReversalLines')?.addEventListener('change', () => {
+        if (oipFullCandles) oipDraw30mReversalLines(oipFullCandles.slice(0, oipReplayIndex + 1));
+    });
+    ['oipReversal30mCountUp', 'oipReversal30mCountDn', 'oipReversal30mRange'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', () => {
+            if (oipFullCandles) oipDraw30mReversalLines(oipFullCandles.slice(0, oipReplayIndex + 1));
+        });
+    });
+    document.getElementById('oipShow1DReversalLines')?.addEventListener('change', () => {
+        if (oipFullCandles) oipDraw1DReversalLines(oipFullCandles.slice(0, oipReplayIndex + 1));
+    });
+    ['oipReversal1DCount', 'oipReversal1DRange'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', () => {
+            if (oipFullCandles) oipDraw1DReversalLines(oipFullCandles.slice(0, oipReplayIndex + 1));
         });
     });
 
@@ -1118,6 +1222,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // the trigger to initialize once the panel actually has layout.
     function oipStartCharts() {
         oipInitCharts();
+        oipInitReplay();
         oipUpdateEmaVisibility();
         oipLoadCandles();
     }
@@ -1314,22 +1419,41 @@ function _oipH(c) { return parseFloat(c.high ?? c.h); }
 function _oipL(c) { return parseFloat(c.low  ?? c.l); }
 
 // ── 2nd 30-second candle box — all days ──────────────────────────────────────
+let oip30sSecondCandle = { oi: [], ce: [], pe: [] };
 let oip2ndCandle30sBox = { oi: [], ce: [], pe: [] };
 
-function oipDraw2ndCandle30sBox(candles) {
+function oipDraw2ndCandle30sBox(candles, maxTime) {
     oip2ndCandle30sBox.oi.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.oi = [];
     oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
     oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
 
-    if (oipInterval !== '30second' || !candles || !candles.length) return;
+    const _30s_allowed = ['30second', 'minute'];
+    if (!_30s_allowed.includes(oipInterval) || !candles || !candles.length) return;
+    if (!document.getElementById('oipShow2ndCandle30s')?.checked) return;
 
-    function _draw30sAllDays(chart, src) {
+    function _build30sMap(arr) {
+        const m = {};
+        (arr || []).forEach(c => {
+            const d = new Date(c.time * 1000);
+            const dk = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+            m[dk] = c;
+        });
+        return m;
+    }
+
+    function _draw30sAllDays(chart, src, map30s) {
         const boxes = [];
-        const map = _oipGroupByDay(src);
-        Object.keys(map).sort().forEach(dk => {
-            const day = map[dk];
-            if (day.length < 2) return;
-            const c2 = day[1];
+        const srcMap = _oipGroupByDay(src);
+        Object.keys(srcMap).sort().forEach(dk => {
+            const day = srcMap[dk];
+            let c2;
+            if (map30s && map30s[dk]) {
+                c2 = map30s[dk];
+            } else if (day.length >= 2) {
+                c2 = day[1];
+            } else {
+                return;
+            }
             const hi = _oipH(c2), lo = _oipL(c2);
             if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
             const times = day.filter(c => c.time >= c2.time).map(c => c.time);
@@ -1338,19 +1462,26 @@ function oipDraw2ndCandle30sBox(candles) {
         return boxes;
     }
 
+    const _oi30sMap = _build30sMap(oip30sSecondCandle.oi);
     if (oipOIChart)
-        oip2ndCandle30sBox.oi = _draw30sAllDays(oipOIChart, candles);
+        oip2ndCandle30sBox.oi = _draw30sAllDays(oipOIChart, candles, _oi30sMap);
 
-    // Defer CE/PE draws past their charts' init RAF — addBaselineSeries triggers
-    // LC's async render RAF which crashes if the chart isn't yet initialized.
+    // Defer CE/PE draws — addBaselineSeries triggers LC's async render RAF.
+    // Use raw oipOptionData (actual trades only, no alignment gaps) filtered to
+    // current replay time — same source as oi_profile.js.
     requestAnimationFrame(() => {
         try {
             oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
             oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
-            if (oipCEChart?.chart && oipOptionData)
-                oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
-            if (oipPEChart?.chart && oipOptionData)
-                oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+            const _ce30sMap = _build30sMap(oip30sSecondCandle.ce);
+            const _pe30sMap = _build30sMap(oip30sSecondCandle.pe);
+            const raw = oipOptionData || [];
+            const ceSource = raw.filter(c => c.type === 'CE' && (!maxTime || c.time <= maxTime));
+            const peSource = raw.filter(c => c.type === 'PE' && (!maxTime || c.time <= maxTime));
+            if (oipCEChart?.chart && ceSource.length)
+                oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, ceSource, _ce30sMap);
+            if (oipPEChart?.chart && peSource.length)
+                oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, peSource, _pe30sMap);
         } catch(e) {}
     });
 }
@@ -1358,13 +1489,14 @@ function oipDraw2ndCandle30sBox(candles) {
 // ── 2nd 5-minute candle box (09:20–09:25) — all days, 1m/2m/3m/5m ───────────
 let oip2nd5mCandleBox = { oi: [], ce: [], pe: [] };
 
-function oipDraw2nd5mCandleBox(candles) {
+function oipDraw2nd5mCandleBox(candles, maxTime) {
     oip2nd5mCandleBox.oi.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.oi = [];
     oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
     oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
 
     const allowedIntervals = ['minute', '2minute', '3minute', '5minute'];
     if (!allowedIntervals.includes(oipInterval) || !candles || !candles.length) return;
+    if (!document.getElementById('oipShow2nd5mCandle')?.checked) return;
 
     function _draw5mAllDays(chart, src) {
         const boxes = [];
@@ -1388,16 +1520,19 @@ function oipDraw2nd5mCandleBox(candles) {
     if (oipOIChart)
         oip2nd5mCandleBox.oi = _draw5mAllDays(oipOIChart, candles);
 
-    // Defer CE/PE draws past their charts' init RAF — addBaselineSeries triggers
-    // LC's async render RAF which crashes if the chart isn't yet initialized.
+    // Defer CE/PE draws — same rationale as 30s box: use raw oipOptionData
+    // filtered to current replay time, not the alignment-padded arrays.
     requestAnimationFrame(() => {
         try {
             oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
             oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
-            if (oipCEChart?.chart && oipOptionData)
-                oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
-            if (oipPEChart?.chart && oipOptionData)
-                oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+            const raw = oipOptionData || [];
+            const ceSource = raw.filter(c => c.type === 'CE' && (!maxTime || c.time <= maxTime));
+            const peSource = raw.filter(c => c.type === 'PE' && (!maxTime || c.time <= maxTime));
+            if (oipCEChart?.chart && ceSource.length)
+                oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, ceSource);
+            if (oipPEChart?.chart && peSource.length)
+                oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, peSource);
         } catch(e) {}
     });
 }

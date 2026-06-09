@@ -5419,6 +5419,7 @@ def oi_profile_candles() -> EndpointResponse:
         symbol   = request.args.get('symbol',   'NIFTY').upper()
         interval = request.args.get('interval', '5minute')
         days     = request.args.get('days', 1, type=int)
+        opt_days = request.args.get('opt_days', 5, type=int)
         spot_high  = request.args.get('spot_high', type=float)
         spot_low   = request.args.get('spot_low',  type=float)
         step_value = request.args.get('step', 50,  type=int)
@@ -5442,7 +5443,7 @@ def oi_profile_candles() -> EndpointResponse:
         # ── 1. Check Response Cache & Coalesce Requests ──────────────
         # Use request parameters as cache key (ignore _t timestamp)
         # Include start_date/end_date so historical range requests are cached independently
-        cache_key = (symbol, interval, days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str)
+        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str)
         
         # Request Coalescing: Only one thread fetches for this key at a time
         req_lock = _get_request_lock(cache_key)
@@ -5514,10 +5515,15 @@ def oi_profile_candles() -> EndpointResponse:
                 fetch_back = days + 5
                 from_date = (now - timedelta(days=fetch_back)).replace(hour=9, minute=0, second=0, microsecond=0)
                 to_date = now
+            # When explicit date range given, option candles use same window
+            opt_from_date = from_date
         else:
             fetch_back = days + 5
             from_date = (now - timedelta(days=fetch_back)).replace(hour=9, minute=0, second=0, microsecond=0)
             to_date = now
+            # Option candles use their own (shorter) window
+            opt_days = min(max(int(opt_days), 1), days)
+            opt_from_date = (now - timedelta(days=opt_days + 5)).replace(hour=9, minute=0, second=0, microsecond=0)
 
         fetch_interval = 'minute' if interval == '2minute' else interval
 
@@ -5606,6 +5612,9 @@ def oi_profile_candles() -> EndpointResponse:
         executor = _api_executor # Use shared global executor
         # 1. Start fetching index intraday and index daily
         future_index = executor.submit(fetch_task, token, from_date, to_date, fetch_interval)
+        # For 1-minute interval, also fetch 30-second candles in parallel so the
+        # "2nd 30-second candle" box indicator can use accurate H/L.
+        future_index_30s = executor.submit(fetch_task, token, from_date, to_date, '30second') if interval == 'minute' else None
         
         # Use daily OHLC cache if available (TTL 5 mins)
         daily_cache_key = (symbol, days)
@@ -5624,6 +5633,7 @@ def oi_profile_candles() -> EndpointResponse:
         # 2. Identify strikes if spot provided, otherwise wait for index
         itm_ce_strike, itm_pe_strike = None, None
         ce_symbol, pe_symbol, ce_token, pe_token = None, None, None, None
+        future_ce_30s, future_pe_30s = None, None
         
         today_str = now.strftime('%Y-%m-%d')
         atm_cache_key = (symbol, today_str)
@@ -5654,11 +5664,13 @@ def oi_profile_candles() -> EndpointResponse:
             ce_token, ce_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_ce_strike, 'CE')
             pe_token, pe_symbol = _get_cached_strike_token(kite_service, _data_provider, _is_fyers_provider, symbol, itm_pe_strike, 'PE')
 
-        # 3. Fetch Option Candles if tokens known
+        # 3. Fetch Option Candles if tokens known (use shorter opt_from_date window)
         future_ce = None
         future_pe = None
-        if ce_token: future_ce = executor.submit(fetch_task, ce_token, from_date, to_date, fetch_interval)
-        if pe_token: future_pe = executor.submit(fetch_task, pe_token, from_date, to_date, fetch_interval)
+        if ce_token: future_ce = executor.submit(fetch_task, ce_token, opt_from_date, to_date, fetch_interval)
+        if pe_token: future_pe = executor.submit(fetch_task, pe_token, opt_from_date, to_date, fetch_interval)
+        future_ce_30s = executor.submit(fetch_task, ce_token, opt_from_date, to_date, '30second') if interval == 'minute' and ce_token else None
+        future_pe_30s = executor.submit(fetch_task, pe_token, opt_from_date, to_date, '30second') if interval == 'minute' and pe_token else None
 
         # 4. Wait for Index to finish if auto_hl is true
         index_raw = future_index.result()
@@ -5769,8 +5781,10 @@ def oi_profile_candles() -> EndpointResponse:
                         kite_service, symbol, spot_high, spot_low, step_value, data_provider=(_data_provider if _is_fyers_provider else None)
                     )
             
-            if ce_token: future_ce = executor.submit(fetch_task, ce_token, from_date, to_date, fetch_interval)
-            if pe_token: future_pe = executor.submit(fetch_task, pe_token, from_date, to_date, fetch_interval)
+            if ce_token: future_ce = executor.submit(fetch_task, ce_token, opt_from_date, to_date, fetch_interval)
+            if pe_token: future_pe = executor.submit(fetch_task, pe_token, opt_from_date, to_date, fetch_interval)
+            future_ce_30s = executor.submit(fetch_task, ce_token, opt_from_date, to_date, '30second') if interval == 'minute' and ce_token else None
+            future_pe_30s = executor.submit(fetch_task, pe_token, opt_from_date, to_date, '30second') if interval == 'minute' and pe_token else None
 
         # 5. Collect remaining results
         daily_raw = cached_daily if cached_daily else (future_daily.result() if future_daily else [])
@@ -5781,10 +5795,48 @@ def oi_profile_candles() -> EndpointResponse:
         ce_raw = future_ce.result() if future_ce else []
         pe_raw = future_pe.result() if future_pe else []
 
-        # Synchronize option data window with index data window
-        if target_dates:
-            if ce_raw: ce_raw = [c for c in ce_raw if c['date'].date() in target_dates]
-            if pe_raw: pe_raw = [c for c in pe_raw if c['date'].date() in target_dates]
+        # Filter option candles to their own opt_days trading-day window
+        if start_date_str and end_date_str:
+            # Explicit range: align options with index dates
+            if target_dates:
+                if ce_raw: ce_raw = [c for c in ce_raw if c['date'].date() in target_dates]
+                if pe_raw: pe_raw = [c for c in pe_raw if c['date'].date() in target_dates]
+        else:
+            # Default mode: options get their own shorter window (opt_days trading days)
+            opt_all_dates = sorted(set(
+                c['date'].date() for c in (ce_raw or []) + (pe_raw or [])
+            ))
+            opt_target_dates = set(opt_all_dates[-opt_days:]) if opt_all_dates else set()
+            if opt_target_dates:
+                if ce_raw: ce_raw = [c for c in ce_raw if c['date'].date() in opt_target_dates]
+                if pe_raw: pe_raw = [c for c in pe_raw if c['date'].date() in opt_target_dates]
+
+        # Collect 30-second results (only present when interval == 'minute')
+        def _extract_second_30s_candles(raw_30s):
+            """From raw 30-second candle list return one entry per day: the 2nd 30s candle."""
+            if not raw_30s:
+                return []
+            day_map = {}
+            for c in raw_30s:
+                if any(x is None for x in [c.get('open'), c.get('high'), c.get('low'), c.get('close')]):
+                    continue
+                dk = (c['date'] + timedelta(seconds=ist_offset)).strftime('%Y-%m-%d')
+                if dk not in day_map:
+                    day_map[dk] = []
+                day_map[dk].append(c)
+            result = []
+            for dk in sorted(day_map.keys()):
+                day_candles = sorted(day_map[dk], key=lambda x: x['date'])
+                if len(day_candles) >= 2:
+                    c = day_candles[1]
+                    result.append({'time': int(c['date'].timestamp()) + ist_offset,
+                                   'high': c['high'], 'low': c['low'],
+                                   'open': c['open'], 'close': c['close']})
+            return result
+
+        second_30s_oi  = _extract_second_30s_candles(future_index_30s.result() if future_index_30s else [])
+        second_30s_ce  = _extract_second_30s_candles(future_ce_30s.result() if future_ce_30s else [])
+        second_30s_pe  = _extract_second_30s_candles(future_pe_30s.result() if future_pe_30s else [])
 
         # ── Data Formatting ──────────────────────────────────────────
         daily_ohlc = {}
@@ -5842,6 +5894,9 @@ def oi_profile_candles() -> EndpointResponse:
             'candles': candles,
             'ce_opt_candles': ce_candles,
             'pe_opt_candles': pe_candles,
+            'second_30s_candle_oi': second_30s_oi,
+            'second_30s_candle_ce': second_30s_ce,
+            'second_30s_candle_pe': second_30s_pe,
             'count': len(candles),
             'intrinsic': intrinsic_data,
             'daily_ohlc': daily_ohlc,

@@ -20,6 +20,39 @@ let oipRSISeriesObj = null;
 let oipSignalMarkers = [];
 let oipRSIMarkers = [];
 
+/* ── Indicator state persistence ─────────────────────────── */
+const _OIP_IND_IDS = [
+    'oipShowOIBars', 'oipShowVwapOI', 'oipShowVwapInt',
+    'oipShowCpr', 'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
+    'oipShowSignals', 'oipShowRSI',
+    'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
+    'oipShowMaxPain', 'oipShow2ndCandle30s', 'oipShow2nd5mCandle', 'oipShowPremium',
+    'oipShow30mReversalLines', 'oipReversal30mCountUp', 'oipReversal30mCountDn', 'oipReversal30mRange',
+    'oipShow1DReversalLines',  'oipReversal1DCount',  'oipReversal1DRange'
+];
+
+function _oipSaveIndicators(key) {
+    const state = {};
+    _OIP_IND_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        state[id] = el.type === 'checkbox' ? el.checked : el.value;
+    });
+    try { localStorage.setItem(key, JSON.stringify(state)); } catch(e) {}
+}
+
+function _oipRestoreIndicators(key) {
+    let state;
+    try { state = JSON.parse(localStorage.getItem(key) || 'null'); } catch(e) {}
+    if (!state) return;
+    _OIP_IND_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || !(id in state)) return;
+        if (el.type === 'checkbox') el.checked = state[id];
+        else el.value = state[id];
+    });
+}
+
 /* ── EMA visibility ───────────────────────────────────────── */
 function oipUpdateEmaVisibility() {
     const s9   = oipElems.showEma9?.checked   ?? false;
@@ -335,6 +368,20 @@ function oipDrawCpr(candles) {
         's3_s4': 'rgba(255, 0, 0, 0.02)'
     };
 
+    const keyGroup = {
+        prevH: 'oipCprShowPrevHL', prevL: 'oipCprShowPrevHL',
+        pp: 'oipCprShowBand',      bc: 'oipCprShowBand',    tc: 'oipCprShowBand',
+        r1: 'oipCprShowResistance', r2: 'oipCprShowResistance', r3: 'oipCprShowResistance', r4: 'oipCprShowResistance',
+        s1: 'oipCprShowSupport',   s2: 'oipCprShowSupport', s3: 'oipCprShowSupport', s4: 'oipCprShowSupport',
+        cr3: 'oipCprShowCumR3S3',  cs3: 'oipCprShowCumR3S3'
+    };
+    const boxGroup = {
+        'cpr':   'oipCprShowBand',
+        'r1_r2': 'oipCprShowResistance', 'r2_r3': 'oipCprShowResistance', 'r3_r4': 'oipCprShowResistance',
+        's1_s2': 'oipCprShowSupport',    's2_s3': 'oipCprShowSupport',    's3_s4': 'oipCprShowSupport'
+    };
+    const subChecked = id => document.getElementById(id)?.checked !== false;
+
     daysData.forEach((day, dayIdx) => {
         Object.keys(day.levels).forEach(key => {
             const seriesKey = `line_${key}_${dayIdx}`;
@@ -348,7 +395,8 @@ function oipDrawCpr(candles) {
                 oipCprSeriesMap[seriesKey] = series;
             }
             const val = day.levels[key];
-            series.setData(val != null && !isNaN(val) ? day.times.map(t => ({ time: t, value: val })) : []);
+            const visible = subChecked(keyGroup[key]);
+            series.setData(visible && val != null && !isNaN(val) ? day.times.map(t => ({ time: t, value: val })) : []);
         });
 
         day.boxes.forEach((box, boxIdx) => {
@@ -365,6 +413,7 @@ function oipDrawCpr(candles) {
                 });
                 oipCprSeriesMap[seriesKey] = series;
             }
+            if (!subChecked(boxGroup[box.type])) { series.setData([]); return; }
             series.applyOptions({ baseValue: { type: 'price', price: box.min } });
             series.setData(day.times.map(t => ({ time: t, value: box.max })));
         });
@@ -480,21 +529,359 @@ function oipDrawRSI(candles) {
 }
 
 /* ── Indicators popup ─────────────────────────────────────── */
-function oipInitIndicatorsPopup() {
+function oipInitIndicatorsPopup(storageKey) {
     // Wire showEma200 (was declared in oipElems but never initialized)
     oipElems.showEma200 = document.getElementById('oipShowEma200');
 
+    // Restore persisted state before anything is drawn
+    if (storageKey) _oipRestoreIndicators(storageKey);
+
     const btn   = document.getElementById('oipIndicatorsBtn');
     const popup = document.getElementById('oipIndicatorsPopup');
-    if (!btn || !popup) return;
 
-    btn.addEventListener('click', e => {
-        e.stopPropagation();
-        popup.classList.toggle('hidden');
-    });
-    document.addEventListener('click', e => {
-        if (!popup.contains(e.target) && e.target !== btn) {
-            popup.classList.add('hidden');
+    if (btn && popup) {
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            popup.classList.toggle('hidden');
+        });
+        document.addEventListener('click', e => {
+            if (!popup.contains(e.target) && e.target !== btn) {
+                popup.classList.add('hidden');
+            }
+        });
+        // Save whenever any checkbox inside the popup changes
+        if (storageKey) popup.addEventListener('change', () => _oipSaveIndicators(storageKey));
+    } else if (storageKey) {
+        // No popup (compact toolbar page): delegate on document for the known IDs
+        const indSet = new Set(_OIP_IND_IDS);
+        document.addEventListener('change', e => {
+            if (e.target.type === 'checkbox' && indSet.has(e.target.id)) {
+                _oipSaveIndicators(storageKey);
+            }
+        }, true);
+    }
+
+    // CPR expand / collapse
+    const cprExpandBtn = document.getElementById('oipCprExpandBtn');
+    const cprSub       = document.getElementById('oipCprSub');
+    const cprMaster    = document.getElementById('oipShowCpr');
+
+    if (cprExpandBtn && cprSub) {
+        cprExpandBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            e.preventDefault();
+            const isNowHidden = cprSub.classList.toggle('hidden');
+            cprExpandBtn.classList.toggle('expanded', !isNowHidden);
+        });
+    }
+
+    function _syncCprSubState() {
+        if (!cprSub || !cprMaster) return;
+        cprSub.classList.toggle('oip-cpr-disabled', !cprMaster.checked);
+    }
+    if (cprMaster) {
+        cprMaster.addEventListener('change', _syncCprSubState);
+        _syncCprSubState(); // reflects restored state
+    }
+}
+
+/* ── 30-min Reversal Lines ────────────────────────────────── */
+let oip30mReversalSeries = [];
+
+function oipClear30mReversalLines() {
+    oip30mReversalSeries.forEach(s => { try { oipOIChart.removeSeries(s); } catch(e) {} });
+    oip30mReversalSeries = [];
+}
+
+// Aggregate arbitrary-interval candles into 30-minute OHLC buckets aligned to
+// Indian market open (9:15 AM IST).  Buckets: 9:15, 9:45, 10:15, 10:45 …
+// Candles use Fake-IST encoding: UTC hours/minutes == IST hours/minutes.
+function _oipAggregateTo30m(candles) {
+    const MARKET_OPEN = 9 * 60 + 15; // 555 minutes from midnight IST
+    const buckets = new Map();
+
+    candles.forEach(c => {
+        const d      = new Date(c.time * 1000);
+        const total  = d.getUTCHours() * 60 + d.getUTCMinutes();
+        const offset = total - MARKET_OPEN;               // mins since 9:15
+        const idx    = Math.floor(offset / 30);           // which 30-min slot
+        const bMin   = MARKET_OPEN + idx * 30;            // slot start in mins
+
+        const bd = new Date(d);
+        bd.setUTCHours(Math.floor(bMin / 60), bMin % 60, 0, 0);
+        const key = Math.floor(bd.getTime() / 1000);
+
+        if (!buckets.has(key)) {
+            buckets.set(key, { time: key, open: c.open, high: c.high, low: c.low, close: c.close });
+        } else {
+            const b = buckets.get(key);
+            b.high  = Math.max(b.high, c.high);
+            b.low   = Math.min(b.low,  c.low);
+            b.close = c.close;
         }
+    });
+    return [...buckets.values()].sort((a, b) => a.time - b.time);
+}
+
+// Generate future timestamps that stay within 9:15 AM – 3:30 PM IST trading sessions.
+// Uses Fake-IST encoding: UTC hours/minutes == IST hours/minutes.
+function _oipFutureSessionTimes(fromTime, intervalSecs, count) {
+    const result = [];
+    let t = fromTime;
+    const SESSION_START = 9 * 60 + 15;   // 555 min
+    const SESSION_END   = 15 * 60 + 30;  // 930 min
+
+    function jumpToNextSession(ts) {
+        const d = new Date(ts * 1000);
+        d.setUTCDate(d.getUTCDate() + 1);
+        while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() + 1);
+        d.setUTCHours(9, 15, 0, 0);
+        return Math.floor(d.getTime() / 1000);
+    }
+
+    while (result.length < count) {
+        t += intervalSecs;
+        const d   = new Date(t * 1000);
+        const dow = d.getUTCDay();
+        const min = d.getUTCHours() * 60 + d.getUTCMinutes();
+        if (dow === 0 || dow === 6 || min < SESSION_START || min > SESSION_END) {
+            t = jumpToNextSession(t);
+        }
+        result.push(t);
+    }
+    return result;
+}
+
+const _OIP_30M_ALLOWED = new Set([
+    '30second', 'minute', '2minute', '3minute', '5minute',
+    '10minute', '15minute', '30minute'
+]);
+
+// Cached deduped reversal levels from the last full signal detection run.
+// Only updated when recompute=true (i.e., on 30m candle close during replay, or always in live mode).
+let _oip30mLevelCache = null;
+
+// recompute=true (default): detect new signals and update cache — use on 30m close or live mode.
+// recompute=false: redraw existing cached levels with updated time endpoints — use mid-bar in replay.
+function oipDraw30mReversalLines(candles, recompute = true) {
+    oipClear30mReversalLines();
+    if (!document.getElementById('oipShow30mReversalLines')?.checked) return;
+    // Only valid for 30-min and below; silent no-op for 60m / daily / weekly
+    if (typeof oipInterval !== 'undefined' && !_OIP_30M_ALLOWED.has(oipInterval)) return;
+    if (!oipOIChart || !oipOISeries || !candles?.length) return;
+
+    const lastTime = candles[candles.length - 1].time;
+    const curPrice = candles[candles.length - 1].close;
+
+    // ── Robust interval: mode of last 30 consecutive intra-session gaps ──
+    const sample = candles.slice(-31);
+    const freq = {};
+    for (let i = 1; i < sample.length; i++) {
+        const d = sample[i].time - sample[i - 1].time;
+        if (d > 0 && d <= 3600) freq[d] = (freq[d] || 0) + 1; // ignore overnight gaps
+    }
+    const candleInterval = Object.keys(freq).length
+        ? parseInt(Object.keys(freq).reduce((a, b) => freq[a] > freq[b] ? a : b))
+        : 60;
+
+    // Read user-configured values
+    const lineCountUp = Math.max(1, parseInt(document.getElementById('oipReversal30mCountUp')?.value) || 10);
+    const lineCountDn = Math.max(1, parseInt(document.getElementById('oipReversal30mCountDn')?.value) || 10);
+    const lookback    = Math.max(5, parseInt(document.getElementById('oipReversal30mRange')?.value)  || 50);
+
+    // In replay mode skip future timestamps — they expand the time scale and crash the renderer.
+    const FUTURE_BARS = 50;
+    const isReplay = typeof oipFullCandles !== 'undefined' && oipFullCandles && candles.length < oipFullCandles.length;
+    const futureTimes = isReplay ? [] : _oipFutureSessionTimes(lastTime, candleInterval, FUTURE_BARS);
+    window._oipReversalFutureBarsCount = futureTimes.length;
+
+    // ── Signal detection: only runs on 30m close (recompute=true) or first call ──
+    if (recompute || _oip30mLevelCache === null) {
+        const bars = _oipAggregateTo30m(candles);
+        if (bars.length < 2) { _oip30mLevelCache = []; }
+        else {
+            const GAP_PTS = 10;
+            const barsInRange = bars.slice(-lookback);
+            const rawLevels = [];
+            for (let i = 0; i < barsInRange.length - 1; i++) {
+                const c1 = barsInRange[i];
+                const c2 = barsInRange[i + 1];
+                const c1Bull = c1.close > c1.open;
+                const c2Bull = c2.close > c2.open;
+                if (c1Bull === c2Bull) continue;
+                if (Math.abs(c1.close - c2.open) > GAP_PTS) continue;
+                const isBullish = !c1Bull && c2Bull;
+                const next2 = barsInRange.slice(i + 2, i + 4);
+                if (!next2.length) continue;
+                let breakOccurred, closeConfirmed;
+                if (isBullish) {
+                    breakOccurred  = next2.some(b => b.high  > c2.high);
+                    closeConfirmed = next2.some(b => b.close > c2.high);
+                } else {
+                    breakOccurred  = next2.some(b => b.low   < c2.low);
+                    closeConfirmed = next2.some(b => b.close < c2.low);
+                }
+                if (!breakOccurred || !closeConfirmed) continue;
+                rawLevels.push({ level: (c1.close + c2.open) / 2, time: c1.time });
+            }
+            rawLevels.sort((a, b) => a.level - b.level);
+            const deduped = [];
+            for (const l of rawLevels) {
+                const prev = deduped[deduped.length - 1];
+                if (prev && Math.abs(l.level - prev.level) <= 5) {
+                    if (l.time > prev.time) deduped[deduped.length - 1] = l;
+                } else {
+                    deduped.push(l);
+                }
+            }
+            _oip30mLevelCache = deduped;
+        }
+    }
+
+    const deduped = _oip30mLevelCache;
+    if (!deduped?.length) return;
+
+    // ── Pick closest N above/below current price (recomputed every step so lines follow price) ──
+    const above = deduped.filter(l => l.level >= curPrice)
+                         .sort((a, b) => a.level - b.level)
+                         .slice(0, lineCountUp);
+    const below = deduped.filter(l => l.level < curPrice)
+                         .sort((a, b) => b.level - a.level)
+                         .slice(0, lineCountDn);
+
+    // ── Draw lines extended to the current candle's time ────────
+    [...above, ...below].forEach(({ level, time }) => {
+        const historical = candles
+            .filter(c => c.time >= time)
+            .map(c => ({ time: c.time, value: level }));
+        const future = futureTimes.map(t => ({ time: t, value: level }));
+        const s = oipOIChart.addLineSeries({
+            color: '#f97316',
+            lineWidth: 1,
+            lineStyle: 0,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            crosshairMarkerVisible: false,
+            autoscaleInfoProvider: () => null,
+        });
+        s.setData([...historical, ...future]);
+        oip30mReversalSeries.push(s);
+    });
+}
+
+/* ── 1-Day Reversal Lines ─────────────────────────────────── */
+
+// Aggregate any-interval candles into 1-Day OHLC bars.
+// Each day's canonical time = 9:15 AM IST (Fake-IST encoding).
+function _oipAggregateTo1D(candles) {
+    const buckets = new Map();
+    candles.forEach(c => {
+        const d   = new Date(c.time * 1000);
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+        if (!buckets.has(key)) {
+            const bd = new Date(d);
+            bd.setUTCHours(9, 15, 0, 0);
+            buckets.set(key, { time: Math.floor(bd.getTime()/1000), open: c.open, high: c.high, low: c.low, close: c.close });
+        } else {
+            const b = buckets.get(key);
+            b.high  = Math.max(b.high, c.high);
+            b.low   = Math.min(b.low,  c.low);
+            b.close = c.close;
+        }
+    });
+    return [...buckets.values()].sort((a, b) => a.time - b.time);
+}
+
+// Generate N future trading-day timestamps (9:15 AM IST, skipping weekends).
+function _oipFutureTradingDays(fromTime, count) {
+    const result = [];
+    const d = new Date(fromTime * 1000);
+    while (result.length < count) {
+        d.setUTCDate(d.getUTCDate() + 1);
+        if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
+        d.setUTCHours(9, 15, 0, 0);
+        result.push(Math.floor(d.getTime() / 1000));
+    }
+    return result;
+}
+
+let oip1DReversalSeries = [];
+
+function oipClear1DReversalLines() {
+    oip1DReversalSeries.forEach(s => { try { oipOIChart.removeSeries(s); } catch(e) {} });
+    oip1DReversalSeries = [];
+}
+
+function oipDraw1DReversalLines(candles) {
+    oipClear1DReversalLines();
+    if (!document.getElementById('oipShow1DReversalLines')?.checked) return;
+    if (!oipOIChart || !oipOISeries || !candles?.length) return;
+
+    const bars = _oipAggregateTo1D(candles);
+    if (bars.length < 2) return;
+
+    const count = Math.max(1, parseInt(document.getElementById('oipReversal1DCount')?.value) || 10);
+    const range = Math.max(1, parseInt(document.getElementById('oipReversal1DRange')?.value) || 30);
+
+    // Skip future timestamps in replay mode — same reason as oipDraw30mReversalLines.
+    const FUTURE_DAYS = 30;
+    const isReplay1D = typeof oipFullCandles !== 'undefined' && oipFullCandles && candles.length < oipFullCandles.length;
+    const futureTimes = isReplay1D ? [] : _oipFutureTradingDays(bars[bars.length - 1].time, FUTURE_DAYS);
+    window._oipReversalFutureBarsCount = futureTimes.length;
+
+    const shared = {
+        lastValueVisible: false, priceLineVisible: false,
+        crosshairMarkerVisible: false, autoscaleInfoProvider: () => null,
+    };
+
+    // ── 1. Scan backwards (skip last incomplete bar) for candles
+    //       where |close - open| <= range ──────────────────────────
+    const qualifying = [];
+    for (let i = bars.length - 2; i >= 0 && qualifying.length < count; i--) {
+        const b = bars[i];
+        if (Math.abs(b.close - b.open) <= range) qualifying.push(b);
+    }
+
+    if (!qualifying.length) return;
+
+    // ── 2. For each qualifying candle draw a body-zone box + center line ──
+    qualifying.forEach(b => {
+        const top    = Math.max(b.open, b.close);
+        const bottom = Math.min(b.open, b.close);
+        const center = (b.open + b.close) / 2;
+        const isBull = b.close >= b.open;
+        const lineColor = isBull ? '#22c55e' : '#ef4444';
+        const fillColor = isBull ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)';
+
+        // Timeline: from this candle forward through all remaining daily bars + future days
+        const allTimes = [
+            ...bars.filter(bar => bar.time >= b.time).map(bar => bar.time),
+            ...futureTimes,
+        ];
+
+        // Top border
+        const topS = oipOIChart.addLineSeries({ color: lineColor, lineWidth: 1, lineStyle: 0, ...shared });
+        topS.setData(allTimes.map(t => ({ time: t, value: top })));
+        oip1DReversalSeries.push(topS);
+
+        // Bottom border
+        const botS = oipOIChart.addLineSeries({ color: lineColor, lineWidth: 1, lineStyle: 0, ...shared });
+        botS.setData(allTimes.map(t => ({ time: t, value: bottom })));
+        oip1DReversalSeries.push(botS);
+
+        // Fill between top and bottom
+        const fillS = oipOIChart.addBaselineSeries({
+            baseValue: { type: 'price', price: bottom },
+            topFillColor1: fillColor, topFillColor2: fillColor, topLineColor: 'transparent',
+            bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
+            lineWidth: 0, ...shared,
+        });
+        fillS.setData(allTimes.map(t => ({ time: t, value: top })));
+        oip1DReversalSeries.push(fillS);
+
+        // Center line (dashed)
+        const cenS = oipOIChart.addLineSeries({ color: lineColor, lineWidth: 1, lineStyle: 1, ...shared });
+        cenS.setData(allTimes.map(t => ({ time: t, value: center })));
+        oip1DReversalSeries.push(cenS);
     });
 }

@@ -68,7 +68,11 @@ def delete_record(date: str, symbol: str) -> bool:
 def fetch_and_store(symbol: str, provider=None) -> Dict[str, Any]:
     """
     Fetch today's OI totals for *symbol* from the broker and upsert into JSON.
-    Returns a dict with success/error and the stored record on success.
+
+    Change columns (chng_ce_oi, chng_pe_oi) are computed as the difference
+    between the live CE/PE OI and the most recent previously stored record for
+    the same symbol, so they always reflect a real day-over-day delta rather
+    than the static intraday value returned by the broker API.
     """
     try:
         if provider is None:
@@ -92,29 +96,48 @@ def fetch_and_store(symbol: str, provider=None) -> Dict[str, Any]:
         if not ce_summary and not pe_summary:
             ce_strikes = data.get('ce_strikes', [])
             pe_strikes = data.get('pe_strikes', [])
-            total_ce_oi     = sum(s.get('oi', 0) for s in ce_strikes)
-            total_pe_oi     = sum(s.get('oi', 0) for s in pe_strikes)
-            total_ce_change = sum(s.get('change_in_oi', 0) for s in ce_strikes)
-            total_pe_change = sum(s.get('change_in_oi', 0) for s in pe_strikes)
+            total_ce_oi = sum(s.get('oi', 0) for s in ce_strikes)
+            total_pe_oi = sum(s.get('oi', 0) for s in pe_strikes)
         else:
-            total_ce_oi     = ce_summary.get('total_oi', 0)
-            total_pe_oi     = pe_summary.get('total_oi', 0)
-            total_ce_change = ce_summary.get('change_in_oi', 0)
-            total_pe_change = pe_summary.get('change_in_oi', 0)
+            total_ce_oi = ce_summary.get('total_oi', 0)
+            total_pe_oi = pe_summary.get('total_oi', 0)
 
         today = datetime.now().strftime('%Y-%m-%d')
+
+        # Compute change vs the last stored record for this symbol
+        # (skip any record already stored for today so an overwrite stays meaningful)
+        with _lock:
+            records = _load_records()
+            prev = next(
+                (r for r in sorted(records, key=lambda x: x.get('date', ''), reverse=True)
+                 if r.get('symbol') == symbol and r.get('date', '') < today),
+                None
+            )
+
+        if prev is not None:
+            chng_ce_oi = int(total_ce_oi) - int(prev.get('ce_oi', 0))
+            chng_pe_oi = int(total_pe_oi) - int(prev.get('pe_oi', 0))
+            logger.info(
+                f"[HistoricOI] {symbol} change vs {prev['date']}: "
+                f"CE {chng_ce_oi:+,}  PE {chng_pe_oi:+,}"
+            )
+        else:
+            # First-ever record — no baseline to diff against
+            chng_ce_oi = 0
+            chng_pe_oi = 0
+            logger.info(f"[HistoricOI] {symbol}: first record, no previous baseline")
+
         record = {
             'date':       today,
             'symbol':     symbol,
             'ce_oi':      int(total_ce_oi),
             'pe_oi':      int(total_pe_oi),
-            'chng_ce_oi': int(total_ce_change),
-            'chng_pe_oi': int(total_pe_change),
+            'chng_ce_oi': chng_ce_oi,
+            'chng_pe_oi': chng_pe_oi,
         }
 
         with _lock:
             records = _load_records()
-            # Upsert: replace existing (date, symbol) or append
             updated = False
             for i, r in enumerate(records):
                 if r.get('date') == today and r.get('symbol') == symbol:
@@ -125,7 +148,7 @@ def fetch_and_store(symbol: str, provider=None) -> Dict[str, Any]:
                 records.append(record)
             _save_records(records)
 
-        logger.info(f"[HistoricOI] Stored record for {symbol} on {today}: CE={total_ce_oi:,} PE={total_pe_oi:,}")
+        logger.info(f"[HistoricOI] Stored {symbol} on {today}: CE={total_ce_oi:,} PE={total_pe_oi:,}")
         return {'success': True, 'record': record}
 
     except Exception as e:

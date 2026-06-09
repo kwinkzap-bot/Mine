@@ -203,8 +203,8 @@ body.ocean-theme .hoi-wrap {
 .hoi-td.c { text-align: center; }
 
 /* semantic colours */
-.hoi-ce   { color: var(--hoi-accent)  !important; }
-.hoi-pe   { color: #ef4444            !important; }
+.hoi-ce   { color: #ef4444 !important; }
+.hoi-pe   { color: #16a34a !important; }
 .hoi-up   { color: #16a34a !important; font-weight: 700; }
 .hoi-down { color: #ef4444 !important; font-weight: 700; }
 .hoi-flat { color: var(--hoi-text-3)  !important; }
@@ -428,9 +428,30 @@ body.ocean-theme .hoi-wrap {
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowVwapOI"><span>VWAP</span>
                                 </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowCpr"><span>CPR Levels</span>
-                                </label>
+                                <div class="oip-ind-cpr-group">
+                                    <div class="oip-ind-item oip-ind-cpr-header">
+                                        <input type="checkbox" id="oipShowCpr">
+                                        <label for="oipShowCpr" class="oip-ind-cpr-label">CPR Levels</label>
+                                        <span class="oip-cpr-expand" id="oipCprExpandBtn">&#9658;</span>
+                                    </div>
+                                    <div class="oip-ind-cpr-sub hidden" id="oipCprSub">
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowPrevHL" checked><span style="color:#ef07f9">Prev H / L</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowBand" checked><span style="color:#3366ff">PP / BC / TC</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowResistance" checked><span style="color:#006400">R1 – R4</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowSupport" checked><span style="color:#ff0000">S1 – S4</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowCumR3S3" checked><span style="color:#a020f0">Cum. R3 / S3</span>
+                                        </label>
+                                    </div>
+                                </div>
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowSignals"><span>Entry Signals</span>
                                 </label>
@@ -460,6 +481,40 @@ body.ocean-theme .hoi-wrap {
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowEma200" checked>
                                     <span style="color:#888">EMA 200</span>
+                                </label>
+                            </div>
+
+                            <div class="oip-ind-section">
+                                <div class="oip-ind-section-title">Lines</div>
+                                <div class="oip-ind-reversal-wrap">
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShow30mReversalLines"><span style="color:#f97316">30m Reversal</span>
+                                    </label>
+                                    <div class="oip-ind-reversal-inputs">
+                                        <span class="oip-ind-mini-lbl">↑</span>
+                                        <input type="number" id="oipReversal30mCountUp" class="oip-ind-mini-inp" value="10" min="1" max="30" step="1" title="Lines above current price">
+                                        <span class="oip-ind-mini-lbl">↓</span>
+                                        <input type="number" id="oipReversal30mCountDn" class="oip-ind-mini-inp" value="10" min="1" max="30" step="1" title="Lines below current price">
+                                        <span class="oip-ind-mini-lbl">Range</span>
+                                        <input type="number" id="oipReversal30mRange" class="oip-ind-mini-inp" value="50" min="5" max="500" step="5">
+                                    </div>
+                                </div>
+                                <div class="oip-ind-reversal-wrap">
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShow1DReversalLines"><span style="color:#8b5cf6">1D Reversal</span>
+                                    </label>
+                                    <div class="oip-ind-reversal-inputs">
+                                        <span class="oip-ind-mini-lbl">Count</span>
+                                        <input type="number" id="oipReversal1DCount" class="oip-ind-mini-inp" value="10" min="1" max="30" step="1">
+                                        <span class="oip-ind-mini-lbl">Range</span>
+                                        <input type="number" id="oipReversal1DRange" class="oip-ind-mini-inp" value="50" min="5" max="500" step="5">
+                                    </div>
+                                </div>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShow2ndCandle30s" checked><span style="color:#FFC800">2nd 30Sec Candle</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShow2nd5mCandle" checked><span style="color:#00D2FF">2nd 5Min Candle</span>
                                 </label>
                             </div>
                         </div>
@@ -650,6 +705,32 @@ body.ocean-theme .hoi-wrap {
         <div id="pcrTooltip2" class="pcr-tooltip hidden"></div>
       </div>
     </div>
+
+    <!-- Chart 3: Total OI -->
+    <div class="pcr-section">
+      <div class="pcr-section-header">
+        <div class="pcr-section-title">Total OI (Call vs Put)</div>
+        <div class="pcr-legend">
+          <span class="pcr-legend-item"><span class="pcr-dot" style="background:#94a3b8"></span>Future</span>
+          <div class="pcr-oi-metrics">
+            <span class="pcr-oi-metric">
+              <span class="pcr-dot" style="background:#ef4444"></span>
+              <span class="pcr-oi-label">Call Total OI</span>
+              <span id="pcrCEOIVal" class="pcr-oi-val" style="color:#ef4444"></span>
+            </span>
+            <span class="pcr-oi-metric">
+              <span class="pcr-dot" style="background:#22c55e"></span>
+              <span class="pcr-oi-label">Put Total OI</span>
+              <span id="pcrPEOIVal" class="pcr-oi-val" style="color:#22c55e"></span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="pcr-chart-wrap" id="pcrChart3Wrap">
+        <div id="pcrChart3"></div>
+        <div id="pcrTooltip3" class="pcr-tooltip hidden"></div>
+      </div>
+    </div>
   </div>
 </div><!-- /pcr panel -->
 
@@ -770,14 +851,16 @@ function _hoiRenderAll(records) {
         tbody.innerHTML = rows.map(r => {
             const cv   = Number(r.chng_ce_oi), pv = Number(r.chng_pe_oi);
             const diff = Number(r.pe_oi) - Number(r.ce_oi);
-            const cSign = cv > 0 ? '+' : '', pSign = pv > 0 ? '+' : '', dSign = diff > 0 ? '+' : '';
+            const cSign = cv > 0 ? '+' : '', pSign = pv > 0 ? '+' : '';
+            const diffArrow = diff > 0 ? '↑ ' : diff < 0 ? '↓ ' : '';
+            const diffCls   = diff > 0 ? 'hoi-up' : diff < 0 ? 'hoi-down' : 'hoi-flat';
             return `<tr class="hoi-row">
               <td class="hoi-td">${r.date}</td>
-              <td class="hoi-td r ${_hoiChngCls(cv)}">${cSign}${_hoiFmt(cv)}</td>
-              <td class="hoi-td r ${_hoiChngCls(pv)}">${pSign}${_hoiFmt(pv)}</td>
+              <td class="hoi-td r hoi-ce">${cSign}${_hoiFmt(cv)}</td>
+              <td class="hoi-td r hoi-pe">${pSign}${_hoiFmt(pv)}</td>
               <td class="hoi-td r hoi-ce">${_hoiFmt(r.ce_oi)}</td>
               <td class="hoi-td r hoi-pe">${_hoiFmt(r.pe_oi)}</td>
-              <td class="hoi-td r ${_hoiChngCls(diff)}">${dSign}${_hoiFmt(diff)}</td>
+              <td class="hoi-td r ${diffCls}">${diffArrow}${_hoiFmt(Math.abs(diff))}</td>
               <td class="hoi-td c"><button class="hoi-del-btn" title="Delete"
                 onclick="deleteHistoricOI('${r.date}','${r.symbol}')">&#x2715;</button></td>
             </tr>`;

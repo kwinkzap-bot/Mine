@@ -71,6 +71,19 @@
 
                     <div class="oip-prem-sep"></div>
 
+                    <!-- Lines toggles -->
+                    <div class="oip-prem-group oip-ema-group">
+                        <span class="oip-label">Lines</span>
+                        <label class="oip-ema-chk" title="2nd 30-second Candle Box">
+                            <input type="checkbox" id="oipShow2ndCandle30s" checked><span style="color:#FFC800">2nd 30s</span>
+                        </label>
+                        <label class="oip-ema-chk" title="2nd 5-minute Candle Box">
+                            <input type="checkbox" id="oipShow2nd5mCandle" checked><span style="color:#00D2FF">2nd 5m</span>
+                        </label>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
                     <!-- EMA toggles -->
                     <div class="oip-prem-group oip-ema-group">
                         <span class="oip-label">EMA</span>
@@ -335,5 +348,6 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_replay.js') }}?v={{ sv('js/oi_replay.js') }}"></script>
 {% endblock %}

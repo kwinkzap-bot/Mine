@@ -262,7 +262,7 @@ body.ocean-theme {
 
 /* Scrollable Results Table */
 .results-scroll {
-    max-height: 380px;
+    max-height: 375px;
     overflow-y: auto;
     border: none;
     border-radius: 0;

@@ -554,7 +554,7 @@ body.ocean-theme, .oip-page.ocean-theme {
 /* ── Chart ───────────────────────────────────────────────── */
 .oip-chart-wrap {
     position: relative;
-    height: 310px;
+    height: 375px;
     /* fixed — both OI and Premium charts are same height */
     flex-shrink: 0;
     background: var(--oip-bg);
@@ -570,11 +570,10 @@ body.ocean-theme, .oip-page.ocean-theme {
     display: flex;
     gap: 10px;
     width: 100%;
-    margin-bottom: 10px;
 }
 
 .oip-charts-row .oip-chart-wrap {
-    height: 310px;
+    height: 375px;
     flex: 1;
     min-width: 0;
 }
@@ -1354,4 +1353,65 @@ body.ocean-theme .oip-tooltip {
     cursor: pointer;
     accent-color: var(--oip-accent);
     flex-shrink: 0;
+}
+
+/* ── CPR Expand / Collapse ───────────────────────────────── */
+.oip-ind-cpr-header {
+    display: flex;
+    align-items: center;
+    cursor: default;
+}
+.oip-ind-cpr-label {
+    flex: 1;
+    cursor: pointer;
+}
+.oip-cpr-expand {
+    font-size: 8px;
+    color: var(--oip-metric-lbl);
+    cursor: pointer;
+    padding: 0 4px;
+    transition: transform 0.15s;
+    flex-shrink: 0;
+    user-select: none;
+    line-height: 1;
+}
+.oip-cpr-expand.expanded { transform: rotate(90deg); }
+
+.oip-ind-cpr-sub.hidden { display: none; }
+
+.oip-ind-sub-item {
+    padding-left: 30px !important;
+    font-size: 11px !important;
+}
+.oip-ind-cpr-sub.oip-cpr-disabled .oip-ind-sub-item {
+    opacity: 0.38;
+    pointer-events: none;
+}
+
+/* ── 30m Reversal sub-inputs ─────────────────────────────── */
+.oip-ind-reversal-inputs {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 12px 5px 30px;
+}
+.oip-ind-mini-lbl {
+    font-size: 10px;
+    color: var(--oip-metric-lbl);
+    white-space: nowrap;
+}
+.oip-ind-mini-inp {
+    width: 42px;
+    height: 18px;
+    font-size: 10px;
+    padding: 0 4px;
+    border: 1px solid var(--oip-border);
+    border-radius: 3px;
+    background: var(--oip-header-bg);
+    color: var(--oip-text);
+    text-align: center;
+}
+.oip-ind-mini-inp:focus {
+    outline: none;
+    border-color: var(--oip-accent);
 }

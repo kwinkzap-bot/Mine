@@ -46,6 +46,9 @@
                             <option value="15minute">15m</option>
                             <option value="30minute">30m</option>
                             <option value="60minute">1h</option>
+                            <option value="day">1D</option>
+                            <option value="week">1W</option>
+                            <option value="month">1M</option>
                         </select>
                     </div>
 
@@ -72,9 +75,30 @@
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowVwapOI"><span>VWAP</span>
                                 </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowCpr"><span>CPR Levels</span>
-                                </label>
+                                <div class="oip-ind-cpr-group">
+                                    <div class="oip-ind-item oip-ind-cpr-header">
+                                        <input type="checkbox" id="oipShowCpr">
+                                        <label for="oipShowCpr" class="oip-ind-cpr-label">CPR Levels</label>
+                                        <span class="oip-cpr-expand" id="oipCprExpandBtn">&#9658;</span>
+                                    </div>
+                                    <div class="oip-ind-cpr-sub hidden" id="oipCprSub">
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowPrevHL" checked><span style="color:#ef07f9">Prev H / L</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowBand" checked><span style="color:#3366ff">PP / BC / TC</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowResistance" checked><span style="color:#006400">R1 – R4</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowSupport" checked><span style="color:#ff0000">S1 – S4</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipCprShowCumR3S3" checked><span style="color:#a020f0">Cum. R3 / S3</span>
+                                        </label>
+                                    </div>
+                                </div>
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowSignals"><span>Entry Signals</span>
                                 </label>
@@ -104,6 +128,41 @@
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowEma200" checked>
                                     <span style="color:#888">EMA 200</span>
+                                </label>
+                            </div>
+
+                            <div class="oip-ind-section">
+                                <div class="oip-ind-section-title">Lines</div>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowMaxPain" checked><span style="color:#2563eb">Max Pain</span>
+                                </label>
+                                <div class="oip-ind-reversal-wrap">
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShow30mReversalLines"><span style="color:#f97316">30m Reversal</span>
+                                    </label>
+                                    <div class="oip-ind-reversal-inputs">
+                                        <span class="oip-ind-mini-lbl">Count</span>
+                                        <input type="number" id="oipReversal30mCount" class="oip-ind-mini-inp" value="10" min="1" max="30" step="1">
+                                        <span class="oip-ind-mini-lbl">Range</span>
+                                        <input type="number" id="oipReversal30mRange" class="oip-ind-mini-inp" value="50" min="5" max="500" step="5">
+                                    </div>
+                                </div>
+                                <div class="oip-ind-reversal-wrap">
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShow1DReversalLines"><span style="color:#8b5cf6">1D Reversal</span>
+                                    </label>
+                                    <div class="oip-ind-reversal-inputs">
+                                        <span class="oip-ind-mini-lbl">Count</span>
+                                        <input type="number" id="oipReversal1DCount" class="oip-ind-mini-inp" value="10" min="1" max="30" step="1">
+                                        <span class="oip-ind-mini-lbl">Range</span>
+                                        <input type="number" id="oipReversal1DRange" class="oip-ind-mini-inp" value="30" min="1" max="500" step="1">
+                                    </div>
+                                </div>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShow2ndCandle30s" checked><span style="color:#FFC800">2nd 30Sec Candle</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShow2nd5mCandle" checked><span style="color:#00D2FF">2nd 5Min Candle</span>
                                 </label>
                             </div>
                         </div>

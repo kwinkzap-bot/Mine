@@ -425,7 +425,7 @@ window.TradingViewChart = (function () {
                     textColor: '#6b7280',           // Medium grey text on timeScale
                     borderColor: 'transparent',     // Hide the border
                     rightOffset: 20,                 // Matched with OI Profile chart
-                    barSpacing: 8,                 // Increased zoom to match user preference
+                    barSpacing: 4,                 // Half of OI chart spacing for compact option view
                     fixLeftEdge: false,             // Allow scrolling on left
                     fixRightEdge: false,            // Allow dragging to right side
                     shiftVisibleRangeOnNewBar: true
@@ -582,10 +582,29 @@ window.TradingViewChart = (function () {
                 });
             }
 
-            // Format and set data
+            // Format and set data; strip whitespace for CandlestickSeries (LINE keeps them)
             const formattedData = formatChartData(data);
-            if (formattedData.length > 0) {
-                series.setData(formattedData);
+            const initialData = (type === 'LINE') ? formattedData : formattedData.filter(c => c.open !== undefined);
+            if (initialData.length > 0) {
+                series.setData(initialData);
+            }
+
+            // Invisible alignment series: carries ALL timestamps (including positions where
+            // the option had no trade) so scrollToPosition sync lands at the same clock time
+            // as the OI chart. CandlestickSeries is OHLC-only (no whitespace) to prevent
+            // LC v4.1.1 Candlestick renderer crashes; this LineSeries fills the gap.
+            let alignSeries = null;
+            if (type !== 'LINE') {
+                alignSeries = chart.addLineSeries({
+                    visible: false,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                    autoscaleInfoProvider: () => null
+                });
+                if (formattedData.length > 0) {
+                    try { alignSeries.setData(formattedData.map(c => ({ time: c.time, value: 0 }))); } catch(e) {}
+                }
             }
 
             // Price lines array to store reference lines (no PDH/PDL lines)
@@ -759,6 +778,7 @@ window.TradingViewChart = (function () {
                 ceSeries: ceSeries,
                 peSeries: peSeries,
                 sumSeries: typeof sumSeries !== 'undefined' ? sumSeries : null,
+                alignSeries: alignSeries,
                 priceLinesArray: priceLinesArray,
                 data: formattedData,
                 isCombined: type === 'COMBINED' || config.isCombined,
@@ -831,20 +851,27 @@ window.TradingViewChart = (function () {
                     }
 
                     if (this.isCombined) {
-                        // Combined chart: update both CE and PE series
-                        const ceFormatted = newData ? formatChartData(newData) : [];
-                        const peFormatted = (referenceOrPeData && Array.isArray(referenceOrPeData)) ? formatChartData(referenceOrPeData) : [];
+                        // Combined chart: update both CE and PE series.
+                        // Strip whitespace ({time}-only) entries before setData — LC v4.1.1 crashes
+                        // in its Candlestick renderer when open === undefined. The alignSeries
+                        // (invisible LineSeries) carries all timestamps so scrollToPosition sync
+                        // still lands at the correct clock time on every chart.
+                        const ceRawAll = newData ? formatChartData(newData) : [];
+                        const peRawAll = (referenceOrPeData && Array.isArray(referenceOrPeData)) ? formatChartData(referenceOrPeData) : [];
+                        const ceFormatted = ceRawAll.filter(c => c.open !== undefined);
+                        const peFormatted = peRawAll.filter(c => c.open !== undefined);
 
-                        if (ceSeries) {
-                            const hasRealCe = ceFormatted.some(c => c.open !== undefined);
-                            if (hasRealCe) {
-                                try { ceSeries.setData(ceFormatted); } catch(e) {}
-                                if (ceFormatted.length > 0) this.data = ceFormatted;
-                            }
+                        if (ceSeries && ceFormatted.length) {
+                            try { ceSeries.setData(ceFormatted); } catch(e) {}
+                            this.data = ceFormatted;
                         }
-                        if (peSeries) {
-                            const hasRealPe = peFormatted.some(c => c.open !== undefined);
-                            if (hasRealPe) { try { peSeries.setData(peFormatted); } catch(e) {} }
+                        if (peSeries && peFormatted.length) {
+                            try { peSeries.setData(peFormatted); } catch(e) {}
+                        }
+                        // Keep alignment series in step — use CE timestamps (CE and PE share the
+                        // same OI-aligned timestamps so either set works).
+                        if (alignSeries && ceRawAll.length) {
+                            try { alignSeries.setData(ceRawAll.map(c => ({ time: c.time, value: 0 }))); } catch(e) {}
                         }
 
                     } else if (type === 'LINE') {
@@ -872,13 +899,17 @@ window.TradingViewChart = (function () {
                             this.data = lineData;
                         }
                     } else {
-                        // Single series chart
-                        const updatedData = formatChartData(newData);
-                        const hasRealData = updatedData.some(c => c.open !== undefined);
-                        if (hasRealData && updatedData.length > 0) {
+                        // Single Candlestick series chart.
+                        // Strip whitespace — same rationale as the COMBINED path above.
+                        // alignSeries receives all timestamps so bar-count alignment is preserved.
+                        const allFormatted = formatChartData(newData);
+                        const updatedData = allFormatted.filter(c => c.open !== undefined);
+                        if (updatedData.length) {
                             try { series.setData(updatedData); } catch(e) {}
                             this.data = updatedData;
-
+                        }
+                        if (alignSeries && allFormatted.length) {
+                            try { alignSeries.setData(allFormatted.map(c => ({ time: c.time, value: 0 }))); } catch(e) {}
                         }
                     }
 

@@ -679,7 +679,8 @@ class OpenInterestService:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT timestamp, current_price, pcr, total_ce_change, total_pe_change
+                    SELECT timestamp, current_price, pcr, total_ce_change, total_pe_change,
+                           total_ce_oi, total_pe_oi
                     FROM oi_history
                     WHERE symbol = ?
                       AND date(timestamp) = ?
@@ -709,6 +710,8 @@ class OpenInterestService:
                         'pcr': round(row['pcr'], 3),
                         'ce_change': row['total_ce_change'],
                         'pe_change': row['total_pe_change'],
+                        'ce_oi': row['total_ce_oi'],
+                        'pe_oi': row['total_pe_oi'],
                     }
                 except Exception:
                     continue
