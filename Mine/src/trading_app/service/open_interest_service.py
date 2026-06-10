@@ -436,6 +436,34 @@ class OpenInterestService:
                     )
                 ''')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_atm_iv_symbol_date ON atm_iv_history(symbol, date)')
+
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS fii_sector_limits (
+                        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date                    TEXT NOT NULL,
+                        sector                  TEXT NOT NULL,
+                        auc_inr_cr              REAL,
+                        net_invest_inr_cr       REAL,
+                        net_invest_prev_inr_cr  REAL,
+                        period_label            TEXT,
+                        prev_period_label       TEXT,
+                        created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(date, sector)
+                    )
+                ''')
+                # Migration: add new columns if table existed with old schema
+                for _col, _type in [
+                    ('auc_inr_cr', 'REAL'),
+                    ('net_invest_inr_cr', 'REAL'),
+                    ('net_invest_prev_inr_cr', 'REAL'),
+                    ('period_label', 'TEXT'),
+                    ('prev_period_label', 'TEXT'),
+                ]:
+                    try:
+                        cursor.execute(f'ALTER TABLE fii_sector_limits ADD COLUMN {_col} {_type}')
+                    except sqlite3.OperationalError:
+                        pass
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_fii_sector_date ON fii_sector_limits(date, sector)')
                 conn.commit()
                 # logger.info(f"OI Database initialized at {self.db_path}")
         except Exception as e:

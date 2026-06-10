@@ -6513,6 +6513,120 @@ def delete_oi_historic(date: str, symbol: str):
     return jsonify({'success': True})
 
 
+@api_bp.route('/fii-sector-limits', methods=['GET'])
+def get_fii_sector_limits():
+    """Return sector-wise FPI data for a period (or latest). Also returns available periods list."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        from trading_app.service.fii_sector_service import FIISectorService
+        period  = request.args.get('period')  # optional YYYY-MM-DD
+        rows    = FIISectorService.get_sector_fpi_data(period=period)
+        periods = FIISectorService.get_periods()
+        return jsonify({
+            'success': True,
+            'data': rows,
+            'periods': periods,
+            'latest_period': periods[0] if periods else None,
+        })
+    except Exception as e:
+        logger.error(f'FII sector limits error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/fii-sector-update', methods=['POST'])
+def fii_sector_update():
+    """Check for and fetch any new fortnightly periods since the last stored date."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        from trading_app.service.fii_sector_service import FIISectorService
+        result = FIISectorService.check_and_fetch_latest()
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        logger.error(f'FII sector update error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/fii-sector-bulk-init', methods=['POST'])
+def fii_sector_bulk_init():
+    """Start a background bulk fetch of all historic CDSL periods not yet in DB."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        from trading_app.service.fii_sector_service import FIISectorService
+        started = FIISectorService.start_bulk_fetch()
+        return jsonify({'success': True, 'started': started})
+    except Exception as e:
+        logger.error(f'FII sector bulk-init error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/fii-sector-bulk-status', methods=['GET'])
+def fii_sector_bulk_status():
+    """Return progress of the ongoing (or last completed) bulk fetch."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    from trading_app.service.fii_sector_service import FIISectorService
+    # Use thread-safe getter (avoids RuntimeError during dict iteration)
+    return jsonify({'success': True, **FIISectorService.get_bulk_status()})
+
+
+@api_bp.route('/fii-sector-trend', methods=['GET'])
+def fii_sector_trend():
+    """Return all periods × all sectors NI for the heat map (n= optional limit)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        from trading_app.service.fii_sector_service import FIISectorService
+        raw_n = request.args.get('n')
+        n = int(raw_n) if raw_n else None  # None = all periods
+        data = FIISectorService.get_trend_data(n_periods=n)
+        return jsonify({'success': True, **data})
+    except Exception as e:
+        logger.error(f'FII sector trend error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/fii-sector-all-data', methods=['GET'])
+def fii_sector_all_data():
+    """Return full rows for every stored period — used for one-shot IDB caching."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        from trading_app.service.fii_sector_service import FIISectorService
+        data   = FIISectorService.get_all_data()    # {date: [rows...]}
+        periods = sorted(data.keys(), reverse=True)
+        return jsonify({'success': True, 'periods': periods, 'data': data})
+    except Exception as e:
+        logger.error(f'FII sector all-data error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/fii-sector-delete/<date_str>', methods=['DELETE'])
+def fii_sector_delete(date_str):
+    """Delete all rows for a specific period date from local SQLite."""
+    import re
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        return jsonify({'success': False, 'error': 'invalid date format'}), 400
+    try:
+        from trading_app.service.fii_sector_service import FIISectorService
+        ok = FIISectorService.delete_period(date_str)
+        return jsonify({'success': ok})
+    except Exception as e:
+        logger.error(f'FII sector delete error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ── Error handlers ────────────────────────────────────────────────────────────
 
 @api_bp.errorhandler(404)

@@ -125,6 +125,21 @@ class MarketScheduler:
             misfire_grace_time=300,
         )
 
+        self.scheduler.add_job(
+            self._run_fii_sector_task,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=16,
+                minute=0,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='fii_sector_snapshot',
+            name='FII Sector Limit Snapshot',
+            replace_existing=True,
+            misfire_grace_time=300,
+        )
+
         self.scheduler.start()
         jobs = {j.id: str(j.next_run_time) for j in self.scheduler.get_jobs()}
         logger.info(f"Market scheduler started — jobs registered: {list(jobs.keys())}")
@@ -224,6 +239,23 @@ class MarketScheduler:
         except Exception as e:
             logger.error(f"Unexpected error in OI persistence task: {e}", exc_info=True)
 
+
+    def _run_fii_sector_task(self):
+        """4:00 PM IST: scrape NSE FPI sector limits and save to SQLite."""
+        try:
+            if not self.is_trading_day():
+                return
+            logger.info("[FIISector Scheduler] Fetching sector FPI limits...")
+            from trading_app.service.fii_sector_service import FIISectorService
+            svc = FIISectorService()
+            rows = svc.get_sector_fpi_data()
+            if rows:
+                svc.save_snapshot(rows)
+                logger.info(f"[FIISector Scheduler] Saved {len(rows)} sector rows")
+            else:
+                logger.warning("[FIISector Scheduler] No data returned — skipping save")
+        except Exception as e:
+            logger.error(f"[FIISector Scheduler] Error: {e}", exc_info=True)
 
     def _run_historic_oi_record_task(self):
         """3:30 PM IST: fetch and persist daily OI snapshot for all symbols."""

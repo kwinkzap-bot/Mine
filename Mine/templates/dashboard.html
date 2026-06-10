@@ -117,7 +117,7 @@
     --hoi-accent:     #3b82f6;  --hoi-accent-dim: rgba(59,130,246,0.08);
     --hoi-row-hover:  #f8fafc;  --hoi-btn-hover:  #f1f5f9;
     --hoi-shadow:     0 1px 3px rgba(0,0,0,0.06);
-    max-width: 1100px; margin: 0 auto; padding: 14px 16px;
+    margin: 0 auto; padding: 14px 16px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color: var(--hoi-text);
 }
@@ -222,6 +222,231 @@ body.ocean-theme .hoi-wrap {
 
 /* empty state */
 .hoi-empty .hoi-td { text-align: center; padding: 36px 12px; color: var(--hoi-text-3); }
+
+/* ── FII Sector — mirrors hoi theme exactly ───────────────────── */
+.fii-wrap {
+    --fii-bg:         #f8fafc;  --fii-surface:    #ffffff;
+    --fii-border:     #e2e8f0;  --fii-border-sub: #f1f5f9;
+    --fii-text:       #1e293b;  --fii-text-2:     #64748b;  --fii-text-3: #94a3b8;
+    --fii-accent:     #3b82f6;  --fii-accent-dim: rgba(59,130,246,0.08);
+    --fii-row-hover:  #f8fafc;  --fii-shadow:     0 1px 3px rgba(0,0,0,0.06);
+    --fii-accum-bg:   rgba(22,163,74,.09);   --fii-accum-text: #15803d;  --fii-accum-border: rgba(22,163,74,.22);
+    --fii-distr-bg:   rgba(239,68,68,.08);   --fii-distr-text: #b91c1c;  --fii-distr-border: rgba(239,68,68,.20);
+    --fii-bar-accum:  #22c55e;  --fii-bar-distr: #ef4444;  --fii-bar-auc: var(--fii-accent);
+    margin: 0 auto; padding: 14px 0px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: var(--fii-text);
+}
+body.dark-theme .fii-wrap {
+    --fii-bg: #090e17; --fii-surface: #111827; --fii-border: #1e293b; --fii-border-sub: #1a2332;
+    --fii-text: #f1f5f9; --fii-text-2: #94a3b8; --fii-text-3: #475569;
+    --fii-accent: #60a5fa; --fii-accent-dim: rgba(96,165,250,0.1);
+    --fii-row-hover: rgba(59,130,246,0.04); --fii-shadow: none;
+    --fii-accum-bg: rgba(22,163,74,.13); --fii-accum-text: #4ade80; --fii-accum-border: rgba(22,163,74,.28);
+    --fii-distr-bg: rgba(239,68,68,.11); --fii-distr-text: #f87171; --fii-distr-border: rgba(239,68,68,.26);
+}
+body.forest-theme .fii-wrap {
+    --fii-bg: #060c09; --fii-surface: #0a1810; --fii-border: #14532d; --fii-border-sub: #0a1e14;
+    --fii-text: #ecfdf5; --fii-text-2: #6ba88f; --fii-text-3: #4d8068;
+    --fii-accent: #34d399; --fii-accent-dim: rgba(52,211,153,0.1);
+    --fii-row-hover: rgba(16,185,129,0.04); --fii-shadow: none;
+    --fii-accum-bg: rgba(52,211,153,.12); --fii-accum-text: #6ee7b7; --fii-accum-border: rgba(52,211,153,.25);
+    --fii-distr-bg: rgba(239,68,68,.10); --fii-distr-text: #fca5a5; --fii-distr-border: rgba(239,68,68,.24);
+}
+body.cream-theme .fii-wrap {
+    --fii-bg: #fdfbf7; --fii-surface: #fdf6e9; --fii-border: #d4b896; --fii-border-sub: #eeddc4;
+    --fii-text: #3b2f20; --fii-text-2: #9b7a52; --fii-text-3: #c4a882;
+    --fii-accent: #b45309; --fii-accent-dim: rgba(180,83,9,0.08);
+    --fii-row-hover: #f5ead8; --fii-shadow: none;
+    --fii-accum-bg: rgba(22,163,74,.08); --fii-accum-text: #166534; --fii-accum-border: rgba(22,163,74,.20);
+    --fii-distr-bg: rgba(239,68,68,.07); --fii-distr-text: #991b1b; --fii-distr-border: rgba(239,68,68,.18);
+}
+body.ocean-theme .fii-wrap {
+    --fii-bg: #f0f6fc; --fii-surface: #ffffff; --fii-border: #bae0f8; --fii-border-sub: #dbedf8;
+    --fii-text: #0f172a; --fii-text-2: #475569; --fii-text-3: #94a3b8;
+    --fii-accent: #0284c7; --fii-accent-dim: rgba(2,132,199,0.08);
+    --fii-row-hover: #f0f6fc; --fii-shadow: none;
+    --fii-accum-bg: rgba(22,163,74,.08); --fii-accum-text: #15803d; --fii-accum-border: rgba(22,163,74,.20);
+    --fii-distr-bg: rgba(239,68,68,.07); --fii-distr-text: #b91c1c; --fii-distr-border: rgba(239,68,68,.18);
+}
+
+/* topbar — mirrors .hoi-topbar */
+.fii-topbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px; margin-bottom: 8px;
+    background: var(--fii-surface); border: 1px solid var(--fii-border);
+    border-radius: 8px; box-shadow: var(--fii-shadow);
+}
+.fii-title   { font-size: 14px; font-weight: 700; color: var(--fii-text); letter-spacing: -0.01em; }
+.fii-updated { font-size: 11px; color: var(--fii-text-2); margin-left: auto; }
+.fii-refresh-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 12px; font-size: 11px; font-weight: 700;
+    color: #fff; background: var(--fii-accent);
+    border: 1px solid var(--fii-accent); border-radius: 6px;
+    cursor: pointer; letter-spacing: .03em; transition: opacity .15s;
+}
+.fii-refresh-btn:hover { opacity: .85; }
+
+/* two-column grid layout */
+.fii-grids { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 860px) { .fii-grids { grid-template-columns: 1fr; } }
+
+/* grid block — title + table-wrap stacked */
+.fii-grid-block  { display: flex; flex-direction: column; }
+.fii-grid-title  {
+    font-size: 11px; font-weight: 700; padding: 7px 12px 6px;
+    border-radius: 8px 8px 0 0; letter-spacing: .03em; text-transform: uppercase;
+    border: 1px solid; border-bottom: none;
+}
+.fii-grid-count  { font-size: 10px; font-weight: 600; margin-left: 6px; opacity: .65; }
+.fii-accum .fii-grid-title { background: var(--fii-accum-bg); color: var(--fii-accum-text); border-color: var(--fii-accum-border); }
+.fii-distr .fii-grid-title { background: var(--fii-distr-bg); color: var(--fii-distr-text); border-color: var(--fii-distr-border); }
+
+/* table wrap — mirrors .hoi-table-wrap */
+.fii-table-wrap { border: 1px solid var(--fii-border); border-radius: 0 0 8px 8px; overflow: hidden; box-shadow: var(--fii-shadow); }
+.fii-accum .fii-table-wrap { border-color: var(--fii-accum-border); }
+.fii-distr .fii-table-wrap { border-color: var(--fii-distr-border); }
+
+/* table — mirrors .hoi-table */
+.fii-table { width: 100%; border-collapse: collapse; background: var(--fii-surface); font-size: 12px; }
+.fii-table thead th {
+    padding: 8px 12px; text-align: left; font-size: 10px; font-weight: 700;
+    color: var(--fii-text-3); text-transform: uppercase; letter-spacing: 0.06em;
+    background: var(--fii-bg); border-bottom: 1px solid var(--fii-border); white-space: nowrap;
+}
+.fii-table thead th.r { text-align: right; }
+.fii-th-sub { font-weight: 400; opacity: .6; text-transform: none; letter-spacing: 0; font-size: 9px; margin-left: 3px; }
+
+/* rows — mirrors .hoi-row / .hoi-td
+   Use two-class specificity (0,2,0) to beat the global
+   tr:nth-child(even) rule in main.css which sits at (0,1,1) */
+.fii-table .fii-row { background: var(--fii-surface); transition: background .1s; }
+.fii-table .fii-row:hover { background: var(--fii-row-hover); }
+.fii-table .fii-td { padding: 8px 12px; border-bottom: 1px solid var(--fii-border-sub); vertical-align: middle; color: var(--fii-text); }
+.fii-table .fii-row:last-child .fii-td { border-bottom: none; }
+.fii-table .fii-td.r { text-align: right; font-variant-numeric: tabular-nums; }
+.fii-sector-name { font-size: 11px; max-width: 140px; }
+.fii-sn-text { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* bars — track uses --fii-border so it adapts to every theme */
+.fii-bar-wrap     { width: 72px; background: var(--fii-border); border-radius: 3px; height: 7px; display: inline-block; vertical-align: middle; }
+.fii-bar-auc-wrap { width: 56px; background: var(--fii-border); border-radius: 3px; height: 7px; display: inline-block; vertical-align: middle; }
+.fii-bar          { display: block; height: 7px; border-radius: 3px; transition: width .3s; min-width: 2px; }
+.fii-bar-accum    { background: var(--fii-bar-accum); }
+.fii-bar-distr    { background: var(--fii-bar-distr); }
+.fii-bar-auc      { background: var(--fii-bar-auc); }
+
+.fii-ni-val  { display: inline-block; min-width: 54px; font-size: 11px; font-weight: 700; vertical-align: middle; margin-left: 6px; }
+.fii-auc-val { display: inline-block; min-width: 54px; font-size: 11px; color: var(--fii-text-2); vertical-align: middle; margin-left: 6px; }
+
+/* semantic colours — mirrors .hoi-up / .hoi-down */
+.fii-up   { color: #16a34a !important; font-weight: 700; }
+.fii-down { color: #ef4444 !important; font-weight: 700; }
+.fii-flat { color: var(--fii-text-3) !important; }
+.fii-empty { text-align: center; padding: 28px 12px; color: var(--fii-text-3); font-size: 12px; }
+
+/* sync button variant */
+.fii-sync-btn { background: var(--fii-text-2) !important; border-color: var(--fii-text-2) !important; }
+.fii-sync-btn:hover { opacity: .8; }
+
+/* view tabs */
+.fii-tab-bar { display: flex; border-bottom: 2px solid var(--fii-border); margin-bottom: 10px; }
+.fii-tab { padding: 6px 18px; font-size: 12px; font-weight: 600; background: none; border: none;
+           border-bottom: 2px solid transparent; margin-bottom: -2px; cursor: pointer;
+           color: var(--fii-text-2); transition: color .15s, border-color .15s; }
+.fii-tab:hover  { color: var(--fii-accent); }
+.fii-tab.active { color: var(--fii-accent); border-bottom-color: var(--fii-accent); }
+
+/* period pill bar */
+.fii-period-bar { display: flex; gap: 6px; overflow-x: auto; padding: 6px 0 4px;
+                  scrollbar-width: thin; flex-wrap: nowrap; margin-bottom: 8px; }
+.fii-pill { flex-shrink: 0; padding: 4px 8px; border-radius: 20px; font-size: 11px;
+            font-weight: 600; border: 1px solid var(--fii-border);
+            background: var(--fii-surface); color: var(--fii-text-2); white-space: nowrap;
+            transition: background .15s, color .15s;
+            display: inline-flex; align-items: center; gap: 3px; }
+.fii-pill-lbl { cursor: pointer; }
+.fii-pill-del { cursor: pointer; font-size: 11px; line-height: 1; opacity: 0;
+                transition: opacity .1s; padding: 0 1px; }
+.fii-pill:hover .fii-pill-del, .fii-pill.active .fii-pill-del { opacity: 0.55; }
+.fii-pill-del:hover { opacity: 1 !important; }
+.fii-pill:hover  { background: var(--fii-accent-dim); color: var(--fii-accent); border-color: var(--fii-accent); }
+.fii-pill.active { background: var(--fii-accent); color: #fff; border-color: var(--fii-accent); }
+
+/* sync progress bar */
+.fii-sync-wrap    { display: flex; align-items: center; gap: 10px; padding: 6px 14px 6px;
+                    background: var(--fii-surface); border: 1px solid var(--fii-border);
+                    border-radius: 8px; margin-bottom: 8px; }
+.fii-sync-msg     { font-size: 11px; color: var(--fii-text-2); white-space: nowrap; min-width: 140px; }
+.fii-progress-track { flex: 1; height: 4px; background: var(--fii-border); border-radius: 2px; }
+.fii-progress-fill  { height: 4px; background: var(--fii-accent); border-radius: 2px; transition: width .4s; }
+
+/* trend section */
+.fii-trend-header { display: flex; align-items: center; gap: 8px; margin: 14px 0 6px;
+                    font-size: 11px; font-weight: 700; color: var(--fii-text-2);
+                    text-transform: uppercase; letter-spacing: .05em; }
+.fii-heatmap-wrap { overflow-x: auto; border: 1px solid var(--fii-border); border-radius: 8px;
+                    box-shadow: var(--fii-shadow); }
+.fii-heatmap { width: 100%; border-collapse: collapse; font-size: 11px; background: var(--fii-surface); }
+.fii-heatmap thead th {
+    padding: 6px 10px; background: var(--fii-bg); color: var(--fii-text-3);
+    font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    border-bottom: 1px solid var(--fii-border); white-space: nowrap; text-align: right;
+}
+.fii-heatmap thead th:first-child { text-align: left; min-width: 148px;
+    position: sticky; left: 0; z-index: 3; background: var(--fii-bg);
+    box-shadow: inset -1px 0 0 var(--fii-border); }
+.fii-heatmap td {
+    padding: 5px 8px; text-align: right; font-size: 11px; font-weight: 600;
+    border-bottom: 1px solid var(--fii-border-sub); white-space: nowrap;
+}
+.fii-heatmap td.fii-hm-sector { text-align: left; font-weight: 400; font-size: 11px;
+    color: var(--fii-text); min-width: 148px;
+    position: sticky; left: 0; z-index: 1; background: var(--fii-surface);
+    box-shadow: inset -1px 0 0 var(--fii-border-sub); }
+.fii-hm-idx { display: block; font-size: 9px; font-weight: 700; letter-spacing: .04em;
+              color: var(--fii-accent); opacity: .75; line-height: 1; margin-top: 2px; }
+/* flow chart */
+.fii-chart-section { margin-bottom: 10px; background: var(--fii-surface);
+    border: 1px solid var(--fii-border); border-radius: 8px; padding: 8px 12px 6px;
+    box-shadow: var(--fii-shadow); }
+.fii-chart-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.fii-chart-title { font-size: 10px; font-weight: 700; color: var(--fii-text-2);
+    text-transform: uppercase; letter-spacing: .05em; }
+.fii-chart-sub { font-size: 10px; color: var(--fii-text-3); }
+/* sparkline column */
+.fii-hm-spark { padding: 3px 8px 3px 4px; white-space: nowrap; vertical-align: middle; cursor: pointer; }
+.fii-heatmap thead th.fii-hm-spark-th { min-width: 88px; text-align: center; }
+/* sparkline click popup */
+#fiiSparkPopup { position: fixed; display: none; z-index: 9999; pointer-events: auto;
+    background: var(--fii-surface); border: 1px solid var(--fii-border); border-radius: 12px;
+    padding: 16px 20px 14px; box-shadow: 0 12px 40px rgba(0,0,0,.28);
+    min-width: 560px; }
+#fiiSparkPopup .fii-sp-close { position: absolute; top: 10px; right: 12px; font-size: 16px;
+    line-height: 1; cursor: pointer; color: var(--fii-text-3); padding: 2px 6px;
+    border-radius: 4px; }
+#fiiSparkPopup .fii-sp-close:hover { color: var(--fii-text); background: var(--fii-border); }
+#fiiSparkPopup .fii-sp-title { font-size: 13px; font-weight: 700; color: var(--fii-text);
+    margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 480px; }
+#fiiSparkPopup .fii-sp-sub { font-size: 10px; color: var(--fii-text-3); margin-bottom: 10px; }
+#fiiSparkPopup svg { display: block; }
+
+/* heat intensity — light theme */
+.fii-heat-pos-3 { background: #15803d !important; color: #fff !important; }
+.fii-heat-pos-2 { background: #22c55e !important; color: #fff !important; }
+.fii-heat-pos-1 { background: #bbf7d0 !important; color: #14532d !important; }
+.fii-heat-zero  { color: var(--fii-text-3) !important; }
+.fii-heat-neg-1 { background: #fee2e2 !important; color: #7f1d1d !important; }
+.fii-heat-neg-2 { background: #ef4444 !important; color: #fff !important; }
+.fii-heat-neg-3 { background: #991b1b !important; color: #fff !important; }
+/* dark theme overrides so heat is still readable */
+body.dark-theme  .fii-heat-pos-1 { background: rgba(22,163,74,.28) !important; color: #4ade80 !important; }
+body.dark-theme  .fii-heat-neg-1 { background: rgba(239,68,68,.22) !important; color: #f87171 !important; }
+body.forest-theme .fii-heat-pos-1 { background: rgba(52,211,153,.22) !important; color: #6ee7b7 !important; }
+body.forest-theme .fii-heat-neg-1 { background: rgba(239,68,68,.20) !important; color: #fca5a5 !important; }
+body.cream-theme  .fii-heat-pos-3 { background: #14532d !important; }
+body.cream-theme  .fii-heat-neg-3 { background: #7f1d1d !important; }
 </style>
 {% endblock %}
 
@@ -233,6 +458,7 @@ body.ocean-theme .hoi-wrap {
     <button class="dash-tab" id="dash-tab-replay"      onclick="dashSwitch('replay')">🕒 Replay</button>
     <button class="dash-tab" id="dash-tab-pcr"         onclick="dashSwitch('pcr')">📊 PCR</button>
     <button class="dash-tab" id="dash-tab-historic-oi" onclick="dashSwitch('historic-oi')">📈 Historic OI</button>
+    <button class="dash-tab" id="dash-tab-fii-sector" onclick="dashSwitch('fii-sector')">🏢 FII Sector</button>
 </div>
 
 <!-- ── Backtest panel ─────────────────────────────────────────── -->
@@ -777,15 +1003,59 @@ body.ocean-theme .hoi-wrap {
   </div>
 </div><!-- /historic-oi panel -->
 
+<!-- ── FII Sector panel ────────────────────────────────────────── -->
+<div class="dash-panel" id="dash-fii-sector-panel">
+  <div class="fii-wrap">
+    <div class="fii-topbar">
+      <span class="fii-title">FII/FPI Sector-wise Investment (CDSL)</span>
+      <span class="fii-updated" id="fiiSectorUpdated"></span>
+      <button class="fii-refresh-btn" onclick="_fiiUpdate()">↑ Update</button>
+      <button class="fii-refresh-btn fii-sync-btn" onclick="_fiiStartBulkSync()">⟳ Sync History</button>
+    </div>
+    <div id="fiiSyncBarWrap" style="display:none">
+      <div class="fii-sync-wrap">
+        <span class="fii-sync-msg" id="fiiSyncMsg">Preparing…</span>
+        <div class="fii-progress-track"><div class="fii-progress-fill" id="fiiProgressFill" style="width:0%"></div></div>
+      </div>
+    </div>
+    <div class="fii-tab-bar">
+      <button class="fii-tab active" data-tab="current"  onclick="_fiiSwitchTab('current')">Current</button>
+      <button class="fii-tab"        data-tab="historic" onclick="_fiiSwitchTab('historic')">Historic</button>
+    </div>
+    <div id="fiiTabCurrent">
+      <div class="fii-period-bar" id="fiiPeriodBar"></div>
+      <div class="fii-grids" id="fiiSectorGrids">
+        <p class="fii-empty">Select the FII Sector tab to load data.</p>
+      </div>
+    </div>
+    <div id="fiiTabHistoric" style="display:none">
+      <div class="fii-chart-section">
+        <div class="fii-chart-header">
+          <span class="fii-chart-title">Total FPI Net Flow — All Periods</span>
+          <span class="fii-chart-sub" id="fiiChartSub"></span>
+        </div>
+        <div style="position:relative;height:100px">
+          <canvas id="fiiFlowChart"></canvas>
+        </div>
+      </div>
+      <div id="fiiTrendSection">
+        <div class="fii-trend-header">Sector Heat Map — Net Investment (₹ Cr)</div>
+        <div class="fii-heatmap-wrap" id="fiiHeatmapWrap"></div>
+      </div>
+    </div>
+  </div>
+</div><!-- /fii-sector panel -->
+
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 // Set replay mode flag BEFORE oi_replay.js DOMContentLoaded fires
 window.oipReplayMode = true;
 
 // ── Tab switching ──────────────────────────────────────────────
-const _DASH_TABS = ['backtest', 'replay', 'pcr', 'historic-oi'];
+const _DASH_TABS = ['backtest', 'replay', 'pcr', 'historic-oi', 'fii-sector'];
 
 function dashSwitch(tab, pushState) {
     _DASH_TABS.forEach(t => {
@@ -805,6 +1075,9 @@ function dashSwitch(tab, pushState) {
     }
     if (tab === 'historic-oi') {
         loadHistoricOI();
+    }
+    if (tab === 'fii-sector') {
+        if (!window._fiiSectorLoaded) loadFIISectorData();
     }
 }
 
@@ -912,6 +1185,782 @@ function deleteHistoricOI(date, symbol) {
         .then(r => r.json())
         .then(d => { if (d.success) loadHistoricOI(); })
         .catch(() => alert('Delete failed'));
+}
+
+// ── FII Sector (CDSL fortnightly) ─────────────────────────────
+
+window._fiiActivePeriod  = null;
+window._fiiBulkPollTimer = null;
+window._fiiAllPeriods    = [];
+
+// ── IndexedDB helpers ──────────────────────────────────────────
+const _FII_IDB = 'fii_sector_db';
+let _fiiDB = null;
+
+async function _fiiOpenDB() {
+    if (_fiiDB) return _fiiDB;
+    return new Promise((res, rej) => {
+        const req = indexedDB.open(_FII_IDB, 1);
+        req.onupgradeneeded = e => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains('periods'))
+                db.createObjectStore('periods', { keyPath: 'date' });
+        };
+        req.onsuccess = e => { _fiiDB = e.target.result; res(_fiiDB); };
+        req.onerror   = () => rej(req.error);
+    });
+}
+async function _fiiIDBGet(date) {
+    try {
+        const db = await _fiiOpenDB();
+        return new Promise(res => {
+            const r = db.transaction('periods','readonly').objectStore('periods').get(date);
+            r.onsuccess = () => res(r.result || null);
+            r.onerror   = () => res(null);
+        });
+    } catch { return null; }
+}
+async function _fiiIDBPut(date, rows) {
+    try {
+        const db = await _fiiOpenDB();
+        return new Promise(res => {
+            const tx = db.transaction('periods','readwrite');
+            tx.objectStore('periods').put({ date, rows, ts: Date.now() });
+            tx.oncomplete = () => res(true);
+            tx.onerror    = () => res(false);
+        });
+    } catch { return false; }
+}
+async function _fiiIDBGetAll() {
+    try {
+        const db = await _fiiOpenDB();
+        return new Promise(res => {
+            const r = db.transaction('periods','readonly').objectStore('periods').getAll();
+            r.onsuccess = () => res(r.result || []);
+            r.onerror   = () => res([]);
+        });
+    } catch { return []; }
+}
+async function _fiiIDBGetKeys() {
+    try {
+        const db = await _fiiOpenDB();
+        return new Promise(res => {
+            const r = db.transaction('periods','readonly').objectStore('periods').getAllKeys();
+            r.onsuccess = () => res(r.result || []);
+            r.onerror   = () => res([]);
+        });
+    } catch { return []; }
+}
+async function _fiiIDBDelete(date) {
+    try {
+        const db = await _fiiOpenDB();
+        return new Promise(res => {
+            const tx = db.transaction('periods', 'readwrite');
+            tx.objectStore('periods').delete(date);
+            tx.oncomplete = () => res(true);
+            tx.onerror    = () => res(false);
+        });
+    } catch { return false; }
+}
+// ── end IDB helpers ────────────────────────────────────────────
+
+function _fiiSwitchTab(tab) {
+    window._fiiActiveTab = tab;
+    document.getElementById('fiiTabCurrent').style.display  = tab === 'current'  ? '' : 'none';
+    document.getElementById('fiiTabHistoric').style.display = tab === 'historic' ? '' : 'none';
+    document.querySelectorAll('.fii-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === tab));
+    if (tab === 'historic' && !window._fiiTrendLoaded) _fiiLoadTrend();
+}
+
+async function _fiiDeletePeriod(period) {
+    try {
+        const r = await fetch(`/api/fii-sector-delete/${period}`, { method: 'DELETE' });
+        const d = await r.json();
+        if (!d.success) { _fiiToast('Delete failed'); return; }
+    } catch { _fiiToast('Delete failed'); return; }
+    await _fiiIDBDelete(period);
+    _fiiToast(`Deleted ${period} — click Sync to restore`);
+    if (window._fiiActivePeriod === period) window._fiiActivePeriod = null;
+    _fiiRenderGrids(null);
+}
+
+function loadFIISectorData() { _fiiRenderGrids(null); }
+
+async function _fiiRenderGrids(period) {
+    const wrap = document.getElementById('fiiSectorGrids');
+    if (wrap) wrap.innerHTML = '<p class="fii-empty">Loading…</p>';
+
+    let rows = null, periods = window._fiiAllPeriods, latestPeriod = period;
+
+    // IDB first when a specific period is requested
+    if (period) {
+        const cached = await _fiiIDBGet(period);
+        if (cached) { rows = cached.rows; }
+    }
+
+    // Fall back to server
+    if (!rows) {
+        let d;
+        try {
+            const url = period ? `/api/fii-sector-limits?period=${period}` : '/api/fii-sector-limits';
+            d = await fetch(url).then(r => r.json());
+        } catch {
+            if (wrap) wrap.innerHTML = '<p class="fii-empty">Failed to load data.</p>';
+            return;
+        }
+        if (!d.success || !d.data || !d.data.length) {
+            if (wrap) wrap.innerHTML = '<p class="fii-empty">No data available. Use ⟳ Sync History to load historic records.</p>';
+            return;
+        }
+        rows = d.data;
+        latestPeriod = period || d.latest_period;
+        if (d.periods && d.periods.length) {
+            periods = d.periods;
+            window._fiiAllPeriods = periods;
+        }
+        // Cache this period in IDB
+        if (latestPeriod && rows.length) _fiiIDBPut(latestPeriod, rows);
+    }
+
+    window._fiiSectorLoaded = true;
+    window._fiiActivePeriod = latestPeriod;
+
+    const first = rows[0] || {};
+    const el = document.getElementById('fiiSectorUpdated');
+    if (el) {
+        const parts = [];
+        if (periods.length) parts.push(periods.length + ' periods');
+        if (first.updated)  parts.push('As of ' + first.updated);
+        if (first.period)   parts.push(first.period);
+        el.textContent = parts.join(' · ');
+    }
+
+    _fiiRenderPeriodPills(periods, window._fiiActivePeriod);
+
+    const accum = rows.filter(r => (r.net_invest_inr_cr || 0) > 0)
+                      .sort((a, b) => b.net_invest_inr_cr - a.net_invest_inr_cr);
+    const distr = rows.filter(r => (r.net_invest_inr_cr || 0) < 0)
+                      .sort((a, b) => a.net_invest_inr_cr - b.net_invest_inr_cr);
+    const maxNI  = Math.max(...rows.map(r => Math.abs(r.net_invest_inr_cr || 0)), 1);
+    const maxAuc = Math.max(...rows.map(r => r.auc_inr_cr || 0), 1);
+    if (wrap) wrap.innerHTML =
+        _fiiBuildGrid('Accumulation', accum, 'accum', maxNI, maxAuc) +
+        _fiiBuildGrid('Distribution', distr, 'distr', maxNI, maxAuc);
+
+    // Refresh trend if Historic tab is active or already loaded
+    if (periods.length > 1 && (window._fiiActiveTab === 'historic' || window._fiiTrendLoaded)) {
+        window._fiiTrendLoaded = false;
+        _fiiLoadTrend();
+    }
+}
+
+function _fiiRenderPeriodPills(periods, selected) {
+    const bar = document.getElementById('fiiPeriodBar');
+    if (!bar || !periods.length) return;
+    bar.innerHTML = periods.map(p => {
+        const active = p === selected ? ' active' : '';
+        return `<span class="fii-pill${active}" title="${p}">`
+            + `<span class="fii-pill-lbl" onclick="_fiiSelectPeriod('${p}')">${_fiiHmDateLabel(p)}</span>`
+            + `<span class="fii-pill-del" onclick="_fiiDeletePeriod('${p}')" title="Delete">✕</span>`
+            + `</span>`;
+    }).join('');
+    const act = bar.querySelector('.fii-pill.active');
+    if (act) act.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+}
+
+function _fiiPillLabel(isoDate) {
+    try {
+        const d = new Date(isoDate + 'T00:00:00');
+        return d.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
+    } catch { return isoDate; }
+}
+function _fiiHmDateLabel(isoDate) {
+    try {
+        const d = new Date(isoDate + 'T00:00:00');
+        const mon = d.toLocaleDateString('en-US', { month: 'short' });
+        return `${d.getDate()}-${mon}-${d.getFullYear()}`;
+    } catch { return isoDate; }
+}
+
+function _fiiSelectPeriod(period) {
+    window._fiiActivePeriod = period;
+    _fiiRenderGrids(period);
+}
+
+function _fiiUpdate() {
+    const btns = document.querySelectorAll('.fii-refresh-btn');
+    btns.forEach(b => b.disabled = true);
+    fetch('/api/fii-sector-update', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            btns.forEach(b => b.disabled = false);
+            if (d.nothing_new) {
+                _fiiToast('Already up to date');
+            } else {
+                _fiiToast('New data: ' + (d.new_periods || []).join(', '));
+                _fiiRenderGrids(null);
+            }
+        })
+        .catch(() => { btns.forEach(b => b.disabled = false); _fiiToast('Update failed'); });
+}
+
+function _fiiStartBulkSync() {
+    fetch('/api/fii-sector-bulk-init', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (d.started) {
+                _fiiShowSyncBar('Server sync starting…', 0);
+                _fiiBulkPoll();
+            } else {
+                _fiiBulkPollOnce();
+            }
+        })
+        .catch(() => _fiiToast('Sync failed to start'));
+}
+
+function _fiiShowSyncBar(msg, pct) {
+    const w = document.getElementById('fiiSyncBarWrap');
+    const m = document.getElementById('fiiSyncMsg');
+    const f = document.getElementById('fiiProgressFill');
+    if (w) w.style.display = '';
+    if (m) m.textContent   = msg;
+    if (f) f.style.width   = Math.min(100, pct) + '%';
+}
+function _fiiHideSyncBar() {
+    const w = document.getElementById('fiiSyncBarWrap');
+    if (w) w.style.display = 'none';
+}
+
+function _fiiBulkPoll() {
+    if (window._fiiBulkPollTimer) clearInterval(window._fiiBulkPollTimer);
+    window._fiiBulkPollTimer = setInterval(() => {
+        fetch('/api/fii-sector-bulk-status')
+            .then(r => r.json())
+            .then(s => {
+                const total = s.total || 0, fetched = s.fetched || 0;
+                if (total > 0)
+                    _fiiShowSyncBar(`Server: ${fetched} / ${total} (${s.failed||0} failed)…`, (fetched/total)*100);
+                else if (s.done)
+                    _fiiShowSyncBar(`Server sync complete`, 100);
+
+                if (!s.running && s.done) {
+                    clearInterval(window._fiiBulkPollTimer);
+                    _fiiRenderGrids(null).then(() => _fiiBulkCacheIDB(window._fiiAllPeriods));
+                }
+            })
+            .catch(() => {});
+    }, 2000);
+}
+
+function _fiiBulkPollOnce() {
+    fetch('/api/fii-sector-bulk-status')
+        .then(r => r.json())
+        .then(s => {
+            if (s.running) {
+                _fiiShowSyncBar(`Server: ${s.fetched} / ${s.total}…`, (s.fetched/(s.total||1))*100);
+                _fiiBulkPoll();
+            } else {
+                _fiiRenderGrids(null).then(() => _fiiBulkCacheIDB(window._fiiAllPeriods));
+            }
+        })
+        .catch(() => _fiiToast('Status check failed'));
+}
+
+async function _fiiBulkCacheIDB(periods) {
+    if (!periods || !periods.length) return;
+    const toCache = [...periods];
+    _fiiShowSyncBar(`Caching locally: 0 / ${toCache.length}…`, 0);
+
+    // Single request for all data
+    let allData = {};
+    try {
+        const d = await fetch('/api/fii-sector-all-data').then(r => r.json());
+        if (d.success) allData = d.data || {};
+    } catch {}
+
+    let done = 0;
+    for (const p of toCache) {
+        if (allData[p] && allData[p].length) await _fiiIDBPut(p, allData[p]);
+        done++;
+        _fiiShowSyncBar(`Caching locally: ${done} / ${toCache.length}…`, (done/toCache.length)*100);
+    }
+    _fiiShowSyncBar(`Cached ${done} periods locally ✓`, 100);
+    window._fiiTrendLoaded = false;
+    setTimeout(() => { _fiiHideSyncBar(); if (window._fiiActiveTab === 'historic') _fiiLoadTrend(); }, 1800);
+}
+
+async function _fiiLoadTrend() {
+    const allCached  = await _fiiIDBGetAll();
+    const cachedDates = new Set(allCached.map(e => e.date));
+    const allPeriods  = window._fiiAllPeriods || [];
+    const allInIDB    = allPeriods.length > 0 && allPeriods.every(p => cachedDates.has(p));
+
+    if (allInIDB && allCached.length > 0) {
+        _fiiRenderHeatmap(_fiiBuildTrendFromIDB(allCached, allPeriods));
+    } else {
+        fetch('/api/fii-sector-trend')      // no ?n= = all periods
+            .then(r => r.json())
+            .then(d => { if (d.success && d.periods && d.periods.length) _fiiRenderHeatmap(d); })
+            .catch(() => {});
+    }
+}
+
+function _fiiBuildTrendFromIDB(allCached, periods) {
+    const pset = new Set(periods);
+    const sectors = {};
+    for (const e of allCached) {
+        if (!pset.has(e.date)) continue;
+        for (const row of (e.rows || [])) {
+            if (!sectors[row.sector]) sectors[row.sector] = {};
+            sectors[row.sector][e.date] = row.net_invest_inr_cr || 0;
+        }
+    }
+    return { periods, sectors };
+}
+
+function _fiiRenderHeatmap(d) {
+    window._fiiTrendData = d;
+    const wrap = document.getElementById('fiiHeatmapWrap');
+    if (wrap) {
+        wrap.innerHTML = _fiiBuildHeatmap(d);
+        wrap.addEventListener('click', _fiiSparkClick);
+    }
+    _fiiRenderChart(d);
+    window._fiiTrendLoaded = true;
+}
+
+let _fiiChartInst = null;
+function _fiiRenderChart(d) {
+    if (typeof Chart === 'undefined') return;
+    const canvas = document.getElementById('fiiFlowChart');
+    if (!canvas) return;
+
+    // Aggregate total NI per period (oldest → newest for timeline)
+    const periods = [...d.periods].reverse();
+    const sectors = d.sectors;
+    const totals  = periods.map(p => {
+        let sum = 0;
+        for (const s in sectors) sum += (sectors[s][p] || 0);
+        return Math.round(sum);
+    });
+    const labels  = periods.map(p => _fiiPillLabel(p));
+
+    // Summary subtitle
+    const inflow  = totals.filter(v => v > 0).reduce((a, b) => a + b, 0);
+    const outflow = totals.filter(v => v < 0).reduce((a, b) => a + b, 0);
+    const sub = document.getElementById('fiiChartSub');
+    if (sub) sub.textContent =
+        `${periods.length} periods · Inflow ${_fiiFmt(inflow)} Cr · Outflow ${_fiiFmt(outflow)} Cr`;
+
+    const isDark = ['dark-theme','forest-theme','ocean-theme']
+        .some(c => document.body.classList.contains(c));
+    const textClr = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.38)';
+    const gridClr = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
+
+    if (_fiiChartInst) { _fiiChartInst.destroy(); _fiiChartInst = null; }
+    _fiiChartInst = new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [{
+                data: totals,
+                backgroundColor: totals.map(v => v >= 0 ? 'rgba(34,197,94,0.72)' : 'rgba(239,68,68,0.72)'),
+                borderColor:     totals.map(v => v >= 0 ? '#16a34a' : '#dc2626'),
+                borderWidth: 1,
+                borderRadius: 3,
+                borderSkipped: false,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 350 },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: isDark ? '#1e293b' : '#fff',
+                    titleColor: isDark ? '#e2e8f0' : '#1e293b',
+                    bodyColor:  isDark ? '#94a3b8' : '#475569',
+                    borderColor: isDark ? '#334155' : '#e2e8f0',
+                    borderWidth: 1,
+                    callbacks: {
+                        title: ctx => periods[ctx[0].dataIndex],
+                        label: ctx => {
+                            const v = ctx.raw;
+                            return ` Net Flow: ${v > 0 ? '+' : ''}${_fiiFmt(v)} Cr`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { color: textClr, font: { size: 9 }, maxRotation: 45,
+                             autoSkip: true, maxTicksLimit: 18 }
+                },
+                y: {
+                    grid: { color: gridClr },
+                    border: { dash: [3, 3], color: 'transparent' },
+                    ticks: { color: textClr, font: { size: 9 },
+                             callback: v => _fiiFmt(v) + ' Cr' }
+                }
+            }
+        }
+    });
+}
+
+const _FII_SECTOR_IDX = {
+    'Automobile and Auto Components':  'CNXAUTO',
+    'Capital Goods':                   'CNXCAPGOODS',
+    'Construction':                    'CNXINFRA',
+    'Construction Materials':          'CNXINFRA',
+    'Consumer Durables':               'CNXCONSUMDUM',
+    'Fast Moving Consumer Goods':      'CNXFMCG',
+    'Financial Services':              'CNXFIN',
+    'Healthcare':                      'CNXPHARMA',
+    'Information Technology':          'CNXIT',
+    'Media, Entertainment & Publication': 'CNXMEDIA',
+    'Metals & Mining':                 'CNXMETAL',
+    'Oil, Gas & Consumable Fuels':     'CNXENERGY',
+    'Power':                           'CNXENERGY',
+    'Realty':                          'CNXREALTY',
+    'Telecommunication':               'CNXTELCOM',
+};
+
+function _fiiBuildSparkline(niByDate, periods) {
+    // periods is latest-first; reverse to oldest-first for the line
+    const vals = [...periods].reverse().map(p => niByDate[p] || 0);
+    const W = 88, H = 28, pad = 3;
+    const minV = Math.min(...vals, 0);
+    const maxV = Math.max(...vals, 0);
+    const range = maxV - minV || 1;
+    const n = vals.length;
+    const toX = i => pad + (i / Math.max(n - 1, 1)) * (W - pad * 2);
+    const toY = v => H - pad - ((v - minV) / range) * (H - pad * 2);
+    const zeroY = toY(0).toFixed(1);
+    const points = vals.map((v, i) => `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+    const last = vals[n - 1];
+    const col  = last > 0 ? '#22c55e' : last < 0 ? '#ef4444' : '#94a3b8';
+    // Area fill path
+    const areaPath = `M${toX(0)},${zeroY} ` +
+        vals.map((v, i) => `L${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ') +
+        ` L${toX(n-1)},${zeroY} Z`;
+    const fillCol = last > 0 ? 'rgba(34,197,94,0.15)' : last < 0 ? 'rgba(239,68,68,0.15)' : 'transparent';
+    return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block">
+        <line x1="${pad}" y1="${zeroY}" x2="${W-pad}" y2="${zeroY}" stroke="currentColor" stroke-width="0.6" opacity="0.18"/>
+        <path d="${areaPath}" fill="${fillCol}"/>
+        <polyline points="${points}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+        <circle cx="${toX(n-1).toFixed(1)}" cy="${toY(last).toFixed(1)}" r="2" fill="${col}"/>
+    </svg>`;
+}
+
+function _fiiBuildSparklineLarge(niByDate, periods) {
+    const vals   = [...periods].reverse().map(p => niByDate[p] || 0);
+    const labels = [...periods].reverse().map(p => _fiiHmDateLabel(p));
+    const W = 520, H = 210, padL = 52, padR = 16, padT = 14, padB = 56;
+    const cW = W - padL - padR, cH = H - padT - padB;
+    const n = vals.length;
+    const minV = Math.min(...vals, 0);
+    const maxV = Math.max(...vals, 0);
+    const range = maxV - minV || 1;
+    const toX = i => padL + (i / Math.max(n - 1, 1)) * cW;
+    const toY = v => padT + cH - ((v - minV) / range) * cH;
+    const zeroY = toY(0);
+    const last = vals[n - 1];
+    const col   = last > 0 ? '#22c55e' : last < 0 ? '#ef4444' : '#94a3b8';
+    const fillC = last > 0 ? 'rgba(34,197,94,0.13)' : 'rgba(239,68,68,0.13)';
+
+    const points = vals.map((v, i) => `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+    const area   = `M${toX(0)},${zeroY} ` +
+        vals.map((v, i) => `L${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ') +
+        ` L${toX(n-1)},${zeroY} Z`;
+
+    // Y-axis: 5 evenly spaced ticks
+    const ySteps = [0, 0.25, 0.5, 0.75, 1].map(r => minV + r * range);
+    const yLines = ySteps.map(v => {
+        const y = toY(v).toFixed(1);
+        const lbl = (v > 0 ? '+' : '') + _fiiFmt(v);
+        const isZero = Math.abs(v) < range * 0.01;
+        return `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="currentColor"
+                    opacity="${isZero ? 0.25 : 0.08}" stroke-width="${isZero ? 1 : 0.7}"
+                    stroke-dasharray="${isZero ? '' : '3,3'}"/>
+                <text x="${padL - 5}" y="${y}" text-anchor="end" dominant-baseline="middle"
+                    font-size="9" fill="currentColor" opacity="0.5">${lbl}</text>`;
+    }).join('');
+
+    // X labels: every Nth point, rotated -40° anchored just below chart area
+    const step = Math.max(1, Math.round(n / 10));
+    const lblY = (padT + cH + 14).toFixed(1);
+    const xLbls = labels.map((lbl, i) => {
+        if (i % step !== 0 && i !== n - 1) return '';
+        const x = toX(i).toFixed(1);
+        return `<text x="${x}" y="${lblY}" text-anchor="end" font-size="8.5"
+                    fill="currentColor" opacity="0.5"
+                    transform="rotate(-40,${x},${lblY})">${lbl}</text>`;
+    }).join('');
+
+    // Small dots on every data point
+    const dots = vals.map((v, i) =>
+        `<circle cx="${toX(i).toFixed(1)}" cy="${toY(v).toFixed(1)}" r="2" fill="${col}" opacity="0.4"/>`
+    ).join('');
+
+    // Encode interaction data into the SVG data attribute
+    const xs = vals.map((_, i) => +toX(i).toFixed(1));
+    const ys = vals.map(v => +toY(v).toFixed(1));
+    const spData = JSON.stringify({ xs, ys, vals, labels, col, padT, chartBottom: padT + cH, W, H });
+
+    return `<svg id="fiiSparkSvg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
+        style="display:block;overflow:visible;cursor:crosshair"
+        data-sp='${spData}'
+        onmousemove="_fiiCrosshairMove(event,this)" onmouseleave="_fiiCrosshairLeave(this)">
+      ${yLines}
+      <path d="${area}" fill="${fillC}"/>
+      <polyline points="${points}" fill="none" stroke="${col}" stroke-width="2"
+          stroke-linejoin="round" stroke-linecap="round"/>
+      ${dots}
+      <circle cx="${toX(n-1).toFixed(1)}" cy="${toY(last).toFixed(1)}" r="4" fill="${col}"/>
+      ${xLbls}
+      <!-- crosshair (hidden until mousemove) -->
+      <g id="fiiCrossG" display="none">
+        <line id="fiiCrossLine" x1="0" y1="${padT}" x2="0" y2="${padT + cH}"
+            stroke="currentColor" stroke-width="1" stroke-dasharray="4,3" opacity="0.4"/>
+        <circle id="fiiCrossDot" r="5" fill="${col}" stroke="var(--fii-surface)" stroke-width="1.5"/>
+        <g id="fiiCrossTip">
+          <rect rx="4" ry="4" x="0" y="0" width="100" height="34"
+              fill="var(--fii-bg)" stroke="var(--fii-border)" stroke-width="1" opacity="0.96"/>
+          <text id="fiiCrossTipDate" x="7" y="13" font-size="9" fill="currentColor" opacity="0.55"/>
+          <text id="fiiCrossTipVal" x="7" y="27" font-size="11" font-weight="700" fill="${col}"/>
+        </g>
+      </g>
+      <!-- transparent hit area for clean mouse events -->
+      <rect x="${padL}" y="${padT}" width="${cW}" height="${cH}" fill="transparent"/>
+    </svg>`;
+}
+
+function _fiiCrosshairMove(e, svg) {
+    if (!svg._spData) svg._spData = JSON.parse(svg.getAttribute('data-sp'));
+    const d = svg._spData;
+    const rect = svg.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (d.W / rect.width);
+
+    // Snap to nearest data point
+    let best = 0, bestDist = Infinity;
+    d.xs.forEach((x, i) => { const dist = Math.abs(x - mx); if (dist < bestDist) { bestDist = dist; best = i; } });
+
+    const x = d.xs[best], y = d.ys[best];
+    const val = d.vals[best];
+    const sign = val > 0 ? '+' : '';
+
+    const g    = svg.querySelector('#fiiCrossG');
+    const line = svg.querySelector('#fiiCrossLine');
+    const dot  = svg.querySelector('#fiiCrossDot');
+    const tip  = svg.querySelector('#fiiCrossTip');
+
+    g.removeAttribute('display');
+    line.setAttribute('x1', x); line.setAttribute('x2', x);
+    dot.setAttribute('cx', x);  dot.setAttribute('cy', y);
+    svg.querySelector('#fiiCrossTipDate').textContent = d.labels[best];
+    svg.querySelector('#fiiCrossTipVal').textContent  = `${sign}${_fiiFmt(val)} Cr`;
+
+    // Position tooltip above/below dot, flip left/right near edge
+    const tipW = 100, tipH = 34;
+    let tipX = x + 10;
+    if (tipX + tipW > d.W - 8) tipX = x - tipW - 10;
+    const tipY = Math.max(d.padT + 2, y - tipH - 10);
+    tip.setAttribute('transform', `translate(${tipX.toFixed(1)},${tipY.toFixed(1)})`);
+}
+
+function _fiiCrosshairLeave(svg) {
+    const g = svg.querySelector('#fiiCrossG');
+    if (g) g.setAttribute('display', 'none');
+}
+
+function _fiiSparkClick(e) {
+    const cell = e.target.closest('.fii-hm-spark');
+    if (!cell || !window._fiiTrendData) return;
+
+    const sec = cell.dataset.sec;
+    const d   = window._fiiTrendData;
+    if (!sec || !d.sectors[sec]) return;
+
+    let popup = document.getElementById('fiiSparkPopup');
+    if (!popup) {
+        popup = document.createElement('div');
+        popup.id = 'fiiSparkPopup';
+        popup.style.position = 'fixed';
+        (document.querySelector('.fii-wrap') || document.body).appendChild(popup);
+        // Close on click outside
+        document.addEventListener('click', _fiiSparkOutsideClick, { capture: true });
+    }
+
+    // Toggle off if same cell clicked again
+    if (popup.style.display === 'block' && popup.dataset.openSec === sec) {
+        popup.style.display = 'none';
+        popup.dataset.openSec = '';
+        return;
+    }
+
+    const vals  = [...d.periods].reverse().map(p => d.sectors[sec][p] || 0);
+    const last  = vals[vals.length - 1];
+    const peak  = Math.max(...vals.map(Math.abs));
+    const sign  = last > 0 ? '+' : '';
+    const idxTag = _FII_SECTOR_IDX[sec] ? ` · ${_FII_SECTOR_IDX[sec]}` : '';
+    popup.innerHTML =
+        `<span class="fii-sp-close" onclick="_fiiSparkClose()">✕</span>
+         <div class="fii-sp-title">${sec}${idxTag}</div>
+         <div class="fii-sp-sub">Latest NI: <strong>${sign}${_fiiFmt(last)} Cr</strong>
+           &nbsp;·&nbsp; Peak: ${_fiiFmt(peak)} Cr &nbsp;·&nbsp; ${d.periods.length} periods</div>
+         ${_fiiBuildSparklineLarge(d.sectors[sec], d.periods)}`;
+    popup.dataset.openSec = sec;
+    popup.style.display = 'block';
+
+    const rect = cell.getBoundingClientRect();
+    const pw = 560, ph = 260;
+    let x = rect.right + 12;
+    let y = rect.top - 12;
+    if (x + pw > window.innerWidth - 8)  x = rect.left - pw - 12;
+    if (x < 8) x = Math.max(8, (window.innerWidth - pw) / 2);
+    if (y + ph > window.innerHeight - 8) y = window.innerHeight - ph - 8;
+    if (y < 8) y = 8;
+    popup.style.left = x + 'px';
+    popup.style.top  = y + 'px';
+}
+
+function _fiiSparkClose() {
+    const popup = document.getElementById('fiiSparkPopup');
+    if (popup) { popup.style.display = 'none'; popup.dataset.openSec = ''; }
+}
+
+function _fiiSparkOutsideClick(e) {
+    const popup = document.getElementById('fiiSparkPopup');
+    if (!popup || popup.style.display === 'none') return;
+    if (popup.contains(e.target)) return;          // click inside popup — keep open
+    if (e.target.closest('.fii-hm-spark')) return; // cell click handled by _fiiSparkClick
+    _fiiSparkClose();
+}
+
+function _fiiBuildHeatmap(d) {
+    const periods = d.periods;
+    const sectors = d.sectors;
+    let maxAbs = 1;
+    for (const s in sectors)
+        for (const dt in sectors[s])
+            maxAbs = Math.max(maxAbs, Math.abs(sectors[s][dt] || 0));
+
+    const latest = periods[0];
+    const sectorNames = Object.keys(sectors).sort((a, b) =>
+        (sectors[b][latest] || 0) - (sectors[a][latest] || 0));
+
+    const headerCols = periods.map(p => `<th title="${p}">${_fiiHmDateLabel(p)}</th>`).join('');
+    const bodyRows = sectorNames.map(sec => {
+        const cells = periods.map(p => {
+            const v = sectors[sec][p];
+            return `<td class="${_fiiHeatClass(v, maxAbs)}">${_fiiFmtHeat(v)}</td>`;
+        }).join('');
+        const idxName = _FII_SECTOR_IDX[sec] ? `<span class="fii-hm-idx">${_FII_SECTOR_IDX[sec]}</span>` : '';
+        const spark = _fiiBuildSparkline(sectors[sec], periods);
+        const secEsc = sec.replace(/"/g, '&quot;');
+        return `<tr>
+            <td class="fii-hm-sector">${sec}${idxName}</td>
+            <td class="fii-hm-spark" data-sec="${secEsc}">${spark}</td>
+            ${cells}
+        </tr>`;
+    }).join('');
+
+    return `<table class="fii-heatmap">
+        <thead><tr><th>Sector</th><th class="fii-hm-spark-th">Trend</th>${headerCols}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+    </table>`;
+}
+
+function _fiiFmtHeat(v) {
+    if (v == null) return '—';
+    const n = Number(v);
+    if (n === 0) return '—';
+    const sign = n > 0 ? '+' : '';
+    if (Math.abs(n) >= 1000) return sign + (n / 1000).toFixed(0) + 'K';
+    return sign + n.toFixed(0);
+}
+
+function _fiiHeatClass(v, maxAbs) {
+    if (v == null || v === 0) return 'fii-heat-zero';
+    const r = Math.abs(v) / maxAbs;
+    if (v > 0) return r > 0.6 ? 'fii-heat-pos-3' : r > 0.25 ? 'fii-heat-pos-2' : 'fii-heat-pos-1';
+    return r > 0.6 ? 'fii-heat-neg-3' : r > 0.25 ? 'fii-heat-neg-2' : 'fii-heat-neg-1';
+}
+
+function _fiiToast(msg) {
+    let t = document.getElementById('fiiToast');
+    if (!t) {
+        t = document.createElement('div');
+        t.id = 'fiiToast';
+        t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:9999;padding:8px 16px;'
+            + 'border-radius:8px;font-size:12px;font-weight:600;background:#1e293b;color:#f1f5f9;'
+            + 'box-shadow:0 4px 12px rgba(0,0,0,.25);transition:opacity .3s;pointer-events:none;';
+        document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.style.opacity = '1';
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => { t.style.opacity = '0'; }, 3000);
+}
+
+function _fiiFmt(v) {
+    if (v == null) return '—';
+    const n = Number(v);
+    if (Math.abs(n) >= 100000) return (n / 100000).toFixed(1) + ' L Cr';
+    if (Math.abs(n) >= 1000)   return (n / 1000).toFixed(1) + ' K Cr';
+    return n.toFixed(0) + ' Cr';
+}
+
+function _fiiBuildGrid(title, rows, kind, maxNI, maxAuc) {
+    if (!rows.length) return `<div class="fii-grid-block fii-${kind}"><div class="fii-grid-title">${title}</div><p class="fii-empty">No sectors</p></div>`;
+    const isAccum = kind === 'accum';
+    const tableRows = rows.map(r => {
+        const ni     = r.net_invest_inr_cr      || 0;
+        const nip    = r.net_invest_prev_inr_cr  || 0;
+        const auc    = r.auc_inr_cr || 0;
+        const niPct  = Math.min(100, (Math.abs(ni) / maxNI)  * 100);
+        const aucPct = Math.min(100, (auc / maxAuc) * 100);
+        const chgPct = auc > 0 ? (ni / auc) * 100 : null;
+        const niSign  = ni  > 0 ? '+' : '';
+        const nipSign = nip > 0 ? '+' : '';
+        const nipCls  = nip > 0 ? 'fii-up' : nip < 0 ? 'fii-down' : 'fii-flat';
+        const chgCls  = chgPct === null ? 'fii-flat' : chgPct > 0 ? 'fii-up' : chgPct < 0 ? 'fii-down' : 'fii-flat';
+        const chgStr  = chgPct === null ? '—' : (chgPct > 0 ? '+' : '') + chgPct.toFixed(2) + '%';
+        return `<tr class="fii-row">
+            <td class="fii-td fii-sector-name">
+                <span class="fii-sn-text">${r.sector}</span>
+                ${_FII_SECTOR_IDX[r.sector] ? `<span class="fii-hm-idx">${_FII_SECTOR_IDX[r.sector]}</span>` : ''}
+            </td>
+            <td class="fii-td fii-bar-cell">
+                <span class="fii-bar-wrap"><span class="fii-bar fii-bar-${kind}" style="width:${niPct.toFixed(1)}%"></span></span>
+                <span class="fii-ni-val ${isAccum ? 'fii-up' : 'fii-down'}">${niSign}${_fiiFmt(ni)}</span>
+            </td>
+            <td class="fii-td r fii-td-sm ${nipCls}">${nipSign}${_fiiFmt(nip)}</td>
+            <td class="fii-td r fii-td-sm ${chgCls}" title="NI / AUC">${chgStr}</td>
+            <td class="fii-td fii-auc-cell">
+                <span class="fii-bar-wrap fii-bar-auc-wrap"><span class="fii-bar fii-bar-auc" style="width:${aucPct.toFixed(1)}%"></span></span>
+                <span class="fii-auc-val">${_fiiFmt(auc)}</span>
+            </td>
+        </tr>`;
+    }).join('');
+    return `<div class="fii-grid-block fii-${kind}">
+        <div class="fii-grid-title">${title} <span class="fii-grid-count">${rows.length}</span></div>
+        <div class="fii-table-wrap">
+        <table class="fii-table">
+            <thead><tr>
+                <th>Sector</th>
+                <th>Latest NI (₹) <span class="fii-th-sub">bar = relative size</span></th>
+                <th class="r">Prev NI (₹)</th>
+                <th class="r">% of AUC</th>
+                <th>AUC (₹) <span class="fii-th-sub">total holdings</span></th>
+            </tr></thead>
+            <tbody>${tableRows}</tbody>
+        </table>
+        </div>
+    </div>`;
 }
 </script>
 <script src="{{ url_for('static', filename='js/backtest.js') }}"></script>
