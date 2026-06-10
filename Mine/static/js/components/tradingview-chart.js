@@ -375,6 +375,7 @@ window.TradingViewChart = (function () {
             const height = options.height || 400;
             const width = options.width || '100%';
             const theme = options.theme || 'light';
+            const rightOffset = options.rightOffset != null ? options.rightOffset : 20;
 
             // Make pdh and pdl mutable for updatePdhPdl to work
             let mutablePdh = pdh;
@@ -424,7 +425,7 @@ window.TradingViewChart = (function () {
                     secondsVisible: false,
                     textColor: '#6b7280',           // Medium grey text on timeScale
                     borderColor: 'transparent',     // Hide the border
-                    rightOffset: 20,                 // Matched with OI Profile chart
+                    rightOffset: rightOffset,        // Matched with OI Profile chart (overridable via options)
                     barSpacing: 4,                 // Half of OI chart spacing for compact option view
                     fixLeftEdge: false,             // Allow scrolling on left
                     fixRightEdge: false,            // Allow dragging to right side

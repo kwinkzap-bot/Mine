@@ -146,7 +146,7 @@ window.oipInitSecondaryCharts = function() {
     if (elInt && typeof TradingViewChart !== 'undefined') {
         oipIntrinsicChart = TradingViewChart.create({
             containerId: 'oipIntrinsicChart', data: [], type: 'COMBINED',
-            isCombined: true, timeframe: oipInterval, options: { height: 310 }
+            isCombined: true, timeframe: oipInterval, options: { height: 375 }
         });
         oipIntrinsicSeries = oipIntrinsicChart.ceSeries || oipIntrinsicChart.series;
         oipIntrinsicPeSeries = oipIntrinsicChart.peSeries;
@@ -163,14 +163,14 @@ window.oipInitSecondaryCharts = function() {
         // Individual CE Chart
         oipCEChart = TradingViewChart.create({
             containerId: 'oipCEChart', data: [], type: 'CE',
-            timeframe: oipInterval, options: { height: 310 }
+            timeframe: oipInterval, options: { height: 375, rightOffset: 5 }
         });
         oipCESeries = oipCEChart.series;
 
         // Individual PE Chart
         oipPEChart = TradingViewChart.create({
             containerId: 'oipPEChart', data: [], type: 'PE',
-            timeframe: oipInterval, options: { height: 310 }
+            timeframe: oipInterval, options: { height: 375, rightOffset: 5 }
         });
         oipPESeries = oipPEChart.series;
 
@@ -208,7 +208,13 @@ window.oipInitSecondaryCharts = function() {
         // eliminates the rightOffset gap between the last candle and the Y-axis.
         // _oipSyncDepth prevents the target's subscribeVisibleLogicalRangeChange (fired
         // synchronously by applyOptions/scrollToPosition) from triggering a reverse sync.
+        // CE/PE-only charts have rightOffset=5 vs OI/intrinsic rightOffset=20; subtract 15
+        // when syncing TO them and add 15 when syncing FROM them.
+        const _OIP_OPTION_RIGHT_ADJ = 15;
+
         let _oipSyncDepth = 0;
+        // targetCharts may be plain chart instances or {chart, adj} wrapper objects.
+        // Wrappers are identified by a numeric `adj` property (never present on LC instances).
         const syncRange = (sourceChart, targetCharts) => {
             if (_oipSyncDepth > 0) return;
             const ts = sourceChart.timeScale();
@@ -216,11 +222,14 @@ window.oipInitSecondaryCharts = function() {
             const scrollPos  = ts.scrollPosition();
             if (!barSpacing) return;
             _oipSyncDepth++;
-            targetCharts.forEach(t => {
-                if (!t) return;
+            targetCharts.forEach(item => {
+                const isWrapped = item !== null && typeof item === 'object' && typeof item.adj === 'number';
+                const t   = isWrapped ? item.chart : item;
+                const adj = isWrapped ? item.adj   : 0;
+                if (!t || typeof t.timeScale !== 'function') return;
                 try {
                     t.timeScale().applyOptions({ barSpacing });
-                    t.timeScale().scrollToPosition(scrollPos, false);
+                    t.timeScale().scrollToPosition(scrollPos + adj, false);
                 } catch(e) {}
             });
             _oipSyncDepth--;
@@ -229,19 +238,35 @@ window.oipInitSecondaryCharts = function() {
         if (oipOIChart && oipIntrinsicChart && oipIntrinsicChart.chart) {
             oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (_oipSuppressRangeSync || _oipSyncDepth > 0 || activeChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(oipOIChart, [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart]);
+                syncRange(oipOIChart, [
+                    oipIntrinsicChart?.chart,
+                    { chart: oipCEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
+                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ }
+                ]);
             });
             oipIntrinsicChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (_oipSuppressRangeSync || _oipSyncDepth > 0 || activeChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(oipIntrinsicChart.chart, [oipOIChart, oipCEChart?.chart, oipPEChart?.chart]);
+                syncRange(oipIntrinsicChart.chart, [
+                    oipOIChart,
+                    { chart: oipCEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
+                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ }
+                ]);
             });
             oipCEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (_oipSuppressRangeSync || _oipSyncDepth > 0 || activeChartId !== 'ce' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(oipCEChart.chart, [oipOIChart, oipIntrinsicChart?.chart, oipPEChart?.chart]);
+                syncRange(oipCEChart.chart, [
+                    { chart: oipOIChart, adj: _OIP_OPTION_RIGHT_ADJ },
+                    { chart: oipIntrinsicChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ },
+                    oipPEChart?.chart
+                ]);
             });
             oipPEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (_oipSuppressRangeSync || _oipSyncDepth > 0 || activeChartId !== 'pe' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(oipPEChart.chart, [oipOIChart, oipIntrinsicChart?.chart, oipCEChart?.chart]);
+                syncRange(oipPEChart.chart, [
+                    { chart: oipOIChart, adj: _OIP_OPTION_RIGHT_ADJ },
+                    { chart: oipIntrinsicChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ },
+                    oipCEChart?.chart
+                ]);
             });
         }
 
@@ -585,11 +610,16 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                 const barSpacing = ts.options().barSpacing;
                 const scrollPos  = ts.scrollPosition();
                 if (!barSpacing) return;
-                [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart].forEach(c => {
+                const optAdj = 15;
+                [
+                    { chart: oipIntrinsicChart?.chart, adj: 0 },
+                    { chart: oipCEChart?.chart,        adj: -optAdj },
+                    { chart: oipPEChart?.chart,        adj: -optAdj }
+                ].forEach(({ chart: c, adj }) => {
                     if (!c) return;
                     try {
                         c.timeScale().applyOptions({ barSpacing });
-                        c.timeScale().scrollToPosition(scrollPos, false);
+                        c.timeScale().scrollToPosition(scrollPos + adj, false);
                     } catch(e) {}
                 });
             }
@@ -622,15 +652,20 @@ function oipPrecalculateIndicators() {
     oipCachedIndicators.index.rsi = oipCalculateRSISnR(oipFullCandles);
     oipCachedIndicators.cpr = oipCalculateDynamicCPR(oipFullCandles);
 
-    oipCachedIndicators.ce.vwap = oipCalculateVWAP(oipFullCeData);
-    oipCachedIndicators.ce.ema9 = oipCalculateFixedEMA(oipFullCeData, 9);
-    oipCachedIndicators.ce.ema20 = oipCalculateFixedEMA(oipFullCeData, 20);
-    oipCachedIndicators.ce.ema50 = oipCalculateFixedEMA(oipFullCeData, 50);
+    // Strip master-timeline whitespace bars (close=undefined) before computing
+    // EMAs/VWAP — a whitespace first-bar seeds prevEma=NaN, making all values NaN.
+    const ceReal = oipFullCeData.filter(d => d.close != null && isFinite(d.close));
+    const peReal = oipFullPeData.filter(d => d.close != null && isFinite(d.close));
 
-    oipCachedIndicators.pe.vwap = oipCalculateVWAP(oipFullPeData);
-    oipCachedIndicators.pe.ema9 = oipCalculateFixedEMA(oipFullPeData, 9);
-    oipCachedIndicators.pe.ema20 = oipCalculateFixedEMA(oipFullPeData, 20);
-    oipCachedIndicators.pe.ema50 = oipCalculateFixedEMA(oipFullPeData, 50);
+    oipCachedIndicators.ce.vwap = oipCalculateVWAP(ceReal);
+    oipCachedIndicators.ce.ema9 = oipCalculateFixedEMA(ceReal, 9);
+    oipCachedIndicators.ce.ema20 = oipCalculateFixedEMA(ceReal, 20);
+    oipCachedIndicators.ce.ema50 = oipCalculateFixedEMA(ceReal, 50);
+
+    oipCachedIndicators.pe.vwap = oipCalculateVWAP(peReal);
+    oipCachedIndicators.pe.ema9 = oipCalculateFixedEMA(peReal, 9);
+    oipCachedIndicators.pe.ema20 = oipCalculateFixedEMA(peReal, 20);
+    oipCachedIndicators.pe.ema50 = oipCalculateFixedEMA(peReal, 50);
 
     // Premium Lines Pre-calc
     const dist = parseInt(oipElems.targetDistance?.value) || 50;
@@ -732,14 +767,20 @@ function oipRefreshLocalView(view, resetZoom, index) {
             const formatted = TradingViewChart.formatData([oipFullCeData[index]])[0];
             if (hasOHLC(formatted)) oipCEChart.series.update(formatted);
             if (oiAlignTime) try { oipCEChart.alignSeries?.update({ time: oiAlignTime, value: 0 }); } catch(e) {}
+            // Incremental: push only the new EMA point for this timestamp (avoids full setData redraw)
+            const ce9  = oipCachedIndicators.ce.ema9.find(d => d.time === timeAtIdx);
+            const ce20 = oipCachedIndicators.ce.ema20.find(d => d.time === timeAtIdx);
+            const ce50 = oipCachedIndicators.ce.ema50.find(d => d.time === timeAtIdx);
+            if (oipCEEma9Series  && ce9)  oipCEEma9Series.update(ce9);
+            if (oipCEEma20Series && ce20) oipCEEma20Series.update(ce20);
+            if (oipCEEma50Series && ce50) oipCEEma50Series.update(ce50);
         } else {
             oipCEChart.update(oipFullCeData.slice(0, index + 1), [], false);
+            const ceEmaT = d => d.time <= timeAtIdx;
+            if (oipCEEma9Series) oipCEEma9Series.setData(oipCachedIndicators.ce.ema9.filter(ceEmaT));
+            if (oipCEEma20Series) oipCEEma20Series.setData(oipCachedIndicators.ce.ema20.filter(ceEmaT));
+            if (oipCEEma50Series) oipCEEma50Series.setData(oipCachedIndicators.ce.ema50.filter(ceEmaT));
         }
-        // CE EMA is indexed by trade count, not OI bar index — filter by time like profile does
-        const ceEmaT = d => d.time <= timeAtIdx;
-        if (oipCEEma9Series) oipCEEma9Series.setData(oipCachedIndicators.ce.ema9.filter(ceEmaT));
-        if (oipCEEma20Series) oipCEEma20Series.setData(oipCachedIndicators.ce.ema20.filter(ceEmaT));
-        if (oipCEEma50Series) oipCEEma50Series.setData(oipCachedIndicators.ce.ema50.filter(ceEmaT));
     }
 
     if (oipPEChart) {
@@ -747,14 +788,20 @@ function oipRefreshLocalView(view, resetZoom, index) {
             const formatted = TradingViewChart.formatData([oipFullPeData[index]])[0];
             if (hasOHLC(formatted)) oipPEChart.series.update(formatted);
             if (oiAlignTime) try { oipPEChart.alignSeries?.update({ time: oiAlignTime, value: 0 }); } catch(e) {}
+            // Incremental: push only the new EMA point for this timestamp
+            const pe9  = oipCachedIndicators.pe.ema9.find(d => d.time === timeAtIdx);
+            const pe20 = oipCachedIndicators.pe.ema20.find(d => d.time === timeAtIdx);
+            const pe50 = oipCachedIndicators.pe.ema50.find(d => d.time === timeAtIdx);
+            if (oipPEEma9Series  && pe9)  oipPEEma9Series.update(pe9);
+            if (oipPEEma20Series && pe20) oipPEEma20Series.update(pe20);
+            if (oipPEEma50Series && pe50) oipPEEma50Series.update(pe50);
         } else {
             oipPEChart.update(oipFullPeData.slice(0, index + 1), [], false);
+            const peEmaT = d => d.time <= timeAtIdx;
+            if (oipPEEma9Series) oipPEEma9Series.setData(oipCachedIndicators.pe.ema9.filter(peEmaT));
+            if (oipPEEma20Series) oipPEEma20Series.setData(oipCachedIndicators.pe.ema20.filter(peEmaT));
+            if (oipPEEma50Series) oipPEEma50Series.setData(oipCachedIndicators.pe.ema50.filter(peEmaT));
         }
-        // PE EMA same fix
-        const peEmaT = d => d.time <= timeAtIdx;
-        if (oipPEEma9Series) oipPEEma9Series.setData(oipCachedIndicators.pe.ema9.filter(peEmaT));
-        if (oipPEEma20Series) oipPEEma20Series.setData(oipCachedIndicators.pe.ema20.filter(peEmaT));
-        if (oipPEEma50Series) oipPEEma50Series.setData(oipCachedIndicators.pe.ema50.filter(peEmaT));
     }
 
     // 4. Legend & Metadata
@@ -815,11 +862,16 @@ function oipRefreshLocalView(view, resetZoom, index) {
             const barSpacing = ts.options().barSpacing;
             const scrollPos  = ts.scrollPosition();
             if (barSpacing) {
-                [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart].forEach(c => {
+                const optAdj = 15;
+                [
+                    { chart: oipIntrinsicChart?.chart, adj: 0 },
+                    { chart: oipCEChart?.chart,        adj: -optAdj },
+                    { chart: oipPEChart?.chart,        adj: -optAdj }
+                ].forEach(({ chart: c, adj }) => {
                     if (!c) return;
                     try {
                         c.timeScale().applyOptions({ barSpacing });
-                        c.timeScale().scrollToPosition(scrollPos, false);
+                        c.timeScale().scrollToPosition(scrollPos + adj, false);
                     } catch(e) {}
                 });
             }
@@ -921,14 +973,16 @@ async function oipReloadStrikeOnly() {
 
         oipFullCeData = oipFullOptionData.filter(d => d.type === 'CE');
         oipFullPeData = oipFullOptionData.filter(d => d.type === 'PE');
-        oipCachedIndicators.ce.vwap = oipCalculateVWAP(oipFullCeData);
-        oipCachedIndicators.ce.ema9  = oipCalculateFixedEMA(oipFullCeData, 9);
-        oipCachedIndicators.ce.ema20 = oipCalculateFixedEMA(oipFullCeData, 20);
-        oipCachedIndicators.ce.ema50 = oipCalculateFixedEMA(oipFullCeData, 50);
-        oipCachedIndicators.pe.vwap  = oipCalculateVWAP(oipFullPeData);
-        oipCachedIndicators.pe.ema9  = oipCalculateFixedEMA(oipFullPeData, 9);
-        oipCachedIndicators.pe.ema20 = oipCalculateFixedEMA(oipFullPeData, 20);
-        oipCachedIndicators.pe.ema50 = oipCalculateFixedEMA(oipFullPeData, 50);
+        const ceReal2 = oipFullCeData.filter(d => d.close != null && isFinite(d.close));
+        const peReal2 = oipFullPeData.filter(d => d.close != null && isFinite(d.close));
+        oipCachedIndicators.ce.vwap = oipCalculateVWAP(ceReal2);
+        oipCachedIndicators.ce.ema9  = oipCalculateFixedEMA(ceReal2, 9);
+        oipCachedIndicators.ce.ema20 = oipCalculateFixedEMA(ceReal2, 20);
+        oipCachedIndicators.ce.ema50 = oipCalculateFixedEMA(ceReal2, 50);
+        oipCachedIndicators.pe.vwap  = oipCalculateVWAP(peReal2);
+        oipCachedIndicators.pe.ema9  = oipCalculateFixedEMA(peReal2, 9);
+        oipCachedIndicators.pe.ema20 = oipCalculateFixedEMA(peReal2, 20);
+        oipCachedIndicators.pe.ema50 = oipCalculateFixedEMA(peReal2, 50);
         const dist = parseInt(oipElems.targetDistance?.value) || 50;
         const entry = [], current = [];
         oipCachedIndicators.ce.vwap.forEach((v, i) => { const pv = oipCachedIndicators.pe.vwap[i]; if (pv && isFinite(v.value) && isFinite(pv.value)) entry.push({ time: v.time, value: (v.value + pv.value) / 2 }); });

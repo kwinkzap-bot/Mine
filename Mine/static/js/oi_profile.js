@@ -1012,11 +1012,18 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                     // so we add the reversal-line future-bar count so their last real candle
                     // sits at the same visual distance from the Y-axis as OI's last real candle.
                     const futureBarsOffset = window._oipReversalFutureBarsCount || 0;
-                    [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart].forEach(c => {
+                    // CE/PE-only charts have rightOffset=5 vs OI's 20; subtract 15 so their
+                    // last real candle sits closer to the Y-axis, matching the user's preference.
+                    const optionRightAdj = 15;
+                    [
+                        { chart: oipIntrinsicChart?.chart, adj: 0 },
+                        { chart: oipCEChart?.chart,        adj: -optionRightAdj },
+                        { chart: oipPEChart?.chart,        adj: -optionRightAdj }
+                    ].forEach(({ chart: c, adj }) => {
                         if (!c) return;
                         try {
                             c.timeScale().applyOptions({ barSpacing });
-                            c.timeScale().scrollToPosition(scrollPos + futureBarsOffset, false);
+                            c.timeScale().scrollToPosition(scrollPos + futureBarsOffset + adj, false);
                         } catch(e) {}
                     });
                     _oipChartsSyncedOnce = true;

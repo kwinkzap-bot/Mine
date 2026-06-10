@@ -40,14 +40,14 @@ window.oipInitSecondaryCharts = function() {
         // Initialize Individual CE Chart
         oipCEChart = TradingViewChart.create({
             containerId: 'oipCEChart', data: [], type: 'CE',
-            timeframe: oipInterval, options: { height: 375 }
+            timeframe: oipInterval, options: { height: 375, rightOffset: 5 }
         });
         oipCESeries = oipCEChart.series;
 
         // Initialize Individual PE Chart
         oipPEChart = TradingViewChart.create({
             containerId: 'oipPEChart', data: [], type: 'PE',
-            timeframe: oipInterval, options: { height: 375 }
+            timeframe: oipInterval, options: { height: 375, rightOffset: 5 }
         });
         oipPESeries = oipPEChart.series;
 
@@ -81,7 +81,15 @@ window.oipInitSecondaryCharts = function() {
         // _oipSyncDepth is a re-entrancy counter: applyOptions/scrollToPosition fires
         // subscribeVisibleLogicalRangeChange on the target synchronously; the depth check
         // prevents those nested callbacks from triggering a reverse sync.
+        // CE-only and PE-only charts have rightOffset=5 vs OI/intrinsic rightOffset=20.
+        // scrollToPosition() bypasses rightOffset, so we apply this correction whenever
+        // syncing scroll position between the two groups.
+        const _OIP_OPTION_RIGHT_ADJ = 15;
+
         let _oipSyncDepth = 0;
+        // targetCharts may be plain chart instances or {chart, adj} wrapper objects.
+        // Wrappers are identified by a numeric `adj` property (never present on LC instances).
+        // adj is added to scrollPos when calling scrollToPosition on that target.
         const syncRange = (sourceChart, targetCharts) => {
             if (_oipSyncDepth > 0) return; // already inside a sync cycle — skip re-entry
             const ts = sourceChart.timeScale();
@@ -89,8 +97,12 @@ window.oipInitSecondaryCharts = function() {
             const scrollPos  = ts.scrollPosition();
             if (!barSpacing) return;
             _oipSyncDepth++;
-            targetCharts.forEach(t => {
-                if (!t) return;
+            targetCharts.forEach(item => {
+                const isWrapped = item !== null && typeof item === 'object' && typeof item.adj === 'number';
+                const t   = isWrapped ? item.chart : item;
+                const adj = isWrapped ? item.adj   : 0;
+                // Guard: must be a real chart instance with a timeScale method
+                if (!t || typeof t.timeScale !== 'function') return;
                 // Copy both barSpacing (zoom level) and scrollPosition (right-edge offset).
                 // scrollPosition alone is insufficient: the same value means a different pixel
                 // offset when barSpacings differ, causing visible drift between charts.
@@ -98,7 +110,7 @@ window.oipInitSecondaryCharts = function() {
                 // the rightOffset gap between the last candle and the Y-axis.
                 try {
                     t.timeScale().applyOptions({ barSpacing });
-                    t.timeScale().scrollToPosition(scrollPos, false);
+                    t.timeScale().scrollToPosition(scrollPos + adj, false);
                 } catch(e) {}
             });
             _oipSyncDepth--;
@@ -111,22 +123,38 @@ window.oipInitSecondaryCharts = function() {
         if (oipOIChart && oipIntrinsicChart && oipIntrinsicChart.chart) {
             oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (window._oipDataRefreshing || activeChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(oipOIChart, [oipIntrinsicChart?.chart, oipCEChart?.chart, oipPEChart?.chart]);
+                syncRange(oipOIChart, [
+                    oipIntrinsicChart?.chart,
+                    { chart: oipCEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
+                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ }
+                ]);
             });
 
             oipIntrinsicChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (window._oipDataRefreshing || activeChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(oipIntrinsicChart.chart, [oipOIChart, oipCEChart?.chart, oipPEChart?.chart]);
+                syncRange(oipIntrinsicChart.chart, [
+                    oipOIChart,
+                    { chart: oipCEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
+                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ }
+                ]);
             });
 
             oipCEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (window._oipDataRefreshing || activeChartId !== 'ce' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(oipCEChart.chart, [oipOIChart, oipIntrinsicChart?.chart, oipPEChart?.chart]);
+                syncRange(oipCEChart.chart, [
+                    { chart: oipOIChart, adj: _OIP_OPTION_RIGHT_ADJ },
+                    { chart: oipIntrinsicChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ },
+                    oipPEChart?.chart
+                ]);
             });
 
             oipPEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (window._oipDataRefreshing || activeChartId !== 'pe' || !oipOIChartReady || !oipIntChartReady) return;
-                syncRange(oipPEChart.chart, [oipOIChart, oipIntrinsicChart?.chart, oipCEChart?.chart]);
+                syncRange(oipPEChart.chart, [
+                    { chart: oipOIChart, adj: _OIP_OPTION_RIGHT_ADJ },
+                    { chart: oipIntrinsicChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ },
+                    oipCEChart?.chart
+                ]);
             });
         }
 
