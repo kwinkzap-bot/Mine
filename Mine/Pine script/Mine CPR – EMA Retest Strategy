@@ -25,17 +25,17 @@ entryMode     = input.string("RTP(20 & 9)", "Entry Logic",
      tooltip="RTP(20 & 9): Candle touches EMA 9 & 20 and closes above/below both.\nRTP(50): Candle touches EMA 50 and closes above/below it.")
 rtSlopeBars   = input.int  (8,    "Slope Lookback (bars)", minval=1, maxval=15,
      tooltip="Bars used to measure EMA 20/50 slope. Both must slope same direction. 8+ bars filters micro-turns.")
-useADX        = input.bool (true,  "Enable ADX Filter",     group="Sideways Filter",
+useADX        = input.bool (false, "Enable ADX Filter",     group="Sideways Filter",
      tooltip="When checked, signals are blocked if ADX is below the threshold (sideways market).")
 adxLen        = input.int  (14,   "ADX Length",            minval=1, group="Sideways Filter",
      tooltip="ADX period. Higher = smoother but slower response.")
 adxThresh     = input.float(25.0, "ADX Min Threshold",     step=1,   group="Sideways Filter",
      tooltip="Below this value the market is considered sideways and no signals fire. 25 is recommended for 1-min charts.")
-useAutoLevels = input.bool (true,  "Auto SL/Target by Timeframe", group="SL / Target",
+useAutoLevels = input.bool (false, "Auto SL/Target by Timeframe", group="SL / Target",
      tooltip="Automatically picks SL and Target based on chart timeframe. Uncheck to set manually.")
-manualSL      = input.float(10.0, "Stop Loss (points)",    step=5,   group="SL / Target",
+manualSL      = input.float(30.0, "Stop Loss (points)",    step=5,   group="SL / Target",
      tooltip="Used only when Auto SL/Target is disabled.")
-manualTgt     = input.float(20.0, "Target (points)",       step=5,   group="SL / Target",
+manualTgt     = input.float(90.0, "Target (points)",       step=5,   group="SL / Target",
      tooltip="Used only when Auto SL/Target is disabled.")
 
 // Auto SL / Target by timeframe (only for intraday minute charts)
@@ -78,7 +78,7 @@ bearishStack = entryMode == "RTP(50)" ? ema50v > ema20v : ema50v > ema20v and em
 
 // Session filter: after 9:20 AM open, before 3:15 PM cutoff (Indian market)
 afterOpen    = (hour > 9) or (hour == 9 and minute >= 20)
-beforeCutoff = (hour < 15) or (hour == 15 and minute < 15)
+beforeCutoff = (hour < 15) or (hour == 15 and minute <= 28)
 sessionOk    = afterOpen and beforeCutoff
 
 // ── Candlestick patterns ──────────────────────────────────────────────────────

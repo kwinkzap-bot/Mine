@@ -692,38 +692,63 @@ if show_monday_box
         box.set_bottom(cur_mon_box, mon_low)
 
 // ─── Railway Track Signal ─────────────────────────────────────────────────────
-// EMA 20 and EMA 50 run parallel in the same direction (railway tracks).
-// SELL extra conditions:
-//   1. EMA 50 must be the highest (50 > 20 > 9, price below all) — bearish stack
-//   2. After a sell fires, at least one candle HIGH must stay below both EMA 9 & 20
-//      before the next sell is allowed (gap/reset candle required)
-// BUY extra conditions (mirror):
-//   1. EMA 50 must be the lowest (50 < 20 < 9, price above all) — bullish stack
-//   2. After a buy fires, at least one candle LOW must stay above both EMA 9 & 20
-// No new signals at or after 3:15 PM.
+// Entry modes:
+//   RTP(20 & 9) — EMA 20 & 9 must be parallel and fully stacked (50 < 20 < 9 bull / 50 > 20 > 9 bear)
+//                 Touch: low ≤ EMA 20, close > EMA 9 & 20  |  specific candle patterns
+//   RTP(50)     — EMA 20 & 50 slope together; touch EMA 50, close above/below it  |  any bull/bear candle
+// ADX filter: when enabled, signals only fire when ADX ≥ threshold (trending market)
+// SL / Target: dashed reference lines drawn from the signal bar
 
-showRTSignal = input.bool(true, "Show Railway Track Signal", group = "Railway Track")
-rtSlopeBars  = input.int(3,    "Slope Lookback (bars)",     group = "Railway Track", minval = 1, maxval = 10, tooltip = "Bars used to measure EMA 20 and EMA 50 slope direction.")
+showRTSignal  = input.bool(true,           "Show Railway Track Signal",  group = "Railway Track")
+rtEntryMode   = input.string("RTP(20 & 9)", "Entry Mode",                group = "Railway Track", options = ["RTP(20 & 9)", "RTP(50)"])
+rtSlopeBars   = input.int(8,               "Slope Lookback (bars)",      group = "Railway Track", minval = 1, maxval = 20)
+rtUseAdx      = input.bool(false,          "ADX Filter",                 group = "Railway Track")
+rtAdxThresh   = input.int(25,              "ADX Threshold",              group = "Railway Track", minval = 5, maxval = 50)
+rtSlPoints    = input.float(30.0,          "Stop Loss (pts)",            group = "Railway Track", minval = 0.5, step = 0.5)
+rtTgtPoints   = input.float(90.0,          "Target (pts)",               group = "Railway Track", minval = 0.5, step = 0.5)
+rtShowLevels  = input.bool(true,           "Show SL / Target on Chart",  group = "Railway Track")
 
 ema9v  = mshortest
 ema20v = shortest
 ema50v = short
 
-// Railway track: EMA 20 and EMA 50 both sloping in the same direction
+// ── Slope direction ──────────────────────────────────────────────────────────
 ema20Rising  = ema20v > ema20v[rtSlopeBars]
 ema50Rising  = ema50v > ema50v[rtSlopeBars]
 ema20Falling = ema20v < ema20v[rtSlopeBars]
 ema50Falling = ema50v < ema50v[rtSlopeBars]
 
-railwayUp = ema20Rising  and ema50Rising
-railwayDn = ema20Falling and ema50Falling
+// ── Parallel check (RTP(20 & 9) only) ───────────────────────────────────────
+// Gap between EMA 20 and EMA 50 must not be expanding too rapidly
+_rtGap    = math.abs(ema20v - ema50v)
+_rtGapChg = math.abs(_rtGap - _rtGap[5])
+_rtAtr14  = ta.atr(14)
+rtParallel = _rtGapChg <= _rtAtr14 * 0.5
 
-// EMA order checks
-bearishStack = ema50v > ema20v and ema50v > ema9v   // 50 is highest → bearish
-bullishStack = ema50v < ema20v and ema50v < ema9v   // 50 is lowest  → bullish
+isRtp50 = rtEntryMode == "RTP(50)"
 
-// No new signals at or after 3:15 PM
-beforeCutoff = (hour < 15) or (hour == 15 and minute < 15)
+// ── Railway track (entry-mode aware) ────────────────────────────────────────
+railwayUp = ema20Rising  and ema50Rising  and (isRtp50 or rtParallel)
+railwayDn = ema20Falling and ema50Falling and (isRtp50 or rtParallel)
+
+// ── EMA stack ───────────────────────────────────────────────────────────────
+bullishStack = isRtp50 ? (ema50v < ema20v) : (ema50v < ema20v and ema50v < ema9v)   // 50 lowest  → bullish
+bearishStack = isRtp50 ? (ema50v > ema20v) : (ema50v > ema20v and ema50v > ema9v)   // 50 highest → bearish
+
+// ── Session filter: 9:20 AM – 3:28 PM IST ───────────────────────────────────
+_rtAfterOpen    = (hour > 9)  or (hour == 9  and minute >= 20)
+_rtBeforeCutoff = (hour < 15) or (hour == 15 and minute <= 28)
+inSession = _rtAfterOpen and _rtBeforeCutoff
+
+// ── ADX filter ───────────────────────────────────────────────────────────────
+[_, _, _rtAdxVal] = ta.dmi(14, 14)
+rtAdxOk = not rtUseAdx or _rtAdxVal >= rtAdxThresh
+
+// ── Touch conditions (entry-mode aware) ─────────────────────────────────────
+buyTouch  = isRtp50 ? (low  <= ema50v and close >  ema50v) :
+                      (low  <= ema20v  and close >  ema9v  and close >  ema20v)
+sellTouch = isRtp50 ? (high >= ema50v and close <  ema50v) :
+                      (high >= ema20v  and close <  ema9v  and close <  ema20v)
 
 // ── Candlestick pattern helpers ──────────────────────────────────────────────
 _body   = math.abs(close - open)
@@ -731,65 +756,57 @@ _range  = high - low
 _upperW = high - math.max(close, open)
 _lowerW = math.min(close, open) - low
 
-// Hammer: lower wick ≥ 2× body, upper wick ≤ 1× body (can be any candle color)
-isHammer       = _range > 0 and _body > 0 and _lowerW >= 2.0 * _body and _upperW <= _body
+isHammer     = _range > 0 and _body > 0 and _lowerW >= 2.0 * _body and _upperW <= _body
+isBullEngulf = close[1] < open[1] and close > open and open <= close[1] and close >= open[1]
+isBuyCandle  = close > open
 
-// Bullish Engulfing: previous candle red, current candle green body engulfs previous
-isBullEngulf   = close[1] < open[1] and close > open and open <= close[1] and close >= open[1]
+isShootStar  = _range > 0 and _body > 0 and _upperW >= 2.0 * _body and _lowerW <= _body
+isBearEngulf = close[1] > open[1] and close < open and open >= close[1] and close <= open[1]
+isSellCandle = close < open
 
-// Bullish candle (BUY candle structure)
-isBuyCandle    = close > open
+isDoji = _range > 0 and _body <= _range * 0.1
 
-// Shooting Star: upper wick ≥ 2× body, lower wick ≤ 1× body (mirror of hammer)
-isShootStar    = _range > 0 and _body > 0 and _upperW >= 2.0 * _body and _lowerW <= _body
+// RTP(50): any bull/bear candle qualifies; RTP(20 & 9): specific reversal patterns
+buyPattern  = isRtp50 ? (close > open or isDoji) :
+                        (isDoji or (close > open and (isHammer or isBullEngulf or isBuyCandle)))
+sellPattern = isRtp50 ? (close < open or isDoji) :
+                        (isDoji or (close < open and (isShootStar or isBearEngulf or isSellCandle)))
 
-// Bearish Engulfing: previous candle green, current candle red body engulfs previous
-isBearEngulf   = close[1] > open[1] and close < open and open >= close[1] and close <= open[1]
-
-// Bearish candle (SELL candle structure)
-isSellCandle   = close < open
-
-// Doji: body ≤ 10% of total range (no color — valid for both buy and sell)
-isDoji         = _range > 0 and _body <= _range * 0.1
-
-// Color check is enforced for all patterns except Doji (which has no color by definition)
-buyPattern  = isDoji or (close > open and (isHammer    or isBullEngulf or isBuyCandle))
-sellPattern = isDoji or (close < open and (isShootStar or isBearEngulf or isSellCandle))
-
-// Reset-candle tracking
-// After a SELL fires: require one candle where high stays below both EMA 9 & EMA 20
-// After a BUY  fires: require one candle where low  stays above both EMA 9 & EMA 20
+// ── Reset-candle tracking ────────────────────────────────────────────────────
+// After a BUY fires:  one candle low  must stay above the reference EMA(s) before next BUY
+// After a SELL fires: one candle high must stay below the reference EMA(s) before next SELL
 var bool sellNeedsReset = false
 var bool buyNeedsReset  = false
 
-if sellNeedsReset and high < math.min(ema9v, ema20v)
-    sellNeedsReset := false
+if sellNeedsReset
+    sellNeedsReset := isRtp50 ? (high < ema50v) : (high < math.min(ema9v, ema20v))
+if buyNeedsReset
+    buyNeedsReset  := isRtp50 ? (low  > ema50v) : (low  > math.max(ema9v, ema20v))
 
-if buyNeedsReset and low > math.max(ema9v, ema20v)
-    buyNeedsReset := false
+// ── Signals ──────────────────────────────────────────────────────────────────
+rtBuySignal = showRTSignal and inSession and railwayUp and bullishStack and
+              buyTouch and buyPattern and rtAdxOk and not buyNeedsReset
 
-// BUY: track up + bullish stack + low touches EMA 9 & 20 + closes above both + buy pattern + reset clear
-rtBuySignal = showRTSignal and beforeCutoff and railwayUp and bullishStack and
-              low  <= ema9v and low  <= ema20v and
-              close > ema9v and close > ema20v and
-              buyPattern and
-              not buyNeedsReset
+rtSellSignal = showRTSignal and inSession and railwayDn and bearishStack and
+               sellTouch and sellPattern and rtAdxOk and not sellNeedsReset
 
-// SELL: track down + bearish stack + high touches EMA 9 & 20 + closes below both + sell pattern + reset clear
-rtSellSignal = showRTSignal and beforeCutoff and railwayDn and bearishStack and
-               high  >= ema9v and high  >= ema20v and
-               close <  ema9v and close <  ema20v and
-               sellPattern and
-               not sellNeedsReset
-
-// Arm reset after each signal fires
-if rtSellSignal
-    sellNeedsReset := true
 if rtBuySignal
     buyNeedsReset  := true
+if rtSellSignal
+    sellNeedsReset := true
 
+// ── Plots ────────────────────────────────────────────────────────────────────
 plotshape(rtBuySignal,  "RT Buy",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), size = size.tiny, text = "B")
 plotshape(rtSellSignal, "RT Sell", shape.triangledown, location.abovebar, color.new(color.red,  0), size = size.tiny, text = "S")
+
+// SL / Target dashed lines projected forward from the signal bar
+if rtShowLevels and rtBuySignal
+    line.new(bar_index, close - rtSlPoints,  bar_index + 20, close - rtSlPoints,  color = color.new(color.red,   20), width = 1, style = line.style_dashed)
+    line.new(bar_index, close + rtTgtPoints, bar_index + 20, close + rtTgtPoints, color = color.new(color.green, 20), width = 1, style = line.style_dashed)
+
+if rtShowLevels and rtSellSignal
+    line.new(bar_index, close + rtSlPoints,  bar_index + 20, close + rtSlPoints,  color = color.new(color.red,   20), width = 1, style = line.style_dashed)
+    line.new(bar_index, close - rtTgtPoints, bar_index + 20, close - rtTgtPoints, color = color.new(color.green, 20), width = 1, style = line.style_dashed)
 
 alertcondition(rtBuySignal,  "Railway Track Buy",  "Railway Track — BUY signal")
 alertcondition(rtSellSignal, "Railway Track Sell", "Railway Track — SELL signal")
