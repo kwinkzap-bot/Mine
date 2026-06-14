@@ -1,4 +1,5 @@
 """API routes for trading data endpoints."""
+import json
 import logging
 import math
 import os
@@ -20,6 +21,28 @@ from trading_app.app.utils.helpers import is_market_hours, is_trading_day
 # Request Coalescing Globals
 _pending_request_locks: Dict[Any, threading.Lock] = {}
 _pending_locks_manager = threading.Lock()
+
+# RTP optimisation cache — persisted to disk so results survive restarts
+_RTP_OPT_CACHE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', 'utils', 'rtp_opt_cache.json')
+)
+
+def _load_opt_cache() -> dict:
+    try:
+        if os.path.exists(_RTP_OPT_CACHE_PATH):
+            with open(_RTP_OPT_CACHE_PATH, 'r') as _f:
+                return json.load(_f)
+    except Exception:
+        pass
+    return {}
+
+def _save_opt_cache(cache: dict) -> None:
+    try:
+        with open(_RTP_OPT_CACHE_PATH, 'w') as _f:
+            json.dump(cache, _f, indent=2, default=str)
+    except Exception as _e:
+        logger.warning(f"RTP opt cache write failed: {_e}")
+
 
 def _get_request_lock(key: Any) -> threading.Lock:
     with _pending_locks_manager:
@@ -2625,6 +2648,221 @@ def run_cpr_gap_backtest_api():
         
     except Exception as e:
         logger.error(f"Error in CPR Gap backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/rtp', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_rtp_backtest_api():
+    """Run Railway Track Pattern (RTP) backtest."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', 'minute')
+        entry_mode     = data.get('entry_mode', 'RTP(20 & 9)')
+        use_adx        = bool(data.get('use_adx', True))
+        adx_thresh     = float(data.get('adx_thresh', 25.0))
+        sl_points      = float(data['sl_points'])     if data.get('sl_points')     else None
+        tgt_points     = float(data['tgt_points'])    if data.get('tgt_points')    else None
+        trail_points   = float(data['trail_points'])  if data.get('trail_points')  else None
+
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        # Resolve Fyers symbol string
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+        kite_indices = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105,
+            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+        }
+
+        if hasattr(current_kite, 'fyers'):
+            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+        else:
+            instrument_token = kite_indices.get(symbol, symbol)
+
+        candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval=interval,
+            use_cache=False,
+        )
+
+        if not candles:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+
+        import pandas as pd
+        from trading_app.Backtest.rtp_backtest_engine import RTPBacktestEngine
+
+        interval_minutes_map = {
+            'minute': 1, '2minute': 2, '3minute': 3,
+            '5minute': 5, '10minute': 10, '15minute': 15,
+            '30minute': 30, '60minute': 60,
+        }
+        interval_minutes = interval_minutes_map.get(interval, 1)
+
+        df = pd.DataFrame(candles)
+        engine  = RTPBacktestEngine(
+            df=df,
+            entry_mode=entry_mode,
+            interval_minutes=interval_minutes,
+            use_adx=use_adx,
+            adx_thresh=adx_thresh,
+            sl_points=sl_points,
+            tgt_points=tgt_points,
+            trail_points=trail_points,
+        )
+        results = engine.run()
+        trades  = results.get('trades', [])
+
+        # Serialise datetime fields for JSON
+        for t in trades:
+            for k in ('entry_time', 'exit_time'):
+                if hasattr(t.get(k), 'isoformat'):
+                    t[k] = t[k].isoformat()
+                elif t.get(k) is not None:
+                    t[k] = str(t[k])
+
+        def _fmt_dt(val):
+            if val is None:
+                return None
+            s = str(val)
+            return s[:16]  # "YYYY-MM-DD HH:MM"
+
+        return jsonify({
+            'success': True,
+            'trades': trades,
+            'summary': {
+                'total_trades':  results['total_trades'],
+                'wins':          results['wins'],
+                'losses':        results['losses'],
+                'total_pnl':     results['net_pnl'],
+                'win_rate':      results['win_rate'],
+                'profit_factor': results['profit_factor'],
+                'max_drawdown':  results['max_drawdown'],
+                'max_dd_start':  _fmt_dt(results.get('max_dd_start')),
+                'max_dd_end':    _fmt_dt(results.get('max_dd_end')),
+                'avg_win':       results.get('avg_win', 0),
+                'avg_loss':      results.get('avg_loss', 0),
+                'sl_points':     results['sl_points'],
+                'tgt_points':    results['tgt_points'],
+                'trail_points':  results.get('trail_points'),
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error in RTP backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/rtp/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_rtp_optimise():
+    """Return RTP optimisation results, using cached data when available."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date', '2017-01-01')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '5minute')
+        recalculate    = bool(data.get('recalculate', False))
+
+        if not end_date_str:
+            end_date_str = datetime.today().strftime('%Y-%m-%d')
+
+        cache_key = f"{symbol}_{interval}"
+
+        # ── Serve from cache unless caller asked to recalculate ──────────────
+        if not recalculate:
+            cache = _load_opt_cache()
+            if cache_key in cache:
+                entry = cache[cache_key]
+                return jsonify({
+                    'success':            True,
+                    'from_cache':         True,
+                    'cached_at':          entry.get('cached_at'),
+                    'symbol':             entry['symbol'],
+                    'interval':           entry['interval'],
+                    'total_combos_tested': entry['total_combos_tested'],
+                    'best':               entry['best'],
+                    'results':            entry['results'],
+                })
+
+        # ── Run optimisation ─────────────────────────────────────────────────
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+
+        if hasattr(current_kite, 'fyers'):
+            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+        else:
+            kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105,
+                            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009}
+            instrument_token = kite_indices.get(symbol, symbol)
+
+        candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval=interval,
+            use_cache=False,
+        )
+        if not candles:
+            return jsonify({'success': False, 'error': 'No historical data returned'}), 404
+
+        from trading_app.Backtest.rtp_backtest_engine import optimise_rtp
+
+        df      = pd.DataFrame(candles)
+        results = optimise_rtp(df, interval=interval, min_trades=15)
+
+        cached_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+        payload   = {
+            'symbol':             symbol,
+            'interval':           interval,
+            'total_combos_tested': len(results),
+            'best':               results[0] if results else None,
+            'results':            results[:15],
+            'cached_at':          cached_at,
+        }
+
+        # Persist to disk
+        cache           = _load_opt_cache()
+        cache[cache_key] = payload
+        _save_opt_cache(cache)
+
+        return jsonify({'success': True, 'from_cache': False, **payload})
+
+    except Exception as e:
+        logger.error(f"Error in RTP optimise API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

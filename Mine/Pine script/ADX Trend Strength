@@ -1,0 +1,20 @@
+//@version=5
+indicator("ADX Trend Strength", overlay=false, precision=1)
+
+// ─── Inputs ────────────────────────────────────────────────────────────────────
+adxLen    = input.int  (14,   "ADX Length",     minval=1)
+threshold = input.float(20.0, "Threshold Level", step=1,
+     tooltip="Below this level the market is sideways. Match this value to the Railway Track Strategy setting.")
+
+// ─── Calculate ─────────────────────────────────────────────────────────────────
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+
+// ─── Background shade: red zone = sideways, green zone = trending ──────────────
+isTrending = adxVal >= threshold
+bgcolor(isTrending ? color.new(color.green, 92) : color.new(color.red, 92))
+
+// ─── Plots ─────────────────────────────────────────────────────────────────────
+plot(adxVal,   "ADX",  color.white,       2)
+plot(diPlus,   "+DI",  color.lime,        1)
+plot(diMinus,  "-DI",  color.red,         1)
+hline(threshold, "Threshold", color.gray, linestyle=hline.style_dashed, linewidth=1)

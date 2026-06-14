@@ -94,5 +94,29 @@
     "pe_oi": 93968355,
     "chng_ce_oi": -100116445,
     "chng_pe_oi": -83473130
+  },
+  {
+    "date": "2026-06-12",
+    "symbol": "NIFTY",
+    "ce_oi": 116928370,
+    "pe_oi": 204297080,
+    "chng_ce_oi": 4200560,
+    "chng_pe_oi": 110328725
+  },
+  {
+    "date": "2026-06-12",
+    "symbol": "BANKNIFTY",
+    "ce_oi": 13600320,
+    "pe_oi": 11993520,
+    "chng_ce_oi": 235020,
+    "chng_pe_oi": 150900
+  },
+  {
+    "date": "2026-06-12",
+    "symbol": "FINNIFTY",
+    "ce_oi": 419460,
+    "pe_oi": 239280,
+    "chng_ce_oi": 111900,
+    "chng_pe_oi": 24060
   }
 ]

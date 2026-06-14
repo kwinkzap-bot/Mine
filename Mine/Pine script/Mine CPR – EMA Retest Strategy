@@ -1,0 +1,173 @@
+//@version=5
+strategy("Mine CPR – Railway Track Strategy", overlay=true,
+         initial_capital         = 100000,
+         default_qty_type        = strategy.fixed,
+         default_qty_value       = 1,
+         calc_on_every_tick      = false,
+         process_orders_on_close = false)
+
+// ─── EMA ───────────────────────────────────────────────────────────────────────
+EMA9  = input.int(9,  "EMA 9  Length")
+EMA20 = input.int(20, "EMA 20 Length")
+EMA50 = input.int(50, "EMA 50 Length")
+
+ema9v  = ta.ema(close, EMA9)
+ema20v = ta.ema(close, EMA20)
+ema50v = ta.ema(close, EMA50)
+
+plot(ema9v,  "EMA 9",  color.green,  1)
+plot(ema20v, "EMA 20", color.orange, 1)
+plot(ema50v, "EMA 50", color.red,    1)
+
+// ─── Parameters ───────────────────────────────────────────────────────────────
+entryMode     = input.string("RTP(20 & 9)", "Entry Logic",
+     options=["RTP(20 & 9)", "RTP(50)"],
+     tooltip="RTP(20 & 9): Candle touches EMA 9 & 20 and closes above/below both.\nRTP(50): Candle touches EMA 50 and closes above/below it.")
+rtSlopeBars   = input.int  (8,    "Slope Lookback (bars)", minval=1, maxval=15,
+     tooltip="Bars used to measure EMA 20/50 slope. Both must slope same direction. 8+ bars filters micro-turns.")
+useADX        = input.bool (true,  "Enable ADX Filter",     group="Sideways Filter",
+     tooltip="When checked, signals are blocked if ADX is below the threshold (sideways market).")
+adxLen        = input.int  (14,   "ADX Length",            minval=1, group="Sideways Filter",
+     tooltip="ADX period. Higher = smoother but slower response.")
+adxThresh     = input.float(25.0, "ADX Min Threshold",     step=1,   group="Sideways Filter",
+     tooltip="Below this value the market is considered sideways and no signals fire. 25 is recommended for 1-min charts.")
+useAutoLevels = input.bool (true,  "Auto SL/Target by Timeframe", group="SL / Target",
+     tooltip="Automatically picks SL and Target based on chart timeframe. Uncheck to set manually.")
+manualSL      = input.float(10.0, "Stop Loss (points)",    step=5,   group="SL / Target",
+     tooltip="Used only when Auto SL/Target is disabled.")
+manualTgt     = input.float(20.0, "Target (points)",       step=5,   group="SL / Target",
+     tooltip="Used only when Auto SL/Target is disabled.")
+
+// Auto SL / Target by timeframe (only for intraday minute charts)
+// 1 min → 10/20 | 2 min → 15/30 | 3 min → 20/40 | 5 min → 25/50 | others → 25/50
+autoSL  = timeframe.multiplier == 1 ? 10.0 :
+          timeframe.multiplier == 2 ? 15.0 :
+          timeframe.multiplier == 3 ? 20.0 :
+          timeframe.multiplier == 5 ? 25.0 : 25.0
+autoTgt = timeframe.multiplier == 1 ? 20.0 :
+          timeframe.multiplier == 2 ? 30.0 :
+          timeframe.multiplier == 3 ? 40.0 :
+          timeframe.multiplier == 5 ? 50.0 : 50.0
+
+slPoints  = useAutoLevels ? autoSL  : manualSL
+tgtPoints = useAutoLevels ? autoTgt : manualTgt
+
+// ─── Railway Track Logic ───────────────────────────────────────────────────────
+ema20Rising  = ema20v > ema20v[rtSlopeBars]
+ema50Rising  = ema50v > ema50v[rtSlopeBars]
+ema20Falling = ema20v < ema20v[rtSlopeBars]
+ema50Falling = ema50v < ema50v[rtSlopeBars]
+
+// Parallel check: gap between EMA 20 and 50 must not expand rapidly
+gap        = math.abs(ema20v - ema50v)
+gapChange  = math.abs(gap - gap[5])
+isParallel = gapChange <= ta.atr(14) * 0.5
+
+// ADX trend-strength filter: skip entries in sideways/ranging markets
+[_diPlus, _diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+isTrending = not useADX or adxVal >= adxThresh
+
+// RTP(50) skips the parallel check — gap width doesn't matter for deep EMA 50 retests
+railwayUp = ema20Rising  and ema50Rising  and (entryMode == "RTP(50)" or isParallel) and isTrending
+railwayDn = ema20Falling and ema50Falling and (entryMode == "RTP(50)" or isParallel) and isTrending
+
+// RTP(20 & 9): full order required — 50 < 20 < 9 bullish | 50 > 20 > 9 bearish
+// RTP(50):     only 50 vs 20 matters — 50 < 20 bullish | 50 > 20 bearish
+bullishStack = entryMode == "RTP(50)" ? ema50v < ema20v : ema50v < ema20v and ema20v < ema9v
+bearishStack = entryMode == "RTP(50)" ? ema50v > ema20v : ema50v > ema20v and ema20v > ema9v
+
+// Session filter: after 9:20 AM open, before 3:15 PM cutoff (Indian market)
+afterOpen    = (hour > 9) or (hour == 9 and minute >= 20)
+beforeCutoff = (hour < 15) or (hour == 15 and minute < 15)
+sessionOk    = afterOpen and beforeCutoff
+
+// ── Candlestick patterns ──────────────────────────────────────────────────────
+_body   = math.abs(close - open)
+_range  = high - low
+_upperW = high - math.max(close, open)
+_lowerW = math.min(close, open) - low
+
+// Close quality: where the close sits within the full candle range (0=bottom, 1=top)
+_closePos = _range > 0 ? (close - low) / _range : 0.5
+
+// Strong body: at least 50% of range (tighter than before — filters weak candles)
+hasMeaningfulBody = _body >= _range * 0.5
+// Close position checks — ensures genuine rejection, not a limp close near EMA
+buyCloseStrong  = _closePos >= 0.65   // close in top 35% of range
+sellCloseStrong = _closePos <= 0.35   // close in bottom 35% of range
+
+isHammer     = _range > 0 and _body > 0 and _lowerW >= 2.0 * _body and _upperW <= _body
+isBullEngulf = close[1] < open[1] and close > open and open <= close[1] and close >= open[1]
+isBuyCandle  = close > open and hasMeaningfulBody and buyCloseStrong   // strong body + strong close
+
+isShootStar  = _range > 0 and _body > 0 and _upperW >= 2.0 * _body and _lowerW <= _body
+isBearEngulf = close[1] > open[1] and close < open and open >= close[1] and close <= open[1]
+isSellCandle = close < open and hasMeaningfulBody and sellCloseStrong  // strong body + strong close
+
+// Doji: body ≤ 10% of range — direction tied to context to avoid ambiguity
+isDoji = _range > 0 and _body <= _range * 0.1
+
+// RTP(50): touch of EMA 50 is the signal — just require close direction (no extra body filter)
+// RTP(20 & 9): hammer and engulfing are exempt from close quality (inherently strong shapes);
+//              generic buy/sell candle now requires body ≥ 50% AND close in strong position
+buyPattern  = entryMode == "RTP(50)" ? (close > open or isDoji) :
+              (isDoji and railwayUp) or (close > open and (isHammer or isBullEngulf or isBuyCandle))
+sellPattern = entryMode == "RTP(50)" ? (close < open or isDoji) :
+              (isDoji and railwayDn) or (close < open and (isShootStar or isBearEngulf or isSellCandle))
+
+// ── Touch & close conditions per entry mode ───────────────────────────────────
+// RTP(20 & 9): candle low/high touches EMA 20, closes above/below EMA 9 & 20
+buyTouch_20_9  = low   <= ema20v and close > ema9v  and close > ema20v
+sellTouch_20_9 = high  >= ema20v and close < ema9v  and close < ema20v
+
+// RTP(50): candle low/high touches EMA 50, closes above/below EMA 50
+buyTouch_50    = low   <= ema50v and close > ema50v
+sellTouch_50   = high  >= ema50v and close < ema50v
+
+buyTouchCond   = entryMode == "RTP(50)" ? buyTouch_50    : buyTouch_20_9
+sellTouchCond  = entryMode == "RTP(50)" ? sellTouch_50   : sellTouch_20_9
+
+// ── Reset-candle tracking ─────────────────────────────────────────────────────
+// RTP(20 & 9): reset when candle clears EMA 9 & 20 zone
+// RTP(50):     reset when candle clears EMA 50
+var bool sellNeedsReset = false
+var bool buyNeedsReset  = false
+
+sellResetMet = entryMode == "RTP(50)" ? high < ema50v : high < math.min(ema9v, ema20v)
+buyResetMet  = entryMode == "RTP(50)" ? low  > ema50v : low  > math.max(ema9v, ema20v)
+
+if sellNeedsReset and sellResetMet
+    sellNeedsReset := false
+if buyNeedsReset  and buyResetMet
+    buyNeedsReset  := false
+
+// ── Signals ───────────────────────────────────────────────────────────────────
+rtBuySignal  = sessionOk and railwayUp and bullishStack and
+               buyTouchCond and buyPattern and
+               not buyNeedsReset
+
+rtSellSignal = sessionOk and railwayDn and bearishStack and
+               sellTouchCond and sellPattern and
+               not sellNeedsReset
+
+if rtSellSignal
+    sellNeedsReset := true
+if rtBuySignal
+    buyNeedsReset  := true
+
+// ─── Strategy Execution ────────────────────────────────────────────────────────
+if rtBuySignal and strategy.position_size == 0
+    strategy.entry("Long", strategy.long, comment="B")
+    strategy.exit("Long Exit", "Long",
+         profit = tgtPoints / syminfo.mintick,
+         loss   = slPoints  / syminfo.mintick)
+
+if rtSellSignal and strategy.position_size == 0
+    strategy.entry("Short", strategy.short, comment="S")
+    strategy.exit("Short Exit", "Short",
+         profit = tgtPoints / syminfo.mintick,
+         loss   = slPoints  / syminfo.mintick)
+
+// ─── Markers ───────────────────────────────────────────────────────────────────
+plotshape(rtBuySignal,  "RT Buy",  shape.triangleup,   location.belowbar, color.lime, size=size.tiny, text="B")
+plotshape(rtSellSignal, "RT Sell", shape.triangledown, location.abovebar, color.red,  size=size.tiny, text="S")

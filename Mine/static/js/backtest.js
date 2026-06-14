@@ -113,70 +113,68 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 2.5 Strategy Selection Logic
     const strategySelect = document.getElementById('strategySelect');
-    const apexParamsRow = document.getElementById('apexParamsRow');
+    const apexParamsRow  = document.getElementById('apexParamsRow');
     const apexOptionsRow = document.getElementById('apexOptionsRow');
+    const rtpParamsRow   = document.getElementById('rtpParamsRow');
+    const rtpLotRow      = document.getElementById('rtpLotRow');
 
     function updateStrategyView() {
-        if (!strategySelect || !apexParamsRow || !apexOptionsRow) return;
-        
+        if (!strategySelect) return;
+
         const intervalSelect = document.getElementById('interval');
         const startDateInput = document.getElementById('startDate');
-        const cprTypeContainer = document.getElementById('cprTypeContainer');
-        const mainInputsRow = document.getElementById('mainInputsRow');
+        const cprInputsRow   = document.getElementById('cprInputsRow');
+        const mainInputsRow  = document.getElementById('mainInputsRow');
         const today = new Date();
-        
-        if (strategySelect.value === 'cpr_gap') {
-            apexParamsRow.style.display = 'none';
-            // Show options for SL Close
-            apexOptionsRow.style.display = 'flex';
-            
-            const cprInputsRow = document.getElementById('cprInputsRow');
-            if (cprInputsRow) cprInputsRow.style.display = 'grid';
-            
-            if (mainInputsRow) {
-                mainInputsRow.classList.remove('form-row-5');
-                mainInputsRow.classList.remove('form-row-6');
-                mainInputsRow.classList.remove('form-row-7');
-                mainInputsRow.classList.add('form-row-4');
-            }
-            
-            // Set CPR Gap defaults (Best Options)
+        const val   = strategySelect.value;
+
+        // Reset all rows
+        if (apexParamsRow)  apexParamsRow.style.display  = 'none';
+        if (apexOptionsRow) apexOptionsRow.style.display = 'none';
+        if (cprInputsRow)   cprInputsRow.style.display   = 'none';
+        if (rtpParamsRow)   rtpParamsRow.style.display   = 'none';
+        if (rtpLotRow)      rtpLotRow.style.display      = 'none';
+
+        const optBtn = document.getElementById('runOptimiseBtn');
+        if (optBtn) optBtn.style.display = (val === 'rtp') ? '' : 'none';
+
+        if (mainInputsRow) {
+            mainInputsRow.classList.remove('form-row-5','form-row-6','form-row-7');
+            mainInputsRow.classList.add('form-row-4');
+        }
+
+        if (val === 'cpr_gap') {
+            if (apexOptionsRow) apexOptionsRow.style.display = 'flex';
+            if (cprInputsRow)   cprInputsRow.style.display   = 'grid';
             if (intervalSelect) intervalSelect.value = '5minute';
             if (startDateInput) {
-                const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-                // Adjust for local timezone to avoid off-by-one day issues
-                const localDateStr = new Date(currentMonthStart.getTime() - (currentMonthStart.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-                startDateInput.value = localDateStr;
+                const d = new Date(today.getFullYear(), today.getMonth(), 1);
+                startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
+            }
+            const entryTypeSelect  = document.getElementById('entryType');
+            const slTypeSelect     = document.getElementById('slType');
+            const slCloseCheckbox  = document.getElementById('slClosePrice');
+            if (entryTypeSelect) entryTypeSelect.value = 'both';
+            if (slTypeSelect)    slTypeSelect.value    = 'both';
+            if (slCloseCheckbox) slCloseCheckbox.checked = true;
+
+        } else if (val === 'rtp') {
+            if (rtpParamsRow) rtpParamsRow.style.display = 'grid';
+            if (rtpLotRow)    rtpLotRow.style.display    = 'grid';
+            if (intervalSelect) intervalSelect.value = 'minute';
+            if (startDateInput) {
+                const d = new Date(today.getFullYear(), 0, 1);   // Jan 1 current year
+                startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
             }
 
-            // Set best-performing dropdown defaults
-            const entryTypeSelect = document.getElementById('entryType');
-            const slTypeSelect = document.getElementById('slType');
-            const slCloseCheckbox = document.getElementById('slClosePrice');
-            
-            if (entryTypeSelect) entryTypeSelect.value = 'both';
-            if (slTypeSelect) slTypeSelect.value = 'both';
-            if (slCloseCheckbox) slCloseCheckbox.checked = true;
         } else {
-            apexParamsRow.style.display = ''; // Reverts to CSS grid
-            apexOptionsRow.style.display = 'flex';
-            
-            const cprInputsRow = document.getElementById('cprInputsRow');
-            if (cprInputsRow) cprInputsRow.style.display = 'none';
-            
-            if (mainInputsRow) {
-                mainInputsRow.classList.remove('form-row-5');
-                mainInputsRow.classList.remove('form-row-6');
-                mainInputsRow.classList.remove('form-row-7');
-                mainInputsRow.classList.add('form-row-4');
-            }
-            
-            // Set Apex Reversal defaults
+            // apex (default)
+            if (apexParamsRow)  apexParamsRow.style.display  = '';
+            if (apexOptionsRow) apexOptionsRow.style.display = 'flex';
             if (intervalSelect) intervalSelect.value = '60minute';
             if (startDateInput) {
-                const currentYearStart = new Date(today.getFullYear(), 0, 1);
-                const localDateStr = new Date(currentYearStart.getTime() - (currentYearStart.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-                startDateInput.value = localDateStr;
+                const d = new Date(today.getFullYear(), 0, 1);
+                startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
             }
         }
     }
@@ -186,6 +184,14 @@ document.addEventListener('DOMContentLoaded', function() {
         // Set initial state
         updateStrategyView();
     }
+
+    // Investment display: ₹50,000 per lot
+    window.updateRtpInvestment = function() {
+        const lots = Math.max(1, parseInt(document.getElementById('rtpLots')?.value || 1));
+        const total = lots * 50000;
+        const el = document.getElementById('rtpInvestmentDisplay');
+        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+    };
 
     // 3. Run Backtest
     runBtn.addEventListener('click', async function() {
@@ -214,11 +220,32 @@ document.addEventListener('DOMContentLoaded', function() {
 
         loading.style.display = 'block';
         resultsArea.style.display = 'none';
+        const btTradesSec   = document.getElementById('btTradesSection');
+        const btPlaceholder = document.getElementById('btRightPlaceholder');
+        const periodSec     = document.getElementById('periodBreakdownSection');
+        const optPanel      = document.getElementById('rtpOptimisePanel');
+        if (btTradesSec)   btTradesSec.style.display   = 'none';
+        if (btPlaceholder) btPlaceholder.style.display = '';
+        if (periodSec)     periodSec.style.display     = 'none';
+        if (optPanel)      optPanel.style.display      = 'none';
 
         try {
             let endpoint = '/api/backtest/apex-reversal';
-            if (strategySelect && strategySelect.value === 'cpr_gap') {
-                endpoint = '/api/backtest/cpr-gap';
+            const strat = strategySelect ? strategySelect.value : 'apex';
+            if (strat === 'cpr_gap') endpoint = '/api/backtest/cpr-gap';
+            if (strat === 'rtp')     endpoint = '/api/backtest/rtp';
+
+            // RTP-specific payload fields
+            if (strat === 'rtp') {
+                payload.entry_mode = document.getElementById('rtpEntryMode')?.value || 'RTP(20 & 9)';
+                payload.use_adx    = document.getElementById('rtpUseAdx')?.checked ?? true;
+                payload.adx_thresh = parseFloat(document.getElementById('rtpAdxThresh')?.value || 20);
+                const slVal    = document.getElementById('rtpSL')?.value;
+                const tgtVal   = document.getElementById('rtpTarget')?.value;
+                const trailVal = document.getElementById('rtpTrailSL')?.value;
+                if (slVal)    payload.sl_points    = parseFloat(slVal);
+                if (tgtVal)   payload.tgt_points   = parseFloat(tgtVal);
+                if (trailVal) payload.trail_points = parseFloat(trailVal);
             }
 
             const response = await fetch(endpoint, {
@@ -242,32 +269,431 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // Brokerage per round-trip trade (entry + exit) for NIFTY, by lot count
+    function calcBrokeragePerTrade(lots) {
+        const lookup = { 1: 103, 2: 158, 3: 213, 4: 268, 5: 330 };
+        if (lots <= 5) return lookup[Math.max(1, Math.floor(lots))] || 103;
+        return 330 + (Math.floor(lots) - 5) * 62;
+    }
+
     let lastData = null;
     let sortConfig = { key: 'exit_time', direction: 'desc' };
 
     function displayResults(data) {
         lastData = data;
         const { summary } = data;
-        
-        // Update stats
-        document.getElementById('statTotalTrades').textContent = summary.total_trades;
-        
-        const winRate = summary.total_trades > 0 
-            ? ((summary.wins / summary.total_trades) * 100).toFixed(1) + '%' 
+        const isRtp = strategySelect && strategySelect.value === 'rtp';
+
+        // ── Row 1: always-visible cards ────────────────────────────
+        document.getElementById('statTotalTrades').textContent = summary.total_trades ?? 0;
+        document.getElementById('statWins').textContent        = summary.wins   ?? 0;
+        document.getElementById('statLosses').textContent      = summary.losses ?? 0;
+
+        document.getElementById('statWinRate').textContent = summary.total_trades > 0
+            ? ((summary.wins / summary.total_trades) * 100).toFixed(1) + '%'
             : '0%';
-        document.getElementById('statWinRate').textContent = winRate;
-        
-        document.getElementById('statTotalPnl').textContent = summary.total_pnl.toFixed(2);
-        document.getElementById('statTotalPnl').className = summary.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
-        
-        const outcome = summary.total_pnl >= 0 ? 'PROFIT' : 'LOSS';
+
+        const pnl    = summary.total_pnl ?? 0;
+        const pnlEl  = document.getElementById('statTotalPnl');
+        pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
+        pnlEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
+
         const outcomeEl = document.getElementById('statOutcome');
-        outcomeEl.textContent = outcome;
-        outcomeEl.className = summary.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative';
-        
+        outcomeEl.textContent = pnl >= 0 ? 'PROFIT' : 'LOSS';
+        outcomeEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
+
+        // ── Row 2: RTP-only cards ──────────────────────────────────
+        const rtpRow = document.getElementById('rtpStatsRow');
+        if (isRtp && rtpRow) {
+            rtpRow.style.display = '';
+
+            // Profit factor
+            document.getElementById('statProfitFactor').textContent = summary.profit_factor ?? '—';
+
+            // Avg Win / Avg Loss
+            const avgWinEl  = document.getElementById('statAvgWin');
+            const avgLossEl = document.getElementById('statAvgLoss');
+            if (avgWinEl)  avgWinEl.textContent  = summary.avg_win  != null ? '+' + summary.avg_win.toFixed(1)  + ' pts' : '—';
+            if (avgLossEl) avgLossEl.textContent = summary.avg_loss != null ? summary.avg_loss.toFixed(1) + ' pts' : '—';
+
+            // Position sizing inputs
+            const lots     = Math.max(1, parseInt(document.getElementById('rtpLots')?.value    || 1));
+            const lotValue = Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value || 75));
+
+            // Max drawdown — pts near label, ₹ as main value
+            const dd        = summary.max_drawdown ?? 0;
+            const ddPtsEl   = document.getElementById('statMaxDDPts');
+            const ddEl      = document.getElementById('statMaxDD');
+            if (ddPtsEl) ddPtsEl.textContent = dd.toFixed(1) + ' pts';
+            if (ddEl)    ddEl.textContent    = '₹' + Math.round(Math.abs(dd) * lotValue * lots).toLocaleString('en-IN');
+
+            // Drawdown date range subtitle
+            const ddDatesEl = document.getElementById('statMaxDDDates');
+            if (ddDatesEl) {
+                if (summary.max_dd_start && summary.max_dd_end) {
+                    const fmt = s => s.replace('T', ' ').slice(0, 16);
+                    ddDatesEl.textContent = fmt(summary.max_dd_start) + ' → ' + fmt(summary.max_dd_end);
+                } else {
+                    ddDatesEl.textContent = '';
+                }
+            }
+
+            // Net P&L (₹) = gross ₹ − brokerage
+            const brokPerTrade   = calcBrokeragePerTrade(lots);
+            const totalBrokerage = brokPerTrade * (summary.total_trades || 0);
+            const grossRs = pnl * lotValue * lots;
+            const netRs   = grossRs - totalBrokerage;
+            const netEl   = document.getElementById('statNetRs');
+            if (netEl) {
+                netEl.textContent = (netRs >= 0 ? '+' : '') + '₹' + Math.round(netRs).toLocaleString('en-IN');
+                netEl.className   = 'stat-card__val ' + (netRs >= 0 ? 'stat-val-green' : 'stat-val-red');
+            }
+            const netSubEl = document.getElementById('statNetRsSub');
+            if (netSubEl) netSubEl.textContent = 'brok: ₹' + totalBrokerage.toLocaleString('en-IN');
+
+            // Subtitle with SL / Target / Trail
+            if (summary.sl_points != null && summary.tgt_points != null) {
+                const subtitle = document.getElementById('btSubtitle');
+                if (subtitle) {
+                    let info = `SL: ${summary.sl_points} pts  ·  Target: ${summary.tgt_points} pts`;
+                    if (summary.trail_points) info += `  ·  Trail: ${summary.trail_points} pts`;
+                    subtitle.textContent = info;
+                }
+            }
+        } else {
+            if (rtpRow) rtpRow.style.display = 'none';
+        }
+
+        // Equity curve + period breakdown
+        const lots2     = Math.max(1, parseInt(document.getElementById('rtpLots')?.value    || 1));
+        const lotValue2 = Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value || 75));
+        renderEquityCurve(data.trades, isRtp, lots2, lotValue2);
+
+        // Store for period tab re-renders
+        _periodTrades   = data.trades;
+        _periodIsRtp    = isRtp;
+        _periodLots     = lots2;
+        _periodLotValue = lotValue2;
+        const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
+        renderPeriodBreakdown(data.trades, isRtp, lots2, lotValue2, activePeriod);
+
         renderTable();
         resultsArea.style.display = 'block';
+        const btTradesSec2   = document.getElementById('btTradesSection');
+        const btPlaceholder2 = document.getElementById('btRightPlaceholder');
+        if (btTradesSec2)   btTradesSec2.style.display   = '';
+        if (btPlaceholder2) btPlaceholder2.style.display = 'none';
     }
+
+    // ── Equity Curve ────────────────────────────────────────────────
+    let _equityChart = null;
+
+    function renderEquityCurve(trades, isRtp, lots, lotValue) {
+        const section = document.getElementById('equityCurveSection');
+        if (!section || !trades || trades.length === 0) {
+            if (section) section.style.display = 'none';
+            return;
+        }
+
+        // Sort by entry time chronologically
+        const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+
+        const totalInvestment = lots * 50000;
+
+        // Start point = total investment
+        const labels       = ['Start'];
+        const chartData    = [totalInvestment];
+        const tooltipDates = [''];
+        const pointColors  = ['#2962ff'];
+
+        let portfolio = totalInvestment;
+        sorted.forEach((t, idx) => {
+            const tradeRs = isRtp
+                ? Math.round((t.pnl || 0) * lotValue * lots)
+                : (t.pnl || 0);
+            portfolio += tradeRs;
+            labels.push('T' + (idx + 1));
+            chartData.push(Math.round(portfolio));
+            pointColors.push((t.pnl || 0) >= 0 ? '#00c853' : '#ff1744');
+            tooltipDates.push(t.entry_time ? String(t.entry_time).replace('T', ' ').slice(0, 16) : '');
+        });
+
+        const finalValue = chartData[chartData.length - 1];
+        const diff       = finalValue - totalInvestment;
+        const isProfit   = diff >= 0;
+        const lineColor  = isProfit ? '#2962ff' : '#ff1744';
+        const fillColor  = isProfit ? 'rgba(41,98,255,0.07)' : 'rgba(255,23,68,0.06)';
+
+        // Badge: show net change + return %
+        const finalEl = document.getElementById('equityCurveFinalPnl');
+        if (finalEl) {
+            const pct = ((diff / totalInvestment) * 100).toFixed(1);
+            finalEl.textContent =
+                (diff >= 0 ? '+' : '') + '₹' + Math.abs(diff).toLocaleString('en-IN') +
+                '  (' + (diff >= 0 ? '+' : '') + pct + '%)';
+            finalEl.style.color = isProfit ? '#00c853' : '#ff1744';
+        }
+
+        // Y-axis: compact ₹ labels (K / L)
+        const fmtY = v => {
+            if (Math.abs(v) >= 100000) return '₹' + (v / 100000).toFixed(1) + 'L';
+            if (Math.abs(v) >= 1000)   return '₹' + (v / 1000).toFixed(0)   + 'K';
+            return '₹' + v;
+        };
+
+        // Destroy previous chart instance
+        if (_equityChart) { _equityChart.destroy(); _equityChart = null; }
+
+        const ctx = document.getElementById('equityCurveChart');
+        if (!ctx) return;
+
+        _equityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Portfolio Value',
+                    data: chartData,
+                    borderColor: lineColor,
+                    backgroundColor: fillColor,
+                    fill: true,
+                    tension: 0.25,
+                    pointRadius: 0,
+                    pointHoverRadius: 4,
+                    pointHoverBackgroundColor: pointColors,
+                    pointHoverBorderColor: pointColors,
+                    borderWidth: 2,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => {
+                                const i = items[0].dataIndex;
+                                if (i === 0) return 'Starting capital';
+                                return `Trade ${i}  ·  ${tooltipDates[i]}`;
+                            },
+                            label: (item) => {
+                                const v   = item.raw;
+                                const chg = v - totalInvestment;
+                                return [
+                                    '  Value: ₹' + Math.round(v).toLocaleString('en-IN'),
+                                    '  P&L:   ' + (chg >= 0 ? '+' : '') + '₹' + Math.round(chg).toLocaleString('en-IN'),
+                                ];
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { maxTicksLimit: 15, color: '#999', font: { size: 11 }, autoSkip: true },
+                        grid:  { color: 'rgba(0,0,0,0.04)' },
+                    },
+                    y: {
+                        ticks: { color: '#999', font: { size: 11 }, callback: fmtY },
+                        grid:  { color: 'rgba(0,0,0,0.05)' },
+                    }
+                }
+            }
+        });
+
+        section.style.display = '';
+    }
+
+    // ── Period P&L Breakdown ─────────────────────────────────────────
+    let _periodChart = null;
+    let _periodTrades = [];
+    let _periodIsRtp = false;
+    let _periodLots = 1;
+    let _periodLotValue = 75;
+
+    function getWeekKey(date) {
+        const d = new Date(date);
+        d.setHours(0, 0, 0, 0);
+        d.setDate(d.getDate() - d.getDay() + 1); // Monday
+        return d.toISOString().slice(0, 10);
+    }
+
+    function groupByPeriod(trades, period) {
+        const groups = {};
+        trades.forEach(t => {
+            const d = new Date(t.entry_time);
+            let key;
+            if      (period === 'daily')   key = d.toISOString().slice(0, 10);
+            else if (period === 'weekly')  key = getWeekKey(d);
+            else if (period === 'monthly') key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+            else                           key = `${d.getFullYear()}`;
+            if (!groups[key]) groups[key] = { pnl: 0, wins: 0, losses: 0 };
+            groups[key].pnl += (t.pnl || 0);
+            if ((t.pnl || 0) > 0) groups[key].wins++;
+            else                  groups[key].losses++;
+        });
+        return groups;
+    }
+
+    // Compact number formatter for bar labels
+    function fmtCompact(v, isRtp) {
+        const abs  = Math.abs(v);
+        const sign = v >= 0 ? '+' : '−';
+        if (isRtp) {
+            if (abs >= 100000) return sign + '₹' + (abs / 100000).toFixed(1) + 'L';
+            if (abs >= 1000)   return sign + '₹' + (abs / 1000).toFixed(1) + 'K';
+            return sign + '₹' + abs;
+        }
+        return (v >= 0 ? '+' : '') + v.toFixed(1);
+    }
+
+    // Custom plugin: draw value labels on top/bottom of each bar
+    const barValueLabelPlugin = {
+        id: 'barValueLabels',
+        afterDatasetsDraw(chart, _, opts) {
+            const { ctx, data } = chart;
+            const meta = chart.getDatasetMeta(0);
+            ctx.save();
+            ctx.font = '600 9px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+            ctx.textAlign = 'center';
+            meta.data.forEach((bar, i) => {
+                const v = data.datasets[0].data[i];
+                if (v == null) return;
+                const text = opts.fmt(v);
+                ctx.fillStyle = v >= 0 ? '#16a34a' : '#dc2626';
+                if (v >= 0) {
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(text, bar.x, bar.y - 3);
+                } else {
+                    ctx.textBaseline = 'top';
+                    ctx.fillText(text, bar.x, bar.y + 3);
+                }
+            });
+            ctx.restore();
+        }
+    };
+
+    function renderPeriodBreakdown(trades, isRtp, lots, lotValue, period) {
+        const section = document.getElementById('periodBreakdownSection');
+        if (!section || !trades || trades.length === 0) {
+            if (section) section.style.display = 'none';
+            return;
+        }
+
+        const groups = groupByPeriod(trades, period);
+        const keys   = Object.keys(groups).sort();
+
+        const labels = keys.map(k => {
+            if (period === 'monthly') {
+                const [y, m] = k.split('-');
+                return new Date(+y, +m - 1).toLocaleString('default', { month: 'short', year: '2-digit' });
+            }
+            if (period === 'weekly')  return 'W ' + k.slice(5);
+            if (period === 'daily')   return k.slice(5);   // MM-DD
+            return k;
+        });
+
+        const values = keys.map(k => {
+            const raw = groups[k].pnl;
+            return isRtp ? Math.round(raw * lotValue * lots) : Math.round(raw * 100) / 100;
+        });
+
+        const meta = keys.map(k => groups[k]);  // { pnl, wins, losses }
+
+        const bgColors  = values.map(v => v >= 0 ? 'rgba(34,197,94,.20)'  : 'rgba(239,68,68,.20)');
+        const brdColors = values.map(v => v >= 0 ? 'rgba(34,197,94,.90)'  : 'rgba(239,68,68,.90)');
+
+        const canvas = document.getElementById('periodBreakdownChart');
+        if (!canvas) return;
+        if (_periodChart) { _periodChart.destroy(); _periodChart = null; }
+
+        const fmt = v => fmtCompact(v, isRtp);
+
+        _periodChart = new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            plugins: [barValueLabelPlugin],
+            data: {
+                labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: bgColors,
+                    borderColor:     brdColors,
+                    borderWidth:  1.5,
+                    borderRadius: 4,
+                    borderSkipped: false,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                layout: { padding: { top: 18, bottom: 4 } },
+                plugins: {
+                    legend: { display: false },
+                    barValueLabels: { fmt },
+                    tooltip: {
+                        callbacks: {
+                            title: ctx => labels[ctx[0].dataIndex],
+                            label: ctx => {
+                                const i  = ctx.dataIndex;
+                                const v  = values[i];
+                                const g  = meta[i];
+                                const tr = g.wins + g.losses;
+                                const wr = tr > 0 ? ((g.wins / tr) * 100).toFixed(0) : 0;
+                                return [
+                                    ' P&L: ' + (v >= 0 ? '+' : '') + (isRtp
+                                        ? '₹' + Math.abs(v).toLocaleString('en-IN')
+                                        : v + ' pts'),
+                                    ` Trades: ${tr}  (${g.wins}W / ${g.losses}L)`,
+                                    ` Win Rate: ${wr}%`,
+                                ];
+                            }
+                        },
+                        padding: 10,
+                        displayColors: false,
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { font: { size: 9, weight: '500' }, color: '#94a3b8' }
+                    },
+                    y: {
+                        grid: {
+                            color: ctx => ctx.tick.value === 0
+                                ? 'rgba(0,0,0,.25)'
+                                : 'rgba(0,0,0,.04)',
+                            lineWidth: ctx => ctx.tick.value === 0 ? 1.5 : 1,
+                        },
+                        ticks: {
+                            font: { size: 9 }, color: '#94a3b8',
+                            callback: v => {
+                                if (v === 0) return '0';
+                                const abs = Math.abs(v);
+                                const s   = v < 0 ? '−' : '';
+                                if (isRtp) {
+                                    if (abs >= 100000) return s + '₹' + (abs/100000).toFixed(1) + 'L';
+                                    if (abs >= 1000)   return s + '₹' + (abs/1000).toFixed(0) + 'K';
+                                    return s + '₹' + abs;
+                                }
+                                return s + abs;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        section.style.display = '';
+    }
+
+    // Period tab wiring
+    document.querySelectorAll('.period-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.period-tab').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            renderPeriodBreakdown(_periodTrades, _periodIsRtp, _periodLots, _periodLotValue, btn.dataset.period);
+        });
+    });
 
     function renderTable() {
         if (!lastData || !lastData.trades) return;
@@ -293,17 +719,20 @@ document.addEventListener('DOMContentLoaded', function() {
         if (trades.length === 0) {
             tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding: 20px;">No trades generated</td></tr>';
         } else {
-            tbody.innerHTML = trades.map(t => `
+            tbody.innerHTML = trades.map(t => {
+                const dir    = t.direction || t.type || '-';
+                const result = t.exit_reason || t.result || '-';
+                return `
                 <tr>
                     <td>${formatDate(t.entry_time)}</td>
-                    <td><span class="badge ${t.type === 'BUY' ? 'badge-buy' : 'badge-sell'}">${t.type}</span></td>
-                    <td>${t.entry_price.toFixed(2)}</td>
+                    <td><span class="badge ${dir === 'BUY' ? 'badge-buy' : 'badge-sell'}">${dir}</span></td>
+                    <td>${(t.entry_price||0).toFixed(2)}</td>
                     <td>${formatDate(t.exit_time)}</td>
-                    <td>${t.exit_price.toFixed(2)}</td>
-                    <td>${t.result}</td>
-                    <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl.toFixed(2)}</td>
-                </tr>
-            `).join('');
+                    <td>${(t.exit_price||0).toFixed(2)}</td>
+                    <td>${result}</td>
+                    <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(t.pnl||0).toFixed(2)}</td>
+                </tr>`;
+            }).join('');
         }
 
         // Update header indicators
@@ -335,4 +764,111 @@ document.addEventListener('DOMContentLoaded', function() {
         const d = new Date(dateStr);
         return d.toLocaleString();
     }
+
+    // ── Optimise helpers ─────────────────────────────────────────────
+    function renderOptResults(data) {
+        const panel  = document.getElementById('rtpOptimisePanel');
+        const tbody  = document.getElementById('optTableBody');
+        const metaEl = document.getElementById('optMeta');
+        const recalcBtn = document.getElementById('recalculateOptBtn');
+
+        if (metaEl) {
+            let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
+            if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
+            metaEl.textContent = meta;
+        }
+
+        if (tbody) {
+            tbody.innerHTML = (data.results || []).map((r, i) => {
+                const adxStr = r.use_adx ? `≥${r.adx_thresh}` : 'Off';
+                const pnlFmt = (r.net_pnl >= 0 ? '+' : '') + r.net_pnl.toFixed(1) + ' pts';
+                const ddFmt  = r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—';
+                const wr     = r.total_trades > 0
+                    ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0';
+                return `
+                <tr class="${i === 0 ? 'opt-best' : ''}">
+                    <td>${i + 1}</td>
+                    <td style="white-space:nowrap">${r.entry_mode}</td>
+                    <td>${r.sl_points}</td>
+                    <td>${r.tgt_points}</td>
+                    <td>${adxStr}</td>
+                    <td>${r.total_trades}</td>
+                    <td>${wr}%</td>
+                    <td class="${r.net_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${pnlFmt}</td>
+                    <td>${(r.profit_factor || 0).toFixed(2)}</td>
+                    <td class="pnl-negative">${ddFmt}</td>
+                    <td><button class="btn-opt-use" data-idx="${i}">Use</button></td>
+                </tr>`;
+            }).join('');
+
+            tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    applyOptResult(data.results[parseInt(btn.dataset.idx)]);
+                });
+            });
+        }
+
+        if (panel) panel.style.display = '';
+        if (recalcBtn) recalcBtn.style.display = '';
+        if (data.best) applyOptResult(data.best);
+    }
+
+    async function runOptimise(recalculate) {
+        const symbol = symbolSearch.value.trim().toUpperCase();
+        if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
+
+        const panel     = document.getElementById('rtpOptimisePanel');
+        const recalcBtn = document.getElementById('recalculateOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+
+        try {
+            const resp = await fetch('/api/backtest/rtp/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    symbol,
+                    start_date:  document.getElementById('startDate').value,
+                    end_date:    document.getElementById('endDate').value,
+                    interval:    document.getElementById('interval').value,
+                    recalculate: recalculate,
+                })
+            });
+            const data = await resp.json();
+            if (!data.success) { window.showNotification(data.error || 'Optimisation failed', 'error'); return; }
+            renderOptResults(data);
+        } catch (err) {
+            console.error('Optimise error:', err);
+            window.showNotification('Optimisation request failed', 'error');
+        } finally {
+            if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+        }
+    }
+
+    function applyOptResult(r) {
+        const entryMode = document.getElementById('rtpEntryMode');
+        const useAdx    = document.getElementById('rtpUseAdx');
+        const adxThresh = document.getElementById('rtpAdxThresh');
+        const sl        = document.getElementById('rtpSL');
+        const tgt       = document.getElementById('rtpTarget');
+        if (entryMode) entryMode.value = r.entry_mode;
+        if (useAdx)    useAdx.checked  = r.use_adx;
+        if (adxThresh && r.adx_thresh != null) adxThresh.value = r.adx_thresh;
+        if (sl)        sl.value        = r.sl_points;
+        if (tgt)       tgt.value       = r.tgt_points;
+        if (window.showNotification) {
+            window.showNotification(
+                `Applied: ${r.entry_mode}  ·  SL ${r.sl_points}  ·  TGT ${r.tgt_points}`, 'success'
+            );
+        }
+    }
+
+    const optimiseBtn   = document.getElementById('runOptimiseBtn');
+    const recalcOptBtn  = document.getElementById('recalculateOptBtn');
+    if (optimiseBtn)  optimiseBtn.addEventListener('click',  () => runOptimise(false));
+    if (recalcOptBtn) recalcOptBtn.addEventListener('click', () => runOptimise(true));
 });

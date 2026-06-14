@@ -152,15 +152,15 @@ class FIISectorService:
     @classmethod
     def get_trend_data(cls, n_periods: Optional[int] = None) -> Dict[str, Any]:
         """
-        Return NI data for all (or last n_periods) × all sectors.
-        Returns {periods: [...], sectors: {name: {date: ni_value}}}
+        Return NI and AUC data for all (or last n_periods) × all sectors.
+        Returns {periods: [...], sectors: {name: {date: ni_value}}, holdings: {name: {date: auc_value}}}
         """
         limit_sql = f'LIMIT {n_periods}' if n_periods else ''
         try:
             with sqlite3.connect(_DB_PATH) as conn:
                 conn.row_factory = sqlite3.Row
                 cur = conn.execute(
-                    f'''SELECT date, sector, net_invest_inr_cr
+                    f'''SELECT date, sector, net_invest_inr_cr, auc_inr_cr
                        FROM fii_sector_limits
                        WHERE date IN (
                            SELECT DISTINCT date FROM fii_sector_limits
@@ -171,19 +171,23 @@ class FIISectorService:
                 rows = cur.fetchall()
         except Exception as e:
             logger.error(f'FIISector.get_trend_data: {e}')
-            return {'periods': [], 'sectors': {}}
+            return {'periods': [], 'sectors': {}, 'holdings': {}}
 
         periods: List[str] = []
         sectors: Dict[str, Dict[str, float]] = {}
+        holdings: Dict[str, Dict[str, float]] = {}
         for r in rows:
-            d, sec, ni = r['date'], r['sector'], r['net_invest_inr_cr']
+            d, sec, ni, auc = r['date'], r['sector'], r['net_invest_inr_cr'], r['auc_inr_cr']
             if d not in periods:
                 periods.append(d)
             if sec not in sectors:
                 sectors[sec] = {}
             sectors[sec][d] = ni or 0.0
+            if sec not in holdings:
+                holdings[sec] = {}
+            holdings[sec][d] = auc or 0.0
 
-        return {'periods': periods, 'sectors': sectors}
+        return {'periods': periods, 'sectors': sectors, 'holdings': holdings}
 
     @classmethod
     def save_snapshot(cls, rows: List[Dict[str, Any]], report_date: Optional[str] = None) -> None:
