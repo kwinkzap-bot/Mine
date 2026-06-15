@@ -1382,6 +1382,7 @@ body.cream-theme  .fii-heat-neg-3 { background: #7f1d1d !important; }
     <div class="hoi-topbar">
       <span class="hoi-title">Historic OI</span>
       <span id="hoiStatus" class="hoi-status" style="margin-left:auto;margin-right:8px;"></span>
+      <button id="hoiBackfillBtn" class="hoi-btn-record" style="display:none;margin-right:6px;background:#5a6a7a" onclick="backfillHistoricOHLC()">⬇ Fill OHLC</button>
       <button id="hoiRecordBtn" class="hoi-btn-record" onclick="recordHistoricOI()">⏺ Record</button>
     </div>
 
@@ -1404,11 +1405,17 @@ body.cream-theme  .fii-heat-neg-3 { background: #7f1d1d !important; }
             <th class="r hoi-ce">CE OI</th>
             <th class="r hoi-pe">PE OI</th>
             <th class="r">PE−CE Diff</th>
+            <th class="r">Open</th>
+            <th class="r">High</th>
+            <th class="r">Low</th>
+            <th class="r">Close</th>
+            <th class="c">Move</th>
+            <th class="r">PCR</th>
             <th class="c"></th>
           </tr>
         </thead>
         <tbody id="hoiTbody-{{ sym }}">
-          <tr class="hoi-empty"><td class="hoi-td" colspan="7">Loading…</td></tr>
+          <tr class="hoi-empty"><td class="hoi-td" colspan="13">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -1528,20 +1535,37 @@ function _hoiChngCls(v) {
 }
 
 function _hoiRenderAll(records) {
+    // Show backfill button only while there are records with missing OHLC
+    const hasMissing = (records || []).some(r => !r.close || Number(r.close) === 0);
+    const backfillBtn = document.getElementById('hoiBackfillBtn');
+    if (backfillBtn) backfillBtn.style.display = hasMissing ? '' : 'none';
+
     _HOI_SYMBOLS.forEach(sym => {
         const tbody = document.getElementById('hoiTbody-' + sym);
         const rows = (records || []).filter(r => r.symbol === sym);
         if (rows.length === 0) {
-            tbody.innerHTML = `<tr class="hoi-empty"><td class="hoi-td" colspan="7">No records for ${sym}. Click ⏺ Record to capture today's OI.</td></tr>`;
+            tbody.innerHTML = `<tr class="hoi-empty"><td class="hoi-td" colspan="13">No records for ${sym}. Click ⏺ Record to capture today's OI.</td></tr>`;
             return;
         }
         const _today = new Date().toLocaleDateString('sv'); // YYYY-MM-DD in local time
         tbody.innerHTML = rows.map(r => {
             const cv   = Number(r.chng_ce_oi), pv = Number(r.chng_pe_oi);
-            const diff = Number(r.pe_oi) - Number(r.ce_oi);
+            const ceOI = Number(r.ce_oi), peOI = Number(r.pe_oi);
+            const diff = peOI - ceOI;
+            const pcr  = ceOI > 0 ? (peOI / ceOI).toFixed(2) : '—';
+            const pcrCls = ceOI > 0
+                ? (peOI / ceOI >= 1 ? 'hoi-up' : 'hoi-down')
+                : 'hoi-flat';
             const cSign = cv > 0 ? '+' : '', pSign = pv > 0 ? '+' : '';
             const diffArrow = diff > 0 ? '↑ ' : diff < 0 ? '↓ ' : '';
             const diffCls   = diff > 0 ? 'hoi-up' : diff < 0 ? 'hoi-down' : 'hoi-flat';
+            const o = Number(r.open || 0), h = Number(r.high || 0),
+                  l = Number(r.low  || 0), c = Number(r.close || 0);
+            const hasOHLC  = c > 0;
+            const moveUp   = c >= o;
+            const moveCls  = !hasOHLC ? 'hoi-flat' : moveUp ? 'hoi-up' : 'hoi-down';
+            const moveText = !hasOHLC ? '—' : moveUp ? '▲' : '▼';
+            const fmtP = n => hasOHLC && n ? n.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
             const delCell = r.date === _today
                 ? `<button class="hoi-del-btn" title="Delete" onclick="deleteHistoricOI('${r.date}','${r.symbol}')">&#x2715;</button>`
                 : '';
@@ -1549,9 +1573,15 @@ function _hoiRenderAll(records) {
               <td class="hoi-td">${r.date}</td>
               <td class="hoi-td r hoi-ce">${cSign}${_hoiFmt(cv)}</td>
               <td class="hoi-td r hoi-pe">${pSign}${_hoiFmt(pv)}</td>
-              <td class="hoi-td r hoi-ce">${_hoiFmt(r.ce_oi)}</td>
-              <td class="hoi-td r hoi-pe">${_hoiFmt(r.pe_oi)}</td>
+              <td class="hoi-td r hoi-ce">${_hoiFmt(ceOI)}</td>
+              <td class="hoi-td r hoi-pe">${_hoiFmt(peOI)}</td>
               <td class="hoi-td r ${diffCls}">${diffArrow}${_hoiFmt(Math.abs(diff))}</td>
+              <td class="hoi-td r">${fmtP(o)}</td>
+              <td class="hoi-td r">${fmtP(h)}</td>
+              <td class="hoi-td r">${fmtP(l)}</td>
+              <td class="hoi-td r">${fmtP(c)}</td>
+              <td class="hoi-td c ${moveCls}">${moveText}</td>
+              <td class="hoi-td r ${pcrCls}">${pcr}</td>
               <td class="hoi-td c">${delCell}</td>
             </tr>`;
         }).join('');
@@ -1565,7 +1595,7 @@ function loadHistoricOI() {
         .catch(() => {
             _HOI_SYMBOLS.forEach(s => {
                 document.getElementById('hoiTbody-' + s).innerHTML =
-                    '<tr class="hoi-empty"><td class="hoi-td hoi-down" colspan="7">Failed to load records.</td></tr>';
+                    '<tr class="hoi-empty"><td class="hoi-td hoi-down" colspan="13">Failed to load records.</td></tr>';
             });
         });
 }
@@ -1602,6 +1632,32 @@ function deleteHistoricOI(date, symbol) {
         .then(r => r.json())
         .then(d => { if (d.success) loadHistoricOI(); })
         .catch(() => alert('Delete failed'));
+}
+
+function backfillHistoricOHLC() {
+    const btn    = document.getElementById('hoiBackfillBtn');
+    const status = document.getElementById('hoiStatus');
+    btn.disabled = true;
+    btn.textContent = '⏳ Filling…';
+    status.textContent = '';
+    fetch('/api/oi-historic/backfill-ohlc', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            btn.textContent = '⬇ Fill OHLC';
+            if (d.success) {
+                _hoiRenderAll(d.records);
+                status.textContent = `✅ Updated ${d.updated} record(s)` +
+                    (d.errors && d.errors.length ? ` ⚠️ Failed: ${d.errors.join(', ')}` : '');
+            } else {
+                status.textContent = '❌ ' + (d.error || 'Backfill failed');
+            }
+        })
+        .catch(() => {
+            btn.disabled = false;
+            btn.textContent = '⬇ Fill OHLC';
+            status.textContent = '❌ Network error';
+        });
 }
 
 // ── FII Sector (CDSL fortnightly) ─────────────────────────────

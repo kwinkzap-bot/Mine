@@ -1330,9 +1330,11 @@ class OpenInterestService:
                 ce_token = strike_info.get('ce_token')
                 pe_token = strike_info.get('pe_token')
                 
-                # OPTIMIZATION: Only fetch quote if we don't have OI/LTP from native API
-                needs_ce = ce_token and (strike_info.get('ce_oi') is None or strike_info.get('ce_ltp') is None)
-                needs_pe = pe_token and (strike_info.get('pe_oi') is None or strike_info.get('pe_ltp') is None)
+                # OPTIMIZATION: Only skip quote fetch when native API gave us both a non-zero
+                # OI and a non-zero LTP.  A value of 0 means "data absent" (CSV instruments
+                # have no OI field; Fyers sometimes returns 0 before market opens).
+                needs_ce = ce_token and not (strike_info.get('ce_oi') and strike_info.get('ce_ltp'))
+                needs_pe = pe_token and not (strike_info.get('pe_oi') and strike_info.get('pe_ltp'))
 
                 if needs_ce:
                     ce_token_str = str(ce_token)

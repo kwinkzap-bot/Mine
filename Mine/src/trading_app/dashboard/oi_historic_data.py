@@ -8,7 +8,7 @@ Upsert logic: one record per (date, symbol); re-fetching on the same day overwri
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
 import logging
@@ -65,6 +65,42 @@ def delete_record(date: str, symbol: str) -> bool:
     return True
 
 
+_SYMBOL_INSTRUMENT_KEY = {
+    'fyers': {
+        'NIFTY':     'NSE:NIFTY50-INDEX',
+        'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
+        'FINNIFTY':  'NSE:FINNIFTY-INDEX',
+    },
+    'kite': {
+        'NIFTY':     'NSE:NIFTY 50',
+        'BANKNIFTY': 'NSE:NIFTY BANK',
+        'FINNIFTY':  'NSE:NIFTY FIN SERVICE',
+    },
+}
+
+
+def _fetch_day_ohlc(symbol: str, date_str: str, provider) -> Dict[str, Any]:
+    """Fetch the day candle (O/H/L/C) for the underlying index on date_str."""
+    try:
+        from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+        provider_type = 'fyers' if isinstance(provider, FyersDataServiceAdapter) else 'kite'
+        instrument_key = _SYMBOL_INSTRUMENT_KEY[provider_type].get(symbol)
+        if not instrument_key:
+            return {}
+        candles = provider.historical_data(instrument_key, date_str, date_str, 'day')
+        if candles:
+            c = candles[-1]
+            return {
+                'open':  round(float(c.get('open', 0)), 2),
+                'high':  round(float(c.get('high', 0)), 2),
+                'low':   round(float(c.get('low', 0)), 2),
+                'close': round(float(c.get('close', 0)), 2),
+            }
+    except Exception as e:
+        logger.warning(f"[HistoricOI] OHLC fetch failed for {symbol} on {date_str}: {e}")
+    return {}
+
+
 def fetch_and_store(symbol: str, provider=None) -> Dict[str, Any]:
     """
     Fetch today's OI totals for *symbol* from the broker and upsert into JSON.
@@ -106,6 +142,9 @@ def fetch_and_store(symbol: str, provider=None) -> Dict[str, Any]:
 
         today = datetime.now().strftime('%Y-%m-%d')
 
+        # Fetch underlying day OHLC
+        ohlc = _fetch_day_ohlc(symbol, today, provider)
+
         # Compute change vs the last stored record for this symbol
         # (skip any record already stored for today so an overwrite stays meaningful)
         with _lock:
@@ -136,6 +175,10 @@ def fetch_and_store(symbol: str, provider=None) -> Dict[str, Any]:
             'pe_oi':      int(total_pe_oi),
             'chng_ce_oi': chng_ce_oi,
             'chng_pe_oi': chng_pe_oi,
+            'open':       ohlc.get('open', 0),
+            'high':       ohlc.get('high', 0),
+            'low':        ohlc.get('low', 0),
+            'close':      ohlc.get('close', 0),
         }
 
         with _lock:
@@ -156,6 +199,60 @@ def fetch_and_store(symbol: str, provider=None) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[HistoricOI] Error fetching {symbol}: {e}", exc_info=True)
         return {'success': False, 'error': str(e)}
+
+
+def backfill_ohlc(provider=None) -> Dict[str, Any]:
+    """
+    One-time backfill: for every record missing OHLC data (open/close == 0),
+    fetch the day candle from the broker and update the record in-place.
+    Returns a summary of how many records were updated vs skipped.
+    """
+    if provider is None:
+        from trading_app.service.provider_logic import get_data_provider
+        provider = get_data_provider(user='Mine')
+
+    if not provider:
+        return {'success': False, 'error': 'No data provider available'}
+
+    updated = 0
+    skipped = 0
+    errors = []
+
+    with _lock:
+        records = _load_records()
+
+    for i, r in enumerate(records):
+        # Already has OHLC data — skip
+        if r.get('close') and float(r['close']) > 0:
+            skipped += 1
+            continue
+
+        date_str = r.get('date', '')
+        symbol   = r.get('symbol', '')
+        if not date_str or not symbol:
+            skipped += 1
+            continue
+
+        ohlc = _fetch_day_ohlc(symbol, date_str, provider)
+        if not ohlc or ohlc.get('close', 0) == 0:
+            errors.append(f"{symbol} {date_str}")
+            skipped += 1
+            continue
+
+        records[i] = {**r, **ohlc}
+        updated += 1
+
+    with _lock:
+        _save_records(records)
+
+    logger.info(f"[HistoricOI] OHLC backfill done: {updated} updated, {skipped} skipped, {len(errors)} errors")
+    return {
+        'success': True,
+        'updated': updated,
+        'skipped': skipped,
+        'errors':  errors,
+        'records': get_all_records(),
+    }
 
 
 def fetch_and_store_all(provider=None) -> List[Dict[str, Any]]:

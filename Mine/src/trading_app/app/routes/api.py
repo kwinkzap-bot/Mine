@@ -5691,6 +5691,68 @@ def algo_rtp_history() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/algo/rtp/exit', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp_force_exit() -> EndpointResponse:
+    """Manually close the active RTP trade on all brokers."""
+    try:
+        try:
+            with open(_RTP_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {}
+
+        if not state.get('active_trade'):
+            return jsonify({'success': False, 'error': 'No active trade to exit'}), 400
+
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        # Prefer the running instance so cached broker services are reused
+        algo = get_instance(username)
+        if algo is None:
+            algo = RTPAlgo(username=username)
+
+        provider = get_data_provider()
+        spot = 0.0
+        if provider:
+            try:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+            except Exception:
+                pass
+
+        algo._exit_trade('MANUAL', spot)
+        return jsonify({'success': True, 'exit_spot': spot})
+    except Exception as e:
+        logger.error(f'[rtp/exit] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp/start', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp_start() -> EndpointResponse:
+    """Start (or restart) the RTP monitoring thread."""
+    try:
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        existing = get_instance(username)
+        if existing and existing.is_running():
+            return jsonify({'success': False, 'error': 'Algo already running'}), 409
+
+        algo = RTPAlgo(username=username)
+        algo.start()
+        return jsonify({'success': True, 'message': 'RTP algo started'})
+    except Exception as e:
+        logger.error(f'[rtp/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/pcr/history', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -7003,6 +7065,17 @@ def delete_oi_historic(date: str, symbol: str):
     if not deleted:
         return jsonify({'success': False, 'error': 'Record not found'}), 404
     return jsonify({'success': True})
+
+
+@api_bp.route('/oi-historic/backfill-ohlc', methods=['POST'])
+@require_user_auth
+def backfill_oi_historic_ohlc():
+    """Backfill OHLC data for all historic OI records that are missing it."""
+    from trading_app.dashboard.oi_historic_data import backfill_ohlc
+    from trading_app.service.provider_logic import get_data_provider
+    provider = get_data_provider(user='Mine')
+    result = backfill_ohlc(provider=provider)
+    return jsonify(result)
 
 
 @api_bp.route('/fii-sector-limits', methods=['GET'])
