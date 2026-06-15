@@ -111,11 +111,15 @@ let oipFullOptionData = null;
 let oipCurrentCEStrike = null;
 let oipCurrentPEStrike = null;
 
+// Premium Strike (Prem. Str.) mode state
+let oipPremiumStrikeData = null;           // Cached result from /api/oi-profile/premium-strikes
+const oipPremStrikeLines = { ce: [], pe: [] }; // Price-line handles for cleanup
+
 let oipAllStrikes = [];
 let oipCurrentPrice = 0;
 let oipSymbol = 'NIFTY';
 let oipLotSize = 50, oipStrikeStep = 50;
-let oipInterval = 'minute';
+let oipInterval = '5minute';
 let oipStrikeCount = 15;
 let oipMode = 'change';
 let oipIsBusy = false;
@@ -373,16 +377,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Show / hide strike dropdowns
         if (oipElems.customStrikeDropdown) oipElems.customStrikeDropdown.style.display = isCustom ? '' : 'none';
-        if (oipElems.ceStrikeDropdown) oipElems.ceStrikeDropdown.style.display = isCePe ? '' : 'none';
-        if (oipElems.peStrikeDropdown) oipElems.peStrikeDropdown.style.display = isCePe ? '' : 'none';
+        // Prem. Str. (atm) and CE & PE modes both show the CE/PE dropdowns
+        const showCePe = isCePe || isAtm;
+        if (oipElems.ceStrikeDropdown) oipElems.ceStrikeDropdown.style.display = showCePe ? '' : 'none';
+        if (oipElems.peStrikeDropdown) oipElems.peStrikeDropdown.style.display = showCePe ? '' : 'none';
+        // In Prem. Str. mode the dropdowns are auto-populated; disable manual edits
+        if (oipElems.ceStrikeDropdown) oipElems.ceStrikeDropdown.disabled = isAtm;
+        if (oipElems.peStrikeDropdown) oipElems.peStrikeDropdown.disabled = isAtm;
+
+        if (!isAtm) {
+            oipClearPremStrikeLines();
+        }
     }
 
     // Apply on page load to match the HTML default (custom selected)
     oipApplyStrikeMode(oipElems.strikeMode?.value || 'custom');
 
     oipElems.strikeMode?.addEventListener('change', () => {
-        oipApplyStrikeMode(oipElems.strikeMode.value);
-        oipLoadCandles(true, false);
+        const mode = oipElems.strikeMode.value;
+        oipApplyStrikeMode(mode);
+        if (mode === 'atm') {
+            oipFetchAndApplyPremiumStrikes();
+        } else {
+            oipLoadCandles(true, false);
+        }
     });
 
     oipElems.customStrikeDropdown?.addEventListener('change', () => {
@@ -698,6 +716,7 @@ async function oipFullRefresh(resetZoom = false) {
         oipHasLoadedCandles = false;
         oipHasLoadedOI = false;
         oipCustomStrikeSetOnLoad = false;
+        oipPremiumStrikeData = null; // Reset so strikes are re-computed for new symbol/session
     }
 
     try {
@@ -727,8 +746,13 @@ async function oipFullRefresh(resetZoom = false) {
         console.log(`[OIP] Loading initial OI for ${oipSymbol}...`);
         await oipLoadOI();
 
-        // 4. Load Candles (Blocks until success)
+        // 4. Load Candles — if Prem. Str. mode is active, compute premium strikes first
         console.log(`[OIP] Loading initial Candles for ${oipSymbol}...`);
+        if (oipElems.strikeMode?.value === 'atm' && !oipPremiumStrikeData) {
+            await oipFetchAndApplyPremiumStrikes(resetZoom);
+            // oipFetchAndApplyPremiumStrikes calls oipLoadCandles internally, so return here
+            return;
+        }
         await oipLoadCandles(true, resetZoom);
 
     } catch (err) {
@@ -856,10 +880,21 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         const needsOptionData = (view !== 'index') && !oipOptionData;
         const autoHL = true;
         const strikeMode = oipElems.strikeMode?.value || 'custom';
-        const first5m = strikeMode === 'atm';
-        const customStrike = strikeMode === 'custom' ? (oipElems.customStrikeDropdown?.value || '') : '';
-        const ceStrike = strikeMode === 'ce_pe' ? (oipElems.ceStrikeDropdown?.value || '') : '';
-        const peStrike = strikeMode === 'ce_pe' ? (oipElems.peStrikeDropdown?.value || '') : '';
+        let first5m = false;
+        let customStrike = '', ceStrike = '', peStrike = '';
+        if (strikeMode === 'atm') {
+            if (oipPremiumStrikeData) {
+                ceStrike = oipPremiumStrikeData.ce_strike;
+                peStrike = oipPremiumStrikeData.pe_strike;
+            } else {
+                first5m = true; // Fallback until premium strikes are fetched
+            }
+        } else if (strikeMode === 'custom') {
+            customStrike = oipElems.customStrikeDropdown?.value || '';
+        } else if (strikeMode === 'ce_pe') {
+            ceStrike = oipElems.ceStrikeDropdown?.value || '';
+            peStrike = oipElems.peStrikeDropdown?.value || '';
+        }
 
         const _daysForInterval = { day: 365, week: 1095, month: 3650 };
         let days    = _daysForInterval[oipInterval] ?? (parseInt(oipElems.days?.value) || 5);
@@ -1448,9 +1483,12 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
                 if (oipCEEma50Series) oipCEEma50Series.setData(ceEmas.ema50);
             }
 
-            const isCePeMode = oipElems.strikeMode?.value === 'ce_pe';
-            const ceStrike = isCePeMode ? (oipElems.ceStrikeDropdown?.value || '--') : (oipElems.customStrikeDropdown?.value || '--');
-            if (document.getElementById('oipLegendCEOnly')) document.getElementById('oipLegendCEOnly').textContent = `${ceStrike} CE`;
+            const _sm = oipElems.strikeMode?.value;
+            let _ceLbl;
+            if (_sm === 'ce_pe') _ceLbl = oipElems.ceStrikeDropdown?.value || '--';
+            else if (_sm === 'atm' && oipPremiumStrikeData) _ceLbl = oipPremiumStrikeData.ce_strike;
+            else _ceLbl = oipElems.customStrikeDropdown?.value || '--';
+            if (document.getElementById('oipLegendCEOnly')) document.getElementById('oipLegendCEOnly').textContent = `${_ceLbl} CE`;
         }
 
         // Update Individual PE Only Chart
@@ -1464,13 +1502,17 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
                 if (oipPEEma50Series) oipPEEma50Series.setData(peEmas.ema50);
             }
 
-            const isCePeMode = oipElems.strikeMode?.value === 'ce_pe';
-            const peStrike = isCePeMode ? (oipElems.peStrikeDropdown?.value || '--') : (oipElems.customStrikeDropdown?.value || '--');
-            if (document.getElementById('oipLegendPEOnly')) document.getElementById('oipLegendPEOnly').textContent = `${peStrike} PE`;
+            const _sm = oipElems.strikeMode?.value;
+            let _peLbl;
+            if (_sm === 'ce_pe') _peLbl = oipElems.peStrikeDropdown?.value || '--';
+            else if (_sm === 'atm' && oipPremiumStrikeData) _peLbl = oipPremiumStrikeData.pe_strike;
+            else _peLbl = oipElems.customStrikeDropdown?.value || '--';
+            if (document.getElementById('oipLegendPEOnly')) document.getElementById('oipLegendPEOnly').textContent = `${_peLbl} PE`;
         }
     }
     if (oipOIData.intrinsic) oipDrawIntrinsicLines(oipOIData.intrinsic, view);
     if (oipOIData.intrinsic) oipDrawPremiumLines(oipOIData.intrinsic, view);
+    oipDrawPremStrikeLines();
 }
 
 
@@ -1906,6 +1948,126 @@ async function oipSelectSymbol(s) {
 
     oipFullRefresh(true);
 }
+
+// ── Premium Strike (Prem. Str.) helpers ─────────────────────────────────────
+
+/**
+ * Fetch computed CE/PE strikes from the backend and auto-populate the dropdowns,
+ * then reload the option candles.
+ */
+async function oipFetchAndApplyPremiumStrikes(resetZoom = true) {
+    try {
+        const step = oipStrikeStep || 50;
+        const res  = await fetch(`/api/oi-profile/premium-strikes?symbol=${oipSymbol}&step=${step}`);
+        const data = await res.json();
+        if (!data.success) {
+            console.warn('[OIP] Premium strikes:', data.error);
+            await oipLoadCandles(true, resetZoom);
+            return;
+        }
+
+        oipPremiumStrikeData = data;
+
+        // Populate CE/PE dropdowns with the auto-computed strikes
+        function setDropdownStrike(el, strike) {
+            if (!el) return;
+            let found = false;
+            for (const opt of el.options) {
+                if (parseFloat(opt.value) === strike) { el.value = opt.value; found = true; break; }
+            }
+            if (!found) {
+                const opt = document.createElement('option');
+                opt.value = String(strike);
+                opt.textContent = String(strike);
+                el.appendChild(opt);
+                el.value = String(strike);
+            }
+        }
+        setDropdownStrike(oipElems.ceStrikeDropdown, data.ce_strike);
+        setDropdownStrike(oipElems.peStrikeDropdown, data.pe_strike);
+
+        await oipLoadCandles(true, resetZoom);
+    } catch (e) {
+        console.error('[OIP] Premium strikes fetch failed:', e);
+        await oipLoadCandles(true, resetZoom);
+    }
+}
+
+/** Remove all Prem. Str. price lines from CE and PE individual charts. */
+function oipClearPremStrikeLines() {
+    oipPremStrikeLines.ce.forEach(l => { try { oipCESeries?.removePriceLine(l); } catch (e) {} });
+    oipPremStrikeLines.pe.forEach(l => { try { oipPESeries?.removePriceLine(l); } catch (e) {} });
+    oipPremStrikeLines.ce = [];
+    oipPremStrikeLines.pe = [];
+}
+
+/**
+ * Draw 3 horizontal price lines on each individual CE and PE chart:
+ *   1. Strike diff  = |PE_strike − CE_strike|          [dashed, amber]
+ *   2. Prev-day close of the option itself              [solid, cyan/violet]
+ *   3. |CE_prev_close − PE_prev_close| at same strike  [dashed, purple]
+ *
+ * Only active when "Prem. Str." mode is selected and data is available.
+ */
+function oipDrawPremStrikeLines() {
+    oipClearPremStrikeLines();
+    const psd = oipPremiumStrikeData;
+    if (!psd || oipElems.strikeMode?.value !== 'atm') return;
+    if (!oipCESeries || !oipPESeries) return;
+
+    const strikeDiff = Math.abs(psd.pe_strike - psd.ce_strike);
+    const r2 = n => (n != null ? Math.round(n * 100) / 100 : null);
+
+    // ── CE chart lines ────────────────────────────────────────────────
+    const ced = psd.ce_strike_data;
+    if (ced) {
+        const cePdc = r2(ced.ce_close);
+        const ceDiff = (ced.ce_close != null && ced.pe_close != null)
+            ? r2(Math.abs(ced.ce_close - ced.pe_close)) : null;
+
+        if (strikeDiff > 0)
+            oipPremStrikeLines.ce.push(oipCESeries.createPriceLine({
+                price: strikeDiff, color: '#f59e0b', lineWidth: 2, lineStyle: 0,
+                axisLabelVisible: true, title: `Diff ${strikeDiff}`
+            }));
+        if (cePdc != null)
+            oipPremStrikeLines.ce.push(oipCESeries.createPriceLine({
+                price: cePdc, color: '#22d3ee', lineWidth: 2, lineStyle: 0,
+                axisLabelVisible: true, title: `PDC ${cePdc}`
+            }));
+        if (ceDiff != null)
+            oipPremStrikeLines.ce.push(oipCESeries.createPriceLine({
+                price: ceDiff, color: '#a78bfa', lineWidth: 2, lineStyle: 0,
+                axisLabelVisible: true, title: `C-P ${ceDiff}`
+            }));
+    }
+
+    // ── PE chart lines ────────────────────────────────────────────────
+    const ped = psd.pe_strike_data;
+    if (ped) {
+        const pePdc = r2(ped.pe_close);
+        const peDiff = (ped.ce_close != null && ped.pe_close != null)
+            ? r2(Math.abs(ped.ce_close - ped.pe_close)) : null;
+
+        if (strikeDiff > 0)
+            oipPremStrikeLines.pe.push(oipPESeries.createPriceLine({
+                price: strikeDiff, color: '#f59e0b', lineWidth: 2, lineStyle: 0,
+                axisLabelVisible: true, title: `Diff ${strikeDiff}`
+            }));
+        if (pePdc != null)
+            oipPremStrikeLines.pe.push(oipPESeries.createPriceLine({
+                price: pePdc, color: '#c084fc', lineWidth: 2, lineStyle: 0,
+                axisLabelVisible: true, title: `PDC ${pePdc}`
+            }));
+        if (peDiff != null)
+            oipPremStrikeLines.pe.push(oipPESeries.createPriceLine({
+                price: peDiff, color: '#a78bfa', lineWidth: 2, lineStyle: 0,
+                axisLabelVisible: true, title: `C-P ${peDiff}`
+            }));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
     if (!oipElems.customStrikeDropdown) return;

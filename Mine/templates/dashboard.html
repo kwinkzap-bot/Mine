@@ -1535,12 +1535,16 @@ function _hoiRenderAll(records) {
             tbody.innerHTML = `<tr class="hoi-empty"><td class="hoi-td" colspan="7">No records for ${sym}. Click ⏺ Record to capture today's OI.</td></tr>`;
             return;
         }
+        const _today = new Date().toLocaleDateString('sv'); // YYYY-MM-DD in local time
         tbody.innerHTML = rows.map(r => {
             const cv   = Number(r.chng_ce_oi), pv = Number(r.chng_pe_oi);
             const diff = Number(r.pe_oi) - Number(r.ce_oi);
             const cSign = cv > 0 ? '+' : '', pSign = pv > 0 ? '+' : '';
             const diffArrow = diff > 0 ? '↑ ' : diff < 0 ? '↓ ' : '';
             const diffCls   = diff > 0 ? 'hoi-up' : diff < 0 ? 'hoi-down' : 'hoi-flat';
+            const delCell = r.date === _today
+                ? `<button class="hoi-del-btn" title="Delete" onclick="deleteHistoricOI('${r.date}','${r.symbol}')">&#x2715;</button>`
+                : '';
             return `<tr class="hoi-row">
               <td class="hoi-td">${r.date}</td>
               <td class="hoi-td r hoi-ce">${cSign}${_hoiFmt(cv)}</td>
@@ -1548,8 +1552,7 @@ function _hoiRenderAll(records) {
               <td class="hoi-td r hoi-ce">${_hoiFmt(r.ce_oi)}</td>
               <td class="hoi-td r hoi-pe">${_hoiFmt(r.pe_oi)}</td>
               <td class="hoi-td r ${diffCls}">${diffArrow}${_hoiFmt(Math.abs(diff))}</td>
-              <td class="hoi-td c"><button class="hoi-del-btn" title="Delete"
-                onclick="deleteHistoricOI('${r.date}','${r.symbol}')">&#x2715;</button></td>
+              <td class="hoi-td c">${delCell}</td>
             </tr>`;
         }).join('');
     });

@@ -84,7 +84,9 @@ def fetch_and_store(symbol: str, provider=None) -> Dict[str, Any]:
 
         from trading_app.service.open_interest_service import OpenInterestService
         oi_service = OpenInterestService(provider)
-        data = oi_service.get_open_interest_data(symbol)
+        # On expiry day, use_next_expiry=True skips today's expiry and records
+        # next week's OI instead (non-expiry days: no behavioural difference).
+        data = oi_service.get_open_interest_data(symbol, use_next_expiry=True)
 
         if not data.get('success'):
             return {'success': False, 'error': data.get('error', 'OI fetch failed')}

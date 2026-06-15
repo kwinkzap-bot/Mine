@@ -63,16 +63,18 @@ class MarketScheduler:
         if not self.scheduler or self.scheduler.running:
             logger.info("Scheduler is already running")
             return
-        
+
+        assert CronTrigger is not None  # APScheduler is available (checked above)
+
         # Schedule CPR filter to run every 5 minutes during market hours
         # Cron expression: Every 5 minutes on weekdays between 9:15 AM and 3:40 PM IST
         self.cpr_filter_job = self.scheduler.add_job(
             self._run_cpr_filter_task,
-            CronTrigger(  # type: ignore
-                day_of_week='mon-fri',  # Monday to Friday
-                hour='9-15',             # 9 AM to 3 PM
-                minute='*/5',            # Every 5 minutes
-                second='0'
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/5',
+                second='0',
             ),
             id='cpr_filter_recurring',
             name='CPR Filter Recurring Task',
@@ -138,6 +140,21 @@ class MarketScheduler:
             name='FII Sector Limit Snapshot',
             replace_existing=True,
             misfire_grace_time=300,
+        )
+
+        self.scheduler.add_job(
+            self._start_rtp_monitoring,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=9,
+                minute=15,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='rtp_algo_start',
+            name='RTP Railway Track Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
         )
 
         self.scheduler.start()
@@ -256,6 +273,25 @@ class MarketScheduler:
                 logger.warning("[FIISector Scheduler] No data returned — skipping save")
         except Exception as e:
             logger.error(f"[FIISector Scheduler] Error: {e}", exc_info=True)
+
+    def _start_rtp_monitoring(self):
+        """9:15 AM weekdays: start RTP Railway Track algo monitoring thread."""
+        import os
+        try:
+            if not self.is_trading_day():
+                return
+            username = os.getenv('MONITORING_USERNAME', 'Mine')
+            from trading_app.app.utils.user_env import UserEnvManager
+            active = UserEnvManager.get_user_var(username, 'EMA_RTP_ACTIVE', 'false')
+            if active.strip().lower() != 'true':
+                logger.info("[RTP Scheduler] EMA_RTP_ACTIVE=false — skipping start")
+                return
+            from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo
+            algo = RTPAlgo(username=username)
+            algo.start()
+            logger.info(f"[RTP Scheduler] Monitoring thread started for user={username}")
+        except Exception as e:
+            logger.error(f"[RTP Scheduler] Error starting RTP algo: {e}", exc_info=True)
 
     def _run_historic_oi_record_task(self):
         """3:30 PM IST: fetch and persist daily OI snapshot for all symbols."""

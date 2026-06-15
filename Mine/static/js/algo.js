@@ -1,10 +1,183 @@
-/* algo.js — NIFTY Weekly Straddle UI */
+/* algo.js — Algo page: Straddle + EMA RTP tabs */
 'use strict';
 
-let _algoTimer = null;
+let _algoTimer       = null;
+let _rtpStatusTimer  = null;
+let _rtpHistoryTimer = null;
+const _ALGO_TABS = ['straddle', 'rtp'];
 
 function algoLoad() {
-    _fetchStatus();
+    const hash = location.hash.replace('#', '');
+    algoSwitch(_ALGO_TABS.includes(hash) ? hash : 'straddle');
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+
+function algoSwitch(tab) {
+    _ALGO_TABS.forEach(t => {
+        document.getElementById('algo-' + t + '-panel').classList.toggle('active', t === tab);
+        document.getElementById('algo-tab-'  + t).classList.toggle('active', t === tab);
+    });
+    history.replaceState(null, '', '#' + tab);
+    clearTimeout(_algoTimer);
+    clearTimeout(_rtpStatusTimer);
+    clearTimeout(_rtpHistoryTimer);
+    if (tab === 'straddle') {
+        _fetchStatus();
+    } else {
+        _rtpFetchStatus();
+        _rtpFetchHistory();
+    }
+}
+
+// ── RTP status ────────────────────────────────────────────────────────────────
+
+function _rtpFetchStatus() {
+    fetch('/api/algo/rtp/status')
+        .then(r => r.json())
+        .then(data => {
+            _rtpRenderStatus(data);
+            clearTimeout(_rtpStatusTimer);
+            _rtpStatusTimer = setTimeout(_rtpFetchStatus, data.active ? 5000 : 30000);
+        })
+        .catch(() => {
+            clearTimeout(_rtpStatusTimer);
+            _rtpStatusTimer = setTimeout(_rtpFetchStatus, 30000);
+        });
+}
+
+function _rtpRenderStatus(data) {
+    const trade  = data.state && data.state.active_trade;
+    const live   = data.live || null;
+    const active = !!data.active;
+
+    // Badge
+    const badge = document.getElementById('rtpBadge');
+    badge.className = 'ag-badge ' + (active ? 'active' : 'inactive');
+    document.getElementById('rtpBadgeText').textContent =
+        active ? (trade.direction + ' ' + trade.option_type) : 'No Trade';
+
+    // Timestamp
+    document.getElementById('rtpLastUpd').textContent =
+        new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Active trade grid
+    const grid = document.getElementById('rtpActiveGrid');
+    if (!active || !trade) {
+        grid.innerHTML = '<div class="ag-empty">No active trade</div>';
+        return;
+    }
+
+    const pnlPts = live ? live.pnl_pts : null;
+    const pnlInr = live ? live.pnl_inr_total : null;
+    const spotStr = live ? '₹' + _num(live.spot) : '…';
+
+    const tiles = [
+        { label: 'Direction',    value: trade.direction,
+          cls: trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg' },
+        { label: 'Option',       value: trade.option_type + ' ' + trade.strike },
+        { label: 'Entry Spot',   value: '₹' + _num(trade.entry_spot) },
+        { label: 'Live Spot',    value: spotStr },
+        { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
+        { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
+        { label: 'P&L (pts)',    value: _rtpFmtPts(pnlPts),  cls: _rtpPnlCls(pnlPts) },
+        { label: 'P&L (₹ est)', value: _rtpFmtInr(pnlInr),  cls: _rtpPnlCls(pnlInr) },
+        { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
+    ];
+
+    grid.innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+}
+
+// ── RTP history ───────────────────────────────────────────────────────────────
+
+function _rtpFetchHistory() {
+    fetch('/api/algo/rtp/history')
+        .then(r => r.json())
+        .then(data => {
+            _rtpRenderHistory(data.trades || []);
+            clearTimeout(_rtpHistoryTimer);
+            _rtpHistoryTimer = setTimeout(_rtpFetchHistory, 30000);
+        })
+        .catch(() => {
+            clearTimeout(_rtpHistoryTimer);
+            _rtpHistoryTimer = setTimeout(_rtpFetchHistory, 30000);
+        });
+}
+
+function _rtpRenderHistory(trades) {
+    const countEl = document.getElementById('rtpHistCount');
+    const body    = document.getElementById('rtpHistBody');
+
+    if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
+
+    if (!trades.length) {
+        body.innerHTML = '<div class="ag-empty">No completed trades today</div>';
+        return;
+    }
+
+    body.innerHTML = `
+<table class="ag-hist-table">
+    <thead>
+        <tr>
+            <th class="ag-hist-th">Time</th>
+            <th class="ag-hist-th">Dir</th>
+            <th class="ag-hist-th">Strike</th>
+            <th class="ag-hist-th">Entry</th>
+            <th class="ag-hist-th">Exit</th>
+            <th class="ag-hist-th">P&amp;L (pts)</th>
+            <th class="ag-hist-th">Reason</th>
+        </tr>
+    </thead>
+    <tbody>
+    ${trades.map(t => {
+        const pnlCls = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const pnlStr = (t.pnl_pts >= 0 ? '+' : '') + Number(t.pnl_pts).toFixed(1);
+        return `<tr>
+            <td class="ag-hist-td">${t.exit_time ? _fmtTime(t.exit_time) : '—'}</td>
+            <td class="ag-hist-td">
+                <span class="ag-leg-type ${t.direction === 'BUY' ? 'ce' : 'pe'}"
+                      style="font-size:9px">${t.direction}</span>
+            </td>
+            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
+            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
+            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
+            <td class="ag-hist-td ${pnlCls}" style="font-weight:700">${pnlStr}</td>
+            <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
+        </tr>`;
+    }).join('')}
+    </tbody>
+</table>`;
+}
+
+// ── RTP helpers ───────────────────────────────────────────────────────────────
+
+function _rtpFmtPts(pts) {
+    if (pts == null) return '…';
+    return (pts >= 0 ? '+' : '') + Number(pts).toFixed(1) + ' pts';
+}
+
+function _rtpFmtInr(inr) {
+    if (inr == null) return '…';
+    return (inr >= 0 ? '+₹' : '-₹') + Math.abs(inr).toFixed(0);
+}
+
+function _rtpPnlCls(val) {
+    if (val == null) return '';
+    return val >= 0 ? 'ag-pos' : 'ag-neg';
+}
+
+function _rtpFmtReason(reason) {
+    const map = {
+        TARGET: '<span class="ag-reason-badge target">TARGET</span>',
+        SL:     '<span class="ag-reason-badge sl">SL</span>',
+        EOD:    '<span class="ag-reason-badge eod">EOD</span>',
+    };
+    return map[reason] || reason || '—';
 }
 
 // ── Fetch & render ────────────────────────────────────────────────────────────

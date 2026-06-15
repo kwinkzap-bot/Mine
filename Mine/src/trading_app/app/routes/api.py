@@ -27,6 +27,15 @@ _RTP_OPT_CACHE_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', 'utils', 'rtp_opt_cache.json')
 )
 
+# RTP algo state and history files (read directly — no class import needed)
+_RTP_STATE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_state.json')
+)
+_RTP_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_history.json')
+)
+_NIFTY_FYERS_IDX = 'NSE:NIFTY50-INDEX'
+
 def _load_opt_cache() -> dict:
     try:
         if os.path.exists(_RTP_OPT_CACHE_PATH):
@@ -5609,6 +5618,79 @@ def _get_straddle_broker(username: str) -> Optional[int]:
     return None
 
 
+@api_bp.route('/algo/rtp/status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp_status() -> EndpointResponse:
+    """Return current RTP active trade + live NIFTY spot and P&L."""
+    try:
+        from datetime import date as _date
+        try:
+            with open(_RTP_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {'active_trade': None, 'buy_needs_reset': False, 'sell_needs_reset': False}
+
+        trade = state.get('active_trade')
+        if not trade:
+            return jsonify({'success': True, 'active': False, 'state': state, 'live': None})
+
+        # Fetch live NIFTY spot for P&L calculation
+        live = None
+        try:
+            provider = get_data_provider()
+            if provider:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+                if spot:
+                    direction  = trade.get('direction', 'BUY')
+                    entry_spot = float(trade.get('entry_spot', 0))
+                    pnl_pts    = spot - entry_spot if direction == 'BUY' else entry_spot - spot
+                    pnl_pts    = round(pnl_pts, 2)
+                    broker_entries = trade.get('broker_entries', [])
+                    pnl_inr_total  = round(
+                        sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
+                    )
+                    live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+        except Exception as _e:
+            logger.warning(f'[rtp/status] live fetch failed: {_e}')
+
+        return jsonify({'success': True, 'active': True, 'state': state, 'live': live})
+    except Exception as e:
+        logger.error(f'[rtp/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp_history() -> EndpointResponse:
+    """Return today's completed RTP trades from rtp_trades_history.json."""
+    try:
+        from datetime import date as _date
+        today = _date.today().isoformat()
+        try:
+            with open(_RTP_HISTORY_PATH, 'r') as _f:
+                all_trades = json.load(_f)
+            if not isinstance(all_trades, list):
+                all_trades = []
+        except Exception:
+            all_trades = []
+
+        # Filter to today only; strip broker_entries to keep payload lean
+        trades = [
+            {k: v for k, v in t.items() if k != 'broker_entries'}
+            for t in all_trades
+            if t.get('date') == today
+        ]
+        return jsonify({'success': True, 'trades': trades, 'count': len(trades)})
+    except Exception as e:
+        logger.error(f'[rtp/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/pcr/history', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -6156,6 +6238,178 @@ def oi_profile_candles() -> EndpointResponse:
 
     except Exception as exc:
         logger.error(f'[OI-Profile] Optimized fetch error: {exc}', exc_info=True)
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@api_bp.route('/oi-profile/premium-strikes', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def oi_profile_premium_strikes() -> EndpointResponse:
+    """
+    Compute optimal CE/PE strikes for the 'Prem. Str.' mode in OI Profile.
+
+    Algorithm:
+    1. Get previous-day index close → round to nearest step = ATM.
+    2. For ATM ± 2 steps (5 candidates), fetch previous-day CE and PE closes in parallel.
+    3. Pick the candidate closest to ATM where |CE_close - PE_close| <= max_diff (default 25).
+    4. CE_strike = round_to_step(base_strike - CE_close)
+       PE_strike = round_to_step(base_strike + PE_close)
+    5. Fetch prev-day closes for CE_strike{CE,PE} and PE_strike{CE,PE} in parallel.
+    6. Return everything needed for the frontend to auto-select strikes and draw lines.
+    """
+    try:
+        symbol   = request.args.get('symbol', 'NIFTY').upper()
+        step     = request.args.get('step', 50, type=int) or 50
+        max_diff = request.args.get('max_diff', 25, type=float)
+
+        kite = get_kite(instance=1)
+        _data_provider = get_data_provider()
+        if not kite and not _data_provider:
+            return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
+
+        from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+        _is_fyers = isinstance(_data_provider, FyersDataServiceAdapter)
+        effective = _data_provider if _data_provider else kite
+        kite_svc  = KiteService(kite_instance=effective) if effective else KiteService()
+
+        now = datetime.now()
+
+        # ── 1. Previous-day index close ────────────────────────────────
+        idx_close = kite_svc.get_previous_trading_day_close(symbol)
+        if not idx_close:
+            return jsonify({'success': False, 'error': 'Could not fetch previous-day close for index'}), 500
+
+        atm = int(round(idx_close / step) * step)
+
+        # ── 2. Candidate strikes (5) sorted by distance from idx_close ─
+        candidates = sorted(
+            [atm + i * step for i in range(-2, 3)],
+            key=lambda s: abs(s - idx_close)
+        )
+
+        # Helper: previous-day close for a single instrument token
+        def _fetch_prev_close(token):
+            try:
+                from_dt = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+                if _is_fyers and _data_provider:
+                    raw = _data_provider.historical_data(
+                        str(token), from_dt.strftime('%Y-%m-%d'),
+                        now.strftime('%Y-%m-%d'), 'day', use_cache=False)
+                elif kite:
+                    raw = kite_svc._historical_with_retry(int(token), from_dt, now, 'day')
+                else:
+                    return None
+                if not raw:
+                    return None
+                raw.sort(key=lambda x: x['date'])
+                today = now.date()
+                for bar in reversed(raw):
+                    bar_date = bar['date'].date() if hasattr(bar['date'], 'date') else bar['date']
+                    if bar_date < today:
+                        return float(bar['close'])
+            except Exception as exc:
+                logger.warning(f'[PremStrikes] prev-close fetch failed for {token}: {exc}')
+            return None
+
+        # ── 3. Resolve tokens and fetch CE/PE closes for all candidates in parallel ─
+        tok_map = {}  # strike -> {ce: token, pe: token}
+        for s in candidates:
+            ce_tok, _ = _get_cached_strike_token(kite_svc, _data_provider, _is_fyers, symbol, s, 'CE')
+            pe_tok, _ = _get_cached_strike_token(kite_svc, _data_provider, _is_fyers, symbol, s, 'PE')
+            tok_map[s] = {'ce': ce_tok, 'pe': pe_tok}
+
+        futures1 = {}
+        for s, toks in tok_map.items():
+            if toks['ce']: futures1[(s, 'ce')] = _api_executor.submit(_fetch_prev_close, toks['ce'])
+            if toks['pe']: futures1[(s, 'pe')] = _api_executor.submit(_fetch_prev_close, toks['pe'])
+
+        close1 = {}
+        for key, fut in futures1.items():
+            try:
+                close1[key] = fut.result(timeout=12)
+            except Exception:
+                close1[key] = None
+
+        # ── 4. Find base strike ────────────────────────────────────────
+        base_strike = None
+        base_ce_close = None
+        base_pe_close = None
+        for s in candidates:
+            ce_c = close1.get((s, 'ce'))
+            pe_c = close1.get((s, 'pe'))
+            if ce_c is not None and pe_c is not None and abs(ce_c - pe_c) <= max_diff:
+                base_strike, base_ce_close, base_pe_close = s, ce_c, pe_c
+                break
+
+        if base_strike is None:
+            # Fallback: use ATM even if the condition is not met
+            base_strike   = atm
+            base_ce_close = close1.get((atm, 'ce'))
+            base_pe_close = close1.get((atm, 'pe'))
+
+        # ── 5. Compute CE/PE strikes ───────────────────────────────────
+        ce_val   = base_ce_close or 0
+        pe_val   = base_pe_close or 0
+        ce_strike = int(round((base_strike - ce_val) / step) * step)
+        pe_strike = int(round((base_strike + pe_val) / step) * step)
+
+        logger.info(
+            f'[PremStrikes] {symbol}: idx_close={idx_close:.2f}, ATM={atm}, '
+            f'base={base_strike}, CE_close={ce_val:.2f}, PE_close={pe_val:.2f} '
+            f'-> CE_strike={ce_strike}, PE_strike={pe_strike}'
+        )
+
+        # ── 6. Fetch prev-day closes for CE_strike and PE_strike ───────
+        ce_s_ce_tok, _ = _get_cached_strike_token(kite_svc, _data_provider, _is_fyers, symbol, ce_strike, 'CE')
+        ce_s_pe_tok, _ = _get_cached_strike_token(kite_svc, _data_provider, _is_fyers, symbol, ce_strike, 'PE')
+        pe_s_ce_tok, _ = _get_cached_strike_token(kite_svc, _data_provider, _is_fyers, symbol, pe_strike, 'CE')
+        pe_s_pe_tok, _ = _get_cached_strike_token(kite_svc, _data_provider, _is_fyers, symbol, pe_strike, 'PE')
+
+        futures2 = {}
+        if ce_s_ce_tok: futures2['ce_s_ce'] = _api_executor.submit(_fetch_prev_close, ce_s_ce_tok)
+        if ce_s_pe_tok: futures2['ce_s_pe'] = _api_executor.submit(_fetch_prev_close, ce_s_pe_tok)
+        if pe_s_ce_tok: futures2['pe_s_ce'] = _api_executor.submit(_fetch_prev_close, pe_s_ce_tok)
+        if pe_s_pe_tok: futures2['pe_s_pe'] = _api_executor.submit(_fetch_prev_close, pe_s_pe_tok)
+
+        # Reuse already-fetched data when computed strike matches the base strike
+        prefill = {}
+        if ce_strike == base_strike:
+            prefill['ce_s_ce'] = base_ce_close
+            prefill['ce_s_pe'] = base_pe_close
+        if pe_strike == base_strike:
+            prefill['pe_s_ce'] = base_ce_close
+            prefill['pe_s_pe'] = base_pe_close
+
+        res2 = dict(prefill)
+        for k, fut in futures2.items():
+            if k in res2:
+                continue  # already have it
+            try:
+                res2[k] = fut.result(timeout=12)
+            except Exception:
+                res2[k] = None
+
+        return jsonify({
+            'success':        True,
+            'symbol':         symbol,
+            'base_strike':    base_strike,
+            'base_ce_close':  base_ce_close,
+            'base_pe_close':  base_pe_close,
+            'ce_strike':      ce_strike,
+            'pe_strike':      pe_strike,
+            'strike_diff':    abs(pe_strike - ce_strike),
+            'ce_strike_data': {
+                'ce_close': res2.get('ce_s_ce'),
+                'pe_close': res2.get('ce_s_pe'),
+            },
+            'pe_strike_data': {
+                'ce_close': res2.get('pe_s_ce'),
+                'pe_close': res2.get('pe_s_pe'),
+            },
+        })
+
+    except Exception as exc:
+        logger.error(f'[PremStrikes] Error: {exc}', exc_info=True)
         return jsonify({'success': False, 'error': str(exc)}), 500
 
 

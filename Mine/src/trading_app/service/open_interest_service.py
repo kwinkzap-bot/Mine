@@ -881,7 +881,7 @@ class OpenInterestService:
             logger.error(f"Failed to retrieve latest OI from DB: {e}")
             return None
     
-    def get_open_interest_data(self, symbol: str = 'NIFTY') -> Dict[str, Any]:
+    def get_open_interest_data(self, symbol: str = 'NIFTY', use_next_expiry: bool = False) -> Dict[str, Any]:
         """
         Get open interest data for options strikes.
         
@@ -995,36 +995,44 @@ class OpenInterestService:
                             # If still None, use today as last resort for Native API
                             if not expiry_dt:
                                 expiry_dt = datetime.now().date()
-                                
-                            instruments = []
-                            for opt in options_list:
-                                # Map Fyers 'CALL'/'PUT' to internal 'CE'/'PE'
-                                f_type = (opt.get('optionType') or opt.get('option_type') or '').upper()
-                                inst_type = 'CE' if ('CALL' in f_type or 'CE' in f_type) else 'PE' if ('PUT' in f_type or 'PE' in f_type) else f_type
-                                
-                                # Handle strike price variations
-                                strike = float(opt.get('strikePrice') or opt.get('strike_price') or 0)
-                                
-                                instruments.append({
-                                    'instrument_token': opt.get('symbol'),
-                                    'tradingsymbol':    opt.get('symbol', '').split(':')[-1],
-                                    'name':             proper_name_target,
-                                    'instrument_type':  inst_type,
-                                    'strike':           strike,
-                                    'expiry':           expiry_dt,
-                                    # Include OI fields if present in native chain to avoid extra quote calls
-                                    'oi':               opt.get('oi', opt.get('open_interest', 0)),
-                                    'oi_change':        opt.get('oich', opt.get('oi_change', 0)),
-                                    'last_price':       opt.get('ltp', opt.get('last_price', opt.get('lp', 0)))
-                                })
-                            
-                            # Populate fast token cache for chart resolution
-                            from trading_app.service.fyers_data_service import _FYERS_OPTION_TOKEN_CACHE, _FYERS_OPTION_TOKEN_LOCK
-                            with _FYERS_OPTION_TOKEN_LOCK:
-                                for inst in instruments:
-                                    # Key: NIFTY:24100:CE -> NSE:NIFTY26MAY24100CE
-                                    c_key = f"{inst['name']}:{int(inst['strike'])}:{inst['instrument_type']}"
-                                    _FYERS_OPTION_TOKEN_CACHE[c_key] = inst['instrument_token']
+
+                            # On expiry day, skip native chain so CSV path picks next expiry
+                            if use_next_expiry and expiry_dt <= datetime.now().date():
+                                logger.info(
+                                    f"[OI] {symbol}: expiry is today ({expiry_dt}), "
+                                    f"falling back to CSV for next-expiry selection"
+                                )
+                                # Leave instruments=None → triggers CSV fallback below
+                            else:
+                                instruments = []
+                                for opt in options_list:
+                                    # Map Fyers 'CALL'/'PUT' to internal 'CE'/'PE'
+                                    f_type = (opt.get('optionType') or opt.get('option_type') or '').upper()
+                                    inst_type = 'CE' if ('CALL' in f_type or 'CE' in f_type) else 'PE' if ('PUT' in f_type or 'PE' in f_type) else f_type
+
+                                    # Handle strike price variations
+                                    strike = float(opt.get('strikePrice') or opt.get('strike_price') or 0)
+
+                                    instruments.append({
+                                        'instrument_token': opt.get('symbol'),
+                                        'tradingsymbol':    opt.get('symbol', '').split(':')[-1],
+                                        'name':             proper_name_target,
+                                        'instrument_type':  inst_type,
+                                        'strike':           strike,
+                                        'expiry':           expiry_dt,
+                                        # Include OI fields if present in native chain to avoid extra quote calls
+                                        'oi':               opt.get('oi', opt.get('open_interest', 0)),
+                                        'oi_change':        opt.get('oich', opt.get('oi_change', 0)),
+                                        'last_price':       opt.get('ltp', opt.get('last_price', opt.get('lp', 0)))
+                                    })
+
+                                # Populate fast token cache for chart resolution
+                                from trading_app.service.fyers_data_service import _FYERS_OPTION_TOKEN_CACHE, _FYERS_OPTION_TOKEN_LOCK
+                                with _FYERS_OPTION_TOKEN_LOCK:
+                                    for inst in instruments:
+                                        # Key: NIFTY:24100:CE -> NSE:NIFTY26MAY24100CE
+                                        c_key = f"{inst['name']}:{int(inst['strike'])}:{inst['instrument_type']}"
+                                        _FYERS_OPTION_TOKEN_CACHE[c_key] = inst['instrument_token']
                 except Exception as e:
                     logger.warning(f"[OI] Native Fyers Chain API failed for {symbol}: {e}. Falling back to CSV.")
             
@@ -1056,7 +1064,7 @@ class OpenInterestService:
                         return {'success': False, 'error': f'Failed to get instruments: {str(e)}'}
             
             # Step 4: Get available strikes for symbol
-            strikes_data = self._get_available_strikes(instruments, symbol, current_price, config)
+            strikes_data = self._get_available_strikes(instruments, symbol, current_price, config, use_next_expiry=use_next_expiry)
             
             if not strikes_data:
                 return {
@@ -1127,8 +1135,9 @@ class OpenInterestService:
                 'error': str(e)
             }
     
-    def _get_available_strikes(self, instruments: List[Dict[str, Any]], symbol: str, 
-                              current_price: float, config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _get_available_strikes(self, instruments: List[Dict[str, Any]], symbol: str,
+                              current_price: float, config: Dict[str, Any],
+                              use_next_expiry: bool = False) -> List[Dict[str, Any]]:
         """
         Get available strikes for a symbol similar to KiteDataFetchService.get_available_strikes()
         
@@ -1225,11 +1234,13 @@ class OpenInterestService:
             
             # Select nearest future expiry - expiry is already a date object
             today = datetime.now().date()
+            # When use_next_expiry=True (historic recording on expiry day),
+            # skip today's expiry and pick the next one.
+            expiry_threshold = today + timedelta(days=1) if use_next_expiry else today
             current_expiry = None
-            
+
             for expiry_date in expiries:
-                # expiry_date is already a datetime.date object
-                if expiry_date >= today:
+                if expiry_date >= expiry_threshold:
                     current_expiry = expiry_date
                     break
             

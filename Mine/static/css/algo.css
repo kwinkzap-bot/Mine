@@ -547,3 +547,97 @@ body.ocean-theme .algo-page {
     .ag-leg-sym { max-width: 120px; }
     .ag-btn { padding: 8px 14px; font-size: 0.8rem; }
 }
+
+/* ── Tab bar ──────────────────────────────────────────────────── */
+.ag-tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border-bottom: 1px solid var(--ag-border);
+    background: var(--ag-surface);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding: 0 4px;
+}
+
+.ag-tab {
+    padding: 8px 14px 7px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--ag-text-2);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+}
+.ag-tab:hover  { color: var(--ag-text); }
+.ag-tab.active { color: var(--ag-accent); border-bottom-color: var(--ag-accent); }
+
+/* ── Panel visibility ─────────────────────────────────────────── */
+.ag-panel        { display: none; }
+.ag-panel.active { display: contents; } /* transparent to parent flex — preserves gap/direction */
+
+/* ── History table ────────────────────────────────────────────── */
+.ag-hist-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.ag-hist-th {
+    padding: 6px 10px;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ag-text-3);
+    text-align: left;
+    border-bottom: 1px solid var(--ag-border-sub);
+    background: var(--ag-bg);
+    white-space: nowrap;
+}
+.ag-hist-td {
+    padding: 7px 10px;
+    color: var(--ag-text);
+    border-bottom: 1px solid var(--ag-border-sub);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.ag-hist-table tbody tr:hover .ag-hist-td { background: var(--ag-row-hover); }
+.ag-hist-table tbody tr:last-child .ag-hist-td { border-bottom: none; }
+
+/* ── Reason badges ────────────────────────────────────────────── */
+.ag-reason-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid;
+}
+.ag-reason-badge.target {
+    color: var(--ag-pos);
+    background: rgba(22, 163, 74, 0.08);
+    border-color: rgba(22, 163, 74, 0.25);
+}
+.ag-reason-badge.sl {
+    color: var(--ag-neg);
+    background: rgba(220, 38, 38, 0.08);
+    border-color: rgba(220, 38, 38, 0.25);
+}
+.ag-reason-badge.eod {
+    color: var(--ag-text-2);
+    background: var(--ag-accent-dim);
+    border-color: var(--ag-border);
+}
+
+/* ── Responsive — history table ───────────────────────────────── */
+@media (max-width: 600px) {
+    .ag-hist-th, .ag-hist-td { padding: 5px 7px; font-size: 11px; }
+}

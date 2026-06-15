@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Algo — NIFTY Weekly Straddle{% endblock %}
+{% block title %}Algo{% endblock %}
 
 {% block head %}
 {{ super() }}
@@ -9,6 +9,17 @@
 {% block content %}
 <div class="algo-page">
 <div class="algo-inner">
+
+    <!-- ── Tab bar ────────────────────────────────────────────── -->
+    <div class="ag-tab-bar">
+        <button class="ag-tab active" id="algo-tab-straddle" onclick="algoSwitch('straddle')">Straddle</button>
+        <button class="ag-tab"        id="algo-tab-rtp"      onclick="algoSwitch('rtp')">EMA RTP</button>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- Straddle panel                                          -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel active" id="algo-straddle-panel">
 
     <!-- ── Header ──────────────────────────────────────────────── -->
     <div class="ag-header">
@@ -115,6 +126,48 @@
             Exit Now
         </button>
     </div>
+
+    </div><!-- #algo-straddle-panel -->
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- EMA RTP panel                                           -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-rtp-panel">
+
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <div class="ag-header">
+        <span class="ag-title">EMA RTP — Railway Track</span>
+        <span id="rtpBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="rtpBadgeText">No Trade</span>
+        </span>
+        <span class="ag-last-upd" id="rtpLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <!-- ── Active Trade card ───────────────────────────────────── -->
+    <div class="ag-card" id="rtpActiveCard">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Active Trade</span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="rtpActiveGrid">
+                <div class="ag-empty">No active trade</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Executed Trade History ──────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Executed Trade History — Today</span>
+            <span id="rtpHistCount" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+        </div>
+        <div id="rtpHistBody">
+            <div class="ag-empty">No completed trades today</div>
+        </div>
+    </div>
+
+    </div><!-- #algo-rtp-panel -->
 
 </div><!-- .algo-inner -->
 </div><!-- .algo-page -->
