@@ -157,6 +157,22 @@ class MarketScheduler:
             misfire_grace_time=120,
         )
 
+        # Watchdog: restart the thread if it crashes mid-day
+        self.scheduler.add_job(
+            self._watchdog_rtp,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/5',
+                second=30,
+                timezone='Asia/Kolkata',
+            ),
+            id='rtp_algo_watchdog',
+            name='RTP Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
         self.scheduler.start()
         jobs = {j.id: str(j.next_run_time) for j in self.scheduler.get_jobs()}
         logger.info(f"Market scheduler started — jobs registered: {list(jobs.keys())}")
@@ -274,24 +290,53 @@ class MarketScheduler:
         except Exception as e:
             logger.error(f"[FIISector Scheduler] Error: {e}", exc_info=True)
 
-    def _start_rtp_monitoring(self):
-        """9:15 AM weekdays: start RTP Railway Track algo monitoring thread."""
+    # ── RTP algo management ───────────────────────────────────────────────────
+
+    def _rtp_username(self) -> str:
         import os
+        return os.getenv('MONITORING_USERNAME', 'Mine')
+
+    def _rtp_active(self) -> bool:
+        from trading_app.app.utils.user_env import UserEnvManager
+        val = UserEnvManager.get_user_var(self._rtp_username(), 'EMA_RTP_ACTIVE', 'false')
+        return val.strip().lower() == 'true'
+
+    def _ensure_rtp_running(self, source: str = '') -> None:
+        """Start the RTP monitoring thread if it is not already running.
+        Guards against duplicate starts via the module-level instance registry.
+        """
         try:
             if not self.is_trading_day():
                 return
-            username = os.getenv('MONITORING_USERNAME', 'Mine')
-            from trading_app.app.utils.user_env import UserEnvManager
-            active = UserEnvManager.get_user_var(username, 'EMA_RTP_ACTIVE', 'false')
-            if active.strip().lower() != 'true':
-                logger.info("[RTP Scheduler] EMA_RTP_ACTIVE=false — skipping start")
+            now = datetime.now()
+            h, m = now.hour, now.minute
+            # Only within the algo's active window (9:20 AM – 3:28 PM IST)
+            in_window = (h > 9 or (h == 9 and m >= 20)) and (h < 15 or (h == 15 and m <= 28))
+            if not in_window:
                 return
-            from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo
-            algo = RTPAlgo(username=username)
-            algo.start()
-            logger.info(f"[RTP Scheduler] Monitoring thread started for user={username}")
+            if not self._rtp_active():
+                logger.info(f"[RTP {source}] EMA_RTP_ACTIVE=false — skipping start")
+                return
+            from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+            username = self._rtp_username()
+            existing = get_instance(username)
+            if existing and existing.is_running():
+                return  # Already alive
+            if existing:
+                logger.warning(f"[RTP {source}] Monitoring thread dead — restarting")
+            else:
+                logger.info(f"[RTP {source}] Starting monitoring thread for user={username}")
+            RTPAlgo(username=username).start()
         except Exception as e:
-            logger.error(f"[RTP Scheduler] Error starting RTP algo: {e}", exc_info=True)
+            logger.error(f"[RTP {source}] _ensure_rtp_running failed: {e}", exc_info=True)
+
+    def _start_rtp_monitoring(self) -> None:
+        """9:15 AM weekdays: start RTP Railway Track algo monitoring thread."""
+        self._ensure_rtp_running(source='Scheduler')
+
+    def _watchdog_rtp(self) -> None:
+        """Every 5 minutes during market hours: restart RTP thread if it crashed."""
+        self._ensure_rtp_running(source='Watchdog')
 
     def _run_historic_oi_record_task(self):
         """3:30 PM IST: fetch and persist daily OI snapshot for all symbols."""
@@ -328,6 +373,9 @@ def init_scheduler(app):
     logger.info("Initializing market scheduler...")
     with app.app_context():
         market_scheduler.start()
+        # Startup recovery: if the server restarted during market hours the 9:15 AM
+        # cron already passed and the algo thread was never launched. Start it now.
+        market_scheduler._ensure_rtp_running(source='Startup')
 
     import atexit
     atexit.register(market_scheduler.stop)

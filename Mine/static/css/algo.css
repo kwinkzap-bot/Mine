@@ -583,25 +583,35 @@ body.ocean-theme .algo-page {
 .ag-panel.active { display: contents; } /* transparent to parent flex — preserves gap/direction */
 
 /* ── History table ────────────────────────────────────────────── */
-.ag-hist-table {
+.ag-hist-scroll {
     width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.ag-hist-table {
+    width: max-content;
+    min-width: 100%;
     border-collapse: collapse;
     font-size: 12px;
 }
 .ag-hist-th {
-    padding: 6px 10px;
+    padding: 6px 8px;
     font-size: 9px;
     font-weight: 700;
-    text-transform: uppercase;
+    text-transform: none;
     letter-spacing: 0.05em;
     color: var(--ag-text-3);
     text-align: left;
     border-bottom: 1px solid var(--ag-border-sub);
     background: var(--ag-bg);
     white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 1;
 }
 .ag-hist-td {
-    padding: 7px 10px;
+    font-size: 10px;
+    padding: 7px 8px;
     color: var(--ag-text);
     border-bottom: 1px solid var(--ag-border-sub);
     font-variant-numeric: tabular-nums;
@@ -636,8 +646,25 @@ body.ocean-theme .algo-page {
     background: var(--ag-accent-dim);
     border-color: var(--ag-border);
 }
+.ag-reason-badge.manual {
+    color: #7c3aed;
+    background: rgba(124, 58, 237, 0.08);
+    border-color: rgba(124, 58, 237, 0.25);
+}
+
+/* ── Card header action buttons ───────────────────────────────── */
+.ag-card-hdr-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+.ag-card-hdr-actions .ag-btn {
+    padding: 5px 12px;
+    font-size: 0.75rem;
+}
 
 /* ── Responsive — history table ───────────────────────────────── */
 @media (max-width: 600px) {
-    .ag-hist-th, .ag-hist-td { padding: 5px 7px; font-size: 11px; }
+    .ag-hist-th, .ag-hist-td { padding: 5px 6px; font-size: 10px; }
 }

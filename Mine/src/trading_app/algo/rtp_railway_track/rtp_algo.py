@@ -16,7 +16,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -34,8 +34,16 @@ _DELTA_TARGET   = 0.90
 _STRIKE_STEP    = 50.0
 _SLOPE_BARS     = 8
 _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
-_WARMUP_BARS    = 30   # EMA20 + slope_bars=8 needs ~28 bars; 30 lets signals fire by ~9:50 AM
+_WARMUP_BARS    = 200  # Must match backtest warmup — EMA50 needs ~200 1-min bars to converge
+_LOOKBACK_DAYS  = 5    # Calendar days to look back for warmup candles (covers weekends/holidays)
 _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute of data gap)
+
+# Module-level registry so the API can reach the running instance without storing it in the scheduler
+_instances: Dict[str, 'RTPAlgo'] = {}
+
+
+def get_instance(username: str) -> Optional['RTPAlgo']:
+    return _instances.get(username)
 
 
 class RTPAlgo:
@@ -63,11 +71,16 @@ class RTPAlgo:
             name='rtp-algo-monitor',
         )
         self._thread.start()
+        _instances[self.username] = self
         logger.info("[RTP] Monitoring thread started")
 
     def stop(self) -> None:
         self._stop_event.set()
+        _instances.pop(self.username, None)
         logger.info("[RTP] Stop requested")
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
     # ── State ─────────────────────────────────────────────────────────────────
 
@@ -86,7 +99,8 @@ class RTPAlgo:
             except Exception as e:
                 logger.error(f"[RTP] State save failed: {e}")
 
-    def _append_history(self, trade: Dict[str, Any], exit_spot: float, reason: str) -> None:
+    def _append_history(self, trade: Dict[str, Any], exit_spot: float, reason: str,
+                         opt_exit_price: Optional[float] = None) -> None:
         """Append a completed trade record to rtp_trades_history.json (today only, latest-first)."""
         try:
             today = date.today().isoformat()
@@ -102,24 +116,38 @@ class RTPAlgo:
             if history and history[0].get('date') != today:
                 history = []
 
-            direction = trade.get('direction', 'BUY')
-            entry_spot = float(trade.get('entry_spot', 0))
-            pnl_pts = round(exit_spot - entry_spot, 2) if direction == 'BUY' \
-                      else round(entry_spot - exit_spot, 2)
+            direction   = trade.get('direction', 'BUY')
+            entry_spot  = float(trade.get('entry_spot', 0))
+            pnl_pts     = round(exit_spot - entry_spot, 2) if direction == 'BUY' \
+                          else round(entry_spot - exit_spot, 2)
+
+            opt_entry_price = trade.get('opt_entry_price')
+            opt_pnl_pts: Optional[float] = None
+            opt_pnl_inr: Optional[float] = None
+            if opt_entry_price is not None and opt_exit_price is not None:
+                opt_pnl_pts = round(opt_exit_price - opt_entry_price, 2)
+                total_qty = sum(
+                    e.get('quantity', 0) for e in trade.get('broker_entries', [])
+                )
+                opt_pnl_inr = round(opt_pnl_pts * total_qty, 2) if total_qty else None
 
             record = {
-                'date':          today,
-                'direction':     direction,
-                'entry_spot':    entry_spot,
-                'exit_spot':     exit_spot,
-                'pnl_pts':       pnl_pts,
-                'reason':        reason,
-                'entry_time':    trade.get('entry_time', ''),
-                'exit_time':     datetime.now().isoformat(),
-                'strike':        trade.get('strike'),
-                'option_type':   trade.get('option_type', ''),
-                'lot_size':      trade.get('lot_size', 75),
-                'broker_entries': trade.get('broker_entries', []),
+                'date':             today,
+                'direction':        direction,
+                'entry_spot':       entry_spot,
+                'exit_spot':        exit_spot,
+                'pnl_pts':          pnl_pts,
+                'reason':           reason,
+                'entry_time':       trade.get('entry_time', ''),
+                'exit_time':        datetime.now().isoformat(),
+                'strike':           trade.get('strike'),
+                'option_type':      trade.get('option_type', ''),
+                'lot_size':         trade.get('lot_size', 75),
+                'opt_entry_price':  opt_entry_price,
+                'opt_exit_price':   opt_exit_price,
+                'opt_pnl_pts':      opt_pnl_pts,
+                'opt_pnl_inr':      opt_pnl_inr,
+                'broker_entries':   trade.get('broker_entries', []),
             }
             history.insert(0, record)  # latest-first
 
@@ -149,20 +177,24 @@ class RTPAlgo:
             logger.warning(f"[RTP] Spot fetch failed: {e}")
             return None
 
-    def _fetch_1min_candles(self, provider: Any, n: int = 300) -> Optional[pd.DataFrame]:
+    def _fetch_1min_candles(self, provider: Any) -> Optional[pd.DataFrame]:
+        """Fetch 1-min candles with enough history for EMA50 to converge.
+        Today-only data (~50 bars at 10 AM) gives a completely wrong EMA50,
+        causing false signals that diverge from backtest results.
+        """
         try:
-            today = date.today().strftime('%Y-%m-%d')
-            candles = provider.historical_data(
+            today     = date.today()
+            from_date = (today - timedelta(days=_LOOKBACK_DAYS)).strftime('%Y-%m-%d')
+            candles   = provider.historical_data(
                 instrument_token=_NIFTY_FYERS,
-                from_date=today,
-                to_date=today,
+                from_date=from_date,
+                to_date=today.strftime('%Y-%m-%d'),
                 interval='minute',
                 use_cache=False,
             )
             if not candles:
                 return None
-            df = pd.DataFrame(candles)
-            return df.tail(n).reset_index(drop=True)
+            return pd.DataFrame(candles).reset_index(drop=True)
         except Exception as e:
             logger.warning(f"[RTP] Candle fetch failed: {e}")
             return None
@@ -498,22 +530,33 @@ class RTPAlgo:
                 f" qty={quantity} ({lots} lot(s)) order_id={order_id}"
             )
 
+        # Capture option LTP just after order placement as proxy for fill price
+        opt_entry_price: Optional[float] = None
+        try:
+            ltp_data = provider.ltp([fyers_sym])
+            raw = ltp_data.get(fyers_sym, {}).get('last_price', 0)
+            opt_entry_price = round(float(raw), 2) if raw else None
+        except Exception as _e:
+            logger.warning(f"[RTP] Could not fetch option entry LTP: {_e}")
+
         state = self._load_state()
         state['active_trade'] = {
-            'direction':      direction,
-            'entry_spot':     spot,
-            'entry_time':     datetime.now().isoformat(),
-            'sl_level':       sl_level,
-            'target_level':   tgt_level,
-            'strike':         int(strike),
-            'option_type':    opt_type,
-            'lot_size':       self._lot_size,
-            'expiry':         str(self._expiry),
-            'broker_entries': broker_entries,
+            'direction':       direction,
+            'entry_spot':      spot,
+            'entry_time':      datetime.now().isoformat(),
+            'sl_level':        sl_level,
+            'target_level':    tgt_level,
+            'strike':          int(strike),
+            'option_type':     opt_type,
+            'lot_size':        self._lot_size,
+            'expiry':          str(self._expiry),
+            'broker_entries':  broker_entries,
+            'opt_entry_price': opt_entry_price,
         }
         self._save_state(state)
         logger.info(
             f"[RTP] ENTERED {direction}: spot={spot} {int(strike)}{opt_type}"
+            f" opt_ltp={opt_entry_price}"
             f" sl={sl_level} tgt={tgt_level} expiry={self._expiry}"
             f" brokers={len(broker_entries)}"
         )
@@ -527,6 +570,19 @@ class RTPAlgo:
 
         opt_type = trade['option_type']
         strike   = trade['strike']
+
+        # Capture option LTP before exit orders for option P&L calculation
+        opt_exit_price: Optional[float] = None
+        try:
+            provider = getattr(self, '_provider', None)
+            if provider:
+                fyers_sym = trade.get('broker_entries', [{}])[0].get('fyers_sym', '') if trade.get('broker_entries') else ''
+                if fyers_sym:
+                    ltp_data = provider.ltp([fyers_sym])
+                    raw = ltp_data.get(fyers_sym, {}).get('last_price', 0)
+                    opt_exit_price = round(float(raw), 2) if raw else None
+        except Exception as _e:
+            logger.warning(f"[RTP] Could not fetch option exit LTP: {_e}")
 
         for entry in trade.get('broker_entries', []):
             idx         = entry['broker_idx']
@@ -561,10 +617,92 @@ class RTPAlgo:
             'spot':   spot,
             'time':   datetime.now().isoformat(),
         }
-        self._append_history(trade, spot, reason)
+        self._append_history(trade, spot, reason, opt_exit_price=opt_exit_price)
         self._save_state(state)
         self._spot_fail_count = 0
-        logger.info(f"[RTP] EXITED ({reason}): spot={spot}")
+        logger.info(f"[RTP] EXITED ({reason}): spot={spot} opt_exit_ltp={opt_exit_price}")
+
+    # ── needs_reset replay ────────────────────────────────────────────────────
+
+    def _replay_today_needs_reset(self, provider: Any) -> Tuple[bool, bool]:
+        """Re-derive buy/sell_needs_reset by replaying today's bars, skipping bars
+        that fall inside already-completed trades. Mirrors the backtest's bar-by-bar
+        tracking so mid-day restarts don't get stuck with a stale True flag.
+        """
+        try:
+            df = self._fetch_1min_candles(provider)
+            if df is None or df.empty:
+                return False, False
+
+            from trading_app.Backtest.rtp_backtest_engine import RTPBacktestEngine
+            engine = RTPBacktestEngine(
+                df=df,
+                entry_mode='RTP(20 & 9)',
+                interval_minutes=1,
+                slope_bars=_SLOPE_BARS,
+                use_adx=False,
+                sl_points=_SL_POINTS,
+                tgt_points=_TGT_POINTS,
+            )
+            processed = engine.df
+
+            today = date.today()
+            today_bars = processed[processed['datetime'].dt.date == today].copy()
+            if today_bars.empty:
+                return False, False
+
+            # Build trade-period exclusion list from today's closed trade history
+            trade_periods: List[Tuple] = []
+            try:
+                with open(_HISTORY_FILE, 'r') as _f:
+                    history = json.load(_f)
+                today_str = today.isoformat()
+                for t in history:
+                    if t.get('date') != today_str:
+                        continue
+                    try:
+                        e = pd.Timestamp(t['entry_time'])
+                        x = pd.Timestamp(t['exit_time'])
+                        trade_periods.append((e, x))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            buy_needs_reset  = False
+            sell_needs_reset = False
+
+            for _, row in today_bars.iterrows():
+                if not row.get('session_ok', False):
+                    continue
+                bar_dt = row['datetime']
+                # Skip bars that occurred inside a past trade (mirrors backtest skip)
+                if any(e <= bar_dt <= x for e, x in trade_periods):
+                    continue
+
+                if sell_needs_reset and row['high'] < min(row['ema9'], row['ema20']):
+                    sell_needs_reset = False
+                if buy_needs_reset and row['low'] > max(row['ema9'], row['ema20']):
+                    buy_needs_reset = False
+
+                buy_sig  = bool(row['rway_up'] and row['bull_stack'] and
+                                row['buy_touch'] and row['buy_pat'] and not buy_needs_reset)
+                sell_sig = bool(row['rway_dn'] and row['bear_stack'] and
+                                row['sell_touch'] and row['sell_pat'] and not sell_needs_reset)
+                if buy_sig:
+                    buy_needs_reset = True
+                if sell_sig:
+                    sell_needs_reset = True
+
+            logger.info(
+                f"[RTP] needs_reset replayed — buy={buy_needs_reset} sell={sell_needs_reset}"
+                f" ({len(trade_periods)} past trade(s) excluded)"
+            )
+            return buy_needs_reset, sell_needs_reset
+
+        except Exception as e:
+            logger.error(f"[RTP] needs_reset replay error: {e}", exc_info=True)
+            return False, False
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -574,16 +712,31 @@ class RTPAlgo:
         if not provider:
             logger.error("[RTP] Could not get data provider — aborting")
             return
+        self._provider = provider  # stored so _exit_trade can fetch option LTP
 
-        # ── Day-start initialisation ──────────────────────────────────────────
+        # ── Day-start / mid-day-restart initialisation ────────────────────────
 
-        # Reset needs_reset flags for the new trading day (safe when no open trade)
         state = self._load_state()
         if not state.get('active_trade'):
-            state['buy_needs_reset']  = False
-            state['sell_needs_reset'] = False
-            self._save_state(state)
-            logger.info("[RTP] buy/sell_needs_reset cleared for new trading day")
+            now = datetime.now()
+            if now.hour < 9 or (now.hour == 9 and now.minute < 20):
+                # True day start: clear both flags unconditionally
+                state['buy_needs_reset']  = False
+                state['sell_needs_reset'] = False
+                self._save_state(state)
+                logger.info("[RTP] buy/sell_needs_reset cleared for new trading day")
+            else:
+                # Mid-day restart (watchdog / server recovery):
+                # replay today's bars so we don't lose a reset that happened
+                # while the thread was down, and don't falsely clear a live flag.
+                buy_nr, sell_nr = self._replay_today_needs_reset(provider)
+                state['buy_needs_reset']  = buy_nr
+                state['sell_needs_reset'] = sell_nr
+                self._save_state(state)
+                logger.info(
+                    f"[RTP] Mid-day restart — replayed needs_reset:"
+                    f" buy={buy_nr} sell={sell_nr}"
+                )
 
         # Cache broker services once — avoids repeated session re-initialisation per trade
         logger.info("[RTP] Initialising broker services...")
@@ -629,14 +782,10 @@ class RTPAlgo:
                     logger.info("[RTP] EOD cutoff reached — monitor loop ending")
                     break
 
-                # ── Runtime kill-switch
-                if self._uvar('EMA_RTP_ACTIVE', 'false').lower() != 'true':
-                    time.sleep(5)
-                    continue
-
                 state = self._load_state()
 
-                # ── In trade → check SL / Target every second via spot price
+                # ── In trade → check SL / Target every second regardless of kill-switch.
+                # The kill-switch only prevents new entries; it must never block an exit.
                 if state.get('active_trade'):
                     spot = self._get_nifty_spot(provider)
                     if spot:
@@ -664,28 +813,34 @@ class RTPAlgo:
                                 " — open trade UNMONITORED. Check provider connection."
                             )
 
-                # ── No trade → check for signal once per new minute
-                # Compares m != last_signal_minute instead of s == 0 so a missed
-                # second-boundary (slow network call) never skips the whole minute.
-                elif m != last_signal_minute:
-                    last_signal_minute = m
-                    df = self._fetch_1min_candles(provider, 300)
-                    if df is not None and len(df) >= _WARMUP_BARS:
-                        signal, state = self._check_rtp_signal(df, state)
-                        self._save_state(state)
+                else:
+                    # ── Runtime kill-switch — only blocks new signal entries
+                    if self._uvar('EMA_RTP_ACTIVE', 'false').lower() != 'true':
+                        time.sleep(5)
+                        continue
 
-                        if signal:
-                            logger.info(
-                                f"[RTP] Signal: {signal} at {now.strftime('%H:%M:%S')}"
+                    # ── No trade → check for signal once per new minute
+                    # Compares m != last_signal_minute instead of s == 0 so a missed
+                    # second-boundary (slow network call) never skips the whole minute.
+                    if m != last_signal_minute:
+                        last_signal_minute = m
+                        df = self._fetch_1min_candles(provider)
+                        if df is not None and len(df) >= _WARMUP_BARS:
+                            signal, state = self._check_rtp_signal(df, state)
+                            self._save_state(state)
+
+                            if signal:
+                                logger.info(
+                                    f"[RTP] Signal: {signal} at {now.strftime('%H:%M:%S')}"
+                                )
+                                spot = self._get_nifty_spot(provider)
+                                if spot:
+                                    self._enter_trade(signal, spot, provider)
+                        else:
+                            logger.debug(
+                                f"[RTP] Insufficient candle data"
+                                f" ({len(df) if df is not None else 0}/{_WARMUP_BARS} bars)"
                             )
-                            spot = self._get_nifty_spot(provider)
-                            if spot:
-                                self._enter_trade(signal, spot, provider)
-                    else:
-                        logger.debug(
-                            f"[RTP] Insufficient candle data"
-                            f" ({len(df) if df is not None else 0}/{_WARMUP_BARS} bars)"
-                        )
 
             except Exception as e:
                 logger.error(f"[RTP] Monitor error: {e}", exc_info=True)

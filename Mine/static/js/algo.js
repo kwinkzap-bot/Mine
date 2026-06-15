@@ -91,6 +91,12 @@ function _rtpRenderStatus(data) {
             <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
         </div>`
     ).join('');
+
+    // Toggle action buttons based on trade state
+    const exitBtn  = document.getElementById('rtpExitBtn');
+    const startBtn = document.getElementById('rtpStartBtn');
+    if (exitBtn)  exitBtn.disabled  = !active;
+    if (startBtn) startBtn.disabled = active;
 }
 
 // ── RTP history ───────────────────────────────────────────────────────────────
@@ -120,38 +126,63 @@ function _rtpRenderHistory(trades) {
         return;
     }
 
+    function _fmtOpt(val) {
+        if (val == null) return '—';
+        return '₹' + Number(val).toFixed(2);
+    }
+    function _fmtPts(val, suffix) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
+    }
+    function _fmtInr(val) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
+    }
+
     body.innerHTML = `
+<div class="ag-hist-scroll">
 <table class="ag-hist-table">
     <thead>
         <tr>
-            <th class="ag-hist-th">Time</th>
-            <th class="ag-hist-th">Dir</th>
+            <th class="ag-hist-th">Date</th>
+            <th class="ag-hist-th">Entry Time</th>
+            <th class="ag-hist-th">Exit Time</th>
             <th class="ag-hist-th">Strike</th>
-            <th class="ag-hist-th">Entry</th>
-            <th class="ag-hist-th">Exit</th>
-            <th class="ag-hist-th">P&amp;L (pts)</th>
+            <th class="ag-hist-th">Opt Entry</th>
+            <th class="ag-hist-th">Opt Exit</th>
+            <th class="ag-hist-th">N Entry</th>
+            <th class="ag-hist-th">N Exit</th>
+            <th class="ag-hist-th">N P&amp;L</th>
+            <th class="ag-hist-th">Opt P&amp;L</th>
             <th class="ag-hist-th">Reason</th>
         </tr>
     </thead>
     <tbody>
     ${trades.map(t => {
-        const pnlCls = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const pnlStr = (t.pnl_pts >= 0 ? '+' : '') + Number(t.pnl_pts).toFixed(1);
+        const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
+        const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
+        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const oPnlCls   = (t.opt_pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
+        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
+        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
         return `<tr>
-            <td class="ag-hist-td">${t.exit_time ? _fmtTime(t.exit_time) : '—'}</td>
-            <td class="ag-hist-td">
-                <span class="ag-leg-type ${t.direction === 'BUY' ? 'ce' : 'pe'}"
-                      style="font-size:9px">${t.direction}</span>
-            </td>
+            <td class="ag-hist-td">${dateStr}</td>
+            <td class="ag-hist-td">${entryTime}</td>
+            <td class="ag-hist-td">${exitTime}</td>
             <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
             <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
             <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
-            <td class="ag-hist-td ${pnlCls}" style="font-weight:700">${pnlStr}</td>
+            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
             <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
         </tr>`;
     }).join('')}
     </tbody>
-</table>`;
+</table>
+</div>`;
 }
 
 // ── RTP helpers ───────────────────────────────────────────────────────────────
@@ -176,8 +207,42 @@ function _rtpFmtReason(reason) {
         TARGET: '<span class="ag-reason-badge target">TARGET</span>',
         SL:     '<span class="ag-reason-badge sl">SL</span>',
         EOD:    '<span class="ag-reason-badge eod">EOD</span>',
+        MANUAL: '<span class="ag-reason-badge manual">MANUAL</span>',
     };
     return map[reason] || reason || '—';
+}
+
+// ── RTP Force Exit ────────────────────────────────────────────────────────────
+
+function rtpExitNow(btn) {
+    if (!confirm('Force-close the active RTP trade? A market SELL order will be sent immediately.')) return;
+    _setBusy(btn, 'Exiting…');
+    fetch('/api/algo/rtp/exit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Exit failed: ' + (d.error || 'Unknown error')); _unbusy(btn, 'Force Exit'); return; }
+            clearTimeout(_rtpStatusTimer);
+            clearTimeout(_rtpHistoryTimer);
+            _rtpFetchStatus();
+            _rtpFetchHistory();
+        })
+        .catch(e => { alert('Request failed: ' + e); _unbusy(btn, 'Force Exit'); });
+}
+
+// ── RTP Start Algo ────────────────────────────────────────────────────────────
+
+function rtpStartAlgo(btn) {
+    if (!confirm('Start the RTP monitoring thread? Use this if the algo crashed or never started.')) return;
+    _setBusy(btn, 'Starting…');
+    fetch('/api/algo/rtp/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Start failed: ' + (d.error || 'Unknown error')); _unbusy(btn, 'Start Algo'); return; }
+            _unbusy(btn, 'Start Algo');
+            clearTimeout(_rtpStatusTimer);
+            _rtpFetchStatus();
+        })
+        .catch(e => { alert('Request failed: ' + e); _unbusy(btn, 'Start Algo'); });
 }
 
 // ── Fetch & render ────────────────────────────────────────────────────────────
@@ -430,6 +495,12 @@ function _num(v) {
 function _fmtTime(iso) {
     try {
         return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    } catch { return iso; }
+}
+
+function _fmtTimeOnly(iso) {
+    try {
+        return new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
     } catch { return iso; }
 }
 
