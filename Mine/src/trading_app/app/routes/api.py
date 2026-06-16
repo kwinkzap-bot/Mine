@@ -52,6 +52,28 @@ def _save_opt_cache(cache: dict) -> None:
     except Exception as _e:
         logger.warning(f"RTP opt cache write failed: {_e}")
 
+# Swing Momentum optimisation cache
+_SM_OPT_CACHE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', 'utils', 'sm_opt_cache.json')
+)
+
+def _load_sm_opt_cache() -> dict:
+    try:
+        if os.path.exists(_SM_OPT_CACHE_PATH):
+            with open(_SM_OPT_CACHE_PATH, 'r') as _f:
+                return json.load(_f)
+    except Exception:
+        pass
+    return {}
+
+def _save_sm_opt_cache(cache: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_SM_OPT_CACHE_PATH), exist_ok=True)
+        with open(_SM_OPT_CACHE_PATH, 'w') as _f:
+            json.dump(cache, _f, indent=2, default=str)
+    except Exception as _e:
+        logger.warning(f"SM opt cache write failed: {_e}")
+
 
 def _get_request_lock(key: Any) -> threading.Lock:
     with _pending_locks_manager:
@@ -7189,6 +7211,174 @@ def fii_sector_delete(date_str):
         return jsonify({'success': ok})
     except Exception as e:
         logger.error(f'FII sector delete error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── Swing Trade ───────────────────────────────────────────────────────────────
+
+_SWING_TRADE_CACHE: Dict[str, Any] = {}
+_SWING_TRADE_CACHE_TS: Dict[str, float] = {}
+_SWING_TRADE_CACHE_TTL = 900  # 15 minutes
+
+@api_bp.route('/swing-trade/stocks', methods=['GET'])
+def swing_trade_stocks():
+    auth_error = check_auth()
+    if auth_error: return auth_error
+
+    index_name = request.args.get('index', 'NIFTY').upper().strip()
+    cache_key = f"swing_{index_name}"
+    now_ts = _time.time()
+    if cache_key in _SWING_TRADE_CACHE and (now_ts - _SWING_TRADE_CACHE_TS.get(cache_key, 0)) < _SWING_TRADE_CACHE_TTL:
+        return jsonify(_SWING_TRADE_CACHE[cache_key])
+
+    try:
+        import yfinance as yf
+        from trading_app.service.dynamic_constituents import DynamicConstituentsService
+
+        stocks = DynamicConstituentsService.get_constituents(index_name)
+        yf_symbols = [f"{s}.NS" for s in stocks]
+
+        today = datetime.now().date()
+        start = today - timedelta(days=310)
+
+        raw = yf.download(yf_symbols, start=str(start), end=str(today + timedelta(days=1)),
+                          interval='1d', auto_adjust=True, progress=False, threads=True)
+
+        if raw.empty:
+            return jsonify({'success': False, 'error': 'No data returned from yfinance'}), 502
+
+        if len(yf_symbols) == 1:
+            close_df = raw[['Close']].copy()
+            close_df.columns = yf_symbols
+        else:
+            close_df = raw['Close'].copy()
+
+        close_df = close_df.dropna(how='all')
+        if close_df.empty:
+            return jsonify({'success': False, 'error': 'Empty close data'}), 502
+
+        def lookup(days_ago: int) -> pd.Series:
+            target = pd.Timestamp(today - timedelta(days=days_ago))
+            available = close_df.index[close_df.index <= target]
+            if len(available) == 0:
+                return pd.Series(dtype=float)
+            return close_df.loc[available[-1]]
+
+        latest     = close_df.iloc[-1]
+        prev_close = close_df.iloc[-2] if len(close_df) >= 2 else latest
+        wk_ago     = lookup(7)
+        mo_ago     = lookup(30)
+        mo3_ago    = lookup(91)
+        mo6_ago    = lookup(182)
+        mo9_ago    = lookup(273)
+
+        def pct(base: pd.Series, sym: str) -> Optional[float]:
+            if base.empty: return None
+            b = base.get(sym)
+            p = latest.get(sym)
+            if b is None or p is None: return None
+            try:
+                bf, pf = float(b), float(p)
+            except (TypeError, ValueError):
+                return None
+            if math.isnan(bf) or math.isnan(pf) or bf == 0:
+                return None
+            return round((pf - bf) / bf * 100, 2)
+
+        results = []
+        for sym, yf_sym in zip(stocks, yf_symbols):
+            price_val = latest.get(yf_sym)
+            if price_val is None:
+                continue
+            try:
+                price_f = float(price_val)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(price_f):
+                continue
+            results.append({
+                'symbol':     sym,
+                'price':      round(price_f, 2),
+                'day_chng':   pct(prev_close, yf_sym),
+                'week_chng':  pct(wk_ago,     yf_sym),
+                'month_chng': pct(mo_ago,      yf_sym),
+                'mo3_chng':   pct(mo3_ago,     yf_sym),
+                'mo6_chng':   pct(mo6_ago,     yf_sym),
+                'mo9_chng':   pct(mo9_ago,     yf_sym),
+            })
+
+        payload = {'success': True, 'stocks': results, 'index': index_name}
+        _SWING_TRADE_CACHE[cache_key] = payload
+        _SWING_TRADE_CACHE_TS[cache_key] = now_ts
+        return jsonify(payload)
+
+    except Exception as e:
+        logger.error(f'[SwingTrade] error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── Swing Momentum Backtest ───────────────────────────────────────────────────
+
+@api_bp.route('/backtest/swing-momentum', methods=['POST'])
+def backtest_swing_momentum():
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    body = request.get_json() or {}
+    try:
+        from trading_app.Backtest.swing_momentum_engine import SwingMomentumEngine
+        engine = SwingMomentumEngine(
+            index_name    = body.get('index', 'NIFTY 500'),
+            start_date    = body['start_date'],
+            end_date      = body['end_date'],
+            rebalance_freq= body.get('rebalance_freq', 'monthly'),
+            investment    = float(body.get('investment', 100000)),
+            top_n         = int(body.get('top_n', 10)),
+            exit_rank     = int(body.get('exit_rank', 50)),
+        )
+        result = engine.run()
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        logger.error(f'[SwingMomentum] backtest error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/swing-momentum/optimise', methods=['POST'])
+def backtest_sm_optimise():
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    body       = request.get_json() or {}
+    index_name = body.get('index', 'NIFTY 500').upper().strip()
+    start_date = body.get('start_date', '2022-01-01')
+    end_date   = body.get('end_date') or datetime.today().strftime('%Y-%m-%d')
+    investment = float(body.get('investment', 100000))
+    recalc     = bool(body.get('recalculate', False))
+    cache_key  = f"{index_name}_{start_date}_{end_date}"
+
+    if not recalc:
+        cache = _load_sm_opt_cache()
+        if cache_key in cache:
+            return jsonify({'success': True, 'from_cache': True, **cache[cache_key]})
+
+    try:
+        from trading_app.Backtest.swing_momentum_engine import optimise_swing_momentum
+        results = optimise_swing_momentum(index_name, start_date, end_date, investment)
+        payload = {
+            'index':               index_name,
+            'start_date':          start_date,
+            'end_date':            end_date,
+            'total_combos_tested': len(results),
+            'best':                results[0] if results else None,
+            'results':             results[:15],
+            'cached_at':           datetime.now().strftime('%Y-%m-%d %H:%M'),
+        }
+        cache = _load_sm_opt_cache()
+        cache[cache_key] = payload
+        _save_sm_opt_cache(cache)
+        return jsonify({'success': True, 'from_cache': False, **payload})
+    except Exception as e:
+        logger.error(f'[SMOptimise] error: {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

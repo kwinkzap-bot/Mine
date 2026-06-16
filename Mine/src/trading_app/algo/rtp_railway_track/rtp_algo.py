@@ -205,7 +205,7 @@ class RTPAlgo:
         self, df: pd.DataFrame, state: Dict[str, Any]
     ) -> Tuple[Optional[str], Dict[str, Any]]:
         """
-        Run indicator preparation on candles and check the last completed bar.
+        Run indicator preparation on candles and check the last COMPLETED bar.
         Updates buy/sell_needs_reset in state and returns (signal, updated_state).
         Signal is 'BUY', 'SELL', or None.
         """
@@ -224,7 +224,20 @@ class RTPAlgo:
             if len(processed) < 2:
                 return None, state
 
-            row = processed.iloc[-1]
+            # Filter to COMPLETED bars only.
+            # The provider may return the current in-progress candle as the last row;
+            # checking that incomplete bar misses every signal because the pattern
+            # is not yet formed. We exclude any bar whose open time falls within
+            # the current minute — only bars from previous minutes are complete.
+            now_ist     = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
+            completed   = processed[processed['datetime'] < now_ist]
+            if len(completed) < 2:
+                return None, state
+
+            last_bar_str = str(completed.iloc[-1]['datetime'])
+            logger.debug(f"[RTP] Signal check — last completed bar: {last_bar_str}")
+
+            row = completed.iloc[-1]
             buy_needs_reset  = bool(state.get('buy_needs_reset',  False))
             sell_needs_reset = bool(state.get('sell_needs_reset', False))
 
@@ -511,7 +524,7 @@ class RTPAlgo:
         for idx, (broker_type, svc) in self._broker_map.items():
             lots     = max(1, int(self._uvar(f'BROKER_{idx}_RTP_LOTS', '1') or '1'))
             quantity = lots * self._lot_size
-            product  = self._uvar(f'BROKER_{idx}_PRODUCT_TYPE', 'MIS').upper()
+            product  = self._uvar(f'BROKER_{idx}_PRODUCT_TYPE', 'NRML').upper()
             order_id = self._place_order(
                 idx, broker_type, svc, opt_type, strike,
                 kite_ts, fyers_sym, quantity, 'BUY', product,
@@ -599,7 +612,7 @@ class RTPAlgo:
                 else:
                     svc = self._init_broker_svc(idx, broker_type)
                 if svc:
-                    product  = self._uvar(f'BROKER_{idx}_PRODUCT_TYPE', 'MIS').upper()
+                    product  = self._uvar(f'BROKER_{idx}_PRODUCT_TYPE', 'NRML').upper()
                     order_id = self._place_order(
                         idx, broker_type, svc, opt_type, strike,
                         kite_ts, fyers_sym, quantity, 'SELL', product,
@@ -657,12 +670,16 @@ class RTPAlgo:
                 with open(_HISTORY_FILE, 'r') as _f:
                     history = json.load(_f)
                 today_str = today.isoformat()
+                _IST = 'Asia/Kolkata'
                 for t in history:
                     if t.get('date') != today_str:
                         continue
                     try:
-                        e = pd.Timestamp(t['entry_time'])
-                        x = pd.Timestamp(t['exit_time'])
+                        _e = pd.Timestamp(t['entry_time'])
+                        _x = pd.Timestamp(t['exit_time'])
+                        # Localize to IST so comparison with IST-aware bar_dt works
+                        e = _e.tz_localize(_IST) if _e.tzinfo is None else _e.tz_convert(_IST)
+                        x = _x.tz_localize(_IST) if _x.tzinfo is None else _x.tz_convert(_IST)
                         trade_periods.append((e, x))
                     except Exception:
                         pass
@@ -672,7 +689,16 @@ class RTPAlgo:
             buy_needs_reset  = False
             sell_needs_reset = False
 
-            for _, row in today_bars.iterrows():
+            # Use the same completed-bar cutoff as _check_rtp_signal:
+            # exclude bars at or after the current IST minute (may be in-progress).
+            # Then further exclude the LAST completed bar so _check_rtp_signal
+            # can process it fresh — if we replay the signal bar and set
+            # buy/sell_needs_reset=True here, _check_rtp_signal won't fire on it.
+            now_ist    = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
+            completed  = today_bars[today_bars['datetime'] < now_ist]
+            replay_bars = completed.iloc[:-1] if len(completed) > 1 else completed.iloc[:0]
+
+            for _, row in replay_bars.iterrows():
                 if not row.get('session_ok', False):
                     continue
                 bar_dt = row['datetime']
@@ -696,7 +722,7 @@ class RTPAlgo:
 
             logger.info(
                 f"[RTP] needs_reset replayed — buy={buy_needs_reset} sell={sell_needs_reset}"
-                f" ({len(trade_periods)} past trade(s) excluded)"
+                f" ({len(replay_bars)} bars replayed, {len(trade_periods)} past trade(s) excluded)"
             )
             return buy_needs_reset, sell_needs_reset
 
@@ -707,16 +733,41 @@ class RTPAlgo:
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     def _monitor_loop(self) -> None:
-        logger.info("[RTP] Monitor loop started")
-        provider = self._get_provider()
-        if not provider:
-            logger.error("[RTP] Could not get data provider — aborting")
+        logger.info("[RTP] Monitor loop started — waiting for data provider")
+
+        # ── Wait for provider (token may not be available immediately after restart) ──
+        provider = None
+        while not self._stop_event.is_set():
+            try:
+                provider = self._get_provider()
+                if provider:
+                    break
+            except Exception as _e:
+                logger.warning(f"[RTP] Provider init error: {_e}")
+            logger.info("[RTP] Data provider not ready — retrying in 30s")
+            self._stop_event.wait(30)
+
+        if self._stop_event.is_set() or provider is None:
+            logger.info("[RTP] Monitor loop stopped before provider became available")
             return
+
         self._provider = provider  # stored so _exit_trade can fetch option LTP
+        logger.info("[RTP] Data provider ready")
 
         # ── Day-start / mid-day-restart initialisation ────────────────────────
 
         state = self._load_state()
+
+        # Discard any active trade left over from a previous trading day
+        # (server crash during live trade leaves stale state; monitoring it
+        # tomorrow would use yesterday's SL/Target levels on today's prices)
+        _today_str = date.today().isoformat()
+        _stale     = state.get('active_trade')
+        if _stale and not str(_stale.get('entry_time', '')).startswith(_today_str):
+            logger.warning("[RTP] Stale active trade from previous day — clearing state")
+            state = {'active_trade': None, 'buy_needs_reset': False, 'sell_needs_reset': False}
+            self._save_state(state)
+
         if not state.get('active_trade'):
             now = datetime.now()
             if now.hour < 9 or (now.hour == 9 and now.minute < 20):
@@ -749,16 +800,23 @@ class RTPAlgo:
         else:
             logger.warning("[RTP] No active RTP brokers — signals will be detected but no orders placed")
 
-        # Pre-fetch NFO instruments once — avoids expensive download on every trade entry
-        logger.info("[RTP] Pre-fetching NFO instruments...")
-        try:
-            self._instruments, self._expiry, self._lot_size = self._get_instruments_and_expiry(provider)
-            logger.info(
-                f"[RTP] Instruments cached — expiry={self._expiry} lot_size={self._lot_size}"
-                f" count={len(self._instruments)}"
-            )
-        except Exception as e:
-            logger.error(f"[RTP] Instrument fetch failed at startup: {e}")
+        # ── Wait for NFO instruments (may need a live market session) ─────────
+        logger.info("[RTP] Fetching NFO instruments...")
+        while not self._stop_event.is_set():
+            try:
+                self._instruments, self._expiry, self._lot_size = \
+                    self._get_instruments_and_expiry(provider)
+                logger.info(
+                    f"[RTP] Instruments ready — expiry={self._expiry}"
+                    f" lot_size={self._lot_size} count={len(self._instruments)}"
+                )
+                break
+            except Exception as e:
+                logger.warning(f"[RTP] Instrument fetch failed: {e} — retrying in 60s")
+                self._stop_event.wait(60)
+
+        if self._stop_event.is_set():
+            logger.info("[RTP] Monitor loop stopped during instrument fetch")
             return
 
         last_signal_minute: Optional[int] = None
@@ -774,11 +832,17 @@ class RTPAlgo:
                     continue
 
                 # ── Past EOD cutoff: exit any open trade and stop
-                if (h > 15) or (h == 15 and m > 28):
+                if (h > 15) or (h == 15 and m >= 28):
                     state = self._load_state()
                     if state.get('active_trade'):
-                        spot = self._get_nifty_spot(provider) or 0.0
-                        self._exit_trade('EOD', spot)
+                        spot = None
+                        for _retry in range(5):
+                            spot = self._get_nifty_spot(provider)
+                            if spot:
+                                break
+                            if _retry < 4:
+                                time.sleep(0.5)
+                        self._exit_trade('EOD', spot or 0.0)
                     logger.info("[RTP] EOD cutoff reached — monitor loop ending")
                     break
 
@@ -833,9 +897,20 @@ class RTPAlgo:
                                 logger.info(
                                     f"[RTP] Signal: {signal} at {now.strftime('%H:%M:%S')}"
                                 )
-                                spot = self._get_nifty_spot(provider)
+                                spot = None
+                                for _retry in range(3):
+                                    spot = self._get_nifty_spot(provider)
+                                    if spot:
+                                        break
+                                    if _retry < 2:
+                                        time.sleep(0.5)
                                 if spot:
                                     self._enter_trade(signal, spot, provider)
+                                else:
+                                    logger.error(
+                                        f"[RTP] Signal {signal} missed — spot unavailable"
+                                        " after 3 retries"
+                                    )
                         else:
                             logger.debug(
                                 f"[RTP] Insufficient candle data"

@@ -134,9 +134,22 @@ document.addEventListener('DOMContentLoaded', function() {
         if (cprInputsRow)   cprInputsRow.style.display   = 'none';
         if (rtpParamsRow)   rtpParamsRow.style.display   = 'none';
         if (rtpLotRow)      rtpLotRow.style.display      = 'none';
+        const smParamsRow = document.getElementById('swingMomentumParamsRow');
+        if (smParamsRow) smParamsRow.style.display = 'none';
+        // Restore symbol/interval visibility (they are hidden for swing_momentum)
+        const symFg = document.getElementById('mainSymbolFg');
+        const intFg = document.getElementById('mainIntervalFg');
+        if (symFg) symFg.style.display = '';
+        if (intFg) intFg.style.display = '';
 
         const optBtn = document.getElementById('runOptimiseBtn');
-        if (optBtn) optBtn.style.display = (val === 'rtp') ? '' : 'none';
+        if (optBtn) optBtn.style.display = (val === 'rtp' || val === 'swing_momentum') ? '' : 'none';
+
+        // Hide optimise result panels when switching strategies
+        const rtpOptPanel = document.getElementById('rtpOptimisePanel');
+        const smOptPanel  = document.getElementById('smOptimisePanel');
+        if (rtpOptPanel) rtpOptPanel.style.display = 'none';
+        if (smOptPanel)  smOptPanel.style.display  = 'none';
 
         if (mainInputsRow) {
             mainInputsRow.classList.remove('form-row-5','form-row-6','form-row-7');
@@ -167,6 +180,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
             }
 
+        } else if (val === 'swing_momentum') {
+            if (smParamsRow) smParamsRow.style.display = 'grid';
+            if (symFg) symFg.style.display = 'none';
+            if (intFg) intFg.style.display = 'none';
+            if (startDateInput) {
+                const d = new Date(today.getFullYear() - 2, 0, 1);
+                startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
+            }
         } else {
             // apex (default)
             if (apexParamsRow)  apexParamsRow.style.display  = '';
@@ -195,8 +216,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 3. Run Backtest
     runBtn.addEventListener('click', async function() {
+        const _strat = strategySelect ? strategySelect.value : 'apex';
         const symbol = symbolSearch.value.toUpperCase();
-        if (!symbol) {
+        if (_strat !== 'swing_momentum' && !symbol) {
             window.showNotification('Please select a symbol', 'warning');
             return;
         }
@@ -224,16 +246,28 @@ document.addEventListener('DOMContentLoaded', function() {
         const btPlaceholder = document.getElementById('btRightPlaceholder');
         const periodSec     = document.getElementById('periodBreakdownSection');
         const optPanel      = document.getElementById('rtpOptimisePanel');
+        const smOptPanel    = document.getElementById('smOptimisePanel');
         if (btTradesSec)   btTradesSec.style.display   = 'none';
         if (btPlaceholder) btPlaceholder.style.display = '';
         if (periodSec)     periodSec.style.display     = 'none';
         if (optPanel)      optPanel.style.display      = 'none';
+        if (smOptPanel)    smOptPanel.style.display    = 'none';
 
         try {
             let endpoint = '/api/backtest/apex-reversal';
             const strat = strategySelect ? strategySelect.value : 'apex';
             if (strat === 'cpr_gap') endpoint = '/api/backtest/cpr-gap';
             if (strat === 'rtp')     endpoint = '/api/backtest/rtp';
+
+            // Swing Momentum: different endpoint + payload
+            if (strat === 'swing_momentum') {
+                endpoint = '/api/backtest/swing-momentum';
+                payload.index          = document.getElementById('smIndex')?.value || 'NIFTY 500';
+                payload.rebalance_freq = document.getElementById('smRebalFreq')?.value || 'monthly';
+                payload.investment     = parseFloat(document.getElementById('smInvestment')?.value || '100000');
+                payload.top_n          = parseInt(document.getElementById('smTopN')?.value || '10');
+                payload.exit_rank      = parseInt(document.getElementById('smExitRank')?.value || '50');
+            }
 
             // RTP-specific payload fields
             if (strat === 'rtp') {
@@ -283,6 +317,16 @@ document.addEventListener('DOMContentLoaded', function() {
         lastData = data;
         const { summary } = data;
         const isRtp = strategySelect && strategySelect.value === 'rtp';
+        const isSM  = strategySelect && strategySelect.value === 'swing_momentum';
+
+        if (isSM) {
+            lastData.is_swing_momentum = true;
+            _displaySwingMomentumResults(data);
+            return;
+        }
+
+        // Restore any stat card labels that swing_momentum may have changed
+        _restoreSmStatLabels();
 
         // ── Row 1: always-visible cards ────────────────────────────
         document.getElementById('statTotalTrades').textContent = summary.total_trades ?? 0;
@@ -697,6 +741,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function renderTable() {
         if (!lastData || !lastData.trades) return;
+        if (lastData.is_swing_momentum) { _renderSmTable(lastData.trades); return; }
         const trades = [...lastData.trades];
         const tbody = document.getElementById('tradesBody');
         
@@ -869,6 +914,315 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const optimiseBtn   = document.getElementById('runOptimiseBtn');
     const recalcOptBtn  = document.getElementById('recalculateOptBtn');
-    if (optimiseBtn)  optimiseBtn.addEventListener('click',  () => runOptimise(false));
+    if (optimiseBtn)  optimiseBtn.addEventListener('click', () => {
+        if (strategySelect && strategySelect.value === 'swing_momentum') _runSmOptimise(false);
+        else runOptimise(false);
+    });
     if (recalcOptBtn) recalcOptBtn.addEventListener('click', () => runOptimise(true));
+
+    // ── Swing Momentum Optimise ──────────────────────────────────────────
+    const smRecalcOptBtn = document.getElementById('smRecalcOptBtn');
+    if (smRecalcOptBtn) smRecalcOptBtn.addEventListener('click', () => _runSmOptimise(true));
+
+    async function _runSmOptimise(recalculate) {
+        const panel      = document.getElementById('smOptimisePanel');
+        const recalcBtn  = document.getElementById('smRecalcOptBtn');
+        const activeBtn  = recalculate ? recalcBtn : optimiseBtn;
+        const origText   = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+
+        try {
+            const resp = await fetch('/api/backtest/swing-momentum/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    index:       document.getElementById('smIndex')?.value || 'NIFTY 500',
+                    start_date:  document.getElementById('startDate').value,
+                    end_date:    document.getElementById('endDate').value,
+                    investment:  parseFloat(document.getElementById('smInvestment')?.value || '100000'),
+                    recalculate: recalculate,
+                })
+            });
+            const data = await resp.json();
+            if (!data.success) { window.showNotification(data.error || 'Optimisation failed', 'error'); return; }
+            _renderSmOptResults(data);
+        } catch (err) {
+            console.error('SM Optimise error:', err);
+            window.showNotification('Optimisation request failed', 'error');
+        } finally {
+            if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+        }
+    }
+
+    function _renderSmOptResults(data) {
+        const panel     = document.getElementById('smOptimisePanel');
+        const tbody     = document.getElementById('smOptTableBody');
+        const metaEl    = document.getElementById('smOptMeta');
+        const recalcBtn = document.getElementById('smRecalcOptBtn');
+        const rtpPanel  = document.getElementById('rtpOptimisePanel');
+
+        if (rtpPanel) rtpPanel.style.display = 'none';
+
+        if (metaEl) {
+            let meta = `${data.total_combos_tested} combos · ${data.index} · ${data.start_date} → ${data.end_date}`;
+            if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
+            metaEl.textContent = meta;
+        }
+
+        if (tbody) {
+            tbody.innerHTML = (data.results || []).map((r, i) => {
+                const retFmt = (r.total_return_pct >= 0 ? '+' : '') + r.total_return_pct.toFixed(1) + '%';
+                const cagrFmt = (r.cagr_pct >= 0 ? '+' : '') + r.cagr_pct.toFixed(1) + '%';
+                const mddFmt  = r.max_drawdown_pct.toFixed(1) + '%';
+                const freqLbl = r.rebalance_freq.charAt(0).toUpperCase() + r.rebalance_freq.slice(1);
+                return `
+                <tr class="${i === 0 ? 'opt-best' : ''}">
+                    <td>${i + 1}</td>
+                    <td>${r.top_n}</td>
+                    <td>${r.exit_rank}</td>
+                    <td>${freqLbl}</td>
+                    <td class="${r.total_return_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}">${retFmt}</td>
+                    <td class="${r.cagr_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}">${cagrFmt}</td>
+                    <td class="pnl-negative">${mddFmt}</td>
+                    <td>${r.total_rotations}</td>
+                    <td>${r.score.toFixed(2)}</td>
+                    <td><button class="btn-opt-use" data-idx="${i}">Use</button></td>
+                </tr>`;
+            }).join('');
+
+            tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    _applySmOptResult(data.results[parseInt(btn.dataset.idx)]);
+                });
+            });
+        }
+
+        if (panel) panel.style.display = '';
+        if (recalcBtn) recalcBtn.style.display = '';
+        if (data.best) _applySmOptResult(data.best);
+    }
+
+    function _applySmOptResult(r) {
+        if (!r) return;
+        const topNEl = document.getElementById('smTopN');
+        const rankEl = document.getElementById('smExitRank');
+        const freqEl = document.getElementById('smRebalFreq');
+        if (topNEl) topNEl.value = r.top_n;
+        if (rankEl) rankEl.value = r.exit_rank;
+        if (freqEl) freqEl.value = r.rebalance_freq;
+        if (window.showNotification) {
+            const freqLbl = r.rebalance_freq.charAt(0).toUpperCase() + r.rebalance_freq.slice(1);
+            window.showNotification(
+                `Applied: Top ${r.top_n}  ·  Exit >${r.exit_rank}  ·  ${freqLbl}`, 'success'
+            );
+        }
+    }
+
+    // ── Swing Momentum Portfolio helpers ─────────────────────────────────────
+
+    const _smOrigLabels = {};  // backup of stat card labels replaced by swing_momentum mode
+
+    function _smSetCard(valId, newLbl, newVal, extraCls) {
+        const valEl = document.getElementById(valId);
+        if (!valEl) return;
+        const lblEl = valEl.previousElementSibling;
+        if (lblEl && lblEl.classList.contains('stat-card__lbl')) {
+            if (!_smOrigLabels[valId]) _smOrigLabels[valId] = lblEl.textContent;
+            lblEl.textContent = newLbl;
+        }
+        valEl.textContent = newVal;
+        valEl.className   = 'stat-card__val' + (extraCls ? ' ' + extraCls : '');
+    }
+
+    function _restoreSmStatLabels() {
+        Object.entries(_smOrigLabels).forEach(([id, lbl]) => {
+            const el = document.getElementById(id);
+            if (el && el.previousElementSibling) el.previousElementSibling.textContent = lbl;
+        });
+    }
+
+    function _displaySwingMomentumResults(data) {
+        const { summary, portfolio_curve } = data;
+        const tr = summary.total_return_pct;
+
+        // Row 1: repurpose standard stat cards
+        _smSetCard('statTotalTrades', 'Rebalances',  summary.rebalance_count,    null);
+        _smSetCard('statWins',        'Buy Trades',  summary.total_buy_trades,    null);
+        _smSetCard('statLosses',      'Sell Trades', summary.total_sell_trades,   null);
+        _smSetCard('statWinRate',     'Rotations',   summary.total_rotations,     null);
+        _smSetCard('statTotalPnl',    '₹ End Value',
+            '₹' + Math.round(summary.end_value).toLocaleString('en-IN'),
+            tr >= 0 ? 'stat-val-green' : 'stat-val-red');
+        _smSetCard('statOutcome',     'Net Outcome', tr >= 0 ? 'PROFIT' : 'LOSS',
+            tr >= 0 ? 'stat-val-green' : 'stat-val-red');
+
+        // Row 2 (RTP): hide
+        const rtpRow = document.getElementById('rtpStatsRow');
+        if (rtpRow) rtpRow.style.display = 'none';
+
+        // Row 3 (SM-specific): show
+        const smRow = document.getElementById('smStatsRow');
+        if (smRow) smRow.style.display = '';
+        const _s = (id, val, cls) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = val;
+            if (cls) el.className = 'stat-card__val ' + cls;
+        };
+        _s('smStatReturn',    (tr >= 0 ? '+' : '') + tr.toFixed(2) + '%',
+            tr >= 0 ? 'stat-val-green' : 'stat-val-red');
+        _s('smStatCagr',      (summary.cagr_pct >= 0 ? '+' : '') + summary.cagr_pct.toFixed(2) + '%',
+            summary.cagr_pct >= 0 ? 'stat-val-green' : 'stat-val-red');
+        _s('smStatMdd',       summary.max_drawdown_pct.toFixed(2) + '%', 'stat-val-red');
+        _s('smStatRotations', String(summary.total_rotations), null);
+        _s('smStatAvgHold',   summary.avg_holding_days + ' d', null);
+
+        // Equity curve from portfolio_curve
+        _renderSmEquityCurve(portfolio_curve, summary.start_value);
+
+        // Period breakdown not applicable for SM
+        const periodSec = document.getElementById('periodBreakdownSection');
+        if (periodSec) periodSec.style.display = 'none';
+
+        // Trades table
+        _renderSmTable(data.trades);
+
+        // Show result sections
+        resultsArea.style.display = 'block';
+        const btTradesSec   = document.getElementById('btTradesSection');
+        const btPlaceholder = document.getElementById('btRightPlaceholder');
+        if (btTradesSec)   btTradesSec.style.display   = '';
+        if (btPlaceholder) btPlaceholder.style.display = 'none';
+    }
+
+    function _renderSmEquityCurve(curve, investment) {
+        const section = document.getElementById('equityCurveSection');
+        if (!section || !curve || !curve.length) {
+            if (section) section.style.display = 'none';
+            return;
+        }
+
+        const labels = curve.map(p => p.date.slice(0, 7));   // YYYY-MM
+        const values = curve.map(p => p.value);
+        const finalV = values[values.length - 1] || investment;
+        const diff   = finalV - investment;
+        const isProfit = diff >= 0;
+
+        const finalEl = document.getElementById('equityCurveFinalPnl');
+        if (finalEl) {
+            const pct = investment ? ((diff / investment) * 100).toFixed(1) : '0';
+            finalEl.textContent = (diff >= 0 ? '+' : '') + '₹' + Math.abs(Math.round(diff)).toLocaleString('en-IN') +
+                '  (' + (diff >= 0 ? '+' : '') + pct + '%)';
+            finalEl.style.color = isProfit ? '#00c853' : '#ff1744';
+        }
+
+        const fmtY = v => {
+            const abs = Math.abs(v);
+            if (abs >= 100000) return '₹' + (v / 100000).toFixed(1) + 'L';
+            if (abs >= 1000)   return '₹' + (v / 1000).toFixed(0)   + 'K';
+            return '₹' + v;
+        };
+
+        if (_equityChart) { _equityChart.destroy(); _equityChart = null; }
+        const ctx = document.getElementById('equityCurveChart');
+        if (!ctx) return;
+
+        const lineColor = isProfit ? '#2962ff' : '#ff1744';
+        const fillColor = isProfit ? 'rgba(41,98,255,0.07)' : 'rgba(255,23,68,0.06)';
+
+        _equityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Portfolio Value',
+                    data: values,
+                    borderColor: lineColor,
+                    backgroundColor: fillColor,
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    pointBackgroundColor: lineColor,
+                    borderWidth: 2,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            title: items => curve[items[0].dataIndex]?.date || '',
+                            label: item => {
+                                const v = item.raw;
+                                const chg = v - investment;
+                                return [
+                                    '  Value: ₹' + Math.round(v).toLocaleString('en-IN'),
+                                    '  P&L:   ' + (chg >= 0 ? '+' : '') + '₹' + Math.round(chg).toLocaleString('en-IN'),
+                                ];
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { maxTicksLimit: 15, color: '#999', font: { size: 11 }, autoSkip: true },
+                        grid:  { color: 'rgba(0,0,0,0.04)' },
+                    },
+                    y: {
+                        ticks: { color: '#999', font: { size: 11 }, callback: fmtY },
+                        grid:  { color: 'rgba(0,0,0,0.05)' },
+                    }
+                }
+            }
+        });
+
+        section.style.display = '';
+    }
+
+    function _renderSmTable(trades) {
+        const thead = document.querySelector('.trades-table thead tr');
+        const tbody = document.getElementById('tradesBody');
+        if (thead) {
+            thead.innerHTML = `
+                <th>Date</th>
+                <th>Symbol</th>
+                <th>Action</th>
+                <th>Qty</th>
+                <th>Price</th>
+                <th>₹ Value</th>
+                <th>Reason</th>
+                <th>Rank</th>
+                <th>P&amp;L</th>`;
+        }
+        if (!tbody) return;
+        if (!trades || !trades.length) {
+            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;">No trades generated</td></tr>';
+            return;
+        }
+        const fmtRs = v => '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        tbody.innerHTML = [...trades].map(t => {
+            const isBuy  = t.action === 'BUY';
+            const rowBg  = isBuy ? 'background:rgba(34,197,94,0.04)' : 'background:rgba(239,68,68,0.04)';
+            const pnlHtml = t.pnl != null
+                ? `<span class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl >= 0 ? '+' : ''}${fmtRs(t.pnl)}</span>`
+                : '—';
+            return `
+                <tr style="${rowBg}">
+                    <td>${t.date || '—'}</td>
+                    <td style="font-weight:600">${t.symbol || '—'}</td>
+                    <td><span class="badge ${isBuy ? 'badge-buy' : 'badge-sell'}">${t.action}</span></td>
+                    <td>${t.qty ?? 0}</td>
+                    <td>${fmtRs(t.price || 0)}</td>
+                    <td>${fmtRs(t.investment || 0)}</td>
+                    <td>${t.reason || '—'}</td>
+                    <td>${t.rank != null ? t.rank : '—'}</td>
+                    <td>${pnlHtml}</td>
+                </tr>`;
+        }).join('');
+    }
 });

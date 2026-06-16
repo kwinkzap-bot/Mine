@@ -1,9 +1,11 @@
 /* algo.js — Algo page: Straddle + EMA RTP tabs */
 'use strict';
 
-let _algoTimer       = null;
-let _rtpStatusTimer  = null;
-let _rtpHistoryTimer = null;
+let _algoTimer         = null;
+let _rtpStatusTimer    = null;
+let _rtpHistoryTimer   = null;
+let _rtpLastEntryTime  = null;  // tracks last seen entry_time to detect trade changes
+let _rtpLastActiveFlag = false; // tracks last seen active flag
 const _ALGO_TABS = ['straddle', 'rtp'];
 
 function algoLoad() {
@@ -37,8 +39,22 @@ function _rtpFetchStatus() {
         .then(r => r.json())
         .then(data => {
             _rtpRenderStatus(data);
+            // Detect trade state changes and immediately refresh history so opt
+            // entry/exit values reflect the just-completed or just-entered trade
+            // rather than waiting up to 30 s for the scheduled history poll.
+            const newEntryTime = data.state && data.state.active_trade
+                ? data.state.active_trade.entry_time : null;
+            const newActive = !!data.active;
+            const tradeChanged = newEntryTime !== _rtpLastEntryTime ||
+                                 newActive !== _rtpLastActiveFlag;
+            _rtpLastEntryTime  = newEntryTime;
+            _rtpLastActiveFlag = newActive;
+            if (tradeChanged) {
+                clearTimeout(_rtpHistoryTimer);
+                _rtpFetchHistory();
+            }
             clearTimeout(_rtpStatusTimer);
-            _rtpStatusTimer = setTimeout(_rtpFetchStatus, data.active ? 5000 : 30000);
+            _rtpStatusTimer = setTimeout(_rtpFetchStatus, newActive ? 5000 : 30000);
         })
         .catch(() => {
             clearTimeout(_rtpStatusTimer);
@@ -92,11 +108,9 @@ function _rtpRenderStatus(data) {
         </div>`
     ).join('');
 
-    // Toggle action buttons based on trade state
-    const exitBtn  = document.getElementById('rtpExitBtn');
-    const startBtn = document.getElementById('rtpStartBtn');
-    if (exitBtn)  exitBtn.disabled  = !active;
-    if (startBtn) startBtn.disabled = active;
+    // Toggle Force Exit button based on trade state
+    const exitBtn = document.getElementById('rtpExitBtn');
+    if (exitBtn) exitBtn.disabled = !active;
 }
 
 // ── RTP history ───────────────────────────────────────────────────────────────
@@ -229,21 +243,6 @@ function rtpExitNow(btn) {
         .catch(e => { alert('Request failed: ' + e); _unbusy(btn, 'Force Exit'); });
 }
 
-// ── RTP Start Algo ────────────────────────────────────────────────────────────
-
-function rtpStartAlgo(btn) {
-    if (!confirm('Start the RTP monitoring thread? Use this if the algo crashed or never started.')) return;
-    _setBusy(btn, 'Starting…');
-    fetch('/api/algo/rtp/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-        .then(r => r.json())
-        .then(d => {
-            if (!d.success) { alert('Start failed: ' + (d.error || 'Unknown error')); _unbusy(btn, 'Start Algo'); return; }
-            _unbusy(btn, 'Start Algo');
-            clearTimeout(_rtpStatusTimer);
-            _rtpFetchStatus();
-        })
-        .catch(e => { alert('Request failed: ' + e); _unbusy(btn, 'Start Algo'); });
-}
 
 // ── Fetch & render ────────────────────────────────────────────────────────────
 

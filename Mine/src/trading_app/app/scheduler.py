@@ -303,6 +303,10 @@ class MarketScheduler:
 
     def _ensure_rtp_running(self, source: str = '') -> None:
         """Start the RTP monitoring thread if it is not already running.
+        Always starts during market hours regardless of EMA_RTP_ACTIVE — the
+        kill-switch lives inside the loop and gates signal detection only.
+        Gating thread startup on EMA_RTP_ACTIVE would leave the algo dormant
+        until the next 5-min watchdog tick after the user enables the flag.
         Guards against duplicate starts via the module-level instance registry.
         """
         try:
@@ -310,12 +314,11 @@ class MarketScheduler:
                 return
             now = datetime.now()
             h, m = now.hour, now.minute
-            # Only within the algo's active window (9:20 AM – 3:28 PM IST)
-            in_window = (h > 9 or (h == 9 and m >= 20)) and (h < 15 or (h == 15 and m <= 28))
+            # Window: 9:15 AM – 3:27 PM IST. The monitor loop exits at 3:28 PM
+            # (m >= 28); the watchdog must close before that so it doesn't restart
+            # a thread that just exited for EOD.
+            in_window = (h > 9 or (h == 9 and m >= 15)) and (h < 15 or (h == 15 and m <= 27))
             if not in_window:
-                return
-            if not self._rtp_active():
-                logger.info(f"[RTP {source}] EMA_RTP_ACTIVE=false — skipping start")
                 return
             from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
             username = self._rtp_username()
