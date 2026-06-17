@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Backtest - Apex Reversal Engine{% endblock %}
+{% block title %}Backtest Strategy{% endblock %}
 {% block head %}
 {{ super() }}
 <style>
@@ -265,17 +265,9 @@
 {% endblock %}
 {% block content %}
 <div class="backtest-container">
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
-        <div>
-            <h1>Backtest Strategy</h1>
-            <p style="margin-bottom: 0;">Analyze performance of the Apex Reversal Engine across different symbols and timeframes.</p>
-        </div>
-        <div style="margin-top: 4px;">
-            <select id="strategySelect" style="height: 32px; padding: 0 30px 0 12px; font-size: 13px; font-weight: 600; color: #1a237e; border: 1.5px solid #2962ff; border-radius: 6px; background-color: #f0f4ff; cursor: pointer; outline: none; appearance: none; background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%232962ff%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E'); background-repeat: no-repeat; background-position: right 10px center; transition: all 0.2s;">
-                <option value="apex">Apex Reversal Engine</option>
-                <option value="cpr_gap">CPR</option>
-            </select>
-        </div>
+    <div style="margin-bottom: 24px;">
+        <h1>Backtest Strategy</h1>
+        <p style="margin-bottom: 0;">Analyze strategy performance across different symbols and timeframes.</p>
     </div>
 
     <!-- Row 1: Core Parameters -->
@@ -305,70 +297,6 @@
                 <option value="30minute">30 Minute</option>
                 <option value="60minute" selected>60 Minute</option>
                 <option value="day">Daily</option>
-            </select>
-        </div>
-    </div>
-
-    <!-- Row 1b: CPR Specific (Visible only for CPR) -->
-    <div class="form-row form-row-3" id="cprInputsRow" style="display: none;">
-        <div class="form-group" id="cprTypeContainer">
-            <label for="cprType">Type</label>
-            <select id="cprType">
-                <option value="s1_r1" selected>S1 & L and R1 & High</option>
-                <option value="on_cpr">On CPR</option>
-            </select>
-        </div>
-        <div class="form-group" id="entryTypeContainer">
-            <label for="entryType">Entry Type</label>
-            <select id="entryType">
-                <option value="any">Crossed Either (Any)</option>
-                <option value="pdh_pdl">Crossed High or Low</option>
-                <option value="s1_r1">Crossed S1 or R1</option>
-                <option value="both" selected>Crossed Both</option>
-            </select>
-        </div>
-        <div class="form-group" id="slTypeContainer">
-            <label for="slType">Stoploss Type</label>
-            <select id="slType">
-                <option value="both" selected>R1/S1 & High/Low</option>
-                <option value="pdh_pdl">High/Low Only</option>
-                <option value="s1_r1">R1/S1 Only</option>
-                <option value="candle">First Candle Low/High</option>
-            </select>
-        </div>
-    </div>
-
-    <!-- Row 2: Strategy Parameters -->
-    <div id="apexParamsRow" class="form-row form-row-3">
-        <div class="form-group">
-            <label for="pivotStrength">Pivot Strength</label>
-            <input type="number" id="pivotStrength" value="1" min="1">
-        </div>
-        <div class="form-group">
-            <label for="rsiLength">RSI Length</label>
-            <input type="number" id="rsiLength" value="14" min="1">
-        </div>
-        <div class="form-group">
-            <label for="rrRatio">Risk : Reward</label>
-            <input type="number" id="rrRatio" value="3.0" step="0.1">
-        </div>
-    </div>
-
-    <!-- Row 3: Options -->
-    <div id="apexOptionsRow" style="display: flex; align-items: center; gap: 24px; margin: 12px 0 8px; flex-wrap: wrap;">
-        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; font-weight: 500; color: #333; user-select: none;">
-            <input type="checkbox" id="slClosePrice" checked
-                   style="width: 18px; height: 18px; accent-color: #2962ff; cursor: pointer;">
-            SL on Candle Close
-            <span style="font-size: 12px; color: #888; font-weight: 400;">(uncheck for touch-based SL)</span>
-        </label>
-        <div style="display: flex; align-items: center; gap: 8px;">
-            <label for="trailMode" style="font-size: 14px; font-weight: 500; color: #333; white-space: nowrap;">Trailing SL:</label>
-            <select id="trailMode" style="height: 36px; padding: 0 10px; border: 1.5px solid #e0e0e0; border-radius: 8px; font-size: 13px; font-weight: 500; background: #fafbfc; cursor: pointer;">
-                <option value="0">Break Even Only</option>
-                <option value="1">Trail 1 Candle</option>
-                <option value="2">Trail 2 Candles</option>
-                <option value="3">Trail 3 Candles</option>
             </select>
         </div>
     </div>

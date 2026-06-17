@@ -211,7 +211,7 @@ def _do_exit(broker_kite: Any, username: str, broker_instance: int, reason: str)
     try:
         from trading_app.app.utils.user_env import UserEnvManager
         product_type = (
-            UserEnvManager.get_user_var(username, f'BROKER_{broker_instance}_PRODUCT_TYPE') or 'MIS'
+            UserEnvManager.get_user_var(username, f'BROKER_{broker_instance}_PRODUCT_TYPE') or 'NRML'
         ).upper()
 
         quantity = state.get('lots', 1) * state.get('lot_size', 1)
@@ -265,7 +265,7 @@ class NiftyWeeklyStraddle:
         delta_target = float(UserEnvManager.get_user_var(u, f'BROKER_{n}_STRADDLE_DELTA') or 0.16)
         sl_cap = float(UserEnvManager.get_user_var(u, f'BROKER_{n}_STRADDLE_SL_CAP') or 8300)
         lots = int(UserEnvManager.get_user_var(u, f'BROKER_{n}_STRADDLE_LOTS') or 1)
-        product_type = (UserEnvManager.get_user_var(u, f'BROKER_{n}_PRODUCT_TYPE') or 'MIS').upper()
+        product_type = (UserEnvManager.get_user_var(u, f'BROKER_{n}_PRODUCT_TYPE') or 'NRML').upper()
         return delta_target, sl_cap, lots, product_type
 
     def preview(self) -> Dict[str, Any]:

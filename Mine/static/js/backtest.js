@@ -1,6 +1,6 @@
 /**
  * backtest.js
- * Handles the UI logic for the Apex Reversal Engine backtester.
+ * Handles the UI logic for the backtester.
  */
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -113,8 +113,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 2.5 Strategy Selection Logic
     const strategySelect = document.getElementById('strategySelect');
-    const apexParamsRow  = document.getElementById('apexParamsRow');
-    const apexOptionsRow = document.getElementById('apexOptionsRow');
     const rtpParamsRow   = document.getElementById('rtpParamsRow');
     const rtpLotRow      = document.getElementById('rtpLotRow');
 
@@ -123,15 +121,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const intervalSelect = document.getElementById('interval');
         const startDateInput = document.getElementById('startDate');
-        const cprInputsRow   = document.getElementById('cprInputsRow');
         const mainInputsRow  = document.getElementById('mainInputsRow');
         const today = new Date();
         const val   = strategySelect.value;
 
         // Reset all rows
-        if (apexParamsRow)  apexParamsRow.style.display  = 'none';
-        if (apexOptionsRow) apexOptionsRow.style.display = 'none';
-        if (cprInputsRow)   cprInputsRow.style.display   = 'none';
         if (rtpParamsRow)   rtpParamsRow.style.display   = 'none';
         if (rtpLotRow)      rtpLotRow.style.display      = 'none';
         const smParamsRow = document.getElementById('swingMomentumParamsRow');
@@ -156,22 +150,7 @@ document.addEventListener('DOMContentLoaded', function() {
             mainInputsRow.classList.add('form-row-4');
         }
 
-        if (val === 'cpr_gap') {
-            if (apexOptionsRow) apexOptionsRow.style.display = 'flex';
-            if (cprInputsRow)   cprInputsRow.style.display   = 'grid';
-            if (intervalSelect) intervalSelect.value = '5minute';
-            if (startDateInput) {
-                const d = new Date(today.getFullYear(), today.getMonth(), 1);
-                startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
-            }
-            const entryTypeSelect  = document.getElementById('entryType');
-            const slTypeSelect     = document.getElementById('slType');
-            const slCloseCheckbox  = document.getElementById('slClosePrice');
-            if (entryTypeSelect) entryTypeSelect.value = 'both';
-            if (slTypeSelect)    slTypeSelect.value    = 'both';
-            if (slCloseCheckbox) slCloseCheckbox.checked = true;
-
-        } else if (val === 'rtp') {
+        if (val === 'rtp') {
             if (rtpParamsRow) rtpParamsRow.style.display = 'grid';
             if (rtpLotRow)    rtpLotRow.style.display    = 'grid';
             if (intervalSelect) intervalSelect.value = 'minute';
@@ -186,15 +165,6 @@ document.addEventListener('DOMContentLoaded', function() {
             if (intFg) intFg.style.display = 'none';
             if (startDateInput) {
                 const d = new Date(today.getFullYear() - 2, 0, 1);
-                startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
-            }
-        } else {
-            // apex (default)
-            if (apexParamsRow)  apexParamsRow.style.display  = '';
-            if (apexOptionsRow) apexOptionsRow.style.display = 'flex';
-            if (intervalSelect) intervalSelect.value = '60minute';
-            if (startDateInput) {
-                const d = new Date(today.getFullYear(), 0, 1);
                 startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
             }
         }
@@ -216,7 +186,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 3. Run Backtest
     runBtn.addEventListener('click', async function() {
-        const _strat = strategySelect ? strategySelect.value : 'apex';
+        const _strat = strategySelect ? strategySelect.value : 'rtp';
         const symbol = symbolSearch.value.toUpperCase();
         if (_strat !== 'swing_momentum' && !symbol) {
             window.showNotification('Please select a symbol', 'warning');
@@ -228,16 +198,6 @@ document.addEventListener('DOMContentLoaded', function() {
             start_date: document.getElementById('startDate').value,
             end_date: document.getElementById('endDate').value,
             interval: document.getElementById('interval').value,
-            cpr_type: document.getElementById('cprType') ? document.getElementById('cprType').value : 's1_r1',
-            entry_type: document.getElementById('entryType') ? document.getElementById('entryType').value : 'any',
-            sl_type: document.getElementById('slType') ? document.getElementById('slType').value : 'both',
-            pivot_strength: document.getElementById('pivotStrength').value,
-            rsi_length: document.getElementById('rsiLength').value,
-            rsi_overbought: 70,
-            rsi_oversold: 30,
-            rr_ratio: document.getElementById('rrRatio').value,
-            sl_close_price: document.getElementById('slClosePrice').checked,
-            trail_candles: parseInt(document.getElementById('trailMode').value)
         };
 
         loading.style.display = 'block';
@@ -254,10 +214,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (smOptPanel)    smOptPanel.style.display    = 'none';
 
         try {
-            let endpoint = '/api/backtest/apex-reversal';
-            const strat = strategySelect ? strategySelect.value : 'apex';
-            if (strat === 'cpr_gap') endpoint = '/api/backtest/cpr-gap';
-            if (strat === 'rtp')     endpoint = '/api/backtest/rtp';
+            const strat = strategySelect ? strategySelect.value : 'rtp';
+            let endpoint = '/api/backtest/rtp';
 
             // Swing Momentum: different endpoint + payload
             if (strat === 'swing_momentum') {

@@ -13,6 +13,7 @@ Env vars required in Mine.env:
 """
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -37,6 +38,23 @@ _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
 _WARMUP_BARS    = 200  # Must match backtest warmup — EMA50 needs ~200 1-min bars to converge
 _LOOKBACK_DAYS  = 5    # Calendar days to look back for warmup candles (covers weekends/holidays)
 _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute of data gap)
+_FALLBACK_IV    = 0.12  # assumed annual IV when a strike's own LTP cannot produce a valid IV
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard-normal CDF via math.erf — no scipy dependency."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _bs_delta(flag: str, S: float, K: float, t: float, r: float, sigma: float) -> float:
+    """Black-Scholes delta. flag='c' → call; flag='p' → put.
+    Returns 0.0 on bad inputs instead of raising."""
+    if t <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return 0.0
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * t) / (sigma * math.sqrt(t))
+    nd1 = _norm_cdf(d1)
+    return nd1 if flag == 'c' else nd1 - 1.0
+
 
 # Module-level registry so the API can reach the running instance without storing it in the scheduler
 _instances: Dict[str, 'RTPAlgo'] = {}
@@ -202,12 +220,21 @@ class RTPAlgo:
     # ── Signal detection ──────────────────────────────────────────────────────
 
     def _check_rtp_signal(
-        self, df: pd.DataFrame, state: Dict[str, Any]
-    ) -> Tuple[Optional[str], Dict[str, Any]]:
+        self, df: pd.DataFrame, state: Dict[str, Any],
+        last_bar_dt: Optional[pd.Timestamp] = None,
+    ) -> Tuple[Optional[str], Dict[str, Any], Optional[pd.Timestamp]]:
         """
-        Run indicator preparation on candles and check the last COMPLETED bar.
-        Updates buy/sell_needs_reset in state and returns (signal, updated_state).
-        Signal is 'BUY', 'SELL', or None.
+        Check for BUY/SELL signal on completed bars not yet examined.
+
+        Processes ALL bars since last_bar_dt (not just the most recent one).
+        This handles Fyers historical-data API delays: if the signal bar is
+        delivered 1-2 minutes late, it may no longer be completed.iloc[-1] by
+        the time we check, and would be missed entirely by a last-bar-only scan.
+
+        Needs-reset flag updates run on EVERY bar (including pre/post-session)
+        to mirror the backtest's sequential processing exactly.
+
+        Returns (signal, updated_state, new_last_bar_dt).
         """
         try:
             from trading_app.Backtest.rtp_backtest_engine import RTPBacktestEngine
@@ -222,55 +249,98 @@ class RTPAlgo:
             )
             processed = engine.df
             if len(processed) < 2:
-                return None, state
+                return None, state, last_bar_dt
 
-            # Filter to COMPLETED bars only.
-            # The provider may return the current in-progress candle as the last row;
-            # checking that incomplete bar misses every signal because the pattern
-            # is not yet formed. We exclude any bar whose open time falls within
-            # the current minute — only bars from previous minutes are complete.
-            now_ist     = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
-            completed   = processed[processed['datetime'] < now_ist]
+            # Exclude the current in-progress bar (its open time == current IST minute)
+            now_ist   = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
+            completed = processed[processed['datetime'] < now_ist]
             if len(completed) < 2:
-                return None, state
+                return None, state, last_bar_dt
 
-            last_bar_str = str(completed.iloc[-1]['datetime'])
-            logger.debug(f"[RTP] Signal check — last completed bar: {last_bar_str}")
+            new_last_bar_dt = completed.iloc[-1]['datetime']
 
-            row = completed.iloc[-1]
+            # Which bars to examine:
+            # • First run (last_bar_dt=None): only the most recent completed bar —
+            #   earlier bars have already been processed by _replay_today_needs_reset.
+            # • Subsequent runs: every bar that arrived since last_bar_dt, in order.
+            #   This catches signals on bars delayed by the data provider (they may
+            #   appear 1-2 minutes late and no longer be the last bar when we check).
+            if last_bar_dt is not None:
+                to_check = completed[completed['datetime'] > last_bar_dt]
+            else:
+                to_check = completed.iloc[-1:]
+
+            if to_check.empty:
+                return None, state, new_last_bar_dt
+
             buy_needs_reset  = bool(state.get('buy_needs_reset',  False))
             sell_needs_reset = bool(state.get('sell_needs_reset', False))
+            signal: Optional[str] = None
 
-            # Clear reset flag when price exits the EMA zone
-            if sell_needs_reset and row['high'] < min(row['ema9'], row['ema20']):
-                sell_needs_reset = False
-            if buy_needs_reset  and row['low']  > max(row['ema9'], row['ema20']):
-                buy_needs_reset  = False
+            for _, row in to_check.iterrows():
+                bar_dt = row['datetime']
 
-            buy_signal = bool(
-                row['session_ok'] and row['rway_up']  and row['bull_stack'] and
-                row['buy_touch']  and row['buy_pat']  and not buy_needs_reset
-            )
-            sell_signal = bool(
-                row['session_ok'] and row['rway_dn']  and row['bear_stack'] and
-                row['sell_touch'] and row['sell_pat'] and not sell_needs_reset
-            )
+                # Needs-reset clears on ALL bars — the backtest's sequential loop
+                # does not gate this on session_ok, so neither should we.
+                if sell_needs_reset and row['high'] < min(row['ema9'], row['ema20']):
+                    sell_needs_reset = False
+                    logger.debug(f"[RTP] sell_needs_reset cleared at {bar_dt}")
+                if buy_needs_reset  and row['low']  > max(row['ema9'], row['ema20']):
+                    buy_needs_reset  = False
+                    logger.debug(f"[RTP] buy_needs_reset cleared at {bar_dt}")
 
-            # Set reset flag to prevent re-entry on the same EMA touch
-            if buy_signal:
-                buy_needs_reset  = True
-            if sell_signal:
-                sell_needs_reset = True
+                if not row.get('session_ok', False):
+                    continue  # skip signal check; reset updates above still run
+
+                buy_signal = bool(
+                    row['rway_up']   and row['bull_stack'] and
+                    row['buy_touch'] and row['buy_pat']    and not buy_needs_reset
+                )
+                sell_signal = bool(
+                    row['rway_dn']    and row['bear_stack'] and
+                    row['sell_touch'] and row['sell_pat']   and not sell_needs_reset
+                )
+
+                logger.debug(
+                    f"[RTP] {bar_dt} | "
+                    f"rway_up={row.get('rway_up')} bull={row.get('bull_stack')} "
+                    f"buy_touch={row.get('buy_touch')} buy_pat={row.get('buy_pat')} "
+                    f"buy_nr={buy_needs_reset} → buy={buy_signal} | "
+                    f"rway_dn={row.get('rway_dn')} bear={row.get('bear_stack')} "
+                    f"sell_touch={row.get('sell_touch')} sell_pat={row.get('sell_pat')} "
+                    f"sell_nr={sell_needs_reset} → sell={sell_signal}"
+                )
+
+                if buy_signal:
+                    buy_needs_reset = True
+                    new_last_bar_dt = bar_dt  # resume after this bar next time
+                    signal = 'BUY'
+                    break
+                if sell_signal:
+                    sell_needs_reset = True
+                    new_last_bar_dt = bar_dt
+                    signal = 'SELL'
+                    break
 
             state['buy_needs_reset']  = buy_needs_reset
             state['sell_needs_reset'] = sell_needs_reset
 
-            signal = 'BUY' if buy_signal else ('SELL' if sell_signal else None)
-            return signal, state
+            if signal:
+                logger.info(
+                    f"[RTP] ✓ Signal={signal} on bar {new_last_bar_dt} "
+                    f"(checked {len(to_check)} bar(s) since {last_bar_dt})"
+                )
+            else:
+                logger.debug(
+                    f"[RTP] No signal — checked {len(to_check)} bar(s), "
+                    f"last={new_last_bar_dt} buy_nr={buy_needs_reset} sell_nr={sell_needs_reset}"
+                )
+
+            return signal, state, new_last_bar_dt
 
         except Exception as e:
             logger.error(f"[RTP] Signal check error: {e}", exc_info=True)
-            return None, state
+            return None, state, last_bar_dt
 
     # ── Instruments ───────────────────────────────────────────────────────────
 
@@ -323,14 +393,31 @@ class RTPAlgo:
         spot: float,
         provider: Any,
     ) -> Tuple[float, Optional[Dict]]:
-        """Scan ATM ± 25 strikes; return the one closest to delta 0.90.
-        Uses self._instruments and self._expiry cached at monitor start."""
+        """Scan ATM ± 25 strikes; return the one whose delta is closest to ±0.90.
+
+        CE target delta = +0.90  (deep ITM call, strike below spot)
+        PE target delta = -0.90  (deep ITM put,  strike above spot)
+
+        Root cause of PE landing at -0.97: py_vollib's implied_volatility()
+        raises when an option's LTP ≤ its intrinsic value (stale market data
+        for moderately ITM puts).  calculate_greeks() catches silently and
+        returns Delta=0, which the 'd >= 0' guard then discards — so all
+        intermediate ITM puts are skipped and only the deepest ones (where
+        LTP still exceeds intrinsic) survive, giving delta -0.97 instead
+        of -0.90.
+
+        Fix: derive ATM IV once (most reliable, always > 0) and use pure
+        Black-Scholes delta for every candidate.  LTP-derived IV is tried
+        first per strike; ATM IV is the fallback.  Delta is never zero due
+        to an IV failure.
+        """
         atm = round(spot / _STRIKE_STEP) * _STRIKE_STEP
         if self._expiry is None or not self._instruments:
             logger.error("[RTP] Instruments not cached — cannot select strike")
             return atm, None
         instruments = self._instruments
-        expiry: date = self._expiry   # narrowed from Optional[date]
+        expiry: date = self._expiry
+        flag         = 'c' if opt_type.upper() == 'CE' else 'p'
         candidates   = [atm + i * _STRIKE_STEP for i in range(-25, 26)]
 
         candidate_insts: List[Tuple[float, Dict]] = []
@@ -349,6 +436,24 @@ class RTPAlgo:
             logger.warning(f"[RTP] Delta batch LTP failed: {e}")
             return atm, None
 
+        t = GreeksCalculator.calculate_time_to_expiry(expiry)
+
+        # ── Step 1: derive ATM IV as the fallback sigma ───────────────────
+        atm_sigma = _FALLBACK_IV
+        atm_inst  = self._find_option(instruments, atm, opt_type, expiry)
+        if atm_inst and atm_inst.get('instrument_token'):
+            atm_ltp = ltp_data.get(atm_inst['instrument_token'], {}).get('last_price', 0)
+            if atm_ltp > 0.5:
+                try:
+                    from py_vollib.black_scholes.implied_volatility import implied_volatility as _iv_fn
+                    _iv = _iv_fn(atm_ltp, spot, atm, t, 0.07, flag)
+                    if _iv and 0 < _iv <= 5.0:
+                        atm_sigma = _iv
+                except Exception:
+                    pass
+        logger.debug(f"[RTP] ATM IV for delta scan: {atm_sigma:.4f} ({opt_type})")
+
+        # ── Step 2: score every candidate ─────────────────────────────────
         signed_target = _DELTA_TARGET if opt_type.upper() == 'CE' else -_DELTA_TARGET
         best_strike   = atm
         best_inst: Optional[Dict] = None
@@ -359,21 +464,40 @@ class RTPAlgo:
             ltp = ltp_data.get(fyers_sym, {}).get('last_price', 0)
             if ltp < 0.5:
                 continue
-            try:
-                greeks = GreeksCalculator.calculate_greeks(opt_type, ltp, spot, strike, expiry)
-                d = greeks.get('Delta', 0)
-                if opt_type.upper() == 'CE' and d <= 0:
-                    continue
-                if opt_type.upper() == 'PE' and d >= 0:
-                    continue
-                diff = abs(d - signed_target)
-                if diff < best_diff:
-                    best_diff   = diff
-                    best_strike = strike
-                    best_inst   = inst
-            except Exception:
-                pass
 
+            # Try per-strike IV first; fall back to ATM IV so deep-ITM
+            # candidates are never dropped due to IV calculation failure.
+            sigma = atm_sigma
+            try:
+                from py_vollib.black_scholes.implied_volatility import implied_volatility as _iv_fn
+                _iv = _iv_fn(ltp, spot, strike, t, 0.07, flag)
+                if _iv and 0 < _iv <= 5.0:
+                    sigma = _iv
+            except Exception:
+                pass  # keep atm_sigma
+
+            d = _bs_delta(flag, spot, strike, t, 0.07, sigma)
+
+            if opt_type.upper() == 'CE' and d <= 0:
+                continue
+            if opt_type.upper() == 'PE' and d >= 0:
+                continue
+
+            diff = abs(d - signed_target)
+            logger.debug(
+                f"[RTP] {opt_type} {int(strike)}: ltp={ltp:.2f} "
+                f"iv={sigma:.4f} delta={d:+.4f} diff={diff:.4f}"
+            )
+
+            if diff < best_diff:
+                best_diff   = diff
+                best_strike = strike
+                best_inst   = inst
+
+        logger.info(
+            f"[RTP] Delta strike selected: {opt_type} {int(best_strike)} "
+            f"(target={signed_target:+.2f} best_diff={best_diff:.4f})"
+        )
         return best_strike, best_inst
 
     # ── Broker management ─────────────────────────────────────────────────────
@@ -699,17 +823,21 @@ class RTPAlgo:
             replay_bars = completed.iloc[:-1] if len(completed) > 1 else completed.iloc[:0]
 
             for _, row in replay_bars.iterrows():
-                if not row.get('session_ok', False):
-                    continue
                 bar_dt = row['datetime']
-                # Skip bars that occurred inside a past trade (mirrors backtest skip)
-                if any(e <= bar_dt <= x for e, x in trade_periods):
-                    continue
 
+                # Needs-reset clears on ALL bars (the backtest's sequential loop
+                # does not gate this on session_ok, so neither should we here).
                 if sell_needs_reset and row['high'] < min(row['ema9'], row['ema20']):
                     sell_needs_reset = False
                 if buy_needs_reset and row['low'] > max(row['ema9'], row['ema20']):
                     buy_needs_reset = False
+
+                if not row.get('session_ok', False):
+                    continue  # skip signal check; reset updates above still ran
+
+                # Skip bars that occurred inside a past trade (mirrors backtest skip)
+                if any(e <= bar_dt <= x for e, x in trade_periods):
+                    continue
 
                 buy_sig  = bool(row['rway_up'] and row['bull_stack'] and
                                 row['buy_touch'] and row['buy_pat'] and not buy_needs_reset)
@@ -819,7 +947,16 @@ class RTPAlgo:
             logger.info("[RTP] Monitor loop stopped during instrument fetch")
             return
 
-        last_signal_minute: Optional[int] = None
+        # last_signal_minute: throttles the candle fetch to once per minute.
+        # last_checked_bar_dt: tracks the datetime of the last bar we checked for
+        #   a signal. On every fetch we process ALL bars after this pointer (not
+        #   just the single last bar). This handles the Fyers historical-data API
+        #   delay: a 1-2 min late bar would no longer be completed.iloc[-1] by
+        #   the time we notice it, and would be missed by a last-bar-only scan.
+        #   After a trade exits, we reset this to the current IST minute so that
+        #   bars during the trade period are not re-evaluated as new signals.
+        last_signal_minute:   Optional[int]           = None
+        last_checked_bar_dt:  Optional[pd.Timestamp]  = None
 
         while not self._stop_event.is_set():
             try:
@@ -862,13 +999,19 @@ class RTPAlgo:
                         if direction == 'BUY':
                             if spot <= sl_level:
                                 self._exit_trade('SL', spot)
+                                # Advance bar pointer to now so post-trade signal
+                                # check starts fresh (not from pre-entry bars).
+                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
                             elif spot >= tgt_level:
                                 self._exit_trade('TARGET', spot)
+                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
                         else:  # SELL direction → PE bought
                             if spot >= sl_level:
                                 self._exit_trade('SL', spot)
+                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
                             elif spot <= tgt_level:
                                 self._exit_trade('TARGET', spot)
+                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
                     else:
                         self._spot_fail_count += 1
                         if self._spot_fail_count >= _MAX_SPOT_FAILS:
@@ -883,20 +1026,21 @@ class RTPAlgo:
                         time.sleep(5)
                         continue
 
-                    # ── No trade → check for signal once per new minute
-                    # Compares m != last_signal_minute instead of s == 0 so a missed
-                    # second-boundary (slow network call) never skips the whole minute.
+                    # ── No trade → check for signal once per new minute.
+                    # Uses m != last_signal_minute (not s == 0) so that a slow
+                    # network call at second 0 never causes the whole minute to be
+                    # skipped.  Within the check we scan ALL bars since
+                    # last_checked_bar_dt, not just the newest one.
                     if m != last_signal_minute:
                         last_signal_minute = m
                         df = self._fetch_1min_candles(provider)
                         if df is not None and len(df) >= _WARMUP_BARS:
-                            signal, state = self._check_rtp_signal(df, state)
+                            signal, state, last_checked_bar_dt = self._check_rtp_signal(
+                                df, state, last_checked_bar_dt
+                            )
                             self._save_state(state)
 
                             if signal:
-                                logger.info(
-                                    f"[RTP] Signal: {signal} at {now.strftime('%H:%M:%S')}"
-                                )
                                 spot = None
                                 for _retry in range(3):
                                     spot = self._get_nifty_spot(provider)
@@ -912,9 +1056,10 @@ class RTPAlgo:
                                         " after 3 retries"
                                     )
                         else:
-                            logger.debug(
+                            logger.info(
                                 f"[RTP] Insufficient candle data"
                                 f" ({len(df) if df is not None else 0}/{_WARMUP_BARS} bars)"
+                                " — skipping signal check"
                             )
 
             except Exception as e:
