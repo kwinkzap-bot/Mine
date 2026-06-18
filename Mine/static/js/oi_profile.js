@@ -121,7 +121,7 @@ let oipSymbol = 'NIFTY';
 let oipLotSize = 50, oipStrikeStep = 50;
 let oipInterval = '5minute';
 let oipStrikeCount = 15;
-let oipMode = 'change';
+let oipMode = 'off';
 let oipIsBusy = false;
 let oipIsBusyCandles = false;
 let oipIsBusyOI = false;
@@ -617,6 +617,7 @@ function oipDrawOIBars() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     if (!(oipElems.showOIBars?.checked ?? true)) return;
+    if (oipMode === 'off') return;
     if (!oipAllStrikes.length) return;
 
     // Resolve dynamic colors based on active theme

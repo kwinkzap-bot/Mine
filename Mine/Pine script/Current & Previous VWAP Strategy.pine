@@ -1,0 +1,165 @@
+//@version=5
+strategy(
+     title             = "Current & Previous VWAP Strategy",
+     shorttitle        = "C/P VWAP Strat",
+     overlay           = true,
+     default_qty_type  = strategy.percent_of_equity,
+     default_qty_value = 100,
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.02,
+     slippage          = 2)
+
+// ─── Inputs ───────────────────────────────────────────────────────────────────
+var GRP_FILTER = "VWAP Gap Filter"
+minGapPoints = input.float(30.0, "Min Gap Between VWAPs (Points)", minval=0.0, step=1.0,
+     tooltip="Entry is skipped when the CVWAP-PVWAP distance is below this value",
+     group=GRP_FILTER)
+
+var GRP_TIME = "Intraday Time Filter"
+exitHour   = input.int(15, "Exit Hour (24h)", minval=0, maxval=23, group=GRP_TIME)
+exitMinute = input.int(25, "Exit Minute",      minval=0, maxval=59, group=GRP_TIME)
+
+var GRP_RISK = "Risk Management"
+tpPoints = input.float(150.0, "Target (Points)",   minval=1.0, step=1.0, group=GRP_RISK)
+slPoints = input.float(50.0,  "Stop Loss (Points)", minval=1.0, step=1.0, group=GRP_RISK)
+
+var GRP_TRADE = "Trade Direction"
+enableLong  = input.bool(true, "Enable Long",     group=GRP_TRADE)
+enableShort = input.bool(true, "Enable Short",    group=GRP_TRADE)
+enablePL    = input.bool(true, "Enable PL Entry", group=GRP_TRADE)
+
+var GRP_STYLE = "Style"
+colCurrent  = input.color(color.new(color.blue,   0), "Current VWAP",  group=GRP_STYLE)
+colPrevious = input.color(color.new(color.orange, 0), "Previous VWAP", group=GRP_STYLE)
+lineWidth   = input.int(2, "Line Width", minval=1, maxval=4,            group=GRP_STYLE)
+
+// ─── Session Detection ────────────────────────────────────────────────────────
+isNewSession = ta.change(time("D")) != 0
+
+// ─── Typical Price ────────────────────────────────────────────────────────────
+typicalPrice = (high + low + close) / 3.0
+
+// ─── VWAP Calculation ─────────────────────────────────────────────────────────
+var float cumPV    = 0.0
+var float cumVol   = 0.0
+var float prevVWAP = na
+
+if isNewSession
+    prevVWAP := cumPV / cumVol   // lock in last session's closing VWAP
+    cumPV    := typicalPrice * volume
+    cumVol   := volume
+else
+    cumPV  += typicalPrice * volume
+    cumVol += volume
+
+currentVWAP = cumPV / cumVol
+
+// ─── PL Entry Conditions ──────────────────────────────────────────────────────
+vwapGapPoints = math.abs(currentVWAP - prevVWAP)
+plGapOk       = not na(prevVWAP) and vwapGapPoints >= minGapPoints
+
+// Long: Prev VWAP below Current VWAP — wick touches Prev VWAP, closes above, candle must not touch CVWAP
+longSetupReady = plGapOk and prevVWAP < currentVWAP
+longEntryBar   = longSetupReady and low <= prevVWAP and close > prevVWAP and high < currentVWAP
+
+// Short: Prev VWAP above Current VWAP — wick touches Prev VWAP, closes below, candle must not touch CVWAP
+shortSetupReady = plGapOk and prevVWAP > currentVWAP
+shortEntryBar   = shortSetupReady and high >= prevVWAP and close < prevVWAP and low > currentVWAP
+
+// ─── Strategy Execution ───────────────────────────────────────────────────────
+inLong  = strategy.position_size > 0
+inShort = strategy.position_size < 0
+flat    = strategy.position_size == 0
+
+// One trade per day — resets on each new session
+var bool tradeDoneToday = false
+if isNewSession
+    tradeDoneToday := false
+
+// Time-based exit
+timeExit = hour(time, syminfo.timezone) == exitHour and minute(time, syminfo.timezone) == exitMinute
+
+// Block entries where the bar CLOSES at or after 3:00 PM
+// Using time_close prevents the 2:55 PM bar (5-min) from triggering a 3:00 PM execution
+entryAllowed = hour(time_close, syminfo.timezone) < 15
+
+if enableLong and enablePL and longEntryBar and flat and entryAllowed and not tradeDoneToday
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long TP/SL", from_entry="Long",
+         limit = close + tpPoints,
+         stop  = close - slPoints,
+         comment_profit = "TP Hit", comment_loss = "SL Hit")
+    tradeDoneToday := true
+
+if enableShort and enablePL and shortEntryBar and flat and entryAllowed and not tradeDoneToday
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short TP/SL", from_entry="Short",
+         limit = close - tpPoints,
+         stop  = close + slPoints,
+         comment_profit = "TP Hit", comment_loss = "SL Hit")
+    tradeDoneToday := true
+
+// Force close at exit time
+if timeExit and not flat
+    strategy.close_all(comment="3:25 PM Exit")
+
+// Safety net: close any position that carried overnight to the 9:15 AM open
+if isNewSession and not flat
+    strategy.close_all(comment="9:15 AM Exit")
+
+// ─── Plots ────────────────────────────────────────────────────────────────────
+plot(currentVWAP, title="Current VWAP",  color=colCurrent,  linewidth=lineWidth)
+plot(prevVWAP,    title="Previous VWAP", color=colPrevious, linewidth=lineWidth)
+
+// ─── Entry / Exit Labels ──────────────────────────────────────────────────────
+
+// PL label at entry bar
+justEntered = strategy.position_size != 0 and strategy.position_size[1] == 0
+if justEntered
+    isLongEntry = strategy.position_size > 0
+    label.new(bar_index, isLongEntry ? low : high,
+         text      = "PL",
+         color     = isLongEntry ? color.new(color.green, 0) : color.new(color.red, 0),
+         textcolor = color.white,
+         style     = isLongEntry ? label.style_label_up : label.style_label_down,
+         size      = size.normal)
+
+// TG / SL label when a trade closes
+tradeJustClosed = ta.change(strategy.closedtrades) != 0
+if tradeJustClosed
+    exitComment = strategy.closedtrades.exit_comment(strategy.closedtrades - 1)
+    exitPrice   = strategy.closedtrades.exit_price(strategy.closedtrades - 1)
+    wasLong     = strategy.closedtrades.size(strategy.closedtrades - 1) > 0
+
+    if exitComment == "TP Hit"
+        label.new(bar_index, exitPrice,
+             text      = "TG",
+             color     = color.new(color.green, 0),
+             textcolor = color.white,
+             style     = wasLong ? label.style_label_down : label.style_label_up,
+             size      = size.normal)
+    else if exitComment == "SL Hit"
+        label.new(bar_index, exitPrice,
+             text      = "SL",
+             color     = color.new(color.red, 0),
+             textcolor = color.white,
+             style     = wasLong ? label.style_label_up : label.style_label_down,
+             size      = size.normal)
+
+// 3:25 PM exit marker — only shown when a position is open
+plotshape(timeExit and not flat,
+     title="Time Exit (3:25 PM)", style=shape.labeldown,
+     location=location.abovebar, color=color.new(color.purple, 0),
+     text="3:25", textcolor=color.white, size=size.small)
+
+// ─── Labels on latest bar ─────────────────────────────────────────────────────
+if barstate.islast
+    label.new(bar_index, currentVWAP,
+         text="VWAP\n" + str.tostring(currentVWAP, "#.##"),
+         color=colCurrent, textcolor=color.white,
+         style=label.style_label_left, size=size.small)
+    if not na(prevVWAP)
+        label.new(bar_index, prevVWAP,
+             text="Prev VWAP\n" + str.tostring(prevVWAP, "#.##"),
+             color=colPrevious, textcolor=color.white,
+             style=label.style_label_left, size=size.small)
