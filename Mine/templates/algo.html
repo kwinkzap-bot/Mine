@@ -149,6 +149,8 @@
         <div class="ag-card-hdr">
             <span class="ag-card-title">Active Trade</span>
             <div class="ag-card-hdr-actions">
+                <button class="ag-btn ag-btn-strikes" id="rtpStrikesBtn"
+                        onclick="rtpFetchDeltaStrikes(this)">Δ Strikes</button>
                 <button class="ag-btn ag-btn-exit" id="rtpExitBtn"
                         onclick="rtpExitNow(this)" disabled>Force Exit</button>
             </div>
@@ -157,6 +159,8 @@
             <div class="ag-grid" id="rtpActiveGrid">
                 <div class="ag-empty">No active trade</div>
             </div>
+            <!-- Delta strike result panel — shown after button click -->
+            <div id="rtpStrikesResult" style="display:none"></div>
         </div>
     </div>
 

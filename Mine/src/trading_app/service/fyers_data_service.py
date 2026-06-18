@@ -249,6 +249,141 @@ class FyersDataServiceAdapter:
     def set_access_token(self, token: str):
         pass
 
+    def get_option_chain_raw(
+        self,
+        symbol: str = 'NSE:NIFTY50-INDEX',
+        strikecount: int = 50,
+    ) -> Dict[tuple, Dict]:
+        """Fetch Fyers option chain; return raw market data per (strike, type).
+
+        Returns:
+            {
+              (23650, 'CE'): {'ltp': 420.0, 'iv': 0.12, 'delta': None, 'symbol': 'NSE:NIFTY...CE'},
+              (24600, 'PE'): {'ltp': 538.0, 'iv': 0.11, 'delta': None, 'symbol': 'NSE:NIFTY...PE'},
+              ...
+            }
+
+        'iv' is the per-option implied vol from Fyers, normalised to annual decimal (e.g. 0.12).
+        'delta' is populated when Fyers returns it directly in the response; otherwise None.
+        Callers should compute delta from iv using Black-Scholes if delta is None.
+
+        strikecount=50: 50 strikes each side of ATM → 100 strikes × 50pt step = ±2500pt range,
+        enough to reach deep-ITM 0.90-delta options even when ATM is ~24000.
+        """
+        _rate_limiter.wait()
+        try:
+            resp = self.fyers.optionchain(data={'symbol': symbol, 'strikecount': strikecount})
+        except Exception as e:
+            logger.error(f"[FyersAdapter] get_option_chain_raw error: {e}")
+            return {}
+
+        if resp.get('s') != 'ok':
+            logger.warning(f"[FyersAdapter] optionchain non-ok for {symbol}: {resp.get('message', resp)}")
+            return {}
+
+        rows = resp.get('data', {}).get('optionsChain', [])
+        if not rows:
+            logger.warning(f"[FyersAdapter] optionchain returned 0 rows for {symbol}")
+            return {}
+
+        # ── Debug dump on first call (written once per process start) ─────
+        _debug_file = '/tmp/fyers_chain_debug.json'
+        if not getattr(self, '_chain_debug_dumped', False):
+            try:
+                import json as _json
+                sample = rows[:3] if len(rows) >= 3 else rows
+                with open(_debug_file, 'w') as _f:
+                    _json.dump({'total_rows': len(rows), 'sample': sample}, _f, indent=2, default=str)
+                self._chain_debug_dumped = True
+                logger.info(f"[FyersAdapter] chain debug dump → {_debug_file} (first 3 of {len(rows)} rows)")
+            except Exception:
+                pass
+
+        def _parse_ot(sym: str) -> str:
+            if sym.endswith('CE'):
+                return 'CE'
+            if sym.endswith('PE'):
+                return 'PE'
+            return ''
+
+        def _parse_iv(d: dict) -> Optional[float]:
+            """Extract per-option IV from whatever field Fyers uses; normalise to decimal."""
+            raw = None
+            # Try greeks sub-dict first
+            g = d.get('greeks') or {}
+            if isinstance(g, dict):
+                raw = g.get('iv') or g.get('impliedVolatility') or g.get('implied_volatility')
+            # Flat top-level fields
+            if raw is None:
+                raw = (d.get('iv') or d.get('impliedVol') or d.get('implied_volatility')
+                       or d.get('impliedVolatility'))
+            if raw is None:
+                return None
+            try:
+                v = float(raw)
+                if v <= 0:
+                    return None
+                # Fyers may return iv as percentage (e.g. 12.5) or decimal (0.125)
+                return v / 100.0 if v > 5.0 else v
+            except (TypeError, ValueError):
+                return None
+
+        def _parse_delta(d: dict) -> Optional[float]:
+            g = d.get('greeks') or {}
+            if isinstance(g, dict):
+                val = g.get('delta')
+                if val is not None:
+                    return float(val)
+            val = d.get('delta')
+            return float(val) if val is not None else None
+
+        result: Dict = {}
+
+        for row in rows:
+            sym = (row.get('symbol') or '').strip()
+            ot = _parse_ot(sym)
+
+            if ot in ('CE', 'PE'):
+                # ── Shape A: flat list, each element is one option ─────────
+                strike_raw = (row.get('strike_price') or row.get('strikePrice')
+                              or row.get('strike') or 0)
+                if not strike_raw:
+                    continue
+                ltp_raw = row.get('ltp') or row.get('last_price') or 0
+                result[(int(strike_raw), ot)] = {
+                    'ltp':    round(float(ltp_raw), 2) if ltp_raw else None,
+                    'iv':     _parse_iv(row),
+                    'delta':  _parse_delta(row),
+                    'symbol': sym,
+                }
+            else:
+                # ── Shape B: grouped row — call:{} and put:{} sub-dicts ────
+                strike_raw = (row.get('strike_price') or row.get('strikePrice')
+                              or row.get('strike') or 0)
+                for sub_key, sub_ot in [('call', 'CE'), ('put', 'PE')]:
+                    sub = row.get(sub_key) or {}
+                    if not sub:
+                        continue
+                    # Inherit strike from parent row if missing in sub-dict
+                    s_strike = (sub.get('strike_price') or sub.get('strikePrice')
+                                or sub.get('strike') or strike_raw)
+                    if not s_strike:
+                        continue
+                    s_sym = (sub.get('symbol') or '').strip()
+                    s_ltp = sub.get('ltp') or sub.get('last_price') or 0
+                    result[(int(s_strike), sub_ot)] = {
+                        'ltp':    round(float(s_ltp), 2) if s_ltp else None,
+                        'iv':     _parse_iv(sub),
+                        'delta':  _parse_delta(sub),
+                        'symbol': s_sym,
+                    }
+
+        logger.info(
+            f"[FyersAdapter] option chain raw: {len(result)} entries for {symbol} "
+            f"(strikecount={strikecount})"
+        )
+        return result
+
     def quote(self, symbols: List[str], priority: int = 0) -> Dict[str, Any]:
         max_retries = 2
         backoff = 2.0

@@ -887,7 +887,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const recalcBtn  = document.getElementById('smRecalcOptBtn');
         const activeBtn  = recalculate ? recalcBtn : optimiseBtn;
         const origText   = activeBtn ? activeBtn.textContent : '';
-        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (activeBtn) { activeBtn.textContent = '⏳ 0s…'; activeBtn.disabled = true; }
         if (panel) panel.style.display = 'none';
 
         try {
@@ -895,22 +895,68 @@ document.addEventListener('DOMContentLoaded', function() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    index:       document.getElementById('smIndex')?.value || 'NIFTY 500',
-                    start_date:  document.getElementById('startDate').value,
-                    end_date:    document.getElementById('endDate').value,
-                    investment:  parseFloat(document.getElementById('smInvestment')?.value || '100000'),
-                    recalculate: recalculate,
+                    start_date:     document.getElementById('startDate').value,
+                    end_date:       document.getElementById('endDate').value,
+                    investment:     parseFloat(document.getElementById('smInvestment')?.value || '100000'),
+                    rebalance_freq: document.getElementById('smRebalFreq')?.value || 'monthly',
+                    recalculate:    recalculate,
                 })
             });
             const data = await resp.json();
-            if (!data.success) { window.showNotification(data.error || 'Optimisation failed', 'error'); return; }
-            _renderSmOptResults(data);
+            if (!data.success) {
+                window.showNotification(data.error || 'Optimisation failed', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            // Cached result comes back immediately — render straight away
+            if (data.from_cache) {
+                _renderSmOptResults(data);
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            // Long-running task: poll status endpoint until complete
+            _pollSmOptimise(data.task_id, activeBtn, origText, Date.now());
         } catch (err) {
             console.error('SM Optimise error:', err);
             window.showNotification('Optimisation request failed', 'error');
-        } finally {
             if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
         }
+    }
+
+    function _pollSmOptimise(taskId, activeBtn, origText, startMs) {
+        const MAX_WAIT_MS = 10 * 60 * 1000; // 10 min hard stop
+
+        function tick() {
+            const elapsed = Math.round((Date.now() - startMs) / 1000);
+            if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s…`;
+
+            if (Date.now() - startMs > MAX_WAIT_MS) {
+                window.showNotification('Optimisation timed out — try a shorter date range', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+
+            fetch(`/api/backtest/swing-momentum/optimise/status/${taskId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'running') {
+                        setTimeout(tick, 2000);
+                        return;
+                    }
+                    if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                    if (!data.success || data.status === 'error') {
+                        window.showNotification(data.error || 'Optimisation failed', 'error');
+                        return;
+                    }
+                    _renderSmOptResults(data);
+                })
+                .catch(err => {
+                    console.error('SM poll error:', err);
+                    setTimeout(tick, 3000); // retry on transient network error
+                });
+        }
+
+        setTimeout(tick, 2000); // first check after 2s
     }
 
     function _renderSmOptResults(data) {
@@ -922,28 +968,36 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (rtpPanel) rtpPanel.style.display = 'none';
 
+        const _smIdxShort = {
+            'NIFTY 500': 'Nifty 500', 'NIFTY 200': 'Nifty 200',
+            'NIFTY SMALLCAP 250': 'SC 250', 'NIFTY SMALLCAP 500': 'SC 500',
+            'NIFTY MICROCAP 250': 'MC 250', 'NIFTY LARGEMIDCAP 250': 'LMC 250',
+            'NIFTY MIDSMALLCAP 400': 'MSC 400', 'NIFTY MIDSMALLCAP 400': 'MSC 400',
+        };
+
         if (metaEl) {
-            let meta = `${data.total_combos_tested} combos · ${data.index} · ${data.start_date} → ${data.end_date}`;
+            const freqLabel = (data.rebalance_freq || 'monthly');
+            const freqDisp  = freqLabel.charAt(0).toUpperCase() + freqLabel.slice(1);
+            let meta = `3 indices · ${freqDisp} · ${data.total_combos_tested} combos · ${data.start_date} → ${data.end_date}`;
             if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
             metaEl.textContent = meta;
         }
 
         if (tbody) {
             tbody.innerHTML = (data.results || []).map((r, i) => {
-                const retFmt = (r.total_return_pct >= 0 ? '+' : '') + r.total_return_pct.toFixed(1) + '%';
+                const retFmt  = (r.total_return_pct >= 0 ? '+' : '') + r.total_return_pct.toFixed(1) + '%';
                 const cagrFmt = (r.cagr_pct >= 0 ? '+' : '') + r.cagr_pct.toFixed(1) + '%';
                 const mddFmt  = r.max_drawdown_pct.toFixed(1) + '%';
-                const freqLbl = r.rebalance_freq.charAt(0).toUpperCase() + r.rebalance_freq.slice(1);
+                const idxLbl  = _smIdxShort[r.index] || r.index;
                 return `
                 <tr class="${i === 0 ? 'opt-best' : ''}">
                     <td>${i + 1}</td>
+                    <td style="white-space:nowrap">${idxLbl}</td>
                     <td>${r.top_n}</td>
                     <td>${r.exit_rank}</td>
-                    <td>${freqLbl}</td>
                     <td class="${r.total_return_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}">${retFmt}</td>
                     <td class="${r.cagr_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}">${cagrFmt}</td>
                     <td class="pnl-negative">${mddFmt}</td>
-                    <td>${r.total_rotations}</td>
                     <td>${r.score.toFixed(2)}</td>
                     <td><button class="btn-opt-use" data-idx="${i}">Use</button></td>
                 </tr>`;
@@ -963,16 +1017,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function _applySmOptResult(r) {
         if (!r) return;
+        const idxEl  = document.getElementById('smIndex');
         const topNEl = document.getElementById('smTopN');
         const rankEl = document.getElementById('smExitRank');
         const freqEl = document.getElementById('smRebalFreq');
-        if (topNEl) topNEl.value = r.top_n;
-        if (rankEl) rankEl.value = r.exit_rank;
-        if (freqEl) freqEl.value = r.rebalance_freq;
+        if (idxEl  && r.index)         idxEl.value  = r.index;
+        if (topNEl)                    topNEl.value = r.top_n;
+        if (rankEl)                    rankEl.value = r.exit_rank;
+        if (freqEl)                    freqEl.value = r.rebalance_freq;
         if (window.showNotification) {
             const freqLbl = r.rebalance_freq.charAt(0).toUpperCase() + r.rebalance_freq.slice(1);
+            const idxLbl  = (r.index || '').replace('NIFTY ', 'Nifty ');
             window.showNotification(
-                `Applied: Top ${r.top_n}  ·  Exit >${r.exit_rank}  ·  ${freqLbl}`, 'success'
+                `Applied: ${idxLbl}  ·  ${freqLbl}  ·  Top ${r.top_n}  ·  Exit >${r.exit_rank}`, 'success'
             );
         }
     }

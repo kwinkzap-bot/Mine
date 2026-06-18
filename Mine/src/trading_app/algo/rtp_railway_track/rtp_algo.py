@@ -38,7 +38,7 @@ _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
 _WARMUP_BARS    = 200  # Must match backtest warmup — EMA50 needs ~200 1-min bars to converge
 _LOOKBACK_DAYS  = 5    # Calendar days to look back for warmup candles (covers weekends/holidays)
 _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute of data gap)
-_FALLBACK_IV    = 0.12  # assumed annual IV when a strike's own LTP cannot produce a valid IV
+_FALLBACK_IV    = 0.15  # assumed annual IV when ATM IV cannot be computed (NIFTY typical range 13–18%)
 
 
 def _norm_cdf(x: float) -> float:
@@ -222,7 +222,7 @@ class RTPAlgo:
     def _check_rtp_signal(
         self, df: pd.DataFrame, state: Dict[str, Any],
         last_bar_dt: Optional[pd.Timestamp] = None,
-    ) -> Tuple[Optional[str], Dict[str, Any], Optional[pd.Timestamp]]:
+    ) -> Tuple[Optional[str], Dict[str, Any], Optional[pd.Timestamp], Optional[float]]:
         """
         Check for BUY/SELL signal on completed bars not yet examined.
 
@@ -234,7 +234,10 @@ class RTPAlgo:
         Needs-reset flag updates run on EVERY bar (including pre/post-session)
         to mirror the backtest's sequential processing exactly.
 
-        Returns (signal, updated_state, new_last_bar_dt).
+        Returns (signal, updated_state, new_last_bar_dt, signal_bar_close).
+        signal_bar_close is the CLOSE of the signal bar — used as the SL/Target
+        reference so that live behaviour matches backtest exactly (backtest
+        entries are always at bar close, not at real-time spot).
         """
         try:
             from trading_app.Backtest.rtp_backtest_engine import RTPBacktestEngine
@@ -276,6 +279,7 @@ class RTPAlgo:
             buy_needs_reset  = bool(state.get('buy_needs_reset',  False))
             sell_needs_reset = bool(state.get('sell_needs_reset', False))
             signal: Optional[str] = None
+            signal_bar_close: Optional[float] = None
 
             for _, row in to_check.iterrows():
                 bar_dt = row['datetime']
@@ -312,14 +316,16 @@ class RTPAlgo:
                 )
 
                 if buy_signal:
-                    buy_needs_reset = True
-                    new_last_bar_dt = bar_dt  # resume after this bar next time
-                    signal = 'BUY'
+                    buy_needs_reset  = True
+                    new_last_bar_dt  = bar_dt
+                    signal           = 'BUY'
+                    signal_bar_close = float(row['close'])
                     break
                 if sell_signal:
                     sell_needs_reset = True
-                    new_last_bar_dt = bar_dt
-                    signal = 'SELL'
+                    new_last_bar_dt  = bar_dt
+                    signal           = 'SELL'
+                    signal_bar_close = float(row['close'])
                     break
 
             state['buy_needs_reset']  = buy_needs_reset
@@ -328,6 +334,7 @@ class RTPAlgo:
             if signal:
                 logger.info(
                     f"[RTP] ✓ Signal={signal} on bar {new_last_bar_dt} "
+                    f"bar_close={signal_bar_close} "
                     f"(checked {len(to_check)} bar(s) since {last_bar_dt})"
                 )
             else:
@@ -336,11 +343,11 @@ class RTPAlgo:
                     f"last={new_last_bar_dt} buy_nr={buy_needs_reset} sell_nr={sell_needs_reset}"
                 )
 
-            return signal, state, new_last_bar_dt
+            return signal, state, new_last_bar_dt, signal_bar_close
 
         except Exception as e:
             logger.error(f"[RTP] Signal check error: {e}", exc_info=True)
-            return None, state, last_bar_dt
+            return None, state, last_bar_dt, None
 
     # ── Instruments ───────────────────────────────────────────────────────────
 
@@ -387,118 +394,165 @@ class RTPAlgo:
                 return inst
         return None
 
+    def _fetch_fyers_chain_deltas(
+        self, provider: Any, spot: float, t: float
+    ) -> Dict:
+        """Fetch Fyers option chain and compute delta for every strike using Fyers' own IV.
+
+        Flow:
+          1. Call provider.get_option_chain_raw() — one API call gets all strikes.
+          2. Determine ATM IV:
+               a. Use the 'iv' field from the ATM option in the chain (Fyers' own IV).
+               b. If missing, derive from ATM option LTP via py_vollib.
+               c. Last resort: use _FALLBACK_IV (15%).
+          3. Compute delta for EVERY strike in the chain via Black-Scholes using ATM IV.
+             (Flat vol surface = same approach Fyers uses for their delta display.)
+          4. Return {(strike_int, 'CE'|'PE'): {delta, ltp, symbol}}.
+
+        Returns {} only if the API call itself fails — never silently falls back to a
+        constant IV in the happy path.
+        """
+        fn = getattr(provider, 'get_option_chain_raw', None)
+        if fn is None:
+            logger.warning("[RTP] Provider has no get_option_chain_raw — cannot use Fyers chain")
+            return {}
+
+        try:
+            raw_chain = fn(symbol=_NIFTY_FYERS, strikecount=50) or {}
+        except Exception as e:
+            logger.error(f"[RTP] Fyers option chain fetch failed: {e}")
+            return {}
+
+        if not raw_chain:
+            logger.warning("[RTP] Fyers chain returned 0 rows — check debug dump at /tmp/fyers_chain_debug.json")
+            return {}
+
+        # ── ATM IV from chain ─────────────────────────────────────────────
+        atm = round(spot / _STRIKE_STEP) * _STRIKE_STEP
+        atm_sigma: float = _FALLBACK_IV
+        atm_found = False
+
+        # Prefer CE ATM iv (CE ATM is more liquid; use PE as backup)
+        for ot_try in ('CE', 'PE'):
+            entry = raw_chain.get((int(atm), ot_try))
+            if not entry:
+                continue
+            iv = entry.get('iv')
+            if iv and 0 < iv <= 5.0:
+                atm_sigma = iv
+                atm_found = True
+                logger.info(f"[RTP] ATM IV from Fyers chain: {atm_sigma:.4f} ({int(atm)}{ot_try})")
+                break
+
+        if not atm_found:
+            # Try computing from LTP of ATM CE if iv not in chain
+            atm_entry = raw_chain.get((int(atm), 'CE')) or raw_chain.get((int(atm), 'PE'))
+            if atm_entry:
+                atm_ltp = atm_entry.get('ltp') or 0
+                atm_ot  = 'CE' if (int(atm), 'CE') in raw_chain else 'PE'
+                atm_flag = 'c' if atm_ot == 'CE' else 'p'
+                if atm_ltp and atm_ltp > 0.5:
+                    try:
+                        from py_vollib.black_scholes.implied_volatility import implied_volatility as _iv_fn
+                        _iv = _iv_fn(atm_ltp, spot, float(atm), t, 0.07, atm_flag)
+                        if _iv and 0 < _iv <= 5.0:
+                            atm_sigma = _iv
+                            logger.info(f"[RTP] ATM IV from LTP: {atm_sigma:.4f} (ltp={atm_ltp})")
+                    except Exception:
+                        pass
+
+        if atm_sigma == _FALLBACK_IV:
+            logger.warning(f"[RTP] Using fallback IV {atm_sigma:.2f} — check /tmp/fyers_chain_debug.json")
+
+        # ── Compute delta for all chain strikes ───────────────────────────
+        result: Dict = {}
+        for (strike, ot), entry in raw_chain.items():
+            flag  = 'c' if ot == 'CE' else 'p'
+            delta = _bs_delta(flag, spot, float(strike), t, 0.07, atm_sigma)
+            result[(strike, ot)] = {
+                'delta':  delta,
+                'ltp':    entry.get('ltp'),
+                'symbol': entry.get('symbol', ''),
+            }
+
+        logger.info(
+            f"[RTP] Chain deltas computed: {len(result)} strikes, "
+            f"atm={int(atm)} atm_sigma={atm_sigma:.4f}"
+        )
+        return result
+
     def _select_delta_strike(
         self,
         opt_type: str,
         spot: float,
         provider: Any,
+        chain_deltas: Optional[Dict] = None,
     ) -> Tuple[float, Optional[Dict]]:
-        """Scan ATM ± 25 strikes; return the one whose delta is closest to ±0.90.
+        """Return the strike from the Fyers option chain whose delta is closest to ±0.90.
 
-        CE target delta = +0.90  (deep ITM call, strike below spot)
-        PE target delta = -0.90  (deep ITM put,  strike above spot)
+        Uses chain_deltas exclusively — no instruments list, no Black-Scholes fallback.
+        The instrument dict is constructed from the chain symbol so that order placement
+        and LTP queries work even if the strike is not in NSE_FO.csv.
 
-        Root cause of PE landing at -0.97: py_vollib's implied_volatility()
-        raises when an option's LTP ≤ its intrinsic value (stale market data
-        for moderately ITM puts).  calculate_greeks() catches silently and
-        returns Delta=0, which the 'd >= 0' guard then discards — so all
-        intermediate ITM puts are skipped and only the deepest ones (where
-        LTP still exceeds intrinsic) survive, giving delta -0.97 instead
-        of -0.90.
-
-        Fix: derive ATM IV once (most reliable, always > 0) and use pure
-        Black-Scholes delta for every candidate.  LTP-derived IV is tried
-        first per strike; ATM IV is the fallback.  Delta is never zero due
-        to an IV failure.
+        chain_deltas: pass the pre-fetched result from _fetch_fyers_chain_deltas() when
+          you need both CE and PE (avoids double API call). Pass None to fetch fresh.
         """
-        atm = round(spot / _STRIKE_STEP) * _STRIKE_STEP
-        if self._expiry is None or not self._instruments:
-            logger.error("[RTP] Instruments not cached — cannot select strike")
-            return atm, None
-        instruments = self._instruments
-        expiry: date = self._expiry
-        flag         = 'c' if opt_type.upper() == 'CE' else 'p'
-        candidates   = [atm + i * _STRIKE_STEP for i in range(-25, 26)]
-
-        candidate_insts: List[Tuple[float, Dict]] = []
-        for strike in candidates:
-            inst = self._find_option(instruments, strike, opt_type, expiry)
-            if inst and inst.get('instrument_token'):
-                candidate_insts.append((strike, inst))
-
-        if not candidate_insts:
-            return atm, None
-
-        all_syms = [inst['instrument_token'] for _, inst in candidate_insts]
-        try:
-            ltp_data = provider.ltp(all_syms)
-        except Exception as e:
-            logger.warning(f"[RTP] Delta batch LTP failed: {e}")
-            return atm, None
-
-        t = GreeksCalculator.calculate_time_to_expiry(expiry)
-
-        # ── Step 1: derive ATM IV as the fallback sigma ───────────────────
-        atm_sigma = _FALLBACK_IV
-        atm_inst  = self._find_option(instruments, atm, opt_type, expiry)
-        if atm_inst and atm_inst.get('instrument_token'):
-            atm_ltp = ltp_data.get(atm_inst['instrument_token'], {}).get('last_price', 0)
-            if atm_ltp > 0.5:
-                try:
-                    from py_vollib.black_scholes.implied_volatility import implied_volatility as _iv_fn
-                    _iv = _iv_fn(atm_ltp, spot, atm, t, 0.07, flag)
-                    if _iv and 0 < _iv <= 5.0:
-                        atm_sigma = _iv
-                except Exception:
-                    pass
-        logger.debug(f"[RTP] ATM IV for delta scan: {atm_sigma:.4f} ({opt_type})")
-
-        # ── Step 2: score every candidate ─────────────────────────────────
+        atm           = round(spot / _STRIKE_STEP) * _STRIKE_STEP
         signed_target = _DELTA_TARGET if opt_type.upper() == 'CE' else -_DELTA_TARGET
-        best_strike   = atm
-        best_inst: Optional[Dict] = None
-        best_diff     = float('inf')
 
-        for strike, inst in candidate_insts:
-            fyers_sym = inst['instrument_token']
-            ltp = ltp_data.get(fyers_sym, {}).get('last_price', 0)
-            if ltp < 0.5:
+        if self._expiry is None:
+            logger.error("[RTP] Expiry not set — cannot select strike")
+            return atm, None
+
+        t = GreeksCalculator.calculate_time_to_expiry(self._expiry)
+
+        if chain_deltas is None:
+            chain_deltas = self._fetch_fyers_chain_deltas(provider, spot, t)
+
+        if not chain_deltas:
+            logger.error("[RTP] Fyers option chain empty — cannot select delta strike")
+            return atm, None
+
+        best_strike    = atm
+        best_delta_val = 0.0
+        best_diff      = float('inf')
+        best_symbol    = ''
+        best_ltp: Optional[float] = None
+
+        for (strike, ot), entry in chain_deltas.items():
+            if ot != opt_type.upper():
                 continue
-
-            # Try per-strike IV first; fall back to ATM IV so deep-ITM
-            # candidates are never dropped due to IV calculation failure.
-            sigma = atm_sigma
-            try:
-                from py_vollib.black_scholes.implied_volatility import implied_volatility as _iv_fn
-                _iv = _iv_fn(ltp, spot, strike, t, 0.07, flag)
-                if _iv and 0 < _iv <= 5.0:
-                    sigma = _iv
-            except Exception:
-                pass  # keep atm_sigma
-
-            d = _bs_delta(flag, spot, strike, t, 0.07, sigma)
-
-            if opt_type.upper() == 'CE' and d <= 0:
-                continue
-            if opt_type.upper() == 'PE' and d >= 0:
-                continue
-
+            d    = entry['delta']
             diff = abs(d - signed_target)
-            logger.debug(
-                f"[RTP] {opt_type} {int(strike)}: ltp={ltp:.2f} "
-                f"iv={sigma:.4f} delta={d:+.4f} diff={diff:.4f}"
-            )
-
+            logger.debug(f"[RTP] {ot} {strike}: delta={d:+.4f} diff={diff:.4f}")
             if diff < best_diff:
-                best_diff   = diff
-                best_strike = strike
-                best_inst   = inst
+                best_diff      = diff
+                best_strike    = float(strike)
+                best_delta_val = d
+                best_symbol    = entry.get('symbol', '')
+                best_ltp       = entry.get('ltp')
+
+        if not best_symbol:
+            logger.error(f"[RTP] No {opt_type} strikes found in chain for target={signed_target:+.2f}")
+            return best_strike, None
+
+        # Build inst dict from chain symbol — works for Fyers orders and LTP calls
+        # For Zerodha orders, _place_order uses symbol='NIFTY'+strike+opt_type directly
+        inst: Dict = {
+            'instrument_token': best_symbol,
+            'tradingsymbol':    '',
+            'name':             'NIFTY',
+            'expiry':           self._expiry,
+            'strike':           int(best_strike),
+            'instrument_type':  opt_type.upper(),
+        }
 
         logger.info(
-            f"[RTP] Delta strike selected: {opt_type} {int(best_strike)} "
-            f"(target={signed_target:+.2f} best_diff={best_diff:.4f})"
+            f"[RTP] Delta strike: {opt_type} {int(best_strike)} "
+            f"delta={best_delta_val:+.4f} ltp={best_ltp} sym={best_symbol} "
+            f"(target={signed_target:+.2f} diff={best_diff:.4f})"
         )
-        return best_strike, best_inst
+        return best_strike, inst
 
     # ── Broker management ─────────────────────────────────────────────────────
 
@@ -628,12 +682,65 @@ class RTPAlgo:
             )
         return None
 
+    # ── Delta-strike query (used by the UI "View Strikes" button) ────────────
+
+    def get_delta_strikes(self, provider: Any) -> Dict[str, Any]:
+        """Return the CE and PE strikes closest to ±0.90 delta using Fyers option chain.
+        Response: {success, spot, expiry, CE: {strike, delta, ltp}, PE: {strike, delta, ltp}}
+        """
+        # ── Current spot ──────────────────────────────────────────────────────
+        spot: Optional[float] = None
+        try:
+            data = provider.ltp([_NIFTY_FYERS])
+            raw  = data.get(_NIFTY_FYERS, {}).get('last_price', 0)
+            spot = float(raw) if raw else None
+        except Exception as _e:
+            logger.warning(f"[RTP] get_delta_strikes spot fetch: {_e}")
+
+        if not spot:
+            return {'success': False, 'error': 'Cannot fetch NIFTY spot price'}
+
+        # ── Expiry (needed for T) ─────────────────────────────────────────────
+        if self._expiry is None:
+            try:
+                self._instruments, self._expiry, self._lot_size = \
+                    self._get_instruments_and_expiry(provider)
+            except Exception as _e:
+                return {'success': False, 'error': f'Cannot determine expiry: {_e}'}
+
+        t = GreeksCalculator.calculate_time_to_expiry(self._expiry)
+
+        # ── Fyers option chain: one call for CE + PE ──────────────────────────
+        chain_deltas = self._fetch_fyers_chain_deltas(provider, spot, t)
+        if not chain_deltas:
+            return {'success': False, 'error': 'Fyers option chain unavailable — check /tmp/fyers_chain_debug.json'}
+
+        result: Dict[str, Any] = {
+            'success': True,
+            'spot':    round(spot, 2),
+            'expiry':  str(self._expiry),
+        }
+
+        for opt_type in ('CE', 'PE'):
+            strike, inst = self._select_delta_strike(opt_type, spot, provider, chain_deltas)
+            key = (int(strike), opt_type)
+            entry     = chain_deltas.get(key) or {}
+            result[opt_type] = {
+                'strike': int(strike),
+                'delta':  round(entry['delta'], 3) if entry.get('delta') is not None else None,
+                'ltp':    entry.get('ltp'),
+            }
+
+        return result
+
     # ── Trade lifecycle ───────────────────────────────────────────────────────
 
     def _enter_trade(self, direction: str, spot: float, provider: Any) -> None:
         """Select delta strike, place BUY orders on all cached brokers, save state."""
         opt_type = 'CE' if direction == 'BUY' else 'PE'
-        strike, inst = self._select_delta_strike(opt_type, spot, provider)
+        t = GreeksCalculator.calculate_time_to_expiry(self._expiry) if self._expiry else 0.01
+        chain_deltas = self._fetch_fyers_chain_deltas(provider, spot, t)
+        strike, inst = self._select_delta_strike(opt_type, spot, provider, chain_deltas)
 
         if inst is None:
             logger.error(f"[RTP] No delta strike found for {opt_type} near spot={spot}")
@@ -1035,9 +1142,8 @@ class RTPAlgo:
                         last_signal_minute = m
                         df = self._fetch_1min_candles(provider)
                         if df is not None and len(df) >= _WARMUP_BARS:
-                            signal, state, last_checked_bar_dt = self._check_rtp_signal(
-                                df, state, last_checked_bar_dt
-                            )
+                            signal, state, last_checked_bar_dt, sig_bar_close = \
+                                self._check_rtp_signal(df, state, last_checked_bar_dt)
                             self._save_state(state)
 
                             if signal:
@@ -1049,7 +1155,19 @@ class RTPAlgo:
                                     if _retry < 2:
                                         time.sleep(0.5)
                                 if spot:
-                                    self._enter_trade(signal, spot, provider)
+                                    # Use the signal bar's CLOSE as the SL/Target reference
+                                    # so that live levels match the backtest exactly.
+                                    # The backtest enters at bar close; using real-time spot
+                                    # instead shifts the SL level and causes exit timing to
+                                    # diverge (the 9:23 trade stayed open until 10:40 instead
+                                    # of 9:37 because the 2.4pt entry difference moved the SL).
+                                    # Fallback to current spot if bar close is unavailable.
+                                    entry_ref = sig_bar_close if sig_bar_close else spot
+                                    logger.info(
+                                        f"[RTP] Entry ref: bar_close={sig_bar_close} "
+                                        f"live_spot={spot} using={entry_ref}"
+                                    )
+                                    self._enter_trade(signal, entry_ref, provider)
                                 else:
                                     logger.error(
                                         f"[RTP] Signal {signal} missed — spot unavailable"

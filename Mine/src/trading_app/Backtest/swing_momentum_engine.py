@@ -7,10 +7,19 @@ import pandas as pd
 
 _logger = logging.getLogger(__name__)
 
-# Grid for optimisation (6 × 5 × 3 = 90 combos)
-_SM_TOP_N_VALUES = [5, 8, 10, 12, 15, 20]
-_SM_EXIT_RANKS   = [25, 35, 50, 75, 100]
-_SM_REBAL_FREQS  = ['weekly', 'monthly', 'quarterly']
+# Grid for optimisation
+_SM_TOP_N_VALUES = [5, 8, 10, 12, 15, 20]           # 6 values
+_SM_EXIT_RANKS   = [25, 35, 50, 75, 100]             # 5 values
+_SM_REBAL_FREQS  = ['weekly', 'monthly', 'quarterly'] # 3 values
+
+# Indices swept during optimisation.
+# NIFTY SMALLCAP 500 is excluded — its NSE CSV URL returns 404, leaving only a 50-stock
+# fallback list which produces misleading results.
+_SM_OPT_INDICES = [
+    'NIFTY 500',
+    'NIFTY SMALLCAP 250',
+    'NIFTY MIDSMALLCAP 400',
+]
 
 
 def _sm_opt_score(summary: dict) -> float:
@@ -71,30 +80,7 @@ class SwingMomentumEngine:
             close_df = raw['Close'].copy()
         return close_df.dropna(how='all'), syms, yf_syms
 
-    # ── price helpers ─────────────────────────────────────────────────────
-
-    def _lookup(self, close_df: pd.DataFrame, col: str, as_of: date) -> Optional[float]:
-        available = close_df.index[close_df.index <= pd.Timestamp(as_of)]
-        if not len(available):
-            return None
-        try:
-            val = float(close_df.loc[available[-1], col])
-            return None if math.isnan(val) else val
-        except (TypeError, ValueError, KeyError):
-            return None
-
-    def _pct(self, close_df: pd.DataFrame, col: str, as_of: date, days_ago: int) -> Optional[float]:
-        target = pd.Timestamp(as_of) - timedelta(days=days_ago)
-        available = close_df.index[close_df.index <= target]
-        if not len(available):
-            return None
-        base = self._lookup(close_df, col, available[-1].date())
-        curr = self._lookup(close_df, col, as_of)
-        if base is None or curr is None or base == 0:
-            return None
-        return (curr - base) / base * 100
-
-    # ── ranking ───────────────────────────────────────────────────────────
+    # ── ranking (vectorized) ──────────────────────────────────────────────
 
     def _rank(
         self,
@@ -103,27 +89,59 @@ class SwingMomentumEngine:
         yf_syms: List[str],
         as_of: date,
     ) -> List[Dict]:
-        rows: List[Dict] = []
-        for sym, yf in zip(syms, yf_syms):
-            price = self._lookup(close_df, yf, as_of)
-            if price is None:
-                continue
-            vals = [
-                v for v in (
-                    self._pct(close_df, yf, as_of, 91),
-                    self._pct(close_df, yf, as_of, 182),
-                    self._pct(close_df, yf, as_of, 273),
-                )
-                if v is not None
-            ]
-            avg = sum(vals) / len(vals) if vals else None
-            rows.append({'sym': sym, 'yf': yf, 'price': price, 'avg': avg})
+        """Rank stocks by avg(3M, 6M, 9M) momentum.
 
-        # descending by avg; stocks with no avg go to the bottom
+        Vectorized: fetches 4 price rows once per date (not per-stock),
+        cutting per-call pandas overhead by ~stocks×4.
+        """
+        as_of_ts = pd.Timestamp(as_of)
+
+        def _get_row(cutoff: pd.Timestamp):
+            avail = close_df.index[close_df.index <= cutoff]
+            return close_df.loc[avail[-1]] if len(avail) else None
+
+        row_cur = _get_row(as_of_ts)
+        if row_cur is None:
+            return []
+        row_91  = _get_row(as_of_ts - timedelta(days=91))
+        row_182 = _get_row(as_of_ts - timedelta(days=182))
+        row_273 = _get_row(as_of_ts - timedelta(days=273))
+
+        rows: List[Dict] = []
+        for sym, yf_sym in zip(syms, yf_syms):
+            pv = row_cur.get(yf_sym)
+            if pv is None or pd.isna(pv):
+                continue
+            price = float(pv)
+
+            vals = []
+            for base_row in (row_91, row_182, row_273):
+                if base_row is not None:
+                    bv = base_row.get(yf_sym)
+                    if bv is not None and not pd.isna(bv) and float(bv) != 0:
+                        vals.append((price - float(bv)) / float(bv) * 100)
+
+            avg = sum(vals) / len(vals) if vals else None
+            rows.append({'sym': sym, 'yf': yf_sym, 'price': price, 'avg': avg})
+
         rows.sort(key=lambda r: (r['avg'] is None, -(r['avg'] or 0)))
         for i, r in enumerate(rows):
             r['rank'] = i + 1
         return rows
+
+    # ── ranking pre-computation (for optimiser) ───────────────────────────
+
+    def _precompute_rankings(
+        self,
+        close_df: pd.DataFrame,
+        syms: List[str],
+        yf_syms: List[str],
+        rdates: List[date],
+    ) -> Dict[date, List[Dict]]:
+        """Compute rankings for every rebalance date once and cache the result.
+        The optimiser passes this dict to run() so rankings are never recomputed
+        across the 30 top_n × exit_rank combos for the same index/freq."""
+        return {rd: self._rank(close_df, syms, yf_syms, rd) for rd in rdates}
 
     # ── rebalance date generation ──────────────────────────────────────────
 
@@ -167,7 +185,13 @@ class SwingMomentumEngine:
 
     # ── main simulation ───────────────────────────────────────────────────
 
-    def run(self, _close_df=None, _syms=None, _yf_syms=None) -> Dict[str, Any]:
+    def run(
+        self,
+        _close_df=None,
+        _syms=None,
+        _yf_syms=None,
+        _rankings: Optional[Dict[date, List[Dict]]] = None,
+    ) -> Dict[str, Any]:
         if _close_df is not None:
             close_df, syms, yf_syms = _close_df, _syms, _yf_syms
         else:
@@ -186,7 +210,11 @@ class SwingMomentumEngine:
         is_first = True
 
         for rd in rdates:
-            ranked   = self._rank(close_df, syms, yf_syms, rd)
+            # Use pre-computed rankings when available (optimiser path)
+            if _rankings is not None and rd in _rankings:
+                ranked = _rankings[rd]
+            else:
+                ranked = self._rank(close_df, syms, yf_syms, rd)
             rank_map = {r['sym']: r for r in ranked}
 
             # ── EXIT: held stocks that dropped below exit_rank ────────
@@ -195,7 +223,10 @@ class SwingMomentumEngine:
                 rank = info['rank'] if info else len(ranked) + 1
                 if rank > self.exit_rank:
                     hold  = portfolio.pop(sym)
-                    price = self._lookup(close_df, hold['yf'], rd) or hold['buy_price']
+                    row   = close_df.index[close_df.index <= pd.Timestamp(rd)]
+                    price = float(close_df.loc[row[-1], hold['yf']]) if len(row) else hold['buy_price']
+                    if pd.isna(price):
+                        price = hold['buy_price']
                     pnl   = (price - hold['buy_price']) * hold['qty']
                     trades.append({
                         'date':         str(rd),
@@ -244,16 +275,28 @@ class SwingMomentumEngine:
             is_first = False
 
             # Record portfolio value at this rebalance date
-            held_val = sum(
-                h['qty'] * (self._lookup(close_df, h['yf'], rd) or h['buy_price'])
-                for h in portfolio.values()
-            )
+            row = close_df.index[close_df.index <= pd.Timestamp(rd)]
+            if len(row):
+                price_row = close_df.loc[row[-1]]
+                held_val = sum(
+                    h['qty'] * (float(price_row.get(h['yf'], h['buy_price'])) if not pd.isna(price_row.get(h['yf'], float('nan'))) else h['buy_price'])
+                    for h in portfolio.values()
+                )
+            else:
+                held_val = sum(h['qty'] * h['buy_price'] for h in portfolio.values())
             curve.append({'date': str(rd), 'value': round(cash + held_val, 2)})
 
         # ── FINAL CLOSEOUT at end_date ────────────────────────────────
+        end_row = close_df.index[close_df.index <= pd.Timestamp(self.end_date)]
+        price_row_end = close_df.loc[end_row[-1]] if len(end_row) else None
+
         for sym, hold in list(portfolio.items()):
-            price = self._lookup(close_df, hold['yf'], self.end_date) or hold['buy_price']
-            pnl   = (price - hold['buy_price']) * hold['qty']
+            if price_row_end is not None:
+                pv = price_row_end.get(hold['yf'])
+                price = float(pv) if pv is not None and not pd.isna(pv) else hold['buy_price']
+            else:
+                price = hold['buy_price']
+            pnl = (price - hold['buy_price']) * hold['qty']
             trades.append({
                 'date':         str(self.end_date),
                 'symbol':       sym,
@@ -272,9 +315,9 @@ class SwingMomentumEngine:
             curve.append({'date': str(self.end_date), 'value': round(cash, 2)})
 
         # ── Summary ───────────────────────────────────────────────────
-        sv  = self.investment
-        ev  = round(cash, 2)
-        tr  = (ev - sv) / sv * 100 if sv else 0
+        sv   = self.investment
+        ev   = round(cash, 2)
+        tr   = (ev - sv) / sv * 100 if sv else 0
         days = (self.end_date - self.start_date).days
         cagr = ((ev / sv) ** (365.0 / days) - 1) * 100 if days > 0 and sv > 0 and ev > 0 else 0
 
@@ -288,8 +331,8 @@ class SwingMomentumEngine:
                 if dd < mdd:
                     mdd = dd
 
-        sells     = [t for t in trades if t['action'] == 'SELL']
-        avg_hold  = sum(t.get('holding_days') or 0 for t in sells) / len(sells) if sells else 0
+        sells    = [t for t in trades if t['action'] == 'SELL']
+        avg_hold = sum(t.get('holding_days') or 0 for t in sells) / len(sells) if sells else 0
 
         return {
             'trades':          trades,
@@ -315,7 +358,7 @@ def optimise_swing_momentum(
     end_date: str,
     investment: float = 100_000.0,
 ) -> List[Dict]:
-    """Sweep 90 param combos. Downloads price data once and reuses across all combos."""
+    """Sweep 90 param combos for a single index. Downloads price data once."""
     base = SwingMomentumEngine(index_name, start_date, end_date)
     close_df, syms, yf_syms = base._fetch_data()
 
@@ -348,6 +391,80 @@ def optimise_swing_momentum(
                     _logger.debug(
                         'SM opt skip top_n=%s exit=%s freq=%s — %s',
                         top_n, exit_rank, freq, exc,
+                    )
+
+    results.sort(key=lambda x: x['score'], reverse=True)
+    return results
+
+
+def optimise_swing_momentum_full(
+    start_date: str,
+    end_date: str,
+    investment: float = 100_000.0,
+    rebalance_freq: str = 'monthly',
+) -> List[Dict]:
+    """Sweep 3 indices × 30 inner combos (top_n × exit_rank) = 90 backtests.
+
+    Key optimisation: rankings are pre-computed ONCE per index (not 30× per combo),
+    cutting the work from O(combos × dates × stocks) to O(dates × stocks + combos × dates × top_n).
+    """
+    results: List[Dict] = []
+
+    for idx_name in _SM_OPT_INDICES:
+        # ── Download price data once ──────────────────────────────────
+        try:
+            base = SwingMomentumEngine(idx_name, start_date, end_date,
+                                       rebalance_freq=rebalance_freq)
+            close_df, syms, yf_syms = base._fetch_data()
+        except Exception as exc:
+            _logger.warning('SM full-opt: skipping index %s — %s', idx_name, exc)
+            continue
+
+        # ── Pre-compute rankings for all rebalance dates (shared across combos) ──
+        try:
+            td_sorted = sorted(d.date() for d in close_df.index)
+            rdates    = base._rebalance_dates(td_sorted)
+            if not rdates:
+                _logger.warning('SM full-opt: no rebalance dates for %s, skipping', idx_name)
+                continue
+            rankings = base._precompute_rankings(close_df, syms, yf_syms, rdates)
+            _logger.info('SM full-opt: %s — %d stocks, %d rebalance dates',
+                         idx_name, len(syms), len(rdates))
+        except Exception as exc:
+            _logger.warning('SM full-opt: ranking precompute failed for %s — %s', idx_name, exc)
+            continue
+
+        # ── Sweep top_n × exit_rank (30 combos, rankings already computed) ──
+        for top_n in _SM_TOP_N_VALUES:
+            for exit_rank in _SM_EXIT_RANKS:
+                try:
+                    eng = SwingMomentumEngine(
+                        idx_name, start_date, end_date,
+                        rebalance_freq=rebalance_freq,
+                        investment=investment,
+                        top_n=top_n,
+                        exit_rank=exit_rank,
+                    )
+                    r     = eng.run(_close_df=close_df, _syms=syms,
+                                    _yf_syms=yf_syms, _rankings=rankings)
+                    s     = r['summary']
+                    score = _sm_opt_score(s)
+                    results.append({
+                        'index':            idx_name,
+                        'top_n':            top_n,
+                        'exit_rank':        exit_rank,
+                        'rebalance_freq':   rebalance_freq,
+                        'total_return_pct': s['total_return_pct'],
+                        'cagr_pct':         s['cagr_pct'],
+                        'max_drawdown_pct': s['max_drawdown_pct'],
+                        'total_rotations':  s['total_rotations'],
+                        'rebalance_count':  s['rebalance_count'],
+                        'score':            round(score, 4),
+                    })
+                except Exception as exc:
+                    _logger.debug(
+                        'SM full-opt skip %s top_n=%s exit=%s — %s',
+                        idx_name, top_n, exit_rank, exc,
                     )
 
     results.sort(key=lambda x: x['score'], reverse=True)

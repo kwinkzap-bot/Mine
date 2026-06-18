@@ -531,6 +531,78 @@ body.ocean-theme .algo-page {
     background: var(--ag-accent-dim);
     filter: none;
 }
+.ag-btn-strikes {
+    background: transparent;
+    color: #5c6bc0;
+    border: 1.5px solid #9fa8da;
+}
+.ag-btn-strikes:hover:not(:disabled) {
+    background: #ede7f6;
+    filter: none;
+}
+.ag-btn-strikes.busy {
+    color: #9fa8da;
+    cursor: wait;
+}
+/* Delta-strike result panel */
+.rtp-strikes-panel {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px 14px;
+    margin-top: 10px;
+    padding: 10px 14px;
+    background: #f5f7ff;
+    border-radius: 8px;
+    border: 1.5px solid #c5cae9;
+    font-size: 13px;
+    line-height: 1.8;
+}
+.rtp-strikes-panel .rsp-label {
+    color: #7986cb;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+}
+.rtp-strikes-panel .rsp-spot {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    color: #555;
+    margin-bottom: 2px;
+}
+.rtp-strikes-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    grid-column: 1 / -1;
+    padding: 5px 0;
+    border-bottom: 1px dashed #c5cae9;
+}
+.rtp-strikes-row:last-child { border-bottom: none; }
+.rtp-strikes-row .rsr-type {
+    font-weight: 700;
+    font-size: 12px;
+    min-width: 24px;
+}
+.rtp-strikes-row .rsr-strike {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1a237e;
+    min-width: 60px;
+}
+.rtp-strikes-row .rsr-delta {
+    font-size: 12px;
+    font-weight: 600;
+    color: #555;
+    min-width: 72px;
+}
+.rtp-strikes-row .rsr-ltp {
+    font-size: 12px;
+    color: #777;
+    margin-left: auto;
+}
+.rsr-type.ce { color: #1976d2; }
+.rsr-type.pe { color: #c62828; }
 
 /* ── Divider ──────────────────────────────────────────────────── */
 .ag-divider {

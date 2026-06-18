@@ -5,6 +5,7 @@ import math
 import os
 import threading
 import time as _time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Tuple, Union
@@ -73,6 +74,10 @@ def _save_sm_opt_cache(cache: dict) -> None:
             json.dump(cache, _f, indent=2, default=str)
     except Exception as _e:
         logger.warning(f"SM opt cache write failed: {_e}")
+
+# In-memory task store for long-running SM optimisation background jobs
+_sm_opt_tasks: Dict[str, Dict] = {}
+_sm_opt_tasks_lock = threading.Lock()
 
 
 def _get_request_lock(key: Any) -> threading.Lock:
@@ -5753,6 +5758,26 @@ def algo_rtp_force_exit() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/algo/rtp/delta-strikes', methods=['GET'])
+@require_user_auth
+def algo_rtp_delta_strikes() -> EndpointResponse:
+    """Return the CE and PE strikes closest to ±0.90 delta at the current NIFTY spot."""
+    try:
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        provider = get_data_provider()
+        if not provider:
+            return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
+
+        # Prefer the running instance (has instruments already cached)
+        algo = get_instance(username) or RTPAlgo(username=username)
+        result = algo.get_delta_strikes(provider)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'[rtp/delta-strikes] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/algo/rtp/start', methods=['POST'])
 @csrf.exempt
 @limiter.exempt
@@ -7348,38 +7373,67 @@ def backtest_sm_optimise():
     auth_error = check_auth()
     if auth_error:
         return auth_error
-    body       = request.get_json() or {}
-    index_name = body.get('index', 'NIFTY 500').upper().strip()
-    start_date = body.get('start_date', '2022-01-01')
-    end_date   = body.get('end_date') or datetime.today().strftime('%Y-%m-%d')
-    investment = float(body.get('investment', 100000))
-    recalc     = bool(body.get('recalculate', False))
-    cache_key  = f"{index_name}_{start_date}_{end_date}"
+    body            = request.get_json() or {}
+    start_date      = body.get('start_date', '2022-01-01')
+    end_date        = body.get('end_date') or datetime.today().strftime('%Y-%m-%d')
+    investment      = float(body.get('investment', 100000))
+    rebalance_freq  = body.get('rebalance_freq', 'monthly')
+    recalc          = bool(body.get('recalculate', False))
+    cache_key       = f"full_{start_date}_{end_date}_{rebalance_freq}"
 
+    # Serve from disk cache immediately (no background task needed)
     if not recalc:
         cache = _load_sm_opt_cache()
         if cache_key in cache:
             return jsonify({'success': True, 'from_cache': True, **cache[cache_key]})
 
-    try:
-        from trading_app.Backtest.swing_momentum_engine import optimise_swing_momentum
-        results = optimise_swing_momentum(index_name, start_date, end_date, investment)
-        payload = {
-            'index':               index_name,
-            'start_date':          start_date,
-            'end_date':            end_date,
-            'total_combos_tested': len(results),
-            'best':                results[0] if results else None,
-            'results':             results[:15],
-            'cached_at':           datetime.now().strftime('%Y-%m-%d %H:%M'),
-        }
-        cache = _load_sm_opt_cache()
-        cache[cache_key] = payload
-        _save_sm_opt_cache(cache)
-        return jsonify({'success': True, 'from_cache': False, **payload})
-    except Exception as e:
-        logger.error(f'[SMOptimise] error: {e}', exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
+    # Spawn background thread and return task_id to client immediately
+    task_id = str(uuid.uuid4())
+    with _sm_opt_tasks_lock:
+        _sm_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time()}
+
+    def _run():
+        try:
+            from trading_app.Backtest.swing_momentum_engine import optimise_swing_momentum_full
+            results = optimise_swing_momentum_full(start_date, end_date, investment, rebalance_freq)
+            payload = {
+                'start_date':          start_date,
+                'end_date':            end_date,
+                'rebalance_freq':      rebalance_freq,
+                'total_combos_tested': len(results),
+                'best':                results[0] if results else None,
+                'results':             results[:15],
+                'cached_at':           datetime.now().strftime('%Y-%m-%d %H:%M'),
+            }
+            disk_cache = _load_sm_opt_cache()
+            disk_cache[cache_key] = payload
+            _save_sm_opt_cache(disk_cache)
+            with _sm_opt_tasks_lock:
+                _sm_opt_tasks[task_id] = {'status': 'complete', 'payload': payload}
+        except Exception as e:
+            logger.error(f'[SMOptimise] background error: {e}', exc_info=True)
+            with _sm_opt_tasks_lock:
+                _sm_opt_tasks[task_id] = {'status': 'error', 'error': str(e)}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
+
+
+@api_bp.route('/backtest/swing-momentum/optimise/status/<task_id>', methods=['GET'])
+def backtest_sm_optimise_status(task_id):
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _sm_opt_tasks_lock:
+        task = _sm_opt_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running'})
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    # complete
+    return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
 
 
 # ── Error handlers ────────────────────────────────────────────────────────────

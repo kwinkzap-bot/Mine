@@ -244,6 +244,64 @@ function rtpExitNow(btn) {
 }
 
 
+// ── RTP Delta Strikes ─────────────────────────────────────────────────────────
+
+function rtpFetchDeltaStrikes(btn) {
+    const panel = document.getElementById('rtpStrikesResult');
+    btn.disabled = true;
+    btn.classList.add('busy');
+    btn.textContent = 'Loading…';
+    panel.style.display = 'none';
+
+    fetch('/api/algo/rtp/delta-strikes')
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            btn.classList.remove('busy');
+            btn.textContent = 'Δ Strikes';
+
+            if (!d.success) {
+                panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ ${d.error || 'Failed to fetch strikes'}</span>`;
+                panel.style.display = 'block';
+                return;
+            }
+
+            const fmt  = v => v != null ? v.toLocaleString('en-IN') : '—';
+            const fmtD = v => v != null ? (v > 0 ? '+' : '') + v.toFixed(3) : '—';
+            const fmtL = v => v != null ? '₹' + v.toLocaleString('en-IN', {minimumFractionDigits:2}) : '—';
+
+            const ce = d.CE || {};
+            const pe = d.PE || {};
+
+            panel.innerHTML = `
+              <div style="font-size:11px;color:#7986cb;font-weight:600;margin-bottom:4px;letter-spacing:.4px;">
+                NIFTY SPOT: <span style="color:#1a237e;font-size:13px;">${fmt(d.spot)}</span>
+                &nbsp;·&nbsp; Expiry: <span style="color:#555;">${d.expiry || '—'}</span>
+              </div>
+              <div class="rtp-strikes-row">
+                <span class="rsr-type ce">CE</span>
+                <span class="rsr-strike">${fmt(ce.strike)}</span>
+                <span class="rsr-delta">δ ${fmtD(ce.delta)}</span>
+                <span class="rsr-ltp">LTP ${fmtL(ce.ltp)}</span>
+              </div>
+              <div class="rtp-strikes-row">
+                <span class="rsr-type pe">PE</span>
+                <span class="rsr-strike">${fmt(pe.strike)}</span>
+                <span class="rsr-delta">δ ${fmtD(pe.delta)}</span>
+                <span class="rsr-ltp">LTP ${fmtL(pe.ltp)}</span>
+              </div>`;
+            panel.style.display = 'block';
+        })
+        .catch(e => {
+            btn.disabled = false;
+            btn.classList.remove('busy');
+            btn.textContent = 'Δ Strikes';
+            panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ Request failed: ${e}</span>`;
+            panel.style.display = 'block';
+        });
+}
+
+
 // ── Fetch & render ────────────────────────────────────────────────────────────
 
 function _fetchStatus() {
