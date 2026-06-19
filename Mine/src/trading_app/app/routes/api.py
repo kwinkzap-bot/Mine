@@ -2808,6 +2808,256 @@ def run_rtp_backtest_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _fetch_1min_and_resample(provider, instrument_token, start_date_str, end_date_str, interval):
+    """
+    Fetch 1-minute bars (maximum Fyers historical depth — same as RTP) and
+    resample to the requested interval in-process.
+
+    Fyers stores 10+ years of 1-minute data for NSE indices but only ~1 year
+    of pre-aggregated 5-minute data, which is why VWAP was returning only
+    1 year while RTP (1-minute) returned 10 years.
+
+    Uses floor+groupby instead of resample(offset=) for pandas-version safety.
+    NSE opens at 9:15 IST which is a natural 5-minute boundary (9h15m % 5 = 0),
+    so floor('5min') on IST-aware timestamps aligns correctly without offset.
+    """
+    import pandas as pd
+
+    _interval_mins = {
+        'minute': 1, '1minute': 1, '2minute': 2, '3minute': 3,
+        '5minute': 5, '10minute': 10, '15minute': 15,
+        '30minute': 30, '60minute': 60, 'hour': 60,
+    }
+    target_mins = _interval_mins.get(interval, 5)
+
+    # Always pull raw 1-minute data for maximum historical depth
+    candles = provider.historical_data(
+        instrument_token=instrument_token,
+        from_date=start_date_str,
+        to_date=end_date_str,
+        interval='minute',
+        use_cache=False,
+    )
+
+    if not candles:
+        return candles
+
+    if target_mins <= 1:
+        return candles
+
+    df = pd.DataFrame(candles)
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.set_index('date').sort_index()
+
+    # floor() on timezone-aware IST timestamps aligns to the correct
+    # N-minute boundary (e.g. 09:15, 09:20, … for 5-minute)
+    freq     = f'{target_mins}min'
+    slot_key = df.index.floor(freq)
+
+    resampled = df.groupby(slot_key).agg(
+        open=('open',   'first'),
+        high=('high',   'max'),
+        low =('low',    'min'),
+        close=('close', 'last'),
+        volume=('volume', 'sum'),
+    )
+    resampled = resampled.dropna(subset=['open', 'close'])
+    resampled.index.name = 'date'
+    resampled = resampled.reset_index()
+
+    result = resampled.to_dict('records')
+    logger.info(
+        '[VWAP fetch] 1-min→%s resample: %d raw 1-min bars → %d %s bars  (%s → %s)',
+        freq, len(df), len(result), interval,
+        result[0]['date'] if result else '—',
+        result[-1]['date'] if result else '—',
+    )
+    return result
+
+
+@api_bp.route('/backtest/vwap', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_vwap_backtest_api():
+    """Run Current & Previous VWAP (PL) backtest."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '5minute')
+        min_gap        = float(data.get('min_gap',  30.0))
+        tp_points      = float(data.get('tp_points', 150.0))
+        sl_points      = float(data.get('sl_points', 50.0))
+
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+        kite_indices = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105,
+            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+        }
+
+        if hasattr(current_kite, 'fyers'):
+            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+        else:
+            instrument_token = kite_indices.get(symbol, symbol)
+
+        candles = _fetch_1min_and_resample(
+            current_kite, instrument_token, start_date_str, end_date_str, interval
+        )
+
+        if not candles:
+            return jsonify({'success': False, 'error': 'No historical data found for the given range'}), 404
+
+        logger.info('[VWAP BT] %d bars received  first=%s  last=%s',
+                    len(candles),
+                    candles[0].get('date', '?'),
+                    candles[-1].get('date', '?'))
+
+        import pandas as pd
+        import importlib
+        import trading_app.Backtest.vwap_engine as _vwap_mod
+        importlib.reload(_vwap_mod)
+        from trading_app.Backtest.vwap_engine import VWAPBacktestEngine
+
+        df = pd.DataFrame(candles)
+        vol_sum = df['volume'].sum() if 'volume' in df.columns else -1
+        logger.info('[VWAP BT] volume sum=%s  zero_vol_pct=%.1f%%',
+                    vol_sum,
+                    100.0 * (df['volume'] == 0).mean() if 'volume' in df.columns else -1)
+        engine = VWAPBacktestEngine(
+            df=df,
+            min_gap_points=min_gap,
+            tp_points=tp_points,
+            sl_points=sl_points,
+            interval=interval,
+        )
+        trades, summary = engine.run()
+
+        logger.info('[VWAP BT] engine done: %d trades', len(trades))
+
+        return jsonify({
+            'success': True,
+            'trades':  trades,
+            '_debug': {
+                'bars_fetched': len(candles),
+                'first_bar':    str(candles[0].get('date', '?')),
+                'last_bar':     str(candles[-1].get('date', '?')),
+            },
+            'summary': {
+                'total_trades':  summary['total_trades'],
+                'wins':          summary['wins'],
+                'losses':        summary['losses'],
+                'total_pnl':     summary['total_pnl'],
+                'win_rate':      summary['win_rate'],
+                'profit_factor': summary['profit_factor'],
+                'max_drawdown':  summary['max_drawdown'],
+                'avg_win':       summary['avg_win'],
+                'avg_loss':      summary['avg_loss'],
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error in VWAP backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/vwap/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_vwap_optimise():
+    """Sweep VWAP (min_gap × tp × sl) parameter grid and return ranked results."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date', '2017-01-01')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '5minute')
+        recalculate    = bool(data.get('recalculate', False))
+
+        if not end_date_str:
+            end_date_str = datetime.today().strftime('%Y-%m-%d')
+
+        cache_key = f"vwap_{symbol}_{interval}"
+
+        if not recalculate:
+            cache = _load_opt_cache()
+            if cache_key in cache:
+                entry = cache[cache_key]
+                return jsonify({'success': True, 'from_cache': True, **entry})
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+        kite_indices = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105,
+            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+        }
+
+        if hasattr(current_kite, 'fyers'):
+            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+        else:
+            instrument_token = kite_indices.get(symbol, symbol)
+
+        candles = _fetch_1min_and_resample(
+            current_kite, instrument_token, start_date_str, end_date_str, interval
+        )
+        if not candles:
+            return jsonify({'success': False, 'error': 'No historical data returned'}), 404
+
+        import pandas as pd
+        from trading_app.Backtest.vwap_engine import optimise_vwap
+
+        df      = pd.DataFrame(candles)
+        results = optimise_vwap(df, interval=interval)
+
+        cached_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+        payload   = {
+            'symbol':              symbol,
+            'interval':            interval,
+            'total_combos_tested': len(results),
+            'best':                results[0] if results else None,
+            'results':             results[:15],
+            'cached_at':           cached_at,
+        }
+
+        cache           = _load_opt_cache()
+        cache[cache_key] = payload
+        _save_opt_cache(cache)
+
+        return jsonify({'success': True, 'from_cache': False, **payload})
+
+    except Exception as e:
+        logger.error(f"Error in VWAP optimise API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/backtest/rtp/optimise', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth

@@ -821,6 +821,7 @@ body.ocean-theme .sw-wrap {
         <div style="display:flex;align-items:center;gap:10px;">
             <select id="strategySelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
                 <option value="rtp">RTP (Railway Track)</option>
+                <option value="vwap">📈 C/P VWAP Strategy</option>
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
@@ -913,6 +914,38 @@ body.ocean-theme .sw-wrap {
                 <div class="form-group">
                     <label>Total Investment</label>
                     <div id="rtpInvestmentDisplay" style="height:42px;padding:0 14px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:14px;font-weight:700;color:#1a237e;background:#f5f7ff;display:flex;align-items:center;letter-spacing:0.3px;">₹2,50,000</div>
+                </div>
+            </div>
+
+            <!-- VWAP params -->
+            <div id="vwapParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="vwapMinGap">Min Gap (pts)</label>
+                    <input type="number" id="vwapMinGap" value="30" min="0" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="vwapTP">Target (pts)</label>
+                    <input type="number" id="vwapTP" value="150" min="1" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="vwapSL">Stop Loss (pts)</label>
+                    <input type="number" id="vwapSL" value="50" min="1" step="1">
+                </div>
+            </div>
+
+            <!-- VWAP position sizing -->
+            <div id="vwapLotRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="vwapLots">Lots</label>
+                    <input type="number" id="vwapLots" value="5" min="1" max="50" step="1" oninput="updateVwapInvestment()">
+                </div>
+                <div class="form-group">
+                    <label for="vwapLotValue">Lot Value (₹/pt)</label>
+                    <input type="number" id="vwapLotValue" value="65" min="1" step="1" oninput="updateVwapInvestment()">
+                </div>
+                <div class="form-group">
+                    <label>Total Investment</label>
+                    <div id="vwapInvestmentDisplay" style="height:42px;padding:0 14px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:14px;font-weight:700;color:#1a237e;background:#f5f7ff;display:flex;align-items:center;letter-spacing:0.3px;">₹2,50,000</div>
                 </div>
             </div>
 
@@ -1028,6 +1061,36 @@ body.ocean-theme .sw-wrap {
                             </tr>
                         </thead>
                         <tbody id="smOptTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- VWAP Optimise results panel -->
+            <div id="vwapOptimisePanel" style="display:none;">
+                <div class="opt-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">⚡ VWAP Parameter Optimisation Results</h4>
+                        <button id="vwapRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="vwapOptMeta"></small>
+                </div>
+                <div class="opt-table-wrap">
+                    <table class="opt-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Min Gap</th>
+                                <th>SL</th>
+                                <th>Target</th>
+                                <th>Trades</th>
+                                <th>Win%</th>
+                                <th>Net P&amp;L (pts)</th>
+                                <th>Prof. Factor</th>
+                                <th>Max DD</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="vwapOptTableBody"></tbody>
                     </table>
                 </div>
             </div>
@@ -1254,6 +1317,24 @@ body.ocean-theme .sw-wrap {
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
                                             <input type="checkbox" id="oipCprShowCumR3S3" checked><span style="color:#a020f0">Cum. R3 / S3</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="oip-ind-cpr-group">
+                                    <div class="oip-ind-item oip-ind-cpr-header">
+                                        <input type="checkbox" id="oipShowMultiCpr">
+                                        <label for="oipShowMultiCpr" class="oip-ind-cpr-label">Multi CPR</label>
+                                        <span class="oip-cpr-expand" id="oipMultiCprExpandBtn">&#9658;</span>
+                                    </div>
+                                    <div class="oip-ind-cpr-sub hidden" id="oipMultiCprSub">
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipMultiCpr15m" checked><span style="color:#f97316">15 Min</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipMultiCpr30m" checked><span style="color:#06b6d4">30 Min</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipMultiCpr1h" checked><span style="color:#a855f7">1 Hour</span>
                                         </label>
                                     </div>
                                 </div>

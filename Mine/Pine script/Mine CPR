@@ -7,7 +7,10 @@ shadow = input(true, title="CPR shadow")
 cprTransp = input.int(50, "CPR Central Transparency", minval=0, maxval=100)
 rsTransp = input.int(98, "CPR R/S Transparency", minval=0, maxval=100)
 mcprTransp = input.int(20, "Multi-Pivot Transparency", minval=0, maxval=100)
-showPivots = input.bool(false, title="Multi-Timeframe CPR")
+showPivots  = input.bool(false, title="Multi CPR",  group="Multi CPR")
+show15mCPR  = input.bool(true,  title="15 min",    group="Multi CPR", inline="mcpr_tfs")
+show30mCPR  = input.bool(true,  title="30 min",    group="Multi CPR", inline="mcpr_tfs")
+show1hCPR   = input.bool(true,  title="1 Hour",    group="Multi CPR", inline="mcpr_tfs")
 showAllSMAs = input(true, "Show All Moving Averages")
 enableIndicator = input.bool(false, "Enable Indicator", group = "Appearance")
 carmarilla = input(true, title="Show pivot R3 and S3")
@@ -557,74 +560,57 @@ alertcondition(printedtp7 == 1, title="TP7 Line Drawn", message="TP7 line has be
 alertcondition(tp, title="Take-Profit Condition", message="Take-Profit condition met")
 
 //--------MCPR---------------------------------------------------------------------------------------------
-// --- Dynamic Timeframe Calculation (Global Scope) ---
+// Multi CPR — independent CPR levels for 15-min, 30-min, and 1-hour timeframes
 
-// Get the current chart period string (e.g., "5", "60", "D", "W")
-string currentPeriod = timeframe.period
-// Get the current chart multiplier (e.g., 5 for "5", 1 for "60", 1 for "D")
-float currentMultiplier = timeframe.multiplier
+myWidthMainLevels = input.int(title="Line width for Main levels", defval=1, minval=1, group="Multi CPR")
 
-// 1. Calculate currentTFMinutes on a single line
-float currentTFMinutes = currentPeriod == "S" or currentPeriod == "" ? na : currentMultiplier * (currentPeriod == "S" ? 1.0/60 : currentPeriod == "m" ? 1.0 : currentMultiplier < 60 ? currentMultiplier : 60.0)
+// 15-min CPR
+[m15_h, m15_l, m15_c] = request.security(syminfo.tickerid, "15", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_on)
+m15_pivot = (m15_h + m15_l + m15_c) / 3.0
+m15_bc    = (m15_h + m15_l) / 2.0
+m15_tc    = m15_pivot - m15_bc + m15_pivot
 
-// 2. Determine the pivot timeframe string
-var string pivottimeframe = 
-  currentPeriod == "1" or currentPeriod == "3" or (currentPeriod != "D" and currentTFMinutes <= 3) ? "30" : // 1min to 3min -> 30m
-  currentPeriod == "5" or currentPeriod == "10" or (currentPeriod != "D" and currentTFMinutes <= 10) ? "60" : // 5min to 10min -> 1h
-  currentPeriod == "15" ? "120" :  // 15min -> 2h
-  currentPeriod == "30" ? "180" :  // 30min -> 3h
-  currentPeriod == "60" ? "D" :    // 1hour (60) -> Daily
-  currentPeriod == "D" ? "W" :    // Daily Chart (D) -> Weekly Pivot
-  currentPeriod == "W" ? "M" :    // Weekly Chart (W) -> Monthly Pivot
-  "D" // Default to Daily
+// 30-min CPR
+[m30_h, m30_l, m30_c] = request.security(syminfo.tickerid, "30", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_on)
+m30_pivot = (m30_h + m30_l + m30_c) / 3.0
+m30_bc    = (m30_h + m30_l) / 2.0
+m30_tc    = m30_pivot - m30_bc + m30_pivot
 
-// --- Input Variables ---
-mdp = input.int(defval=2, title="Multiday Lookback (For High/Low)", tooltip="Defines the lookback period for calculating the High/Low used in the CPR formula.", minval=1)
+// 1-hour CPR
+[m60_h, m60_l, m60_c] = request.security(syminfo.tickerid, "60", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_on)
+m60_pivot = (m60_h + m60_l + m60_c) / 3.0
+m60_bc    = (m60_h + m60_l) / 2.0
+m60_tc    = m60_pivot - m60_bc + m60_pivot
 
-// --- SECURITY CALLS ---
-// Calculate the highest/lowest values of the previous 'mdp' days on the current chart TF
-mphigh_val = ta.highest(high[1], mdp) 
-mplow_val = ta.lowest(low[1], mdp)   
+// 15 min CPR color inputs
+m15_line_color = input.color(color.orange,                 "15m Line Color", group="Multi CPR", inline="m15_colors")
+m15_fill_color = input.color(color.new(color.orange, 80),  "15m Fill Color", group="Multi CPR", inline="m15_colors")
 
-// Fetch security data using the dynamic 'pivottimeframe'
-mpopen = request.security(syminfo.tickerid, pivottimeframe, open[mdp], barmerge.gaps_off, barmerge.lookahead_on)
-mphigh = request.security(syminfo.tickerid, pivottimeframe, mphigh_val, barmerge.gaps_off, barmerge.lookahead_on)
-mplow = request.security(syminfo.tickerid, pivottimeframe, mplow_val, barmerge.gaps_off, barmerge.lookahead_on)
-mpclose = request.security(syminfo.tickerid, pivottimeframe, close[1], barmerge.gaps_off, barmerge.lookahead_on)
+// 15 min CPR plots
+p15  = plot(showPivots and show15mCPR ? m15_pivot : na, title="15m P",  color=m15_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+bc15 = plot(showPivots and show15mCPR ? m15_bc    : na, title="15m BC", color=m15_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+tc15 = plot(showPivots and show15mCPR ? m15_tc    : na, title="15m TC", color=m15_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+fill(bc15, tc15, color=showPivots and show15mCPR ? m15_fill_color : na)
 
-//Multiday CPR Calculation
-mpivot = (mphigh + mplow + mpclose) / 3.0
-mbc = (mphigh + mplow) / 2.0
-mtc = mpivot - mbc + mpivot
+// 30 min CPR color inputs
+m30_line_color = input.color(color.teal,                   "30m Line Color", group="Multi CPR", inline="m30_colors")
+m30_fill_color = input.color(color.new(color.teal, 80),    "30m Fill Color", group="Multi CPR", inline="m30_colors")
 
-// Color and style definitions
-myWidthMainLevels = input.int(title="Line width for Main levels", defval=1, minval=1)
+// 30 min CPR plots
+p30  = plot(showPivots and show30mCPR ? m30_pivot : na, title="30m P",  color=m30_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+bc30 = plot(showPivots and show30mCPR ? m30_bc    : na, title="30m BC", color=m30_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+tc30 = plot(showPivots and show30mCPR ? m30_tc    : na, title="30m TC", color=m30_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+fill(bc30, tc30, color=showPivots and show30mCPR ? m30_fill_color : na)
 
-// ⬇️ --- CORRECTED PLOT CALLS (Moved back to Global Scope) --- ⬇️
+// 1 hour CPR color inputs
+h1_line_color = input.color(color.purple,                  "1H Line Color", group="Multi CPR", inline="h1_colors")
+h1_fill_color = input.color(color.new(color.purple, 80),   "1H Fill Color", group="Multi CPR", inline="h1_colors")
 
-// Plot P
-p10 = plot(showPivots and not na(mpivot) ? mpivot : na, 
-         title="P", 
-         color=color.purple, 
-         style=plot.style_linebr, 
-         linewidth=myWidthMainLevels)
-
-// Plot BC
-c = plot(showPivots and not na(mbc) ? mbc : na, 
-         title="BC", 
-         color=color.blue, 
-         style=plot.style_linebr, 
-         linewidth=myWidthMainLevels)
-
-// Plot TC
-d = plot(showPivots and not na(mtc) ? mtc : na, 
-         title="TC", 
-         color=color.blue, 
-         style=plot.style_linebr, 
-         linewidth=myWidthMainLevels)
-
-// Fill the CPR zone only if the pivots are shown
-fill(c, d, color=showPivots ? color.new(color.yellow, mcprTransp) : na)
+// 1 hour CPR plots
+p60  = plot(showPivots and show1hCPR ? m60_pivot : na, title="1h P",  color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+bc60 = plot(showPivots and show1hCPR ? m60_bc    : na, title="1h BC", color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+tc60 = plot(showPivots and show1hCPR ? m60_tc    : na, title="1h TC", color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+fill(bc60, tc60, color=showPivots and show1hCPR ? h1_fill_color : na)
 
 //===============================================================================================================================
 
@@ -656,6 +642,35 @@ if show2ndCandleBox and is_5min_or_below and m5_is_2nd
         b = array.last(boxes2nd)
         box.set_top(b, m5_high2)
         box.set_bottom(b, m5_low2)
+
+// ─── 2nd 1-Min Candle Box ─────────────────────────────────────────────────────
+show2nd1mBox     = input.bool(true,  "Show 2nd 1-Min Candle Box", group = "2nd 1-Min Candle")
+box1mFillColor   = input.color(color.new(#FF6B6B, 90), "Fill Color",   group = "2nd 1-Min Candle")
+box1mBorderColor = input.color(#FF6B6B, "Border Color", group = "2nd 1-Min Candle")
+
+// Only visible on 1-min and below timeframes
+is_1m_or_below = timeframe.isintraday and timeframe.multiplier <= 1
+
+// Fetch second 1-min candle data (1-min context)
+m1_is_2nd = request.security(syminfo.tickerid, "1", ta.barssince(ta.change(time("D"))) == 1, lookahead = barmerge.lookahead_off)
+m1_high2  = request.security(syminfo.tickerid, "1", high, lookahead = barmerge.lookahead_off)
+m1_low2   = request.security(syminfo.tickerid, "1", low,  lookahead = barmerge.lookahead_off)
+m1_time2  = request.security(syminfo.tickerid, "1", time, lookahead = barmerge.lookahead_off)
+
+var box[] boxes1m    = array.new_box()
+var int   last1mTime = na
+
+if show2nd1mBox and is_1m_or_below and m1_is_2nd
+    if na(last1mTime) or last1mTime != m1_time2
+        // New day's second 1-min candle — box extends to end of day
+        b = box.new(m1_time2, m1_high2, time_close("D"), m1_low2, border_color = box1mBorderColor, bgcolor = box1mFillColor, xloc = xloc.bar_time)
+        array.push(boxes1m, b)
+        last1mTime := m1_time2
+    else if array.size(boxes1m) > 0
+        // Live update while the candle is forming
+        b = array.last(boxes1m)
+        box.set_top(b, m1_high2)
+        box.set_bottom(b, m1_low2)
 
 // ─── Monday High/Low Box ─────────────────────────────────────────────────────
 show_monday_box     = input.bool(true, "Show Monday H/L Box",  group = "Monday Box")
@@ -691,122 +706,88 @@ if show_monday_box
         box.set_top(cur_mon_box, mon_high)
         box.set_bottom(cur_mon_box, mon_low)
 
-// ─── Railway Track Signal ─────────────────────────────────────────────────────
-// Entry modes:
-//   RTP(20 & 9) — EMA 20 & 9 must be parallel and fully stacked (50 < 20 < 9 bull / 50 > 20 > 9 bear)
-//                 Touch: low ≤ EMA 20, close > EMA 9 & 20  |  specific candle patterns
-//   RTP(50)     — EMA 20 & 50 slope together; touch EMA 50, close above/below it  |  any bull/bear candle
-// ADX filter: when enabled, signals only fire when ADX ≥ threshold (trending market)
-// SL / Target: dashed reference lines drawn from the signal bar
-
-showRTSignal  = input.bool(true,           "Show Railway Track Signal",  group = "Railway Track")
-rtEntryMode   = input.string("RTP(20 & 9)", "Entry Mode",                group = "Railway Track", options = ["RTP(20 & 9)", "RTP(50)"])
-rtSlopeBars   = input.int(8,               "Slope Lookback (bars)",      group = "Railway Track", minval = 1, maxval = 20)
-rtUseAdx      = input.bool(false,          "ADX Filter",                 group = "Railway Track")
-rtAdxThresh   = input.int(25,              "ADX Threshold",              group = "Railway Track", minval = 5, maxval = 50)
-rtSlPoints    = input.float(30.0,          "Stop Loss (pts)",            group = "Railway Track", minval = 0.5, step = 0.5)
-rtTgtPoints   = input.float(90.0,          "Target (pts)",               group = "Railway Track", minval = 0.5, step = 0.5)
-rtShowLevels  = input.bool(true,           "Show SL / Target on Chart",  group = "Railway Track")
+// ─── EMA Retest Signal ─────────────────────────────────────────────────────────
+// Logic:
+//   1. Price drops below ALL 3 EMAs
+//   2. Price breaks above ALL 3 EMAs
+//   3. Price rallies — must stay above all 3 for ≥ minBarsAbove bars AND reach
+//      at least rallyATRMult × ATR above the top EMA (stops oscillation signals)
+//   4. Price pulls back — low touches EMA band, EMAs are tightly clustered
+//   5. First bullish candle in that zone = BUY. Exit: close below 50 EMA.
+showEMASignal  = input.bool(true,  "Show EMA Retest Signal",       group = "EMA Signal")
+clusterATRMult = input.float(0.3,  "EMA Cluster Threshold (ATR×)", group = "EMA Signal", minval = 0.05, step = 0.05, tooltip = "Max spread between the 3 EMAs as a multiple of ATR(14). Lower = tighter cluster required.")
+minBarsAbove   = input.int(3,      "Min Rally Bars",               group = "EMA Signal", minval = 1, maxval = 30,  tooltip = "Minimum bars price must close above ALL 3 EMAs after the breakout before a retest signal can fire.")
+rallyATRMult   = input.float(1.0,  "Min Rally Distance (ATR×)",    group = "EMA Signal", minval = 0.1, step = 0.1, tooltip = "Price must reach at least this many ATRs ABOVE the highest EMA during the rally. This is the key filter — it rejects signals where price merely oscillates through the EMAs without a real move away.")
+targetPoints   = input.float(25.0, "Target Points",                group = "EMA Signal", minval = 1)
 
 ema9v  = mshortest
 ema20v = shortest
 ema50v = short
 
-// ── Slope direction ──────────────────────────────────────────────────────────
-ema20Rising  = ema20v > ema20v[rtSlopeBars]
-ema50Rising  = ema50v > ema50v[rtSlopeBars]
-ema20Falling = ema20v < ema20v[rtSlopeBars]
-ema50Falling = ema50v < ema50v[rtSlopeBars]
+emaTop    = math.max(ema9v, math.max(ema20v, ema50v))
+emaBot    = math.min(ema9v, math.min(ema20v, ema50v))
+emasClose = (emaTop - emaBot) <= ta.atr(14) * clusterATRMult
 
-// ── Parallel check (RTP(20 & 9) only) ───────────────────────────────────────
-// Gap between EMA 20 and EMA 50 must not be expanding too rapidly
-_rtGap    = math.abs(ema20v - ema50v)
-_rtGapChg = math.abs(_rtGap - _rtGap[5])
-_rtAtr14  = ta.atr(14)
-rtParallel = _rtGapChg <= _rtAtr14 * 0.5
+aboveAll = close > ema9v  and close > ema20v and close > ema50v
+belowAll = close < ema9v  and close < ema20v and close < ema50v
 
-isRtp50 = rtEntryMode == "RTP(50)"
+var bool  hadBelowPhase       = false
+var bool  setupActive         = false
+var bool  wasInRetest         = false
+var bool  inTrade             = false
+var int   barsAboveAfterBreak = 0
+var float maxDistAboveEMAs    = 0.0
 
-// ── Railway track (entry-mode aware) ────────────────────────────────────────
-railwayUp = ema20Rising  and ema50Rising  and (isRtp50 or rtParallel)
-railwayDn = ema20Falling and ema50Falling and (isRtp50 or rtParallel)
+// Phase 1 – price drops below all 3 EMAs
+if belowAll
+    hadBelowPhase := true
 
-// ── EMA stack ───────────────────────────────────────────────────────────────
-bullishStack = isRtp50 ? (ema50v < ema20v) : (ema50v < ema20v and ema50v < ema9v)   // 50 lowest  → bullish
-bearishStack = isRtp50 ? (ema50v > ema20v) : (ema50v > ema20v and ema50v > ema9v)   // 50 highest → bearish
+// Phase 2 – breakout: first bar price closes above all 3 EMAs after the below phase
+if hadBelowPhase and aboveAll and not aboveAll[1]
+    setupActive         := true
+    hadBelowPhase       := false
+    barsAboveAfterBreak := 0
+    maxDistAboveEMAs    := 0.0
 
-// ── Session filter: 9:20 AM – 3:28 PM IST ───────────────────────────────────
-_rtAfterOpen    = (hour > 9)  or (hour == 9  and minute >= 20)
-_rtBeforeCutoff = (hour < 15) or (hour == 15 and minute <= 28)
-inSession = _rtAfterOpen and _rtBeforeCutoff
+// Phase 3 – during rally, count bars above all EMAs and track max distance above EMA top
+if setupActive and aboveAll
+    barsAboveAfterBreak += 1
+    dist = close - emaTop
+    if dist > maxDistAboveEMAs
+        maxDistAboveEMAs := dist
 
-// ── ADX filter ───────────────────────────────────────────────────────────────
-[_, _, _rtAdxVal] = ta.dmi(14, 14)
-rtAdxOk = not rtUseAdx or _rtAdxVal >= rtAdxThresh
+// Rally confirmed only when BOTH thresholds are met:
+//   • enough bars above all EMAs (rules out single-bar spikes)
+//   • price got meaningfully above the EMA cluster (rules out oscillations)
+hadRallyConfirmed = barsAboveAfterBreak >= minBarsAbove and maxDistAboveEMAs >= ta.atr(14) * rallyATRMult
 
-// ── Touch conditions (entry-mode aware) ─────────────────────────────────────
-buyTouch  = isRtp50 ? (low  <= ema50v and close >  ema50v) :
-                      (low  <= ema20v  and close >  ema9v  and close >  ema20v)
-sellTouch = isRtp50 ? (high >= ema50v and close <  ema50v) :
-                      (high >= ema20v  and close <  ema9v  and close <  ema20v)
+// Phase 4 – retest: low touches EMA band, close stays above 50 EMA
+inRetest  = setupActive and hadRallyConfirmed and low <= emaTop and close > ema50v
 
-// ── Candlestick pattern helpers ──────────────────────────────────────────────
-_body   = math.abs(close - open)
-_range  = high - low
-_upperW = high - math.max(close, open)
-_lowerW = math.min(close, open) - low
+// Entry: first bullish candle entering the retest zone with clustered EMAs
+buySignal = showEMASignal and inRetest and emasClose and close > open and not wasInRetest
 
-isHammer     = _range > 0 and _body > 0 and _lowerW >= 2.0 * _body and _upperW <= _body
-isBullEngulf = close[1] < open[1] and close > open and open <= close[1] and close >= open[1]
-isBuyCandle  = close > open
+// Exit and target only fire if a BUY was previously triggered
+exitSignal = showEMASignal and inTrade and close < ema50v
 
-isShootStar  = _range > 0 and _body > 0 and _upperW >= 2.0 * _body and _lowerW <= _body
-isBearEngulf = close[1] > open[1] and close < open and open >= close[1] and close <= open[1]
-isSellCandle = close < open
+wasInRetest := inRetest
 
-isDoji = _range > 0 and _body <= _range * 0.1
+// Set inTrade on entry, clear on exit
+if buySignal
+    inTrade := true
+if close < ema50v
+    inTrade             := false
+    setupActive         := false
+    wasInRetest         := false
+    barsAboveAfterBreak := 0
+    maxDistAboveEMAs    := 0.0
 
-// RTP(50): any bull/bear candle qualifies; RTP(20 & 9): specific reversal patterns
-buyPattern  = isRtp50 ? (close > open or isDoji) :
-                        (isDoji or (close > open and (isHammer or isBullEngulf or isBuyCandle)))
-sellPattern = isRtp50 ? (close < open or isDoji) :
-                        (isDoji or (close < open and (isShootStar or isBearEngulf or isSellCandle)))
+plotshape(buySignal,  "EMA Retest Buy",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), size = size.small, text = "B")
+plotshape(exitSignal, "EMA Retest Exit", shape.triangledown, location.abovebar, color.new(color.red,  0), size = size.small, text = "X")
 
-// ── Reset-candle tracking ────────────────────────────────────────────────────
-// After a BUY fires:  one candle low  must stay above the reference EMA(s) before next BUY
-// After a SELL fires: one candle high must stay below the reference EMA(s) before next SELL
-var bool sellNeedsReset = false
-var bool buyNeedsReset  = false
+// Target label only on entry
+if buySignal
+    label.new(bar_index, close + targetPoints, "T " + str.tostring(math.round(close + targetPoints, 2)), color = color.new(color.green, 80), textcolor = color.green, style = label.style_label_down, size = size.tiny)
 
-if sellNeedsReset
-    sellNeedsReset := isRtp50 ? (high < ema50v) : (high < math.min(ema9v, ema20v))
-if buyNeedsReset
-    buyNeedsReset  := isRtp50 ? (low  > ema50v) : (low  > math.max(ema9v, ema20v))
-
-// ── Signals ──────────────────────────────────────────────────────────────────
-rtBuySignal = showRTSignal and inSession and railwayUp and bullishStack and
-              buyTouch and buyPattern and rtAdxOk and not buyNeedsReset
-
-rtSellSignal = showRTSignal and inSession and railwayDn and bearishStack and
-               sellTouch and sellPattern and rtAdxOk and not sellNeedsReset
-
-if rtBuySignal
-    buyNeedsReset  := true
-if rtSellSignal
-    sellNeedsReset := true
-
-// ── Plots ────────────────────────────────────────────────────────────────────
-plotshape(rtBuySignal,  "RT Buy",  shape.triangleup,   location.belowbar, color.new(color.lime, 0), size = size.tiny, text = "B")
-plotshape(rtSellSignal, "RT Sell", shape.triangledown, location.abovebar, color.new(color.red,  0), size = size.tiny, text = "S")
-
-// SL / Target dashed lines projected forward from the signal bar
-if rtShowLevels and rtBuySignal
-    line.new(bar_index, close - rtSlPoints,  bar_index + 20, close - rtSlPoints,  color = color.new(color.red,   20), width = 1, style = line.style_dashed)
-    line.new(bar_index, close + rtTgtPoints, bar_index + 20, close + rtTgtPoints, color = color.new(color.green, 20), width = 1, style = line.style_dashed)
-
-if rtShowLevels and rtSellSignal
-    line.new(bar_index, close + rtSlPoints,  bar_index + 20, close + rtSlPoints,  color = color.new(color.red,   20), width = 1, style = line.style_dashed)
-    line.new(bar_index, close - rtTgtPoints, bar_index + 20, close - rtTgtPoints, color = color.new(color.green, 20), width = 1, style = line.style_dashed)
-
-alertcondition(rtBuySignal,  "Railway Track Buy",  "Railway Track — BUY signal")
-alertcondition(rtSellSignal, "Railway Track Sell", "Railway Track — SELL signal")
+alertcondition(buySignal,  "EMA Retest Buy Signal",  "EMA Retest Buy — Rally confirmed, clustered EMA retest")
+alertcondition(exitSignal, "EMA Retest Exit Signal", "EMA Exit — Close below 50 EMA")

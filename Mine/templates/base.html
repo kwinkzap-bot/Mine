@@ -27,6 +27,13 @@
 
 <body>
     <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                for (var reg of registrations) { reg.unregister(); }
+            });
+        }
+    </script>
+    <script>
         (function() {
             // 1. Immediately apply theme class to body to prevent flash
             const theme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';

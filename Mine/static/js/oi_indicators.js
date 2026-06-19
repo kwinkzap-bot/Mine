@@ -16,6 +16,7 @@ let oipPEEma9Series = null, oipPEEma20Series = null, oipPEEma50Series = null;
 // CPR, RSI, signal series + markers
 let oipCprSeriesObj = null;
 let oipCprSeriesMap = {};
+let oipMultiCprSeriesMap = {};
 let oipRSISeriesObj = null;
 let oipSignalMarkers = [];
 let oipRSIMarkers = [];
@@ -28,7 +29,8 @@ const _OIP_IND_IDS = [
     'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
     'oipShowMaxPain', 'oipShow2ndCandle30s', 'oipShow2nd5mCandle', 'oipShowPremium',
     'oipShow30mReversalLines', 'oipReversal30mCountUp', 'oipReversal30mCountDn', 'oipReversal30mRange',
-    'oipShow1DReversalLines',  'oipReversal1DCount',  'oipReversal1DRange'
+    'oipShow1DReversalLines',  'oipReversal1DCount',  'oipReversal1DRange',
+    'oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h'
 ];
 
 function _oipSaveIndicators(key) {
@@ -528,6 +530,101 @@ function oipDrawRSI(candles) {
     }
 }
 
+/* ── Multi CPR ────────────────────────────────────────────── */
+function _oipAggregateToNMin(candles, minutes) {
+    const MARKET_OPEN = 9 * 60 + 15;
+    const buckets = new Map();
+    candles.forEach(c => {
+        const d     = new Date(c.time * 1000);
+        const total = d.getUTCHours() * 60 + d.getUTCMinutes();
+        const idx   = Math.floor((total - MARKET_OPEN) / minutes);
+        const bMin  = MARKET_OPEN + idx * minutes;
+        const bd    = new Date(d);
+        bd.setUTCHours(Math.floor(bMin / 60), bMin % 60, 0, 0);
+        const key   = Math.floor(bd.getTime() / 1000);
+        if (!buckets.has(key)) {
+            buckets.set(key, { time: key, open: c.open, high: c.high, low: c.low, close: c.close, times: [c.time] });
+        } else {
+            const b = buckets.get(key);
+            b.high  = Math.max(b.high, c.high);
+            b.low   = Math.min(b.low,  c.low);
+            b.close = c.close;
+            b.times.push(c.time);
+        }
+    });
+    return [...buckets.values()].sort((a, b) => a.time - b.time);
+}
+
+function oipDrawMultiCPR(candles) {
+    if (!oipOIChart || !oipOISeries) return;
+
+    Object.values(oipMultiCprSeriesMap).forEach(s => { try { s.setData([]); } catch(e) {} });
+
+    const show = document.getElementById('oipShowMultiCpr')?.checked;
+    if (!show || !candles?.length) return;
+
+    const shared = {
+        lastValueVisible: false, priceLineVisible: false,
+        crosshairMarkerVisible: false, autoscaleInfoProvider: () => null
+    };
+
+    const configs = [
+        { id: 'oipMultiCpr15m', minutes: 15, color: '#f97316', fill: 'rgba(249,115,22,0.07)'  },
+        { id: 'oipMultiCpr30m', minutes: 30, color: '#06b6d4', fill: 'rgba(6,182,212,0.07)'   },
+        { id: 'oipMultiCpr1h',  minutes: 60, color: '#a855f7', fill: 'rgba(168,85,247,0.07)'  }
+    ];
+
+    configs.forEach(({ id, minutes, color, fill }) => {
+        const enabled = document.getElementById(id)?.checked !== false;
+        const bars    = _oipAggregateToNMin(candles, minutes);
+
+        for (let i = 1; i < bars.length; i++) {
+            const prev = bars[i - 1], curr = bars[i];
+            if (!curr.times.length) continue;
+
+            const oH = prev.high, oL = prev.low, oC = prev.close;
+            const pp = (oH + oL + oC) / 3;
+            const bc = (oH + oL) / 2;
+            const tc = 2 * pp - bc;
+
+            const tcKey   = `mc_tc_${minutes}_${i}`;
+            const ppKey   = `mc_pp_${minutes}_${i}`;
+            const bcKey   = `mc_bc_${minutes}_${i}`;
+            const fillKey = `mc_fill_${minutes}_${i}`;
+
+            if (!oipMultiCprSeriesMap[tcKey]) {
+                oipMultiCprSeriesMap[tcKey] = oipOIChart.addLineSeries({ color, lineWidth: 1, lineStyle: 0, ...shared });
+            }
+            if (!oipMultiCprSeriesMap[ppKey]) {
+                oipMultiCprSeriesMap[ppKey] = oipOIChart.addLineSeries({ color, lineWidth: 1, lineStyle: 1, ...shared });
+            }
+            if (!oipMultiCprSeriesMap[bcKey]) {
+                oipMultiCprSeriesMap[bcKey] = oipOIChart.addLineSeries({ color, lineWidth: 1, lineStyle: 0, ...shared });
+            }
+            if (!oipMultiCprSeriesMap[fillKey]) {
+                oipMultiCprSeriesMap[fillKey] = oipOIChart.addBaselineSeries({
+                    baseValue: { type: 'price', price: Math.min(tc, bc) },
+                    topFillColor1: fill, topFillColor2: fill, topLineColor: 'transparent',
+                    bottomFillColor1: fill, bottomFillColor2: fill, bottomLineColor: 'transparent',
+                    lineWidth: 0, ...shared
+                });
+            }
+
+            const pts = enabled ? curr.times.map(t => ({ time: t, value: tc })) : [];
+            oipMultiCprSeriesMap[tcKey].setData(pts);
+            oipMultiCprSeriesMap[ppKey].setData(enabled ? curr.times.map(t => ({ time: t, value: pp })) : []);
+            oipMultiCprSeriesMap[bcKey].setData(enabled ? curr.times.map(t => ({ time: t, value: bc })) : []);
+
+            if (enabled) {
+                oipMultiCprSeriesMap[fillKey].applyOptions({ baseValue: { type: 'price', price: Math.min(tc, bc) } });
+                oipMultiCprSeriesMap[fillKey].setData(curr.times.map(t => ({ time: t, value: Math.max(tc, bc) })));
+            } else {
+                oipMultiCprSeriesMap[fillKey].setData([]);
+            }
+        }
+    });
+}
+
 /* ── Indicators popup ─────────────────────────────────────── */
 function oipInitIndicatorsPopup(storageKey) {
     // Wire showEma200 (was declared in oipElems but never initialized)
@@ -581,7 +678,30 @@ function oipInitIndicatorsPopup(storageKey) {
     }
     if (cprMaster) {
         cprMaster.addEventListener('change', _syncCprSubState);
-        _syncCprSubState(); // reflects restored state
+        _syncCprSubState();
+    }
+
+    // Multi CPR expand / collapse
+    const multiCprExpandBtn = document.getElementById('oipMultiCprExpandBtn');
+    const multiCprSub       = document.getElementById('oipMultiCprSub');
+    const multiCprMaster    = document.getElementById('oipShowMultiCpr');
+
+    if (multiCprExpandBtn && multiCprSub) {
+        multiCprExpandBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            e.preventDefault();
+            const isNowHidden = multiCprSub.classList.toggle('hidden');
+            multiCprExpandBtn.classList.toggle('expanded', !isNowHidden);
+        });
+    }
+
+    function _syncMultiCprSubState() {
+        if (!multiCprSub || !multiCprMaster) return;
+        multiCprSub.classList.toggle('oip-cpr-disabled', !multiCprMaster.checked);
+    }
+    if (multiCprMaster) {
+        multiCprMaster.addEventListener('change', _syncMultiCprSubState);
+        _syncMultiCprSubState();
     }
 }
 

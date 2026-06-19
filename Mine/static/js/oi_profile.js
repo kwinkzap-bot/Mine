@@ -335,6 +335,12 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    ['oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', () => {
+            if (oipOIData?.candles) oipDrawMultiCPR(oipOIData.candles);
+        });
+    });
+
     document.getElementById('oipShowMaxPain')?.addEventListener('change', () => {
         oipUpdateMaxPainLine(oipCurrentPrice, oipOIData?.max_pain);
     });
@@ -972,6 +978,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
 
             oipUpdateEmaVisibility();
             oipDrawCpr(validCandles);
+            oipDrawMultiCPR(validCandles);
             oipDrawRSI(validCandles);
         }
 
