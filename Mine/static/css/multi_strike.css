@@ -211,7 +211,7 @@
     padding: 8px 10px;
     text-align: right;
     font-weight: 600;
-    color: #333;
+    color: #000;
     border-bottom: 1px solid #ddd;
     font-size: 10px;
 }
@@ -342,4 +342,16 @@
 
 .text-right {
     text-align: right;
+}
+
+body.dark-theme .strike-table thead,
+body.forest-theme .strike-table thead {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+body.dark-theme .strike-table th,
+body.forest-theme .strike-table th {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom-color: rgba(255, 255, 255, 0.08);
 }

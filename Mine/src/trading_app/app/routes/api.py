@@ -7364,15 +7364,43 @@ def delete_oi_historic(date: str, symbol: str):
     return jsonify({'success': True})
 
 
-@api_bp.route('/oi-historic/backfill-ohlc', methods=['POST'])
+@api_bp.route('/oi-historic/load-all', methods=['POST'])
 @require_user_auth
-def backfill_oi_historic_ohlc():
-    """Backfill OHLC data for all historic OI records that are missing it."""
-    from trading_app.dashboard.oi_historic_data import backfill_ohlc
+def oi_historic_load_all():
+    """
+    Consolidated load: add new records from NSE bhavcopy or SQLite,
+    then patch any remaining records missing OHLC or Fut OI.
+    Runs in background; poll /api/oi-historic/load-status for progress.
+    Body: { source: 'nse'|'sqlite', from_date: 'YYYY-MM-DD', to_date: 'YYYY-MM-DD' }
+    """
+    from trading_app.dashboard.oi_historic_data import load_all
     from trading_app.service.provider_logic import get_data_provider
-    provider = get_data_provider(user='Mine')
-    result = backfill_ohlc(provider=provider)
+    provider  = get_data_provider(user='Mine')
+    body        = request.get_json(silent=True) or {}
+    source      = body.get('source', 'nse')
+    from_date   = body.get('from_date', '')
+    to_date     = body.get('to_date', '')
+    symbols     = body.get('symbols') or None
+    recalculate = bool(body.get('recalculate', False))
+    result      = load_all(from_date, to_date, source=source, symbols=symbols,
+                           provider=provider, force=recalculate)
     return jsonify(result)
+
+
+@api_bp.route('/oi-historic/load-status', methods=['GET'])
+@require_user_auth
+def oi_historic_load_status():
+    """Return progress of the background load-all job."""
+    from trading_app.dashboard.oi_historic_data import get_backfill_status
+    return jsonify(get_backfill_status())
+
+
+@api_bp.route('/oi-historic/sync-fii', methods=['POST'])
+@require_user_auth
+def oi_historic_sync_fii():
+    """Fetch last ~30 days of FII index futures flow from Moneycontrol and patch Historic OI records."""
+    from trading_app.dashboard.oi_historic_data import sync_fii_from_moneycontrol
+    return jsonify(sync_fii_from_moneycontrol())
 
 
 @api_bp.route('/fii-sector-limits', methods=['GET'])
@@ -7684,6 +7712,133 @@ def backtest_sm_optimise_status(task_id):
         return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
     # complete
     return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
+
+
+@api_bp.route('/active-contracts', methods=['GET'])
+def get_active_contracts():
+    """Return active F&O contracts with live market data (OHLC, volume, change) from Fyers."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    underlying    = request.args.get('underlying', 'NIFTY').strip().upper()
+    type_filter   = request.args.get('type', 'all').strip().upper()
+    expiry_filter = request.args.get('expiry', '').strip()
+    strike_filter = request.args.get('strike', '').strip()
+
+    provider = get_data_provider()
+    if not provider:
+        return jsonify({'success': False, 'error': 'No data provider available'}), 401
+
+    if not hasattr(provider, 'instruments'):
+        from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+        provider = FyersDataServiceAdapter(fyers_instance=None)
+
+    import datetime as _dt
+    from itertools import groupby as _groupby
+    today = _dt.date.today()
+
+    try:
+        all_instruments = provider.instruments('NFO')
+    except Exception as e:
+        logger.error(f'[active-contracts] instruments fetch error: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    # All available expiries for this underlying (for dropdown)
+    all_expiries_raw = sorted(set(
+        i['expiry'] for i in all_instruments
+        if i.get('name', '').strip().upper() == underlying
+        and i.get('expiry') is not None and i.get('expiry') >= today
+    ))
+    monthly_set = set()
+    for _k, grp in _groupby(all_expiries_raw, key=lambda d: (d.year, d.month)):
+        monthly_set.add(list(grp)[-1])
+    expiry_options = [{
+        'date':       e.isoformat(),
+        'label':      ('Monthly ' if e in monthly_set else 'Weekly ') + e.strftime('%d %b %Y'),
+        'is_monthly': e in monthly_set,
+    } for e in all_expiries_raw]
+
+    # Default to nearest expiry (keeps quote batch size small)
+    active_expiry = expiry_filter or (all_expiries_raw[0].isoformat() if all_expiries_raw else '')
+
+    filtered = [
+        i for i in all_instruments
+        if i.get('name', '').strip().upper() == underlying
+        and i.get('expiry') is not None and i.get('expiry') >= today
+        and i['expiry'].isoformat() == active_expiry
+        and (type_filter == 'ALL' or i.get('instrument_type', '').upper() == type_filter)
+        and (not strike_filter or str(int(float(i.get('strike', 0) or 0))) == strike_filter)
+    ]
+    filtered.sort(key=lambda x: (x.get('strike', 0) or 0))
+
+    # Build base contract list
+    contracts = []
+    for inst in filtered:
+        inst_type = inst.get('instrument_type', '')
+        instrument_label = 'Index Futures' if inst_type == 'FUT' else 'Index Options'
+        contracts.append({
+            'instrument_token': inst.get('instrument_token', ''),
+            'symbol':           inst.get('tradingsymbol', ''),
+            'instrument_type':  instrument_label,
+            'expiry':           inst['expiry'].isoformat(),
+            'option_type':      inst_type if inst_type in ('CE', 'PE') else '',
+            'strike':           inst.get('strike') if inst_type != 'FUT' else None,
+            'lot_size':         inst.get('lot_size', 0),
+            # market data defaults (populated below)
+            'open': 0, 'high': 0, 'low': 0, 'close': 0,
+            'prev_close': 0, 'last': 0, 'change': 0, 'pct_change': 0, 'volume': 0,
+        })
+
+    # Fetch live quotes from Fyers raw API
+    if contracts and hasattr(provider, 'fyers') and provider.fyers:
+        try:
+            from trading_app.service.fyers_data_service import _rate_limiter
+            tokens = [c['instrument_token'] for c in contracts if c['instrument_token']]
+            quote_map = {}
+            batch_size = 50
+            for i in range(0, len(tokens), batch_size):
+                batch = tokens[i:i + batch_size]
+                _rate_limiter.wait()
+                resp = provider.fyers.quotes(data={'symbols': ','.join(batch)})
+                if resp and resp.get('s') == 'ok':
+                    for item in resp.get('d', []):
+                        n = item.get('n', '')
+                        v = item.get('v', {})
+                        lp         = float(v.get('lp', 0) or 0)
+                        prev_close = float(v.get('prev_close_price', 0) or 0)
+                        ch         = float(v.get('ch', lp - prev_close if prev_close else 0) or 0)
+                        chp        = float(v.get('chp', round(ch / prev_close * 100, 2) if prev_close else 0) or 0)
+                        quote_map[n] = {
+                            'open':       float(v.get('open_price', 0) or 0),
+                            'high':       float(v.get('high_price', 0) or 0),
+                            'low':        float(v.get('low_price', 0) or 0),
+                            'close':      float(v.get('close_price', prev_close) or prev_close),
+                            'prev_close': prev_close,
+                            'last':       lp,
+                            'change':     round(ch, 2),
+                            'pct_change': round(chp, 2),
+                            'volume':     int(v.get('volume', 0) or 0),
+                        }
+            for c in contracts:
+                q = quote_map.get(c['instrument_token'], {})
+                if q:
+                    c.update(q)
+        except Exception as e:
+            logger.warning(f'[active-contracts] quote fetch error: {e}')
+
+    # Sort by volume desc (most active first)
+    contracts.sort(key=lambda x: x.get('volume', 0), reverse=True)
+
+    return jsonify({
+        'success':        True,
+        'underlying':     underlying,
+        'active_expiry':  active_expiry,
+        'as_of':          today.isoformat(),
+        'total':          len(contracts),
+        'contracts':      contracts,
+        'expiry_options': expiry_options,
+    })
 
 
 # ── Error handlers ────────────────────────────────────────────────────────────

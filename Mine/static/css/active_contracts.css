@@ -1,0 +1,440 @@
+/* ================================================================
+   Active Contracts — NSE-style market data table inside Dashboard.
+================================================================ */
+
+/* ── Custom properties (light defaults) ─────────────────────── */
+.ac-page {
+    --ac-bg:         #f8fafc;
+    --ac-surface:    #ffffff;
+    --ac-border:     #e2e8f0;
+    --ac-border-sub: #f1f5f9;
+    --ac-text:       #1e293b;
+    --ac-text-2:     #64748b;
+    --ac-text-3:     #94a3b8;
+    --ac-accent:     #3b82f6;
+    --ac-accent-dim: rgba(59,130,246,0.08);
+    --ac-row-hover:  #f8fafc;
+    --ac-shadow:     0 1px 3px rgba(0,0,0,0.06);
+    --ac-pos:        #16a34a;
+    --ac-neg:        #dc2626;
+    --ac-high:       #059669;
+    --ac-low:        #dc2626;
+}
+
+body.dark-theme .ac-page {
+    --ac-bg:         #090e17;
+    --ac-surface:    #111827;
+    --ac-border:     #1e293b;
+    --ac-border-sub: #1a2332;
+    --ac-text:       #f1f5f9;
+    --ac-text-2:     #94a3b8;
+    --ac-text-3:     #475569;
+    --ac-accent:     #60a5fa;
+    --ac-accent-dim: rgba(96,165,250,0.1);
+    --ac-row-hover:  rgba(59,130,246,0.04);
+    --ac-shadow:     none;
+    --ac-pos:        #4ade80;
+    --ac-neg:        #f87171;
+    --ac-high:       #4ade80;
+    --ac-low:        #f87171;
+}
+
+body.forest-theme .ac-page {
+    --ac-bg:         #060c09;
+    --ac-surface:    #0a1810;
+    --ac-border:     #14532d;
+    --ac-border-sub: #0a1e14;
+    --ac-text:       #ecfdf5;
+    --ac-text-2:     #6ba88f;
+    --ac-text-3:     #4d8068;
+    --ac-accent:     #34d399;
+    --ac-accent-dim: rgba(52,211,153,0.1);
+    --ac-row-hover:  rgba(16,185,129,0.04);
+    --ac-shadow:     none;
+    --ac-pos:        #86efac;
+    --ac-neg:        #fca5a5;
+    --ac-high:       #86efac;
+    --ac-low:        #fca5a5;
+}
+
+body.cream-theme .ac-page {
+    --ac-bg:         #fdfbf7;
+    --ac-surface:    #fdf6e9;
+    --ac-border:     #d4b896;
+    --ac-border-sub: #eeddc4;
+    --ac-text:       #3b2f20;
+    --ac-text-2:     #9b7a52;
+    --ac-text-3:     #c4a882;
+    --ac-accent:     #b45309;
+    --ac-accent-dim: rgba(180,83,9,0.08);
+    --ac-row-hover:  #f5ead8;
+    --ac-shadow:     0 1px 3px rgba(0,0,0,0.04);
+    --ac-pos:        #15803d;
+    --ac-neg:        #b91c1c;
+    --ac-high:       #15803d;
+    --ac-low:        #b91c1c;
+}
+
+body.ocean-theme .ac-page {
+    --ac-bg:         #f0f6fc;
+    --ac-surface:    #ffffff;
+    --ac-border:     #bae0f8;
+    --ac-border-sub: #dbedf8;
+    --ac-text:       #0f172a;
+    --ac-text-2:     #475569;
+    --ac-text-3:     #94a3b8;
+    --ac-accent:     #0284c7;
+    --ac-accent-dim: rgba(2,132,199,0.08);
+    --ac-row-hover:  #f0f6fc;
+    --ac-shadow:     0 1px 3px rgba(0,0,0,0.04);
+    --ac-pos:        #15803d;
+    --ac-neg:        #b91c1c;
+    --ac-high:       #15803d;
+    --ac-low:        #b91c1c;
+}
+
+/* ── Page shell ──────────────────────────────────────────────── */
+.ac-page {
+    background: var(--ac-bg);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    color: var(--ac-text);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 0;
+}
+
+/* ── Filter bar ──────────────────────────────────────────────── */
+.ac-filter-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+    background: var(--ac-surface);
+    border: 1px solid var(--ac-border);
+    border-radius: 8px;
+    box-shadow: var(--ac-shadow);
+}
+
+/* ── Selects ─────────────────────────────────────────────────── */
+.ac-select {
+    appearance: none;
+    -webkit-appearance: none;
+    background: var(--ac-bg);
+    border: 1px solid var(--ac-border);
+    border-radius: 6px;
+    color: var(--ac-text);
+    font-size: 11px;
+    font-weight: 600;
+    font-family: inherit;
+    padding: 5px 22px 5px 10px;
+    cursor: pointer;
+    outline: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2394a3b8' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    transition: border-color 0.15s;
+    min-width: 110px;
+}
+
+.ac-select:hover,
+.ac-select:focus { border-color: var(--ac-accent); outline: none; }
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+.ac-btn-refresh,
+.ac-btn-clear {
+    padding: 5px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: inherit;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.ac-btn-refresh {
+    background: var(--ac-accent);
+    border: 1px solid var(--ac-accent);
+    color: #fff;
+}
+
+.ac-btn-refresh:hover {
+    opacity: 0.88;
+}
+
+.ac-btn-clear {
+    background: transparent;
+    border: 1px solid var(--ac-border);
+    color: var(--ac-text-2);
+}
+
+.ac-btn-clear:hover {
+    background: var(--ac-accent-dim);
+    border-color: var(--ac-accent);
+    color: var(--ac-text);
+}
+
+/* ── Stat chip ───────────────────────────────────────────────── */
+.ac-stat-chip {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ac-text-3);
+}
+
+/* ── Loading ─────────────────────────────────────────────────── */
+.ac-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 60px 0;
+    background: var(--ac-surface);
+    border: 1px solid var(--ac-border);
+    border-radius: 8px;
+    color: var(--ac-text-2);
+    font-size: 13px;
+}
+
+.ac-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--ac-border);
+    border-top-color: var(--ac-accent);
+    border-radius: 50%;
+    animation: ac-spin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes ac-spin { to { transform: rotate(360deg); } }
+
+/* ── Error ───────────────────────────────────────────────────── */
+.ac-error {
+    padding: 10px 14px;
+    background: var(--ac-surface);
+    border: 1px solid var(--ac-neg);
+    border-radius: 8px;
+    color: var(--ac-neg);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* ── Table wrapper ───────────────────────────────────────────── */
+.ac-table-wrap {
+    border: 1px solid var(--ac-border);
+    border-radius: 8px;
+    overflow: hidden;
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: calc(100vh - 170px);
+    box-shadow: var(--ac-shadow);
+}
+
+/* ── Table ───────────────────────────────────────────────────── */
+.ac-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--ac-surface);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.ac-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.ac-table thead th {
+    padding: 8px 10px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--ac-text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: var(--ac-bg);
+    border-bottom: 2px solid var(--ac-border);
+    white-space: nowrap;
+    vertical-align: bottom;
+    line-height: 1.3;
+    cursor: default;
+}
+
+.ac-table thead th.col-r { text-align: right; }
+.ac-th-last { color: var(--ac-accent) !important; }
+.ac-th-info { width: 28px; }
+
+/* ── Data rows ───────────────────────────────────────────────── */
+.ac-table tbody tr {
+    transition: background 0.1s;
+    background: var(--ac-surface);
+}
+
+.ac-table tbody tr.ac-top-row {
+    background: var(--ac-accent-dim);
+}
+
+.ac-table tbody tr.ac-top-row td {
+    border-bottom-color: var(--ac-border);
+}
+
+.ac-table tbody tr:hover { background: var(--ac-row-hover); }
+
+.ac-table tbody td {
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--ac-border-sub);
+    vertical-align: middle;
+    color: var(--ac-text);
+    font-size: 12px;
+}
+
+.ac-table tbody tr:last-child td { border-bottom: none; }
+.ac-table tbody td.col-r { text-align: right; }
+
+/* ── Info icon ───────────────────────────────────────────────── */
+.ac-info-cell { width: 28px; text-align: center; }
+
+.ac-info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1px solid var(--ac-border);
+    font-size: 10px;
+    font-weight: 700;
+    font-style: normal;
+    color: var(--ac-text-3);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+    font-family: serif;
+}
+
+.ac-info-icon:hover {
+    border-color: var(--ac-accent);
+    color: var(--ac-accent);
+}
+
+/* ── Instrument type ─────────────────────────────────────────── */
+.ac-inst-type {
+    font-size: 11px;
+    color: var(--ac-text-2);
+    font-weight: 500;
+    max-width: 120px;
+}
+
+/* ── Expiry date ─────────────────────────────────────────────── */
+.ac-expiry-col {
+    font-size: 11px;
+    color: var(--ac-text-2);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Type badge (CE / PE) ────────────────────────────────────── */
+.ac-type-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 800;
+    padding: 2px 7px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.ac-type-badge.ce {
+    background: rgba(16,185,129,0.12);
+    color: #059669;
+}
+
+.ac-type-badge.pe {
+    background: rgba(220,38,38,0.10);
+    color: #dc2626;
+}
+
+.ac-dash { color: var(--ac-text-3); }
+
+/* ── Numbers ─────────────────────────────────────────────────── */
+.ac-strike {
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Straddle strike box */
+.ac-straddle-box {
+    display: inline-block;
+    padding: 2px 8px;
+    border: 1.5px solid #f97316;
+    border-radius: 4px;
+    background: rgba(249,115,22,0.10);
+    color: #f97316;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+/* Top-6 strike highlights — color only, box stays orange */
+.ac-strike-ce {
+    font-weight: 800;
+    color: var(--ac-neg) !important;
+}
+
+.ac-strike-pe {
+    font-weight: 800;
+    color: var(--ac-pos) !important;
+}
+
+/* Top-6 HIGH cell bold */
+.ac-high-bold {
+    font-weight: 800;
+}
+
+.ac-num {
+    font-variant-numeric: tabular-nums;
+    color: var(--ac-text-2);
+}
+
+.ac-high { color: var(--ac-high) !important; }
+.ac-low  { color: var(--ac-low)  !important; }
+
+/* ── LAST price ──────────────────────────────────────────────── */
+.ac-last {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--ac-accent);
+}
+
+/* ── Change / %Change ────────────────────────────────────────── */
+.ac-pos { color: var(--ac-pos) !important; font-weight: 600; }
+.ac-neg { color: var(--ac-neg) !important; font-weight: 600; }
+
+/* ── Volume ──────────────────────────────────────────────────── */
+.ac-volume {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--ac-text);
+}
+
+/* ── Empty state ─────────────────────────────────────────────── */
+.ac-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 60px 0;
+    color: var(--ac-text-3);
+}
+
+.ac-empty p     { margin: 0; font-size: 13px; font-weight: 600; color: var(--ac-text-2); }
+.ac-empty small { font-size: 11px; color: var(--ac-text-3); }
+
+/* ── Utility ─────────────────────────────────────────────────── */
+.hidden { display: none !important; }
+
+body.dark-theme .ac-table thead th,
+body.forest-theme .ac-table thead th {
+    color: #fff;
+}

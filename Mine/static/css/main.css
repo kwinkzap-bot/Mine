@@ -9,7 +9,7 @@
 
 /* Use premium typography for a clean Terminal/Dashboard feel */
 body {
-    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
     font-size: 80%;
     -webkit-font-smoothing: antialiased;
@@ -433,8 +433,8 @@ td {
 }
 
 th {
-    background: linear-gradient(135deg, #667eea 0%, #5a6fd8 100%);
-    color: white;
+    background: rgba(0, 0, 0, 0.06);
+    color: #000;
     font-weight: 600;
     cursor: pointer;
     position: relative;
@@ -445,7 +445,7 @@ th {
 }
 
 th:hover {
-    background: linear-gradient(135deg, #5a6fd8 0%, #4d5fbf 100%);
+    background: rgba(0, 0, 0, 0.1);
 }
 
 /* Sort indicator icons for tables */
@@ -463,12 +463,12 @@ th.sort-desc:after {
 
 th.sort-asc:after {
     border-width: 0 5px 8px 5px;
-    border-color: transparent transparent white transparent;
+    border-color: transparent transparent currentColor transparent;
 }
 
 th.sort-desc:after {
     border-width: 8px 5px 0 5px;
-    border-color: white transparent transparent transparent;
+    border-color: currentColor transparent transparent transparent;
 }
 
 tr {
@@ -726,4 +726,16 @@ body.ocean-theme .dropdown-item {
 body.ocean-theme .dropdown-item:hover {
     background: #e0edf8;
     color: #0284c7;
+}
+
+/* ─── Global Table Header: White text on dark/forest themes ─── */
+body.dark-theme th,
+body.forest-theme th {
+    background: rgba(255, 255, 255, 0.07) !important;
+    color: #fff !important;
+}
+
+body.dark-theme th:hover,
+body.forest-theme th:hover {
+    background: rgba(255, 255, 255, 0.12) !important;
 }

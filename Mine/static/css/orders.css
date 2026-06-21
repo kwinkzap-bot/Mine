@@ -106,7 +106,7 @@ body.ocean-theme .orders-page {
     /* no padding here — container already provides 12px */
     background: var(--ord-bg);
     min-height: calc(100vh - 80px);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color: var(--ord-text);
 }
 
@@ -447,3 +447,8 @@ body.forest-theme .orders-page .ord-action-badge-sell { background: #450a0a; col
 }
 .ord-src-mine   { background: #ede9fe; color: #6d28d9; border: 1px solid #c4b5fd; }
 .ord-src-broker { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+
+body.dark-theme .ord-table thead th,
+body.forest-theme .ord-table thead th {
+    color: #fff;
+}

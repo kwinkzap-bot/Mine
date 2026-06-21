@@ -139,7 +139,7 @@ table th {
     padding: 12px 15px;
     text-align: left;
     font-weight: 600;
-    color: #333;
+    color: #000;
     white-space: nowrap;
     position: sticky;
     top: 0;
@@ -401,4 +401,16 @@ table td.numeric {
 .px-15 {
     padding-left: 15px;
     padding-right: 15px;
+}
+
+body.dark-theme table thead,
+body.forest-theme table thead {
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+body.dark-theme table th,
+body.forest-theme table th {
+    background: rgba(255, 255, 255, 0.04);
+    color: #fff;
 }

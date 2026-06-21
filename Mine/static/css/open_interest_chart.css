@@ -19,7 +19,7 @@
     background: var(--oip-body-bg);
     color: var(--oip-text);
     min-height: 100vh;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     transition: background 0.3s ease, color 0.3s ease;
 }
 
@@ -657,7 +657,7 @@
     width: 100%;
     border-collapse: collapse;
     font-size: 14px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     letter-spacing: 0.3px;
 }
 
@@ -706,7 +706,7 @@
 .oi-summary-table td {
     padding: 11px 12px;
     text-align: right;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 13px;
     line-height: 1.5;
     font-weight: 500;

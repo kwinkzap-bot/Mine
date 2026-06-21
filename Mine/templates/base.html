@@ -20,7 +20,7 @@
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
     {% endif %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/notifications.css') }}">
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap" rel="stylesheet">
     <title>{% block title %}Stock Scanner{% endblock %}</title>
     {% block head %}{% endblock %}
 </head>
@@ -104,6 +104,7 @@
             <a href="/oi-profile" class="nav-link {% if request.path == '/oi-profile' %}active{% endif %}">📉 OI
                 Profile</a>            <a href="/orders" class="nav-link {% if request.path == '/orders' %}active{% endif %}">📋 Orders</a>
             <a href="/portfolio" class="nav-link {% if request.path == '/portfolio' %}active{% endif %}">💼 Portfolio</a>
+
             <a href="/markets" class="nav-link {% if request.path == '/markets' %}active{% endif %}">🏢 Markets</a>
             <a href="/trend-detection" class="nav-link {% if request.path == '/trend-detection' %}active{% endif %}">📈 Trend</a>
             <a href="/algo" class="nav-link {% if request.path == '/algo' %}active{% endif %}">⚡ Algo</a>

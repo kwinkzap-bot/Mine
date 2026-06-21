@@ -4,6 +4,7 @@
 {% block head %}
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/active_contracts.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/pcr.css') }}?v={{ sv('css/pcr.css') }}">
 <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
@@ -319,119 +320,71 @@
 .symbol-item:last-child { border-bottom: none; }
 .symbol-item:hover { background: var(--oip-header-bg); color: var(--oip-accent); }
 
-/* ── Historic OI — mirrors Orders table theme ─────────────────── */
-.hoi-wrap {
-    --hoi-bg:         #f8fafc;  --hoi-surface:    #ffffff;
-    --hoi-border:     #e2e8f0;  --hoi-border-sub: #f1f5f9;
-    --hoi-text:       #1e293b;  --hoi-text-2:     #64748b;  --hoi-text-3: #94a3b8;
-    --hoi-accent:     #3b82f6;  --hoi-accent-dim: rgba(59,130,246,0.08);
-    --hoi-row-hover:  #f8fafc;  --hoi-btn-hover:  #f1f5f9;
-    --hoi-shadow:     0 1px 3px rgba(0,0,0,0.06);
-    margin: 0 auto; padding: 14px 16px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    color: var(--hoi-text);
-}
-body.dark-theme .hoi-wrap {
-    --hoi-bg: #090e17; --hoi-surface: #111827; --hoi-border: #1e293b; --hoi-border-sub: #1a2332;
-    --hoi-text: #f1f5f9; --hoi-text-2: #94a3b8; --hoi-text-3: #475569;
-    --hoi-accent: #60a5fa; --hoi-accent-dim: rgba(96,165,250,0.1);
-    --hoi-row-hover: rgba(59,130,246,0.04); --hoi-btn-hover: #1e293b; --hoi-shadow: none;
-}
-body.forest-theme .hoi-wrap {
-    --hoi-bg: #060c09; --hoi-surface: #0a1810; --hoi-border: #14532d; --hoi-border-sub: #0a1e14;
-    --hoi-text: #ecfdf5; --hoi-text-2: #6ba88f; --hoi-text-3: #4d8068;
-    --hoi-accent: #34d399; --hoi-accent-dim: rgba(52,211,153,0.1);
-    --hoi-row-hover: rgba(16,185,129,0.04); --hoi-btn-hover: #0a1e14; --hoi-shadow: none;
-}
-body.cream-theme .hoi-wrap {
-    --hoi-bg: #fdfbf7; --hoi-surface: #fdf6e9; --hoi-border: #d4b896; --hoi-border-sub: #eeddc4;
-    --hoi-text: #3b2f20; --hoi-text-2: #9b7a52; --hoi-text-3: #c4a882;
-    --hoi-accent: #b45309; --hoi-accent-dim: rgba(180,83,9,0.08);
-    --hoi-row-hover: #f5ead8; --hoi-btn-hover: #f5ead8;
-}
-body.ocean-theme .hoi-wrap {
-    --hoi-bg: #f0f6fc; --hoi-surface: #ffffff; --hoi-border: #bae0f8; --hoi-border-sub: #dbedf8;
-    --hoi-text: #0f172a; --hoi-text-2: #475569; --hoi-text-3: #94a3b8;
-    --hoi-accent: #0284c7; --hoi-accent-dim: rgba(2,132,199,0.08);
-    --hoi-row-hover: #f0f6fc; --hoi-btn-hover: #e0edf8;
-}
+/* ── Historic OI — inherits --pf-* theme vars from .sw-wrap ─────── */
 
-/* topbar — mirrors .ord-topbar */
-.hoi-topbar {
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    padding: 10px 14px; margin-bottom: 8px;
-    background: var(--hoi-surface); border: 1px solid var(--hoi-border);
-    border-radius: 8px; box-shadow: var(--hoi-shadow);
-}
-.hoi-title  { font-size: 14px; font-weight: 700; color: var(--hoi-text); letter-spacing: -0.01em; }
-.hoi-status { font-size: 11px; color: var(--hoi-text-2); margin-left: 4px; }
-
-/* Record button — filled accent, mirrors .ord-tab.active */
-.hoi-btn-record {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 4px 12px; font-size: 11px; font-weight: 700;
-    color: #fff; background: var(--hoi-accent);
-    border: 1px solid var(--hoi-accent); border-radius: 6px;
-    cursor: pointer; letter-spacing: .03em; transition: opacity .15s;
-}
-.hoi-btn-record:disabled { opacity: .55; cursor: not-allowed; }
-
-/* symbol tab group — mirrors .ord-tab-group / .ord-tab */
-.hoi-tab-group {
-    display: flex; border: 1px solid var(--hoi-border);
-    border-radius: 6px; overflow: hidden; margin-bottom: 8px;
+/* symbol tabs (HOI-specific; SW has no equivalent) */
+.hoi-sym-tab-group {
+    display: flex; border: 1px solid var(--pf-border);
+    border-radius: 6px; overflow: hidden; margin-bottom: 10px;
 }
 .hoi-sym-tab {
-    padding: 4px 16px; font-size: 11px; font-weight: 600;
-    border: none; background: transparent; color: var(--hoi-text-2);
+    padding: 5px 18px; font-size: 11px; font-weight: 600; font-family: inherit;
+    border: none; background: transparent; color: var(--pf-text-2);
     cursor: pointer; transition: background .15s, color .15s;
-    border-right: 1px solid var(--hoi-border);
+    border-right: 1px solid var(--pf-border);
 }
 .hoi-sym-tab:last-child { border-right: none; }
-.hoi-sym-tab.active { background: var(--hoi-accent); color: #fff; }
-.hoi-sym-tab:hover:not(.active) { background: var(--hoi-accent-dim); color: var(--hoi-text); }
+.hoi-sym-tab.active { background: var(--pf-accent); color: #fff; }
+.hoi-sym-tab:hover:not(.active) { background: var(--pf-accent-dim); color: var(--pf-text); }
 
-/* table wrap — mirrors .ord-table-wrap */
-.hoi-table-wrap { border: 1px solid var(--hoi-border); border-radius: 8px; overflow: hidden; box-shadow: var(--hoi-shadow); }
-
-/* table — mirrors .ord-table */
-.hoi-table { width: 100%; border-collapse: collapse; background: var(--hoi-surface); font-size: 12px; }
-.hoi-table thead th {
-    padding: 8px 12px; text-align: left; font-size: 10px; font-weight: 700;
-    color: var(--hoi-text-3); text-transform: uppercase; letter-spacing: 0.06em;
-    background: var(--hoi-bg); border-bottom: 1px solid var(--hoi-border); white-space: nowrap;
+/* semantic colours — theme-aware via --pf-pos / --pf-neg */
+.hoi-ce   { color: var(--pf-neg) !important; }
+.hoi-pe   { color: var(--pf-pos) !important; }
+.hoi-up   { color: var(--pf-pos) !important; font-weight: 600; }
+.hoi-down { color: var(--pf-neg) !important; font-weight: 600; }
+.hoi-flat { color: var(--pf-text-3) !important; font-weight: normal; }
+.hoi-day-mon {
+    display: inline-block; padding: 1px 6px;
+    border: 1px solid var(--pf-accent); border-radius: 3px;
+    color: var(--pf-accent); font-size: 10px; font-weight: 700; letter-spacing: .02em;
 }
-.hoi-table thead th.r { text-align: right; }
-.hoi-table thead th.c { text-align: center; }
+.hoi-mon-box {
+    display: inline-block; padding: 0 5px;
+    border: 1px solid var(--pf-accent); border-radius: 3px;
+}
+.hoi-mon-row { background: color-mix(in srgb, var(--pf-accent) 8%, transparent) !important; }
 
-/* rows — mirror .ord-row / .ord-td */
-.hoi-row { background: var(--hoi-surface); transition: background .1s; }
-.hoi-row:hover { background: var(--hoi-row-hover); }
-.hoi-td { padding: 8px 12px; border-bottom: 1px solid var(--hoi-border-sub); vertical-align: middle; color: var(--hoi-text); }
-.hoi-row:last-child .hoi-td { border-bottom: none; }
-.hoi-td.r { text-align: right; font-variant-numeric: tabular-nums; }
-.hoi-td.c { text-align: center; }
-
-/* semantic colours */
-.hoi-ce   { color: #ef4444 !important; }
-.hoi-pe   { color: #16a34a !important; }
-.hoi-up   { color: #16a34a !important; font-weight: 700; }
-.hoi-down { color: #ef4444 !important; font-weight: 700; }
-.hoi-flat { color: var(--hoi-text-3)  !important; }
-
-/* delete button — mirrors .ord-btn + .delete-order:hover */
+/* delete button */
 .hoi-del-btn {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 26px; height: 26px;
-    border: 1px solid var(--hoi-border); border-radius: 5px;
-    background: transparent; color: var(--hoi-text-2);
-    cursor: pointer; font-size: 12px;
+    width: 24px; height: 24px;
+    border: 1px solid var(--pf-border); border-radius: 5px;
+    background: transparent; color: var(--pf-text-3);
+    cursor: pointer; font-size: 11px;
     transition: background .15s, color .15s, border-color .15s;
 }
-.hoi-del-btn:hover { color: #be123c; border-color: #ef4444; background: rgba(239,68,68,0.06); }
+.hoi-del-btn:hover { color: var(--pf-neg); border-color: var(--pf-neg); background: rgba(220,38,38,0.06); }
 
-/* empty state */
-.hoi-empty .hoi-td { text-align: center; padding: 36px 12px; color: var(--hoi-text-3); }
+/* ── HOI datepicker ────────────────────────────────────────────── */
+.hoi-date-wrap {
+    position: relative; display: inline-flex; align-items: center;
+}
+.hoi-date-wrap input[type="date"] {
+    padding: 4px 28px 4px 8px;
+    font-size: 12px; font-family: inherit;
+    border: 1px solid var(--pf-border); border-radius: 5px;
+    background: var(--pf-bg); color: var(--pf-text);
+    cursor: pointer; outline: none;
+    appearance: none; -webkit-appearance: none;
+}
+.hoi-date-wrap input[type="date"]:focus {
+    border-color: var(--pf-accent); box-shadow: 0 0 0 2px var(--pf-accent-dim);
+}
+.hoi-date-wrap input[type="date"]::-webkit-calendar-picker-indicator {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    width: 14px; height: 14px; cursor: pointer; opacity: .55;
+    filter: var(--pf-cal-filter, none);
+}
 
 /* ── FII Sector — mirrors hoi theme exactly ───────────────────── */
 .fii-wrap {
@@ -444,7 +397,7 @@ body.ocean-theme .hoi-wrap {
     --fii-distr-bg:   rgba(239,68,68,.08);   --fii-distr-text: #b91c1c;  --fii-distr-border: rgba(239,68,68,.20);
     --fii-bar-accum:  #22c55e;  --fii-bar-distr: #ef4444;  --fii-bar-auc: var(--fii-accent);
     margin: 0 auto; padding: 14px 0px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color: var(--fii-text);
 }
 body.dark-theme .fii-wrap {
@@ -690,6 +643,7 @@ body.dark-theme .sw-wrap {
     --pf-pos:        #4ade80;
     --pf-neg:        #f87171;
     --sw-top-bg:     rgba(34,197,94,0.09);
+    --pf-cal-filter: invert(1) opacity(.6);
 }
 body.forest-theme .sw-wrap {
     --pf-bg:         #060c09;
@@ -706,6 +660,7 @@ body.forest-theme .sw-wrap {
     --pf-pos:        #86efac;
     --pf-neg:        #fca5a5;
     --sw-top-bg:     rgba(52,211,153,0.08);
+    --pf-cal-filter: invert(1) opacity(.6);
 }
 body.cream-theme .sw-wrap {
     --pf-bg:         #fdfbf7;
@@ -807,6 +762,7 @@ body.ocean-theme .sw-wrap {
     <button class="dash-tab" id="dash-tab-historic-oi" onclick="dashSwitch('historic-oi')">📈 Historic OI</button>
     <button class="dash-tab" id="dash-tab-fii-sector"   onclick="dashSwitch('fii-sector')">🏢 FII Sector</button>
     <button class="dash-tab" id="dash-tab-swing-trade" onclick="dashSwitch('swing-trade')">📉 Swing Trade</button>
+    <button class="dash-tab" id="dash-tab-contracts"   onclick="dashSwitch('contracts')">📜 Contracts</button>
 </div>
 
 <!-- ── Backtest panel ─────────────────────────────────────────── -->
@@ -956,7 +912,6 @@ body.ocean-theme .sw-wrap {
                     <select id="smIndex">
                         <option value="NIFTY 500" selected>Nifty 500</option>
                         <option value="NIFTY 200">Nifty 200</option>
-                        <option value="NIFTY SMALLCAP 250">Nifty Smallcap 250</option>
                         <option value="NIFTY SMALLCAP 250">Nifty Smallcap 250</option>
                         <option value="NIFTY MICROCAP 250">Nifty Microcap 250</option>
                         <option value="NIFTY LARGEMIDCAP 250">Nifty LargeMidcap 250</option>
@@ -1622,46 +1577,69 @@ body.ocean-theme .sw-wrap {
 
 <!-- ── Historic OI panel ──────────────────────────────────────── -->
 <div class="dash-panel" id="dash-historic-oi-panel">
-  <div class="hoi-wrap">
+  <div class="sw-wrap">
 
     <!-- Topbar -->
-    <div class="hoi-topbar">
-      <span class="hoi-title">Historic OI</span>
-      <span id="hoiStatus" class="hoi-status" style="margin-left:auto;margin-right:8px;"></span>
-      <button id="hoiBackfillBtn" class="hoi-btn-record" style="display:none;margin-right:6px;background:#5a6a7a" onclick="backfillHistoricOHLC()">⬇ Fill OHLC</button>
-      <button id="hoiRecordBtn" class="hoi-btn-record" onclick="recordHistoricOI()">⏺ Record</button>
+    <div class="sw-topbar">
+      <span class="sw-title">Historic OI</span>
+      <span id="hoiStatus" class="sw-updated" style="margin-left:auto;margin-right:8px;"></span>
+      <button class="sw-refresh-btn" style="margin-right:6px;opacity:.75" onclick="hoiToggleLoadHistory()">⬆ Load History</button>
+      <button id="hoiRecordBtn" class="sw-refresh-btn" onclick="recordHistoricOI()">⏺ Record</button>
+    </div>
+    <!-- Load History panel (hidden by default) -->
+    <div id="hoiLoadHistoryPanel" style="display:none;padding:10px 14px;background:var(--pf-row-alt);border-bottom:1px solid var(--pf-border);gap:10px;flex-wrap:wrap;align-items:center">
+      <label style="font-size:12px;color:var(--pf-text-2);font-weight:600">From</label>
+      <div class="hoi-date-wrap"><input type="date" id="hoiFromDate" value="2021-01-01"></div>
+      <label style="font-size:12px;color:var(--pf-text-2);font-weight:600">To</label>
+      <div class="hoi-date-wrap"><input type="date" id="hoiToDate"></div>
+      <label style="font-size:12px;color:var(--pf-text-2);font-weight:600">Source</label>
+      <label style="font-size:12px;cursor:pointer"><input type="radio" name="hoiSrc" value="nse" checked> NSE Bhavcopy <span style="color:var(--pf-text-3)">(5 yr)</span></label>
+      <label style="font-size:12px;cursor:pointer"><input type="radio" name="hoiSrc" value="sqlite"> SQLite <span style="color:var(--pf-text-3)">(local, fast)</span></label>
+      <button class="sw-refresh-btn" onclick="hoiStartBackfill()" id="hoiLoadBtn">▶ Start</button>
+      <button class="sw-refresh-btn" onclick="hoiRecalculate()" id="hoiRecalcBtn" style="background:var(--pf-text-3);border-color:var(--pf-text-3)">↺ Recalculate</button>
+      <span style="width:1px;height:20px;background:var(--pf-border);display:inline-block;margin:0 2px"></span>
+      <button class="sw-refresh-btn" onclick="hoiSyncFII()" id="hoiSyncFIIBtn" style="background:#0284c7;border-color:#0284c7">↓ Sync FII <span style="font-size:10px;opacity:.8">(30d)</span></button>
+      <span id="hoiLoadMsg" style="font-size:11px;color:var(--pf-text-2)"></span>
+    </div>
+    <!-- Backfill progress bar -->
+    <div id="hoiProgressWrap" style="display:none;padding:6px 14px;background:var(--pf-row-alt);border-bottom:1px solid var(--pf-border)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span id="hoiProgressMsg" style="font-size:11px;color:var(--pf-text-2);flex:1">Loading…</span>
+        <span id="hoiProgressPct" style="font-size:11px;color:var(--pf-text-3)">0%</span>
+      </div>
+      <div style="height:4px;background:var(--pf-border);border-radius:2px;margin-top:4px">
+        <div id="hoiProgressFill" style="height:100%;width:0%;background:var(--pf-accent);border-radius:2px;transition:width .3s"></div>
+      </div>
     </div>
 
     <!-- Symbol tab group -->
-    <div class="hoi-tab-group">
+    <div class="hoi-sym-tab-group">
       <button class="hoi-sym-tab active" id="hoi-tab-NIFTY"     onclick="hoiSymbolSwitch('NIFTY')">NIFTY</button>
       <button class="hoi-sym-tab"        id="hoi-tab-BANKNIFTY" onclick="hoiSymbolSwitch('BANKNIFTY')">BANKNIFTY</button>
-      <button class="hoi-sym-tab"        id="hoi-tab-FINNIFTY"  onclick="hoiSymbolSwitch('FINNIFTY')">FINNIFTY</button>
     </div>
 
     <!-- Per-symbol grids -->
-    {% for sym in ['NIFTY', 'BANKNIFTY', 'FINNIFTY'] %}
-    <div class="hoi-table-wrap" id="hoi-panel-{{ sym }}"{% if not loop.first %} style="display:none"{% endif %}>
-      <table class="hoi-table">
+    {% for sym in ['NIFTY', 'BANKNIFTY'] %}
+    <div class="sw-table-wrap" id="hoi-panel-{{ sym }}"{% if not loop.first %} style="display:none"{% endif %}>
+      <table class="sw-table">
         <thead>
           <tr>
-            <th>Date</th>
-            <th class="r">Chng CE OI</th>
-            <th class="r">Chng PE OI</th>
-            <th class="r hoi-ce">CE OI</th>
-            <th class="r hoi-pe">PE OI</th>
-            <th class="r">PE−CE Diff</th>
-            <th class="r">Open</th>
-            <th class="r">High</th>
-            <th class="r">Low</th>
-            <th class="r">Close</th>
-            <th class="c">Move</th>
-            <th class="r">PCR</th>
-            <th class="c"></th>
+            <th class="sw-th-l">Date</th>
+            <th class="sw-th-c">Day</th>
+            <th>CHNG OPT OI</th>
+            <th>PCR</th>
+            <th>Chng Fut OI</th>
+            <th>FII Fut</th>
+            <th>Open</th>
+            <th>High</th>
+            <th>Low</th>
+            <th>Close</th>
+            <th class="sw-th-c">Move</th>
+            <th class="sw-th-c"></th>
           </tr>
         </thead>
         <tbody id="hoiTbody-{{ sym }}">
-          <tr class="hoi-empty"><td class="hoi-td" colspan="13">Loading…</td></tr>
+          <tr><td colspan="12" class="sw-empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -1729,6 +1707,10 @@ body.ocean-theme .sw-wrap {
           <option value="NIFTY MIDCAP 150">Nifty Midcap 150</option>
           <option value="MIDCPNIFTY">Nifty Midcap Select</option>
           <option value="NIFTY SMLCAP 100">Nifty Smallcap 100</option>
+          <option value="NIFTY SMALLCAP 250">Nifty Smallcap 250</option>
+          <option value="NIFTY MICROCAP 250">Nifty Microcap 250</option>
+          <option value="NIFTY LARGEMIDCAP 250">Nifty LargeMidcap 250</option>
+          <option value="NIFTY MIDSMALLCAP 400">Nifty MidSmallcap 400</option>
         </optgroup>
         <optgroup label="── Derivatives ──">
           <option value="BANKNIFTY">Nifty Bank</option>
@@ -1797,6 +1779,76 @@ body.ocean-theme .sw-wrap {
   </div>
 </div><!-- /swing-trade panel -->
 
+<!-- ── Contracts panel ─────────────────────────────────────────── -->
+<div class="dash-panel" id="dash-contracts-panel">
+<div class="ac-page" style="min-height:unset;">
+
+    <!-- Filter bar -->
+    <div class="ac-filter-bar">
+        <select class="ac-select" id="acUnderlying">
+            <option value="NIFTY" selected>NIFTY</option>
+            <option value="BANKNIFTY">BANK NIFTY</option>
+            <option value="FINNIFTY">FIN NIFTY</option>
+            <option value="MIDCPNIFTY">MIDCAP NIFTY</option>
+        </select>
+        <select class="ac-select" id="acExpiry">
+            <option value="">Loading…</option>
+        </select>
+        <select class="ac-select" id="acOptionType">
+            <option value="all">Option Type</option>
+            <option value="CE">Call (CE)</option>
+            <option value="PE">Put (PE)</option>
+            <option value="FUT">Futures</option>
+        </select>
+        <select class="ac-select" id="acStrike">
+            <option value="">Strike Price</option>
+        </select>
+        <button class="ac-btn-refresh" id="acRefreshBtn">Refresh</button>
+        <button class="ac-btn-clear"   id="acClearBtn">Clear</button>
+        <span class="ac-stat-chip" id="acStatTotal"></span>
+    </div>
+
+    <div class="ac-loading hidden" id="acLoading">
+        <div class="ac-spinner"></div>
+        <span>Fetching live contracts…</span>
+    </div>
+    <div class="ac-error hidden" id="acError"></div>
+
+    <div class="ac-table-wrap" id="acTableWrap">
+        <table class="ac-table">
+            <thead>
+                <tr>
+                    <th class="ac-th-info"></th>
+                    <th>INSTRUMENT TYPE</th>
+                    <th>EXPIRY DATE</th>
+                    <th>OPTION</th>
+                    <th class="col-r">STRIKE</th>
+                    <th class="col-r">OPEN</th>
+                    <th class="col-r">HIGH</th>
+                    <th class="col-r">LOW</th>
+                    <th class="col-r">CLOSE</th>
+                    <th class="col-r">PREV. CLOSE</th>
+                    <th class="col-r ac-th-last">LAST</th>
+                    <th class="col-r">CHNG</th>
+                    <th class="col-r">%CHNG</th>
+                    <th class="col-r">VOLUME<br><small>(CONTRACTS)</small></th>
+                </tr>
+            </thead>
+            <tbody id="acTableBody"></tbody>
+        </table>
+        <div class="ac-empty hidden" id="acEmpty">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+                <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>
+                <rect x="9" y="3" width="6" height="4" rx="1"/>
+            </svg>
+            <p>No contracts found</p>
+            <small>Try changing the filters or refreshing</small>
+        </div>
+    </div>
+
+</div>
+</div><!-- /contracts panel -->
+
 {% endblock %}
 
 {% block scripts %}
@@ -1806,7 +1858,7 @@ body.ocean-theme .sw-wrap {
 window.oipReplayMode = true;
 
 // ── Tab switching ──────────────────────────────────────────────
-const _DASH_TABS = ['backtest', 'replay', 'pcr', 'historic-oi', 'fii-sector', 'swing-trade'];
+const _DASH_TABS = ['backtest', 'replay', 'pcr', 'historic-oi', 'fii-sector', 'swing-trade', 'contracts'];
 
 function dashSwitch(tab, pushState) {
     _DASH_TABS.forEach(t => {
@@ -1833,6 +1885,9 @@ function dashSwitch(tab, pushState) {
     if (tab === 'swing-trade') {
         if (!window._swLoaded) swLoadStocks();
     }
+    if (tab === 'contracts') {
+        if (typeof acInit === 'function') acInit();
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1847,7 +1902,7 @@ window.addEventListener('hashchange', () => {
 });
 
 // ── Historic OI ────────────────────────────────────────────────
-const _HOI_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'];
+const _HOI_SYMBOLS = ['NIFTY', 'BANKNIFTY'];
 let _hoiActiveSymbol = 'NIFTY';
 
 function hoiSymbolSwitch(sym) {
@@ -1868,20 +1923,16 @@ function _hoiChngCls(v) {
 }
 
 function _hoiRenderAll(records) {
-    // Show backfill button only while there are records with missing OHLC
-    const hasMissing = (records || []).some(r => !r.close || Number(r.close) === 0);
-    const backfillBtn = document.getElementById('hoiBackfillBtn');
-    if (backfillBtn) backfillBtn.style.display = hasMissing ? '' : 'none';
 
     _HOI_SYMBOLS.forEach(sym => {
         const tbody = document.getElementById('hoiTbody-' + sym);
         const rows = (records || []).filter(r => r.symbol === sym);
         if (rows.length === 0) {
-            tbody.innerHTML = `<tr class="hoi-empty"><td class="hoi-td" colspan="13">No records for ${sym}. Click ⏺ Record to capture today's OI.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="12" class="sw-empty">No records for ${sym}. Click ⏺ Record to capture today's OI.</td></tr>`;
             return;
         }
         const _today = new Date().toLocaleDateString('sv'); // YYYY-MM-DD in local time
-        tbody.innerHTML = rows.map(r => {
+        tbody.innerHTML = rows.map((r, idx) => {
             const cv   = Number(r.chng_ce_oi), pv = Number(r.chng_pe_oi);
             const ceOI = Number(r.ce_oi), peOI = Number(r.pe_oi);
             const diff = peOI - ceOI;
@@ -1902,20 +1953,34 @@ function _hoiRenderAll(records) {
             const delCell = r.date === _today
                 ? `<button class="hoi-del-btn" title="Delete" onclick="deleteHistoricOI('${r.date}','${r.symbol}')">&#x2715;</button>`
                 : '';
-            return `<tr class="hoi-row">
-              <td class="hoi-td">${r.date}</td>
-              <td class="hoi-td r hoi-ce">${cSign}${_hoiFmt(cv)}</td>
-              <td class="hoi-td r hoi-pe">${pSign}${_hoiFmt(pv)}</td>
-              <td class="hoi-td r hoi-ce">${_hoiFmt(ceOI)}</td>
-              <td class="hoi-td r hoi-pe">${_hoiFmt(peOI)}</td>
-              <td class="hoi-td r ${diffCls}">${diffArrow}${_hoiFmt(Math.abs(diff))}</td>
-              <td class="hoi-td r">${fmtP(o)}</td>
-              <td class="hoi-td r">${fmtP(h)}</td>
-              <td class="hoi-td r">${fmtP(l)}</td>
-              <td class="hoi-td r">${fmtP(c)}</td>
-              <td class="hoi-td c ${moveCls}">${moveText}</td>
-              <td class="hoi-td r ${pcrCls}">${pcr}</td>
-              <td class="hoi-td c">${delCell}</td>
+            const _DAY = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+            const _day = _DAY[new Date(r.date + 'T00:00:00').getDay()];
+            const isMon = _day === 'Mon';
+            const dayCell = isMon ? '<span class="hoi-day-mon">Mon</span>' : `<span style="color:var(--pf-text-2);font-size:11px;font-weight:600">${_day}</span>`;
+            const monBox  = txt => isMon ? `<span class="hoi-mon-box">${txt}</span>` : txt;
+            const prevRec    = rows[idx + 1];
+            const curFut     = r.idx_fut_oi != null ? Number(r.idx_fut_oi) : null;
+            const prevFut    = prevRec?.idx_fut_oi != null ? Number(prevRec.idx_fut_oi) : null;
+            const chngFut    = (curFut != null && prevFut != null) ? curFut - prevFut : null;
+            const chngFutCls = chngFut == null ? 'hoi-flat' : chngFut > 0 ? 'hoi-up' : 'hoi-down';
+            const chngFutTxt = chngFut == null ? '—' : (chngFut > 0 ? '+' : '-') + _hoiFmt(Math.abs(chngFut));
+            const _fiiRaw = r.FII_Index_futures;
+            const futOI  = (_fiiRaw != null && _fiiRaw !== 0) ? Number(_fiiRaw) : null;
+            const fiiCls = futOI == null ? 'hoi-flat' : futOI > 0 ? 'hoi-up' : 'hoi-down';
+            const fiiTxt = futOI == null ? '—' : (futOI > 0 ? '+' : '') + futOI.toFixed(0) + ' Cr';
+            return `<tr${isMon ? ' class="hoi-mon-row"' : ''}>
+              <td class="sw-td-l">${r.date}</td>
+              <td class="sw-td-c">${dayCell}</td>
+              <td class="${diffCls}">${diffArrow}${_hoiFmt(Math.abs(diff))}</td>
+              <td class="${pcrCls}">${pcr}</td>
+              <td class="${chngFutCls}">${chngFutTxt}</td>
+              <td class="${fiiCls}">${fiiTxt}</td>
+              <td>${fmtP(o)}</td>
+              <td>${monBox(fmtP(h))}</td>
+              <td>${monBox(fmtP(l))}</td>
+              <td>${fmtP(c)}</td>
+              <td class="sw-td-c ${moveCls}">${moveText}</td>
+              <td class="sw-td-c">${delCell}</td>
             </tr>`;
         }).join('');
     });
@@ -1928,7 +1993,7 @@ function loadHistoricOI() {
         .catch(() => {
             _HOI_SYMBOLS.forEach(s => {
                 document.getElementById('hoiTbody-' + s).innerHTML =
-                    '<tr class="hoi-empty"><td class="hoi-td hoi-down" colspan="13">Failed to load records.</td></tr>';
+                    '<tr><td colspan="12" class="sw-empty hoi-down">Failed to load records.</td></tr>';
             });
         });
 }
@@ -1967,30 +2032,102 @@ function deleteHistoricOI(date, symbol) {
         .catch(() => alert('Delete failed'));
 }
 
-function backfillHistoricOHLC() {
-    const btn    = document.getElementById('hoiBackfillBtn');
-    const status = document.getElementById('hoiStatus');
+// ── Historic OI — Load History ──────────────────────────────────
+let _hoiPollTimer = null;
+
+function hoiToggleLoadHistory() {
+    const panel = document.getElementById('hoiLoadHistoryPanel');
+    const showing = panel.style.display !== 'none';
+    panel.style.display = showing ? 'none' : 'flex';
+    if (!showing) {
+        // Default "to" date to today
+        const today = new Date().toLocaleDateString('sv');
+        document.getElementById('hoiToDate').value = today;
+    }
+}
+
+function hoiStartBackfill()  { _hoiLaunchBackfill(false); }
+function hoiRecalculate()    { _hoiLaunchBackfill(true);  }
+
+function hoiSyncFII() {
+    const btn = document.getElementById('hoiSyncFIIBtn');
+    const msg = document.getElementById('hoiLoadMsg');
     btn.disabled = true;
-    btn.textContent = '⏳ Filling…';
-    status.textContent = '';
-    fetch('/api/oi-historic/backfill-ohlc', { method: 'POST' })
+    msg.textContent = 'Syncing FII data…';
+    fetch('/api/oi-historic/sync-fii', { method: 'POST' })
         .then(r => r.json())
         .then(d => {
             btn.disabled = false;
-            btn.textContent = '⬇ Fill OHLC';
             if (d.success) {
-                _hoiRenderAll(d.records);
-                status.textContent = `✅ Updated ${d.updated} record(s)` +
-                    (d.errors && d.errors.length ? ` ⚠️ Failed: ${d.errors.join(', ')}` : '');
+                msg.textContent = `✓ FII synced: ${d.updated} records (${d.date_range || ''})`;
+                loadHistoricOI();
             } else {
-                status.textContent = '❌ ' + (d.error || 'Backfill failed');
+                msg.textContent = '❌ ' + (d.error || 'Sync failed');
             }
         })
-        .catch(() => {
-            btn.disabled = false;
-            btn.textContent = '⬇ Fill OHLC';
-            status.textContent = '❌ Network error';
-        });
+        .catch(() => { btn.disabled = false; msg.textContent = '❌ Network error'; });
+}
+
+function _hoiLaunchBackfill(recalculate) {
+    const src      = document.querySelector('input[name="hoiSrc"]:checked')?.value;
+    const fromDate = document.getElementById('hoiFromDate').value;
+    const toDate   = document.getElementById('hoiToDate').value;
+    const loadBtn  = document.getElementById('hoiLoadBtn');
+    const rcalcBtn = document.getElementById('hoiRecalcBtn');
+    const msg      = document.getElementById('hoiLoadMsg');
+
+    if (src === 'nse' && (!fromDate || !toDate)) { msg.textContent = '⚠ Select date range'; return; }
+    if (src === 'nse' && fromDate > toDate)       { msg.textContent = '⚠ From must be ≤ To'; return; }
+
+    loadBtn.disabled  = true;
+    rcalcBtn.disabled = true;
+    msg.textContent   = recalculate ? 'Recalculating…' : 'Starting…';
+    document.getElementById('hoiProgressWrap').style.display = '';
+
+    fetch('/api/oi-historic/load-all', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ source: src, from_date: fromDate, to_date: toDate, recalculate }),
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (d.success) {
+            msg.textContent = recalculate ? 'Recalculating…' : 'Running…';
+            _hoiPollBackfill();
+        } else {
+            loadBtn.disabled  = false;
+            rcalcBtn.disabled = false;
+            msg.textContent   = '❌ ' + (d.error || 'Failed to start');
+            document.getElementById('hoiProgressWrap').style.display = 'none';
+        }
+    })
+    .catch(() => {
+        loadBtn.disabled  = false;
+        rcalcBtn.disabled = false;
+        msg.textContent   = '❌ Network error';
+        document.getElementById('hoiProgressWrap').style.display = 'none';
+    });
+}
+
+function _hoiPollBackfill() {
+    if (_hoiPollTimer) clearTimeout(_hoiPollTimer);
+    fetch('/api/oi-historic/load-status')
+        .then(r => r.json())
+        .then(st => {
+            const pct = st.total > 0 ? Math.round(st.progress / st.total * 100) : 0;
+            document.getElementById('hoiProgressFill').style.width = pct + '%';
+            document.getElementById('hoiProgressPct').textContent  = pct + '%';
+            document.getElementById('hoiProgressMsg').textContent  = st.message || '';
+            if (st.running) {
+                _hoiPollTimer = setTimeout(_hoiPollBackfill, 3000);
+            } else {
+                document.getElementById('hoiLoadBtn').disabled  = false;
+                document.getElementById('hoiRecalcBtn').disabled = false;
+                document.getElementById('hoiLoadMsg').textContent = st.message || 'Done';
+                loadHistoricOI();
+            }
+        })
+        .catch(() => { _hoiPollTimer = setTimeout(_hoiPollBackfill, 5000); });
 }
 
 // ── FII Sector (CDSL fortnightly) ─────────────────────────────
@@ -2917,14 +3054,17 @@ function _fiiBuildGrid(title, rows, kind, maxNI, maxAuc) {
             return;
         }
 
-        const sorted = [..._swData].sort((a, b) => {
+        const cmp = (a, b) => {
             const va = a[_swSortKey], vb = b[_swSortKey];
             if (va === null && vb === null) return 0;
             if (va === null) return 1;
             if (vb === null) return -1;
             if (typeof va === 'string') return _swSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
             return _swSortAsc ? va - vb : vb - va;
-        });
+        };
+        const below = [..._swData].filter(r => r.price <= 10000).sort(cmp);
+        const above = [..._swData].filter(r => r.price >  10000).sort(cmp);
+        const sorted = [...below, ...above];
 
         tbody.innerHTML = sorted.map((r, i) => `
             <tr${i < 10 ? ' class="sw-top-row"' : ''}>
@@ -2992,4 +3132,5 @@ function _fiiBuildGrid(title, rows, kind, maxNI, maxAuc) {
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_replay.js') }}?v={{ sv('js/oi_replay.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pcr.js') }}?v={{ sv('js/pcr.js') }}"></script>
+<script src="{{ url_for('static', filename='js/active_contracts.js') }}"></script>
 {% endblock %}

@@ -564,6 +564,9 @@ alertcondition(tp, title="Take-Profit Condition", message="Take-Profit condition
 
 myWidthMainLevels = input.int(title="Line width for Main levels", defval=1, minval=1, group="Multi CPR")
 
+// Auto-hide Multi CPR when chart timeframe is above 15 min
+showMCPR = showPivots and timeframe.isintraday and timeframe.multiplier <= 15
+
 // 15-min CPR
 [m15_h, m15_l, m15_c] = request.security(syminfo.tickerid, "15", [high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_on)
 m15_pivot = (m15_h + m15_l + m15_c) / 3.0
@@ -587,30 +590,30 @@ m15_line_color = input.color(color.orange,                 "15m Line Color", gro
 m15_fill_color = input.color(color.new(color.orange, 80),  "15m Fill Color", group="Multi CPR", inline="m15_colors")
 
 // 15 min CPR plots
-p15  = plot(showPivots and show15mCPR ? m15_pivot : na, title="15m P",  color=m15_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
-bc15 = plot(showPivots and show15mCPR ? m15_bc    : na, title="15m BC", color=m15_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
-tc15 = plot(showPivots and show15mCPR ? m15_tc    : na, title="15m TC", color=m15_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
-fill(bc15, tc15, color=showPivots and show15mCPR ? m15_fill_color : na)
+p15  = plot(showMCPR and show15mCPR ? m15_pivot : na, title="15m P",  color=m15_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+bc15 = plot(showMCPR and show15mCPR ? m15_bc    : na, title="15m BC", color=m15_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+tc15 = plot(showMCPR and show15mCPR ? m15_tc    : na, title="15m TC", color=m15_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+fill(bc15, tc15, color=showMCPR and show15mCPR ? m15_fill_color : na)
 
 // 30 min CPR color inputs
 m30_line_color = input.color(color.teal,                   "30m Line Color", group="Multi CPR", inline="m30_colors")
 m30_fill_color = input.color(color.new(color.teal, 80),    "30m Fill Color", group="Multi CPR", inline="m30_colors")
 
 // 30 min CPR plots
-p30  = plot(showPivots and show30mCPR ? m30_pivot : na, title="30m P",  color=m30_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
-bc30 = plot(showPivots and show30mCPR ? m30_bc    : na, title="30m BC", color=m30_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
-tc30 = plot(showPivots and show30mCPR ? m30_tc    : na, title="30m TC", color=m30_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
-fill(bc30, tc30, color=showPivots and show30mCPR ? m30_fill_color : na)
+p30  = plot(showMCPR and show30mCPR ? m30_pivot : na, title="30m P",  color=m30_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+bc30 = plot(showMCPR and show30mCPR ? m30_bc    : na, title="30m BC", color=m30_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+tc30 = plot(showMCPR and show30mCPR ? m30_tc    : na, title="30m TC", color=m30_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+fill(bc30, tc30, color=showMCPR and show30mCPR ? m30_fill_color : na)
 
 // 1 hour CPR color inputs
 h1_line_color = input.color(color.purple,                  "1H Line Color", group="Multi CPR", inline="h1_colors")
 h1_fill_color = input.color(color.new(color.purple, 80),   "1H Fill Color", group="Multi CPR", inline="h1_colors")
 
 // 1 hour CPR plots
-p60  = plot(showPivots and show1hCPR ? m60_pivot : na, title="1h P",  color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
-bc60 = plot(showPivots and show1hCPR ? m60_bc    : na, title="1h BC", color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
-tc60 = plot(showPivots and show1hCPR ? m60_tc    : na, title="1h TC", color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
-fill(bc60, tc60, color=showPivots and show1hCPR ? h1_fill_color : na)
+p60  = plot(showMCPR and show1hCPR ? m60_pivot : na, title="1h P",  color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+bc60 = plot(showMCPR and show1hCPR ? m60_bc    : na, title="1h BC", color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+tc60 = plot(showMCPR and show1hCPR ? m60_tc    : na, title="1h TC", color=h1_line_color, style=plot.style_linebr, linewidth=myWidthMainLevels)
+fill(bc60, tc60, color=showMCPR and show1hCPR ? h1_fill_color : na)
 
 //===============================================================================================================================
 

@@ -83,7 +83,7 @@ body.ocean-theme .portfolio-page {
 .portfolio-page {
     background: var(--pf-bg);
     min-height: calc(100vh - 80px);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color: var(--pf-text);
     display: flex;
     flex-direction: column;
@@ -768,3 +768,8 @@ body.forest-theme .pf-group-pnl.pos { color: #22c55e; }
 
 /* ── Utility ─────────────────────────────────────────────────── */
 .hidden { display: none !important; }
+
+body.dark-theme .pf-table thead th,
+body.forest-theme .pf-table thead th {
+    color: #fff;
+}

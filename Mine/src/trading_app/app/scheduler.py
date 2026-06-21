@@ -116,8 +116,8 @@ class MarketScheduler:
             self._run_historic_oi_record_task,
             CronTrigger(
                 day_of_week='mon-fri',
-                hour=15,
-                minute=30,
+                hour=20,
+                minute=0,
                 second=0,
                 timezone='Asia/Kolkata',
             ),
@@ -342,7 +342,7 @@ class MarketScheduler:
         self._ensure_rtp_running(source='Watchdog')
 
     def _run_historic_oi_record_task(self):
-        """3:30 PM IST: fetch and persist daily OI snapshot for all symbols."""
+        """8:00 PM IST: fetch and persist daily OI snapshot for all symbols."""
         try:
             if not self.is_trading_day():
                 return
