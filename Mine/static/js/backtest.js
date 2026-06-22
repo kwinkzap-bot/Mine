@@ -13,12 +13,11 @@ document.addEventListener('DOMContentLoaded', function() {
     let allSymbols = [];
     let selectedSymbol = 'NIFTY';
 
-    // Initialize dates (default to Jan 1st of current year)
+    // Initialize dates (default to Jan 1st 2017)
     const today = new Date();
-    const currentYearStart = new Date(today.getFullYear(), 0, 1); // Jan 1st
-    
+
     document.getElementById('endDate').value = today.toISOString().split('T')[0];
-    document.getElementById('startDate').value = currentYearStart.toISOString().split('T')[0];
+    document.getElementById('startDate').value = '2017-01-01';
 
     // Ensure timeframe default is 60m (already set in HTML but double check)
     const intervalSelect = document.getElementById('interval');
@@ -142,8 +141,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (symFg) symFg.style.display = '';
         if (intFg) intFg.style.display = '';
 
-        const optBtn = document.getElementById('runOptimiseBtn');
-        if (optBtn) optBtn.style.display = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap') ? '' : 'none';
+        const optBtn      = document.getElementById('runOptimiseBtn');
+        const smGoLiveBtn = document.getElementById('smGoLiveBtn');
+        if (optBtn)      optBtn.style.display      = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap') ? '' : 'none';
+        if (smGoLiveBtn) smGoLiveBtn.style.display = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
         const rtpOptPanel = document.getElementById('rtpOptimisePanel');
@@ -160,29 +161,20 @@ document.addEventListener('DOMContentLoaded', function() {
             if (rtpParamsRow) rtpParamsRow.style.display = 'grid';
             if (rtpLotRow)    rtpLotRow.style.display    = 'grid';
             if (intervalSelect) intervalSelect.value = 'minute';
-            if (startDateInput) {
-                const d = new Date(today.getFullYear(), 0, 1);   // Jan 1 current year
-                startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
-            }
+            if (startDateInput) startDateInput.value = '2017-01-01';
 
         } else if (val === 'vwap') {
             if (vwapParamsRow) vwapParamsRow.style.display = 'grid';
             if (vwapLotRow)    vwapLotRow.style.display    = 'grid';
             if (intervalSelect) intervalSelect.value = '5minute';
-            if (startDateInput) {
-                const d = new Date(today.getFullYear() - 2, 0, 1);
-                startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
-            }
+            if (startDateInput) startDateInput.value = '2017-01-01';
             updateVwapInvestment();
 
         } else if (val === 'swing_momentum') {
             if (smParamsRow) smParamsRow.style.display = 'grid';
             if (symFg) symFg.style.display = 'none';
             if (intFg) intFg.style.display = 'none';
-            if (startDateInput) {
-                const d = new Date(today.getFullYear() - 2, 0, 1);
-                startDateInput.value = new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().split('T')[0];
-            }
+            if (startDateInput) startDateInput.value = '2017-01-01';
         }
     }
 
@@ -1055,6 +1047,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const smRecalcOptBtn = document.getElementById('smRecalcOptBtn');
     if (smRecalcOptBtn) smRecalcOptBtn.addEventListener('click', () => _runSmOptimise(true));
 
+    const smGoLiveBtnEl = document.getElementById('smGoLiveBtn');
+    if (smGoLiveBtnEl) smGoLiveBtnEl.addEventListener('click', _smGoLiveFromForm);
+
     async function _runSmOptimise(recalculate) {
         const panel      = document.getElementById('smOptimisePanel');
         const recalcBtn  = document.getElementById('smRecalcOptBtn');
@@ -1185,7 +1180,40 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (panel) panel.style.display = '';
         if (recalcBtn) recalcBtn.style.display = '';
-        if (data.best) _applySmOptResult(data.best);
+    }
+
+    function _smGoLiveFromForm() {
+        const index     = (document.getElementById('smIndex')     || {}).value || 'NIFTY 500';
+        const topN      = parseInt((document.getElementById('smTopN')      || {}).value) || 10;
+        const exitRank  = parseInt((document.getElementById('smExitRank')  || {}).value) || 50;
+        const freq      = (document.getElementById('smRebalFreq') || {}).value || 'monthly';
+        const investment= parseFloat((document.getElementById('smInvestment') || {}).value) || 100000;
+
+        const idxLbl  = index.replace('NIFTY ', 'Nifty ');
+        const freqLbl = freq.charAt(0).toUpperCase() + freq.slice(1);
+        const label   = `${idxLbl} · ${freqLbl} · Top ${topN} · Exit >${exitRank}`;
+
+        const btn = document.getElementById('smGoLiveBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+        fetch('/api/algo/swing-momentum/configs', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ index, top_n: topN, exit_rank: exitRank,
+                                      rebalance_freq: freq, investment, label,
+                                      start_date: '2025-01-01' }),
+        })
+        .then(r => r.json())
+        .then(d => {
+            if (btn) { btn.disabled = false; btn.textContent = '🚀 Go Live'; }
+            if (!d.success) { window.showNotification('Failed to save config', 'error'); return; }
+            window.showNotification(`Saved to Algo → Swing Momentum`, 'success');
+            setTimeout(() => { window.location.href = '/algo#swing-momentum'; }, 800);
+        })
+        .catch(() => {
+            if (btn) { btn.disabled = false; btn.textContent = '🚀 Go Live'; }
+            window.showNotification('Request failed', 'error');
+        });
     }
 
     function _applySmOptResult(r) {

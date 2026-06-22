@@ -16,6 +16,16 @@ let _pcrChart1 = null, _pcrChart2 = null, _pcrChart3 = null;
 let _pcrPriceSeries1 = null, _pcrRatioSeries = null;
 let _pcrPriceSeries2 = null, _pcrCESeries = null, _pcrPESeries = null;
 let _pcrPriceSeries3 = null, _pcrCEOISeries = null, _pcrPEOISeries = null;
+
+// Expose chart instances globally for vega.js crosshair sync
+Object.defineProperties(window, {
+    _pcrChart1:      { get: () => _pcrChart1 },
+    _pcrChart2:      { get: () => _pcrChart2 },
+    _pcrChart3:      { get: () => _pcrChart3 },
+    _pcrPriceSeries1:{ get: () => _pcrPriceSeries1 },
+    _pcrPriceSeries2:{ get: () => _pcrPriceSeries2 },
+    _pcrPriceSeries3:{ get: () => _pcrPriceSeries3 },
+});
 let _pcrTimer = null;
 let _pcrRawData = [];
 let _pcrInited = false;
@@ -33,6 +43,7 @@ function _pcrCleanup() {
     _pcrPriceSeries1 = _pcrRatioSeries = null;
     _pcrPriceSeries2 = _pcrCESeries = _pcrPESeries = null;
     _pcrPriceSeries3 = _pcrCEOISeries = _pcrPEOISeries = null;
+    if (typeof _vegaCleanup === 'function') _vegaCleanup();
 }
 
 // ── Entry point ────────────────────────────────────────────────────────────
@@ -50,6 +61,7 @@ function pcrLoad() {
         }
     }
     pcrRefresh();
+    if (typeof vegaLoad === 'function') vegaLoad();
 }
 
 function pcrRefresh() {
@@ -67,6 +79,7 @@ function pcrRefresh() {
             if (upd) upd.textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             clearTimeout(_pcrTimer);
             if (isMarketOpen()) _pcrTimer = setTimeout(pcrRefresh, 5000);
+            if (typeof vegaRefresh === 'function') vegaRefresh();
         })
         .catch(e => console.error('[PCR] fetch error', e))
         .finally(() => { if (btn) btn.textContent = '↻ Refresh'; });
@@ -239,6 +252,7 @@ function _pcrInitCharts() {
         if (_pcrActiveChart === 'chart1') {
             _pcrSyncCross(_pcrChart2, p, _pcrPriceSeries2);
             _pcrSyncCross(_pcrChart3, p, _pcrPriceSeries3);
+            if (typeof _vegaSyncFromPCR === 'function') _vegaSyncFromPCR(p);
         }
     });
     _pcrChart2.subscribeCrosshairMove(p => {
@@ -246,6 +260,7 @@ function _pcrInitCharts() {
         if (_pcrActiveChart === 'chart2') {
             _pcrSyncCross(_pcrChart1, p, _pcrPriceSeries1);
             _pcrSyncCross(_pcrChart3, p, _pcrPriceSeries3);
+            if (typeof _vegaSyncFromPCR === 'function') _vegaSyncFromPCR(p);
         }
     });
     _pcrChart3.subscribeCrosshairMove(p => {
@@ -253,6 +268,7 @@ function _pcrInitCharts() {
         if (_pcrActiveChart === 'chart3') {
             _pcrSyncCross(_pcrChart1, p, _pcrPriceSeries1);
             _pcrSyncCross(_pcrChart2, p, _pcrPriceSeries2);
+            if (typeof _vegaSyncFromPCR === 'function') _vegaSyncFromPCR(p);
         }
     });
 
@@ -266,6 +282,7 @@ function _pcrInitCharts() {
         _pcrRangeSyncing = true;
         syncRange(r, _pcrChart2);
         syncRange(r, _pcrChart3);
+        if (typeof vegaSyncRange === 'function') vegaSyncRange(r);
         _pcrRangeSyncing = false;
     });
     _pcrChart2.timeScale().subscribeVisibleLogicalRangeChange(r => {
@@ -273,6 +290,7 @@ function _pcrInitCharts() {
         _pcrRangeSyncing = true;
         syncRange(r, _pcrChart1);
         syncRange(r, _pcrChart3);
+        if (typeof vegaSyncRange === 'function') vegaSyncRange(r);
         _pcrRangeSyncing = false;
     });
     _pcrChart3.timeScale().subscribeVisibleLogicalRangeChange(r => {
@@ -280,6 +298,7 @@ function _pcrInitCharts() {
         _pcrRangeSyncing = true;
         syncRange(r, _pcrChart1);
         syncRange(r, _pcrChart2);
+        if (typeof vegaSyncRange === 'function') vegaSyncRange(r);
         _pcrRangeSyncing = false;
     });
 

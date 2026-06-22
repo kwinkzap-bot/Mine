@@ -337,6 +337,15 @@ class FyersDataServiceAdapter:
             val = d.get('delta')
             return float(val) if val is not None else None
 
+        def _parse_vega(d: dict) -> Optional[float]:
+            g = d.get('greeks') or {}
+            if isinstance(g, dict):
+                val = g.get('vega')
+                if val is not None:
+                    return float(val)
+            val = d.get('vega')
+            return float(val) if val is not None else None
+
         result: Dict = {}
 
         for row in rows:
@@ -354,6 +363,7 @@ class FyersDataServiceAdapter:
                     'ltp':    round(float(ltp_raw), 2) if ltp_raw else None,
                     'iv':     _parse_iv(row),
                     'delta':  _parse_delta(row),
+                    'vega':   _parse_vega(row),
                     'symbol': sym,
                 }
             else:
@@ -375,6 +385,7 @@ class FyersDataServiceAdapter:
                         'ltp':    round(float(s_ltp), 2) if s_ltp else None,
                         'iv':     _parse_iv(sub),
                         'delta':  _parse_delta(sub),
+                        'vega':   _parse_vega(sub),
                         'symbol': s_sym,
                     }
 

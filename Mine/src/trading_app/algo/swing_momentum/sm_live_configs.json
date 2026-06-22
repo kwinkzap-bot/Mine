@@ -1,0 +1,178 @@
+{
+  "configs": [
+    {
+      "id": "3036e38b",
+      "label": "Nifty SMALLCAP 250 \u00b7 Monthly \u00b7 Top 12 \u00b7 Exit >35",
+      "index": "NIFTY SMALLCAP 250",
+      "top_n": 12,
+      "exit_rank": 35,
+      "rebalance_freq": "monthly",
+      "investment": 100000.0,
+      "start_date": "2025-01-01",
+      "status": "watching",
+      "added_at": "2026-06-22 16:46",
+      "live_since": "2026-06-22",
+      "live_entries": [
+        {
+          "symbol": "HFCL",
+          "entry_price": 209.46,
+          "qty": 39,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "CPPLUS",
+          "entry_price": 3631.6,
+          "qty": 2,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "KIRLOSENG",
+          "entry_price": 2389.8,
+          "qty": 3,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "CEMPRO",
+          "entry_price": 1273.2,
+          "qty": 6,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "ACUTAAS",
+          "entry_price": 3249.6,
+          "qty": 2,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "SYRMA",
+          "entry_price": 1336.2,
+          "qty": 6,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "RRKABEL",
+          "entry_price": 2353.3,
+          "qty": 3,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "DATAPATTNS",
+          "entry_price": 4866.2,
+          "qty": 1,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "WELCORP",
+          "entry_price": 1404.4,
+          "qty": 5,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "SCHNEIDER",
+          "entry_price": 1395.5,
+          "qty": 5,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "EMMVEE",
+          "entry_price": 325.8,
+          "qty": 25,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "IFCI",
+          "entry_price": 83.36,
+          "qty": 99,
+          "entry_date": "2026-06-22"
+        }
+      ]
+    },
+    {
+      "id": "85b39f4c",
+      "label": "Nifty 500 \u00b7 Monthly \u00b7 Top 12 \u00b7 Exit >50",
+      "index": "NIFTY 500",
+      "top_n": 12,
+      "exit_rank": 50,
+      "rebalance_freq": "monthly",
+      "investment": 100000.0,
+      "start_date": "2025-01-01",
+      "status": "watching",
+      "added_at": "2026-06-22 17:23",
+      "live_since": "2026-06-22",
+      "live_entries": [
+        {
+          "symbol": "HFCL",
+          "entry_price": 209.46,
+          "qty": 39,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "CPPLUS",
+          "entry_price": 3631.6,
+          "qty": 2,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "KIRLOSENG",
+          "entry_price": 2389.8,
+          "qty": 3,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "CEMPRO",
+          "entry_price": 1273.2,
+          "qty": 6,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "ACUTAAS",
+          "entry_price": 3249.6,
+          "qty": 2,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "SYRMA",
+          "entry_price": 1336.2,
+          "qty": 6,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "RRKABEL",
+          "entry_price": 2353.3,
+          "qty": 3,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "GVT&D",
+          "entry_price": 5494.5,
+          "qty": 1,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "DATAPATTNS",
+          "entry_price": 4866.2,
+          "qty": 1,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "WELCORP",
+          "entry_price": 1404.4,
+          "qty": 5,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "SCHNEIDER",
+          "entry_price": 1395.5,
+          "qty": 11,
+          "entry_date": "2026-06-22"
+        },
+        {
+          "symbol": "EMMVEE",
+          "entry_price": 325.8,
+          "qty": 47,
+          "entry_date": "2026-06-22"
+        }
+      ]
+    }
+  ]
+}

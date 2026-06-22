@@ -672,14 +672,18 @@ class OpenInterestService:
             simple_strikes = []
             for s in strikes:
                 simple_strikes.append({
-                    'strike': s.get('strike'),
-                    'ce_oi': s.get('ce_oi'),
-                    'pe_oi': s.get('pe_oi'),
+                    'strike':   s.get('strike'),
+                    'ce_oi':    s.get('ce_oi'),
+                    'pe_oi':    s.get('pe_oi'),
                     'ce_change': s.get('ce_change_in_oi'),
                     'pe_change': s.get('pe_change_in_oi'),
-                    'ce_iv': s.get('ce_iv'),
-                    'pe_iv': s.get('pe_iv'),
-                    'expiry': s.get('expiry_date').isoformat() if hasattr(s.get('expiry_date'), 'isoformat') else s.get('expiry_date')
+                    'ce_iv':    s.get('ce_iv'),
+                    'pe_iv':    s.get('pe_iv'),
+                    'ce_ltp':   s.get('ce_ltp'),
+                    'pe_ltp':   s.get('pe_ltp'),
+                    'ce_vega':  s.get('ce_vega'),   # Fyers live Greek (per share, per 1-unit IV)
+                    'pe_vega':  s.get('pe_vega'),
+                    'expiry':   s.get('expiry_date').isoformat() if hasattr(s.get('expiry_date'), 'isoformat') else s.get('expiry_date')
                 })
             
             active_strikes_json = json.dumps(simple_strikes)
@@ -746,6 +750,170 @@ class OpenInterestService:
             return sorted(seen.values(), key=lambda x: x['time'])
         except Exception as e:
             logger.error(f"[OI] get_intraday_pcr_history error: {e}")
+            return []
+
+    def get_intraday_vega_history(self, symbol: str, date_str: str) -> List[Dict[str, Any]]:
+        """Return per-minute Call/Put Vega time-series.
+
+        Formula: Σ(baseline_ltp × Δoi_lots) / 1e7  in ₹ Crore.
+
+        The BASELINE (9:15 AM) option LTP is used as the fixed weight for every
+        snapshot — NOT the current (live) LTP.  This is key for expiry-day
+        behaviour: opening prices are high; as positions unwind in the afternoon
+        the OI drops (Δoi → large negative) while the weight stays at the
+        opening premium, producing the steep late-day decline seen in the chart.
+
+        Weight priority per strike:
+          1. Stored ce_ltp / pe_ltp from the 9:15 AM first snapshot.
+          2. BS price at baseline time using stored ce_iv / pe_iv.
+          3. BS price with adaptive sigma (50% for expiry-day, else 13% default).
+
+        Put vega is negated so put buying appears below zero (bearish convention).
+        """
+        _LOT_SIZES = {'NIFTY': 75, 'BANKNIFTY': 35, 'FINNIFTY': 40, 'MIDCPNIFTY': 120}
+        lot_size   = _LOT_SIZES.get(symbol, 75)
+        _DEFAULT_IVS = {'NIFTY': 0.13, 'BANKNIFTY': 0.16, 'FINNIFTY': 0.13, 'MIDCPNIFTY': 0.14}
+        default_iv = _DEFAULT_IVS.get(symbol, 0.13)
+
+        def _bs_call(S, K, T, r, sigma):
+            try:
+                d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+                d2 = d1 - sigma * math.sqrt(T)
+                N  = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))
+                return max(S * N(d1) - K * math.exp(-r * T) * N(d2), 0.0)
+            except Exception:
+                return max(S - K, 0.0)
+
+        def _bs_put(S, K, T, r, sigma):
+            try:
+                d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+                d2 = d1 - sigma * math.sqrt(T)
+                N  = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))
+                return max(K * math.exp(-r * T) * N(-d2) - S * N(-d1), 0.0)
+            except Exception:
+                return max(K - S, 0.0)
+
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT timestamp, current_price, active_strikes
+                    FROM oi_history
+                    WHERE symbol = ?
+                      AND date(timestamp) = ?
+                      AND time(timestamp) BETWEEN '09:15:00' AND '15:30:00'
+                      AND current_price > 0
+                      AND active_strikes IS NOT NULL
+                      AND active_strikes != '[]'
+                    ORDER BY timestamp ASC
+                ''', (symbol, date_str))
+                rows = cursor.fetchall()
+
+            if not rows:
+                return []
+
+            # ── Build baseline OI + baseline LTP from the 9:15 AM first row ──
+            baseline_ce_oi:  dict = {}
+            baseline_pe_oi:  dict = {}
+            baseline_ce_ltp: dict = {}
+            baseline_pe_ltp: dict = {}
+
+            first_row     = rows[0]
+            first_price   = first_row['current_price']
+            first_strikes = json.loads(first_row['active_strikes'] or '[]')
+            first_dt      = datetime.fromisoformat(first_row['timestamp'])
+
+            for s in first_strikes:
+                k          = s.get('strike')
+                expiry_str = s.get('expiry')
+                if not k or not expiry_str:
+                    continue
+
+                baseline_ce_oi[k] = s.get('ce_oi') or 0
+                baseline_pe_oi[k] = s.get('pe_oi') or 0
+
+                ce_ltp0 = float(s.get('ce_ltp') or 0)
+                pe_ltp0 = float(s.get('pe_ltp') or 0)
+
+                if ce_ltp0 <= 0 or pe_ltp0 <= 0:
+                    try:
+                        exp_date = datetime.strptime(expiry_str, '%Y-%m-%d').date()
+                        T0 = max((exp_date - first_dt.date()).days / 365.0, 0.001)
+                        K  = float(k)
+                        # On expiry day (T clamped to 0.001) use 50% IV — this
+                        # is empirically calibrated to produce correct final-value
+                        # magnitudes when Fyers reports combined June22+June29 OI.
+                        # On normal days, stored ce_iv / pe_iv from Fyers is used.
+                        if T0 <= 0.003:
+                            sigma_ce = 0.50
+                            sigma_pe = 0.50
+                        else:
+                            sigma_ce = float(s.get('ce_iv') or 0) or default_iv
+                            sigma_pe = float(s.get('pe_iv') or 0) or default_iv
+                        if ce_ltp0 <= 0:
+                            ce_ltp0 = _bs_call(first_price, K, T0, 0.05, sigma_ce)
+                        if pe_ltp0 <= 0:
+                            pe_ltp0 = _bs_put(first_price, K, T0, 0.05, sigma_pe)
+                    except Exception:
+                        pass
+
+                baseline_ce_ltp[k] = ce_ltp0
+                baseline_pe_ltp[k] = pe_ltp0
+
+            # ── Process every snapshot using fixed baseline weights ────────────
+            seen: dict = {}
+            used_estimated = any(v == 0 for v in baseline_ce_ltp.values())
+
+            for row in rows:
+                try:
+                    dt        = datetime.fromisoformat(row['timestamp'])
+                    unix_ts   = int(dt.replace(tzinfo=timezone.utc).timestamp())
+                    minute_ts = unix_ts - (unix_ts % 60)
+                    if minute_ts in seen:
+                        continue
+
+                    strikes       = json.loads(row['active_strikes'] or '[]')
+                    current_price = row['current_price']
+
+                    call_vega_sum = 0.0
+                    put_vega_sum  = 0.0
+
+                    for s in strikes:
+                        strike     = s.get('strike')
+                        if not strike:
+                            continue
+
+                        ce_oi_now = s.get('ce_oi') or 0
+                        pe_oi_now = s.get('pe_oi') or 0
+                        ce_lots   = (ce_oi_now - baseline_ce_oi.get(strike, ce_oi_now)) / lot_size
+                        pe_lots   = (pe_oi_now - baseline_pe_oi.get(strike, pe_oi_now)) / lot_size
+
+                        if ce_lots == 0 and pe_lots == 0:
+                            continue
+
+                        ce_w = baseline_ce_ltp.get(strike, 0)
+                        pe_w = baseline_pe_ltp.get(strike, 0)
+
+                        if ce_lots != 0 and ce_w > 0:
+                            call_vega_sum += ce_w * ce_lots
+                        if pe_lots != 0 and pe_w > 0:
+                            put_vega_sum  += pe_w * pe_lots
+
+                    seen[minute_ts] = {
+                        'time':      minute_ts,
+                        'price':     current_price,
+                        'call_vega': round(call_vega_sum / 1e7, 2),
+                        'put_vega':  round(-put_vega_sum / 1e7, 2),
+                        'estimated': used_estimated,
+                    }
+                except Exception:
+                    continue
+
+            return sorted(seen.values(), key=lambda x: x['time'])
+        except Exception as e:
+            logger.error(f'[OI] get_intraday_vega_history error: {e}')
             return []
 
     def get_latest_oi_from_db(self, symbol: str, max_age_minutes: int = 5) -> Optional[Dict[str, Any]]:
@@ -1013,6 +1181,9 @@ class OpenInterestService:
                                     # Handle strike price variations
                                     strike = float(opt.get('strikePrice') or opt.get('strike_price') or 0)
 
+                                    # Fyers API v3 exposes live greeks including vega
+                                    g = opt.get('greeks') or {}
+                                    raw_vega = (g.get('vega') if isinstance(g, dict) else None) or opt.get('vega')
                                     instruments.append({
                                         'instrument_token': opt.get('symbol'),
                                         'tradingsymbol':    opt.get('symbol', '').split(':')[-1],
@@ -1023,7 +1194,9 @@ class OpenInterestService:
                                         # Include OI fields if present in native chain to avoid extra quote calls
                                         'oi':               opt.get('oi', opt.get('open_interest', 0)),
                                         'oi_change':        opt.get('oich', opt.get('oi_change', 0)),
-                                        'last_price':       opt.get('ltp', opt.get('last_price', opt.get('lp', 0)))
+                                        'last_price':       opt.get('ltp', opt.get('last_price', opt.get('lp', 0))),
+                                        'vega':             float(raw_vega) if raw_vega is not None else None,
+                                        'iv':               opt.get('iv', opt.get('impliedVolatility')),
                                     })
 
                                 # Populate fast token cache for chart resolution
@@ -1280,11 +1453,13 @@ class OpenInterestService:
                         strikes_dict[strike]['ce_oi'] = inst.get('oi', 0)
                         strikes_dict[strike]['ce_oi_change'] = inst.get('oi_change', 0)
                         strikes_dict[strike]['ce_ltp'] = inst.get('last_price', 0)
+                        strikes_dict[strike]['ce_vega'] = inst.get('vega')
                     elif option_type == 'PE':
                         strikes_dict[strike]['pe_token'] = token
                         strikes_dict[strike]['pe_oi'] = inst.get('oi', 0)
                         strikes_dict[strike]['pe_oi_change'] = inst.get('oi_change', 0)
                         strikes_dict[strike]['pe_ltp'] = inst.get('last_price', 0)
+                        strikes_dict[strike]['pe_vega'] = inst.get('vega')
                 except (KeyError, ValueError, TypeError) as e:
                     logger.debug(f"Skipping instrument: {e}")
                     continue
@@ -1581,7 +1756,40 @@ class OpenInterestService:
                             logger.error(f"Error parsing PE quote for strike {strike} token {pe_token_str}: {e}")
                     else:
                         logger.debug(f"PE Token {pe_token_str} NOT found in quotes")
-            
+
+                # ── Native-chain LTP fallback for IV ──────────────────────────
+                # When the native optionchain API provided OI+LTP (so individual
+                # quote fetches were skipped), the ce_iv/pe_iv are still 0.
+                # Compute IV here from the pre-fetched LTP values.
+                expiry_str = strike_info.get('expiry')
+                if expiry_str:
+                    try:
+                        if isinstance(expiry_str, str):
+                            exp_date = datetime.strptime(expiry_str, '%Y-%m-%d').date()
+                        else:
+                            exp_date = expiry_str
+                        days_to_exp = (exp_date - datetime.now().date()).days
+                        T_exp = max(days_to_exp / 365.0, 0.001)
+                        r_exp = 0.05
+                        K_exp = float(strike)
+                        S_exp = current_price
+
+                        if strikes_oi[strike]['ce_iv'] == 0:
+                            ce_ltp_val = float(strike_info.get('ce_ltp') or 0)
+                            if ce_ltp_val > 0:
+                                iv_ce = _calculate_iv_from_price(S_exp, K_exp, T_exp, r_exp, ce_ltp_val, 'CE')
+                                strikes_oi[strike]['ce_iv'] = float(iv_ce) if iv_ce else 0
+                                strikes_oi[strike]['ce_ltp'] = ce_ltp_val
+
+                        if strikes_oi[strike]['pe_iv'] == 0:
+                            pe_ltp_val = float(strike_info.get('pe_ltp') or 0)
+                            if pe_ltp_val > 0:
+                                iv_pe = _calculate_iv_from_price(S_exp, K_exp, T_exp, r_exp, pe_ltp_val, 'PE')
+                                strikes_oi[strike]['pe_iv'] = float(iv_pe) if iv_pe else 0
+                                strikes_oi[strike]['pe_ltp'] = pe_ltp_val
+                    except Exception:
+                        pass
+
             # Cache opening OI if it's 9:15 AM - 9:20 AM (first call of the day)
             current_time = datetime.now().time()
             market_open = dt_time(9, 15)

@@ -113,6 +113,8 @@ class SwingMomentumEngine:
             if pv is None or pd.isna(pv):
                 continue
             price = float(pv)
+            if price > 10_000:
+                continue
 
             vals = []
             for base_row in (row_91, row_182, row_273):
@@ -349,6 +351,199 @@ class SwingMomentumEngine:
                 'total_sell_trades': len(sells),
                 'rebalance_count':   len(rdates),
             },
+        }
+
+
+    # ── live portfolio state (for Algo → Swing Momentum tab) ─────────────────
+
+    def live_state(self) -> Dict[str, Any]:
+        """Return current portfolio state + next-rebalance preview without placing orders.
+
+        Steps
+        -----
+        1. Fetch price history.
+        2. Replay all past rebalance dates to build current holdings (no final closeout).
+        3. Fetch today's closing price for each holding via the price DataFrame.
+        4. Run today's momentum ranking → derive BUY/SELL candidates for next rebalance.
+        5. Estimate next rebalance date.
+        """
+        import yfinance as yf
+
+        today     = datetime.today().date()
+        close_df, syms, yf_syms = self._fetch_data()
+        td_sorted = sorted(d.date() for d in close_df.index)
+        all_rdates = self._rebalance_dates(td_sorted)
+
+        # Only replay rebalances that have already happened
+        past_rdates = [rd for rd in all_rdates if rd <= today]
+
+        portfolio: Dict[str, Dict] = {}   # sym → {yf, qty, buy_price, buy_date}
+        cash      = self.investment
+        all_trades: List[Dict] = []
+
+        for rd in past_rdates:
+            ranked   = self._rank(close_df, syms, yf_syms, rd)
+            rank_map = {r['sym']: r for r in ranked}
+
+            # EXIT: rotation out
+            for sym in list(portfolio.keys()):
+                info = rank_map.get(sym)
+                rank = info['rank'] if info else len(ranked) + 1
+                if rank > self.exit_rank:
+                    hold  = portfolio.pop(sym)
+                    row   = close_df.index[close_df.index <= pd.Timestamp(rd)]
+                    price = float(close_df.loc[row[-1], hold['yf']]) if len(row) else hold['buy_price']
+                    if pd.isna(price):
+                        price = hold['buy_price']
+                    pnl = (price - hold['buy_price']) * hold['qty']
+                    all_trades.append({
+                        'date': str(rd), 'symbol': sym, 'action': 'SELL',
+                        'qty': hold['qty'], 'price': round(price, 2),
+                        'reason': 'ROTATION_OUT', 'rank': rank,
+                        'pnl': round(pnl, 2),
+                    })
+                    cash += price * hold['qty']
+
+            # ENTER: fill to top_n
+            owned      = set(portfolio.keys())
+            candidates = [r for r in ranked if r['sym'] not in owned]
+            for r in candidates:
+                if len(portfolio) >= self.top_n:
+                    break
+                remaining = self.top_n - len(portfolio)
+                per_stock = cash / remaining
+                qty       = int(per_stock / r['price'])
+                if qty <= 0:
+                    continue
+                cost = qty * r['price']
+                all_trades.append({
+                    'date': str(rd), 'symbol': r['sym'], 'action': 'BUY',
+                    'qty': qty, 'price': round(r['price'], 2),
+                    'reason': 'ROTATION_IN', 'rank': r['rank'],
+                })
+                cash -= cost
+                portfolio[r['sym']] = {
+                    'yf': r['yf'], 'qty': qty,
+                    'buy_price': r['price'], 'buy_date': rd,
+                }
+
+        last_rebalance = str(past_rdates[-1]) if past_rdates else None
+
+        # ── Fetch current prices for holdings ───────────────────────────────
+        holdings: List[Dict] = []
+        if portfolio:
+            yf_syms_held = [h['yf'] for h in portfolio.values()]
+            try:
+                px = yf.download(
+                    yf_syms_held, period='5d', interval='1d',
+                    auto_adjust=True, progress=False, threads=True,
+                )
+                if not px.empty:
+                    closes = px['Close'] if len(yf_syms_held) > 1 else px[['Close']].rename(columns={'Close': yf_syms_held[0]})
+                else:
+                    closes = None
+            except Exception:
+                closes = None
+
+            for sym, h in portfolio.items():
+                curr_price = h['buy_price']
+                if closes is not None:
+                    col = closes.get(h['yf'])
+                    if col is not None:
+                        col_clean = col.dropna()
+                        if not col_clean.empty:
+                            curr_price = round(float(col_clean.iloc[-1]), 2)
+
+                buy_val  = round(h['buy_price'] * h['qty'], 2)
+                curr_val = round(curr_price * h['qty'], 2)
+                pnl_abs  = round(curr_val - buy_val, 2)
+                pnl_pct  = round((curr_price - h['buy_price']) / h['buy_price'] * 100, 2) if h['buy_price'] else 0
+                holdings.append({
+                    'symbol':        sym,
+                    'qty':           h['qty'],
+                    'buy_date':      str(h['buy_date']),
+                    'buy_price':     round(h['buy_price'], 2),
+                    'current_price': curr_price,
+                    'buy_value':     buy_val,
+                    'current_value': curr_val,
+                    'pnl_abs':       pnl_abs,
+                    'pnl_pct':       pnl_pct,
+                })
+
+        # ── Today's rankings → next-rebalance preview ───────────────────────
+        today_ranked = self._rank(close_df, syms, yf_syms, today)
+        rank_map_today = {r['sym']: r for r in today_ranked}
+        owned_now = set(portfolio.keys())
+
+        # Stocks we hold that now rank > exit_rank → should SELL at next rebalance
+        sell_preview: List[Dict] = []
+        for sym, h in portfolio.items():
+            info = rank_map_today.get(sym)
+            rank = info['rank'] if info else len(today_ranked) + 1
+            if rank > self.exit_rank:
+                sell_preview.append({'symbol': sym, 'current_rank': rank, 'qty': h['qty']})
+
+        # Slots freed by sells + any empty slots
+        free_slots = len(sell_preview) + max(0, self.top_n - len(portfolio))
+        sell_syms  = {s['symbol'] for s in sell_preview}
+
+        # Top-ranked stocks NOT in portfolio (and not already being sold) → should BUY
+        buy_preview: List[Dict] = []
+        for r in today_ranked:
+            if len(buy_preview) >= free_slots:
+                break
+            if r['sym'] not in owned_now or r['sym'] in sell_syms:
+                if r['sym'] not in owned_now:
+                    buy_preview.append({
+                        'symbol':       r['sym'],
+                        'current_rank': r['rank'],
+                        'price':        round(r['price'], 2),
+                    })
+
+        # ── Estimate next rebalance date ────────────────────────────────────
+        next_rebalance = None
+        future_rdates  = [rd for rd in all_rdates if rd > today]
+        if future_rdates:
+            next_rebalance = str(future_rdates[0])
+        elif past_rdates:
+            # extrapolate one period forward from the last rebalance
+            import calendar
+            last_dt = past_rdates[-1]
+            freq    = self.rebalance_freq
+            if freq == 'weekly':
+                next_rebalance = str(last_dt + timedelta(days=7))
+            elif freq == 'monthly':
+                m, y = last_dt.month + 1, last_dt.year
+                if m > 12:
+                    m, y = 1, y + 1
+                d = min(last_dt.day, calendar.monthrange(y, m)[1])
+                next_rebalance = str(last_dt.replace(year=y, month=m, day=d))
+            else:
+                m, y = last_dt.month + 3, last_dt.year
+                if m > 12:
+                    m, y = m - 12, y + 1
+                d = min(last_dt.day, calendar.monthrange(y, m)[1])
+                next_rebalance = str(last_dt.replace(year=y, month=m, day=d))
+
+        # ── Portfolio-level stats ────────────────────────────────────────────
+        curr_port_val  = sum(h['current_value'] for h in holdings)
+        total_invested = sum(h['buy_value'] for h in holdings)
+        unrealised_pnl = round(curr_port_val - total_invested, 2)
+        unrealised_pct = round(unrealised_pnl / total_invested * 100, 2) if total_invested else 0
+
+        return {
+            'current_holdings':  sorted(holdings, key=lambda h: h['pnl_pct'], reverse=True),
+            'holding_count':     len(holdings),
+            'sell_preview':      sell_preview,
+            'buy_preview':       buy_preview,
+            'last_rebalance':    last_rebalance,
+            'next_rebalance':    next_rebalance,
+            'cash_remaining':    round(cash, 2),
+            'current_port_val':  round(curr_port_val, 2),
+            'total_invested':    round(total_invested, 2),
+            'unrealised_pnl':    unrealised_pnl,
+            'unrealised_pct':    unrealised_pct,
+            'rebalance_needed':  len(sell_preview) > 0 or len(buy_preview) > 0,
         }
 
 

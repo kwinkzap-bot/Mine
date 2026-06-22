@@ -1,27 +1,73 @@
 [
   {
-    "date": "2026-06-19",
-    "direction": "SELL",
-    "entry_spot": 23961.35,
-    "exit_spot": 23991.95,
-    "pnl_pts": -30.6,
+    "date": "2026-06-22",
+    "direction": "BUY",
+    "entry_spot": 24124.6,
+    "exit_spot": 24093.5,
+    "pnl_pts": -31.1,
     "reason": "SL",
-    "entry_time": "2026-06-19T10:42:02.931263",
-    "exit_time": "2026-06-19T14:15:01.191619",
-    "strike": 24400,
-    "option_type": "PE",
+    "entry_time": "2026-06-22T13:37:04.439672",
+    "exit_time": "2026-06-22T15:19:35.518265",
+    "strike": 23900,
+    "option_type": "CE",
     "lot_size": 65,
-    "opt_entry_price": 441.0,
-    "opt_exit_price": 391.55,
-    "opt_pnl_pts": -49.45,
-    "opt_pnl_inr": -3214.25,
+    "opt_entry_price": 240.9,
+    "opt_exit_price": 224.35,
+    "opt_pnl_pts": -16.55,
+    "opt_pnl_inr": -2151.5,
     "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2068968994677121024'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2662323900CE",
+        "lots": 1,
+        "quantity": 65
+      },
       {
         "broker_idx": 2,
         "broker_type": "zerodha",
-        "order_id": "{'order_id': '2067837788388515840'}",
+        "order_id": "{'order_id': '2068969000851136512'}",
         "tradingsymbol": "",
-        "fyers_sym": "NSE:NIFTY2662324400PE",
+        "fyers_sym": "NSE:NIFTY2662323900CE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
+    "date": "2026-06-22",
+    "direction": "BUY",
+    "entry_spot": 24140.3,
+    "exit_spot": 24110.1,
+    "pnl_pts": -30.2,
+    "reason": "SL",
+    "entry_time": "2026-06-22T10:07:01.902643",
+    "exit_time": "2026-06-22T13:10:07.538314",
+    "strike": 23900,
+    "option_type": "CE",
+    "lot_size": 65,
+    "opt_entry_price": 248.0,
+    "opt_exit_price": 229.0,
+    "opt_pnl_pts": -19.0,
+    "opt_pnl_inr": -2470.0,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2068916140264316928'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2662323900CE",
+        "lots": 1,
+        "quantity": 65
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2068916141686185984'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2662323900CE",
         "lots": 1,
         "quantity": 65
       }

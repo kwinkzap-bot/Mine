@@ -12,8 +12,9 @@
 
     <!-- ── Tab bar ────────────────────────────────────────────── -->
     <div class="ag-tab-bar">
-        <button class="ag-tab active" id="algo-tab-straddle" onclick="algoSwitch('straddle')">Straddle</button>
-        <button class="ag-tab"        id="algo-tab-rtp"      onclick="algoSwitch('rtp')">EMA RTP</button>
+        <button class="ag-tab active" id="algo-tab-straddle"         onclick="algoSwitch('straddle')">Straddle</button>
+        <button class="ag-tab"        id="algo-tab-rtp"              onclick="algoSwitch('rtp')">EMA RTP</button>
+        <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
 
     <!-- ════════════════════════════════════════════════════════ -->
@@ -176,6 +177,35 @@
     </div>
 
     </div><!-- #algo-rtp-panel -->
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- Swing Momentum panel                                     -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-swing-momentum-panel">
+
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <div class="ag-header">
+        <span class="ag-title">Swing Momentum — Live Watch</span>
+        <span id="smLiveBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="smLiveBadgeText">0 Configs</span>
+        </span>
+        <span class="ag-last-upd" id="smLiveLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <!-- ── Empty state ───────────────────────────────────────────── -->
+    <div id="smLiveEmpty" class="ag-card" style="display:none">
+        <div class="ag-card-body" style="text-align:center;padding:32px 16px;color:var(--ag-text-2)">
+            <div style="font-size:2rem;margin-bottom:8px">📊</div>
+            <div style="font-size:0.95rem;font-weight:600;margin-bottom:6px">No live configs yet</div>
+            <div style="font-size:0.82rem">Go to <strong>Backtest → Swing Momentum → Optimise</strong> and click <strong>Go Live</strong> on any row.</div>
+        </div>
+    </div>
+
+    <!-- ── Config cards container ─────────────────────────────────── -->
+    <div id="smLiveConfigsContainer"></div>
+
+    </div><!-- #algo-swing-momentum-panel -->
 
 </div><!-- .algo-inner -->
 </div><!-- .algo-page -->

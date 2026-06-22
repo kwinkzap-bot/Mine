@@ -195,6 +195,37 @@ class RTPAlgo:
             logger.warning(f"[RTP] Spot fetch failed: {e}")
             return None
 
+    def _fetch_today_1min_candles(self, provider: Any) -> Optional[pd.DataFrame]:
+        """Fetch only today's 1-min candles — lightweight for in-trade H/L exit checking."""
+        try:
+            today = date.today().strftime('%Y-%m-%d')
+            candles = provider.historical_data(
+                instrument_token=_NIFTY_FYERS,
+                from_date=today,
+                to_date=today,
+                interval='minute',
+                use_cache=False,
+            )
+            if not candles:
+                return None
+            df = pd.DataFrame(candles).reset_index(drop=True)
+            if df.empty:
+                return None
+            if 'date' in df.columns:
+                df['datetime'] = pd.to_datetime(df['date'])
+            else:
+                df['datetime'] = pd.to_datetime(df.index)
+            if df['datetime'].dt.tz is None:
+                df['datetime'] = df['datetime'].dt.tz_localize(
+                    'Asia/Kolkata', ambiguous='infer', nonexistent='shift_forward'
+                )
+            else:
+                df['datetime'] = df['datetime'].dt.tz_convert('Asia/Kolkata')
+            return df
+        except Exception as e:
+            logger.warning(f"[RTP] Today candle fetch failed: {e}")
+            return None
+
     def _fetch_1min_candles(self, provider: Any) -> Optional[pd.DataFrame]:
         """Fetch 1-min candles with enough history for EMA50 to converge.
         Today-only data (~50 bars at 10 AM) gives a completely wrong EMA50,
@@ -1062,8 +1093,11 @@ class RTPAlgo:
         #   the time we notice it, and would be missed by a last-bar-only scan.
         #   After a trade exits, we reset this to the current IST minute so that
         #   bars during the trade period are not re-evaluated as new signals.
-        last_signal_minute:   Optional[int]           = None
-        last_checked_bar_dt:  Optional[pd.Timestamp]  = None
+        last_signal_minute:      Optional[int]            = None
+        last_checked_bar_dt:     Optional[pd.Timestamp]  = None
+        last_exit_candle_minute: int                     = -1
+        last_exit_candle_dt:     Optional[pd.Timestamp]  = None
+        tracked_trade_entry_time: Optional[str]          = None
 
         while not self._stop_event.is_set():
             try:
@@ -1095,6 +1129,13 @@ class RTPAlgo:
                 # ── In trade → check SL / Target every second regardless of kill-switch.
                 # The kill-switch only prevents new entries; it must never block an exit.
                 if state.get('active_trade'):
+                    # Reset candle exit pointer when a new trade starts
+                    _entry_now = str(state['active_trade'].get('entry_time', ''))
+                    if _entry_now != tracked_trade_entry_time:
+                        tracked_trade_entry_time = _entry_now
+                        last_exit_candle_dt      = None
+                        last_exit_candle_minute  = -1
+
                     spot = self._get_nifty_spot(provider)
                     if spot:
                         self._spot_fail_count = 0
@@ -1126,6 +1167,84 @@ class RTPAlgo:
                                 f"[RTP] Spot fetch failed {self._spot_fail_count} consecutive times"
                                 " — open trade UNMONITORED. Check provider connection."
                             )
+
+                    # ── Per-minute candle H/L exit check ─────────────────────────────
+                    # The 1-second spot poll can miss a momentary SL/Target touch if
+                    # the price dips and recovers between polls.  Checking the completed
+                    # 1-min candle's high/low once per minute mirrors the backtest
+                    # exactly (backtest exits on c['low'] <= SL or c['high'] >= Target).
+                    if m != last_exit_candle_minute:
+                        last_exit_candle_minute = m
+                        # Re-read state: the spot check above may have already exited.
+                        _cs = self._load_state()
+                        if _cs.get('active_trade'):
+                            try:
+                                _tdf = self._fetch_today_1min_candles(provider)
+                                if _tdf is not None and not _tdf.empty:
+                                    _now_ist  = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
+                                    _completed = _tdf[_tdf['datetime'] < _now_ist]
+                                    if not _completed.empty:
+                                        if last_exit_candle_dt is not None:
+                                            _to_check = _completed[
+                                                _completed['datetime'] > last_exit_candle_dt
+                                            ]
+                                        else:
+                                            # First check — scan from trade entry time
+                                            _ets = pd.Timestamp(tracked_trade_entry_time)
+                                            if _ets.tzinfo is None:
+                                                _ets = _ets.tz_localize('Asia/Kolkata')
+                                            else:
+                                                _ets = _ets.tz_convert('Asia/Kolkata')
+                                            _to_check = _completed[
+                                                _completed['datetime'] >= _ets.floor('min')
+                                            ]
+
+                                        _at = _cs['active_trade']
+                                        _dir = _at['direction']
+                                        _sl  = float(_at['sl_level'])
+                                        _tgt = float(_at['target_level'])
+
+                                        for _, _c in _to_check.iterrows():
+                                            last_exit_candle_dt = _c['datetime']
+                                            # Guard: spot check may have exited mid-loop
+                                            if not self._load_state().get('active_trade'):
+                                                break
+                                            if _dir == 'BUY':
+                                                if _c['low'] <= _sl:
+                                                    logger.info(
+                                                        f"[RTP] Candle exit BUY SL: "
+                                                        f"{_c['datetime']} low={_c['low']} <= sl={_sl}"
+                                                    )
+                                                    self._exit_trade('SL', _sl)
+                                                    last_checked_bar_dt = _now_ist
+                                                    break
+                                                if _c['high'] >= _tgt:
+                                                    logger.info(
+                                                        f"[RTP] Candle exit BUY TARGET: "
+                                                        f"{_c['datetime']} high={_c['high']} >= tgt={_tgt}"
+                                                    )
+                                                    self._exit_trade('TARGET', _tgt)
+                                                    last_checked_bar_dt = _now_ist
+                                                    break
+                                            else:
+                                                if _c['high'] >= _sl:
+                                                    logger.info(
+                                                        f"[RTP] Candle exit SELL SL: "
+                                                        f"{_c['datetime']} high={_c['high']} >= sl={_sl}"
+                                                    )
+                                                    self._exit_trade('SL', _sl)
+                                                    last_checked_bar_dt = _now_ist
+                                                    break
+                                                if _c['low'] <= _tgt:
+                                                    logger.info(
+                                                        f"[RTP] Candle exit SELL TARGET: "
+                                                        f"{_c['datetime']} low={_c['low']} <= tgt={_tgt}"
+                                                    )
+                                                    self._exit_trade('TARGET', _tgt)
+                                                    last_checked_bar_dt = _now_ist
+                                                    break
+                            except Exception as _ce:
+                                logger.warning(f"[RTP] Candle exit check error: {_ce}")
 
                 else:
                     # ── Runtime kill-switch — only blocks new signal entries

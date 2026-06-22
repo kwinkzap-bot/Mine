@@ -802,5 +802,206 @@
       }
     ],
     "cached_at": "2026-06-21 18:08"
+  },
+  "full_2017-01-01_2026-06-22_monthly": {
+    "start_date": "2017-01-01",
+    "end_date": "2026-06-22",
+    "rebalance_freq": "monthly",
+    "total_combos_tested": 90,
+    "best": {
+      "index": "NIFTY MIDSMALLCAP 400",
+      "top_n": 20,
+      "exit_rank": 35,
+      "rebalance_freq": "monthly",
+      "total_return_pct": 5442.25,
+      "cagr_pct": 52.76,
+      "max_drawdown_pct": -27.82,
+      "total_rotations": 441,
+      "rebalance_count": 114,
+      "score": 1.8965
+    },
+    "results": [
+      {
+        "index": "NIFTY MIDSMALLCAP 400",
+        "top_n": 20,
+        "exit_rank": 35,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 5442.25,
+        "cagr_pct": 52.76,
+        "max_drawdown_pct": -27.82,
+        "total_rotations": 441,
+        "rebalance_count": 114,
+        "score": 1.8965
+      },
+      {
+        "index": "NIFTY 500",
+        "top_n": 20,
+        "exit_rank": 35,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 4920.53,
+        "cagr_pct": 51.17,
+        "max_drawdown_pct": -27.55,
+        "total_rotations": 508,
+        "rebalance_count": 114,
+        "score": 1.8574
+      },
+      {
+        "index": "NIFTY MIDSMALLCAP 400",
+        "top_n": 15,
+        "exit_rank": 35,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 6305.53,
+        "cagr_pct": 55.11,
+        "max_drawdown_pct": -29.72,
+        "total_rotations": 305,
+        "rebalance_count": 114,
+        "score": 1.8543
+      },
+      {
+        "index": "NIFTY 500",
+        "top_n": 15,
+        "exit_rank": 50,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 5725.77,
+        "cagr_pct": 53.56,
+        "max_drawdown_pct": -29.67,
+        "total_rotations": 271,
+        "rebalance_count": 114,
+        "score": 1.8052
+      },
+      {
+        "index": "NIFTY SMALLCAP 250",
+        "top_n": 12,
+        "exit_rank": 35,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 11084.32,
+        "cagr_pct": 64.5,
+        "max_drawdown_pct": -35.73,
+        "total_rotations": 194,
+        "rebalance_count": 114,
+        "score": 1.8052
+      },
+      {
+        "index": "NIFTY 500",
+        "top_n": 12,
+        "exit_rank": 50,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 6667.97,
+        "cagr_pct": 56.01,
+        "max_drawdown_pct": -31.26,
+        "total_rotations": 212,
+        "rebalance_count": 114,
+        "score": 1.7917
+      },
+      {
+        "index": "NIFTY SMALLCAP 250",
+        "top_n": 10,
+        "exit_rank": 25,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 7184.19,
+        "cagr_pct": 57.23,
+        "max_drawdown_pct": -32.03,
+        "total_rotations": 190,
+        "rebalance_count": 114,
+        "score": 1.7868
+      },
+      {
+        "index": "NIFTY MIDSMALLCAP 400",
+        "top_n": 15,
+        "exit_rank": 25,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 5028.46,
+        "cagr_pct": 51.51,
+        "max_drawdown_pct": -28.83,
+        "total_rotations": 379,
+        "rebalance_count": 114,
+        "score": 1.7867
+      },
+      {
+        "index": "NIFTY 500",
+        "top_n": 12,
+        "exit_rank": 35,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 5711.87,
+        "cagr_pct": 53.52,
+        "max_drawdown_pct": -30.39,
+        "total_rotations": 258,
+        "rebalance_count": 114,
+        "score": 1.7611
+      },
+      {
+        "index": "NIFTY 500",
+        "top_n": 15,
+        "exit_rank": 75,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 5378.71,
+        "cagr_pct": 52.57,
+        "max_drawdown_pct": -29.91,
+        "total_rotations": 226,
+        "rebalance_count": 114,
+        "score": 1.7576
+      },
+      {
+        "index": "NIFTY 500",
+        "top_n": 20,
+        "exit_rank": 50,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 5320.29,
+        "cagr_pct": 52.4,
+        "max_drawdown_pct": -29.84,
+        "total_rotations": 388,
+        "rebalance_count": 114,
+        "score": 1.756
+      },
+      {
+        "index": "NIFTY SMALLCAP 250",
+        "top_n": 20,
+        "exit_rank": 75,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 4562.39,
+        "cagr_pct": 49.99,
+        "max_drawdown_pct": -29.04,
+        "total_rotations": 227,
+        "rebalance_count": 114,
+        "score": 1.7214
+      },
+      {
+        "index": "NIFTY SMALLCAP 250",
+        "top_n": 20,
+        "exit_rank": 50,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 3995.36,
+        "cagr_pct": 47.96,
+        "max_drawdown_pct": -28.03,
+        "total_rotations": 298,
+        "rebalance_count": 114,
+        "score": 1.711
+      },
+      {
+        "index": "NIFTY MIDSMALLCAP 400",
+        "top_n": 20,
+        "exit_rank": 50,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 4978.07,
+        "cagr_pct": 51.35,
+        "max_drawdown_pct": -30.25,
+        "total_rotations": 352,
+        "rebalance_count": 114,
+        "score": 1.6975
+      },
+      {
+        "index": "NIFTY MIDSMALLCAP 400",
+        "top_n": 10,
+        "exit_rank": 50,
+        "rebalance_freq": "monthly",
+        "total_return_pct": 8759.46,
+        "cagr_pct": 60.51,
+        "max_drawdown_pct": -35.8,
+        "total_rotations": 153,
+        "rebalance_count": 114,
+        "score": 1.6902
+      }
+    ],
+    "cached_at": "2026-06-22 09:24"
   }
 }

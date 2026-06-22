@@ -6069,6 +6069,25 @@ def pcr_history() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/vega/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def vega_history() -> EndpointResponse:
+    """Return intraday Call/Put Vega time-series computed from stored active_strikes IV data."""
+    try:
+        from datetime import date as _date
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        date_str = request.args.get('date', _date.today().isoformat())
+        from trading_app.service.open_interest_service import OpenInterestService
+        svc = OpenInterestService(None)
+        data = svc.get_intraday_vega_history(symbol, date_str)
+        return jsonify({'success': True, 'symbol': symbol, 'date': date_str, 'data': data})
+    except Exception as e:
+        logger.error(f'[vega/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/oi-profile/candles', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -7839,6 +7858,399 @@ def get_active_contracts():
         'contracts':      contracts,
         'expiry_options': expiry_options,
     })
+
+
+# ── Algo: Swing Momentum Live Configs ─────────────────────────────────────────
+
+_SM_LIVE_CONFIGS_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'swing_momentum', 'sm_live_configs.json')
+)
+
+
+def _sm_load_live_configs() -> list:
+    if not os.path.exists(_SM_LIVE_CONFIGS_PATH):
+        return []
+    try:
+        with open(_SM_LIVE_CONFIGS_PATH, 'r') as f:
+            return json.load(f).get('configs', [])
+    except Exception:
+        return []
+
+
+def _sm_save_live_configs(configs: list) -> None:
+    os.makedirs(os.path.dirname(_SM_LIVE_CONFIGS_PATH), exist_ok=True)
+    with open(_SM_LIVE_CONFIGS_PATH, 'w') as f:
+        json.dump({'configs': configs}, f, indent=2)
+
+
+def _sm_compute_today_rankings(index_name: str):
+    """Return today's momentum rankings using avg(3M, 6M, 9M) — same as Swing Trade tab.
+
+    Returns (ranked_list, close_df).  ranked_list is sorted descending by score
+    and each entry has: symbol, yf_sym, score, rank, price.
+    Returns (None, None) on data failure.
+    """
+    import math
+    import yfinance as yf
+    from trading_app.service.dynamic_constituents import DynamicConstituentsService
+
+    stocks     = DynamicConstituentsService.get_constituents(index_name)
+    yf_symbols = [f"{s}.NS" for s in stocks]
+
+    today = datetime.today().date()
+    start = today - timedelta(days=310)
+
+    raw = yf.download(yf_symbols, start=str(start),
+                      end=str(today + timedelta(days=1)),
+                      interval='1d', auto_adjust=True, progress=False, threads=True)
+    if raw is None or raw.empty:
+        return None, None
+
+    close_df = (raw[['Close']].copy().rename(columns={'Close': yf_symbols[0]})
+                if len(yf_symbols) == 1 else raw['Close'].copy())
+    close_df = close_df.dropna(how='all')
+    if close_df.empty:
+        return None, None
+
+    def _lookup(days_ago):
+        tgt  = pd.Timestamp(today - timedelta(days=days_ago))
+        avail = close_df.index[close_df.index <= tgt]
+        return close_df.loc[avail[-1]] if len(avail) else pd.Series(dtype=float)
+
+    latest  = close_df.iloc[-1]
+    mo3_ago = _lookup(91)
+    mo6_ago = _lookup(182)
+    mo9_ago = _lookup(273)
+
+    def _pct(base, yf_sym):
+        if base.empty:
+            return None
+        b, p = base.get(yf_sym), latest.get(yf_sym)
+        if b is None or p is None:
+            return None
+        try:
+            bf, pf = float(b), float(p)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(bf) or math.isnan(pf) or bf == 0:
+            return None
+        return (pf - bf) / bf * 100
+
+    ranked = []
+    for sym, yf_sym in zip(stocks, yf_symbols):
+        price = latest.get(yf_sym)
+        try:
+            pf = float(price)
+        except (TypeError, ValueError):
+            continue
+        if price is None or math.isnan(pf):
+            continue
+        if pf > 10_000:
+            continue
+        r3 = _pct(mo3_ago, yf_sym)
+        r6 = _pct(mo6_ago, yf_sym)
+        r9 = _pct(mo9_ago, yf_sym)
+        # Use average of available periods (matches Swing Trade tab logic)
+        # Require at least 2 of 3 periods so ranking stays meaningful
+        avail = [r for r in (r3, r6, r9) if r is not None]
+        if len(avail) < 2:
+            continue
+        ranked.append({'symbol': sym, 'yf_sym': yf_sym,
+                       'score': sum(avail) / len(avail), 'price': round(pf, 2)})
+
+    ranked.sort(key=lambda x: x['score'], reverse=True)
+    for i, s in enumerate(ranked):
+        s['rank'] = i + 1
+
+    return ranked, close_df
+
+
+@api_bp.route('/algo/swing-momentum/configs', methods=['GET'])
+def sm_live_configs_list():
+    return jsonify({'success': True, 'configs': _sm_load_live_configs()})
+
+
+@api_bp.route('/algo/swing-momentum/configs', methods=['POST'])
+def sm_live_configs_add():
+    body = request.get_json() or {}
+    configs  = _sm_load_live_configs()
+    today    = datetime.today().date()
+    index    = body.get('index', 'NIFTY 500')
+    top_n    = int(body.get('top_n', 10))
+    investment = float(body.get('investment', 100000))
+
+    # Immediately go live using today's momentum rankings (no historical simulation)
+    ranked, _ = _sm_compute_today_rankings(index)
+    cash         = investment
+    live_entries = []
+    for s in (ranked or []):
+        if len(live_entries) >= top_n:
+            break
+        price = s['price']
+        if not price or price <= 0:
+            continue
+        remaining_slots = top_n - len(live_entries)
+        per_stock = cash / remaining_slots
+        qty = int(per_stock / price)
+        if qty <= 0:
+            continue
+        cash -= qty * price
+        live_entries.append({
+            'symbol':      s['symbol'],
+            'entry_price': price,
+            'qty':         qty,
+            'entry_date':  str(today),
+        })
+
+    config = {
+        'id':             str(uuid.uuid4())[:8],
+        'label':          body.get('label', ''),
+        'index':          index,
+        'top_n':          top_n,
+        'exit_rank':      int(body.get('exit_rank', 50)),
+        'rebalance_freq': body.get('rebalance_freq', 'monthly'),
+        'investment':     investment,
+        'start_date':     body.get('start_date', '2025-01-01'),
+        'status':         'watching',
+        'added_at':       datetime.now().strftime('%Y-%m-%d %H:%M'),
+        'live_since':     str(today),
+        'live_entries':   live_entries,
+    }
+    configs.append(config)
+    _sm_save_live_configs(configs)
+    return jsonify({'success': True, 'config': config})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>', methods=['DELETE'])
+def sm_live_configs_delete(config_id):
+    configs = _sm_load_live_configs()
+    configs = [c for c in configs if c['id'] != config_id]
+    _sm_save_live_configs(configs)
+    return jsonify({'success': True})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/toggle', methods=['POST'])
+def sm_live_configs_toggle(config_id):
+    configs = _sm_load_live_configs()
+    for c in configs:
+        if c['id'] == config_id:
+            c['status'] = 'paused' if c['status'] == 'watching' else 'watching'
+            break
+    _sm_save_live_configs(configs)
+    return jsonify({'success': True})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/go-live', methods=['POST'])
+def sm_live_go_live(config_id):
+    """Snapshot TODAY's top-N momentum stocks as live entry prices (no historical simulation)."""
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+
+    try:
+        today   = datetime.today().date()
+        top_n   = config['top_n']
+
+        ranked, _ = _sm_compute_today_rankings(config['index'])
+        if not ranked:
+            return jsonify({'success': False, 'error': 'No price data returned for index'}), 502
+
+        if not ranked:
+            return jsonify({'success': False, 'error': 'No stocks ranked — check index name'}), 400
+
+        cash         = config['investment']
+        live_entries = []
+        for s in ranked:
+            if len(live_entries) >= top_n:
+                break
+            price = s['price']
+            if not price or price <= 0:
+                continue
+            remaining_slots = top_n - len(live_entries)
+            per_stock = cash / remaining_slots
+            qty = int(per_stock / price)
+            if qty <= 0:
+                continue
+            cash -= qty * price
+            live_entries.append({
+                'symbol':      s['symbol'],
+                'entry_price': price,
+                'qty':         qty,
+                'entry_date':  str(today),
+            })
+
+        for c in configs:
+            if c['id'] == config_id:
+                c['live_since']   = str(today)
+                c['live_entries'] = live_entries
+                break
+        _sm_save_live_configs(configs)
+
+        return jsonify({'success': True, 'live_since': str(today), 'live_entries': live_entries})
+    except Exception as e:
+        logger.exception(f'SM go-live error for config {config_id}: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/reset-live', methods=['POST'])
+def sm_live_reset(config_id):
+    """Clear live entry prices so the config returns to strategy-view mode."""
+    configs = _sm_load_live_configs()
+    for c in configs:
+        if c['id'] == config_id:
+            c.pop('live_since',   None)
+            c.pop('live_entries', None)
+            break
+    _sm_save_live_configs(configs)
+    return jsonify({'success': True})
+
+
+@api_bp.route('/algo/swing-momentum/signal/<config_id>', methods=['GET'])
+def sm_live_signal(config_id):
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+
+    try:
+        import yfinance as yf
+        today        = datetime.today().date()
+        live_entries = config.get('live_entries')
+
+        # If somehow live_entries are missing, auto-compute and save them now
+        if not live_entries:
+            ranked_init, _ = _sm_compute_today_rankings(config['index'])
+            top_init  = (ranked_init or [])[:config['top_n']]
+            per_stock = config['investment'] / len(top_init) if top_init else config['investment']
+            live_entries = [
+                {'symbol': s['symbol'], 'entry_price': s['price'],
+                 'qty': int(per_stock / s['price']) if s['price'] > 0 else 0,
+                 'entry_date': str(today)}
+                for s in top_init
+            ]
+            for c in configs:
+                if c['id'] == config_id:
+                    c['live_since']   = str(today)
+                    c['live_entries'] = live_entries
+                    break
+            _sm_save_live_configs(configs)
+
+        # ── Always live-tracking mode: no historical simulation ───────────
+        top_n     = config['top_n']
+        exit_rank = config['exit_rank']
+
+        ranked, _ = _sm_compute_today_rankings(config['index'])
+        rank_by_sym = {s['symbol']: s for s in (ranked or [])}
+        held_syms   = {e['symbol'] for e in live_entries}
+
+        # Rebalance preview: what would change at next rebalance (as objects)
+        sell_preview = [
+            {
+                'symbol':       e['symbol'],
+                'current_rank': rank_by_sym.get(e['symbol'], {}).get('rank', '?'),
+                'score':        round(rank_by_sym.get(e['symbol'], {}).get('score', 0), 2),
+                'qty':          e['qty'],
+            }
+            for e in live_entries
+            if rank_by_sym.get(e['symbol'], {}).get('rank', 9999) > exit_rank
+        ]
+        buy_preview = [
+            {
+                'symbol':       s['symbol'],
+                'current_rank': s['rank'],
+                'score':        round(s['score'], 2),
+                'price':        s['price'],
+            }
+            for s in (ranked or [])[:top_n]
+            if s['symbol'] not in held_syms
+        ]
+        rebalance_needed = bool(sell_preview or buy_preview)
+
+        # Next rebalance date
+        if config['rebalance_freq'] == 'weekly':
+            days_fwd = (7 - today.weekday()) % 7 or 7
+            next_reb = str(today + timedelta(days=days_fwd))
+        elif config['rebalance_freq'] == 'quarterly':
+            qm = (((today.month - 1) // 3 + 1) * 3 % 12) + 1
+            qy = today.year + (1 if qm <= today.month else 0)
+            next_reb = str(today.replace(year=qy, month=qm, day=1))
+        else:  # monthly
+            nm = today.month % 12 + 1
+            ny = today.year + (1 if today.month == 12 else 0)
+            next_reb = str(today.replace(year=ny, month=nm, day=1))
+
+        # Fetch current prices for held stocks
+        yf_syms = [f"{e['symbol']}.NS" for e in live_entries]
+        try:
+            px = yf.download(yf_syms, period='5d', interval='1d',
+                             auto_adjust=True, progress=False, threads=True)
+            closes = (px['Close'] if len(yf_syms) > 1
+                      else px[['Close']].rename(columns={'Close': yf_syms[0]}))
+        except Exception:
+            closes = None
+
+        live_holdings  = []
+        total_invested = 0.0
+        total_curr_val = 0.0
+
+        for e in live_entries:
+            yf_sym     = f"{e['symbol']}.NS"
+            curr_price = e['entry_price']
+            if closes is not None:
+                col = closes.get(yf_sym)
+                if col is not None:
+                    clean = col.dropna()
+                    if not clean.empty:
+                        curr_price = round(float(clean.iloc[-1]), 2)
+
+            qty      = e['qty']
+            entry    = e['entry_price']
+            buy_val  = round(entry * qty, 2)
+            curr_val = round(curr_price * qty, 2)
+            pnl_abs  = round(curr_val - buy_val, 2)
+            pnl_pct  = round((curr_price - entry) / entry * 100, 2) if entry else 0
+
+            total_invested += buy_val
+            total_curr_val += curr_val
+            r_info = rank_by_sym.get(e['symbol'], {})
+            live_holdings.append({
+                'symbol':         e['symbol'],
+                'qty':            qty,
+                'entry_date':     e['entry_date'],
+                'entry_price':    entry,
+                'current_price':  curr_price,
+                'buy_value':      buy_val,
+                'current_value':  curr_val,
+                'pnl_abs':        pnl_abs,
+                'pnl_pct':        pnl_pct,
+                'current_rank':   r_info.get('rank', '?'),
+                'momentum_score': round(r_info.get('score', 0), 2),
+            })
+
+        live_holdings.sort(key=lambda h: h['pnl_pct'], reverse=True)
+        unrealised_pnl = round(total_curr_val - total_invested, 2)
+        unrealised_pct = round(unrealised_pnl / total_invested * 100, 2) if total_invested else 0
+
+        return jsonify({
+            'success':          True,
+            'live_mode':        True,
+            'live_since':       config.get('live_since'),
+            'live_holdings':    live_holdings,
+            'holding_count':    len(live_holdings),
+            'total_invested':   round(total_invested, 2),
+            'current_port_val': round(total_curr_val, 2),
+            'unrealised_pnl':   unrealised_pnl,
+            'unrealised_pct':   unrealised_pct,
+            'sell_preview':     sell_preview,
+            'buy_preview':      buy_preview,
+            'next_rebalance':   next_reb,
+            'last_rebalance':   config.get('live_since'),
+            'rebalance_needed': rebalance_needed,
+        })
+    except Exception as e:
+        logger.exception(f'SM live signal error for config {config_id}: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ── Error handlers ────────────────────────────────────────────────────────────

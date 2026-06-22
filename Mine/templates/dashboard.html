@@ -256,6 +256,15 @@
     text-transform: uppercase; letter-spacing: .4px;
 }
 .opt-use-btn:hover, .btn-opt-use:hover { opacity: .8; }
+.btn-sm-golive {
+    padding: 2px 8px; font-size: 9px; font-weight: 700;
+    background: #16a34a; color: #fff;
+    border: none; border-radius: 3px; cursor: pointer;
+    text-transform: uppercase; letter-spacing: .4px;
+    transition: opacity .15s;
+}
+.btn-sm-golive:hover { opacity: .8; }
+.btn-sm-golive:disabled { opacity: .4; cursor: not-allowed; }
 .btn-recalculate {
     padding: 3px 10px; font-size: 9px; font-weight: 600;
     background: transparent; color: var(--oip-metric-lbl);
@@ -272,6 +281,14 @@
     cursor: pointer; transition: all .15s; white-space: nowrap;
 }
 .btn-optimise:hover { background: var(--oip-accent); color: #fff; }
+.btn-sm-golive-main {
+    padding: 5px 14px; font-size: 11px; font-weight: 700;
+    background: #16a34a; color: #fff;
+    border: 1px solid #16a34a; border-radius: 5px;
+    cursor: pointer; transition: all .15s; white-space: nowrap;
+}
+.btn-sm-golive-main:hover:not(:disabled) { background: #15803d; border-color: #15803d; }
+.btn-sm-golive-main:disabled { opacity: .5; cursor: not-allowed; }
 
 /* ── Period Breakdown ───────────────────────────────── */
 .period-breakdown {
@@ -782,6 +799,7 @@ body.ocean-theme .sw-wrap {
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
             <button id="runOptimiseBtn" class="btn-optimise" style="display:none;">⚡ Find Best Params</button>
+            <button id="smGoLiveBtn" class="btn-sm-golive-main" style="display:none;">🚀 Go Live</button>
         </div>
     </div>
 
@@ -1572,6 +1590,30 @@ body.ocean-theme .sw-wrap {
         <div id="pcrTooltip3" class="pcr-tooltip hidden"></div>
       </div>
     </div>
+    <!-- Chart 4: Vega Analysis -->
+    <div class="pcr-section">
+      <div class="pcr-section-header">
+        <div class="pcr-section-title">Vega Analysis</div>
+        <div class="pcr-legend">
+          <span class="pcr-legend-item"><span class="pcr-dot pcr-dot--dash"></span>Synth Future</span>
+          <div class="pcr-oi-metrics">
+            <span class="pcr-oi-metric">
+              <span class="pcr-dot" style="background:#ef4444"></span>
+              <span id="vegaPutVal" class="pcr-oi-val" style="color:#ef4444"></span>
+            </span>
+            <span class="pcr-oi-metric">
+              <span class="pcr-dot" style="background:#22c55e"></span>
+              <span id="vegaCallVal" class="pcr-oi-val" style="color:#22c55e"></span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="pcr-chart-wrap" id="vegaChartWrap">
+        <div id="vegaChart"></div>
+        <div id="vegaTooltip" class="pcr-tooltip hidden"></div>
+      </div>
+    </div>
+
   </div>
 </div><!-- /pcr panel -->
 
@@ -3132,5 +3174,6 @@ function _fiiBuildGrid(title, rows, kind, maxNI, maxAuc) {
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_replay.js') }}?v={{ sv('js/oi_replay.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pcr.js') }}?v={{ sv('js/pcr.js') }}"></script>
+<script src="{{ url_for('static', filename='js/vega.js') }}?v={{ sv('js/vega.js') }}"></script>
 <script src="{{ url_for('static', filename='js/active_contracts.js') }}"></script>
 {% endblock %}

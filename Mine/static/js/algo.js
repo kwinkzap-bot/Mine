@@ -6,7 +6,7 @@ let _rtpStatusTimer    = null;
 let _rtpHistoryTimer   = null;
 let _rtpLastEntryTime  = null;  // tracks last seen entry_time to detect trade changes
 let _rtpLastActiveFlag = false; // tracks last seen active flag
-const _ALGO_TABS = ['straddle', 'rtp'];
+const _ALGO_TABS = ['straddle', 'rtp', 'swing-momentum'];
 
 function algoLoad() {
     const hash = location.hash.replace('#', '');
@@ -26,9 +26,11 @@ function algoSwitch(tab) {
     clearTimeout(_rtpHistoryTimer);
     if (tab === 'straddle') {
         _fetchStatus();
-    } else {
+    } else if (tab === 'rtp') {
         _rtpFetchStatus();
         _rtpFetchHistory();
+    } else if (tab === 'swing-momentum') {
+        _smLiveFetchConfigs();
     }
 }
 
@@ -582,4 +584,312 @@ function _setBusy(btn, label) {
 function _unbusy(btn, label) {
     btn.disabled = false;
     btn.textContent = label || btn._orig || label;
+}
+
+// ── Swing Momentum Live Watch ─────────────────────────────────────────────────
+
+function _smLiveFetchConfigs() {
+    fetch('/api/algo/swing-momentum/configs')
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) return;
+            _smLiveRenderConfigs(d.configs || []);
+        })
+        .catch(() => {});
+}
+
+function _smLiveRenderConfigs(configs) {
+    const badge      = document.getElementById('smLiveBadge');
+    const badgeTxt   = document.getElementById('smLiveBadgeText');
+    const empty      = document.getElementById('smLiveEmpty');
+    const container  = document.getElementById('smLiveConfigsContainer');
+
+    const watching = configs.filter(c => c.status === 'watching').length;
+    badge.className = 'ag-badge ' + (watching > 0 ? 'active' : 'inactive');
+    badgeTxt.textContent = configs.length === 0 ? '0 Configs'
+        : `${watching} Watching` + (configs.length > watching ? ` / ${configs.length - watching} Paused` : '');
+
+    empty.style.display  = configs.length === 0 ? '' : 'none';
+    container.innerHTML  = configs.map(c => _smLiveBuildCard(c)).join('');
+
+    container.querySelectorAll('.sm-live-remove-btn').forEach(btn =>
+        btn.addEventListener('click', e => { e.stopPropagation(); _smLiveRemove(btn.dataset.id); }));
+    container.querySelectorAll('.sm-live-toggle-btn').forEach(btn =>
+        btn.addEventListener('click', e => { e.stopPropagation(); _smLiveToggle(btn.dataset.id, btn); }));
+    container.querySelectorAll('.sm-live-refresh-btn').forEach(btn =>
+        btn.addEventListener('click', e => { e.stopPropagation(); _smSignalLoaded[btn.dataset.id] = false; _smLiveLoadSignal(btn.dataset.id); }));
+    container.querySelectorAll('.sm-live-reinit-btn').forEach(btn =>
+        btn.addEventListener('click', e => { e.stopPropagation(); _smLiveReinit(btn.dataset.id); }));
+    container.querySelectorAll('.sm-live-card-hdr').forEach(hdr =>
+        hdr.addEventListener('click', () => _smLiveExpandToggle(hdr.dataset.id)));
+
+    document.getElementById('smLiveLastUpd').textContent =
+        new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+const _smSignalLoaded = {};   // id → true once signal has been fetched
+
+function _smLiveBuildCard(c) {
+    const isWatching = c.status === 'watching';
+    const statusCls  = isWatching ? 'sm-live-status-watch' : 'sm-live-status-pause';
+    const dotCls     = isWatching ? 'sm-status-dot-watch'  : 'sm-status-dot-pause';
+    const hdrCls     = isWatching ? 'sm-hdr-watching'      : 'sm-hdr-paused';
+    const statusTxt  = isWatching ? 'Watching' : 'Paused';
+    const toggleLbl  = isWatching ? 'Pause'    : 'Watch';
+    const freqLabel  = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly' }[c.rebalance_freq] || c.rebalance_freq;
+    const indexLabel = c.index || '';
+    const inv        = Number(c.investment).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+    return `
+<div class="ag-card sm-live-card" id="sm-card-${c.id}">
+    <div class="sm-live-card-hdr ${hdrCls}" data-id="${c.id}">
+        <span class="sm-chevron" id="sm-chev-${c.id}">&#9654;</span>
+        <div class="sm-live-title-block">
+            <div class="sm-live-label">${indexLabel}</div>
+            <div class="sm-live-subtitle">
+                <span>${freqLabel}</span>
+                <span class="sm-live-subtitle-sep">·</span>
+                <span>Top ${c.top_n}</span>
+                <span class="sm-live-subtitle-sep">·</span>
+                <span>Exit &gt;${c.exit_rank}</span>
+            </div>
+        </div>
+        <span class="sm-live-status-badge ${statusCls}">
+            <span class="sm-status-dot ${dotCls}"></span>${statusTxt}
+        </span>
+        <span class="sm-live-inv-chip">₹${inv}</span>
+        <div class="sm-live-hdr-actions">
+            <button class="ag-btn ag-btn-strikes ag-btn-icon-only sm-live-refresh-btn" data-id="${c.id}" title="Refresh signal">↻</button>
+            <button class="ag-btn ag-btn-strikes sm-live-reinit-btn" data-id="${c.id}" title="Re-initialize live entries with today's rankings">⟳ Re-init</button>
+            <span class="sm-actions-divider"></span>
+            <button class="ag-btn ag-btn-preview sm-live-toggle-btn" data-id="${c.id}">${toggleLbl}</button>
+            <button class="ag-btn ag-btn-exit sm-live-remove-btn" data-id="${c.id}">✕</button>
+        </div>
+    </div>
+    <div class="sm-live-card-body" id="sm-body-${c.id}">
+        <div id="sm-signal-${c.id}" class="sm-live-signal-panel">
+            <div class="sm-signal-loading">Click to expand and load portfolio state…</div>
+        </div>
+    </div>
+</div>`;
+}
+
+function _smLiveExpandToggle(id) {
+    const card = document.getElementById(`sm-card-${id}`);
+    const body = document.getElementById(`sm-body-${id}`);
+    const chev = document.getElementById(`sm-chev-${id}`);
+    if (!card || !body) return;
+
+    const isOpen = card.classList.toggle('sm-card-open');
+    chev.innerHTML = isOpen ? '&#9660;' : '&#9654;';
+
+    if (isOpen && !_smSignalLoaded[id]) {
+        _smSignalLoaded[id] = true;
+        _smLiveLoadSignal(id);
+    }
+}
+
+function _smLiveReinit(id) {
+    if (!confirm('Re-initialize live entries with today\'s rankings?\nThis will replace current entry prices and quantities.')) return;
+    fetch(`/api/algo/swing-momentum/configs/${id}/go-live`, { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (d.success) {
+                _smSignalLoaded[id] = false;
+                _smLiveFetchConfigs();
+            } else {
+                alert('Re-init failed: ' + (d.error || 'Unknown error'));
+            }
+        })
+        .catch(() => alert('Re-init request failed'));
+}
+
+function _smLiveRemove(id) {
+    if (!confirm('Remove this live config?')) return;
+    fetch(`/api/algo/swing-momentum/configs/${id}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(d => { if (d.success) _smLiveFetchConfigs(); })
+        .catch(() => {});
+}
+
+function _smLiveToggle(id, btn) {
+    _setBusy(btn, '…');
+    fetch(`/api/algo/swing-momentum/configs/${id}/toggle`, { method: 'POST' })
+        .then(r => r.json())
+        .then(d => { if (d.success) _smLiveFetchConfigs(); })
+        .catch(() => _unbusy(btn));
+}
+
+function _smLiveLoadSignal(id) {
+    const panel = document.getElementById(`sm-signal-${id}`);
+    if (!panel) return;
+    panel.innerHTML = '<div class="sm-signal-loading">Fetching live prices and momentum rankings…</div>';
+
+    fetch(`/api/algo/swing-momentum/signal/${id}`)
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) {
+                panel.innerHTML = `<div class="sm-signal-error">⚠ ${d.error || 'Failed to compute signal'}</div>`;
+                return;
+            }
+            _smLiveRenderSignal(id, d);
+        })
+        .catch(e => {
+            panel.innerHTML = `<div class="sm-signal-error">⚠ Request failed: ${e}</div>`;
+        });
+}
+
+function _smLiveRenderSignal(id, d) {
+    const panel = document.getElementById(`sm-signal-${id}`);
+    _smRenderLiveMode(id, panel, d);
+}
+
+// ── Live-mode: P&L from real entry prices locked on go-live date ──────────────
+
+function _smRenderLiveMode(id, panel, d) {
+    const holdings  = d.live_holdings || [];
+    const pnlCls    = (d.unrealised_pnl || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+    const pnlSign   = (d.unrealised_pnl || 0) >= 0 ? '+₹' : '-₹';
+    const pnlFmt    = pnlSign + Math.abs(d.unrealised_pnl || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const pnlPct    = ((d.unrealised_pct || 0) >= 0 ? '+' : '') + (d.unrealised_pct || 0).toFixed(1) + '%';
+
+    const holdingsHtml = holdings.length
+        ? `<div class="sm-signal-holdings-scroll">
+            <table class="sm-signal-table sm-holdings-table">
+                <thead><tr>
+                    <th class="sm-th-rank">Rank</th>
+                    <th class="sm-th-score">Avg (3M+6M+9M)/3</th>
+                    <th>Symbol</th><th>Qty</th><th>Entry Date</th>
+                    <th>Entry Price</th><th>Curr Price</th>
+                    <th>Invested</th><th>Curr Value</th>
+                    <th>P&amp;L ₹</th><th>P&amp;L %</th>
+                </tr></thead>
+                <tbody>
+                ${holdings.map((h) => {
+                    const pCls  = h.pnl_pct >= 0 ? 'sm-pos' : 'sm-neg';
+                    const pSign = h.pnl_abs >= 0 ? '+₹' : '-₹';
+                    const pPct  = (h.pnl_pct >= 0 ? '+' : '') + h.pnl_pct.toFixed(1) + '%';
+                    const score = h.momentum_score != null ? (h.momentum_score >= 0 ? '+' : '') + h.momentum_score.toFixed(1) + '%' : '—';
+                    const sCls  = h.momentum_score != null ? (h.momentum_score >= 0 ? 'sm-score-pos' : 'sm-score-neg') : '';
+                    return `<tr>
+                        <td class="sm-td-rank"><span class="sm-rank-pill">${h.current_rank ?? '—'}</span></td>
+                        <td class="sm-td-score ${sCls}">${score}</td>
+                        <td class="sm-col-sym"><strong>${h.symbol}</strong></td>
+                        <td class="sm-col-num">${h.qty}</td>
+                        <td class="sm-td-date">${h.entry_date || '—'}</td>
+                        <td>₹${Number(h.entry_price).toFixed(2)}</td>
+                        <td>₹${Number(h.current_price).toFixed(2)}</td>
+                        <td>₹${Number(h.buy_value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                        <td>₹${Number(h.current_value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                        <td class="${pCls} sm-pnl-abs">${pSign}${Math.abs(h.pnl_abs).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                        <td class="${pCls} sm-pnl-pct">${pPct}</td>
+                    </tr>`;
+                }).join('')}
+                </tbody>
+            </table></div>`
+        : '<div class="ag-empty">No live holdings</div>';
+
+    panel.innerHTML = `
+<div class="sm-live-stats-grid">
+    <div class="sm-live-stat-card sm-live-stat-since">
+        <div class="sm-live-stat-label"><span class="sm-live-dot-xs"></span>Live Since</div>
+        <div class="sm-live-stat-val">${d.live_since || '—'}</div>
+    </div>
+    <div class="sm-live-stat-card">
+        <div class="sm-live-stat-label">Holdings</div>
+        <div class="sm-live-stat-val">${holdings.length} stocks</div>
+    </div>
+    <div class="sm-live-stat-card">
+        <div class="sm-live-stat-label">Total Invested</div>
+        <div class="sm-live-stat-val">${_smFmtInr(d.total_invested)}</div>
+    </div>
+    <div class="sm-live-stat-card">
+        <div class="sm-live-stat-label">Current Value</div>
+        <div class="sm-live-stat-val">${_smFmtInr(d.current_port_val)}</div>
+    </div>
+    <div class="sm-live-stat-card sm-live-stat-pnl">
+        <div class="sm-live-stat-label">Unrealised P&amp;L</div>
+        <div class="sm-live-stat-val ${pnlCls}">${pnlFmt} <span class="sm-live-stat-pct">${pnlPct}</span></div>
+    </div>
+    <div class="sm-live-stat-card sm-live-stat-rebal">
+        <div class="sm-live-stat-label">Next Rebalance</div>
+        <div class="sm-live-stat-val sm-warn">${d.next_rebalance || '—'}</div>
+    </div>
+</div>
+
+<div class="sm-signal-section-title">Live Holdings — ${holdings.length} stocks</div>
+${holdingsHtml}
+
+${_smRebalPreviewHtml(d)}`;
+}
+
+// ── Shared: rebalance preview section ─────────────────────────────────────────
+
+function _smRebalPreviewHtml(d) {
+    const sellList = d.sell_preview || [];
+    const buyList  = d.buy_preview  || [];
+
+    const statusCls  = d.rebalance_needed ? 'sm-rebal-status-due' : 'sm-rebal-status-ok';
+    const statusTxt  = d.rebalance_needed
+        ? `${sellList.length} sell · ${buyList.length} buy`
+        : 'No changes expected';
+
+    const sellHtml = sellList.length
+        ? sellList.map(s => {
+            const sc = s.score != null ? (s.score >= 0 ? '+' : '') + Number(s.score).toFixed(1) + '%' : '—';
+            return `<div class="sm-rebal-row sm-rebal-row-sell">
+                <span class="sm-rebal-row-arrow">↓</span>
+                <span class="sm-rebal-row-sym">${s.symbol}</span>
+                <span class="sm-rank-pill sm-rank-pill-sell">${s.current_rank}</span>
+                <span class="sm-rebal-row-score sm-neg">${sc}</span>
+                <span class="sm-rebal-row-detail">${s.qty} shares</span>
+            </div>`;
+          }).join('')
+        : '<div class="sm-no-action">Nothing to sell</div>';
+
+    const buyHtml = buyList.length
+        ? buyList.map(b => {
+            const sc = b.score != null ? (b.score >= 0 ? '+' : '') + Number(b.score).toFixed(1) + '%' : '—';
+            return `<div class="sm-rebal-row sm-rebal-row-buy">
+                <span class="sm-rebal-row-arrow">↑</span>
+                <span class="sm-rebal-row-sym">${b.symbol}</span>
+                <span class="sm-rank-pill sm-rank-pill-buy">${b.current_rank}</span>
+                <span class="sm-rebal-row-score sm-pos">${sc}</span>
+                <span class="sm-rebal-row-detail">₹${Number(b.price).toFixed(0)}</span>
+            </div>`;
+          }).join('')
+        : '<div class="sm-no-action">No new entries</div>';
+
+    return `
+<div class="sm-rebal-section">
+    <div class="sm-rebal-header">
+        <div class="sm-rebal-header-left">
+            <span class="sm-rebal-header-title">Next Rebalance Preview</span>
+            <span class="sm-rebal-header-date">${d.next_rebalance || '—'}</span>
+        </div>
+        <span class="sm-rebal-status ${statusCls}">${statusTxt}</span>
+    </div>
+    <div class="sm-rebal-grid">
+        <div class="sm-rebal-col sm-rebal-col-sell">
+            <div class="sm-rebal-col-hdr sm-sell-hdr">
+                <span class="sm-rebal-col-icon">↓</span> SELL
+                ${sellList.length ? `<span class="sm-rebal-col-count">${sellList.length}</span>` : ''}
+            </div>
+            <div class="sm-action-list">${sellHtml}</div>
+        </div>
+        <div class="sm-rebal-col sm-rebal-col-buy">
+            <div class="sm-rebal-col-hdr sm-buy-hdr">
+                <span class="sm-rebal-col-icon">↑</span> BUY
+                ${buyList.length ? `<span class="sm-rebal-col-count">${buyList.length}</span>` : ''}
+            </div>
+            <div class="sm-action-list">${buyHtml}</div>
+        </div>
+    </div>
+</div>`;
+}
+
+
+function _smFmtInr(v) {
+    if (v == null) return '—';
+    return '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 }
