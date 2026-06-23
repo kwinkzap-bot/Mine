@@ -599,6 +599,10 @@ function _smLiveFetchConfigs() {
 }
 
 function _smLiveRenderConfigs(configs) {
+    // Clear per-config P&L so the header total resets for this render
+    Object.keys(_smPnlByConfig).forEach(k => delete _smPnlByConfig[k]);
+    _smUpdateTotalPnl();
+
     const badge      = document.getElementById('smLiveBadge');
     const badgeTxt   = document.getElementById('smLiveBadgeText');
     const empty      = document.getElementById('smLiveEmpty');
@@ -617,7 +621,10 @@ function _smLiveRenderConfigs(configs) {
     container.querySelectorAll('.sm-live-toggle-btn').forEach(btn =>
         btn.addEventListener('click', e => { e.stopPropagation(); _smLiveToggle(btn.dataset.id, btn); }));
     container.querySelectorAll('.sm-live-refresh-btn').forEach(btn =>
-        btn.addEventListener('click', e => { e.stopPropagation(); _smSignalLoaded[btn.dataset.id] = false; _smLiveLoadSignal(btn.dataset.id); }));
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            _smLiveLoadSignal(btn.dataset.id);
+        }));
     container.querySelectorAll('.sm-live-reinit-btn').forEach(btn =>
         btn.addEventListener('click', e => { e.stopPropagation(); _smLiveReinit(btn.dataset.id); }));
     container.querySelectorAll('.sm-live-card-hdr').forEach(hdr =>
@@ -625,20 +632,40 @@ function _smLiveRenderConfigs(configs) {
 
     document.getElementById('smLiveLastUpd').textContent =
         new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Kick off background prefetch for every watching config so data is
+    // ready before the user expands the card.
+    configs.filter(c => c.status === 'watching').forEach(c => _smPrefetch(c.id));
 }
 
-const _smSignalLoaded = {};   // id → true once signal has been fetched
+// Lazy-load cache: id → { signal: Promise, rankings: Promise, ts: ms }
+const _smCache = {};
+const _SM_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Per-config P&L map for header total
+const _smPnlByConfig = {};
+
+function _smUpdateTotalPnl() {
+    const el = document.getElementById('smLiveTotalPnl');
+    if (!el) return;
+    const values = Object.values(_smPnlByConfig);
+    if (!values.length) { el.className = 'sm-total-pnl-chip'; el.textContent = ''; return; }
+    const total  = values.reduce((s, v) => s + v, 0);
+    const isPos  = total >= 0;
+    const sign   = isPos ? '+₹' : '-₹';
+    el.className = 'sm-total-pnl-chip sm-total-pnl-loaded ' + (isPos ? 'sm-tpnl-pos' : 'sm-tpnl-neg');
+    el.textContent = sign + Math.abs(total).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
 
 function _smLiveBuildCard(c) {
     const isWatching = c.status === 'watching';
-    const statusCls  = isWatching ? 'sm-live-status-watch' : 'sm-live-status-pause';
-    const dotCls     = isWatching ? 'sm-status-dot-watch'  : 'sm-status-dot-pause';
-    const hdrCls     = isWatching ? 'sm-hdr-watching'      : 'sm-hdr-paused';
-    const statusTxt  = isWatching ? 'Watching' : 'Paused';
-    const toggleLbl  = isWatching ? 'Pause'    : 'Watch';
+    const hdrCls     = isWatching ? 'sm-hdr-watching' : 'sm-hdr-paused';
+    const toggleLbl  = isWatching ? 'Pause'               : 'Watch';
     const freqLabel  = { weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly' }[c.rebalance_freq] || c.rebalance_freq;
     const indexLabel = c.index || '';
     const inv        = Number(c.investment).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+    const liveSince = c.live_since || '—';
 
     return `
 <div class="ag-card sm-live-card" id="sm-card-${c.id}">
@@ -654,9 +681,7 @@ function _smLiveBuildCard(c) {
                 <span>Exit &gt;${c.exit_rank}</span>
             </div>
         </div>
-        <span class="sm-live-status-badge ${statusCls}">
-            <span class="sm-status-dot ${dotCls}"></span>${statusTxt}
-        </span>
+        <div class="sm-hdr-pnl" id="sm-hdr-pnl-${c.id}"></div>
         <span class="sm-live-inv-chip">₹${inv}</span>
         <div class="sm-live-hdr-actions">
             <button class="ag-btn ag-btn-strikes ag-btn-icon-only sm-live-refresh-btn" data-id="${c.id}" title="Refresh signal">↻</button>
@@ -666,6 +691,15 @@ function _smLiveBuildCard(c) {
             <button class="ag-btn ag-btn-exit sm-live-remove-btn" data-id="${c.id}">✕</button>
         </div>
     </div>
+    <div class="sm-card-meta-row" id="sm-meta-${c.id}">
+        <span class="sm-meta-item" id="sm-meta-dep-${c.id}">Deployed —</span>
+        <span class="sm-meta-sep">·</span>
+        <span class="sm-meta-item" id="sm-meta-cur-${c.id}">Current —</span>
+        <span class="sm-meta-sep">·</span>
+        <span class="sm-meta-item" id="sm-meta-reb-${c.id}">Rebal —</span>
+        <span class="sm-meta-sep">·</span>
+        <span class="sm-meta-since">Live since ${liveSince}</span>
+    </div>
     <div class="sm-live-card-body" id="sm-body-${c.id}">
         <div id="sm-signal-${c.id}" class="sm-live-signal-panel">
             <div class="sm-signal-loading">Click to expand and load portfolio state…</div>
@@ -674,28 +708,13 @@ function _smLiveBuildCard(c) {
 </div>`;
 }
 
-function _smLiveExpandToggle(id) {
-    const card = document.getElementById(`sm-card-${id}`);
-    const body = document.getElementById(`sm-body-${id}`);
-    const chev = document.getElementById(`sm-chev-${id}`);
-    if (!card || !body) return;
-
-    const isOpen = card.classList.toggle('sm-card-open');
-    chev.innerHTML = isOpen ? '&#9660;' : '&#9654;';
-
-    if (isOpen && !_smSignalLoaded[id]) {
-        _smSignalLoaded[id] = true;
-        _smLiveLoadSignal(id);
-    }
-}
-
 function _smLiveReinit(id) {
     if (!confirm('Re-initialize live entries with today\'s rankings?\nThis will replace current entry prices and quantities.')) return;
     fetch(`/api/algo/swing-momentum/configs/${id}/go-live`, { method: 'POST' })
         .then(r => r.json())
         .then(d => {
             if (d.success) {
-                _smSignalLoaded[id] = false;
+                _smInvalidateCache(id);
                 _smLiveFetchConfigs();
             } else {
                 alert('Re-init failed: ' + (d.error || 'Unknown error'));
@@ -720,23 +739,147 @@ function _smLiveToggle(id, btn) {
         .catch(() => _unbusy(btn));
 }
 
-function _smLiveLoadSignal(id) {
+// ── Lazy-load prefetch ────────────────────────────────────────────────────────
+// Both API calls start in the background as soon as cards render.
+// _smLiveExpandToggle just awaits the already-in-flight promises.
+
+function _smUpdateMetaRow(id, d) {
+    if (!d?.success) return;
+    const dep = document.getElementById(`sm-meta-dep-${id}`);
+    const cur = document.getElementById(`sm-meta-cur-${id}`);
+    const reb = document.getElementById(`sm-meta-reb-${id}`);
+    if (dep) dep.textContent = 'Deployed ' + _smFmtInr(d.total_invested || 0);
+    if (cur) {
+        cur.textContent = 'Current ' + _smFmtInr(d.current_port_val || 0);
+        cur.className   = 'sm-meta-item ' + (d.unrealised_pnl >= 0 ? 'sm-meta-pos' : 'sm-meta-neg');
+    }
+    if (reb) reb.textContent = 'Rebal ' + (d.next_rebalance || '—');
+    _smPnlByConfig[id] = d.unrealised_pnl || 0;
+    _smUpdateTotalPnl();
+}
+
+function _smUpdateHdrPnl(id, d) {
+    const el = document.getElementById(`sm-hdr-pnl-${id}`);
+    if (!el || !d?.success) return;
+    const pnlVal  = d.unrealised_pnl || 0;
+    const pnlCls  = pnlVal >= 0 ? 'ag-pos' : 'ag-neg';
+    const pnlSign = pnlVal >= 0 ? '+₹' : '-₹';
+    const pnlFmt  = pnlSign + Math.abs(pnlVal).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const pnlPct  = ((d.unrealised_pct || 0) >= 0 ? '+' : '') + (d.unrealised_pct || 0).toFixed(1) + '%';
+    el.className  = `sm-hdr-pnl sm-hdr-pnl-loaded ${pnlCls}`;
+    el.innerHTML  = `${pnlFmt} <span class="sm-hdr-pnl-pct">${pnlPct}</span>`;
+}
+
+function _smPrefetch(id, force = false) {
+    const existing = _smCache[id];
+    if (!force && existing && (Date.now() - existing.ts) < _SM_CACHE_TTL_MS) {
+        // Cache is fresh — just re-apply the P&L and meta row to the (possibly re-rendered) header
+        existing.signal.then(d => { _smUpdateHdrPnl(id, d); _smUpdateMetaRow(id, d); });
+        return;
+    }
+
+    // Signal (fast: Fyers LTP or yfinance fallback)
+    const signalP = fetch(`/api/algo/swing-momentum/signal/${id}`)
+        .then(r => r.json())
+        .then(d => { _smUpdateHdrPnl(id, d); _smUpdateMetaRow(id, d); return d; })
+        .catch(() => null);
+
+    // Rankings (slow: 500 stocks, server-side 15-min cache)
+    const rankingsP = fetch(`/api/algo/swing-momentum/signal/${id}/rankings`)
+        .then(r => r.json())
+        .catch(() => null);
+
+    _smCache[id] = { signal: signalP, rankings: rankingsP, ts: Date.now() };
+}
+
+function _smInvalidateCache(id) {
+    delete _smCache[id];
+}
+
+function _smLiveExpandToggle(id) {
+    const card = document.getElementById(`sm-card-${id}`);
+    if (!card) return;
+
+    const isOpen = card.classList.toggle('sm-card-open');
+
+    if (!isOpen) return;
+
     const panel = document.getElementById(`sm-signal-${id}`);
     if (!panel) return;
-    panel.innerHTML = '<div class="sm-signal-loading">Fetching live prices and momentum rankings…</div>';
 
-    fetch(`/api/algo/swing-momentum/signal/${id}`)
-        .then(r => r.json())
-        .then(d => {
-            if (!d.success) {
-                panel.innerHTML = `<div class="sm-signal-error">⚠ ${d.error || 'Failed to compute signal'}</div>`;
+    const cached = _smCache[id];
+    if (!cached) {
+        // Not prefetched yet (e.g. paused config) — fetch now
+        panel.innerHTML = '<div class="sm-signal-loading">Fetching live prices…</div>';
+        _smPrefetch(id);
+    }
+
+    // Await signal (may already be resolved)
+    const entry = _smCache[id];
+    panel.innerHTML = '<div class="sm-signal-loading">Fetching live prices…</div>';
+    entry.signal.then(d => {
+        if (!d || !d.success) {
+            panel.innerHTML = `<div class="sm-signal-error">⚠ ${d?.error || 'Failed to load signal'}</div>`;
+            return;
+        }
+        _smLiveRenderSignal(id, d);
+
+        // Await rankings (may already be resolved)
+        entry.rankings.then(r => {
+            if (!r || !r.success) return;
+            _smApplyRankings(id, r);
+        });
+    });
+}
+
+function _smApplyRankings(id, d) {
+    const ranks = d.holding_ranks || {};
+
+    Object.entries(ranks).forEach(([sym, info]) => {
+        const row = document.querySelector(`#sm-signal-${id} tr[data-sym="${sym}"]`);
+        if (!row) return;
+        row.dataset.score = info.momentum_score ?? -9999;
+        const rankCell  = row.querySelector('.sm-rank-cell');
+        const scoreCell = row.querySelector('.sm-score-cell');
+        if (rankCell) rankCell.textContent = info.current_rank ?? '—';
+        if (scoreCell) {
+            const score = info.momentum_score;
+            scoreCell.textContent = score != null
+                ? (score >= 0 ? '+' : '') + score.toFixed(1) + '%' : '—';
+            scoreCell.className = 'sm-td-score sm-score-cell ' +
+                (score != null ? (score >= 0 ? 'sm-score-pos' : 'sm-score-neg') : '');
+        }
+    });
+
+    // Re-sort by momentum score descending
+    const tbody = document.querySelector(`#sm-signal-${id} .sm-holdings-table tbody`);
+    if (tbody) {
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        rows.sort((a, b) => parseFloat(b.dataset.score || -9999) - parseFloat(a.dataset.score || -9999));
+        rows.forEach(r => tbody.appendChild(r));
+    }
+
+    // Fill rebalance preview
+    const wrap = document.getElementById(`sm-rebal-preview-${id}`);
+    if (wrap) wrap.innerHTML = _smRebalPreviewHtml(d);
+}
+
+function _smLiveLoadSignal(id) {
+    _smInvalidateCache(id);
+    _smPrefetch(id, true);
+    if (document.getElementById(`sm-card-${id}`)?.classList.contains('sm-card-open')) {
+        // Re-render immediately with fresh fetch
+        const panel = document.getElementById(`sm-signal-${id}`);
+        if (panel) panel.innerHTML = '<div class="sm-signal-loading">Refreshing…</div>';
+        _smCache[id].signal.then(d => {
+            if (!d || !d.success) {
+                if (panel) panel.innerHTML = `<div class="sm-signal-error">⚠ ${d?.error || 'Failed'}</div>`;
                 return;
             }
             _smLiveRenderSignal(id, d);
-        })
-        .catch(e => {
-            panel.innerHTML = `<div class="sm-signal-error">⚠ Request failed: ${e}</div>`;
+            _smCache[id].rankings.then(r => { if (r?.success) _smApplyRankings(id, r); });
         });
+    }
 }
 
 function _smLiveRenderSignal(id, d) {
@@ -744,14 +887,22 @@ function _smLiveRenderSignal(id, d) {
     _smRenderLiveMode(id, panel, d);
 }
 
+const _smSipLogs = {};   // id → log array (used by popup)
+
 // ── Live-mode: P&L from real entry prices locked on go-live date ──────────────
 
 function _smRenderLiveMode(id, panel, d) {
-    const holdings  = d.live_holdings || [];
-    const pnlCls    = (d.unrealised_pnl || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-    const pnlSign   = (d.unrealised_pnl || 0) >= 0 ? '+₹' : '-₹';
-    const pnlFmt    = pnlSign + Math.abs(d.unrealised_pnl || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-    const pnlPct    = ((d.unrealised_pct || 0) >= 0 ? '+' : '') + (d.unrealised_pct || 0).toFixed(1) + '%';
+    const holdings   = d.live_holdings || [];
+    const pnlVal     = d.unrealised_pnl || 0;
+    const pnlCls     = pnlVal >= 0 ? 'ag-pos' : 'ag-neg';
+    const pnlSign    = pnlVal >= 0 ? '+₹' : '-₹';
+    const pnlFmt     = pnlSign + Math.abs(pnlVal).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const pnlPct     = ((d.unrealised_pct || 0) >= 0 ? '+' : '') + (d.unrealised_pct || 0).toFixed(1) + '%';
+
+    const cfgInv     = d.configured_investment || 0;
+    const sipLog     = d.monthly_investment_log || [];
+    const totalSip   = d.total_sip_added || 0;
+    _smSipLogs[id]   = sipLog;
 
     const holdingsHtml = holdings.length
         ? `<div class="sm-signal-holdings-scroll">
@@ -769,11 +920,9 @@ function _smRenderLiveMode(id, panel, d) {
                     const pCls  = h.pnl_pct >= 0 ? 'sm-pos' : 'sm-neg';
                     const pSign = h.pnl_abs >= 0 ? '+₹' : '-₹';
                     const pPct  = (h.pnl_pct >= 0 ? '+' : '') + h.pnl_pct.toFixed(1) + '%';
-                    const score = h.momentum_score != null ? (h.momentum_score >= 0 ? '+' : '') + h.momentum_score.toFixed(1) + '%' : '—';
-                    const sCls  = h.momentum_score != null ? (h.momentum_score >= 0 ? 'sm-score-pos' : 'sm-score-neg') : '';
-                    return `<tr>
-                        <td class="sm-td-rank"><span class="sm-rank-pill">${h.current_rank ?? '—'}</span></td>
-                        <td class="sm-td-score ${sCls}">${score}</td>
+                    return `<tr data-sym="${h.symbol}">
+                        <td class="sm-td-rank"><span class="sm-rank-pill sm-rank-cell">—</span></td>
+                        <td class="sm-td-score sm-score-cell" style="color:var(--ag-text-3)">…</td>
                         <td class="sm-col-sym"><strong>${h.symbol}</strong></td>
                         <td class="sm-col-num">${h.qty}</td>
                         <td class="sm-td-date">${h.entry_date || '—'}</td>
@@ -790,37 +939,166 @@ function _smRenderLiveMode(id, panel, d) {
         : '<div class="ag-empty">No live holdings</div>';
 
     panel.innerHTML = `
-<div class="sm-live-stats-grid">
-    <div class="sm-live-stat-card sm-live-stat-since">
-        <div class="sm-live-stat-label"><span class="sm-live-dot-xs"></span>Live Since</div>
-        <div class="sm-live-stat-val">${d.live_since || '—'}</div>
+<!-- ── Compact action bar: Capital + SIP ── -->
+<div class="sm-action-bar">
+    <div class="sm-ab-capital">
+        <span class="sm-ab-label">Capital</span>
+        <span class="sm-ab-val" id="sm-cfg-inv-${id}">${_smFmtInr(cfgInv)}</span>
+        <button class="sm-edit-btn" onclick="_smToggleEditInv('${id}', ${cfgInv})" title="Edit capital">✎</button>
+        ${totalSip > 0 ? `<span class="sm-ab-sip-added">+${_smFmtInr(totalSip)} SIP</span>` : ''}
     </div>
-    <div class="sm-live-stat-card">
-        <div class="sm-live-stat-label">Holdings</div>
-        <div class="sm-live-stat-val">${holdings.length} stocks</div>
-    </div>
-    <div class="sm-live-stat-card">
-        <div class="sm-live-stat-label">Total Invested</div>
-        <div class="sm-live-stat-val">${_smFmtInr(d.total_invested)}</div>
-    </div>
-    <div class="sm-live-stat-card">
-        <div class="sm-live-stat-label">Current Value</div>
-        <div class="sm-live-stat-val">${_smFmtInr(d.current_port_val)}</div>
-    </div>
-    <div class="sm-live-stat-card sm-live-stat-pnl">
-        <div class="sm-live-stat-label">Unrealised P&amp;L</div>
-        <div class="sm-live-stat-val ${pnlCls}">${pnlFmt} <span class="sm-live-stat-pct">${pnlPct}</span></div>
-    </div>
-    <div class="sm-live-stat-card sm-live-stat-rebal">
-        <div class="sm-live-stat-label">Next Rebalance</div>
-        <div class="sm-live-stat-val sm-warn">${d.next_rebalance || '—'}</div>
+    <span class="sm-ab-divider"></span>
+    <div class="sm-ab-sip">
+        <span class="sm-ab-label">SIP</span>
+        <input type="number" id="sm-sip-amount-${id}" step="500" min="0" placeholder="Amount ₹" class="sm-ab-input sm-sip-amount-input">
+        <input type="text"   id="sm-sip-note-${id}"   placeholder="Note"          class="sm-ab-input sm-sip-note-input">
+        <button class="ag-btn ag-btn-preview sm-ab-btn" onclick="_smRecordSip('${id}')">+ Add</button>
+        ${sipLog.length ? `<button class="sm-history-btn sm-ab-btn" onclick="_smShowSipHistory('${id}')">History (${sipLog.length})</button>` : ''}
     </div>
 </div>
+<div id="sm-inv-edit-form-${id}" style="display:none" class="sm-inline-edit-form">
+    <input type="number" id="sm-inv-input-${id}" value="${cfgInv}" step="5000" min="1000" class="sm-ab-input" style="width:130px">
+    <button class="ag-btn ag-btn-preview sm-ab-btn" onclick="_smSaveInv('${id}')">Save</button>
+    <button class="ag-btn sm-ab-btn" onclick="_smToggleEditInv('${id}', null)">Cancel</button>
+</div>
 
-<div class="sm-signal-section-title">Live Holdings — ${holdings.length} stocks</div>
+<div class="sm-signal-section-title">
+    <span class="sm-live-dot-xs"></span>
+    Live Holdings &mdash; ${holdings.length} stocks &mdash; ${d.live_since || ''}
+</div>
 ${holdingsHtml}
 
-${_smRebalPreviewHtml(d)}`;
+<div id="sm-rebal-preview-${id}" class="sm-rebal-preview-wrap">
+    <div class="sm-signal-loading" style="font-size:0.78rem;padding:8px 0">Loading momentum rankings…</div>
+</div>`;
+}
+
+function _smShowSipHistory(id) {
+    const log   = _smSipLogs[id] || [];
+    const existing = document.getElementById('sm-sip-history-modal');
+    if (existing) existing.remove();
+
+    const total   = log.reduce((s, e) => s + (e.amount || 0), 0);
+    const avg     = log.length ? Math.round(total / log.length) : 0;
+    const fmtInr  = v => '₹' + Math.round(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+    const bodyHtml = log.length
+        ? [...log].reverse().map((e, i) => `
+            <tr class="${i % 2 === 0 ? 'sm-mrow-even' : 'sm-mrow-odd'}">
+                <td class="sm-mcell sm-mcell-date">
+                    <span class="sm-mdate-icon">&#128197;</span>${e.date}
+                </td>
+                <td class="sm-mcell sm-mcell-amt">${fmtInr(e.amount)}</td>
+                <td class="sm-mcell sm-mcell-note">${e.note || '<span class="sm-mdash">—</span>'}</td>
+            </tr>`).join('')
+        : `<tr><td colspan="3" class="sm-mcell" style="text-align:center;padding:28px 0;color:var(--ag-text-3)">No entries recorded yet</td></tr>`;
+
+    const modal = document.createElement('div');
+    modal.id = 'sm-sip-history-modal';
+    modal.className = 'sm-modal-overlay';
+    modal.innerHTML = `
+<div class="sm-modal-box">
+
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">SIP History</span>
+            <span class="sm-modal-subtitle">Recorded investments over time</span>
+        </div>
+        <button class="sm-modal-close" onclick="document.getElementById('sm-sip-history-modal').remove()" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+
+    <div class="sm-modal-stats">
+        <div class="sm-mstat">
+            <span class="sm-mstat-lbl">Total Invested</span>
+            <span class="sm-mstat-val sm-mstat-green">${fmtInr(total)}</span>
+        </div>
+        <div class="sm-mstat-div"></div>
+        <div class="sm-mstat">
+            <span class="sm-mstat-lbl">Entries</span>
+            <span class="sm-mstat-val">${log.length}</span>
+        </div>
+        <div class="sm-mstat-div"></div>
+        <div class="sm-mstat">
+            <span class="sm-mstat-lbl">Avg / Entry</span>
+            <span class="sm-mstat-val">${avg ? fmtInr(avg) : '—'}</span>
+        </div>
+    </div>
+
+    <div class="sm-modal-table-wrap">
+        <table class="sm-modal-table">
+            <thead>
+                <tr>
+                    <th class="sm-mth">Date</th>
+                    <th class="sm-mth sm-mth-r">Amount</th>
+                    <th class="sm-mth">Note</th>
+                </tr>
+            </thead>
+            <tbody>${bodyHtml}</tbody>
+        </table>
+    </div>
+
+    <div class="sm-modal-footer">
+        <span class="sm-mfooter-lbl">Total invested</span>
+        <span class="sm-mfooter-val">${fmtInr(total)}</span>
+    </div>
+
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+}
+
+function _smToggleEditInv(id, currentVal) {
+    const form  = document.getElementById(`sm-inv-edit-form-${id}`);
+    const input = document.getElementById(`sm-inv-input-${id}`);
+    if (!form) return;
+    const isOpen = form.style.display !== 'none';
+    form.style.display = isOpen ? 'none' : 'flex';
+    if (!isOpen && currentVal != null && input) input.value = currentVal;
+}
+
+function _smSaveInv(id) {
+    const input = document.getElementById(`sm-inv-input-${id}`);
+    const val   = parseFloat(input?.value);
+    if (!val || val <= 0) return;
+    fetch(`/api/algo/swing-momentum/configs/${id}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ investment: val }),
+    }).then(r => r.json()).then(d => {
+        if (!d.success) return;
+        const chip = document.getElementById(`sm-cfg-inv-${id}`);
+        if (chip) chip.textContent = _smFmtInr(val);
+        // also update header chip
+        const hdrChip = document.querySelector(`#sm-card-${id} .sm-live-inv-chip`);
+        if (hdrChip) hdrChip.textContent = '₹' + Math.round(val).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+        _smToggleEditInv(id, null);
+        _smLiveFetchConfigs();
+    });
+}
+
+
+function _smRecordSip(id) {
+    const amtEl  = document.getElementById(`sm-sip-amount-${id}`);
+    const noteEl = document.getElementById(`sm-sip-note-${id}`);
+    const amt    = parseFloat(amtEl?.value);
+    if (!amt || amt <= 0) { window.showNotification && window.showNotification('Enter a valid amount', 'error'); return; }
+    const today  = new Date().toISOString().split('T')[0];
+    fetch(`/api/algo/swing-momentum/configs/${id}/monthly-invest`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ amount: amt, date: today, note: noteEl?.value || '' }),
+    }).then(r => r.json()).then(d => {
+        if (!d.success) return;
+        window.showNotification && window.showNotification('Investment recorded', 'success');
+        if (amtEl)  amtEl.value  = '';
+        if (noteEl) noteEl.value = '';
+        _smLiveLoadSignal(id);
+    });
 }
 
 // ── Shared: rebalance preview section ─────────────────────────────────────────

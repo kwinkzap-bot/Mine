@@ -13,7 +13,6 @@ show30mCPR  = input.bool(true,  title="30 min",    group="Multi CPR", inline="mc
 show1hCPR   = input.bool(true,  title="1 Hour",    group="Multi CPR", inline="mcpr_tfs")
 showAllSMAs = input(true, "Show All Moving Averages")
 enableIndicator = input.bool(false, "Enable Indicator", group = "Appearance")
-carmarilla = input(true, title="Show pivot R3 and S3")
 showSMA9 = input(true, "Show SMA 9", inline="sma9")
 EMA9 = input.int(9, "", inline="sma9")
 showSMA20 = input(true, "Show SMA 20", inline="sma20")
@@ -58,8 +57,9 @@ kind = input.string(title="Type", defval="Camarilla", options=[TRADITIONAL, FIBO
 pivot_time_frame = input.string(title="Pivots Timeframe", defval=AUTO, options=[AUTO, DAILY, WEEKLY, MONTHLY, QUARTERLY, YEARLY, BIYEARLY, TRIYEARLY, QUINQUENNIALLY, DECENNIALLY])
 look_back = input.int(title="Number of Pivots Back", defval=15, minval=1, maxval=5000, tooltip="Pine Script allows max 500 line objects. Each pivot uses ~15 lines by default (~33 pivots max). Enable 'CPR Only in History' for ~160 pivots, or disable R/S and PDH/PDL toggles for ~50 pivots.")
 hist_cpr_only  = input.bool(false, "Historical CPR Lines Only (allows more pivots back)", tooltip="When ON, only P/BC/TC are drawn for historical pivots (~160 pivots max). When OFF, all R/S/PDH/PDL lines are drawn (~33 pivots max).")
-hist_show_rs   = input.bool(true,  "Show R/S Levels in History",  tooltip="Disable to allow ~50 pivots back instead of ~33.")
-hist_show_pdhl = input.bool(true,  "Show PDH/PDL in History",      tooltip="Disable to save 2 lines per pivot.")
+show_resistance = input.bool(true, "Show R1-R3", inline="show_rs")
+show_support    = input.bool(true, "Show S1-S3", inline="show_rs")
+hist_show_pdhl  = input.bool(true, "Show PDH/PDL in History", tooltip="Disable to save 2 lines per pivot.")
 is_daily_based = input.bool(title="Use Daily-based Values", defval=true, tooltip="When this option is unchecked, Pivot Points will use intraday data while calculating on intraday charts. If Extended Hours are displayed on the chart, they will be taken into account during the pivot level calculation. If intraday OHLC values are different from daily-based values (normal for stocks), the pivot levels will also differ.")
 show_labels = input.bool(title="Show Labels", defval=true, inline="labels")
 position_labels = input.string("Left", "", options=["Left", "Right"], inline="labels")
@@ -73,7 +73,7 @@ p_show = input.bool(false, "P‏  ‏  ‏  ‏  ‏  ‏  ‏  ‏", inline="P"
 p_color = input.color(P_COLOR, "", inline="P")
 var r3 = array.new_float()
 var s3 = array.new_float()
-s3r3_show = input.bool(true, "S3/R3", inline="S3/R3")
+s3r3_show  = input.bool(true, "Show R3/S3", inline="S3/R3")
 s3r3_color = input.color(R3S3_COLOR, "", inline="S3/R3")
 
 // CPR Arrays
@@ -82,12 +82,8 @@ var arr_bc = array.new_float()
 var arr_tc = array.new_float()
 var arr_r1 = array.new_float()
 var arr_r2 = array.new_float()
-var arr_r3 = array.new_float()
-var arr_r4 = array.new_float()
 var arr_s1 = array.new_float()
 var arr_s2 = array.new_float()
-var arr_s3 = array.new_float()
-var arr_s4 = array.new_float()
 var arr_pdh = array.new_float()
 var arr_pdl = array.new_float()
 
@@ -215,12 +211,8 @@ if (not uses_current_bar and is_time_change) or (uses_current_bar and not na(sec
     array.push(arr_tc, _tc)
     array.push(arr_r1, (_pivot * 2) - pivotX_prev_low)
     array.push(arr_r2, _pivot + (pivotX_prev_high - pivotX_prev_low))
-    array.push(arr_r3, ((_pivot * 2) - pivotX_prev_low) + (pivotX_prev_high - pivotX_prev_low))
-    array.push(arr_r4, (((_pivot * 2) - pivotX_prev_low) + (pivotX_prev_high - pivotX_prev_low)) + ((_pivot + (pivotX_prev_high - pivotX_prev_low)) - ((_pivot * 2) - pivotX_prev_low)))
     array.push(arr_s1, (_pivot * 2) - pivotX_prev_high)
     array.push(arr_s2, _pivot - (pivotX_prev_high - pivotX_prev_low))
-    array.push(arr_s3, ((_pivot * 2) - pivotX_prev_high) - (pivotX_prev_high - pivotX_prev_low))
-    array.push(arr_s4, (((_pivot * 2) - pivotX_prev_high) - (pivotX_prev_high - pivotX_prev_low)) - (((_pivot * 2) - pivotX_prev_high) - (_pivot - (pivotX_prev_high - pivotX_prev_low))))
     array.push(arr_pdh, pivotX_prev_high)
     array.push(arr_pdl, pivotX_prev_low)
 
@@ -229,15 +221,15 @@ if (not uses_current_bar and is_time_change) or (uses_current_bar and not na(sec
             array.shift(arr_time)
         if array.size(p) > 0 and p_show
             array.shift(p)
-        if array.size(r3) > 0 and s3r3_show and carmarilla
+        if array.size(r3) > 0 and s3r3_show
             array.shift(r3)
-        if array.size(s3) > 0 and s3r3_show and carmarilla
+        if array.size(s3) > 0 and s3r3_show
             array.shift(s3)
         // Shift CPR Arrays
         if array.size(arr_p) > 0
             array.shift(arr_p), array.shift(arr_bc), array.shift(arr_tc)
-            array.shift(arr_r1), array.shift(arr_r2), array.shift(arr_r3), array.shift(arr_r4)
-            array.shift(arr_s1), array.shift(arr_s2), array.shift(arr_s3), array.shift(arr_s4)
+            array.shift(arr_r1), array.shift(arr_r2)
+            array.shift(arr_s1), array.shift(arr_s2)
             array.shift(arr_pdh), array.shift(arr_pdl)
     is_change := true
 else
@@ -274,13 +266,6 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
         if array.size(p) > 0 and p_show
             draw_line(i, p, p_color)
             draw_label(i, array.get(p, i), "P", p_color)
-        if array.size(r3) > 0 and s3r3_show and carmarilla
-            draw_line(i, r3, s3r3_color)
-            draw_label(i, array.get(r3, i), "", s3r3_color)
-        if array.size(s3) > 0 and s3r3_show and carmarilla
-            draw_line(i, s3, s3r3_color)
-            draw_label(i, array.get(s3, i), "", s3r3_color)
-        
         // Draw CPR Lines
         if sp and array.size(arr_p) > i
             _lp = line.new(array.get(arr_time, i), array.get(arr_p, i), array.get(arr_time, i+1), array.get(arr_p, i), xloc=xloc.bar_time, color=pivtcol, width=1)
@@ -290,26 +275,29 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
             if shadow
                 array.push(fills, linefill.new(_lbc, _ltc, color.new(pivotColor, cprTransp)))
 
-            if not hist_cpr_only and hist_show_rs
+            if not hist_cpr_only and show_resistance
                 _lr1 = line.new(array.get(arr_time, i), array.get(arr_r1, i), array.get(arr_time, i+1), array.get(arr_r1, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
                 _lr2 = line.new(array.get(arr_time, i), array.get(arr_r2, i), array.get(arr_time, i+1), array.get(arr_r2, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
-                _lr3 = line.new(array.get(arr_time, i), array.get(arr_r3, i), array.get(arr_time, i+1), array.get(arr_r3, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
-                _lr4 = line.new(array.get(arr_time, i), array.get(arr_r4, i), array.get(arr_time, i+1), array.get(arr_r4, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
-                array.push(lines, _lr1), array.push(lines, _lr2), array.push(lines, _lr3), array.push(lines, _lr4)
-
-                _ls1 = line.new(array.get(arr_time, i), array.get(arr_s1, i), array.get(arr_time, i+1), array.get(arr_s1, i), xloc=xloc.bar_time, color=redColor, width=1)
-                _ls2 = line.new(array.get(arr_time, i), array.get(arr_s2, i), array.get(arr_time, i+1), array.get(arr_s2, i), xloc=xloc.bar_time, color=redColor, width=1)
-                _ls3 = line.new(array.get(arr_time, i), array.get(arr_s3, i), array.get(arr_time, i+1), array.get(arr_s3, i), xloc=xloc.bar_time, color=redColor, width=1)
-                _ls4 = line.new(array.get(arr_time, i), array.get(arr_s4, i), array.get(arr_time, i+1), array.get(arr_s4, i), xloc=xloc.bar_time, color=redColor, width=1)
-                array.push(lines, _ls1), array.push(lines, _ls2), array.push(lines, _ls3), array.push(lines, _ls4)
-
+                array.push(lines, _lr1), array.push(lines, _lr2)
                 if shadow
                     array.push(fills, linefill.new(_lr1, _lr2, color.new(greenColor, rsTransp)))
-                    array.push(fills, linefill.new(_lr2, _lr3, color.new(greenColor, rsTransp)))
-                    array.push(fills, linefill.new(_lr3, _lr4, color.new(greenColor, rsTransp)))
+
+            if not hist_cpr_only and show_support
+                _ls1 = line.new(array.get(arr_time, i), array.get(arr_s1, i), array.get(arr_time, i+1), array.get(arr_s1, i), xloc=xloc.bar_time, color=redColor, width=1)
+                _ls2 = line.new(array.get(arr_time, i), array.get(arr_s2, i), array.get(arr_time, i+1), array.get(arr_s2, i), xloc=xloc.bar_time, color=redColor, width=1)
+                array.push(lines, _ls1), array.push(lines, _ls2)
+                if shadow
                     array.push(fills, linefill.new(_ls1, _ls2, color.new(redColor, rsTransp)))
-                    array.push(fills, linefill.new(_ls2, _ls3, color.new(redColor, rsTransp)))
-                    array.push(fills, linefill.new(_ls3, _ls4, color.new(redColor, rsTransp)))
+
+            if not hist_cpr_only and s3r3_show
+                if array.size(r3) > i
+                    _lr3 = line.new(array.get(arr_time, i), array.get(r3, i), array.get(arr_time, i+1), array.get(r3, i), xloc=xloc.bar_time, color=s3r3_color, width=1)
+                    array.push(lines, _lr3)
+                    draw_label(i, array.get(r3, i), "R3", s3r3_color)
+                if array.size(s3) > i
+                    _ls3 = line.new(array.get(arr_time, i), array.get(s3, i), array.get(arr_time, i+1), array.get(s3, i), xloc=xloc.bar_time, color=s3r3_color, width=1)
+                    array.push(lines, _ls3)
+                    draw_label(i, array.get(s3, i), "S3", s3r3_color)
 
             if not hist_cpr_only and hist_show_pdhl
                 _lpdh = line.new(array.get(arr_time, i), array.get(arr_pdh, i), array.get(arr_time, i+1), array.get(arr_pdh, i), xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1)
@@ -332,30 +320,29 @@ rr2 = pivot + (high - low)
 ss2 = pivot - (high - low)
 rr3 = rr1 + (high - low)
 ss3 = ss1 - (high - low)
-rr4 = rr3 + (rr2 - rr1)
-ss4 = ss3 - (ss1 - ss2)
+
 
 // Future CPR - Projected into the next session
-[ftime_pivot, ftime_bc, ftime_tc, ftime_r1, ftime_r2, ftime_r3, ftime_r4, ftime_s1, ftime_s2, ftime_s3, ftime_s4] = request.security(syminfo.tickerid, timeframe, [pivot[0], bc[0], tc[0], rr1[0], rr2[0], rr3[0], rr4[0], ss1[0], ss2[0], ss3[0], ss4[0]], lookahead=barmerge.lookahead_on)
+[ftime_pivot, ftime_bc, ftime_tc, ftime_r1, ftime_r2, _, ftime_s1, ftime_s2, _] = request.security(syminfo.tickerid, timeframe, [pivot[0], bc[0], tc[0], rr1[0], rr2[0], rr3[0], ss1[0], ss2[0], ss3[0]], lookahead=barmerge.lookahead_on)
 ftime_pdh = request.security(syminfo.tickerid, timeframe, high[0], lookahead=barmerge.lookahead_on)
 ftime_pdl = request.security(syminfo.tickerid, timeframe, low[0], lookahead=barmerge.lookahead_on)
 
 ftime_close = request.security(syminfo.tickerid, timeframe, close[0], lookahead=barmerge.lookahead_on)
 
 var line f_p = na, var line f_bc = na, var line f_tc = na
-var line f_r1 = na, var line f_r2 = na, var line f_r3 = na, var line f_r4 = na
-var line f_s1 = na, var line f_s2 = na, var line f_s3 = na, var line f_s4 = na
+var line f_r1 = na, var line f_r2 = na
+var line f_s1 = na, var line f_s2 = na
 var line f_pdh = na, var line f_pdl = na
 var line f_cam_r3 = na, var line f_cam_s3 = na
 
 var linefill f_fill_c = na
-var linefill f_fill_r12 = na, var linefill f_fill_r23 = na, var linefill f_fill_r34 = na
-var linefill f_fill_s12 = na, var linefill f_fill_s23 = na, var linefill f_fill_s34 = na
+var linefill f_fill_r12 = na
+var linefill f_fill_s12 = na
 
 if barstate.islast and fsd
     line.delete(f_p), line.delete(f_bc), line.delete(f_tc)
-    line.delete(f_r1), line.delete(f_r2), line.delete(f_r3), line.delete(f_r4)
-    line.delete(f_s1), line.delete(f_s2), line.delete(f_s3), line.delete(f_s4)
+    line.delete(f_r1), line.delete(f_r2)
+    line.delete(f_s1), line.delete(f_s2)
     line.delete(f_pdh), line.delete(f_pdl)
     line.delete(f_cam_r3), line.delete(f_cam_s3)
     
@@ -377,40 +364,37 @@ if barstate.islast and fsd
     f_bc := line.new(next_start, ftime_bc, next_end, ftime_bc, xloc=xloc.bar_time, color=pivtcol, width=1, style=line.style_dashed)
     f_tc := line.new(next_start, ftime_tc, next_end, ftime_tc, xloc=xloc.bar_time, color=pivtcol, width=1, style=line.style_dashed)
     
-    f_r1 := line.new(next_start, ftime_r1, next_end, ftime_r1, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
-    f_r2 := line.new(next_start, ftime_r2, next_end, ftime_r2, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
-    f_r3 := line.new(next_start, ftime_r3, next_end, ftime_r3, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
-    f_r4 := line.new(next_start, ftime_r4, next_end, ftime_r4, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
-    
-    f_s1 := line.new(next_start, ftime_s1, next_end, ftime_s1, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
-    f_s2 := line.new(next_start, ftime_s2, next_end, ftime_s2, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
-    f_s3 := line.new(next_start, ftime_s3, next_end, ftime_s3, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
-    f_s4 := line.new(next_start, ftime_s4, next_end, ftime_s4, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
-    
+    _f_range = ftime_pdh - ftime_pdl
+
+    if show_resistance
+        f_r1 := line.new(next_start, ftime_r1, next_end, ftime_r1, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
+        f_r2 := line.new(next_start, ftime_r2, next_end, ftime_r2, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
+
+    if show_support
+        f_s1 := line.new(next_start, ftime_s1, next_end, ftime_s1, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
+        f_s2 := line.new(next_start, ftime_s2, next_end, ftime_s2, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
+
+    if s3r3_show
+        f_cam_r3 := line.new(next_start, ftime_close + _f_range * 1.1 / 4.0, next_end, ftime_close + _f_range * 1.1 / 4.0, xloc=xloc.bar_time, color=s3r3_color, width=1, style=line.style_dashed)
+        f_cam_s3 := line.new(next_start, ftime_close - _f_range * 1.1 / 4.0, next_end, ftime_close - _f_range * 1.1 / 4.0, xloc=xloc.bar_time, color=s3r3_color, width=1, style=line.style_dashed)
+
     f_pdh := line.new(next_start, ftime_pdh, next_end, ftime_pdh, xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1, style=line.style_dashed)
     f_pdl := line.new(next_start, ftime_pdl, next_end, ftime_pdl, xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1, style=line.style_dashed)
 
-    // Future Camarilla S3/R3 — computed from fetched raw OHLC (same as historical formula)
-    if s3r3_show and carmarilla
-        _f_range     = ftime_pdh - ftime_pdl
-        _f_cam_r3    = ftime_close + _f_range * 1.1 / 4.0
-        _f_cam_s3    = ftime_close - _f_range * 1.1 / 4.0
-        f_cam_r3 := line.new(next_start, _f_cam_r3, next_end, _f_cam_r3, xloc=xloc.bar_time, color=s3r3_color, width=1, style=line.style_dashed)
-        f_cam_s3 := line.new(next_start, _f_cam_s3, next_end, _f_cam_s3, xloc=xloc.bar_time, color=s3r3_color, width=1, style=line.style_dashed)
-
     // Fills
     if not na(f_fill_c)
-        linefill.delete(f_fill_c), linefill.delete(f_fill_r12), linefill.delete(f_fill_r23), linefill.delete(f_fill_r34)
-        linefill.delete(f_fill_s12), linefill.delete(f_fill_s23), linefill.delete(f_fill_s34)
-        
+        linefill.delete(f_fill_c)
+        if not na(f_fill_r12)
+            linefill.delete(f_fill_r12)
+        if not na(f_fill_s12)
+            linefill.delete(f_fill_s12)
+
     if shadow
         f_fill_c := linefill.new(f_bc, f_tc, color.new(pivotColor, cprTransp))
-        f_fill_r12 := linefill.new(f_r1, f_r2, color.new(greenColor, rsTransp))
-        f_fill_r23 := linefill.new(f_r2, f_r3, color.new(greenColor, rsTransp))
-        f_fill_r34 := linefill.new(f_r3, f_r4, color.new(greenColor, rsTransp))
-        f_fill_s12 := linefill.new(f_s1, f_s2, color.new(redColor, rsTransp))
-        f_fill_s23 := linefill.new(f_s2, f_s3, color.new(redColor, rsTransp))
-        f_fill_s34 := linefill.new(f_s3, f_s4, color.new(redColor, rsTransp))
+        if show_resistance and not na(f_r1) and not na(f_r2)
+            f_fill_r12 := linefill.new(f_r1, f_r2, color.new(greenColor, rsTransp))
+        if show_support and not na(f_s1) and not na(f_s2)
+            f_fill_s12 := linefill.new(f_s1, f_s2, color.new(redColor, rsTransp))
 
 //----Power Root Super Trend---------------------------------------------------------------------------------------------------------------------
 import TradingView/ta/8
@@ -502,7 +486,6 @@ extreme_tp5_dist = math.abs(extreme - tp5)
 extreme_tp6_dist = math.abs(extreme - tp6)
 extreme_tp7_dist = math.abs(extreme - tp7)
 
-p12 = plot(enableIndicator ? superTrendValue : na, color = trendDirection > 0 ? color.new(red, 70) : color.new(green, 70))
 upTrend = plot(enableIndicator and close > superTrendValue ? superTrendValue : na, color = color.new(green, 20), style = plot.style_linebr) //, force_overlay = true
 downTrend = plot(enableIndicator and close < superTrendValue ? superTrendValue : na, color = color.new(red, 20), style = plot.style_linebr, force_overlay = false) //, force_overlay = true
 bodyMiddle = plot(barstate.isfirst ? na : (open + close) / 2, "Body Middle",display = display.none)
@@ -794,3 +777,37 @@ if buySignal
 
 alertcondition(buySignal,  "EMA Retest Buy Signal",  "EMA Retest Buy — Rally confirmed, clustered EMA retest")
 alertcondition(exitSignal, "EMA Retest Exit Signal", "EMA Exit — Close below 50 EMA")
+
+// ─── Current & Previous VWAP ─────────────────────────────────────────────────
+vwap_colCurrent  = input.color(color.new(color.blue,   0), "Current VWAP",  group="VWAP Style")
+vwap_colPrevious = input.color(color.new(color.orange, 0), "Previous VWAP", group="VWAP Style")
+vwap_lineWidth   = input.int(2, "Line Width", minval=1, maxval=4,            group="VWAP Style")
+
+// Only visible on 15-min and below
+vwap_show = timeframe.isintraday and timeframe.multiplier <= 15
+
+// Session detection and VWAP calculation
+vwap_isNewSession = ta.change(time("D")) != 0
+vwap_typicalPrice = (high + low + close) / 3.0
+
+var float vwap_cumPV    = 0.0
+var float vwap_cumVol   = 0.0
+var float vwap_prevVWAP = na
+
+if vwap_isNewSession
+    vwap_prevVWAP := vwap_cumPV / vwap_cumVol
+    vwap_cumPV    := vwap_typicalPrice * volume
+    vwap_cumVol   := volume
+else
+    vwap_cumPV  += vwap_typicalPrice * volume
+    vwap_cumVol += volume
+
+vwap_currentVWAP = vwap_cumPV / vwap_cumVol
+
+plot(vwap_show ? vwap_currentVWAP : na, title="Current VWAP",  color=vwap_colCurrent,  linewidth=vwap_lineWidth)
+plot(vwap_show ? vwap_prevVWAP    : na, title="Previous VWAP", color=vwap_colPrevious, linewidth=vwap_lineWidth)
+
+if barstate.islast and vwap_show
+    label.new(bar_index, vwap_currentVWAP, text="VWAP\n" + str.tostring(vwap_currentVWAP, "#.##"), color=vwap_colCurrent,  textcolor=color.white, style=label.style_label_left, size=size.small)
+    if not na(vwap_prevVWAP)
+        label.new(bar_index, vwap_prevVWAP, text="Prev VWAP\n" + str.tostring(vwap_prevVWAP, "#.##"), color=vwap_colPrevious, textcolor=color.white, style=label.style_label_left, size=size.small)

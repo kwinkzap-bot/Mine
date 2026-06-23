@@ -252,6 +252,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.investment     = parseFloat(document.getElementById('smInvestment')?.value || '100000');
                 payload.top_n          = parseInt(document.getElementById('smTopN')?.value || '10');
                 payload.exit_rank      = parseInt(document.getElementById('smExitRank')?.value || '50');
+                payload.monthly_add    = parseFloat(document.getElementById('smMonthlyAdd')?.value || '0');
             }
 
             // RTP-specific payload fields
@@ -1183,11 +1184,12 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function _smGoLiveFromForm() {
-        const index     = (document.getElementById('smIndex')     || {}).value || 'NIFTY 500';
-        const topN      = parseInt((document.getElementById('smTopN')      || {}).value) || 10;
-        const exitRank  = parseInt((document.getElementById('smExitRank')  || {}).value) || 50;
-        const freq      = (document.getElementById('smRebalFreq') || {}).value || 'monthly';
-        const investment= parseFloat((document.getElementById('smInvestment') || {}).value) || 100000;
+        const index      = (document.getElementById('smIndex')      || {}).value || 'NIFTY 500';
+        const topN       = parseInt((document.getElementById('smTopN')       || {}).value) || 10;
+        const exitRank   = parseInt((document.getElementById('smExitRank')   || {}).value) || 50;
+        const freq       = (document.getElementById('smRebalFreq')  || {}).value || 'monthly';
+        const investment = parseFloat((document.getElementById('smInvestment') || {}).value) || 100000;
+        const monthlyAdd = parseFloat((document.getElementById('smMonthlyAdd') || {}).value) || 0;
 
         const idxLbl  = index.replace('NIFTY ', 'Nifty ');
         const freqLbl = freq.charAt(0).toUpperCase() + freq.slice(1);
@@ -1200,8 +1202,9 @@ document.addEventListener('DOMContentLoaded', function() {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ index, top_n: topN, exit_rank: exitRank,
-                                      rebalance_freq: freq, investment, label,
-                                      start_date: '2025-01-01' }),
+                                      rebalance_freq: freq, investment,
+                                      monthly_add: monthlyAdd, monthly_add_type: 'static',
+                                      label, start_date: '2025-01-01' }),
         })
         .then(r => r.json())
         .then(d => {
@@ -1260,13 +1263,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function _displaySwingMomentumResults(data) {
         const { summary, portfolio_curve } = data;
-        const tr = summary.total_return_pct;
+        const tr           = summary.total_return_pct;
+        const totalInvested = summary.total_invested || summary.start_value;
+        const hasSip        = summary.monthly_add > 0;
 
         // Row 1: repurpose standard stat cards
         _smSetCard('statTotalTrades', 'Rebalances',  summary.rebalance_count,    null);
         _smSetCard('statWins',        'Buy Trades',  summary.total_buy_trades,    null);
         _smSetCard('statLosses',      'Sell Trades', summary.total_sell_trades,   null);
-        _smSetCard('statWinRate',     'Rotations',   summary.total_rotations,     null);
+        // Show total invested (= initial + SIP adds) instead of rotations in row-1 slot
+        _smSetCard('statWinRate',
+            hasSip ? 'Total Invested' : 'Rotations',
+            hasSip ? '₹' + Math.round(totalInvested).toLocaleString('en-IN')
+                   : String(summary.total_rotations),
+            null);
         _smSetCard('statTotalPnl',    '₹ End Value',
             '₹' + Math.round(summary.end_value).toLocaleString('en-IN'),
             tr >= 0 ? 'stat-val-green' : 'stat-val-red');
@@ -1291,11 +1301,18 @@ document.addEventListener('DOMContentLoaded', function() {
         _s('smStatCagr',      (summary.cagr_pct >= 0 ? '+' : '') + summary.cagr_pct.toFixed(2) + '%',
             summary.cagr_pct >= 0 ? 'stat-val-green' : 'stat-val-red');
         _s('smStatMdd',       summary.max_drawdown_pct.toFixed(2) + '%', 'stat-val-red');
+        // Always show rotations here (row 3) even when row-1 slot is repurposed
         _s('smStatRotations', String(summary.total_rotations), null);
         _s('smStatAvgHold',   summary.avg_holding_days + ' d', null);
 
-        // Equity curve from portfolio_curve
-        _renderSmEquityCurve(portfolio_curve, summary.start_value);
+        // Update Avg Hold label to show SIP amount when active
+        const smAvgHoldLbl = document.querySelector('#smStatsRow .stat-card:last-child .stat-card__lbl');
+        if (smAvgHoldLbl) smAvgHoldLbl.textContent = hasSip
+            ? `SIP ₹${Math.round(summary.monthly_add).toLocaleString('en-IN')}/mo · Avg Hold`
+            : 'Avg Hold (days)';
+
+        // Equity curve from portfolio_curve — pass total_invested as basis
+        _renderSmEquityCurve(portfolio_curve, totalInvested);
 
         // Period breakdown not applicable for SM
         const periodSec = document.getElementById('periodBreakdownSection');
@@ -1374,12 +1391,18 @@ document.addEventListener('DOMContentLoaded', function() {
                         callbacks: {
                             title: items => curve[items[0].dataIndex]?.date || '',
                             label: item => {
-                                const v = item.raw;
-                                const chg = v - investment;
-                                return [
-                                    '  Value: ₹' + Math.round(v).toLocaleString('en-IN'),
-                                    '  P&L:   ' + (chg >= 0 ? '+' : '') + '₹' + Math.round(chg).toLocaleString('en-IN'),
+                                const v   = item.raw;
+                                const pt  = curve[item.dataIndex];
+                                const inv = (pt && pt.invested != null) ? pt.invested : investment;
+                                const chg = v - inv;
+                                const lines = [
+                                    '  Value:    ₹' + Math.round(v).toLocaleString('en-IN'),
+                                    '  P&L:      ' + (chg >= 0 ? '+' : '') + '₹' + Math.round(chg).toLocaleString('en-IN'),
                                 ];
+                                if (pt && pt.invested != null && pt.invested !== investment) {
+                                    lines.splice(1, 0, '  Invested: ₹' + Math.round(inv).toLocaleString('en-IN'));
+                                }
+                                return lines;
                             }
                         }
                     }

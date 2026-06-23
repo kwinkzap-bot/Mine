@@ -755,44 +755,23 @@ class OpenInterestService:
     def get_intraday_vega_history(self, symbol: str, date_str: str) -> List[Dict[str, Any]]:
         """Return per-minute Call/Put Vega time-series.
 
-        Formula: Σ(baseline_ltp × Δoi_lots) / 1e7  in ₹ Crore.
+        Formula: -Σ(weight × Δoi_lots) / 1e7  in ₹ Crore.
 
-        The BASELINE (9:15 AM) option LTP is used as the fixed weight for every
-        snapshot — NOT the current (live) LTP.  This is key for expiry-day
-        behaviour: opening prices are high; as positions unwind in the afternoon
-        the OI drops (Δoi → large negative) while the weight stays at the
-        opening premium, producing the steep late-day decline seen in the chart.
+        Sign convention (negated — option-writer vega perspective):
+          OI INCREASES from 9:15 baseline → new positions written → negative vega
+          OI DECREASES from 9:15 baseline → positions covered/closed → positive vega
 
-        Weight priority per strike:
-          1. Stored ce_ltp / pe_ltp from the 9:15 AM first snapshot.
-          2. BS price at baseline time using stored ce_iv / pe_iv.
-          3. BS price with adaptive sigma (50% for expiry-day, else 13% default).
+        Weight per strike per snapshot (priority order):
+          1. Fyers live vega Greek (ce_vega / pe_vega) when stored.
+          2. Time value of the option = LTP − intrinsic value.
+             Time value ≈ 0 for deep ITM options (on expiry day these have
+             large LTP but zero vega), preventing sign reversal when ITM
+             positions unwind.
 
-        Put vega is negated so put buying appears below zero (bearish convention).
+        Both call_vega and put_vega start at 0.00 at 9:15 AM.
         """
         _LOT_SIZES = {'NIFTY': 75, 'BANKNIFTY': 35, 'FINNIFTY': 40, 'MIDCPNIFTY': 120}
-        lot_size   = _LOT_SIZES.get(symbol, 75)
-        _DEFAULT_IVS = {'NIFTY': 0.13, 'BANKNIFTY': 0.16, 'FINNIFTY': 0.13, 'MIDCPNIFTY': 0.14}
-        default_iv = _DEFAULT_IVS.get(symbol, 0.13)
-
-        def _bs_call(S, K, T, r, sigma):
-            try:
-                d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
-                d2 = d1 - sigma * math.sqrt(T)
-                N  = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))
-                return max(S * N(d1) - K * math.exp(-r * T) * N(d2), 0.0)
-            except Exception:
-                return max(S - K, 0.0)
-
-        def _bs_put(S, K, T, r, sigma):
-            try:
-                d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
-                d2 = d1 - sigma * math.sqrt(T)
-                N  = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))
-                return max(K * math.exp(-r * T) * N(-d2) - S * N(-d1), 0.0)
-            except Exception:
-                return max(K - S, 0.0)
-
+        lot_size = _LOT_SIZES.get(symbol, 75)
 
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -814,57 +793,18 @@ class OpenInterestService:
             if not rows:
                 return []
 
-            # ── Build baseline OI + baseline LTP from the 9:15 AM first row ──
-            baseline_ce_oi:  dict = {}
-            baseline_pe_oi:  dict = {}
-            baseline_ce_ltp: dict = {}
-            baseline_pe_ltp: dict = {}
+            # ── OI baseline from the 9:15 AM first snapshot ───────────────────
+            baseline_ce_oi: dict = {}
+            baseline_pe_oi: dict = {}
+            for s in json.loads(rows[0]['active_strikes'] or '[]'):
+                k = s.get('strike')
+                if k is not None:
+                    baseline_ce_oi[k] = s.get('ce_oi') or 0
+                    baseline_pe_oi[k] = s.get('pe_oi') or 0
 
-            first_row     = rows[0]
-            first_price   = first_row['current_price']
-            first_strikes = json.loads(first_row['active_strikes'] or '[]')
-            first_dt      = datetime.fromisoformat(first_row['timestamp'])
-
-            for s in first_strikes:
-                k          = s.get('strike')
-                expiry_str = s.get('expiry')
-                if not k or not expiry_str:
-                    continue
-
-                baseline_ce_oi[k] = s.get('ce_oi') or 0
-                baseline_pe_oi[k] = s.get('pe_oi') or 0
-
-                ce_ltp0 = float(s.get('ce_ltp') or 0)
-                pe_ltp0 = float(s.get('pe_ltp') or 0)
-
-                if ce_ltp0 <= 0 or pe_ltp0 <= 0:
-                    try:
-                        exp_date = datetime.strptime(expiry_str, '%Y-%m-%d').date()
-                        T0 = max((exp_date - first_dt.date()).days / 365.0, 0.001)
-                        K  = float(k)
-                        # On expiry day (T clamped to 0.001) use 50% IV — this
-                        # is empirically calibrated to produce correct final-value
-                        # magnitudes when Fyers reports combined June22+June29 OI.
-                        # On normal days, stored ce_iv / pe_iv from Fyers is used.
-                        if T0 <= 0.003:
-                            sigma_ce = 0.50
-                            sigma_pe = 0.50
-                        else:
-                            sigma_ce = float(s.get('ce_iv') or 0) or default_iv
-                            sigma_pe = float(s.get('pe_iv') or 0) or default_iv
-                        if ce_ltp0 <= 0:
-                            ce_ltp0 = _bs_call(first_price, K, T0, 0.05, sigma_ce)
-                        if pe_ltp0 <= 0:
-                            pe_ltp0 = _bs_put(first_price, K, T0, 0.05, sigma_pe)
-                    except Exception:
-                        pass
-
-                baseline_ce_ltp[k] = ce_ltp0
-                baseline_pe_ltp[k] = pe_ltp0
-
-            # ── Process every snapshot using fixed baseline weights ────────────
+            # ── Per-minute vega accumulation ──────────────────────────────────
             seen: dict = {}
-            used_estimated = any(v == 0 for v in baseline_ce_ltp.values())
+            has_fyers_vega = False
 
             for row in rows:
                 try:
@@ -875,26 +815,41 @@ class OpenInterestService:
                         continue
 
                     strikes       = json.loads(row['active_strikes'] or '[]')
-                    current_price = row['current_price']
-
+                    spot          = row['current_price']
                     call_vega_sum = 0.0
                     put_vega_sum  = 0.0
 
                     for s in strikes:
-                        strike     = s.get('strike')
+                        strike = s.get('strike')
                         if not strike:
                             continue
 
-                        ce_oi_now = s.get('ce_oi') or 0
-                        pe_oi_now = s.get('pe_oi') or 0
-                        ce_lots   = (ce_oi_now - baseline_ce_oi.get(strike, ce_oi_now)) / lot_size
-                        pe_lots   = (pe_oi_now - baseline_pe_oi.get(strike, pe_oi_now)) / lot_size
+                        ce_lots = (s.get('ce_oi') or 0) - baseline_ce_oi.get(strike, s.get('ce_oi') or 0)
+                        pe_lots = (s.get('pe_oi') or 0) - baseline_pe_oi.get(strike, s.get('pe_oi') or 0)
+                        ce_lots /= lot_size
+                        pe_lots /= lot_size
 
                         if ce_lots == 0 and pe_lots == 0:
                             continue
 
-                        ce_w = baseline_ce_ltp.get(strike, 0)
-                        pe_w = baseline_pe_ltp.get(strike, 0)
+                        K = float(strike)
+                        ce_vega_g = s.get('ce_vega')
+                        pe_vega_g = s.get('pe_vega')
+
+                        if ce_vega_g is not None:
+                            has_fyers_vega = True
+                            ce_w = float(ce_vega_g)
+                        else:
+                            # Time value = LTP − intrinsic: approaches 0 for deep ITM,
+                            # maximum at ATM — mirrors the vega profile naturally.
+                            ce_ltp = float(s.get('ce_ltp') or 0)
+                            ce_w   = max(ce_ltp - max(spot - K, 0.0), 0.0)
+
+                        if pe_vega_g is not None:
+                            pe_w = float(pe_vega_g)
+                        else:
+                            pe_ltp = float(s.get('pe_ltp') or 0)
+                            pe_w   = max(pe_ltp - max(K - spot, 0.0), 0.0)
 
                         if ce_lots != 0 and ce_w > 0:
                             call_vega_sum += ce_w * ce_lots
@@ -903,10 +858,10 @@ class OpenInterestService:
 
                     seen[minute_ts] = {
                         'time':      minute_ts,
-                        'price':     current_price,
-                        'call_vega': round(call_vega_sum / 1e7, 2),
+                        'price':     spot,
+                        'call_vega': round(-call_vega_sum / 1e7, 2),
                         'put_vega':  round(-put_vega_sum / 1e7, 2),
-                        'estimated': used_estimated,
+                        'estimated': not has_fyers_vega,
                     }
                 except Exception:
                     continue
@@ -1184,6 +1139,9 @@ class OpenInterestService:
                                     # Fyers API v3 exposes live greeks including vega
                                     g = opt.get('greeks') or {}
                                     raw_vega = (g.get('vega') if isinstance(g, dict) else None) or opt.get('vega')
+                                    # Debug: log keys on first option to find vega field name
+                                    if not instruments:
+                                        logger.info(f"[OI] Fyers opt keys: {list(opt.keys())} | greeks={g}")
                                     instruments.append({
                                         'instrument_token': opt.get('symbol'),
                                         'tradingsymbol':    opt.get('symbol', '').split(':')[-1],
@@ -1584,9 +1542,13 @@ class OpenInterestService:
                     'ce_oi': pre_ce_oi if pre_ce_oi is not None else 0,
                     'ce_change_in_oi': pre_ce_oich if pre_ce_oich is not None else 0,
                     'ce_iv': 0,
+                    'ce_ltp': strike_info.get('ce_ltp', 0),
+                    'ce_vega': strike_info.get('ce_vega'),
                     'pe_oi': pre_pe_oi if pre_pe_oi is not None else 0,
                     'pe_change_in_oi': pre_pe_oich if pre_pe_oich is not None else 0,
                     'pe_iv': 0,
+                    'pe_ltp': strike_info.get('pe_ltp', 0),
+                    'pe_vega': strike_info.get('pe_vega'),
                     'expiry_date': strike_info.get('expiry')
                 }
                 

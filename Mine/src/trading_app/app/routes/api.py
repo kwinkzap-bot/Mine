@@ -79,6 +79,11 @@ def _save_sm_opt_cache(cache: dict) -> None:
 _sm_opt_tasks: Dict[str, Dict] = {}
 _sm_opt_tasks_lock = threading.Lock()
 
+# Rankings cache — keyed by index name, expires after 15 min
+_sm_rankings_cache: Dict[str, tuple] = {}
+_SM_RANKINGS_TTL = 900  # seconds
+
+
 
 def _get_request_lock(key: Any) -> threading.Lock:
     with _pending_locks_manager:
@@ -7657,6 +7662,7 @@ def backtest_swing_momentum():
             investment    = float(body.get('investment', 100000)),
             top_n         = int(body.get('top_n', 10)),
             exit_rank     = int(body.get('exit_rank', 50)),
+            monthly_add   = float(body.get('monthly_add', 0)),
         )
         result = engine.run()
         return jsonify({'success': True, **result})
@@ -7902,7 +7908,7 @@ def _sm_compute_today_rankings(index_name: str):
 
     raw = yf.download(yf_symbols, start=str(start),
                       end=str(today + timedelta(days=1)),
-                      interval='1d', auto_adjust=True, progress=False, threads=True)
+                      interval='1d', auto_adjust=True, progress=False, threads=False)
     if raw is None or raw.empty:
         return None, None
 
@@ -7965,6 +7971,20 @@ def _sm_compute_today_rankings(index_name: str):
     return ranked, close_df
 
 
+def _sm_rankings_cached(index_name: str):
+    """Return today's rankings, using a 15-min in-memory cache to avoid repeated full downloads."""
+    now = _time.monotonic()
+    entry = _sm_rankings_cache.get(index_name)
+    if entry:
+        ts, ranked = entry
+        if now - ts < _SM_RANKINGS_TTL:
+            return ranked
+    ranked, _ = _sm_compute_today_rankings(index_name)
+    if ranked:
+        _sm_rankings_cache[index_name] = (now, ranked)
+    return ranked
+
+
 @api_bp.route('/algo/swing-momentum/configs', methods=['GET'])
 def sm_live_configs_list():
     return jsonify({'success': True, 'configs': _sm_load_live_configs()})
@@ -8003,18 +8023,21 @@ def sm_live_configs_add():
         })
 
     config = {
-        'id':             str(uuid.uuid4())[:8],
-        'label':          body.get('label', ''),
-        'index':          index,
-        'top_n':          top_n,
-        'exit_rank':      int(body.get('exit_rank', 50)),
-        'rebalance_freq': body.get('rebalance_freq', 'monthly'),
-        'investment':     investment,
-        'start_date':     body.get('start_date', '2025-01-01'),
-        'status':         'watching',
-        'added_at':       datetime.now().strftime('%Y-%m-%d %H:%M'),
-        'live_since':     str(today),
-        'live_entries':   live_entries,
+        'id':                     str(uuid.uuid4())[:8],
+        'label':                  body.get('label', ''),
+        'index':                  index,
+        'top_n':                  top_n,
+        'exit_rank':              int(body.get('exit_rank', 50)),
+        'rebalance_freq':         body.get('rebalance_freq', 'monthly'),
+        'investment':             investment,
+        'monthly_add':            float(body.get('monthly_add', 0)),
+        'monthly_add_type':       body.get('monthly_add_type', 'static'),
+        'monthly_investment_log': [],
+        'start_date':             body.get('start_date', '2025-01-01'),
+        'status':                 'watching',
+        'added_at':               datetime.now().strftime('%Y-%m-%d %H:%M'),
+        'live_since':             str(today),
+        'live_entries':           live_entries,
     }
     configs.append(config)
     _sm_save_live_configs(configs)
@@ -8025,6 +8048,39 @@ def sm_live_configs_add():
 def sm_live_configs_delete(config_id):
     configs = _sm_load_live_configs()
     configs = [c for c in configs if c['id'] != config_id]
+    _sm_save_live_configs(configs)
+    return jsonify({'success': True})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>', methods=['PATCH'])
+def sm_live_configs_update(config_id):
+    """Update editable fields: investment, monthly_add, monthly_add_type."""
+    body    = request.get_json() or {}
+    configs = _sm_load_live_configs()
+    for c in configs:
+        if c['id'] == config_id:
+            if 'investment'       in body: c['investment']       = float(body['investment'])
+            if 'monthly_add'      in body: c['monthly_add']      = float(body['monthly_add'])
+            if 'monthly_add_type' in body: c['monthly_add_type'] = body['monthly_add_type']
+            break
+    _sm_save_live_configs(configs)
+    return jsonify({'success': True})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/monthly-invest', methods=['POST'])
+def sm_live_add_monthly_invest(config_id):
+    """Record a manual monthly investment entry in the log."""
+    body    = request.get_json() or {}
+    configs = _sm_load_live_configs()
+    for c in configs:
+        if c['id'] == config_id:
+            log = c.setdefault('monthly_investment_log', [])
+            log.append({
+                'date':   body.get('date', datetime.today().strftime('%Y-%m-%d')),
+                'amount': float(body.get('amount', 0)),
+                'note':   body.get('note', ''),
+            })
+            break
     _sm_save_live_configs(configs)
     return jsonify({'success': True})
 
@@ -8108,6 +8164,7 @@ def sm_live_reset(config_id):
 
 @api_bp.route('/algo/swing-momentum/signal/<config_id>', methods=['GET'])
 def sm_live_signal(config_id):
+    """Fast path — only downloads 5d prices for held stocks (~12). Returns in <2s."""
     configs = _sm_load_live_configs()
     config  = next((c for c in configs if c['id'] == config_id), None)
     if not config:
@@ -8118,33 +8175,145 @@ def sm_live_signal(config_id):
         today        = datetime.today().date()
         live_entries = config.get('live_entries')
 
-        # If somehow live_entries are missing, auto-compute and save them now
         if not live_entries:
-            ranked_init, _ = _sm_compute_today_rankings(config['index'])
-            top_init  = (ranked_init or [])[:config['top_n']]
-            per_stock = config['investment'] / len(top_init) if top_init else config['investment']
-            live_entries = [
-                {'symbol': s['symbol'], 'entry_price': s['price'],
-                 'qty': int(per_stock / s['price']) if s['price'] > 0 else 0,
-                 'entry_date': str(today)}
-                for s in top_init
-            ]
-            for c in configs:
-                if c['id'] == config_id:
-                    c['live_since']   = str(today)
-                    c['live_entries'] = live_entries
-                    break
-            _sm_save_live_configs(configs)
+            return jsonify({'success': False, 'error': 'No live entries — click Re-init first'}), 400
 
-        # ── Always live-tracking mode: no historical simulation ───────────
-        top_n     = config['top_n']
-        exit_rank = config['exit_rank']
+        # Next rebalance date (no download needed)
+        if config['rebalance_freq'] == 'weekly':
+            days_fwd = (7 - today.weekday()) % 7 or 7
+            next_reb = str(today + timedelta(days=days_fwd))
+        elif config['rebalance_freq'] == 'quarterly':
+            qm = (((today.month - 1) // 3 + 1) * 3 % 12) + 1
+            qy = today.year + (1 if qm <= today.month else 0)
+            next_reb = str(today.replace(year=qy, month=qm, day=1))
+        else:
+            nm = today.month % 12 + 1
+            ny = today.year + (1 if today.month == 12 else 0)
+            next_reb = str(today.replace(year=ny, month=nm, day=1))
 
-        ranked, _ = _sm_compute_today_rankings(config['index'])
+        # Fetch current prices — Fyers if connected, else yfinance fallback
+        price_map = {}
+        provider  = get_data_provider()
+        if provider is not None:
+            fyers_syms = [f"NSE:{e['symbol']}-EQ" for e in live_entries]
+            try:
+                quotes = provider.quote(fyers_syms)
+                for e in live_entries:
+                    fsym = f"NSE:{e['symbol']}-EQ"
+                    q    = quotes.get(fsym) or quotes.get(f"NSE:{e['symbol']}")
+                    if q and q.get('last_price', 0) > 0:
+                        price_map[e['symbol']] = round(float(q['last_price']), 2)
+            except Exception:
+                pass
+
+        if not price_map:
+            # Fyers not connected or returned empty — fall back to yfinance
+            import yfinance as yf
+            yf_syms = [f"{e['symbol']}.NS" for e in live_entries]
+            try:
+                px     = yf.download(yf_syms, period='5d', interval='1d',
+                                     auto_adjust=True, progress=False, threads=True)
+                closes = (px['Close'] if len(yf_syms) > 1
+                          else px[['Close']].rename(columns={'Close': yf_syms[0]}))
+                for e in live_entries:
+                    col = closes.get(f"{e['symbol']}.NS")
+                    if col is not None:
+                        clean = col.dropna()
+                        if not clean.empty:
+                            price_map[e['symbol']] = round(float(clean.iloc[-1]), 2)
+            except Exception:
+                pass
+
+        live_holdings  = []
+        total_invested = 0.0
+        total_curr_val = 0.0
+
+        for e in live_entries:
+            curr_price = price_map.get(e['symbol'], e['entry_price'])
+
+            qty      = e['qty']
+            entry    = e['entry_price']
+            buy_val  = round(entry * qty, 2)
+            curr_val = round(curr_price * qty, 2)
+            pnl_abs  = round(curr_val - buy_val, 2)
+            pnl_pct  = round((curr_price - entry) / entry * 100, 2) if entry else 0
+            total_invested += buy_val
+            total_curr_val += curr_val
+            live_holdings.append({
+                'symbol':         e['symbol'],
+                'qty':            qty,
+                'entry_date':     e['entry_date'],
+                'entry_price':    entry,
+                'current_price':  curr_price,
+                'buy_value':      buy_val,
+                'current_value':  curr_val,
+                'pnl_abs':        pnl_abs,
+                'pnl_pct':        pnl_pct,
+                'current_rank':   None,
+                'momentum_score': None,
+            })
+
+        unrealised_pnl = round(total_curr_val - total_invested, 2)
+        unrealised_pct = round(unrealised_pnl / total_invested * 100, 2) if total_invested else 0
+
+        monthly_log = config.get('monthly_investment_log', [])
+        total_sip   = sum(e.get('amount', 0) for e in monthly_log)
+
+        return jsonify({
+            'success':                True,
+            'live_mode':              True,
+            'live_since':             config.get('live_since'),
+            'live_holdings':          live_holdings,
+            'holding_count':          len(live_holdings),
+            'total_invested':         round(total_invested, 2),
+            'current_port_val':       round(total_curr_val, 2),
+            'unrealised_pnl':         unrealised_pnl,
+            'unrealised_pct':         unrealised_pct,
+            'sell_preview':           [],
+            'buy_preview':            [],
+            'next_rebalance':         next_reb,
+            'last_rebalance':         config.get('live_since'),
+            'rebalance_needed':       False,
+            'configured_investment':  config.get('investment', 100000),
+            'monthly_add':            config.get('monthly_add', 0),
+            'monthly_add_type':       config.get('monthly_add_type', 'static'),
+            'monthly_investment_log': monthly_log,
+            'total_sip_added':        round(total_sip, 2),
+            'rankings_pending':       True,
+        })
+    except Exception as e:
+        logger.exception(f'SM live signal error for config {config_id}: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/swing-momentum/signal/<config_id>/rankings', methods=['GET'])
+def sm_live_rankings(config_id):
+    """Slow path — downloads 310d × 500 stocks to compute momentum ranks.
+    Uses a 15-min cache so repeated calls are instant after the first load."""
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+
+    try:
+        live_entries = config.get('live_entries', [])
+        top_n        = config['top_n']
+        exit_rank    = config['exit_rank']
+
+        ranked      = _sm_rankings_cached(config['index'])
         rank_by_sym = {s['symbol']: s for s in (ranked or [])}
         held_syms   = {e['symbol'] for e in live_entries}
 
-        # Rebalance preview: what would change at next rebalance (as objects)
+        # Rank + momentum score per holding
+        holding_ranks = {
+            e['symbol']: {
+                'current_rank':   rank_by_sym.get(e['symbol'], {}).get('rank'),
+                'momentum_score': round(rank_by_sym.get(e['symbol'], {}).get('score', 0), 2)
+                                  if e['symbol'] in rank_by_sym else None,
+            }
+            for e in live_entries
+        }
+
         sell_preview = [
             {
                 'symbol':       e['symbol'],
@@ -8162,94 +8331,19 @@ def sm_live_signal(config_id):
                 'score':        round(s['score'], 2),
                 'price':        s['price'],
             }
-            for s in (ranked or [])[:top_n]
+            for s in (ranked or [])[:top_n + 5]
             if s['symbol'] not in held_syms
-        ]
-        rebalance_needed = bool(sell_preview or buy_preview)
-
-        # Next rebalance date
-        if config['rebalance_freq'] == 'weekly':
-            days_fwd = (7 - today.weekday()) % 7 or 7
-            next_reb = str(today + timedelta(days=days_fwd))
-        elif config['rebalance_freq'] == 'quarterly':
-            qm = (((today.month - 1) // 3 + 1) * 3 % 12) + 1
-            qy = today.year + (1 if qm <= today.month else 0)
-            next_reb = str(today.replace(year=qy, month=qm, day=1))
-        else:  # monthly
-            nm = today.month % 12 + 1
-            ny = today.year + (1 if today.month == 12 else 0)
-            next_reb = str(today.replace(year=ny, month=nm, day=1))
-
-        # Fetch current prices for held stocks
-        yf_syms = [f"{e['symbol']}.NS" for e in live_entries]
-        try:
-            px = yf.download(yf_syms, period='5d', interval='1d',
-                             auto_adjust=True, progress=False, threads=True)
-            closes = (px['Close'] if len(yf_syms) > 1
-                      else px[['Close']].rename(columns={'Close': yf_syms[0]}))
-        except Exception:
-            closes = None
-
-        live_holdings  = []
-        total_invested = 0.0
-        total_curr_val = 0.0
-
-        for e in live_entries:
-            yf_sym     = f"{e['symbol']}.NS"
-            curr_price = e['entry_price']
-            if closes is not None:
-                col = closes.get(yf_sym)
-                if col is not None:
-                    clean = col.dropna()
-                    if not clean.empty:
-                        curr_price = round(float(clean.iloc[-1]), 2)
-
-            qty      = e['qty']
-            entry    = e['entry_price']
-            buy_val  = round(entry * qty, 2)
-            curr_val = round(curr_price * qty, 2)
-            pnl_abs  = round(curr_val - buy_val, 2)
-            pnl_pct  = round((curr_price - entry) / entry * 100, 2) if entry else 0
-
-            total_invested += buy_val
-            total_curr_val += curr_val
-            r_info = rank_by_sym.get(e['symbol'], {})
-            live_holdings.append({
-                'symbol':         e['symbol'],
-                'qty':            qty,
-                'entry_date':     e['entry_date'],
-                'entry_price':    entry,
-                'current_price':  curr_price,
-                'buy_value':      buy_val,
-                'current_value':  curr_val,
-                'pnl_abs':        pnl_abs,
-                'pnl_pct':        pnl_pct,
-                'current_rank':   r_info.get('rank', '?'),
-                'momentum_score': round(r_info.get('score', 0), 2),
-            })
-
-        live_holdings.sort(key=lambda h: h['pnl_pct'], reverse=True)
-        unrealised_pnl = round(total_curr_val - total_invested, 2)
-        unrealised_pct = round(unrealised_pnl / total_invested * 100, 2) if total_invested else 0
+        ][:top_n]
 
         return jsonify({
             'success':          True,
-            'live_mode':        True,
-            'live_since':       config.get('live_since'),
-            'live_holdings':    live_holdings,
-            'holding_count':    len(live_holdings),
-            'total_invested':   round(total_invested, 2),
-            'current_port_val': round(total_curr_val, 2),
-            'unrealised_pnl':   unrealised_pnl,
-            'unrealised_pct':   unrealised_pct,
+            'holding_ranks':    holding_ranks,
             'sell_preview':     sell_preview,
             'buy_preview':      buy_preview,
-            'next_rebalance':   next_reb,
-            'last_rebalance':   config.get('live_since'),
-            'rebalance_needed': rebalance_needed,
+            'rebalance_needed': bool(sell_preview or buy_preview),
         })
     except Exception as e:
-        logger.exception(f'SM live signal error for config {config_id}: {e}')
+        logger.exception(f'SM rankings error for config {config_id}: {e}')
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

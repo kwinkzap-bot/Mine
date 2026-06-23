@@ -41,6 +41,7 @@ class SwingMomentumEngine:
         investment: float = 100_000.0,
         top_n: int = 10,
         exit_rank: int = 50,
+        monthly_add: float = 0.0,
     ):
         self.index_name     = index_name.upper().strip()
         self.start_date     = datetime.strptime(start_date, '%Y-%m-%d').date()
@@ -49,6 +50,7 @@ class SwingMomentumEngine:
         self.investment     = float(investment)
         self.top_n          = int(top_n)
         self.exit_rank      = int(exit_rank)
+        self.monthly_add    = float(monthly_add)
 
     # ── data fetching ─────────────────────────────────────────────────────
 
@@ -205,13 +207,18 @@ class SwingMomentumEngine:
             raise ValueError('No rebalance dates found in the given range')
 
         # portfolio: sym → {yf, qty, buy_price, buy_date}
-        portfolio: Dict[str, Dict] = {}
-        cash     = self.investment
+        portfolio:    Dict[str, Dict] = {}
+        cash          = self.investment
+        cum_invested  = self.investment   # tracks total capital injected (initial + SIP adds)
         trades:  List[Dict] = []
         curve:   List[Dict] = []
         is_first = True
 
-        for rd in rdates:
+        for i, rd in enumerate(rdates):
+            # Inject monthly SIP on every rebalance after the first
+            if i > 0 and self.monthly_add > 0:
+                cash         += self.monthly_add
+                cum_invested += self.monthly_add
             # Use pre-computed rankings when available (optimiser path)
             if _rankings is not None and rd in _rankings:
                 ranked = _rankings[rd]
@@ -286,7 +293,7 @@ class SwingMomentumEngine:
                 )
             else:
                 held_val = sum(h['qty'] * h['buy_price'] for h in portfolio.values())
-            curve.append({'date': str(rd), 'value': round(cash + held_val, 2)})
+            curve.append({'date': str(rd), 'value': round(cash + held_val, 2), 'invested': round(cum_invested, 2)})
 
         # ── FINAL CLOSEOUT at end_date ────────────────────────────────
         end_row = close_df.index[close_df.index <= pd.Timestamp(self.end_date)]
@@ -314,14 +321,15 @@ class SwingMomentumEngine:
             cash += price * hold['qty']
 
         if not curve or curve[-1]['date'] != str(self.end_date):
-            curve.append({'date': str(self.end_date), 'value': round(cash, 2)})
+            curve.append({'date': str(self.end_date), 'value': round(cash, 2), 'invested': round(cum_invested, 2)})
 
         # ── Summary ───────────────────────────────────────────────────
-        sv   = self.investment
+        sv             = self.investment          # initial capital (used for peak/mdd baseline)
+        total_invested = round(cum_invested, 2)   # initial + all SIP adds
         ev   = round(cash, 2)
-        tr   = (ev - sv) / sv * 100 if sv else 0
+        tr   = (ev - total_invested) / total_invested * 100 if total_invested else 0
         days = (self.end_date - self.start_date).days
-        cagr = ((ev / sv) ** (365.0 / days) - 1) * 100 if days > 0 and sv > 0 and ev > 0 else 0
+        cagr = ((ev / total_invested) ** (365.0 / days) - 1) * 100 if days > 0 and total_invested > 0 and ev > 0 else 0
 
         peak, mdd = sv, 0.0
         for pt in curve:
@@ -341,6 +349,8 @@ class SwingMomentumEngine:
             'portfolio_curve': curve,
             'summary': {
                 'start_value':       round(sv, 2),
+                'total_invested':    total_invested,
+                'monthly_add':       self.monthly_add,
                 'end_value':         ev,
                 'total_return_pct':  round(tr, 2),
                 'cagr_pct':          round(cagr, 2),
