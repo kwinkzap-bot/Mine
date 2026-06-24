@@ -138,7 +138,7 @@ function _rtpRenderHistory(trades) {
     if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
     if (!trades.length) {
-        body.innerHTML = '<div class="ag-empty">No completed trades today</div>';
+        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
         return;
     }
 
@@ -171,6 +171,7 @@ function _rtpRenderHistory(trades) {
             <th class="ag-hist-th">N P&amp;L</th>
             <th class="ag-hist-th">Opt P&amp;L</th>
             <th class="ag-hist-th">Reason</th>
+            <th class="ag-hist-th"></th>
         </tr>
     </thead>
     <tbody>
@@ -182,6 +183,7 @@ function _rtpRenderHistory(trades) {
         const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
         const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
         const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
+        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
         return `<tr>
             <td class="ag-hist-td">${dateStr}</td>
             <td class="ag-hist-td">${entryTime}</td>
@@ -194,6 +196,9 @@ function _rtpRenderHistory(trades) {
             <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
             <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
             <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
+            <td class="ag-hist-td ag-hist-td-del">
+                <button class="ag-hist-del-btn" onclick="_rtpDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
+            </td>
         </tr>`;
     }).join('')}
     </tbody>
@@ -226,6 +231,24 @@ function _rtpFmtReason(reason) {
         MANUAL: '<span class="ag-reason-badge manual">MANUAL</span>',
     };
     return map[reason] || reason || '—';
+}
+
+// ── RTP Delete History Record ─────────────────────────────────────────────────
+
+function _rtpDeleteTrade(entryTime) {
+    if (!confirm('Delete this trade record? This cannot be undone.')) return;
+    fetch('/api/algo/rtp/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ entry_time: entryTime }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_rtpHistoryTimer);
+            _rtpFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
 }
 
 // ── RTP Force Exit ────────────────────────────────────────────────────────────
@@ -648,13 +671,23 @@ const _smPnlByConfig = {};
 function _smUpdateTotalPnl() {
     const el = document.getElementById('smLiveTotalPnl');
     if (!el) return;
-    const values = Object.values(_smPnlByConfig);
-    if (!values.length) { el.className = 'sm-total-pnl-chip'; el.textContent = ''; return; }
-    const total  = values.reduce((s, v) => s + v, 0);
-    const isPos  = total >= 0;
-    const sign   = isPos ? '+₹' : '-₹';
-    el.className = 'sm-total-pnl-chip sm-total-pnl-loaded ' + (isPos ? 'sm-tpnl-pos' : 'sm-tpnl-neg');
-    el.textContent = sign + Math.abs(total).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const entries = Object.values(_smPnlByConfig);
+    if (!entries.length) { el.className = 'sm-total-pnl-chip'; el.innerHTML = ''; return; }
+    const todaySum = entries.reduce((s, v) => s + (v.today || 0), 0);
+    const totalSum = entries.reduce((s, v) => s + (v.total || 0), 0);
+    const fmtVal = (v) => {
+        const s = v >= 0 ? '+₹' : '-₹';
+        return s + Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    };
+    el.className = 'sm-total-pnl-chip sm-total-pnl-loaded';
+    el.innerHTML = `
+        <span class="sm-tp-item ${todaySum >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
+            <span class="sm-tp-label">Today</span>${fmtVal(todaySum)}
+        </span>
+        <span class="sm-tp-sep">|</span>
+        <span class="sm-tp-item ${totalSum >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
+            <span class="sm-tp-label">Total</span>${fmtVal(totalSum)}
+        </span>`;
 }
 
 function _smLiveBuildCard(c) {
@@ -681,7 +714,6 @@ function _smLiveBuildCard(c) {
                 <span>Exit &gt;${c.exit_rank}</span>
             </div>
         </div>
-        <div class="sm-hdr-pnl" id="sm-hdr-pnl-${c.id}"></div>
         <span class="sm-live-inv-chip">₹${inv}</span>
         <div class="sm-live-hdr-actions">
             <button class="ag-btn ag-btn-strikes ag-btn-icon-only sm-live-refresh-btn" data-id="${c.id}" title="Refresh signal">↻</button>
@@ -695,6 +727,12 @@ function _smLiveBuildCard(c) {
         <span class="sm-meta-item" id="sm-meta-dep-${c.id}">Deployed —</span>
         <span class="sm-meta-sep">·</span>
         <span class="sm-meta-item" id="sm-meta-cur-${c.id}">Current —</span>
+        <span class="sm-meta-sep">·</span>
+        <span class="sm-meta-item sm-meta-pnl" id="sm-meta-today-${c.id}">Today —</span>
+        <span class="sm-meta-sep">·</span>
+        <span class="sm-meta-item sm-meta-pnl" id="sm-meta-total-${c.id}">Total —</span>
+        <span class="sm-meta-sep">·</span>
+        <span class="sm-meta-item sm-meta-pnl" id="sm-meta-cagr-${c.id}">CAGR —</span>
         <span class="sm-meta-sep">·</span>
         <span class="sm-meta-item" id="sm-meta-reb-${c.id}">Rebal —</span>
         <span class="sm-meta-sep">·</span>
@@ -743,31 +781,66 @@ function _smLiveToggle(id, btn) {
 // Both API calls start in the background as soon as cards render.
 // _smLiveExpandToggle just awaits the already-in-flight promises.
 
+function _smFmtPnl(abs, pct) {
+    const sign = abs >= 0 ? '+₹' : '-₹';
+    return sign + Math.abs(abs).toLocaleString('en-IN', { maximumFractionDigits: 0 })
+         + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%)';
+}
+
 function _smUpdateMetaRow(id, d) {
     if (!d?.success) return;
-    const dep = document.getElementById(`sm-meta-dep-${id}`);
-    const cur = document.getElementById(`sm-meta-cur-${id}`);
-    const reb = document.getElementById(`sm-meta-reb-${id}`);
+    const dep     = document.getElementById(`sm-meta-dep-${id}`);
+    const cur     = document.getElementById(`sm-meta-cur-${id}`);
+    const todayEl = document.getElementById(`sm-meta-today-${id}`);
+    const totalEl = document.getElementById(`sm-meta-total-${id}`);
+    const reb     = document.getElementById(`sm-meta-reb-${id}`);
+
     if (dep) dep.textContent = 'Deployed ' + _smFmtInr(d.total_invested || 0);
-    if (cur) {
-        cur.textContent = 'Current ' + _smFmtInr(d.current_port_val || 0);
-        cur.className   = 'sm-meta-item ' + (d.unrealised_pnl >= 0 ? 'sm-meta-pos' : 'sm-meta-neg');
+    if (cur) cur.textContent = 'Current '  + _smFmtInr(d.current_port_val || 0);
+
+    const todayAbs = d.today_pnl      || 0;
+    const todayPct = d.today_pct      || 0;
+    const totAbs   = d.unrealised_pnl || 0;
+    const totPct   = d.unrealised_pct || 0;
+
+    if (todayEl) {
+        todayEl.textContent = 'Today ' + _smFmtPnl(todayAbs, todayPct);
+        todayEl.className   = 'sm-meta-item sm-meta-pnl ' + (todayAbs >= 0 ? 'sm-meta-pos' : 'sm-meta-neg');
+    }
+    if (totalEl) {
+        totalEl.textContent = 'Total ' + _smFmtPnl(totAbs, totPct);
+        totalEl.className   = 'sm-meta-item sm-meta-pnl ' + (totAbs >= 0 ? 'sm-meta-pos' : 'sm-meta-neg');
+    }
+    const cagrEl = document.getElementById(`sm-meta-cagr-${id}`);
+    if (cagrEl) {
+        const cagr = d.cagr_pct || 0;
+        cagrEl.textContent = 'CAGR ' + (cagr >= 0 ? '+' : '') + cagr.toFixed(1) + '%';
+        cagrEl.className   = 'sm-meta-item sm-meta-pnl ' + (cagr >= 0 ? 'sm-meta-pos' : 'sm-meta-neg');
     }
     if (reb) reb.textContent = 'Rebal ' + (d.next_rebalance || '—');
-    _smPnlByConfig[id] = d.unrealised_pnl || 0;
+
+    _smPnlByConfig[id] = { today: todayAbs, total: totAbs };
     _smUpdateTotalPnl();
 }
 
 function _smUpdateHdrPnl(id, d) {
     const el = document.getElementById(`sm-hdr-pnl-${id}`);
     if (!el || !d?.success) return;
-    const pnlVal  = d.unrealised_pnl || 0;
-    const pnlCls  = pnlVal >= 0 ? 'ag-pos' : 'ag-neg';
-    const pnlSign = pnlVal >= 0 ? '+₹' : '-₹';
-    const pnlFmt  = pnlSign + Math.abs(pnlVal).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-    const pnlPct  = ((d.unrealised_pct || 0) >= 0 ? '+' : '') + (d.unrealised_pct || 0).toFixed(1) + '%';
-    el.className  = `sm-hdr-pnl sm-hdr-pnl-loaded ${pnlCls}`;
-    el.innerHTML  = `${pnlFmt} <span class="sm-hdr-pnl-pct">${pnlPct}</span>`;
+    const todayAbs = d.today_pnl      || 0;
+    const todayPct = d.today_pct      || 0;
+    const totAbs   = d.unrealised_pnl || 0;
+    const totPct   = d.unrealised_pct || 0;
+    el.className = 'sm-hdr-pnl sm-hdr-pnl-loaded';
+    el.innerHTML = `
+        <span class="sm-hdr-pnl-row sm-hdr-today ${todayAbs >= 0 ? 'ag-pos' : 'ag-neg'}">
+            <span class="sm-hdr-pnl-label">Today</span>
+            ${_smFmtPnl(todayAbs, todayPct)}
+        </span>
+        <span class="sm-hdr-pnl-sep">|</span>
+        <span class="sm-hdr-pnl-row sm-hdr-total ${totAbs >= 0 ? 'ag-pos' : 'ag-neg'}">
+            <span class="sm-hdr-pnl-label">Total</span>
+            ${_smFmtPnl(totAbs, totPct)}
+        </span>`;
 }
 
 function _smPrefetch(id, force = false) {
@@ -911,15 +984,19 @@ function _smRenderLiveMode(id, panel, d) {
                     <th class="sm-th-rank">Rank</th>
                     <th class="sm-th-score">Avg (3M+6M+9M)/3</th>
                     <th>Symbol</th><th>Qty</th><th>Entry Date</th>
-                    <th>Entry Price</th><th>Curr Price</th>
+                    <th>Entry ₹</th><th>Curr ₹</th>
                     <th>Invested</th><th>Curr Value</th>
-                    <th>P&amp;L ₹</th><th>P&amp;L %</th>
+                    <th class="sm-th-today">Today ₹</th><th class="sm-th-today">Today %</th>
+                    <th>Total ₹</th><th>Total %</th>
                 </tr></thead>
                 <tbody>
                 ${holdings.map((h) => {
-                    const pCls  = h.pnl_pct >= 0 ? 'sm-pos' : 'sm-neg';
-                    const pSign = h.pnl_abs >= 0 ? '+₹' : '-₹';
-                    const pPct  = (h.pnl_pct >= 0 ? '+' : '') + h.pnl_pct.toFixed(1) + '%';
+                    const tCls   = (h.today_pct || 0) >= 0 ? 'sm-pos' : 'sm-neg';
+                    const tSign  = (h.today_abs || 0) >= 0 ? '+₹' : '-₹';
+                    const tPct   = ((h.today_pct || 0) >= 0 ? '+' : '') + (h.today_pct || 0).toFixed(1) + '%';
+                    const pCls   = h.pnl_pct >= 0 ? 'sm-pos' : 'sm-neg';
+                    const pSign  = h.pnl_abs >= 0 ? '+₹' : '-₹';
+                    const pPct   = (h.pnl_pct >= 0 ? '+' : '') + h.pnl_pct.toFixed(1) + '%';
                     return `<tr data-sym="${h.symbol}">
                         <td class="sm-td-rank"><span class="sm-rank-pill sm-rank-cell">—</span></td>
                         <td class="sm-td-score sm-score-cell" style="color:var(--ag-text-3)">…</td>
@@ -930,6 +1007,8 @@ function _smRenderLiveMode(id, panel, d) {
                         <td>₹${Number(h.current_price).toFixed(2)}</td>
                         <td>₹${Number(h.buy_value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
                         <td>₹${Number(h.current_value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                        <td class="${tCls} sm-td-today">${tSign}${Math.abs(h.today_abs || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                        <td class="${tCls} sm-td-today">${tPct}</td>
                         <td class="${pCls} sm-pnl-abs">${pSign}${Math.abs(h.pnl_abs).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
                         <td class="${pCls} sm-pnl-pct">${pPct}</td>
                     </tr>`;
@@ -938,28 +1017,26 @@ function _smRenderLiveMode(id, panel, d) {
             </table></div>`
         : '<div class="ag-empty">No live holdings</div>';
 
+    // Stash holdings + meta so the SIP/SWP popup can compute allocations client-side
+    _smHoldingsData[id] = { holdings, broker: d.broker || null };
+
+    const totalSwp = d.total_swp_taken || 0;
+
     panel.innerHTML = `
-<!-- ── Compact action bar: Capital + SIP ── -->
+<!-- ── Compact action bar: Capital + SIP/SWP ── -->
 <div class="sm-action-bar">
     <div class="sm-ab-capital">
         <span class="sm-ab-label">Capital</span>
         <span class="sm-ab-val" id="sm-cfg-inv-${id}">${_smFmtInr(cfgInv)}</span>
-        <button class="sm-edit-btn" onclick="_smToggleEditInv('${id}', ${cfgInv})" title="Edit capital">✎</button>
         ${totalSip > 0 ? `<span class="sm-ab-sip-added">+${_smFmtInr(totalSip)} SIP</span>` : ''}
+        ${totalSwp > 0 ? `<span class="sm-ab-swp-taken">−${_smFmtInr(totalSwp)} SWP</span>` : ''}
     </div>
     <span class="sm-ab-divider"></span>
     <div class="sm-ab-sip">
-        <span class="sm-ab-label">SIP</span>
-        <input type="number" id="sm-sip-amount-${id}" step="500" min="0" placeholder="Amount ₹" class="sm-ab-input sm-sip-amount-input">
-        <input type="text"   id="sm-sip-note-${id}"   placeholder="Note"          class="sm-ab-input sm-sip-note-input">
-        <button class="ag-btn ag-btn-preview sm-ab-btn" onclick="_smRecordSip('${id}')">+ Add</button>
+        <button class="ag-btn ag-btn-preview sm-ab-btn" onclick="_smOpenFlowModal('${id}', 'sip')">＋ SIP</button>
+        <button class="ag-btn ag-btn-exit sm-ab-btn" onclick="_smOpenFlowModal('${id}', 'swp')">－ SWP</button>
         ${sipLog.length ? `<button class="sm-history-btn sm-ab-btn" onclick="_smShowSipHistory('${id}')">History (${sipLog.length})</button>` : ''}
     </div>
-</div>
-<div id="sm-inv-edit-form-${id}" style="display:none" class="sm-inline-edit-form">
-    <input type="number" id="sm-inv-input-${id}" value="${cfgInv}" step="5000" min="1000" class="sm-ab-input" style="width:130px">
-    <button class="ag-btn ag-btn-preview sm-ab-btn" onclick="_smSaveInv('${id}')">Save</button>
-    <button class="ag-btn sm-ab-btn" onclick="_smToggleEditInv('${id}', null)">Cancel</button>
 </div>
 
 <div class="sm-signal-section-title">
@@ -983,14 +1060,19 @@ function _smShowSipHistory(id) {
     const fmtInr  = v => '₹' + Math.round(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
     const bodyHtml = log.length
-        ? [...log].reverse().map((e, i) => `
+        ? [...log].reverse().map((e, i) => {
+            const amt   = e.amount || 0;
+            const isSwp = amt < 0 || e.type === 'swp';
+            const tag   = isSwp ? '<span class="sm-mtag sm-mtag-swp">SWP</span>'
+                                : '<span class="sm-mtag sm-mtag-sip">SIP</span>';
+            return `
             <tr class="${i % 2 === 0 ? 'sm-mrow-even' : 'sm-mrow-odd'}">
                 <td class="sm-mcell sm-mcell-date">
-                    <span class="sm-mdate-icon">&#128197;</span>${e.date}
+                    <span class="sm-mdate-icon">&#128197;</span>${e.date} ${tag}
                 </td>
-                <td class="sm-mcell sm-mcell-amt">${fmtInr(e.amount)}</td>
+                <td class="sm-mcell sm-mcell-amt ${isSwp ? 'sm-neg' : 'sm-pos'}">${amt < 0 ? '−' : '+'}${fmtInr(Math.abs(amt))}</td>
                 <td class="sm-mcell sm-mcell-note">${e.note || '<span class="sm-mdash">—</span>'}</td>
-            </tr>`).join('')
+            </tr>`; }).join('')
         : `<tr><td colspan="3" class="sm-mcell" style="text-align:center;padding:28px 0;color:var(--ag-text-3)">No entries recorded yet</td></tr>`;
 
     const modal = document.createElement('div');
@@ -1082,22 +1164,180 @@ function _smSaveInv(id) {
 }
 
 
-function _smRecordSip(id) {
-    const amtEl  = document.getElementById(`sm-sip-amount-${id}`);
-    const noteEl = document.getElementById(`sm-sip-note-${id}`);
-    const amt    = parseFloat(amtEl?.value);
-    if (!amt || amt <= 0) { window.showNotification && window.showNotification('Enter a valid amount', 'error'); return; }
-    const today  = new Date().toISOString().split('T')[0];
-    fetch(`/api/algo/swing-momentum/configs/${id}/monthly-invest`, {
+// id → { holdings: [...], broker: {...}|null } captured at render time
+const _smHoldingsData = {};
+
+// Compute equal-₹ split allocations for a SIP/SWP amount across holdings.
+function _smComputeFlowAllocations(holdings, mode, amount) {
+    const n = holdings.length;
+    if (!n || !(amount > 0)) return [];
+    const perStock = amount / n;
+    return holdings.map(h => {
+        const price = Number(h.current_price) || 0;
+        let qty = price > 0 ? Math.floor(perStock / price) : 0;
+        if (mode === 'swp') qty = Math.min(qty, Number(h.qty) || 0);
+        return { symbol: h.symbol, price, qty, held: Number(h.qty) || 0,
+                 entry: Number(h.entry_price) || 0 };
+    });
+}
+
+function _smOpenFlowModal(id, mode) {
+    document.getElementById('smFlowModal')?.remove();
+    const data     = _smHoldingsData[id] || { holdings: [], broker: null };
+    const holdings = data.holdings || [];
+    if (!holdings.length) { window.showNotification && window.showNotification('No holdings loaded yet', 'error'); return; }
+
+    const isSip   = mode === 'sip';
+    const title   = isSip ? '＋ SIP — Add & Buy' : '－ SWP — Withdraw & Sell';
+    const accent  = isSip ? 'sm-flow-sip' : 'sm-flow-swp';
+    const defAmt  = isSip ? 5000 : 5000;
+
+    const modal = document.createElement('div');
+    modal.id = 'smFlowModal';
+    modal.className = 'sm-gl-overlay';
+    modal.innerHTML = `
+<div class="sm-gl-box ${accent}">
+    <div class="sm-gl-hdr">
+        <span class="sm-gl-title">${title}</span>
+        <button class="sm-gl-close" onclick="document.getElementById('smFlowModal').remove()">✕</button>
+    </div>
+    <div class="sm-gl-body">
+        <div class="sm-flow-controls">
+            <label class="sm-gl-field"><span>${isSip ? 'Invest amount (₹)' : 'Withdraw amount (₹)'}</span>
+                <input type="number" id="flowAmount" value="${defAmt}" step="500" min="0"></label>
+            <label class="sm-gl-field sm-gl-field-wide"><span>Broker (optional)</span>
+                <select id="flowBroker"><option value="">None — update list only (no real orders)</option></select></label>
+        </div>
+        <div class="sm-flow-table-wrap">
+            <table class="sm-flow-table">
+                <thead><tr>
+                    <th>Symbol</th><th>Price</th><th>Held</th>
+                    <th>${isSip ? 'Buy Qty' : 'Sell Qty'}</th>
+                    <th>${isSip ? 'New Qty' : 'Left'}</th>
+                    <th>${isSip ? 'New Avg' : 'Value'}</th>
+                </tr></thead>
+                <tbody id="flowTableBody"></tbody>
+            </table>
+        </div>
+        <div class="sm-flow-summary" id="flowSummary"></div>
+        <div class="sm-gl-summary" id="flowResult" style="display:none"></div>
+    </div>
+    <div class="sm-gl-footer">
+        <button class="sm-gl-btn sm-gl-cancel" onclick="document.getElementById('smFlowModal').remove()">Cancel</button>
+        <button class="sm-gl-btn ${isSip ? 'sm-gl-confirm' : 'sm-flow-confirm-swp'}" id="flowConfirmBtn">
+            ${isSip ? 'Confirm & Buy' : 'Confirm & Sell'}</button>
+    </div>
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+
+    // Populate broker dropdown (preselect the config's broker if any)
+    fetch('/api/available-brokers').then(r => r.json()).then(bd => {
+        const sel = document.getElementById('flowBroker');
+        if (!sel || !bd || !bd.brokers) return;
+        bd.brokers.filter(b => b.active !== false).forEach(b => {
+            const opt = document.createElement('option');
+            opt.value = b.instance_num;
+            opt.dataset.type = b.broker_type || '';
+            opt.dataset.name = b.name || b.broker_type || '';
+            opt.textContent = `${b.name || b.broker_type} (${(b.broker_type || '').toUpperCase()})` +
+                              (b.is_logged_in ? '' : ' — not connected');
+            opt.disabled = !b.is_logged_in;
+            if (data.broker && Number(data.broker.instance) === Number(b.instance_num)) opt.selected = true;
+            sel.appendChild(opt);
+        });
+    }).catch(() => {});
+
+    const recompute = () => _smRenderFlowTable(id, mode);
+    document.getElementById('flowAmount').addEventListener('input', recompute);
+    document.getElementById('flowConfirmBtn').addEventListener('click', () => _smSubmitFlow(id, mode));
+    recompute();
+}
+
+function _smRenderFlowTable(id, mode) {
+    const holdings = (_smHoldingsData[id] || {}).holdings || [];
+    const amount   = parseFloat(document.getElementById('flowAmount').value) || 0;
+    const isSip    = mode === 'sip';
+    const allocs   = _smComputeFlowAllocations(holdings, mode, amount);
+    const body     = document.getElementById('flowTableBody');
+    const fmt      = v => '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+    let deployed = 0;
+    body.innerHTML = allocs.map(a => {
+        let detail;
+        if (isSip) {
+            const newQty = a.held + a.qty;
+            const newAvg = newQty ? (a.held * a.entry + a.qty * a.price) / newQty : a.entry;
+            deployed += a.qty * a.price;
+            detail = `<td>${newQty}</td><td>₹${newAvg.toFixed(2)}</td>`;
+        } else {
+            const left = a.held - a.qty;
+            deployed += a.qty * a.price;
+            detail = `<td>${left}${left === 0 ? ' <span class="sm-flow-out">(exit)</span>' : ''}</td><td>${fmt(a.qty * a.price)}</td>`;
+        }
+        return `<tr>
+            <td class="sm-col-sym"><strong>${a.symbol}</strong></td>
+            <td>₹${a.price.toFixed(2)}</td>
+            <td>${a.held}</td>
+            <td class="${isSip ? 'sm-pos' : 'sm-neg'}"><strong>${a.qty}</strong></td>
+            ${detail}
+        </tr>`;
+    }).join('');
+
+    document.getElementById('flowSummary').innerHTML =
+        `${isSip ? 'Total to deploy' : 'Total to withdraw'}: <strong>${fmt(deployed)}</strong>` +
+        `<span class="sm-flow-sub"> · ${allocs.filter(a => a.qty > 0).length}/${holdings.length} stocks · idle cash ${fmt(Math.max(0, amount - deployed))}</span>`;
+}
+
+function _smSubmitFlow(id, mode) {
+    const holdings = (_smHoldingsData[id] || {}).holdings || [];
+    const amount   = parseFloat(document.getElementById('flowAmount').value) || 0;
+    if (!(amount > 0)) { window.showNotification && window.showNotification('Enter a valid amount', 'error'); return; }
+    const allocs   = _smComputeFlowAllocations(holdings, mode, amount).filter(a => a.qty > 0);
+    if (!allocs.length) { window.showNotification && window.showNotification('Amount too small for any share', 'error'); return; }
+
+    const brokerSel = document.getElementById('flowBroker');
+    const brokerOpt = brokerSel.selectedOptions[0];
+    const brokerInst = brokerSel.value;
+
+    const payload = {
+        mode, amount,
+        date: new Date().toISOString().split('T')[0],
+        allocations: allocs.map(a => ({ symbol: a.symbol, qty: a.qty })),
+    };
+    if (brokerInst) {
+        payload.broker_instance = brokerInst;
+        payload.broker_type     = brokerOpt?.dataset.type || '';
+        payload.broker_name     = brokerOpt?.dataset.name || '';
+    }
+
+    const btn = document.getElementById('flowConfirmBtn');
+    btn.disabled = true;
+    btn.textContent = brokerInst ? 'Placing orders…' : 'Updating…';
+
+    fetch(`/api/algo/swing-momentum/configs/${id}/sip-swp`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ amount: amt, date: today, note: noteEl?.value || '' }),
+        body:    JSON.stringify(payload),
     }).then(r => r.json()).then(d => {
-        if (!d.success) return;
-        window.showNotification && window.showNotification('Investment recorded', 'success');
-        if (amtEl)  amtEl.value  = '';
-        if (noteEl) noteEl.value = '';
-        _smLiveLoadSignal(id);
+        if (!d.success) {
+            btn.disabled = false; btn.textContent = mode === 'sip' ? 'Confirm & Buy' : 'Confirm & Sell';
+            window.showNotification && window.showNotification(d.error || 'Failed', 'error');
+            return;
+        }
+        const res = document.getElementById('flowResult');
+        const bs  = d.broker_summary;
+        let msg = `✅ ${mode === 'sip' ? 'Bought' : 'Sold'} ₹${Math.round(d.deployed).toLocaleString('en-IN')} across stocks.`;
+        if (bs) msg += bs.placed ? ` ${bs.placed} order(s) on ${bs.broker}${bs.failed ? `, ${bs.failed} failed` : ''}.`
+                                 : ` ⚠ ${bs.error || 'No orders placed'} (list updated).`;
+        res.className = 'sm-gl-summary ' + (bs && !bs.placed ? 'sm-gl-summary-err' : 'sm-gl-summary-ok');
+        res.style.display = 'block';
+        res.textContent = msg;
+        window.showNotification && window.showNotification(mode === 'sip' ? 'SIP executed' : 'SWP executed', 'success');
+        setTimeout(() => { document.getElementById('smFlowModal')?.remove(); _smLiveLoadSignal(id); }, 1300);
+    }).catch(() => {
+        btn.disabled = false; btn.textContent = mode === 'sip' ? 'Confirm & Buy' : 'Confirm & Sell';
+        window.showNotification && window.showNotification('Request failed', 'error');
     });
 }
 

@@ -1183,6 +1183,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (recalcBtn) recalcBtn.style.display = '';
     }
 
+    // Open the Go Live confirmation popup, pre-filled from the params form.
     function _smGoLiveFromForm() {
         const index      = (document.getElementById('smIndex')      || {}).value || 'NIFTY 500';
         const topN       = parseInt((document.getElementById('smTopN')       || {}).value) || 10;
@@ -1190,31 +1191,134 @@ document.addEventListener('DOMContentLoaded', function() {
         const freq       = (document.getElementById('smRebalFreq')  || {}).value || 'monthly';
         const investment = parseFloat((document.getElementById('smInvestment') || {}).value) || 100000;
         const monthlyAdd = parseFloat((document.getElementById('smMonthlyAdd') || {}).value) || 0;
+        _smOpenGoLiveModal({ index, topN, exitRank, freq, investment, monthlyAdd });
+    }
+
+    function _smOpenGoLiveModal(p) {
+        document.getElementById('smGoLiveModal')?.remove();
+
+        const idxOpts = ['NIFTY 500', 'NIFTY 200', 'NIFTY SMALLCAP 250', 'NIFTY MICROCAP 250',
+                         'NIFTY LARGEMIDCAP 250', 'NIFTY MIDSMALLCAP 400']
+            .map(v => `<option value="${v}" ${v === p.index ? 'selected' : ''}>${v.replace('NIFTY ', 'Nifty ')}</option>`).join('');
+        const freqOpts = ['monthly', 'weekly', 'quarterly']
+            .map(v => `<option value="${v}" ${v === p.freq ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('');
+
+        const modal = document.createElement('div');
+        modal.id = 'smGoLiveModal';
+        modal.className = 'sm-gl-overlay';
+        modal.innerHTML = `
+<div class="sm-gl-box">
+    <div class="sm-gl-hdr">
+        <span class="sm-gl-title">🚀 Go Live — Swing Momentum</span>
+        <button class="sm-gl-close" onclick="document.getElementById('smGoLiveModal').remove()">✕</button>
+    </div>
+    <div class="sm-gl-body">
+        <div class="sm-gl-grid">
+            <label class="sm-gl-field"><span>Investment (₹)</span>
+                <input type="number" id="glInvestment" value="${p.investment}" step="10000" min="10000"></label>
+            <label class="sm-gl-field"><span>Monthly SIP (₹)</span>
+                <input type="number" id="glMonthlyAdd" value="${p.monthlyAdd}" step="1000" min="0" placeholder="0 = disabled"></label>
+            <label class="sm-gl-field"><span>Index</span>
+                <select id="glIndex">${idxOpts}</select></label>
+            <label class="sm-gl-field"><span>Hold Top N</span>
+                <input type="number" id="glTopN" value="${p.topN}" min="1" max="30"></label>
+            <label class="sm-gl-field"><span>Exit if Rank &gt;</span>
+                <input type="number" id="glExitRank" value="${p.exitRank}" min="11" max="200"></label>
+            <label class="sm-gl-field"><span>Rebalance</span>
+                <select id="glRebalFreq">${freqOpts}</select></label>
+            <label class="sm-gl-field sm-gl-field-wide"><span>Broker (optional)</span>
+                <select id="glBroker"><option value="">None — track only (no real orders)</option></select></label>
+        </div>
+        <div class="sm-gl-note" id="glBrokerNote">
+            With no broker, entries are tracked at current ranking prices. Pick a broker to place
+            <strong>CNC MARKET</strong> buy orders and record the actual average fill price.
+        </div>
+        <div class="sm-gl-summary" id="glSummary" style="display:none"></div>
+    </div>
+    <div class="sm-gl-footer">
+        <button class="sm-gl-btn sm-gl-cancel" onclick="document.getElementById('smGoLiveModal').remove()">Cancel</button>
+        <button class="sm-gl-btn sm-gl-confirm" id="glConfirmBtn">Confirm &amp; Go Live</button>
+    </div>
+</div>`;
+        modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+        document.body.appendChild(modal);
+
+        // Populate broker dropdown
+        fetch('/api/available-brokers').then(r => r.json()).then(d => {
+            const sel = document.getElementById('glBroker');
+            if (!sel || !d || !d.brokers) return;
+            d.brokers.filter(b => b.active !== false).forEach(b => {
+                const opt  = document.createElement('option');
+                opt.value  = b.instance_num;
+                opt.dataset.type = b.broker_type || '';
+                opt.dataset.name = b.name || b.broker_type || '';
+                const conn = b.is_logged_in ? '' : ' — not connected';
+                opt.textContent  = `${b.name || b.broker_type} (${(b.broker_type || '').toUpperCase()})${conn}`;
+                opt.disabled = !b.is_logged_in;
+                sel.appendChild(opt);
+            });
+        }).catch(() => {});
+
+        document.getElementById('glConfirmBtn').addEventListener('click', _smSubmitGoLive);
+    }
+
+    function _smSubmitGoLive() {
+        const index      = document.getElementById('glIndex').value;
+        const topN       = parseInt(document.getElementById('glTopN').value) || 10;
+        const exitRank   = parseInt(document.getElementById('glExitRank').value) || 50;
+        const freq       = document.getElementById('glRebalFreq').value;
+        const investment = parseFloat(document.getElementById('glInvestment').value) || 100000;
+        const monthlyAdd = parseFloat(document.getElementById('glMonthlyAdd').value) || 0;
+
+        const brokerSel  = document.getElementById('glBroker');
+        const brokerOpt  = brokerSel.selectedOptions[0];
+        const brokerInst = brokerSel.value;
 
         const idxLbl  = index.replace('NIFTY ', 'Nifty ');
         const freqLbl = freq.charAt(0).toUpperCase() + freq.slice(1);
         const label   = `${idxLbl} · ${freqLbl} · Top ${topN} · Exit >${exitRank}`;
 
-        const btn = document.getElementById('smGoLiveBtn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+        const payload = { index, top_n: topN, exit_rank: exitRank, rebalance_freq: freq,
+                          investment, monthly_add: monthlyAdd, monthly_add_type: 'static',
+                          label, start_date: '2025-01-01' };
+        if (brokerInst) {
+            payload.broker_instance = brokerInst;
+            payload.broker_type     = brokerOpt?.dataset.type || '';
+            payload.broker_name     = brokerOpt?.dataset.name || '';
+        }
+
+        const cbtn = document.getElementById('glConfirmBtn');
+        cbtn.disabled = true;
+        cbtn.textContent = brokerInst ? 'Placing orders…' : 'Saving…';
 
         fetch('/api/algo/swing-momentum/configs', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ index, top_n: topN, exit_rank: exitRank,
-                                      rebalance_freq: freq, investment,
-                                      monthly_add: monthlyAdd, monthly_add_type: 'static',
-                                      label, start_date: '2025-01-01' }),
+            body:    JSON.stringify(payload),
         })
         .then(r => r.json())
         .then(d => {
-            if (btn) { btn.disabled = false; btn.textContent = '🚀 Go Live'; }
-            if (!d.success) { window.showNotification('Failed to save config', 'error'); return; }
-            window.showNotification(`Saved to Algo → Swing Momentum`, 'success');
-            setTimeout(() => { window.location.href = '/algo#swing-momentum'; }, 800);
+            if (!d.success) {
+                cbtn.disabled = false; cbtn.textContent = 'Confirm & Go Live';
+                window.showNotification('Failed to save config', 'error');
+                return;
+            }
+            const bs = d.broker_summary;
+            if (bs) {
+                const sumEl = document.getElementById('glSummary');
+                const cls   = bs.placed ? 'sm-gl-summary-ok' : 'sm-gl-summary-err';
+                sumEl.className = 'sm-gl-summary ' + cls;
+                sumEl.style.display = 'block';
+                sumEl.innerHTML = bs.placed
+                    ? `✅ Placed ${bs.placed} order${bs.placed > 1 ? 's' : ''} on ${bs.broker || 'broker'}` +
+                      (bs.failed ? ` · ⚠ ${bs.failed} failed` : '') + '. Redirecting…'
+                    : `⚠ ${bs.error || 'Order placement failed'}. Config saved as track-only.`;
+            }
+            window.showNotification('Saved to Algo → Swing Momentum', 'success');
+            setTimeout(() => { window.location.href = '/algo#swing-momentum'; }, bs ? 1400 : 800);
         })
         .catch(() => {
-            if (btn) { btn.disabled = false; btn.textContent = '🚀 Go Live'; }
+            cbtn.disabled = false; cbtn.textContent = 'Confirm & Go Live';
             window.showNotification('Request failed', 'error');
         });
     }

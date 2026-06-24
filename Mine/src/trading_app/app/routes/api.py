@@ -35,6 +35,9 @@ _RTP_STATE_PATH = os.path.normpath(
 _RTP_HISTORY_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_history.json')
 )
+_RTP_ALL_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_all_history.json')
+)
 _NIFTY_FYERS_IDX = 'NSE:NIFTY50-INDEX'
 
 def _load_opt_cache() -> dict:
@@ -5949,27 +5952,53 @@ def algo_rtp_status() -> EndpointResponse:
 @limiter.exempt
 @require_user_auth
 def algo_rtp_history() -> EndpointResponse:
-    """Return today's completed RTP trades from rtp_trades_history.json."""
+    """Return all completed RTP trades from rtp_trades_all_history.json (latest-first)."""
     try:
-        from datetime import date as _date
-        today = _date.today().isoformat()
         try:
-            with open(_RTP_HISTORY_PATH, 'r') as _f:
+            with open(_RTP_ALL_HISTORY_PATH, 'r') as _f:
                 all_trades = json.load(_f)
             if not isinstance(all_trades, list):
                 all_trades = []
         except Exception:
             all_trades = []
 
-        # Filter to today only; strip broker_entries to keep payload lean
+        # Strip broker_entries to keep payload lean
         trades = [
             {k: v for k, v in t.items() if k != 'broker_entries'}
             for t in all_trades
-            if t.get('date') == today
         ]
         return jsonify({'success': True, 'trades': trades, 'count': len(trades)})
     except Exception as e:
         logger.error(f'[rtp/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp/history', methods=['DELETE'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp_history_delete() -> EndpointResponse:
+    """Delete a trade record by entry_time from both daily and all-time history files."""
+    try:
+        data = request.get_json(silent=True) or {}
+        entry_time = data.get('entry_time')
+        if not entry_time:
+            return jsonify({'success': False, 'error': 'entry_time required'}), 400
+
+        for path in [_RTP_HISTORY_PATH, _RTP_ALL_HISTORY_PATH]:
+            try:
+                with open(path, 'r') as _f:
+                    records = json.load(_f)
+                if isinstance(records, list):
+                    records = [r for r in records if r.get('entry_time') != entry_time]
+                    with open(path, 'w') as _f:
+                        json.dump(records, _f, indent=2, default=str)
+            except Exception:
+                pass
+
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f'[rtp/history/delete] {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -7990,6 +8019,304 @@ def sm_live_configs_list():
     return jsonify({'success': True, 'configs': _sm_load_live_configs()})
 
 
+# ── Broker order placement for Swing Momentum Go Live ─────────────────────────
+
+def _sm_build_order_service(username: str, instance_num: int, broker_type: str):
+    """Construct an order service for one configured broker instance, or None."""
+    from trading_app.app.utils.user_env import UserEnvManager
+    pfx = f'BROKER_{instance_num}_'
+
+    def env(field):
+        return (UserEnvManager.get_user_var(username, pfx + field) or '').strip()
+
+    try:
+        if broker_type == 'fyers':
+            from trading_app.service.fyers_order_services import FyersOrderService
+            at = session.get(f'fyers_{instance_num}_access_token') or env('ACCESS_TOKEN')
+            if not at:
+                return None
+            return FyersOrderService(app_id=env('APP_ID'), access_token=at)
+
+        if broker_type == 'dhan':
+            from trading_app.service.dhan_order_services import DhanOrderService
+            at = env('ACCESS_TOKEN')
+            cid = env('CLIENT_ID')
+            if not at or not cid:
+                return None
+            return DhanOrderService(access_token=at, client_id=cid)
+
+        if broker_type == 'zerodha':
+            from kiteconnect import KiteConnect
+            from trading_app.service.kite_order_services import apply_kite_proxy
+            at = session.get(f'zerodha_{instance_num}_access_token') or env('ACCESS_TOKEN')
+            api_key = env('API_KEY') or os.getenv('API_KEY')
+            if not at or not api_key:
+                return None
+            k = KiteConnect(api_key=api_key)
+            apply_kite_proxy(k)
+            k.set_access_token(at)
+            return k  # KiteConnect instance used directly
+
+        if broker_type == 'kotak':
+            from trading_app.service.kotak_order_services import KotakOrderService
+            return KotakOrderService(consumer_key=env('CONSUMER_KEY'), ucc=env('UCC'))
+    except Exception as e:
+        logger.error(f'[sm-order] build service {broker_type}_{instance_num} failed: {e}')
+    return None
+
+
+def _sm_place_equity_order(broker_type: str, svc, symbol: str, qty: int, side: str = 'BUY'):
+    """Place a CNC MARKET BUY/SELL for one NSE equity. Returns (order_id, error)."""
+    side = side.upper()
+    try:
+        if broker_type == 'fyers':
+            r = svc.place_order(symbol=f'NSE:{symbol}-EQ', side=(1 if side == 'BUY' else -1),
+                                quantity=qty, order_type=2, product_type='CNC')
+            return (r.get('order_id'), None) if r.get('success') else (None, r.get('error'))
+
+        if broker_type == 'dhan':
+            sec_id = (svc._symbol_master_data or {}).get(symbol) \
+                  or (svc._symbol_master_data or {}).get(f'NSE:{symbol}')
+            if not sec_id:
+                return (None, f'No Dhan security_id for {symbol}')
+            r = svc.place_order(security_id=str(sec_id), transaction_type=side, quantity=qty,
+                                order_type='MARKET', product_type='CNC', exchange_segment='NSE_EQ')
+            return (r.get('order_id'), None) if r.get('success') else (None, r.get('error'))
+
+        if broker_type == 'zerodha':
+            txn = svc.TRANSACTION_TYPE_BUY if side == 'BUY' else svc.TRANSACTION_TYPE_SELL
+            oid = svc.place_order(variety=svc.VARIETY_REGULAR, exchange=svc.EXCHANGE_NSE,
+                                  tradingsymbol=symbol, transaction_type=txn,
+                                  quantity=qty, product=svc.PRODUCT_CNC,
+                                  order_type=svc.ORDER_TYPE_MARKET)
+            return (oid, None)
+
+        if broker_type == 'kotak':
+            r = svc.place_order(tradingsymbol=symbol, transaction_type=side, price=0.0,
+                                quantity=qty, exchange_segment='nse_cm',
+                                product='CNC', order_type='MKT')
+            return (r.get('order_id'), None) if r.get('success') else (None, r.get('error'))
+    except Exception as e:
+        return (None, str(e))
+    return (None, 'Unsupported broker')
+
+
+def _sm_avg_fill_price(broker_type: str, svc, order_id) -> Optional[float]:
+    """Read back the average traded price for a filled order, or None."""
+    if not order_id:
+        return None
+    try:
+        if broker_type == 'fyers':
+            for o in (svc.get_orderbook().get('orders') or []):
+                if str(o.get('id')) == str(order_id):
+                    return float(o.get('tradedPrice') or o.get('avgPrice') or 0) or None
+        elif broker_type == 'dhan':
+            for o in (svc.get_order_book().get('orders') or []):
+                if str(o.get('orderId')) == str(order_id):
+                    return float(o.get('averageTradedPrice') or o.get('price') or 0) or None
+        elif broker_type == 'zerodha':
+            for o in svc.orders():
+                if str(o.get('order_id')) == str(order_id):
+                    return float(o.get('average_price') or 0) or None
+    except Exception as e:
+        logger.error(f'[sm-order] avg price read {broker_type} failed: {e}')
+    return None
+
+
+def _sm_place_portfolio_orders(username: str, instance_num: int, broker_type: str,
+                               broker_name: str, live_entries: list):
+    """Place CNC MARKET BUY for every holding on the chosen broker.
+
+    Mutates live_entries in place: sets entry_price to the avg fill price (when
+    available) and attaches an 'order' record. Returns a summary dict.
+    """
+    import time as _t
+    svc = _sm_build_order_service(username, instance_num, broker_type)
+    if svc is None:
+        return {'placed': 0, 'failed': len(live_entries),
+                'error': f'{broker_name}: not connected / missing credentials'}
+
+    placed, failed, order_ids = 0, 0, []
+    for e in live_entries:
+        oid, err = _sm_place_equity_order(broker_type, svc, e['symbol'], e['qty'], 'BUY')
+        if oid:
+            placed += 1
+            order_ids.append((e, oid))
+            e['order'] = {'broker': broker_name, 'broker_type': broker_type,
+                          'instance': instance_num, 'order_id': str(oid), 'status': 'placed'}
+        else:
+            failed += 1
+            e['order'] = {'broker': broker_name, 'broker_type': broker_type,
+                          'instance': instance_num, 'order_id': None,
+                          'status': 'failed', 'error': err}
+
+    # Give the exchange a moment to fill MARKET orders, then read avg prices
+    if order_ids:
+        _t.sleep(2.0)
+        for e, oid in order_ids:
+            avg = _sm_avg_fill_price(broker_type, svc, oid)
+            if avg and avg > 0:
+                e['entry_price'] = round(avg, 2)
+                e['order']['avg_price'] = round(avg, 2)
+                e['order']['status'] = 'filled'
+
+    return {'placed': placed, 'failed': failed, 'broker': broker_name,
+            'error': None if placed else f'{broker_name}: no orders filled'}
+
+
+def _sm_current_prices(symbols: list) -> dict:
+    """Return {symbol: last_price} via Fyers (preferred) or yfinance fallback."""
+    prices = {}
+    try:
+        provider = get_data_provider()
+        if provider is not None:
+            quotes = provider.quote([f'NSE:{s}-EQ' for s in symbols])
+            for s in symbols:
+                q = quotes.get(f'NSE:{s}-EQ') or quotes.get(f'NSE:{s}')
+                if q and q.get('last_price', 0) > 0:
+                    prices[s] = round(float(q['last_price']), 2)
+    except Exception:
+        pass
+
+    missing = [s for s in symbols if s not in prices]
+    if missing:
+        try:
+            import yfinance as yf
+            px = yf.download([f'{s}.NS' for s in missing], period='5d', interval='1d',
+                             auto_adjust=True, progress=False, threads=False)
+            closes = (px['Close'] if len(missing) > 1
+                      else px[['Close']].rename(columns={'Close': f'{missing[0]}.NS'}))
+            for s in missing:
+                col = closes.get(f'{s}.NS')
+                if col is not None:
+                    clean = col.dropna()
+                    if not clean.empty:
+                        prices[s] = round(float(clean.iloc[-1]), 2)
+        except Exception:
+            pass
+    return prices
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/sip-swp', methods=['POST'])
+def sm_live_sip_swp(config_id):
+    """Execute a SIP (buy more) or SWP (sell) split equally across all holdings.
+
+    Body: {mode: 'sip'|'swp', amount: float, note?, allocations?: [{symbol, qty}],
+           broker_instance?, broker_type?, broker_name?}
+
+    - SIP: buy `qty` of each holding, update entry_price to the new weighted average.
+    - SWP: sell `qty` of each holding (capped at held qty); avg entry unchanged.
+    - With a broker: places CNC MARKET orders and uses the avg fill price.
+    - Without a broker: uses the current market price as the fill price.
+    Logs the flow in monthly_investment_log (amount > 0 for SIP, < 0 for SWP).
+    """
+    body    = request.get_json() or {}
+    mode    = (body.get('mode') or 'sip').lower()
+    amount  = float(body.get('amount', 0) or 0)
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+    entries = config.get('live_entries') or []
+    if not entries:
+        return jsonify({'success': False, 'error': 'No holdings to transact'}), 400
+    if mode not in ('sip', 'swp'):
+        return jsonify({'success': False, 'error': 'mode must be sip or swp'}), 400
+
+    by_sym = {e['symbol']: e for e in entries}
+
+    # Resolve per-stock quantities: trust client allocations, else equal-₹ split
+    prices = _sm_current_prices(list(by_sym.keys()))
+    allocs = body.get('allocations') or []
+    plan   = []  # (entry, qty, price)
+    if allocs:
+        for a in allocs:
+            sym = a.get('symbol'); q = int(a.get('qty', 0) or 0)
+            e   = by_sym.get(sym)
+            if not e or q <= 0:
+                continue
+            plan.append((e, q, prices.get(sym, e['entry_price'])))
+    else:
+        per_stock = amount / len(entries) if entries else 0
+        for e in entries:
+            p = prices.get(e['symbol'], e['entry_price'])
+            q = int(per_stock / p) if p > 0 else 0
+            if mode == 'swp':
+                q = min(q, int(e['qty']))
+            if q > 0:
+                plan.append((e, q, p))
+
+    if not plan:
+        return jsonify({'success': False, 'error': 'Amount too small for any whole share'}), 400
+
+    # Optional broker order placement
+    side          = 'BUY' if mode == 'sip' else 'SELL'
+    broker_inst   = body.get('broker_instance')
+    broker_summary = None
+    fill_prices   = {}   # symbol -> avg fill price (broker) when available
+    if broker_inst:
+        try:
+            import time as _t
+            username    = session.get('username', 'Mine')
+            broker_inst = int(broker_inst)
+            broker_type = (body.get('broker_type') or '').strip().lower()
+            broker_name = body.get('broker_name') or broker_type.title()
+            svc = _sm_build_order_service(username, broker_inst, broker_type)
+            if svc is None:
+                broker_summary = {'placed': 0, 'failed': len(plan),
+                                  'error': f'{broker_name}: not connected'}
+            else:
+                placed, failed, oids = 0, 0, []
+                for e, q, _p in plan:
+                    oid, err = _sm_place_equity_order(broker_type, svc, e['symbol'], q, side)
+                    if oid:
+                        placed += 1; oids.append((e['symbol'], oid))
+                    else:
+                        failed += 1
+                if oids:
+                    _t.sleep(2.0)
+                    for sym, oid in oids:
+                        avg = _sm_avg_fill_price(broker_type, svc, oid)
+                        if avg and avg > 0:
+                            fill_prices[sym] = round(avg, 2)
+                broker_summary = {'placed': placed, 'failed': failed, 'broker': broker_name,
+                                  'error': None if placed else f'{broker_name}: no orders placed'}
+        except Exception as ex:
+            logger.error(f'[sm-{mode}] broker placement failed: {ex}', exc_info=True)
+            broker_summary = {'placed': 0, 'failed': len(plan), 'error': str(ex)}
+
+    # Apply to holdings
+    deployed = 0.0
+    for e, q, p in plan:
+        fill = fill_prices.get(e['symbol'], p)
+        if mode == 'sip':
+            old_qty, old_entry = int(e['qty']), float(e['entry_price'])
+            new_qty = old_qty + q
+            e['entry_price'] = round((old_qty * old_entry + q * fill) / new_qty, 2)
+            e['qty']         = new_qty
+            deployed += q * fill
+        else:  # swp
+            sell_q = min(q, int(e['qty']))
+            e['qty'] = int(e['qty']) - sell_q
+            deployed += sell_q * fill
+    # Drop fully sold-out holdings
+    config['live_entries'] = [e for e in entries if int(e['qty']) > 0]
+
+    log = config.setdefault('monthly_investment_log', [])
+    log.append({
+        'date':   body.get('date', datetime.today().strftime('%Y-%m-%d')),
+        'amount': round(deployed if mode == 'sip' else -deployed, 2),
+        'note':   body.get('note', ''),
+        'type':   mode,
+    })
+
+    _sm_save_live_configs(configs)
+    return jsonify({'success': True, 'mode': mode,
+                    'deployed': round(deployed, 2),
+                    'holdings': len(config['live_entries']),
+                    'broker_summary': broker_summary})
+
+
 @api_bp.route('/algo/swing-momentum/configs', methods=['POST'])
 def sm_live_configs_add():
     body = request.get_json() or {}
@@ -8022,6 +8349,22 @@ def sm_live_configs_add():
             'entry_date':  str(today),
         })
 
+    # Optional: place real CNC MARKET orders on a chosen broker, then record the
+    # average fill price as each holding's entry price.
+    broker_summary = None
+    broker_instance = body.get('broker_instance')
+    if broker_instance and live_entries:
+        try:
+            username = session.get('username', 'Mine')
+            broker_instance = int(broker_instance)
+            broker_type = (body.get('broker_type') or '').strip().lower()
+            broker_name = body.get('broker_name') or broker_type.title()
+            broker_summary = _sm_place_portfolio_orders(
+                username, broker_instance, broker_type, broker_name, live_entries)
+        except Exception as e:
+            logger.error(f'[sm-order] portfolio placement failed: {e}', exc_info=True)
+            broker_summary = {'placed': 0, 'failed': len(live_entries), 'error': str(e)}
+
     config = {
         'id':                     str(uuid.uuid4())[:8],
         'label':                  body.get('label', ''),
@@ -8039,9 +8382,15 @@ def sm_live_configs_add():
         'live_since':             str(today),
         'live_entries':           live_entries,
     }
+    if broker_instance:
+        config['broker'] = {
+            'instance':    broker_instance,
+            'broker_type': body.get('broker_type'),
+            'broker_name': body.get('broker_name'),
+        }
     configs.append(config)
     _sm_save_live_configs(configs)
-    return jsonify({'success': True, 'config': config})
+    return jsonify({'success': True, 'config': config, 'broker_summary': broker_summary})
 
 
 @api_bp.route('/algo/swing-momentum/configs/<config_id>', methods=['DELETE'])
@@ -8191,7 +8540,8 @@ def sm_live_signal(config_id):
             ny = today.year + (1 if today.month == 12 else 0)
             next_reb = str(today.replace(year=ny, month=nm, day=1))
 
-        # Fetch current prices — Fyers if connected, else yfinance fallback
+        # Fetch current prices — Fyers if connected (gives ltp + prev_close), else yfinance fallback
+        # price_map: symbol → {'ltp': float, 'prev_close': float}
         price_map = {}
         provider  = get_data_provider()
         if provider is not None:
@@ -8202,62 +8552,96 @@ def sm_live_signal(config_id):
                     fsym = f"NSE:{e['symbol']}-EQ"
                     q    = quotes.get(fsym) or quotes.get(f"NSE:{e['symbol']}")
                     if q and q.get('last_price', 0) > 0:
-                        price_map[e['symbol']] = round(float(q['last_price']), 2)
+                        ltp        = round(float(q['last_price']), 2)
+                        prev_close = round(float(q.get('ohlc', {}).get('close') or ltp), 2)
+                        price_map[e['symbol']] = {'ltp': ltp, 'prev_close': prev_close}
             except Exception:
                 pass
 
         if not price_map:
-            # Fyers not connected or returned empty — fall back to yfinance
+            # yfinance fallback — prev_close = second-to-last close row
             import yfinance as yf
             yf_syms = [f"{e['symbol']}.NS" for e in live_entries]
             try:
                 px     = yf.download(yf_syms, period='5d', interval='1d',
-                                     auto_adjust=True, progress=False, threads=True)
+                                     auto_adjust=True, progress=False, threads=False)
                 closes = (px['Close'] if len(yf_syms) > 1
                           else px[['Close']].rename(columns={'Close': yf_syms[0]}))
                 for e in live_entries:
                     col = closes.get(f"{e['symbol']}.NS")
                     if col is not None:
                         clean = col.dropna()
-                        if not clean.empty:
-                            price_map[e['symbol']] = round(float(clean.iloc[-1]), 2)
+                        if len(clean) >= 2:
+                            price_map[e['symbol']] = {
+                                'ltp':        round(float(clean.iloc[-1]), 2),
+                                'prev_close': round(float(clean.iloc[-2]), 2),
+                            }
+                        elif len(clean) == 1:
+                            ltp = round(float(clean.iloc[-1]), 2)
+                            price_map[e['symbol']] = {'ltp': ltp, 'prev_close': ltp}
             except Exception:
                 pass
 
-        live_holdings  = []
-        total_invested = 0.0
-        total_curr_val = 0.0
+        live_holdings   = []
+        total_invested  = 0.0
+        total_curr_val  = 0.0
+        total_today_pnl = 0.0
 
         for e in live_entries:
-            curr_price = price_map.get(e['symbol'], e['entry_price'])
+            px_data    = price_map.get(e['symbol'], {})
+            curr_price = px_data.get('ltp',        e['entry_price'])
+            prev_close = px_data.get('prev_close', curr_price)
 
-            qty      = e['qty']
-            entry    = e['entry_price']
-            buy_val  = round(entry * qty, 2)
-            curr_val = round(curr_price * qty, 2)
-            pnl_abs  = round(curr_val - buy_val, 2)
-            pnl_pct  = round((curr_price - entry) / entry * 100, 2) if entry else 0
-            total_invested += buy_val
-            total_curr_val += curr_val
+            qty        = e['qty']
+            entry      = e['entry_price']
+            buy_val    = round(entry * qty, 2)
+            curr_val   = round(curr_price * qty, 2)
+            pnl_abs    = round(curr_val - buy_val, 2)
+            pnl_pct    = round((curr_price - entry) / entry * 100, 2) if entry else 0
+            today_abs  = round((curr_price - prev_close) * qty, 2)
+            today_pct  = round((curr_price - prev_close) / prev_close * 100, 2) if prev_close else 0
+            total_invested  += buy_val
+            total_curr_val  += curr_val
+            total_today_pnl += today_abs
             live_holdings.append({
                 'symbol':         e['symbol'],
                 'qty':            qty,
                 'entry_date':     e['entry_date'],
                 'entry_price':    entry,
                 'current_price':  curr_price,
+                'prev_close':     prev_close,
                 'buy_value':      buy_val,
                 'current_value':  curr_val,
                 'pnl_abs':        pnl_abs,
                 'pnl_pct':        pnl_pct,
+                'today_abs':      today_abs,
+                'today_pct':      today_pct,
                 'current_rank':   None,
                 'momentum_score': None,
             })
 
-        unrealised_pnl = round(total_curr_val - total_invested, 2)
-        unrealised_pct = round(unrealised_pnl / total_invested * 100, 2) if total_invested else 0
+        unrealised_pnl  = round(total_curr_val - total_invested, 2)
+        unrealised_pct  = round(unrealised_pnl / total_invested * 100, 2) if total_invested else 0
+        total_today_pnl = round(total_today_pnl, 2)
+        total_today_pct = round(total_today_pnl / total_invested * 100, 2) if total_invested else 0
+
+        # Simple annualized CAGR since go-live (cost basis = current invested incl. SIP/SWP)
+        cagr_pct = 0.0
+        try:
+            live_since = config.get('live_since')
+            if live_since and total_invested > 0 and total_curr_val > 0:
+                d0    = datetime.strptime(live_since, '%Y-%m-%d').date()
+                years = max((today - d0).days, 1) / 365.25
+                if years >= 0.02:  # ~1 week min to avoid blow-up
+                    cagr_pct = round(((total_curr_val / total_invested) ** (1 / years) - 1) * 100, 2)
+                else:
+                    cagr_pct = unrealised_pct  # too short to annualize meaningfully
+        except Exception:
+            cagr_pct = 0.0
 
         monthly_log = config.get('monthly_investment_log', [])
-        total_sip   = sum(e.get('amount', 0) for e in monthly_log)
+        total_sip   = sum(e.get('amount', 0) for e in monthly_log if e.get('amount', 0) > 0)
+        total_swp   = sum(-e.get('amount', 0) for e in monthly_log if e.get('amount', 0) < 0)
 
         return jsonify({
             'success':                True,
@@ -8269,6 +8653,8 @@ def sm_live_signal(config_id):
             'current_port_val':       round(total_curr_val, 2),
             'unrealised_pnl':         unrealised_pnl,
             'unrealised_pct':         unrealised_pct,
+            'today_pnl':              total_today_pnl,
+            'today_pct':              total_today_pct,
             'sell_preview':           [],
             'buy_preview':            [],
             'next_rebalance':         next_reb,
@@ -8279,6 +8665,8 @@ def sm_live_signal(config_id):
             'monthly_add_type':       config.get('monthly_add_type', 'static'),
             'monthly_investment_log': monthly_log,
             'total_sip_added':        round(total_sip, 2),
+            'total_swp_taken':        round(total_swp, 2),
+            'cagr_pct':               cagr_pct,
             'rankings_pending':       True,
         })
     except Exception as e:

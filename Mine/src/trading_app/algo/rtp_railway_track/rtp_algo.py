@@ -26,9 +26,11 @@ from trading_app.service.greeks_calculator import GreeksCalculator
 
 logger = logging.getLogger(__name__)
 
-_STATE_FILE     = os.path.join(os.path.dirname(__file__), 'rtp_state.json')
-_HISTORY_FILE   = os.path.join(os.path.dirname(__file__), 'rtp_trades_history.json')
+_STATE_FILE       = os.path.join(os.path.dirname(__file__), 'rtp_state.json')
+_HISTORY_FILE     = os.path.join(os.path.dirname(__file__), 'rtp_trades_history.json')
+_ALL_HISTORY_FILE = os.path.join(os.path.dirname(__file__), 'rtp_trades_all_history.json')
 
+_SINGLE_LOT_QTY = 65     # NIFTY single lot — used for Opt P&L display
 _SL_POINTS      = 30.0
 _TGT_POINTS     = 90.0
 _DELTA_TARGET   = 0.90
@@ -144,10 +146,7 @@ class RTPAlgo:
             opt_pnl_inr: Optional[float] = None
             if opt_entry_price is not None and opt_exit_price is not None:
                 opt_pnl_pts = round(opt_exit_price - opt_entry_price, 2)
-                total_qty = sum(
-                    e.get('quantity', 0) for e in trade.get('broker_entries', [])
-                )
-                opt_pnl_inr = round(opt_pnl_pts * total_qty, 2) if total_qty else None
+                opt_pnl_inr = round(opt_pnl_pts * _SINGLE_LOT_QTY, 2)
 
             record = {
                 'date':             today,
@@ -171,6 +170,21 @@ class RTPAlgo:
 
             with open(_HISTORY_FILE, 'w') as f:
                 json.dump(history, f, indent=2, default=str)
+
+            # Append to permanent all-time history (no day rotation)
+            try:
+                try:
+                    with open(_ALL_HISTORY_FILE, 'r') as f:
+                        all_history: list = json.load(f)
+                    if not isinstance(all_history, list):
+                        all_history = []
+                except Exception:
+                    all_history = []
+                all_history.insert(0, record)
+                with open(_ALL_HISTORY_FILE, 'w') as f:
+                    json.dump(all_history, f, indent=2, default=str)
+            except Exception as _ae:
+                logger.error(f"[RTP] All-history append failed: {_ae}")
         except Exception as e:
             logger.error(f"[RTP] History append failed: {e}")
 
