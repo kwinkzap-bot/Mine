@@ -23,7 +23,7 @@ let oipRSIMarkers = [];
 
 /* ── Indicator state persistence ─────────────────────────── */
 const _OIP_IND_IDS = [
-    'oipShowOIBars', 'oipShowVwapOI', 'oipShowVwapInt',
+    'oipShowOIBars', 'oipShowVwapOI', 'oipShowVwapInt', 'oipShowCVWAP', 'oipShowPVWAP',
     'oipShowCpr', 'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
     'oipShowSignals', 'oipShowRSI',
     'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
@@ -150,6 +150,59 @@ function oipCalculateVWAP(candles) {
         if (!isNaN(vwapVal)) {
             result.push({ time: c.time, value: vwapVal });
         }
+    });
+    return result;
+}
+
+// CVWAP — alias for the current-session VWAP (resets each trading day).
+// Kept as a thin wrapper so the indicator wiring reads CVWAP/PVWAP symmetrically.
+function oipCalculateCVWAP(candles) {
+    return oipCalculateVWAP(candles);
+}
+
+// PVWAP — Previous-session VWAP. For every candle of a given day the value is the
+// FINAL (closing) VWAP of the *previous* trading day, drawn as a flat line across
+// the current session. Mirrors the "Previous VWAP" plot in the
+// "Current & Previous VWAP Strategy" Pine script.
+function oipCalculatePVWAP(candles) {
+    if (!candles || candles.length === 0) return [];
+    const dateOf = (t) => {
+        const d = new Date(t * 1000);
+        // UTC methods match the 'Fake IST Epoch' the server emits.
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    };
+
+    // Pass 1 — final VWAP per day, preserving day order.
+    const finalVwap = {};
+    const dayOrder = [];
+    let cumPV = 0, cumV = 0, lastDate = null, lastVwap = null;
+    candles.forEach(c => {
+        const date = dateOf(c.time);
+        if (date !== lastDate) {
+            if (lastDate !== null) finalVwap[lastDate] = lastVwap;
+            cumPV = 0; cumV = 0; lastVwap = null; lastDate = date;
+            dayOrder.push(date);
+        }
+        const vol = c.volume || 0;
+        if (vol <= 0) return;
+        cumPV += ((c.high + c.low + c.close) / 3) * vol;
+        cumV += vol;
+        const v = cumPV / cumV;
+        if (!isNaN(v)) lastVwap = v;
+    });
+    if (lastDate !== null) finalVwap[lastDate] = lastVwap;
+
+    // Map each day to the previous day's final VWAP.
+    const prevDayVwap = {};
+    for (let i = 1; i < dayOrder.length; i++) {
+        prevDayVwap[dayOrder[i]] = finalVwap[dayOrder[i - 1]];
+    }
+
+    // Pass 2 — emit a flat previous-day VWAP line for each candle.
+    const result = [];
+    candles.forEach(c => {
+        const pv = prevDayVwap[dateOf(c.time)];
+        if (pv != null && !isNaN(pv)) result.push({ time: c.time, value: pv });
     });
     return result;
 }

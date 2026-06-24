@@ -16,6 +16,13 @@ let oipOptionData = null;
 let oipVwapSeries = null;
 let oipVwapIntSeries = null;
 let oipVwapIntPeSeries = null;
+// CVWAP (current-session) / PVWAP (previous-session) — main index chart + premium chart
+let oipCvwapSeries = null, oipPvwapSeries = null;
+let oipCvwapIntSeries = null, oipPvwapIntSeries = null;
+let oipCvwapIntPeSeries = null, oipPvwapIntPeSeries = null;
+// CVWAP / PVWAP on the individual CE Only and PE Only charts
+let oipCECvwapSeries = null, oipCEPvwapSeries = null;
+let oipPECvwapSeries = null, oipPEPvwapSeries = null;
 // EMA/CPR/RSI series state declared in oi_indicators.js
 let oipCEChart = null;
 let oipPEChart = null;
@@ -143,7 +150,7 @@ let oipAllSymbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTY MIDC
 const oipElems = {
     symbolInput: null, symbolList: null, interval: null,
     spotHigh: null, spotLow: null, step: null, multiplier: null,
-    view: null, showVwapOI: null, showVwapInt: null,
+    view: null, showVwapOI: null, showVwapInt: null, showCVWAP: null, showPVWAP: null,
     showCpr: null, showEMA: null, showRSI: null, showOIBars: null, autoHL: null, chartWrap: null, canvas: null,
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
     hdrPrice: null, hdrPcr: null, hdrMaxPain: null, hdrCeOI: null,
@@ -172,6 +179,8 @@ function oipInitElems() {
     oipElems.showOIBars = document.getElementById('oipShowOIBars');
     oipElems.showVwapOI = document.getElementById('oipShowVwapOI');
     oipElems.showVwapInt = document.getElementById('oipShowVwapInt');
+    oipElems.showCVWAP = document.getElementById('oipShowCVWAP');
+    oipElems.showPVWAP = document.getElementById('oipShowPVWAP');
     oipElems.showCpr = document.getElementById('oipShowCpr');
     oipElems.showEMA = document.getElementById('oipShowEMA');
     oipElems.showRSI = document.getElementById('oipShowRSI');
@@ -223,10 +232,24 @@ function oipInitElems() {
 }
 
 /* ── Bootstrap ────────────────────────────────────────────── */
+// Applies the CVWAP/PVWAP checkbox state to every series across all charts
+// (main index, Opt Prem, CE Only, PE Only). Used on init and on toggle.
+function oipSyncVwapVisibility() {
+    const cv = oipElems.showCVWAP?.checked ?? false;
+    const pv = oipElems.showPVWAP?.checked ?? false;
+    [oipCvwapSeries, oipCvwapIntSeries, oipCvwapIntPeSeries, oipCECvwapSeries, oipPECvwapSeries]
+        .forEach(s => { try { s?.applyOptions({ visible: cv }); } catch (e) {} });
+    [oipPvwapSeries, oipPvwapIntSeries, oipPvwapIntPeSeries, oipCEPvwapSeries, oipPEPvwapSeries]
+        .forEach(s => { try { s?.applyOptions({ visible: pv }); } catch (e) {} });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     oipInitElems();
     oipInitCharts();
     oipInitIndicatorsPopup('oip-ind-profile');
+    // Charts are built before the popup restores persisted checkbox state, so the
+    // VWAP/CVWAP/PVWAP series are created with stale (default) visibility. Re-sync now.
+    oipSyncVwapVisibility();
 
 
 
@@ -312,6 +335,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (oipVwapIntSeries) oipVwapIntSeries.applyOptions({ visible: show });
         if (oipVwapIntPeSeries) oipVwapIntPeSeries.applyOptions({ visible: show });
     });
+
+    oipElems.showCVWAP?.addEventListener('change', () => oipSyncVwapVisibility());
+    oipElems.showPVWAP?.addEventListener('change', () => oipSyncVwapVisibility());
 
     oipElems.showCpr?.addEventListener('change', () => {
         if (oipOIData && oipOIData.candles) oipDrawCpr(oipOIData.candles);
@@ -499,6 +525,19 @@ function oipInitCharts() {
         oipVwapSeries = oipOIChart.addLineSeries({
             color: '#f59e0b', lineWidth: 2, title: '',
             visible: oipElems.showVwapOI?.checked ?? false,
+            priceLineVisible: false, lastValueVisible: false,
+            autoscaleInfoProvider: () => null
+        });
+        // CVWAP (current-session) + PVWAP (previous-session flat line)
+        oipCvwapSeries = oipOIChart.addLineSeries({
+            color: '#3b82f6', lineWidth: 2, title: '',
+            visible: oipElems.showCVWAP?.checked ?? false,
+            priceLineVisible: false, lastValueVisible: false,
+            autoscaleInfoProvider: () => null
+        });
+        oipPvwapSeries = oipOIChart.addLineSeries({
+            color: '#f97316', lineWidth: 2, title: '',
+            visible: oipElems.showPVWAP?.checked ?? false,
             priceLineVisible: false, lastValueVisible: false,
             autoscaleInfoProvider: () => null
         });
@@ -962,6 +1001,8 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                     }
 
                     if (oipVwapSeries) oipVwapSeries.setData(oipCalculateVWAP(validCandles));
+                    if (oipCvwapSeries) oipCvwapSeries.setData(oipCalculateCVWAP(validCandles));
+                    if (oipPvwapSeries) oipPvwapSeries.setData(oipCalculatePVWAP(validCandles));
                     oipDrawSignals(validCandles);
                 } catch (e) { console.warn('[OIP] SetData Err:', e); }
             }
@@ -1390,8 +1431,13 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
     if (view === 'index') {
         oipIntrinsicChart.update(masterData, null, resetZoom);
         oipIntChartReady = true;  // Intrinsic chart now has data — safe to sync
-        if (oipVwapIntSeries) oipVwapIntSeries.setData(oipCalculateVWAP(masterData.filter(d => d.open !== undefined)));
+        const idxCandles = masterData.filter(d => d.open !== undefined);
+        if (oipVwapIntSeries) oipVwapIntSeries.setData(oipCalculateVWAP(idxCandles));
         if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData([]);
+        if (oipCvwapIntSeries) oipCvwapIntSeries.setData(oipCalculateCVWAP(idxCandles));
+        if (oipPvwapIntSeries) oipPvwapIntSeries.setData(oipCalculatePVWAP(idxCandles));
+        if (oipCvwapIntPeSeries) oipCvwapIntPeSeries.setData([]);
+        if (oipPvwapIntPeSeries) oipPvwapIntPeSeries.setData([]);
         if (oipIntrinsicChart.setMarkers) oipIntrinsicChart.setMarkers([], []);
     } else {
         let optionData = oipOptionData || [];
@@ -1457,20 +1503,37 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         // Compute both VWAPs once — reused by individual series and combined VWAP below.
         const ceVwapData = oipCalculateVWAP(ceRaw);
         const peVwapData = oipCalculateVWAP(peRaw);
+        // CVWAP (current-session) / PVWAP (previous-session) for CE & PE premiums.
+        const ceCvwapData = oipCalculateCVWAP(ceRaw);
+        const peCvwapData = oipCalculateCVWAP(peRaw);
+        const cePvwapData = oipCalculatePVWAP(ceRaw);
+        const pePvwapData = oipCalculatePVWAP(peRaw);
 
         // Update Individual Premium Chart
         if (view === 'combined') {
             oipIntrinsicChart.update(ceData, peData, resetZoom);
             if (oipVwapIntSeries) oipVwapIntSeries.setData(ceVwapData);
             if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(peVwapData);
+            if (oipCvwapIntSeries) oipCvwapIntSeries.setData(ceCvwapData);
+            if (oipCvwapIntPeSeries) oipCvwapIntPeSeries.setData(peCvwapData);
+            if (oipPvwapIntSeries) oipPvwapIntSeries.setData(cePvwapData);
+            if (oipPvwapIntPeSeries) oipPvwapIntPeSeries.setData(pePvwapData);
         } else if (view === 'ce') {
             oipIntrinsicChart.update(ceData, null, resetZoom);
             if (oipVwapIntSeries) oipVwapIntSeries.setData(ceVwapData);
             if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData([]);
+            if (oipCvwapIntSeries) oipCvwapIntSeries.setData(ceCvwapData);
+            if (oipCvwapIntPeSeries) oipCvwapIntPeSeries.setData([]);
+            if (oipPvwapIntSeries) oipPvwapIntSeries.setData(cePvwapData);
+            if (oipPvwapIntPeSeries) oipPvwapIntPeSeries.setData([]);
         } else {
             oipIntrinsicChart.update(null, peData, resetZoom);
             if (oipVwapIntSeries) oipVwapIntSeries.setData([]);
             if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData(peVwapData);
+            if (oipCvwapIntSeries) oipCvwapIntSeries.setData([]);
+            if (oipCvwapIntPeSeries) oipCvwapIntPeSeries.setData(peCvwapData);
+            if (oipPvwapIntSeries) oipPvwapIntSeries.setData([]);
+            if (oipPvwapIntPeSeries) oipPvwapIntPeSeries.setData(pePvwapData);
         }
 
         oipIntChartReady = true;
@@ -1490,6 +1553,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
                 if (oipCEEma20Series) oipCEEma20Series.setData(ceEmas.ema20);
                 if (oipCEEma50Series) oipCEEma50Series.setData(ceEmas.ema50);
             }
+            if (oipCECvwapSeries) oipCECvwapSeries.setData(ceCvwapData);
+            if (oipCEPvwapSeries) oipCEPvwapSeries.setData(cePvwapData);
 
             const _sm = oipElems.strikeMode?.value;
             let _ceLbl;
@@ -1509,6 +1574,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
                 if (oipPEEma20Series) oipPEEma20Series.setData(peEmas.ema20);
                 if (oipPEEma50Series) oipPEEma50Series.setData(peEmas.ema50);
             }
+            if (oipPECvwapSeries) oipPECvwapSeries.setData(peCvwapData);
+            if (oipPEPvwapSeries) oipPEPvwapSeries.setData(pePvwapData);
 
             const _sm = oipElems.strikeMode?.value;
             let _peLbl;
@@ -2035,7 +2102,7 @@ function oipDrawPremStrikeLines() {
 
         if (strikeDiff > 0)
             oipPremStrikeLines.ce.push(oipCESeries.createPriceLine({
-                price: strikeDiff, color: '#f59e0b', lineWidth: 2, lineStyle: 0,
+                price: strikeDiff, color: '#000000', lineWidth: 2, lineStyle: 0,
                 axisLabelVisible: true, title: `Diff ${strikeDiff}`
             }));
         if (cePdc != null)
@@ -2059,7 +2126,7 @@ function oipDrawPremStrikeLines() {
 
         if (strikeDiff > 0)
             oipPremStrikeLines.pe.push(oipPESeries.createPriceLine({
-                price: strikeDiff, color: '#f59e0b', lineWidth: 2, lineStyle: 0,
+                price: strikeDiff, color: '#000000', lineWidth: 2, lineStyle: 0,
                 axisLabelVisible: true, title: `Diff ${strikeDiff}`
             }));
         if (pePdc != null)

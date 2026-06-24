@@ -37,6 +37,26 @@ window.oipInitSecondaryCharts = function() {
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
 
+        // CVWAP (current-session) / PVWAP (previous-session) on the Options Premium chart.
+        const showCV = oipElems.showCVWAP?.checked ?? false;
+        const showPV = oipElems.showPVWAP?.checked ?? false;
+        oipCvwapIntSeries = oipIntrinsicChart.chart.addLineSeries({
+            color: '#3b82f6', lineWidth: 1, title: '', visible: showCV,
+            priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
+        });
+        oipCvwapIntPeSeries = oipIntrinsicChart.chart.addLineSeries({
+            color: '#60a5fa', lineWidth: 1, title: '', visible: showCV,
+            priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
+        });
+        oipPvwapIntSeries = oipIntrinsicChart.chart.addLineSeries({
+            color: '#f97316', lineWidth: 1, title: '', visible: showPV,
+            priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
+        });
+        oipPvwapIntPeSeries = oipIntrinsicChart.chart.addLineSeries({
+            color: '#fdba74', lineWidth: 1, title: '', visible: showPV,
+            priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
+        });
+
         // Initialize Individual CE Chart
         oipCEChart = TradingViewChart.create({
             containerId: 'oipCEChart', data: [], type: 'CE',
@@ -62,6 +82,12 @@ window.oipInitSecondaryCharts = function() {
         oipPEEma9Series = oipPEChart.chart.addLineSeries({ color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
         oipPEEma20Series = oipPEChart.chart.addLineSeries({ color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma20, autoscaleInfoProvider: () => null });
         oipPEEma50Series = oipPEChart.chart.addLineSeries({ color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
+
+        // CVWAP (current-session) / PVWAP (previous-session) on the CE Only & PE Only charts.
+        oipCECvwapSeries = oipCEChart.chart.addLineSeries({ color: '#3b82f6', lineWidth: 1, title: '', visible: showCV, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipCEPvwapSeries = oipCEChart.chart.addLineSeries({ color: '#f97316', lineWidth: 1, title: '', visible: showPV, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipPECvwapSeries = oipPEChart.chart.addLineSeries({ color: '#3b82f6', lineWidth: 1, title: '', visible: showCV, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipPEPvwapSeries = oipPEChart.chart.addLineSeries({ color: '#f97316', lineWidth: 1, title: '', visible: showPV, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
 
         oipInitPremiumSeries();
         

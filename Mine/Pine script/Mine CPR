@@ -4,14 +4,14 @@ indicator("CPR", "Mine CPR", overlay=true, max_lines_count=500, max_labels_count
 sp = input(true, title="Show CPR")
 fsd = input(false, title="Show Future CPR")
 shadow = input(true, title="CPR shadow")
-cprTransp = input.int(50, "CPR Central Transparency", minval=0, maxval=100)
+cprTransp = input.int(80, "CPR Central Transparency", minval=0, maxval=100)
 rsTransp = input.int(98, "CPR R/S Transparency", minval=0, maxval=100)
 mcprTransp = input.int(20, "Multi-Pivot Transparency", minval=0, maxval=100)
-showPivots  = input.bool(false, title="Multi CPR",  group="Multi CPR")
-show15mCPR  = input.bool(true,  title="15 min",    group="Multi CPR", inline="mcpr_tfs")
-show30mCPR  = input.bool(true,  title="30 min",    group="Multi CPR", inline="mcpr_tfs")
+showPivots  = input.bool(true, title="Multi CPR",  group="Multi CPR")
+show15mCPR  = input.bool(false,  title="15 min",    group="Multi CPR", inline="mcpr_tfs")
+show30mCPR  = input.bool(false,  title="30 min",    group="Multi CPR", inline="mcpr_tfs")
 show1hCPR   = input.bool(true,  title="1 Hour",    group="Multi CPR", inline="mcpr_tfs")
-showAllSMAs = input(true, "Show All Moving Averages")
+showAllSMAs = input(false, "Show All Moving Averages")
 enableIndicator = input.bool(false, "Enable Indicator", group = "Appearance")
 showSMA9 = input(true, "Show SMA 9", inline="sma9")
 EMA9 = input.int(9, "", inline="sma9")
@@ -57,11 +57,11 @@ kind = input.string(title="Type", defval="Camarilla", options=[TRADITIONAL, FIBO
 pivot_time_frame = input.string(title="Pivots Timeframe", defval=AUTO, options=[AUTO, DAILY, WEEKLY, MONTHLY, QUARTERLY, YEARLY, BIYEARLY, TRIYEARLY, QUINQUENNIALLY, DECENNIALLY])
 look_back = input.int(title="Number of Pivots Back", defval=15, minval=1, maxval=5000, tooltip="Pine Script allows max 500 line objects. Each pivot uses ~15 lines by default (~33 pivots max). Enable 'CPR Only in History' for ~160 pivots, or disable R/S and PDH/PDL toggles for ~50 pivots.")
 hist_cpr_only  = input.bool(false, "Historical CPR Lines Only (allows more pivots back)", tooltip="When ON, only P/BC/TC are drawn for historical pivots (~160 pivots max). When OFF, all R/S/PDH/PDL lines are drawn (~33 pivots max).")
-show_resistance = input.bool(true, "Show R1-R3", inline="show_rs")
-show_support    = input.bool(true, "Show S1-S3", inline="show_rs")
-hist_show_pdhl  = input.bool(true, "Show PDH/PDL in History", tooltip="Disable to save 2 lines per pivot.")
+show_resistance = input.bool(false, "Show R1-R3", inline="show_rs")
+show_support    = input.bool(false, "Show S1-S3", inline="show_rs")
+hist_show_pdhl  = input.bool(false, "Show PDH/PDL in History", tooltip="Disable to save 2 lines per pivot.")
 is_daily_based = input.bool(title="Use Daily-based Values", defval=true, tooltip="When this option is unchecked, Pivot Points will use intraday data while calculating on intraday charts. If Extended Hours are displayed on the chart, they will be taken into account during the pivot level calculation. If intraday OHLC values are different from daily-based values (normal for stocks), the pivot levels will also differ.")
-show_labels = input.bool(title="Show Labels", defval=true, inline="labels")
+show_labels = input.bool(title="Show Labels", defval=false, inline="labels")
 position_labels = input.string("Left", "", options=["Left", "Right"], inline="labels")
 
 var DEF_COLOR = #FB8C00
@@ -275,14 +275,14 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
             if shadow
                 array.push(fills, linefill.new(_lbc, _ltc, color.new(pivotColor, cprTransp)))
 
-            if not hist_cpr_only and show_resistance
+            if not hist_cpr_only and show_resistance and kind == TRADITIONAL
                 _lr1 = line.new(array.get(arr_time, i), array.get(arr_r1, i), array.get(arr_time, i+1), array.get(arr_r1, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
                 _lr2 = line.new(array.get(arr_time, i), array.get(arr_r2, i), array.get(arr_time, i+1), array.get(arr_r2, i), xloc=xloc.bar_time, color=darkgreenColor, width=1)
                 array.push(lines, _lr1), array.push(lines, _lr2)
                 if shadow
                     array.push(fills, linefill.new(_lr1, _lr2, color.new(greenColor, rsTransp)))
 
-            if not hist_cpr_only and show_support
+            if not hist_cpr_only and show_support and kind == TRADITIONAL
                 _ls1 = line.new(array.get(arr_time, i), array.get(arr_s1, i), array.get(arr_time, i+1), array.get(arr_s1, i), xloc=xloc.bar_time, color=redColor, width=1)
                 _ls2 = line.new(array.get(arr_time, i), array.get(arr_s2, i), array.get(arr_time, i+1), array.get(arr_s2, i), xloc=xloc.bar_time, color=redColor, width=1)
                 array.push(lines, _ls1), array.push(lines, _ls2)
@@ -291,11 +291,11 @@ if barstate.islast and array.size(arr_time) > 0 and is_change
 
             if not hist_cpr_only and s3r3_show
                 if array.size(r3) > i
-                    _lr3 = line.new(array.get(arr_time, i), array.get(r3, i), array.get(arr_time, i+1), array.get(r3, i), xloc=xloc.bar_time, color=s3r3_color, width=1)
+                    _lr3 = line.new(array.get(arr_time, i), array.get(r3, i), array.get(arr_time, i+1), array.get(r3, i), xloc=xloc.bar_time, color=s3r3_color, width=2)
                     array.push(lines, _lr3)
                     draw_label(i, array.get(r3, i), "R3", s3r3_color)
                 if array.size(s3) > i
-                    _ls3 = line.new(array.get(arr_time, i), array.get(s3, i), array.get(arr_time, i+1), array.get(s3, i), xloc=xloc.bar_time, color=s3r3_color, width=1)
+                    _ls3 = line.new(array.get(arr_time, i), array.get(s3, i), array.get(arr_time, i+1), array.get(s3, i), xloc=xloc.bar_time, color=s3r3_color, width=2)
                     array.push(lines, _ls3)
                     draw_label(i, array.get(s3, i), "S3", s3r3_color)
 
@@ -366,17 +366,17 @@ if barstate.islast and fsd
     
     _f_range = ftime_pdh - ftime_pdl
 
-    if show_resistance
+    if show_resistance and kind == TRADITIONAL
         f_r1 := line.new(next_start, ftime_r1, next_end, ftime_r1, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
         f_r2 := line.new(next_start, ftime_r2, next_end, ftime_r2, xloc=xloc.bar_time, color=darkgreenColor, width=1, style=line.style_dashed)
 
-    if show_support
+    if show_support and kind == TRADITIONAL
         f_s1 := line.new(next_start, ftime_s1, next_end, ftime_s1, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
         f_s2 := line.new(next_start, ftime_s2, next_end, ftime_s2, xloc=xloc.bar_time, color=redColor, width=1, style=line.style_dashed)
 
-    if s3r3_show
-        f_cam_r3 := line.new(next_start, ftime_close + _f_range * 1.1 / 4.0, next_end, ftime_close + _f_range * 1.1 / 4.0, xloc=xloc.bar_time, color=s3r3_color, width=1, style=line.style_dashed)
-        f_cam_s3 := line.new(next_start, ftime_close - _f_range * 1.1 / 4.0, next_end, ftime_close - _f_range * 1.1 / 4.0, xloc=xloc.bar_time, color=s3r3_color, width=1, style=line.style_dashed)
+    if s3r3_show and kind == CAMARILLA
+        f_cam_r3 := line.new(next_start, ftime_close + _f_range * 1.1 / 4.0, next_end, ftime_close + _f_range * 1.1 / 4.0, xloc=xloc.bar_time, color=s3r3_color, width=2, style=line.style_dashed)
+        f_cam_s3 := line.new(next_start, ftime_close - _f_range * 1.1 / 4.0, next_end, ftime_close - _f_range * 1.1 / 4.0, xloc=xloc.bar_time, color=s3r3_color, width=2, style=line.style_dashed)
 
     f_pdh := line.new(next_start, ftime_pdh, next_end, ftime_pdh, xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1, style=line.style_dashed)
     f_pdl := line.new(next_start, ftime_pdl, next_end, ftime_pdl, xloc=xloc.bar_time, color=color.new(prevHighColor, 10), width=1, style=line.style_dashed)
@@ -391,9 +391,9 @@ if barstate.islast and fsd
 
     if shadow
         f_fill_c := linefill.new(f_bc, f_tc, color.new(pivotColor, cprTransp))
-        if show_resistance and not na(f_r1) and not na(f_r2)
+        if show_resistance and kind == TRADITIONAL and not na(f_r1) and not na(f_r2)
             f_fill_r12 := linefill.new(f_r1, f_r2, color.new(greenColor, rsTransp))
-        if show_support and not na(f_s1) and not na(f_s2)
+        if show_support and kind == TRADITIONAL and not na(f_s1) and not na(f_s2)
             f_fill_s12 := linefill.new(f_s1, f_s2, color.new(redColor, rsTransp))
 
 //----Power Root Super Trend---------------------------------------------------------------------------------------------------------------------
@@ -662,8 +662,8 @@ if show2nd1mBox and is_1m_or_below and m1_is_2nd
 show_monday_box     = input.bool(true, "Show Monday H/L Box",  group = "Monday Box")
 monday_weeks_back   = input.int(100,  "Weeks Back", minval=1, maxval=500, group = "Monday Box")
 monday_fill_color   = input.color(color.new(#FFD700, 100), "Fill Color",   group = "Monday Box")
-monday_border_color = input.color(color.new(#00BCD4, 20),  "Border Color", group = "Monday Box")
-monday_line_width   = input.int(1, "Border Width", minval=1, maxval=4, group = "Monday Box")
+monday_border_color = input.color(color.new(#000000, 0),  "Border Color", group = "Monday Box")
+monday_line_width   = input.int(2, "Border Width", minval=1, maxval=4, group = "Monday Box")
 
 var float mon_high    = na
 var float mon_low     = na
@@ -700,7 +700,7 @@ if show_monday_box
 //      at least rallyATRMult × ATR above the top EMA (stops oscillation signals)
 //   4. Price pulls back — low touches EMA band, EMAs are tightly clustered
 //   5. First bullish candle in that zone = BUY. Exit: close below 50 EMA.
-showEMASignal  = input.bool(true,  "Show EMA Retest Signal",       group = "EMA Signal")
+showEMASignal  = input.bool(false,  "Show EMA Retest Signal",       group = "EMA Signal")
 clusterATRMult = input.float(0.3,  "EMA Cluster Threshold (ATR×)", group = "EMA Signal", minval = 0.05, step = 0.05, tooltip = "Max spread between the 3 EMAs as a multiple of ATR(14). Lower = tighter cluster required.")
 minBarsAbove   = input.int(3,      "Min Rally Bars",               group = "EMA Signal", minval = 1, maxval = 30,  tooltip = "Minimum bars price must close above ALL 3 EMAs after the breakout before a retest signal can fire.")
 rallyATRMult   = input.float(1.0,  "Min Rally Distance (ATR×)",    group = "EMA Signal", minval = 0.1, step = 0.1, tooltip = "Price must reach at least this many ATRs ABOVE the highest EMA during the rally. This is the key filter — it rejects signals where price merely oscillates through the EMAs without a real move away.")
