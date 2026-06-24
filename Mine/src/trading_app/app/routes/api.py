@@ -243,7 +243,9 @@ BROKER_TYPE_CONFIGS = {
     'dhan': {
         'icon': '📊',
         'description': 'F&O, options & commodity trading',
-        'required_fields': ['ACCESS_TOKEN', 'CLIENT_ID'],
+        # Only the access token is strictly required — the client_id is fetched
+        # from the Dhan profile during verification (same as on placing an order).
+        'required_fields': ['ACCESS_TOKEN'],
         'login_type': 'modal',
         'login_action': 'showDhanLoginModal()',
         'auth_endpoint': '/auth/login/dhan'
@@ -496,6 +498,7 @@ def get_available_brokers() -> EndpointResponse:
             msg_status = 'Not connected'
             s_updates = {}
             s_pops = []
+            env_updates = {}
 
             try:
                 if broker_type == 'zerodha':
@@ -561,12 +564,22 @@ def get_available_brokers() -> EndpointResponse:
                 elif broker_type == 'dhan':
                     access_token = b_conf.get('access_token')
                     client_id = b_conf.get('client_id')
-                    if access_token and client_id:
+                    # Mirror the place_order auth flow: only the access token is
+                    # strictly required. verify_credentials() resolves the client_id
+                    # from the profile, so a missing/stale client_id self-heals here.
+                    if access_token:
                         from trading_app.service.dhan_order_services import DhanOrderService
                         dhan = DhanOrderService(access_token=access_token, client_id=client_id)
                         if dhan.verify_credentials():
                             is_logged_in = True
                             msg_status = 'Connected'
+                            # Persist the client_id resolved from the profile if it
+                            # was missing or has drifted from what's stored.
+                            resolved_client_id = dhan.client_id
+                            if resolved_client_id and resolved_client_id != client_id:
+                                s_updates[f'dhan_{instance_num}_client_id'] = resolved_client_id
+                                env_updates[f'BROKER_{instance_num}_CLIENT_ID'] = resolved_client_id
+                            s_updates[f'dhan_{instance_num}_access_token'] = access_token
                         else:
                             s_pops.append(f'dhan_{instance_num}_access_token')
                             msg_status = 'Token expired'
@@ -587,8 +600,8 @@ def get_available_brokers() -> EndpointResponse:
             except Exception as e:
                 logger.error(f"Error checking broker {broker_type} instance {instance_num}: {e}")
                 msg_status = 'Check error'
-                
-            return b_conf, is_logged_in, msg_status, s_updates, s_pops
+
+            return b_conf, is_logged_in, msg_status, s_updates, s_pops, env_updates
 
         # Run verification checks concurrently
         if broker_configs:
@@ -598,15 +611,24 @@ def get_available_brokers() -> EndpointResponse:
             results = []
 
         # Process results sequentially to build list and safely apply session mutations
-        for b_conf, is_logged_in, msg_status, s_updates, s_pops in results:
+        for b_conf, is_logged_in, msg_status, s_updates, s_pops, env_updates in results:
             instance_num = b_conf['instance_num']
             broker_type = b_conf['broker_type']
             type_config = b_conf['type_config']
-            
+
             # Apply session changes safely in main thread (thread-safe, persists cookie securely)
             for k, v in s_updates.items(): session[k] = v
             for k in s_pops: session.pop(k, None)
             if s_updates: session.permanent = True
+
+            # Persist any recovered credentials (e.g. Dhan client_id resolved from
+            # the profile) back to the user's .env so the next check/order has them.
+            if env_updates:
+                try:
+                    UserEnvManager.save_user_vars(username, env_updates)
+                    logger.info(f"[available-brokers] Updated {username}.env for {broker_type} instance {instance_num}: {list(env_updates.keys())}")
+                except Exception as e:
+                    logger.error(f"[available-brokers] Failed to persist env updates for {broker_type} instance {instance_num}: {e}")
             
             # Build broker entry
             broker_entry = {

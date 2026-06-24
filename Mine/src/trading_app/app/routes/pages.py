@@ -138,7 +138,22 @@ def dashboard():
 @require_user_auth
 @login_required
 def backtest():
-    return redirect(url_for('pages.dashboard') + '#backtest')
+    """Backtest Strategy page."""
+    return render_template('backtest.html')
+
+@pages_bp.route('/contracts')
+@require_user_auth
+@login_required
+def contracts():
+    """Active Contracts page."""
+    return render_template('contracts.html')
+
+@pages_bp.route('/historic-oi')
+@require_user_auth
+@login_required
+def historic_oi():
+    """Historic OI page."""
+    return render_template('historic_oi.html')
 
 @pages_bp.route('/replay')
 @require_user_auth

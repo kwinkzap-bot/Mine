@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Historic OI{% endblock %}
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+{% endblock %}
+{% block content %}
+  <div class="sw-wrap">
+
+    <!-- Topbar -->
+    <div class="sw-topbar">
+      <span class="sw-title">Historic OI</span>
+      <span id="hoiStatus" class="sw-updated" style="margin-left:auto;margin-right:8px;"></span>
+      <button class="sw-refresh-btn" style="margin-right:6px;opacity:.75" onclick="hoiToggleLoadHistory()">⬆ Load History</button>
+      <button id="hoiRecordBtn" class="sw-refresh-btn" onclick="recordHistoricOI()">⏺ Record</button>
+    </div>
+    <!-- Load History panel (hidden by default) -->
+    <div id="hoiLoadHistoryPanel" style="display:none;padding:10px 14px;background:var(--pf-row-alt);border-bottom:1px solid var(--pf-border);gap:10px;flex-wrap:wrap;align-items:center">
+      <label style="font-size:12px;color:var(--pf-text-2);font-weight:600">From</label>
+      <div class="hoi-date-wrap"><input type="date" id="hoiFromDate" value="2021-01-01"></div>
+      <label style="font-size:12px;color:var(--pf-text-2);font-weight:600">To</label>
+      <div class="hoi-date-wrap"><input type="date" id="hoiToDate"></div>
+      <label style="font-size:12px;color:var(--pf-text-2);font-weight:600">Source</label>
+      <label style="font-size:12px;cursor:pointer"><input type="radio" name="hoiSrc" value="nse" checked> NSE Bhavcopy <span style="color:var(--pf-text-3)">(5 yr)</span></label>
+      <label style="font-size:12px;cursor:pointer"><input type="radio" name="hoiSrc" value="sqlite"> SQLite <span style="color:var(--pf-text-3)">(local, fast)</span></label>
+      <button class="sw-refresh-btn" onclick="hoiStartBackfill()" id="hoiLoadBtn">▶ Start</button>
+      <button class="sw-refresh-btn" onclick="hoiRecalculate()" id="hoiRecalcBtn" style="background:var(--pf-text-3);border-color:var(--pf-text-3)">↺ Recalculate</button>
+      <span style="width:1px;height:20px;background:var(--pf-border);display:inline-block;margin:0 2px"></span>
+      <button class="sw-refresh-btn" onclick="hoiSyncFII()" id="hoiSyncFIIBtn" style="background:#0284c7;border-color:#0284c7">↓ Sync FII <span style="font-size:10px;opacity:.8">(30d)</span></button>
+      <span id="hoiLoadMsg" style="font-size:11px;color:var(--pf-text-2)"></span>
+    </div>
+    <!-- Backfill progress bar -->
+    <div id="hoiProgressWrap" style="display:none;padding:6px 14px;background:var(--pf-row-alt);border-bottom:1px solid var(--pf-border)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span id="hoiProgressMsg" style="font-size:11px;color:var(--pf-text-2);flex:1">Loading…</span>
+        <span id="hoiProgressPct" style="font-size:11px;color:var(--pf-text-3)">0%</span>
+      </div>
+      <div style="height:4px;background:var(--pf-border);border-radius:2px;margin-top:4px">
+        <div id="hoiProgressFill" style="height:100%;width:0%;background:var(--pf-accent);border-radius:2px;transition:width .3s"></div>
+      </div>
+    </div>
+
+    <!-- Symbol tab group -->
+    <div class="hoi-sym-tab-group">
+      <button class="hoi-sym-tab active" id="hoi-tab-NIFTY"     onclick="hoiSymbolSwitch('NIFTY')">NIFTY</button>
+      <button class="hoi-sym-tab"        id="hoi-tab-BANKNIFTY" onclick="hoiSymbolSwitch('BANKNIFTY')">BANKNIFTY</button>
+    </div>
+
+    <!-- Per-symbol grids -->
+    {% for sym in ['NIFTY', 'BANKNIFTY'] %}
+    <div class="sw-table-wrap" id="hoi-panel-{{ sym }}"{% if not loop.first %} style="display:none"{% endif %}>
+      <table class="sw-table">
+        <thead>
+          <tr>
+            <th class="sw-th-l">Date</th>
+            <th class="sw-th-c">Day</th>
+            <th>CHNG OPT OI</th>
+            <th>PCR</th>
+            <th>Chng Fut OI</th>
+            <th>FII Fut</th>
+            <th>Open</th>
+            <th>High</th>
+            <th>Low</th>
+            <th>Close</th>
+            <th class="sw-th-c">Move</th>
+            <th class="sw-th-c"></th>
+          </tr>
+        </thead>
+        <tbody id="hoiTbody-{{ sym }}">
+          <tr><td colspan="12" class="sw-empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+
+  </div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/historic_oi.js') }}?v={{ sv('js/historic_oi.js') }}"></script>
+{% endblock %}

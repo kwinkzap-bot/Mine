@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Contracts{% endblock %}
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/active_contracts.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+{% endblock %}
+{% block content %}
+<div class="ac-page" style="min-height:unset;">
+
+    <!-- Filter bar -->
+    <div class="ac-filter-bar">
+        <select class="ac-select" id="acUnderlying">
+            <option value="NIFTY" selected>NIFTY</option>
+            <option value="BANKNIFTY">BANK NIFTY</option>
+            <option value="FINNIFTY">FIN NIFTY</option>
+            <option value="MIDCPNIFTY">MIDCAP NIFTY</option>
+        </select>
+        <select class="ac-select" id="acExpiry">
+            <option value="">Loading…</option>
+        </select>
+        <select class="ac-select" id="acOptionType">
+            <option value="all">Option Type</option>
+            <option value="CE">Call (CE)</option>
+            <option value="PE">Put (PE)</option>
+            <option value="FUT">Futures</option>
+        </select>
+        <select class="ac-select" id="acStrike">
+            <option value="">Strike Price</option>
+        </select>
+        <button class="ac-btn-refresh" id="acRefreshBtn">Refresh</button>
+        <button class="ac-btn-clear"   id="acClearBtn">Clear</button>
+        <span class="ac-stat-chip" id="acStatTotal"></span>
+    </div>
+
+    <div class="ac-loading hidden" id="acLoading">
+        <div class="ac-spinner"></div>
+        <span>Fetching live contracts…</span>
+    </div>
+    <div class="ac-error hidden" id="acError"></div>
+
+    <div class="ac-table-wrap" id="acTableWrap">
+        <table class="ac-table">
+            <thead>
+                <tr>
+                    <th class="ac-th-info"></th>
+                    <th>INSTRUMENT TYPE</th>
+                    <th>EXPIRY DATE</th>
+                    <th>OPTION</th>
+                    <th class="col-r">STRIKE</th>
+                    <th class="col-r">OPEN</th>
+                    <th class="col-r">HIGH</th>
+                    <th class="col-r">LOW</th>
+                    <th class="col-r">CLOSE</th>
+                    <th class="col-r">PREV. CLOSE</th>
+                    <th class="col-r ac-th-last">LAST</th>
+                    <th class="col-r">CHNG</th>
+                    <th class="col-r">%CHNG</th>
+                    <th class="col-r">VOLUME<br><small>(CONTRACTS)</small></th>
+                </tr>
+            </thead>
+            <tbody id="acTableBody"></tbody>
+        </table>
+        <div class="ac-empty hidden" id="acEmpty">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+                <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>
+                <rect x="9" y="3" width="6" height="4" rx="1"/>
+            </svg>
+            <p>No contracts found</p>
+            <small>Try changing the filters or refreshing</small>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/active_contracts.js') }}"></script>
+<script>document.addEventListener('DOMContentLoaded', function () { if (window.acInit) acInit(); });</script>
+{% endblock %}

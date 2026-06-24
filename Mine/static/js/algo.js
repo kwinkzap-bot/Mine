@@ -637,7 +637,52 @@ function _smLiveRenderConfigs(configs) {
         : `${watching} Watching` + (configs.length > watching ? ` / ${configs.length - watching} Paused` : '');
 
     empty.style.display  = configs.length === 0 ? '' : 'none';
-    container.innerHTML  = configs.map(c => _smLiveBuildCard(c)).join('');
+
+    // ── Group configs by the broker chosen at Go Live ──────────────────────────
+    // Each broker becomes its own group; configs with no broker fall into a
+    // separate "None — track only" group rendered last.
+    Object.keys(_smGroupOfConfig).forEach(k => delete _smGroupOfConfig[k]);
+    const groups = new Map();   // key → { gid, label, type, isNone, configs: [] }
+    configs.forEach(c => {
+        const b   = c.broker;
+        const key = b ? `inst-${b.instance}` : '__none__';
+        if (!groups.has(key)) {
+            groups.set(key, {
+                gid:     b ? `inst-${b.instance}` : 'none',
+                label:   b ? (b.broker_name || b.broker_type || 'Broker') : 'None',
+                type:    b ? (b.broker_type || '') : '',
+                isNone:  !b,
+                configs: [],
+            });
+        }
+        const g = groups.get(key);
+        g.configs.push(c);
+        _smGroupOfConfig[c.id] = g.gid;   // remember which group each config feeds
+    });
+
+    // Broker groups first (alphabetical), the "None" group always last.
+    const groupArr = Array.from(groups.values()).sort((a, b) =>
+        a.isNone !== b.isNone ? (a.isNone ? 1 : -1) : a.label.localeCompare(b.label));
+
+    container.innerHTML = groupArr.map(g => {
+        const cards   = g.configs.map(c => _smLiveBuildCard(c)).join('');
+        const cnt     = g.configs.length;
+        const typeStr = g.type ? `<span class="sm-broker-group-type">${g.type.toUpperCase()}</span>` : '';
+        const cntLbl  = `${cnt} config${cnt > 1 ? 's' : ''}`;
+        return `
+<div class="sm-broker-group ${g.isNone ? 'sm-broker-group-none' : 'sm-broker-group-live'}">
+    <div class="sm-broker-group-hdr">
+        <span class="sm-broker-group-icon">${g.isNone ? '📋' : '🏦'}</span>
+        <span class="sm-broker-group-name">${g.isNone ? 'None — track only' : g.label}</span>
+        ${typeStr}
+        <span class="sm-broker-group-pnl" id="sm-grp-pnl-${g.gid}"></span>
+        <span class="sm-broker-group-count">${cntLbl}</span>
+    </div>
+    <div class="sm-broker-group-cards">${cards}</div>
+</div>`;
+    }).join('');
+
+    _smUpdateGroupPnls();
 
     container.querySelectorAll('.sm-live-remove-btn').forEach(btn =>
         btn.addEventListener('click', e => { e.stopPropagation(); _smLiveRemove(btn.dataset.id); }));
@@ -656,9 +701,10 @@ function _smLiveRenderConfigs(configs) {
     document.getElementById('smLiveLastUpd').textContent =
         new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    // Kick off background prefetch for every watching config so data is
-    // ready before the user expands the card.
-    configs.filter(c => c.status === 'watching').forEach(c => _smPrefetch(c.id));
+    // Kick off background prefetch for every config (watching AND paused) so
+    // data is ready before the user expands a card, and so paused configs still
+    // contribute their live P&L to the per-broker group totals.
+    configs.forEach(c => _smPrefetch(c.id));
 }
 
 // Lazy-load cache: id → { signal: Promise, rankings: Promise, ts: ms }
@@ -667,6 +713,38 @@ const _SM_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Per-config P&L map for header total
 const _smPnlByConfig = {};
+// config id → broker-group id (gid), rebuilt on every render
+const _smGroupOfConfig = {};
+
+// Aggregate per-config P&L into each broker group's header chip.
+function _smUpdateGroupPnls() {
+    const sums = {};   // gid → { today, total, has }
+    Object.keys(_smPnlByConfig).forEach(id => {
+        const gid = _smGroupOfConfig[id];
+        if (!gid) return;
+        const p = _smPnlByConfig[id];
+        const s = sums[gid] || (sums[gid] = { today: 0, total: 0, has: false });
+        s.today += p.today || 0;
+        s.total += p.total || 0;
+        s.has = true;
+    });
+    const fmtVal = (v) => (v >= 0 ? '+₹' : '-₹') +
+        Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    document.querySelectorAll('.sm-broker-group-pnl').forEach(el => {
+        const gid = el.id.replace('sm-grp-pnl-', '');
+        const s   = sums[gid];
+        if (!s || !s.has) { el.className = 'sm-broker-group-pnl'; el.innerHTML = ''; return; }
+        el.className = 'sm-broker-group-pnl sm-broker-group-pnl-loaded';
+        el.innerHTML = `
+            <span class="sm-grp-pnl-item ${s.today >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
+                <span class="sm-grp-pnl-label">Today</span>${fmtVal(s.today)}
+            </span>
+            <span class="sm-grp-pnl-sep">|</span>
+            <span class="sm-grp-pnl-item ${s.total >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
+                <span class="sm-grp-pnl-label">Total</span>${fmtVal(s.total)}
+            </span>`;
+    });
+}
 
 function _smUpdateTotalPnl() {
     const el = document.getElementById('smLiveTotalPnl');
@@ -821,6 +899,7 @@ function _smUpdateMetaRow(id, d) {
 
     _smPnlByConfig[id] = { today: todayAbs, total: totAbs };
     _smUpdateTotalPnl();
+    _smUpdateGroupPnls();
 }
 
 function _smUpdateHdrPnl(id, d) {
