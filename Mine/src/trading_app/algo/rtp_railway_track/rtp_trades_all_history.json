@@ -1,5 +1,79 @@
 [
   {
+    "date": "2026-06-25",
+    "direction": "SELL",
+    "entry_spot": 24100.95,
+    "exit_spot": 24050.65,
+    "pnl_pts": 50.3,
+    "reason": "EOD",
+    "entry_time": "2026-06-25T14:42:02.251090",
+    "exit_time": "2026-06-25T15:28:04.410676",
+    "strike": 24450,
+    "option_type": "PE",
+    "lot_size": 65,
+    "opt_entry_price": 362.0,
+    "opt_exit_price": 363.7,
+    "opt_pnl_pts": 1.7,
+    "opt_pnl_inr": 110.5,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2070072511286403072'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUN24450PE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2070072512540499969'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUN24450PE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
+    "date": "2026-06-25",
+    "direction": "BUY",
+    "entry_spot": 24177.2,
+    "exit_spot": 24146.4,
+    "pnl_pts": -30.8,
+    "reason": "SL",
+    "entry_time": "2026-06-25T10:37:01.771029",
+    "exit_time": "2026-06-25T14:13:42.856099",
+    "strike": 23900,
+    "option_type": "CE",
+    "lot_size": 65,
+    "opt_entry_price": 231.7,
+    "opt_exit_price": 285.3,
+    "opt_pnl_pts": 53.6,
+    "opt_pnl_inr": 3484.0,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2070010854698835968'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUN23900CE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2070010856015847424'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUN23900CE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
     "date": "2026-06-24",
     "direction": "SELL",
     "entry_spot": 24044.8,

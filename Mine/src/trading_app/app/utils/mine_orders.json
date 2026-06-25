@@ -46030,5 +46030,4009 @@
     ],
     "id": "6be85978-6a8a-45cd-b06d-7c874a91d166",
     "created_at": 1782285280234
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77800,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "status": "REJECTED",
+    "username": "Mine",
+    "executed_at": null,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": false,
+          "error": "Incorrect `api_key` or `access_token`."
+        },
+        "status": 400
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "Incorrect `api_key` or `access_token`."
+        },
+        "status": 400
+      }
+    ],
+    "id": "b81845d6-1236-4557-add7-23a78d2f0791",
+    "created_at": 1782361229764
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782361484381,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070000212235444224"
+          },
+          "price": 0,
+          "response": {
+            "order_id": {
+              "order_id": "2070000212235444224"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070000213703450624"
+          },
+          "price": 0,
+          "response": {
+            "order_id": {
+              "order_id": "2070000213703450624"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "1f6e6694-ba7f-4621-a011-499ca8bad9b4",
+    "created_at": 1782361484398
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 410.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782361574502,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070000590192566272"
+          },
+          "price": 410.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070000590192566272"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070000591698321408"
+          },
+          "price": 410.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070000591698321408"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "d3bb6f2d-4067-46fe-9220-db307db6ab74",
+    "created_at": 1782361574520
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 415.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782361583832,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070000629388337152"
+          },
+          "price": 415.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070000629388337152"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070000630847954944"
+          },
+          "price": 415.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070000630847954944"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "ac47f5a6-fb9b-410f-a554-035ce88ceb68",
+    "created_at": 1782361583839
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 405.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782361590093,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070000655699206144"
+          },
+          "price": 405.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070000655699206144"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070000657100103680"
+          },
+          "price": 405.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070000657100103680"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "f39494a6-bb54-4068-9d7c-5f3346db2ceb",
+    "created_at": 1782361590104
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 400.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782361594230,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070000672900046848"
+          },
+          "price": 400.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070000672900046848"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070000674460327936"
+          },
+          "price": 400.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070000674460327936"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "339af7a7-47f7-4c53-acf2-2fedd3aa427e",
+    "created_at": 1782361594234
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 440.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782361729546,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070001240703950848"
+          },
+          "price": 440.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070001240703950848"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070001242020962305"
+          },
+          "price": 440.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070001242020962305"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "552f9697-59e3-4ec2-bf81-34c94443ad23",
+    "created_at": 1782361729559
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 460.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782361873205,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070001843056336896"
+          },
+          "price": 460.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070001843056336896"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070001844499177472"
+          },
+          "price": 460.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070001844499177472"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "a8c23ed0-a8d0-429a-846f-6bb7858b717d",
+    "created_at": 1782361873212
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 480.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782361885308,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070001894038102016"
+          },
+          "price": 480.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070001894038102016"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070001895338336256"
+          },
+          "price": 480.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070001895338336256"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "5601b7c5-3b6c-4051-aa01-2f30a1127397",
+    "created_at": 1782361885312
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 405.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782362090060,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070002752805068801"
+          },
+          "price": 405.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070002752805068801"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070002754101108736"
+          },
+          "price": 405.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070002754101108736"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "affced69-72c6-4995-8a90-c69a24239b1e",
+    "created_at": 1782362090077
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 450.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782362102449,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070002804571168768"
+          },
+          "price": 450.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070002804571168768"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070002806068535296"
+          },
+          "price": 450.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070002806068535296"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "99f3c7b4-c905-476e-86a6-6fc22843cbb9",
+    "created_at": 1782362102464
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 440.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782362134040,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070002937086009344"
+          },
+          "price": 440.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070002937086009344"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070002938579181568"
+          },
+          "price": 440.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070002938579181568"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "ec84e381-9f48-4910-8e37-83923c7f1f72",
+    "created_at": 1782362134053
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 430.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782362139221,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070002958745395200"
+          },
+          "price": 430.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070002958745395200"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070002960205012992"
+          },
+          "price": 430.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070002960205012992"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "6f3642ca-d16d-42f5-8b1b-f07c13c78d6c",
+    "created_at": 1782362139229
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 400.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782362190845,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070003175393779712"
+          },
+          "price": 400.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070003175393779712"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070003176857591808"
+          },
+          "price": 400.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070003176857591808"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "ef5fdea6-76dd-478f-ab35-9b6efe089bdc",
+    "created_at": 1782362190849
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 380.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782362693016,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070005281643225088"
+          },
+          "price": 380.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070005281643225088"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070005283081871360"
+          },
+          "price": 380.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070005283081871360"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "573338ae-c2b6-4b70-8ee0-fb914ee6366f",
+    "created_at": 1782362693032
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 360.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782362712346,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070005362559737856"
+          },
+          "price": 360.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070005362559737856"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070005364161961984"
+          },
+          "price": 360.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070005364161961984"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "974621ee-1fc8-4f4b-96e7-0308003cf524",
+    "created_at": 1782362712351
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 340.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782362855815,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070005964631105536"
+          },
+          "price": 340.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070005964631105536"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070005965956505600"
+          },
+          "price": 340.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070005965956505600"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "85aa704c-b0b5-4289-8128-4192be0828ec",
+    "created_at": 1782362855820
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 370.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782362966831,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070006429829750784"
+          },
+          "price": 370.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070006429829750784"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070006431280979968"
+          },
+          "price": 370.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070006431280979968"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "6dcf0dce-c957-4fe8-99a8-71a2b48a7e17",
+    "created_at": 1782362966867
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 420.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782363138757,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070007151291981824"
+          },
+          "price": 420.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070007151291981824"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070007152671907840"
+          },
+          "price": 420.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070007152671907840"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "20c27593-e321-458f-8b60-2bdff145cfbc",
+    "created_at": 1782363138767
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77000,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 530.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782365163922,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070015645080543232"
+          },
+          "price": 530.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070015645080543232"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070015646850539520"
+          },
+          "price": 530.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070015646850539520"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "4ccce686-73ba-416b-8aee-7cad47bcf150",
+    "created_at": 1782365163927
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77100,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 445.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782365510090,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070017096670437376"
+          },
+          "price": 445.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070017096670437376"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070017098541096960"
+          },
+          "price": 445.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070017098541096960"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "9090258c-2be2-4e2e-ae6e-439a010995dc",
+    "created_at": 1782365510118
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77100,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 425.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782365576282,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070017374673100800"
+          },
+          "price": 425.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070017374673100800"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070017376350822400"
+          },
+          "price": 425.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070017376350822400"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "8a133a01-7ec5-4872-9766-0e5f3db3bfb8",
+    "created_at": 1782365576292
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77900,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 490.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782365941842,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070018907930288128"
+          },
+          "price": 490.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070018907930288128"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": false,
+          "error": "Insufficient funds. Required margin is 256389.36 but available margin is 146804.71."
+        },
+        "status": 400
+      }
+    ],
+    "id": "079a3805-6edd-4d02-ab4e-4d218a409e7b",
+    "created_at": 1782365941897
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77100,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 490.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782365967399,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070019015522574336"
+          },
+          "price": 490.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070019015522574336"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070019016873140225"
+          },
+          "price": 490.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070019016873140225"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "9333ec1b-a659-479d-81c4-0a7d6fbeef6c",
+    "created_at": 1782365967411
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77100,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 500.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782367913358,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070027177373917184"
+          },
+          "price": 500.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070027177373917184"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070027178825146368"
+          },
+          "price": 500.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070027178825146368"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "addd7b9d-817c-4bd2-9424-26b8011f0263",
+    "created_at": 1782367913365
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 430.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370456276,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070037843157639168"
+          },
+          "price": 430.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070037843157639168"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070037844604674048"
+          },
+          "price": 430.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070037844604674048"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "724d4598-d424-4393-af57-1f09e1209602",
+    "created_at": 1782370456280
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 415.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370516316,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038094790713344"
+          },
+          "price": 415.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038094790713344"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038096405520384"
+          },
+          "price": 415.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038096405520384"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "b194b14c-d7e4-452f-aa46-a6ac1e7edd99",
+    "created_at": 1782370516320
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 410.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370521150,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038115313442816"
+          },
+          "price": 410.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038115313442816"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038116668203008"
+          },
+          "price": 410.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038116668203008"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "fbc443e5-3b35-473f-9d82-23671d64fcac",
+    "created_at": 1782370521163
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 380.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370589314,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038399481733120"
+          },
+          "price": 380.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038399481733120"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038402581323776"
+          },
+          "price": 380.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038402581323776"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "24d84078-c2fb-4f38-8a60-b8d22595f746",
+    "created_at": 1782370589324
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 360.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370605471,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038468813578240"
+          },
+          "price": 360.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038468813578240"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038470348693504"
+          },
+          "price": 360.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038470348693504"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "4de69ac9-3eaa-406c-82ed-779916d785b6",
+    "created_at": 1782370605479
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 340.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370610585,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038490489741312"
+          },
+          "price": 340.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038490489741312"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038491802558464"
+          },
+          "price": 340.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038491802558464"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "77704160-f7d5-46f3-8dc0-3af84259b1bf",
+    "created_at": 1782370610598
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 320.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370705831,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038889414189057"
+          },
+          "price": 320.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038889414189057"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038891301625856"
+          },
+          "price": 320.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038891301625856"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "35adba68-7f01-4a8a-9491-edc544434d41",
+    "created_at": 1782370705835
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 300.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370713074,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038919369908224"
+          },
+          "price": 300.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038919369908224"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070038921358008320"
+          },
+          "price": 300.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070038921358008320"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "fb4b2af3-9425-4ed0-b600-dbea766f658b",
+    "created_at": 1782370713080
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 400.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370831657,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070039417586114560"
+          },
+          "price": 400.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070039417586114560"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070039419066703872"
+          },
+          "price": 400.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070039419066703872"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "799d71f4-109b-47c8-ba75-aea7489e099f",
+    "created_at": 1782370831662
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 270.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370952690,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070039924857823232"
+          },
+          "price": 270.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070039924857823232"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070039926707511297"
+          },
+          "price": 270.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070039926707511297"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "1e3153b1-89e9-4a7f-9a1b-2ae601700b16",
+    "created_at": 1782370952694
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 250.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370978805,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040034677284864"
+          },
+          "price": 250.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040034677284864"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040036111736832"
+          },
+          "price": 250.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040036111736832"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "5396a0a2-3d26-4436-b11d-74f26694f73f",
+    "created_at": 1782370978809
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 350.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782370985540,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040063127248896"
+          },
+          "price": 350.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040063127248896"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040064477814784"
+          },
+          "price": 350.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040064477814784"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "64860fd1-67db-4d45-be54-5a203d36c0de",
+    "created_at": 1782370985551
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 230.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782371029202,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040246254755840"
+          },
+          "price": 230.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040246254755840"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040247626293248"
+          },
+          "price": 230.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040247626293248"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "96dbe32b-dc0f-4ea5-b473-c29e9b1ec0a1",
+    "created_at": 1782371029318
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 210.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782371036841,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040277636538369"
+          },
+          "price": 210.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040277636538369"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040279549140992"
+          },
+          "price": 210.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040279549140992"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "2c232c86-0cbd-4119-b0ca-4ecd068e3860",
+    "created_at": 1782371036943
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 200.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782371040919,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040295097425920"
+          },
+          "price": 200.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040295097425920"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040296749981696"
+          },
+          "price": 200.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040296749981696"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "14fd4da7-04e2-4ec1-929a-e7dd069f74bf",
+    "created_at": 1782371040927
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 370.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782371184723,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040898246729728"
+          },
+          "price": 370.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040898246729728"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040899735707648"
+          },
+          "price": 370.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040899735707648"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "2dfab9c4-608f-41fe-895a-a842423f5d38",
+    "created_at": 1782371184727
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 380.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782371205214,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040984452259840"
+          },
+          "price": 380.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040984452259840"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070040985853157377"
+          },
+          "price": 380.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070040985853157377"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "ce3cd097-254b-4f24-a3a1-f63b7c6bf820",
+    "created_at": 1782371205226
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 280.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782371288329,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070041333141528576"
+          },
+          "price": 280.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070041333141528576"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070041334462734336"
+          },
+          "price": 280.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070041334462734336"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "a4a4e5eb-d2e7-4ee9-8064-c53d5855db05",
+    "created_at": 1782371288338
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 300.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782371298171,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070041374262484992"
+          },
+          "price": 300.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070041374262484992"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070041375709519872"
+          },
+          "price": 300.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070041375709519872"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "18ada0bd-273b-4bf3-b4ce-c3752030a312",
+    "created_at": 1782371298175
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 360.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782371324018,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070041482668466176"
+          },
+          "price": 360.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070041482668466176"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070041484161638400"
+          },
+          "price": 360.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070041484161638400"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "b99b92a5-b6a1-4796-9609-572f0c491f84",
+    "created_at": 1782371324027
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 390.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782371346889,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070041578013384704"
+          },
+          "price": 390.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070041578013384704"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070041580081176576"
+          },
+          "price": 390.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070041580081176576"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "2a0a76ff-131e-4895-9691-2bc801de1c7b",
+    "created_at": 1782371346903
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 340.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782371627229,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070042753777459200"
+          },
+          "price": 340.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070042753777459200"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070042755929137152"
+          },
+          "price": 340.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070042755929137152"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "bb57b4f8-79b7-4838-806c-0b4ca1539d4b",
+    "created_at": 1782371627236
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 290.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782372138980,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070044900883619840"
+          },
+          "price": 290.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070044900883619840"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070044902305488896"
+          },
+          "price": 290.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070044902305488896"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "9254168d-547f-48cb-b324-c4a4b57b8941",
+    "created_at": 1782372138991
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 300.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782372531762,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070046548246847488"
+          },
+          "price": 300.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070046548246847488"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070046549815517184"
+          },
+          "price": 300.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070046549815517184"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "417382ae-9378-4eee-be49-4f2da47d04e2",
+    "created_at": 1782372531767
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 330.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782372548689,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070046619248025600"
+          },
+          "price": 330.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070046619248025600"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070046620820889600"
+          },
+          "price": 330.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070046620820889600"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "d90bf437-9173-4c92-88f8-1226489ec7c3",
+    "created_at": 1782372548693
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 320.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782372566563,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070046694116352000"
+          },
+          "price": 320.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070046694116352000"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070046695752130560"
+          },
+          "price": 320.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070046695752130560"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "e028a5b6-228b-4d6d-8df4-b202c79f2f56",
+    "created_at": 1782372566569
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 290.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782372585461,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070046773590024192"
+          },
+          "price": 290.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070046773590024192"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070046775037059072"
+          },
+          "price": 290.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070046775037059072"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "60176352-741d-4243-97f2-eeecd07622ae",
+    "created_at": 1782372585475
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 300.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782372748229,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070047456397549569"
+          },
+          "price": 300.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070047456397549569"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070047457731338240"
+          },
+          "price": 300.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070047457731338240"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "87960e0d-8cda-41e7-ab04-6aa9f4ebef44",
+    "created_at": 1782372748240
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 320.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782372903292,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070048106334314496"
+          },
+          "price": 320.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070048106334314496"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070048107840069632"
+          },
+          "price": 320.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070048107840069632"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "8b21befa-b468-4873-a456-983da0dac366",
+    "created_at": 1782372903341
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 350.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782373047181,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070048709865299968"
+          },
+          "price": 350.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070048709865299968"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070048711337500672"
+          },
+          "price": 350.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070048711337500672"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "f1d64c50-1f64-47bb-bb82-3c0d0f419b46",
+    "created_at": 1782373047205
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 330.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782373105889,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070048956431654912"
+          },
+          "price": 330.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070048956431654912"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070048957790609408"
+          },
+          "price": 330.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070048957790609408"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "33be3e2a-02c2-45e5-b610-feaec88c2e6a",
+    "created_at": 1782373105915
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 300.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782373290656,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070049731404816384"
+          },
+          "price": 300.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070049731404816384"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070049732860239872"
+          },
+          "price": 300.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070049732860239872"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "9d64f567-8950-4edb-8bb4-afdbee546e1b",
+    "created_at": 1782373290663
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 270.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782373693312,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070051419742199808"
+          },
+          "price": 270.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070051419742199808"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070051421516390400"
+          },
+          "price": 270.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070051421516390400"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "d99a38bc-b89f-43d0-acf7-0eba1545f08b",
+    "created_at": 1782373693347
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 290.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782373754470,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070051676404244480"
+          },
+          "price": 290.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070051676404244480"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070051677901611008"
+          },
+          "price": 290.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070051677901611008"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "d070e8df-5027-42a4-b089-2582f5927421",
+    "created_at": 1782373754532
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 320.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782373789686,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070051824551256064"
+          },
+          "price": 320.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070051824551256064"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070051825935376384"
+          },
+          "price": 320.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070051825935376384"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "0877d4cb-fb10-4413-b970-a8d01306c270",
+    "created_at": 1782373789704
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 250.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782374165699,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070053401399844864"
+          },
+          "price": 250.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070053401399844864"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070053402926571520"
+          },
+          "price": 250.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070053402926571520"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "57a3faab-0cf9-42ca-a5c6-749f7a604433",
+    "created_at": 1782374165704
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 290.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782374185733,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070053485210427392"
+          },
+          "price": 290.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070053485210427392"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070053486984617984"
+          },
+          "price": 290.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070053486984617984"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "99152daa-d456-4a6c-8532-18dbd1c2cf59",
+    "created_at": 1782374185888
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 250.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782374264118,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070053814433931264"
+          },
+          "price": 250.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070053814433931264"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070053815834828800"
+          },
+          "price": 250.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070053815834828800"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "05814711-50f5-44bc-a80b-45fb7bc28df9",
+    "created_at": 1782374264123
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 280.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782374271032,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070053843441737728"
+          },
+          "price": 280.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070053843441737728"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070053844851023872"
+          },
+          "price": 280.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070053844851023872"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "70fcff8e-2e66-4a45-842a-5e1a955409ba",
+    "created_at": 1782374271049
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 230.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782374304161,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070053982399029248"
+          },
+          "price": 230.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070053982399029248"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070053983820898304"
+          },
+          "price": 230.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070053983820898304"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "447e6845-a87b-40bc-bb68-f6775115c854",
+    "created_at": 1782374304167
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 220.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782374443360,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070054565596028928"
+          },
+          "price": 220.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070054565596028928"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070054567206641664"
+          },
+          "price": 220.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070054567206641664"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "26077bda-cfac-4f55-8624-d41f8ab90f83",
+    "created_at": 1782374443385
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 260.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782374455276,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070054616267415552"
+          },
+          "price": 260.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070054616267415552"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070054617626370048"
+          },
+          "price": 260.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070054617626370048"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "da1f2988-e4f7-4080-ac04-a22ddc8498b2",
+    "created_at": 1782374455289
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 230.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782374610000,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070055265163993088"
+          },
+          "price": 230.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070055265163993088"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070055266585862144"
+          },
+          "price": 230.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070055266585862144"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "1cc8ec32-73a4-44f5-956b-2c8335b0be44",
+    "created_at": 1782374610004
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 250.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782374773889,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070055952199376896"
+          },
+          "price": 250.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070055952199376896"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070055954002927616"
+          },
+          "price": 250.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070055954002927616"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "e7fd2179-4bc4-4af1-9a56-62093e8132cc",
+    "created_at": 1782374773895
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 340.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782375068661,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057188906688512"
+          },
+          "price": 340.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057188906688512"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057190357917697"
+          },
+          "price": 340.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057190357917697"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "2023aa70-4206-4171-91b8-0334c09cd10e",
+    "created_at": 1782375068671
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 350.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782375079153,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057232812662784"
+          },
+          "price": 350.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057232812662784"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057234335195137"
+          },
+          "price": 350.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057234335195137"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "2738d48d-22f8-4244-93a3-e5e50cbde174",
+    "created_at": 1782375079166
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 350.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782375082167,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057245655621632"
+          },
+          "price": 350.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057245655621632"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057247006187520"
+          },
+          "price": 350.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057247006187520"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "3db0020c-0b16-40d3-b69e-11083122b462",
+    "created_at": 1782375082179
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 350.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782375085152,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057258142064641"
+          },
+          "price": 350.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057258142064641"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057259521990656"
+          },
+          "price": 350.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057259521990656"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "df879be4-910a-4fe6-b0d0-27e1c342e19d",
+    "created_at": 1782375085166
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 280.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782375234486,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057884318097408"
+          },
+          "price": 280.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057884318097408"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057885798686720"
+          },
+          "price": 280.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057885798686720"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "cb3dbe35-fd4b-4522-9e30-302028b57936",
+    "created_at": 1782375234495
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 260.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782375241300,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057913002942464"
+          },
+          "price": 260.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057913002942464"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070057914458365952"
+          },
+          "price": 260.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070057914458365952"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "215c3a58-2b84-4f78-bb98-2ae5b0a93cf4",
+    "created_at": 1782375241308
+  },
+  {
+    "mode": "broker",
+    "symbol": "SENSEX",
+    "strike": 77300,
+    "option_type": "CE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 310.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782375342597,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070058337101602816"
+          },
+          "price": 310.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070058337101602816"
+            }
+          }
+        },
+        "status": 200
+      },
+      {
+        "broker": "zerodha_2",
+        "instance": 2,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2070058339144228864"
+          },
+          "price": 310.0,
+          "response": {
+            "order_id": {
+              "order_id": "2070058339144228864"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "37ee13e2-3862-4ac0-a6e1-bbbdab97b2e7",
+    "created_at": 1782375342602
   }
 ]

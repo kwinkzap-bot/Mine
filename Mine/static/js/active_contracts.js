@@ -7,6 +7,9 @@
     let _strike      = '';
     let _data        = null;
     let _wired       = false;
+    let _pollTimer   = null;
+
+    const POLL_MS = 60 * 1000;   // auto-refresh every one minute
 
     const $ = id => document.getElementById(id);
 
@@ -14,7 +17,17 @@
     window.acInit = function () {
         wire();
         if (!window._acLoaded) fetchContracts();
+        startPolling();
     };
+
+    // ── Auto-refresh every minute (silent, pauses when tab hidden) ─
+    function startPolling() {
+        if (_pollTimer) return;
+        _pollTimer = setInterval(() => {
+            if (document.hidden) return;   // skip while tab not visible
+            fetchContracts(true);          // silent refresh — keep filters/strike
+        }, POLL_MS);
+    }
 
     function wire() {
         if (_wired) return;
@@ -60,11 +73,13 @@
     }
 
     // ── Fetch ──────────────────────────────────────────────────────
-    function fetchContracts() {
-        $('acLoading').classList.remove('hidden');
-        $('acTableWrap').classList.add('hidden');
-        $('acError').classList.add('hidden');
-        $('acStatTotal').textContent = '';
+    function fetchContracts(silent) {
+        if (!silent) {
+            $('acLoading').classList.remove('hidden');
+            $('acTableWrap').classList.add('hidden');
+            $('acError').classList.add('hidden');
+            $('acStatTotal').textContent = '';
+        }
 
         const params = new URLSearchParams({
             underlying: _underlying,
@@ -89,6 +104,7 @@
                 render();
             })
             .catch(err => {
+                if (silent) return;   // keep last good data on a transient poll failure
                 $('acLoading').classList.add('hidden');
                 $('acTableWrap').classList.remove('hidden');
                 const el = $('acError');
