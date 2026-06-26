@@ -196,6 +196,14 @@ def algo():
     return render_template('algo.html')
 
 
+@pages_bp.route('/trading')
+@require_user_auth
+@login_required
+def trading():
+    """Trading terminal — Zerodha-style customizable, resizable floating panels."""
+    return render_template('trading.html')
+
+
 @pages_bp.route('/login')
 def login():
     """Login page - redirects to user login."""

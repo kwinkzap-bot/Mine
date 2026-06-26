@@ -82,6 +82,10 @@ def _save_sm_opt_cache(cache: dict) -> None:
 _sm_opt_tasks: Dict[str, Dict] = {}
 _sm_opt_tasks_lock = threading.Lock()
 
+# In-memory task store for long-running RTP optimisation background jobs
+_rtp_opt_tasks: Dict[str, Dict] = {}
+_rtp_opt_tasks_lock = threading.Lock()
+
 # Rankings cache — keyed by index name, expires after 15 min
 _sm_rankings_cache: Dict[str, tuple] = {}
 _SM_RANKINGS_TTL = 900  # seconds
@@ -3007,6 +3011,208 @@ def run_vwap_backtest_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/backtest/second-candle', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_second_candle_backtest_api():
+    """Run the 2nd 30-Sec Candle breakout backtest (Fyers 30-second data)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        # Base candle size. 30second has only ~1 month of Fyers history;
+        # 'minute' and above retain ~10 years.
+        interval       = data.get('interval', '30second')
+        candle_index   = int(data.get('candle_index', 2))
+        rr_ratio       = float(data.get('rr_ratio', 2.0))
+        exit_hour      = int(data.get('exit_hour', 15))
+        exit_minute    = int(data.get('exit_minute', 25))
+        enable_long    = bool(data.get('enable_long', True))
+        enable_short   = bool(data.get('enable_short', True))
+
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+        kite_indices = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105,
+            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+        }
+
+        if hasattr(current_kite, 'fyers'):
+            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+        else:
+            instrument_token = kite_indices.get(symbol, symbol)
+
+        # Fetch the chosen base interval (30second → Fyers "30S", minute → "1", etc.)
+        candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval=interval,
+            use_cache=False,
+        )
+
+        if not candles:
+            return jsonify({'success': False, 'error': f'No {interval} data found for the given range'}), 404
+
+        logger.info('[2ndCandle BT] %d %s bars received  first=%s  last=%s',
+                    len(candles), interval,
+                    candles[0].get('date', '?'),
+                    candles[-1].get('date', '?'))
+
+        import pandas as pd
+        import importlib
+        import trading_app.Backtest.second_candle_engine as _sc_mod
+        importlib.reload(_sc_mod)
+        from trading_app.Backtest.second_candle_engine import SecondCandleBacktestEngine
+
+        df = pd.DataFrame(candles)
+        engine = SecondCandleBacktestEngine(
+            df=df,
+            candle_index=candle_index,
+            rr_ratio=rr_ratio,
+            exit_hour=exit_hour,
+            exit_minute=exit_minute,
+            enable_long=enable_long,
+            enable_short=enable_short,
+        )
+        trades, summary = engine.run()
+
+        logger.info('[2ndCandle BT] engine done: %d trades', len(trades))
+
+        # Warn if the data Fyers returned starts well after the requested range
+        # (30-second history is only retained for ~1 month).
+        warning = None
+        try:
+            import pandas as _pd
+            req_start = _pd.to_datetime(start_date_str).date()
+            got_start = _pd.to_datetime(str(candles[0].get('date'))).date()
+            if (got_start - req_start).days > 5:
+                warning = (
+                    f"{interval} data is only available from {got_start} "
+                    f"(requested {req_start}). Fyers retains ~1 month of 30-second "
+                    f"history — switch to a 1-minute base for multi-year backtests."
+                )
+        except Exception:
+            pass
+
+        return jsonify({
+            'success': True,
+            'trades':  trades,
+            'warning': warning,
+            '_debug': {
+                'bars_fetched': len(candles),
+                'first_bar':    str(candles[0].get('date', '?')),
+                'last_bar':     str(candles[-1].get('date', '?')),
+            },
+            'summary': {
+                'total_trades':  summary['total_trades'],
+                'wins':          summary['wins'],
+                'losses':        summary['losses'],
+                'total_pnl':     summary['total_pnl'],
+                'win_rate':      summary['win_rate'],
+                'profit_factor': summary['profit_factor'],
+                'max_drawdown':  summary['max_drawdown'],
+                'avg_win':       summary['avg_win'],
+                'avg_loss':      summary['avg_loss'],
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error in 2nd Candle backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/second-candle/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_second_candle_optimise():
+    """Sweep the 2nd 30-Sec Candle (candle # × SL:Target × direction) grid."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        interval       = data.get('interval', '30second')
+        exit_hour      = int(data.get('exit_hour', 15))
+        exit_minute    = int(data.get('exit_minute', 25))
+
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+        kite_indices = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105,
+            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+        }
+        if hasattr(current_kite, 'fyers'):
+            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+        else:
+            instrument_token = kite_indices.get(symbol, symbol)
+
+        candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval=interval,
+            use_cache=False,
+        )
+        if not candles:
+            return jsonify({'success': False, 'error': f'No {interval} data found for the given range'}), 404
+
+        import pandas as pd
+        import importlib
+        import trading_app.Backtest.second_candle_engine as _sc_mod
+        importlib.reload(_sc_mod)
+        from trading_app.Backtest.second_candle_engine import optimise_second_candle
+
+        df = pd.DataFrame(candles)
+        results = optimise_second_candle(df, exit_hour=exit_hour, exit_minute=exit_minute)
+
+        logger.info('[2ndCandle OPT] %d combos with trades', len(results))
+
+        return jsonify({
+            'success': True,
+            'symbol': symbol,
+            'interval': interval,
+            'total_combos_tested': len(_sc_mod._CANDLE_GRID) * len(_sc_mod._RR_GRID) * len(_sc_mod._DIR_GRID),
+            'results': results[:25],
+            'best': results[0] if results else None,
+        })
+
+    except Exception as e:
+        logger.error(f"Error in 2nd Candle optimise API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/backtest/vwap/optimise', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -3126,60 +3332,98 @@ def run_rtp_optimise():
                 })
 
         # ── Run optimisation ─────────────────────────────────────────────────
+        # Fetching multi-year intraday data (chunked, rate-limited) plus the
+        # full parameter sweep can take minutes, so run it in a background
+        # thread and let the client poll /backtest/rtp/optimise/status/<task_id>.
         current_kite = get_data_provider()
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
-        fyers_indices = {
-            'NIFTY':      'NSE:NIFTY50-INDEX',
-            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
-            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
-            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-            'SENSEX':     'BSE:SENSEX-INDEX',
-        }
+        task_id = str(uuid.uuid4())
+        with _rtp_opt_tasks_lock:
+            _rtp_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time()}
 
-        if hasattr(current_kite, 'fyers'):
-            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
-        else:
-            kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105,
-                            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009}
-            instrument_token = kite_indices.get(symbol, symbol)
+        def _run():
+            try:
+                fyers_indices = {
+                    'NIFTY':      'NSE:NIFTY50-INDEX',
+                    'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+                    'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+                    'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+                    'SENSEX':     'BSE:SENSEX-INDEX',
+                }
 
-        candles = current_kite.historical_data(
-            instrument_token=instrument_token,
-            from_date=start_date_str,
-            to_date=end_date_str,
-            interval=interval,
-            use_cache=False,
-        )
-        if not candles:
-            return jsonify({'success': False, 'error': 'No historical data returned'}), 404
+                if hasattr(current_kite, 'fyers'):
+                    instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+                else:
+                    kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105,
+                                    'FINNIFTY': 257801, 'MIDCPNIFTY': 288009}
+                    instrument_token = kite_indices.get(symbol, symbol)
 
-        from trading_app.Backtest.rtp_backtest_engine import optimise_rtp
+                candles = current_kite.historical_data(
+                    instrument_token=instrument_token,
+                    from_date=start_date_str,
+                    to_date=end_date_str,
+                    interval=interval,
+                    use_cache=False,
+                )
+                if not candles:
+                    with _rtp_opt_tasks_lock:
+                        _rtp_opt_tasks[task_id] = {'status': 'error', 'error': 'No historical data returned'}
+                    return
 
-        df      = pd.DataFrame(candles)
-        results = optimise_rtp(df, interval=interval, min_trades=15)
+                from trading_app.Backtest.rtp_backtest_engine import optimise_rtp
 
-        cached_at = datetime.now().strftime('%Y-%m-%d %H:%M')
-        payload   = {
-            'symbol':             symbol,
-            'interval':           interval,
-            'total_combos_tested': len(results),
-            'best':               results[0] if results else None,
-            'results':            results[:15],
-            'cached_at':          cached_at,
-        }
+                df      = pd.DataFrame(candles)
+                results = optimise_rtp(df, interval=interval, min_trades=15)
 
-        # Persist to disk
-        cache           = _load_opt_cache()
-        cache[cache_key] = payload
-        _save_opt_cache(cache)
+                payload = {
+                    'symbol':             symbol,
+                    'interval':           interval,
+                    'total_combos_tested': len(results),
+                    'best':               results[0] if results else None,
+                    'results':            results[:15],
+                    'cached_at':          datetime.now().strftime('%Y-%m-%d %H:%M'),
+                }
 
-        return jsonify({'success': True, 'from_cache': False, **payload})
+                # Persist to disk
+                disk_cache            = _load_opt_cache()
+                disk_cache[cache_key] = payload
+                _save_opt_cache(disk_cache)
+
+                with _rtp_opt_tasks_lock:
+                    _rtp_opt_tasks[task_id] = {'status': 'complete', 'payload': payload}
+            except Exception as e:
+                logger.error(f"[RTPOptimise] background error: {e}", exc_info=True)
+                with _rtp_opt_tasks_lock:
+                    _rtp_opt_tasks[task_id] = {'status': 'error', 'error': str(e)}
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
 
     except Exception as e:
         logger.error(f"Error in RTP optimise API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/rtp/optimise/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def run_rtp_optimise_status(task_id):
+    """Poll the status of a background RTP optimisation job."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _rtp_opt_tasks_lock:
+        task = _rtp_opt_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running'})
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    # complete
+    return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
 
 
 @api_bp.route('/place-live-order', methods=['POST'])

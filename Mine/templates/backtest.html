@@ -20,6 +20,7 @@
             <select id="strategySelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
                 <option value="rtp">RTP (Railway Track)</option>
                 <option value="vwap">📈 C/P VWAP Strategy</option>
+                <option value="second_candle">🕒 2nd 30 Sec Candle</option>
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
@@ -53,6 +54,7 @@
                 <div class="form-group" id="mainIntervalFg">
                     <label for="interval">Timeframe</label>
                     <select id="interval">
+                        <option value="30second">30 Second (≈1 month)</option>
                         <option value="minute">1 Minute</option>
                         <option value="2minute">2 Minute</option>
                         <option value="3minute">3 Minute</option>
@@ -145,6 +147,52 @@
                 <div class="form-group">
                     <label>Total Investment</label>
                     <div id="vwapInvestmentDisplay" style="height:42px;padding:0 14px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:14px;font-weight:700;color:#1a237e;background:#f5f7ff;display:flex;align-items:center;letter-spacing:0.3px;">₹2,50,000</div>
+                </div>
+            </div>
+
+            <!-- 2nd 30-Sec Candle params -->
+            <div id="secondCandleParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="scCandleIndex">Range Candle #</label>
+                    <input type="number" id="scCandleIndex" value="2" min="1" max="20" step="1">
+                </div>
+                <div class="form-group">
+                    <label for="scRrRatio">SL : Target</label>
+                    <select id="scRrRatio">
+                        <option value="1">1 : 1</option>
+                        <option value="1.5">1 : 1.5</option>
+                        <option value="2" selected>1 : 2</option>
+                        <option value="2.5">1 : 2.5</option>
+                        <option value="3">1 : 3</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="scExitTime">Cut-off Time</label>
+                    <input type="time" id="scExitTime" value="15:25">
+                </div>
+                <div class="form-group">
+                    <label for="scDirection">Direction</label>
+                    <select id="scDirection">
+                        <option value="both" selected>Buy &amp; Sell</option>
+                        <option value="long">Buy only</option>
+                        <option value="short">Sell only</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- 2nd 30-Sec Candle position sizing -->
+            <div id="secondCandleLotRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="scLots">Lots</label>
+                    <input type="number" id="scLots" value="5" min="1" max="50" step="1" oninput="updateScInvestment()">
+                </div>
+                <div class="form-group">
+                    <label for="scLotValue">Lot Value (₹/pt)</label>
+                    <input type="number" id="scLotValue" value="65" min="1" step="1" oninput="updateScInvestment()">
+                </div>
+                <div class="form-group">
+                    <label>Total Investment</label>
+                    <div id="scInvestmentDisplay" style="height:42px;padding:0 14px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:14px;font-weight:700;color:#1a237e;background:#f5f7ff;display:flex;align-items:center;letter-spacing:0.3px;">₹2,50,000</div>
                 </div>
             </div>
 
@@ -297,6 +345,36 @@
                 </div>
             </div>
 
+            <!-- 2nd 30-Sec Candle Optimise results panel -->
+            <div id="secondCandleOptimisePanel" style="display:none;">
+                <div class="opt-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">⚡ 2nd Candle Best Params</h4>
+                        <button id="scRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="scOptMeta"></small>
+                </div>
+                <div class="opt-table-wrap">
+                    <table class="opt-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Candle</th>
+                                <th>SL:Target</th>
+                                <th>Direction</th>
+                                <th>Trades</th>
+                                <th>Win%</th>
+                                <th>Net P&amp;L (pts)</th>
+                                <th>Prof. Factor</th>
+                                <th>Max DD</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="scOptTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
             <!-- Results area (hidden until run completes) -->
             <div id="resultsArea" style="display:none;">
                 <div class="results-section">
@@ -445,6 +523,6 @@
 </div><!-- /backtest-container -->
 {% endblock %}
 {% block scripts %}
-<script src="{{ url_for('static', filename='js/backtest.js') }}"></script>
+<script src="{{ url_for('static', filename='js/backtest.js') }}?v={{ sv('js/backtest.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 {% endblock %}

@@ -25,7 +25,7 @@
     {% block head %}{% endblock %}
 </head>
 
-<body>
+<body class="{% if request.args.get('embed') %}embed-mode{% endif %}">
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.getRegistrations().then(function(registrations) {
@@ -108,6 +108,7 @@
             <a href="/oi-profile" class="nav-link {% if request.path == '/oi-profile' %}active{% endif %}">📉 OI
                 Profile</a>
             <a href="/algo" class="nav-link {% if request.path == '/algo' %}active{% endif %}">⚡ Algo</a>
+            <a href="/trading" class="nav-link {% if request.path == '/trading' %}active{% endif %}">📟 Trading</a>
             <div class="login-dropdown">
                 {% if pwa_enabled %}
                 <button id="pwa-install-btn" title="Install as App" style="display:none">⬇️</button>

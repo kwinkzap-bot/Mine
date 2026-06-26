@@ -1,0 +1,127 @@
+/* panel-system.css — styling for reusable resizable/draggable floating panels.
+   Theme-aware: light defaults + overrides for the app's body.*-theme classes. */
+
+:root {
+    --tp-bg: #ffffff;
+    --tp-header-bg: #f4f6f9;
+    --tp-border: #dfe3ea;
+    --tp-text: #1f2733;
+    --tp-muted: #6b7686;
+    --tp-accent: #2563eb;
+    --tp-shadow: 0 8px 28px rgba(20, 30, 50, 0.16);
+    --tp-buy: #16a34a;
+    --tp-sell: #dc2626;
+}
+
+body.tp-no-select, body.tp-no-select * {
+    user-select: none !important;
+    cursor: inherit;
+}
+
+/* ── panel shell ─────────────────────────────────────────── */
+.tp-panel {
+    position: fixed;
+    display: flex;
+    flex-direction: column;
+    min-width: 180px;
+    min-height: 60px;
+    background: var(--tp-bg);
+    border: 1px solid var(--tp-border);
+    border-radius: 10px;
+    box-shadow: var(--tp-shadow);
+    color: var(--tp-text);
+    overflow: hidden;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 13px;
+}
+.tp-panel.is-active {
+    border-color: var(--tp-accent);
+    box-shadow: 0 10px 34px rgba(37, 99, 235, 0.22);
+}
+.tp-panel.is-maximized {
+    left: 8px !important; top: 8px !important;
+    width: calc(100vw - 16px) !important;
+    height: calc(100vh - 16px) !important;
+    border-radius: 8px;
+}
+.tp-panel.is-minimized .tp-panel__body,
+.tp-panel.is-minimized .tp-resize { display: none; }
+.tp-panel.is-minimized { height: auto !important; }
+
+/* ── header ──────────────────────────────────────────────── */
+.tp-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px;
+    background: var(--tp-header-bg);
+    border-bottom: 1px solid var(--tp-border);
+    cursor: grab;
+    user-select: none;
+}
+.tp-panel__header:active { cursor: grabbing; }
+.tp-panel__title {
+    display: flex; align-items: center; gap: 7px;
+    font-weight: 600; font-size: 12.5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tp-panel__icon { opacity: .85; }
+.tp-panel__actions { display: flex; gap: 3px; flex-shrink: 0; }
+.tp-panel__btn {
+    width: 22px; height: 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: none; border-radius: 5px;
+    background: transparent; color: var(--tp-muted);
+    font-size: 12px; line-height: 1; cursor: pointer;
+    transition: background .12s, color .12s;
+}
+.tp-panel__btn:hover { background: rgba(120,130,150,.18); color: var(--tp-text); }
+.tp-panel__btn--close:hover { background: rgba(220,38,38,.15); color: var(--tp-sell); }
+
+/* ── body ────────────────────────────────────────────────── */
+.tp-panel__body {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 10px;
+}
+
+/* ── resize handles (8 directions) ───────────────────────── */
+.tp-resize { position: absolute; z-index: 5; }
+.tp-resize--n  { top: -3px; left: 8px; right: 8px; height: 7px; cursor: ns-resize; }
+.tp-resize--s  { bottom: -3px; left: 8px; right: 8px; height: 7px; cursor: ns-resize; }
+.tp-resize--e  { right: -3px; top: 8px; bottom: 8px; width: 7px; cursor: ew-resize; }
+.tp-resize--w  { left: -3px; top: 8px; bottom: 8px; width: 7px; cursor: ew-resize; }
+.tp-resize--ne { top: -4px; right: -4px; width: 14px; height: 14px; cursor: nesw-resize; }
+.tp-resize--nw { top: -4px; left: -4px; width: 14px; height: 14px; cursor: nwse-resize; }
+.tp-resize--se { bottom: -4px; right: -4px; width: 14px; height: 14px; cursor: nwse-resize; }
+.tp-resize--sw { bottom: -4px; left: -4px; width: 14px; height: 14px; cursor: nesw-resize; }
+/* subtle corner grip on the active panel */
+.tp-panel.is-active .tp-resize--se::after {
+    content: ''; position: absolute; right: 3px; bottom: 3px;
+    width: 6px; height: 6px;
+    border-right: 2px solid var(--tp-accent);
+    border-bottom: 2px solid var(--tp-accent);
+    opacity: .6;
+}
+
+/* ───────────────────── theme overrides ──────────────────── */
+body.dark-theme {
+    --tp-bg: #111827; --tp-header-bg: #161f2e; --tp-border: #243044;
+    --tp-text: #e7edf6; --tp-muted: #8a97ab; --tp-accent: #60a5fa;
+    --tp-shadow: 0 10px 30px rgba(0,0,0,.55);
+}
+body.forest-theme {
+    --tp-bg: #0a1410; --tp-header-bg: #0e1c16; --tp-border: #1c3528;
+    --tp-text: #e8f7f0; --tp-muted: #6ba88f; --tp-accent: #34d399;
+    --tp-shadow: 0 10px 30px rgba(0,0,0,.5);
+}
+body.ocean-theme {
+    --tp-bg: #0c1a2b; --tp-header-bg: #102338; --tp-border: #1d3954;
+    --tp-text: #e6f1fb; --tp-muted: #7fa0bd; --tp-accent: #38bdf8;
+    --tp-shadow: 0 10px 30px rgba(2,12,27,.55);
+}
+body.cream-theme {
+    --tp-bg: #fffaf0; --tp-header-bg: #f6efe0; --tp-border: #e6d9bf;
+    --tp-text: #4a3b22; --tp-muted: #9c8458; --tp-accent: #b45309;
+}

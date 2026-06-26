@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Trading Terminal{% endblock %}
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/panel-system.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/trading.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="tt-stage">
+    <div class="tt-toolbar">
+        <span class="tt-title">⚡ Trading Terminal <small>drag headers to move · drag edges/corners to resize</small></span>
+        <span class="tt-spacer"></span>
+        <span class="tt-hint">Panels are dynamic &amp; resizable</span>
+        <div class="tt-add">
+            <button class="tt-btn tt-btn--primary" id="tt-add-btn">＋ Add Panel</button>
+            <div class="tt-add-menu" id="tt-add-menu"></div>
+        </div>
+        <button class="tt-btn" id="tt-reset-btn" title="Reset layout">↺ Reset</button>
+    </div>
+    <!-- floating panels are injected here by PanelSystem -->
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/panel-system.js') }}"></script>
+<script src="{{ url_for('static', filename='js/trading.js') }}"></script>
+{% endblock %}

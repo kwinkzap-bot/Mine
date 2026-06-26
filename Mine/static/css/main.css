@@ -27,6 +27,17 @@ body {
     min-height: 400px;
 }
 
+/* Embed mode (?embed=1) — page rendered inside a panel iframe.
+   Collapse the outer chrome so the component fills its panel compactly. */
+body.embed-mode .container {
+    max-width: none;
+    padding: 6px;
+    min-height: 0;
+}
+body.embed-mode main {
+    margin: 0;
+}
+
 /* Navigation Bar - Premium Glassmorphic Compact Design */
 .navigation-bar {
     padding: 4px 10px;

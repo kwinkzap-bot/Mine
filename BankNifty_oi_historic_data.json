@@ -16198,5 +16198,17 @@
     "close": 58187.2,
     "idx_fut_oi": 2566200,
     "FII_Index_futures": -45.53
+  },
+  {
+    "date": "2026-06-25",
+    "symbol": "BANKNIFTY",
+    "ce_oi": 15809220,
+    "pe_oi": 16224990,
+    "open": 58493.85,
+    "high": 58706.05,
+    "low": 58109.85,
+    "close": 58177.05,
+    "idx_fut_oi": 2691240,
+    "FII_Index_futures": 0
   }
 ]

@@ -102,6 +102,14 @@ body.ocean-theme .ac-page {
     flex-direction: column;
     gap: 8px;
     padding: 8px 0;
+    /* Fill the viewport below the nav chrome so the table reaches the bottom
+       instead of leaving a gap. */
+    height: calc(100vh - 60px);
+}
+
+/* In a panel iframe the nav chrome is collapsed — use the full height. */
+body.embed-mode .ac-page {
+    height: 100vh;
 }
 
 /* ── Filter bar ──────────────────────────────────────────────── */
@@ -227,7 +235,10 @@ body.ocean-theme .ac-page {
     overflow: hidden;
     overflow-x: auto;
     overflow-y: auto;
-    max-height: calc(100vh - 170px);
+    /* Grow to fill the remaining height of .ac-page (min-height:0 lets a flex
+       child shrink/scroll instead of overflowing). */
+    flex: 1 1 auto;
+    min-height: 0;
     box-shadow: var(--ac-shadow);
 }
 

@@ -1,0 +1,72 @@
+/* trading.css — Zerodha-style terminal toolbar + panel content widgets.
+   Inherits panel theme tokens (--tp-*) from panel-system.css. */
+
+.tt-stage {
+    position: relative;
+    min-height: calc(100vh - 120px);
+    padding: 8px;
+}
+
+/* toolbar */
+.tt-toolbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; margin-bottom: 6px;
+    background: var(--tp-bg, #fff);
+    border: 1px solid var(--tp-border, #dfe3ea);
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(20,30,50,.06);
+}
+.tt-title { font-weight: 700; font-size: 15px; color: var(--tp-text, #1f2733); }
+.tt-title small { font-weight: 500; color: var(--tp-muted, #6b7686); margin-left: 8px; }
+.tt-spacer { flex: 1; }
+.tt-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 13px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--tp-border, #dfe3ea);
+    background: var(--tp-header-bg, #f4f6f9);
+    color: var(--tp-text, #1f2733); font-size: 13px; font-weight: 600;
+}
+.tt-btn:hover { border-color: var(--tp-accent, #2563eb); color: var(--tp-accent, #2563eb); }
+.tt-btn--primary { background: var(--tp-accent, #2563eb); color: #fff; border-color: transparent; }
+.tt-btn--primary:hover { filter: brightness(1.06); color: #fff; }
+
+.tt-add { position: relative; }
+.tt-add-menu {
+    position: absolute; top: 110%; right: 0; z-index: 2000;
+    min-width: 180px; padding: 6px;
+    background: var(--tp-bg, #fff);
+    border: 1px solid var(--tp-border, #dfe3ea);
+    border-radius: 10px; box-shadow: var(--tp-shadow, 0 8px 28px rgba(20,30,50,.16));
+    display: none; flex-direction: column; gap: 2px;
+}
+.tt-add-menu.show { display: flex; }
+.tt-add-item {
+    text-align: left; padding: 8px 10px; border: none; border-radius: 7px;
+    background: transparent; color: var(--tp-text, #1f2733);
+    font-size: 13px; cursor: pointer;
+}
+.tt-add-item:hover { background: var(--tp-header-bg, #f1f4f8); color: var(--tp-accent, #2563eb); }
+
+.tt-hint { color: var(--tp-muted, #6b7686); font-size: 12px; padding: 4px 8px; }
+
+/* ── embedded application component (iframe) ────────────── */
+.tp-panel__body.tt-embed-body { padding: 0; display: flex; flex-direction: column; }
+.tt-embed-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 4px 8px; flex: 0 0 auto;
+    background: var(--tp-header-bg, #f4f6f9);
+    border-bottom: 1px solid var(--tp-border, #dfe3ea);
+    font-size: 11px; color: var(--tp-muted, #6b7686);
+}
+.tt-embed-url { font-family: ui-monospace, monospace; opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-embed-acts { display: flex; gap: 4px; flex-shrink: 0; }
+.tt-embed-btn {
+    width: 22px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--tp-border, #dfe3ea); border-radius: 5px;
+    background: var(--tp-bg, #fff); color: var(--tp-muted, #6b7686);
+    font-size: 12px; cursor: pointer; text-decoration: none;
+}
+.tt-embed-btn:hover { border-color: var(--tp-accent, #2563eb); color: var(--tp-accent, #2563eb); }
+.tt-embed-frame { flex: 1 1 auto; width: 100%; border: 0; background: var(--tp-bg, #fff); }
+/* while dragging/resizing, ignore iframe pointer events so the mouse stays with the panel */
+body.tp-no-select .tt-embed-frame { pointer-events: none; }

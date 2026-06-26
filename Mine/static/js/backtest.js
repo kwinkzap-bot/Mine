@@ -13,6 +13,11 @@ document.addEventListener('DOMContentLoaded', function() {
     let allSymbols = [];
     let selectedSymbol = 'NIFTY';
 
+    // Tracks the in-flight RTP optimise so a new/changed run cancels the old one.
+    // Declared up top so cancelRtpOptimise() is safe to call during init.
+    let _rtpOptRun   = 0;     // generation token — only the latest run is honoured
+    let _rtpOptAbort = null;  // AbortController for the in-flight POST request
+
     // Initialize dates (default to Jan 1st 2017)
     const today = new Date();
 
@@ -88,6 +93,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (val) {
                 selectedSymbol = val;
                 this.value = selectedSymbol;
+                applyLotValueForSymbol(selectedSymbol);
+                cancelRtpOptimise(); // stale: results would be for the old symbol
                 this.blur();
             } else {
                 this.blur();
@@ -100,8 +107,25 @@ document.addEventListener('DOMContentLoaded', function() {
             selectedSymbol = e.target.textContent;
             symbolSearch.value = selectedSymbol;
             symbolList.classList.remove('show');
+            applyLotValueForSymbol(selectedSymbol);
+            cancelRtpOptimise(); // stale: results would be for the old symbol
         }
     });
+
+    // Lot value (₹/pt) per symbol; defaults to NIFTY's value for anything else.
+    const LOT_VALUE_BY_SYMBOL = { NIFTY: 65, BANKNIFTY: 30, SENSEX: 20 };
+    function lotValueForSymbol(symbol) {
+        return LOT_VALUE_BY_SYMBOL[(symbol || '').toUpperCase()] || 65;
+    }
+    function applyLotValueForSymbol(symbol) {
+        const lotValue = lotValueForSymbol(symbol);
+        ['rtpLotValue', 'vwapLotValue', 'scLotValue'].forEach(function(id) {
+            const el = document.getElementById(id);
+            if (el) el.value = lotValue;
+        });
+    }
+    // Seed lot values for the symbol selected on initial page load.
+    applyLotValueForSymbol(selectedSymbol);
 
     // Close dropdown when clicking outside
     document.addEventListener('click', function(e) {
@@ -119,6 +143,9 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateStrategyView() {
         if (!strategySelect) return;
 
+        // Switching strategy abandons any in-flight RTP optimise run.
+        if (typeof cancelRtpOptimise === 'function') cancelRtpOptimise();
+
         const intervalSelect = document.getElementById('interval');
         const startDateInput = document.getElementById('startDate');
         const mainInputsRow  = document.getElementById('mainInputsRow');
@@ -131,10 +158,16 @@ document.addEventListener('DOMContentLoaded', function() {
         const smParamsRow   = document.getElementById('swingMomentumParamsRow');
         const vwapParamsRow = document.getElementById('vwapParamsRow');
         const vwapOptPanel  = document.getElementById('vwapOptimisePanel');
+        const scParamsRow   = document.getElementById('secondCandleParamsRow');
+        const scLotRow      = document.getElementById('secondCandleLotRow');
+        const scOptPanel    = document.getElementById('secondCandleOptimisePanel');
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (vwapParamsRow) vwapParamsRow.style.display = 'none';
         if (vwapLotRow)    vwapLotRow.style.display    = 'none';
         if (vwapOptPanel)  vwapOptPanel.style.display  = 'none';
+        if (scParamsRow)   scParamsRow.style.display   = 'none';
+        if (scLotRow)      scLotRow.style.display      = 'none';
+        if (scOptPanel)    scOptPanel.style.display    = 'none';
         // Restore symbol/interval visibility (they are hidden for swing_momentum)
         const symFg = document.getElementById('mainSymbolFg');
         const intFg = document.getElementById('mainIntervalFg');
@@ -143,7 +176,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn      = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn = document.getElementById('smGoLiveBtn');
-        if (optBtn)      optBtn.style.display      = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap') ? '' : 'none';
+        if (optBtn)      optBtn.style.display      = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle') ? '' : 'none';
         if (smGoLiveBtn) smGoLiveBtn.style.display = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -169,6 +202,16 @@ document.addEventListener('DOMContentLoaded', function() {
             if (intervalSelect) intervalSelect.value = '5minute';
             if (startDateInput) startDateInput.value = '2017-01-01';
             updateVwapInvestment();
+
+        } else if (val === 'second_candle') {
+            if (scParamsRow) scParamsRow.style.display = 'grid';
+            if (scLotRow)    scLotRow.style.display    = 'grid';
+            // Base timeframe is selectable: 30second (~1 month of Fyers history)
+            // or 1-minute and above (~10 years).
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '30second';
+            if (startDateInput) startDateInput.value = '2017-01-01';
+            updateScInvestment();
 
         } else if (val === 'swing_momentum') {
             if (smParamsRow) smParamsRow.style.display = 'grid';
@@ -201,6 +244,14 @@ document.addEventListener('DOMContentLoaded', function() {
         if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
     };
 
+    // 2nd 30-Sec Candle investment display
+    window.updateScInvestment = function() {
+        const lots  = Math.max(1, parseInt(document.getElementById('scLots')?.value || 5));
+        const total = lots * 50000;
+        const el = document.getElementById('scInvestmentDisplay');
+        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+    };
+
     // 3. Run Backtest
     runBtn.addEventListener('click', async function() {
         const _strat = strategySelect ? strategySelect.value : 'rtp';
@@ -225,12 +276,14 @@ document.addEventListener('DOMContentLoaded', function() {
         const optPanel      = document.getElementById('rtpOptimisePanel');
         const smOptPanel    = document.getElementById('smOptimisePanel');
         const vwapOptPanel2 = document.getElementById('vwapOptimisePanel');
+        const scOptPanel2   = document.getElementById('secondCandleOptimisePanel');
         if (btTradesSec)    btTradesSec.style.display    = 'none';
         if (btPlaceholder)  btPlaceholder.style.display  = '';
         if (periodSec)      periodSec.style.display      = 'none';
         if (optPanel)       optPanel.style.display       = 'none';
         if (smOptPanel)     smOptPanel.style.display     = 'none';
         if (vwapOptPanel2)  vwapOptPanel2.style.display  = 'none';
+        if (scOptPanel2)    scOptPanel2.style.display    = 'none';
 
         try {
             const strat = strategySelect ? strategySelect.value : 'rtp';
@@ -242,6 +295,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.min_gap   = parseFloat(document.getElementById('vwapMinGap')?.value  || 30);
                 payload.tp_points = parseFloat(document.getElementById('vwapTP')?.value      || 150);
                 payload.sl_points = parseFloat(document.getElementById('vwapSL')?.value      || 50);
+            }
+
+            // 2nd 30-Sec Candle breakout
+            if (strat === 'second_candle') {
+                endpoint = '/api/backtest/second-candle';
+                payload.interval     = document.getElementById('interval')?.value || '30second';
+                payload.candle_index = parseInt(document.getElementById('scCandleIndex')?.value || 2);
+                payload.rr_ratio     = parseFloat(document.getElementById('scRrRatio')?.value || 2);
+                const exitTime = (document.getElementById('scExitTime')?.value || '15:25').split(':');
+                payload.exit_hour    = parseInt(exitTime[0] || 15);
+                payload.exit_minute  = parseInt(exitTime[1] || 25);
+                const dir = document.getElementById('scDirection')?.value || 'both';
+                payload.enable_long  = dir !== 'short';
+                payload.enable_short = dir !== 'long';
             }
 
             // Swing Momentum: different endpoint + payload
@@ -277,6 +344,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const data = await response.json();
 
             if (data.success) {
+                if (data.warning) window.showNotification(data.warning, 'warning');
                 displayResults(data);
             } else {
                 window.showNotification(data.error || 'Backtest failed', 'error');
@@ -305,6 +373,10 @@ document.addEventListener('DOMContentLoaded', function() {
         const isRtp  = strategySelect && strategySelect.value === 'rtp';
         const isSM   = strategySelect && strategySelect.value === 'swing_momentum';
         const isVwap = strategySelect && strategySelect.value === 'vwap';
+        const isSc   = strategySelect && strategySelect.value === 'second_candle';
+        // 2nd-candle reuses the VWAP-style ₹ cards, reading its own lot inputs
+        const moneyLotsId    = isSc ? 'scLots'     : 'vwapLots';
+        const moneyLotValId  = isSc ? 'scLotValue' : 'vwapLotValue';
 
         if (isSM) {
             lastData.is_swing_momentum = true;
@@ -391,7 +463,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     subtitle.textContent = info;
                 }
             }
-        } else if (isVwap && rtpRow) {
+        } else if ((isVwap || isSc) && rtpRow) {
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -403,8 +475,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (avgLossEl) avgLossEl.textContent = summary.avg_loss != null ? '-' + Math.abs(Number(summary.avg_loss)).toFixed(1) + ' pts' : '—';
 
             const dd      = summary.max_drawdown ?? 0;
-            const vLots   = Math.max(1, parseInt(document.getElementById('vwapLots')?.value     || 5));
-            const vLotVal = Math.max(1, parseFloat(document.getElementById('vwapLotValue')?.value || 65));
+            const vLots   = Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value     || 5));
+            const vLotVal = Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value || 65));
             const ddPtsEl = document.getElementById('statMaxDDPts');
             const ddEl    = document.getElementById('statMaxDD');
             if (ddPtsEl) ddPtsEl.textContent = dd.toFixed(1) + ' pts';
@@ -429,13 +501,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Equity curve + period breakdown
-        const lots2     = isVwap
-            ? Math.max(1, parseInt(document.getElementById('vwapLots')?.value      || 5))
+        const lots2     = (isVwap || isSc)
+            ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 5))
             : Math.max(1, parseInt(document.getElementById('rtpLots')?.value       || 1));
-        const lotValue2 = isVwap
-            ? Math.max(1, parseFloat(document.getElementById('vwapLotValue')?.value || 65))
+        const lotValue2 = (isVwap || isSc)
+            ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
-        const isMoney     = isRtp || isVwap;
+        const isMoney     = isRtp || isVwap || isSc;
         const investment2 = lots2 * 50000;
         renderEquityCurve(data.trades, isMoney, lots2, lotValue2, investment2);
 
@@ -768,6 +840,21 @@ document.addEventListener('DOMContentLoaded', function() {
     function renderTable() {
         if (!lastData || !lastData.trades) return;
         if (lastData.is_swing_momentum) { _renderSmTable(lastData.trades); return; }
+        // Restore the intraday header if swing momentum rewrote the thead
+        // (its headers have no data-sort). Only rebuild when actually mutated
+        // so normal runs keep their existing sort listeners.
+        const thead = document.querySelector('.trades-table thead tr');
+        if (thead && !thead.querySelector('th[data-sort]')) {
+            thead.innerHTML = `
+                <th data-sort="entry_time">Entry Time</th>
+                <th data-sort="type">Type</th>
+                <th data-sort="entry_price">Entry Price</th>
+                <th data-sort="exit_time">Exit Time</th>
+                <th data-sort="exit_price">Exit Price</th>
+                <th data-sort="result">Result</th>
+                <th data-sort="pnl">P&amp;L</th>`;
+            attachSortListeners();
+        }
         const trades = [...lastData.trades];
         const tbody = document.getElementById('tradesBody');
         
@@ -816,20 +903,23 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Add sort listeners to headers
-    document.querySelectorAll('.trades-table th[data-sort]').forEach(th => {
-        th.style.cursor = 'pointer';
-        th.addEventListener('click', () => {
-            const key = th.dataset.sort;
-            if (sortConfig.key === key) {
-                sortConfig.direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
-            } else {
-                sortConfig.key = key;
-                sortConfig.direction = 'desc'; // Default to newest/highest first
-            }
-            renderTable();
+    // Add sort listeners to headers (re-callable after the thead is rebuilt)
+    function attachSortListeners() {
+        document.querySelectorAll('.trades-table th[data-sort]').forEach(th => {
+            th.style.cursor = 'pointer';
+            th.addEventListener('click', () => {
+                const key = th.dataset.sort;
+                if (sortConfig.key === key) {
+                    sortConfig.direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    sortConfig.key = key;
+                    sortConfig.direction = 'desc'; // Default to newest/highest first
+                }
+                renderTable();
+            });
         });
-    });
+    }
+    attachSortListeners();
 
     function formatDate(dateStr) {
         if (!dateStr) return '--';
@@ -885,6 +975,15 @@ document.addEventListener('DOMContentLoaded', function() {
         if (data.best) applyOptResult(data.best);
     }
 
+    // Abort any running RTP optimise (pending request + polling loop).
+    function cancelRtpOptimise() {
+        _rtpOptRun += 1;            // invalidate any active poll
+        if (_rtpOptAbort) {
+            try { _rtpOptAbort.abort(); } catch (e) { /* noop */ }
+            _rtpOptAbort = null;
+        }
+    }
+
     async function runOptimise(recalculate) {
         const symbol = symbolSearch.value.trim().toUpperCase();
         if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
@@ -898,10 +997,17 @@ document.addEventListener('DOMContentLoaded', function() {
         if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
         if (panel) panel.style.display = 'none';
 
+        // Cancel whatever was running before and claim this generation.
+        cancelRtpOptimise();
+        const myRun     = _rtpOptRun;
+        const controller = new AbortController();
+        _rtpOptAbort     = controller;
+
         try {
             const resp = await fetch('/api/backtest/rtp/optimise', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
                 body: JSON.stringify({
                     symbol,
                     start_date:  document.getElementById('startDate').value,
@@ -911,14 +1017,68 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
             });
             const data = await resp.json();
-            if (!data.success) { window.showNotification(data.error || 'Optimisation failed', 'error'); return; }
-            renderOptResults(data);
+            if (myRun !== _rtpOptRun) return; // superseded by a newer run
+            if (!data.success) {
+                window.showNotification(data.error || 'Optimisation failed', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            // Served straight from cache → render immediately
+            if (data.from_cache) {
+                _rtpOptAbort = null;
+                renderOptResults(data);
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            // Long-running task: poll status endpoint until complete
+            _pollRtpOptimise(data.task_id, activeBtn, origText, Date.now(), myRun);
         } catch (err) {
+            if (err && err.name === 'AbortError') return; // cancelled on purpose
             console.error('Optimise error:', err);
             window.showNotification('Optimisation request failed', 'error');
-        } finally {
             if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
         }
+    }
+
+    function _pollRtpOptimise(taskId, activeBtn, origText, startMs, myRun) {
+        const MAX_WAIT_MS = 10 * 60 * 1000; // 10 min hard stop
+
+        function tick() {
+            if (myRun !== _rtpOptRun) return; // cancelled / superseded — stop polling
+
+            const elapsed = Math.round((Date.now() - startMs) / 1000);
+            if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s…`;
+
+            if (Date.now() - startMs > MAX_WAIT_MS) {
+                window.showNotification('Optimisation timed out — try a shorter date range', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+
+            fetch(`/api/backtest/rtp/optimise/status/${taskId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (myRun !== _rtpOptRun) return; // superseded while awaiting response
+                    if (data.status === 'running') {
+                        setTimeout(tick, 2000);
+                        return;
+                    }
+                    _rtpOptAbort = null;
+                    if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                    if (!data.success || data.status === 'error') {
+                        window.showNotification(data.error || 'Optimisation failed', 'error');
+                        return;
+                    }
+                    renderOptResults(data);
+                })
+                .catch(err => {
+                    if (myRun !== _rtpOptRun) return; // cancelled — ignore
+                    console.error('RTP poll error:', err);
+                    setTimeout(tick, 3000); // retry on transient network error
+                });
+        }
+
+        setTimeout(tick, 2000); // first check after 2s
     }
 
     function applyOptResult(r) {
@@ -1034,12 +1194,108 @@ document.addEventListener('DOMContentLoaded', function() {
     const vwapRecalcBtn = document.getElementById('vwapRecalcOptBtn');
     if (vwapRecalcBtn) vwapRecalcBtn.addEventListener('click', () => runVwapOptimise(true));
 
+    // ── 2nd 30-Sec Candle Optimise (Find Best Params) ─────────────────
+    function renderScOptResults(data) {
+        const panel     = document.getElementById('secondCandleOptimisePanel');
+        const tbody     = document.getElementById('scOptTableBody');
+        const metaEl    = document.getElementById('scOptMeta');
+        const recalcBtn = document.getElementById('scRecalcOptBtn');
+
+        if (metaEl) metaEl.textContent = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
+
+        const dirLabel = d => d === 'long' ? 'Buy' : (d === 'short' ? 'Sell' : 'Buy & Sell');
+
+        if (tbody) {
+            tbody.innerHTML = (data.results || []).map((r, i) => {
+                const pnlFmt = (r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1) + ' pts';
+                const ddFmt  = r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—';
+                const wr     = r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0';
+                return `
+                <tr class="${i === 0 ? 'opt-best' : ''}">
+                    <td>${i + 1}</td>
+                    <td>${r.candle_index}</td>
+                    <td>1:${r.rr_ratio}</td>
+                    <td>${dirLabel(r.direction)}</td>
+                    <td>${r.total_trades}</td>
+                    <td>${wr}%</td>
+                    <td class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${pnlFmt}</td>
+                    <td>${(r.profit_factor || 0).toFixed(2)}</td>
+                    <td class="pnl-negative">${ddFmt}</td>
+                    <td><button class="btn-opt-use" data-idx="${i}">Use</button></td>
+                </tr>`;
+            }).join('');
+
+            tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
+                btn.addEventListener('click', () => applyScOptResult(data.results[parseInt(btn.dataset.idx)]));
+            });
+        }
+
+        if (panel)     panel.style.display     = '';
+        if (recalcBtn) recalcBtn.style.display = '';
+        if (data.best) applyScOptResult(data.best);
+    }
+
+    async function runScOptimise(recalculate) {
+        const symbol = symbolSearch.value.trim().toUpperCase();
+        if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
+
+        const panel     = document.getElementById('secondCandleOptimisePanel');
+        const recalcBtn = document.getElementById('scRecalcOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+
+        const exitTime = (document.getElementById('scExitTime')?.value || '15:25').split(':');
+        try {
+            const resp = await fetch('/api/backtest/second-candle/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    symbol,
+                    start_date:  document.getElementById('startDate').value,
+                    end_date:    document.getElementById('endDate').value,
+                    interval:    document.getElementById('interval').value,
+                    exit_hour:   parseInt(exitTime[0] || 15),
+                    exit_minute: parseInt(exitTime[1] || 25),
+                })
+            });
+            const data = await resp.json();
+            if (!data.success) { window.showNotification(data.error || 'Optimisation failed', 'error'); return; }
+            renderScOptResults(data);
+        } catch (err) {
+            console.error('2nd Candle optimise error:', err);
+            window.showNotification('Optimisation request failed', 'error');
+        } finally {
+            if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+        }
+    }
+
+    function applyScOptResult(r) {
+        const ci  = document.getElementById('scCandleIndex');
+        const rr  = document.getElementById('scRrRatio');
+        const dir = document.getElementById('scDirection');
+        if (ci) ci.value = r.candle_index;
+        if (rr) rr.value = r.rr_ratio;
+        if (dir) dir.value = r.direction;
+        if (window.showNotification) {
+            window.showNotification(
+                `Applied: Candle ${r.candle_index}  ·  1:${r.rr_ratio}  ·  ${r.direction}  ·  Win% ${((r.wins / r.total_trades) * 100).toFixed(0)}%`, 'success'
+            );
+        }
+    }
+
+    const scRecalcBtn = document.getElementById('scRecalcOptBtn');
+    if (scRecalcBtn) scRecalcBtn.addEventListener('click', () => runScOptimise(true));
+
     const optimiseBtn   = document.getElementById('runOptimiseBtn');
     const recalcOptBtn  = document.getElementById('recalculateOptBtn');
     if (optimiseBtn)  optimiseBtn.addEventListener('click', () => {
         const strat = strategySelect ? strategySelect.value : 'rtp';
         if (strat === 'swing_momentum') _runSmOptimise(false);
         else if (strat === 'vwap')      runVwapOptimise(false);
+        else if (strat === 'second_candle') runScOptimise(false);
         else                            runOptimise(false);
     });
     if (recalcOptBtn) recalcOptBtn.addEventListener('click', () => runOptimise(true));
