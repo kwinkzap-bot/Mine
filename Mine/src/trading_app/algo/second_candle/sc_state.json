@@ -1,0 +1,13 @@
+{
+  "active_trade": null,
+  "traded_today": false,
+  "trade_date": "",
+  "params": {
+    "candle_index": 2,
+    "rr_ratio": 3.0,
+    "exit_hour": 15,
+    "exit_minute": 25,
+    "enable_long": true,
+    "enable_short": true
+  }
+}

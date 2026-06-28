@@ -15,6 +15,7 @@
     <div class="ag-tab-bar">
         <button class="ag-tab"        id="algo-tab-straddle"         onclick="algoSwitch('straddle')">Straddle</button>
         <button class="ag-tab"        id="algo-tab-rtp"              onclick="algoSwitch('rtp')">EMA RTP</button>
+        <button class="ag-tab"        id="algo-tab-sc"              onclick="algoSwitch('sc')">2nd 30s Candle</button>
         <button class="ag-tab active" id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
 
@@ -212,6 +213,121 @@
     </div>
 
     </div><!-- #algo-rtp-panel -->
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- 2nd 30-Sec Candle panel                                  -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-sc-panel">
+
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <div class="ag-header">
+        <span class="ag-title">2nd 30-Sec Candle — Breakout</span>
+        <span id="scBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="scBadgeText">No Trade</span>
+        </span>
+        <span class="ag-last-upd" id="scLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <!-- ── Strategy settings (editable, compact) ───────────────── -->
+    <div class="ag-card sc-settings-card">
+        <div class="sc-settings-row">
+            <span class="sc-set-title">Strategy Settings</span>
+            <label class="sc-field">Candle #
+                <input type="number" id="scAlgoCandleIndex" value="2" min="1" max="20" step="1">
+            </label>
+            <label class="sc-field">SL:Target
+                <select id="scAlgoRrRatio">
+                    <option value="1">1:1</option>
+                    <option value="1.5">1:1.5</option>
+                    <option value="2">1:2</option>
+                    <option value="2.5">1:2.5</option>
+                    <option value="3" selected>1:3</option>
+                    <option value="4">1:4</option>
+                    <option value="5">1:5</option>
+                </select>
+            </label>
+            <label class="sc-field">Cut-off
+                <input type="time" id="scAlgoCutoff" value="15:25">
+            </label>
+            <label class="sc-field">Direction
+                <select id="scAlgoDirection">
+                    <option value="both" selected>Buy &amp; Sell</option>
+                    <option value="long">Buy only</option>
+                    <option value="short">Sell only</option>
+                </select>
+            </label>
+            <button class="ag-btn ag-btn-preview sc-save-btn" onclick="scSaveSettings(this)">Save</button>
+            <span id="scSettingsMsg" class="sc-set-msg"></span>
+        </div>
+    </div>
+
+    <!-- ── Performance dashboard (from executed-trade JSON) ────── -->
+    <div class="ag-card" id="scDashCard" style="display:none">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Live Performance</span>
+            <span id="scDashNet" style="margin-left:auto;font-size:12px;font-weight:800"></span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="scDashStats"></div>
+
+            <!-- Equity curve -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">Equity Curve</span>
+                    <span id="scEquityMeta" class="rtp-chart-meta"></span>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="scEquityChart"></canvas></div>
+            </div>
+
+            <!-- P&L breakdown -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">P&amp;L Breakdown</span>
+                    <div class="rtp-period-tabs" id="scPeriodTabs">
+                        <button class="rtp-period-tab active" data-period="monthly" onclick="scSetPeriod('monthly')">Monthly</button>
+                        <button class="rtp-period-tab"        data-period="weekly"  onclick="scSetPeriod('weekly')">Weekly</button>
+                        <button class="rtp-period-tab"        data-period="daily"   onclick="scSetPeriod('daily')">Daily</button>
+                        <button class="rtp-period-tab"        data-period="yearly"  onclick="scSetPeriod('yearly')">Yearly</button>
+                    </div>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="scBreakdownChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Active Trade card ───────────────────────────────────── -->
+    <div class="ag-card" id="scActiveCard">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Active Trade</span>
+            <div class="ag-card-hdr-actions">
+                <button class="ag-btn ag-btn-strikes" id="scStrikesBtn"
+                        onclick="scFetchDeltaStrikes(this)">Δ Strikes</button>
+                <button class="ag-btn ag-btn-exit" id="scExitBtn"
+                        onclick="scExitNow(this)" disabled>Force Exit</button>
+            </div>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="scActiveGrid">
+                <div class="ag-empty">No active trade</div>
+            </div>
+            <!-- Delta strike result panel — shown after button click -->
+            <div id="scStrikesResult" style="display:none"></div>
+        </div>
+    </div>
+
+    <!-- ── Executed Trade History ──────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Executed Trade History</span>
+            <span id="scHistCount" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+        </div>
+        <div id="scHistBody">
+            <div class="ag-empty">No completed trades</div>
+        </div>
+    </div>
+
+    </div><!-- #algo-sc-panel -->
 
     <!-- ════════════════════════════════════════════════════════ -->
     <!-- Swing Momentum panel                                     -->

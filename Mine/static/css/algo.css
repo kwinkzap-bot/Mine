@@ -1724,3 +1724,44 @@ body.ocean-theme .algo-page {
     border-color: var(--ag-accent);
     color: #fff;
 }
+
+/* ── 2nd-Candle compact Strategy Settings ─────────────────────────────────── */
+.sc-settings-card { padding: 8px 12px; }
+.sc-settings-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+}
+.sc-set-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ag-text);
+    margin-right: 4px;
+}
+.sc-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ag-text-2);
+    white-space: nowrap;
+}
+.sc-field input,
+.sc-field select {
+    padding: 3px 6px;
+    font-size: 12px;
+    border: 1px solid var(--ag-border);
+    border-radius: 5px;
+    background: var(--ag-bg);
+    color: var(--ag-text);
+}
+.sc-field input[type="number"] { width: 52px; }
+.sc-field input[type="time"]   { width: 92px; }
+.sc-save-btn { padding: 4px 14px; font-size: 12px; }
+.sc-set-msg {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--ag-pos);
+}

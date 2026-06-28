@@ -6,7 +6,11 @@ let _rtpStatusTimer    = null;
 let _rtpHistoryTimer   = null;
 let _rtpLastEntryTime  = null;  // tracks last seen entry_time to detect trade changes
 let _rtpLastActiveFlag = false; // tracks last seen active flag
-const _ALGO_TABS = ['straddle', 'rtp', 'swing-momentum'];
+let _scStatusTimer     = null;
+let _scHistoryTimer    = null;
+let _scLastEntryTime   = null;
+let _scLastActiveFlag  = false;
+const _ALGO_TABS = ['straddle', 'rtp', 'sc', 'swing-momentum'];
 
 function algoLoad() {
     const hash = location.hash.replace('#', '');
@@ -24,11 +28,17 @@ function algoSwitch(tab) {
     clearTimeout(_algoTimer);
     clearTimeout(_rtpStatusTimer);
     clearTimeout(_rtpHistoryTimer);
+    clearTimeout(_scStatusTimer);
+    clearTimeout(_scHistoryTimer);
     if (tab === 'straddle') {
         _fetchStatus();
     } else if (tab === 'rtp') {
         _rtpFetchStatus();
         _rtpFetchHistory();
+    } else if (tab === 'sc') {
+        scLoadSettings();
+        _scFetchStatus();
+        _scFetchHistory();
     } else if (tab === 'swing-momentum') {
         _smLiveFetchConfigs();
     }
@@ -538,6 +548,527 @@ function rtpFetchDeltaStrikes(btn) {
     panel.style.display = 'none';
 
     fetch('/api/algo/rtp/delta-strikes')
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            btn.classList.remove('busy');
+            btn.textContent = 'Δ Strikes';
+
+            if (!d.success) {
+                panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ ${d.error || 'Failed to fetch strikes'}</span>`;
+                panel.style.display = 'block';
+                return;
+            }
+
+            const fmt  = v => v != null ? v.toLocaleString('en-IN') : '—';
+            const fmtD = v => v != null ? (v > 0 ? '+' : '') + v.toFixed(3) : '—';
+            const fmtL = v => v != null ? '₹' + v.toLocaleString('en-IN', {minimumFractionDigits:2}) : '—';
+
+            const ce = d.CE || {};
+            const pe = d.PE || {};
+
+            panel.innerHTML = `
+              <div style="font-size:11px;color:#7986cb;font-weight:600;margin-bottom:4px;letter-spacing:.4px;">
+                NIFTY SPOT: <span style="color:#1a237e;font-size:13px;">${fmt(d.spot)}</span>
+                &nbsp;·&nbsp; Expiry: <span style="color:#555;">${d.expiry || '—'}</span>
+              </div>
+              <div class="rtp-strikes-row">
+                <span class="rsr-type ce">CE</span>
+                <span class="rsr-strike">${fmt(ce.strike)}</span>
+                <span class="rsr-delta">δ ${fmtD(ce.delta)}</span>
+                <span class="rsr-ltp">LTP ${fmtL(ce.ltp)}</span>
+              </div>
+              <div class="rtp-strikes-row">
+                <span class="rsr-type pe">PE</span>
+                <span class="rsr-strike">${fmt(pe.strike)}</span>
+                <span class="rsr-delta">δ ${fmtD(pe.delta)}</span>
+                <span class="rsr-ltp">LTP ${fmtL(pe.ltp)}</span>
+              </div>`;
+            panel.style.display = 'block';
+        })
+        .catch(e => {
+            btn.disabled = false;
+            btn.classList.remove('busy');
+            btn.textContent = 'Δ Strikes';
+            panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ Request failed: ${e}</span>`;
+            panel.style.display = 'block';
+        });
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 2nd 30-Sec Candle live algo (mirrors the RTP tab; reuses RTP's generic helpers)
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _scEquityChart    = null;
+let _scBreakdownChart = null;
+let _scDashTrades     = [];
+let _scDashPeriod     = 'monthly';
+
+// ── SC settings ────────────────────────────────────────────────────────────────
+
+function scLoadSettings() {
+    fetch('/api/algo/sc/settings')
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success || !d.params) return;
+            const p = d.params;
+            const ci = document.getElementById('scAlgoCandleIndex');
+            const rr = document.getElementById('scAlgoRrRatio');
+            const ct = document.getElementById('scAlgoCutoff');
+            const dr = document.getElementById('scAlgoDirection');
+            if (ci) ci.value = p.candle_index;
+            if (rr) rr.value = String(p.rr_ratio);
+            if (ct) ct.value = String(p.exit_hour).padStart(2, '0') + ':' + String(p.exit_minute).padStart(2, '0');
+            if (dr) dr.value = p.enable_long && p.enable_short ? 'both' : (p.enable_long ? 'long' : 'short');
+        })
+        .catch(() => {});
+}
+
+function scSaveSettings(btn) {
+    const ci  = parseInt(document.getElementById('scAlgoCandleIndex')?.value || 2);
+    const rr  = parseFloat(document.getElementById('scAlgoRrRatio')?.value || 3);
+    const ct  = (document.getElementById('scAlgoCutoff')?.value || '15:25').split(':');
+    const dir = document.getElementById('scAlgoDirection')?.value || 'both';
+    const payload = {
+        candle_index: ci,
+        rr_ratio:     rr,
+        exit_hour:    parseInt(ct[0] || 15),
+        exit_minute:  parseInt(ct[1] || 25),
+        enable_long:  dir !== 'short',
+        enable_short: dir !== 'long',
+    };
+    _setBusy(btn, 'Saving…');
+    fetch('/api/algo/sc/settings', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+    })
+        .then(r => r.json())
+        .then(d => {
+            _unbusy(btn, 'Save');
+            if (!d.success) { alert('Save failed: ' + (d.error || 'Unknown error')); return; }
+            const msg = document.getElementById('scSettingsMsg');
+            if (msg) { msg.textContent = 'Saved ✓'; setTimeout(() => { msg.textContent = ''; }, 2500); }
+        })
+        .catch(e => { _unbusy(btn, 'Save'); alert('Request failed: ' + e); });
+}
+
+// ── SC status ───────────────────────────────────────────────────────────────
+
+function _scFetchStatus() {
+    fetch('/api/algo/sc/status')
+        .then(r => r.json())
+        .then(data => {
+            _scRenderStatus(data);
+            const newEntryTime = data.state && data.state.active_trade
+                ? data.state.active_trade.entry_time : null;
+            const newActive = !!data.active;
+            const tradeChanged = newEntryTime !== _scLastEntryTime ||
+                                 newActive !== _scLastActiveFlag;
+            _scLastEntryTime  = newEntryTime;
+            _scLastActiveFlag = newActive;
+            if (tradeChanged) {
+                clearTimeout(_scHistoryTimer);
+                _scFetchHistory();
+            }
+            clearTimeout(_scStatusTimer);
+            _scStatusTimer = setTimeout(_scFetchStatus, newActive ? 5000 : 30000);
+        })
+        .catch(() => {
+            clearTimeout(_scStatusTimer);
+            _scStatusTimer = setTimeout(_scFetchStatus, 30000);
+        });
+}
+
+function _scRenderStatus(data) {
+    const trade  = data.state && data.state.active_trade;
+    const live   = data.live || null;
+    const active = !!data.active;
+
+    const badge = document.getElementById('scBadge');
+    badge.className = 'ag-badge ' + (active ? 'active' : 'inactive');
+    document.getElementById('scBadgeText').textContent =
+        active ? (trade.direction + ' ' + trade.option_type) : 'No Trade';
+
+    document.getElementById('scLastUpd').textContent =
+        new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    const grid = document.getElementById('scActiveGrid');
+    if (!active || !trade) {
+        grid.innerHTML = '<div class="ag-empty">No active trade</div>';
+        const exitBtn0 = document.getElementById('scExitBtn');
+        if (exitBtn0) exitBtn0.disabled = true;
+        return;
+    }
+
+    const pnlPts = live ? live.pnl_pts : null;
+    const pnlInr = live ? live.pnl_inr_total : null;
+    const spotStr = live ? '₹' + _num(live.spot) : '…';
+
+    const tiles = [
+        { label: 'Direction',    value: trade.direction,
+          cls: trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg' },
+        { label: 'Option',       value: trade.option_type + ' ' + trade.strike },
+        { label: 'Entry Spot',   value: '₹' + _num(trade.entry_spot) },
+        { label: 'Live Spot',    value: spotStr },
+        { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
+        { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
+        { label: 'P&L (pts)',    value: _rtpFmtPts(pnlPts),  cls: _rtpPnlCls(pnlPts) },
+        { label: 'P&L (₹ est)', value: _rtpFmtInr(pnlInr),  cls: _rtpPnlCls(pnlInr) },
+        { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
+    ];
+
+    grid.innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+
+    const exitBtn = document.getElementById('scExitBtn');
+    if (exitBtn) exitBtn.disabled = !active;
+}
+
+// ── SC history ──────────────────────────────────────────────────────────────
+
+function _scFetchHistory() {
+    fetch('/api/algo/sc/history')
+        .then(r => r.json())
+        .then(data => {
+            _scRenderHistory(data.trades || []);
+            clearTimeout(_scHistoryTimer);
+            _scHistoryTimer = setTimeout(_scFetchHistory, 30000);
+        })
+        .catch(() => {
+            clearTimeout(_scHistoryTimer);
+            _scHistoryTimer = setTimeout(_scFetchHistory, 30000);
+        });
+}
+
+function _scRenderHistory(trades) {
+    const countEl = document.getElementById('scHistCount');
+    const body    = document.getElementById('scHistBody');
+
+    _scRenderDashboard(trades);
+
+    if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
+
+    if (!trades.length) {
+        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
+        return;
+    }
+
+    function _fmtOpt(val) {
+        if (val == null) return '—';
+        return '₹' + Number(val).toFixed(2);
+    }
+    function _fmtPts(val, suffix) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
+    }
+    function _fmtInr(val) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
+    }
+
+    body.innerHTML = `
+<div class="ag-hist-scroll">
+<table class="ag-hist-table">
+    <thead>
+        <tr>
+            <th class="ag-hist-th">Date</th>
+            <th class="ag-hist-th">Entry Time</th>
+            <th class="ag-hist-th">Exit Time</th>
+            <th class="ag-hist-th">Strike</th>
+            <th class="ag-hist-th">Opt Entry</th>
+            <th class="ag-hist-th">Opt Exit</th>
+            <th class="ag-hist-th">N Entry</th>
+            <th class="ag-hist-th">N Exit</th>
+            <th class="ag-hist-th">N P&amp;L</th>
+            <th class="ag-hist-th">Opt P&amp;L</th>
+            <th class="ag-hist-th">Reason</th>
+            <th class="ag-hist-th"></th>
+        </tr>
+    </thead>
+    <tbody>
+    ${trades.map(t => {
+        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const oPnlCls   = (t.opt_pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
+        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
+        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
+        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
+        return `<tr>
+            <td class="ag-hist-td">${dateStr}</td>
+            <td class="ag-hist-td">${entryTime}</td>
+            <td class="ag-hist-td">${exitTime}</td>
+            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
+            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
+            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
+            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
+            <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
+            <td class="ag-hist-td ag-hist-td-del">
+                <button class="ag-hist-del-btn" onclick="_scDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
+            </td>
+        </tr>`;
+    }).join('')}
+    </tbody>
+</table>
+</div>`;
+}
+
+// ── SC dashboard (cards + charts) ─────────────────────────────────────────────
+
+function _scRenderDashboard(trades) {
+    const card = document.getElementById('scDashCard');
+    if (!card) return;
+
+    const done = (trades || []).filter(t => t.opt_pnl_inr != null);
+    _scDashTrades = done;
+
+    if (!done.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+
+    let wins = 0, losses = 0, grossWin = 0, grossLoss = 0;
+    let netInr = 0, netPts = 0, winPts = 0, lossPts = 0;
+    let cntEod = 0, cntSl = 0, cntTgt = 0;
+    done.forEach(t => {
+        const inr = Number(t.opt_pnl_inr) || 0;
+        const pts = Number(t.opt_pnl_pts) || 0;
+        netInr += inr; netPts += pts;
+        if (inr >= 0) { wins++;   grossWin  += inr;           winPts  += pts; }
+        else          { losses++; grossLoss += Math.abs(inr); lossPts += pts; }
+        const reason = String(t.reason || '').toUpperCase();
+        if      (reason === 'EOD')    cntEod++;
+        else if (reason === 'SL')     cntSl++;
+        else if (reason === 'TARGET') cntTgt++;
+    });
+    const total   = done.length;
+    const winRate = total ? (wins / total * 100) : 0;
+    const pf      = grossLoss > 0 ? (grossWin / grossLoss) : (grossWin > 0 ? Infinity : 0);
+    const avgWin  = wins   ? winPts  / wins   : null;
+    const avgLoss = losses ? lossPts / losses : null;
+    const maxDD   = _rtpMaxDrawdown(done);
+
+    const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
+
+    const tiles = [
+        { label: 'Total Trades',  value: total },
+        { label: 'Wins',          value: wins,   cls: 'ag-pos' },
+        { label: 'Losses',        value: losses, cls: 'ag-neg' },
+        { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
+        { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtpPnlCls(netInr) },
+        { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtpPnlCls(netPts) },
+        { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
+        { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
+        { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
+        { label: 'Max Drawdown',  value: '-₹' + Math.abs(Math.round(maxDD)).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Target',        value: cntTgt, cls: 'ag-pos' },
+        { label: 'SL',            value: cntSl,  cls: 'ag-neg' },
+        { label: 'EOD',           value: cntEod, cls: 'ag-warn' },
+    ];
+
+    document.getElementById('scDashStats').innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+
+    const netEl = document.getElementById('scDashNet');
+    if (netEl) {
+        netEl.textContent = inrFmt(netInr);
+        netEl.style.color = netInr >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+
+    _scRenderEquity(done);
+    _scRenderBreakdown(done, _scDashPeriod);
+}
+
+function _scRenderEquity(trades) {
+    const ctx = document.getElementById('scEquityChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const sorted  = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    const labels  = ['Start'];
+    const dataPts = [0];
+    const dates   = [''];
+    let cum = 0;
+    sorted.forEach((t, i) => {
+        cum += Number(t.opt_pnl_inr) || 0;
+        labels.push('T' + (i + 1));
+        dataPts.push(Math.round(cum));
+        dates.push(t.entry_time ? String(t.entry_time).replace('T', ' ').slice(0, 16) : '');
+    });
+
+    const net    = dataPts[dataPts.length - 1];
+    const profit = net >= 0;
+    const line   = profit ? '#2962ff' : '#ff1744';
+    const fill   = profit ? 'rgba(41,98,255,0.07)' : 'rgba(255,23,68,0.06)';
+
+    const meta = document.getElementById('scEquityMeta');
+    if (meta) {
+        meta.textContent = (net >= 0 ? '+₹' : '-₹') + Math.abs(net).toLocaleString('en-IN');
+        meta.style.color = profit ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+
+    const fmtY = v => {
+        const a = Math.abs(v), s = v < 0 ? '-' : '';
+        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(0) + 'K';
+        return s + '₹' + a;
+    };
+
+    if (_scEquityChart) { _scEquityChart.destroy(); _scEquityChart = null; }
+    _scEquityChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [{
+            data: dataPts, borderColor: line, backgroundColor: fill,
+            fill: true, tension: 0.25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2,
+        }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: {
+                    title: items => { const i = items[0].dataIndex; return i === 0 ? 'Start' : `Trade ${i} · ${dates[i]}`; },
+                    label: item => '  Cum P&L: ' + (item.raw >= 0 ? '+₹' : '-₹') + Math.abs(item.raw).toLocaleString('en-IN'),
+                } },
+            },
+            scales: {
+                x: { ticks: { maxTicksLimit: 15, color: '#999', font: { size: 11 }, autoSkip: true }, grid: { color: 'rgba(128,128,128,0.08)' } },
+                y: { ticks: { color: '#999', font: { size: 11 }, callback: fmtY }, grid: { color: 'rgba(128,128,128,0.1)' } },
+            }
+        }
+    });
+}
+
+function scSetPeriod(period) {
+    _scDashPeriod = period;
+    document.querySelectorAll('#scPeriodTabs .rtp-period-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.period === period));
+    _scRenderBreakdown(_scDashTrades, period);
+}
+
+function _scRenderBreakdown(trades, period) {
+    const ctx = document.getElementById('scBreakdownChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const groups = {};
+    (trades || []).forEach(t => {
+        const key = _rtpPeriodKey(new Date(t.entry_time), period);
+        if (!groups[key]) groups[key] = { inr: 0, wins: 0, losses: 0 };
+        const inr = Number(t.opt_pnl_inr) || 0;
+        groups[key].inr += inr;
+        if (inr >= 0) groups[key].wins++; else groups[key].losses++;
+    });
+    const keys   = Object.keys(groups).sort();
+    const labels = keys.map(k => {
+        if (period === 'monthly') { const [y, m] = k.split('-'); return new Date(+y, +m - 1).toLocaleString('default', { month: 'short', year: '2-digit' }); }
+        if (period === 'weekly')  return 'W ' + k.slice(5);
+        if (period === 'daily')   return k.slice(5);
+        return k;
+    });
+    const values = keys.map(k => Math.round(groups[k].inr));
+    const meta   = keys.map(k => groups[k]);
+    const bg  = values.map(v => v >= 0 ? 'rgba(34,197,94,.20)' : 'rgba(239,68,68,.20)');
+    const brd = values.map(v => v >= 0 ? 'rgba(34,197,94,.90)' : 'rgba(239,68,68,.90)');
+
+    const fmtBar = v => {
+        const a = Math.abs(v), s = v >= 0 ? '+' : '−';
+        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(1) + 'K';
+        return s + '₹' + a;
+    };
+
+    if (_scBreakdownChart) { _scBreakdownChart.destroy(); _scBreakdownChart = null; }
+    _scBreakdownChart = new Chart(ctx.getContext('2d'), {
+        type: 'bar',
+        plugins: [_rtpBarLabelPlugin],
+        data: { labels, datasets: [{ data: values, backgroundColor: bg, borderColor: brd, borderWidth: 1.5, borderRadius: 4, borderSkipped: false }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            layout: { padding: { top: 18, bottom: 4 } },
+            plugins: {
+                legend: { display: false },
+                rtpBarLabels: { fmt: fmtBar },
+                tooltip: { displayColors: false, padding: 10, callbacks: {
+                    title: c => labels[c[0].dataIndex],
+                    label: c => {
+                        const i = c.dataIndex, v = values[i], g = meta[i];
+                        const tr = g.wins + g.losses, wr = tr ? Math.round(g.wins / tr * 100) : 0;
+                        return [
+                            ' P&L: ' + (v >= 0 ? '+₹' : '-₹') + Math.abs(v).toLocaleString('en-IN'),
+                            ` Trades: ${tr}  (${g.wins}W / ${g.losses}L)`,
+                            ` Win Rate: ${wr}%`,
+                        ];
+                    },
+                } },
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { font: { size: 9 }, color: '#94a3b8' } },
+                y: {
+                    grid: { color: c => c.tick.value === 0 ? 'rgba(128,128,128,.3)' : 'rgba(128,128,128,.08)' },
+                    ticks: { font: { size: 9 }, color: '#94a3b8', callback: v => {
+                        if (v === 0) return '0';
+                        const a = Math.abs(v), s = v < 0 ? '−' : '';
+                        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+                        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(0) + 'K';
+                        return s + '₹' + a;
+                    } },
+                },
+            }
+        }
+    });
+}
+
+// ── SC actions ────────────────────────────────────────────────────────────────
+
+function _scDeleteTrade(entryTime) {
+    if (!confirm('Delete this trade record? This cannot be undone.')) return;
+    fetch('/api/algo/sc/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ entry_time: entryTime }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_scHistoryTimer);
+            _scFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
+function scExitNow(btn) {
+    if (!confirm('Force-close the active 2nd-candle trade? A market SELL order will be sent immediately.')) return;
+    _setBusy(btn, 'Exiting…');
+    fetch('/api/algo/sc/exit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Exit failed: ' + (d.error || 'Unknown error')); _unbusy(btn, 'Force Exit'); return; }
+            clearTimeout(_scStatusTimer);
+            clearTimeout(_scHistoryTimer);
+            _scFetchStatus();
+            _scFetchHistory();
+        })
+        .catch(e => { alert('Request failed: ' + e); _unbusy(btn, 'Force Exit'); });
+}
+
+function scFetchDeltaStrikes(btn) {
+    const panel = document.getElementById('scStrikesResult');
+    btn.disabled = true;
+    btn.classList.add('busy');
+    btn.textContent = 'Loading…';
+    panel.style.display = 'none';
+
+    fetch('/api/algo/sc/delta-strikes')
         .then(r => r.json())
         .then(d => {
             btn.disabled = false;

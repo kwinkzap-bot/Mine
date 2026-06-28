@@ -40,6 +40,17 @@ _RTP_ALL_HISTORY_PATH = os.path.normpath(
 )
 _NIFTY_FYERS_IDX = 'NSE:NIFTY50-INDEX'
 
+# 2nd 30-Sec Candle algo state and history files
+_SC_STATE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'second_candle', 'sc_state.json')
+)
+_SC_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'second_candle', 'sc_trades_history.json')
+)
+_SC_ALL_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'second_candle', 'sc_trades_all_history.json')
+)
+
 def _load_opt_cache() -> dict:
     try:
         if os.path.exists(_RTP_OPT_CACHE_PATH):
@@ -6347,6 +6358,215 @@ def algo_rtp_start() -> EndpointResponse:
         return jsonify({'success': True, 'message': 'RTP algo started'})
     except Exception as e:
         logger.error(f'[rtp/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── 2nd 30-Sec Candle live algo ──────────────────────────────────────────────
+
+@api_bp.route('/algo/sc/status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_sc_status() -> EndpointResponse:
+    """Return current 2nd-candle active trade + live NIFTY spot and P&L."""
+    try:
+        try:
+            with open(_SC_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {'active_trade': None, 'traded_today': False}
+
+        trade = state.get('active_trade')
+        if not trade:
+            return jsonify({'success': True, 'active': False, 'state': state, 'live': None})
+
+        live = None
+        try:
+            provider = get_data_provider()
+            if provider:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+                if spot:
+                    direction  = trade.get('direction', 'BUY')
+                    entry_spot = float(trade.get('entry_spot', 0))
+                    pnl_pts    = spot - entry_spot if direction == 'BUY' else entry_spot - spot
+                    pnl_pts    = round(pnl_pts, 2)
+                    broker_entries = trade.get('broker_entries', [])
+                    pnl_inr_total  = round(
+                        sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
+                    )
+                    live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+        except Exception as _e:
+            logger.warning(f'[sc/status] live fetch failed: {_e}')
+
+        return jsonify({'success': True, 'active': True, 'state': state, 'live': live})
+    except Exception as e:
+        logger.error(f'[sc/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/sc/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_sc_history() -> EndpointResponse:
+    """Return all completed 2nd-candle trades (latest-first)."""
+    try:
+        try:
+            with open(_SC_ALL_HISTORY_PATH, 'r') as _f:
+                all_trades = json.load(_f)
+            if not isinstance(all_trades, list):
+                all_trades = []
+        except Exception:
+            all_trades = []
+
+        trades = [
+            {k: v for k, v in t.items() if k != 'broker_entries'}
+            for t in all_trades
+        ]
+        return jsonify({'success': True, 'trades': trades, 'count': len(trades)})
+    except Exception as e:
+        logger.error(f'[sc/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/sc/history', methods=['DELETE'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_sc_history_delete() -> EndpointResponse:
+    """Delete a 2nd-candle trade record by entry_time from both history files."""
+    try:
+        data = request.get_json(silent=True) or {}
+        entry_time = data.get('entry_time')
+        if not entry_time:
+            return jsonify({'success': False, 'error': 'entry_time required'}), 400
+
+        for path in [_SC_HISTORY_PATH, _SC_ALL_HISTORY_PATH]:
+            try:
+                with open(path, 'r') as _f:
+                    records = json.load(_f)
+                if isinstance(records, list):
+                    records = [r for r in records if r.get('entry_time') != entry_time]
+                    with open(path, 'w') as _f:
+                        json.dump(records, _f, indent=2, default=str)
+            except Exception:
+                pass
+
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f'[sc/history/delete] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/sc/exit', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_sc_force_exit() -> EndpointResponse:
+    """Manually close the active 2nd-candle trade on all brokers."""
+    try:
+        try:
+            with open(_SC_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {}
+
+        if not state.get('active_trade'):
+            return jsonify({'success': False, 'error': 'No active trade to exit'}), 400
+
+        from trading_app.algo.second_candle.second_candle_algo import SecondCandleAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        algo = get_instance(username)
+        if algo is None:
+            algo = SecondCandleAlgo(username=username)
+
+        provider = get_data_provider()
+        spot = 0.0
+        if provider:
+            try:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+            except Exception:
+                pass
+
+        algo._exit_trade('MANUAL', spot)
+        return jsonify({'success': True, 'exit_spot': spot})
+    except Exception as e:
+        logger.error(f'[sc/exit] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/sc/delta-strikes', methods=['GET'])
+@require_user_auth
+def algo_sc_delta_strikes() -> EndpointResponse:
+    """Return the CE and PE strikes closest to ±0.90 delta at the current NIFTY spot."""
+    try:
+        from trading_app.algo.second_candle.second_candle_algo import SecondCandleAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        provider = get_data_provider()
+        if not provider:
+            return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
+
+        algo = get_instance(username) or SecondCandleAlgo(username=username)
+        result = algo.get_delta_strikes(provider)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'[sc/delta-strikes] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/sc/start', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_sc_start() -> EndpointResponse:
+    """Start (or restart) the 2nd-candle monitoring thread."""
+    try:
+        from trading_app.algo.second_candle.second_candle_algo import SecondCandleAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        existing = get_instance(username)
+        if existing and existing.is_running():
+            return jsonify({'success': False, 'error': 'Algo already running'}), 409
+
+        algo = SecondCandleAlgo(username=username)
+        algo.start()
+        return jsonify({'success': True, 'message': '2nd-candle algo started'})
+    except Exception as e:
+        logger.error(f'[sc/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/sc/settings', methods=['GET', 'POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_sc_settings() -> EndpointResponse:
+    """Read or update the editable 2nd-candle params (persisted in sc_state.json)."""
+    from trading_app.algo.second_candle.second_candle_algo import normalise_params
+    try:
+        try:
+            with open(_SC_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+            if not isinstance(state, dict):
+                state = {}
+        except Exception:
+            state = {}
+
+        if request.method == 'GET':
+            return jsonify({'success': True, 'params': normalise_params(state.get('params'))})
+
+        data = request.get_json(silent=True) or {}
+        params = normalise_params({**(state.get('params') or {}), **data})
+        state['params'] = params
+        state.setdefault('active_trade', None)
+        with open(_SC_STATE_PATH, 'w') as _f:
+            json.dump(state, _f, indent=2, default=str)
+        return jsonify({'success': True, 'params': params})
+    except Exception as e:
+        logger.error(f'[sc/settings] {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

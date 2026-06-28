@@ -173,6 +173,38 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
+        # 2nd 30-Sec Candle algo: start at 9:15 AM weekdays
+        self.scheduler.add_job(
+            self._start_sc_monitoring,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=9,
+                minute=15,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='sc_algo_start',
+            name='2nd 30-Sec Candle Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
+        # Watchdog: restart the 2nd-candle thread if it crashes mid-day
+        self.scheduler.add_job(
+            self._watchdog_sc,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/5',
+                second=30,
+                timezone='Asia/Kolkata',
+            ),
+            id='sc_algo_watchdog',
+            name='2nd Candle Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
         self.scheduler.start()
         jobs = {j.id: str(j.next_run_time) for j in self.scheduler.get_jobs()}
         logger.info(f"Market scheduler started — jobs registered: {list(jobs.keys())}")
@@ -341,6 +373,42 @@ class MarketScheduler:
         """Every 5 minutes during market hours: restart RTP thread if it crashed."""
         self._ensure_rtp_running(source='Watchdog')
 
+    # ── 2nd 30-Sec Candle algo management ─────────────────────────────────────
+
+    def _ensure_sc_running(self, source: str = '') -> None:
+        """Start the 2nd-candle monitoring thread if it is not already running.
+        Mirrors _ensure_rtp_running: starts during market hours regardless of
+        SC_ALGO_ACTIVE — the kill-switch lives inside the loop and gates entries only.
+        """
+        try:
+            if not self.is_trading_day():
+                return
+            now = datetime.now()
+            h, m = now.hour, now.minute
+            in_window = (h > 9 or (h == 9 and m >= 15)) and (h < 15 or (h == 15 and m <= 27))
+            if not in_window:
+                return
+            from trading_app.algo.second_candle.second_candle_algo import SecondCandleAlgo, get_instance
+            username = self._rtp_username()
+            existing = get_instance(username)
+            if existing and existing.is_running():
+                return  # Already alive
+            if existing:
+                logger.warning(f"[SC {source}] Monitoring thread dead — restarting")
+            else:
+                logger.info(f"[SC {source}] Starting monitoring thread for user={username}")
+            SecondCandleAlgo(username=username).start()
+        except Exception as e:
+            logger.error(f"[SC {source}] _ensure_sc_running failed: {e}", exc_info=True)
+
+    def _start_sc_monitoring(self) -> None:
+        """9:15 AM weekdays: start 2nd 30-Sec Candle algo monitoring thread."""
+        self._ensure_sc_running(source='Scheduler')
+
+    def _watchdog_sc(self) -> None:
+        """Every 5 minutes during market hours: restart 2nd-candle thread if it crashed."""
+        self._ensure_sc_running(source='Watchdog')
+
     def _run_historic_oi_record_task(self):
         """8:00 PM IST: fetch and persist daily OI snapshot for all symbols."""
         try:
@@ -379,6 +447,7 @@ def init_scheduler(app):
         # Startup recovery: if the server restarted during market hours the 9:15 AM
         # cron already passed and the algo thread was never launched. Start it now.
         market_scheduler._ensure_rtp_running(source='Startup')
+        market_scheduler._ensure_sc_running(source='Startup')
 
     import atexit
     atexit.register(market_scheduler.stop)
