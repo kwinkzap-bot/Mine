@@ -403,43 +403,6 @@ def callback():
         if instance_num == 1:
             os.environ['ACCESS_TOKEN'] = access_token
         
-        # Auto-start live monitoring after successful Kite authentication ONLY for Broker_1
-        if instance_num == 1:
-            try:
-                from trading_app.app.intraday_option.intraday_9_20_live_signal import Intraday920LiveSignal
-                import threading
-                
-                # Capture values for closure
-                final_api_key = api_key
-                final_access_token = access_token
-                
-                def start_monitoring_async():
-                    """Start monitoring in background thread."""
-                    try:
-                        kite_instance = KiteConnect(api_key=final_api_key)
-                        apply_kite_proxy(kite_instance)
-                        kite_instance.set_access_token(final_access_token)
-                        
-                        monitor = Intraday920LiveSignal(kite_instance, symbol='NIFTY', username=username)
-                        
-                        # Check if it's a market day and start monitoring
-                        if monitor.is_market_day():
-                            if monitor.start_monitoring():
-                                logger.info(f"✅ Auto-started live monitoring for {username}")
-                            else:
-                                logger.warning(f"Could not auto-start monitoring for {username}")
-                        else:
-                            logger.info(f"Not a market day - skipping monitoring for {username}")
-                    except Exception as e:
-                        logger.error(f"Error auto-starting monitoring: {e}")
-                
-                # Start monitoring in background thread
-                monitor_thread = threading.Thread(target=start_monitoring_async, daemon=True)
-                monitor_thread.start()
-                
-            except Exception as e:
-                logger.warning(f"Could not auto-start monitoring: {e}")
-        
         # Check if this is a popup window login (has opener)
         # Return a page that closes the popup and refreshes the parent
         return render_template_string('''

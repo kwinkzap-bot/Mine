@@ -55,65 +55,6 @@ def ensure_ssh_tunnel():
     else:
         logger.warning('[Proxy] SSH tunnel could not be started — orders requiring proxy will fail')
 
-# Global reference to live monitoring instances
-live_monitors = {}
-
-def start_intraday_9_20_monitoring():
-    """Initialize and start the Intraday 9:20 live signal monitoring."""
-    try:
-        from trading_app.app.intraday_option.intraday_9_20_live_signal import Intraday920LiveSignal
-        from trading_app.app.utils.token_manager import get_access_token
-        from kiteconnect import KiteConnect
-        
-        logger.info("🚀 Starting Intraday 9:20 Live Signal Monitoring...")
-        
-        # Get access token and create Kite instance
-        access_token = get_access_token()
-        api_key = os.getenv('API_KEY')
-        
-        if not access_token or not api_key:
-            logger.warning("⚠️  Kite connection not available - missing credentials")
-            return
-        
-        try:
-            kite = KiteConnect(api_key=api_key)
-            kite.set_access_token(access_token)
-        except Exception as e:
-            logger.error(f"Error creating KiteConnect instance: {e}")
-            return
-        
-        # Create monitors for NIFTY only
-        symbols = ['NIFTY']
-        
-        # Get username from environment (set by Flask session or use default)
-        username = os.getenv('MONITORING_USERNAME', 'default_user')
-        
-        for symbol in symbols:
-            try:
-                # Pass username for per-user Excel logging
-                monitor = Intraday920LiveSignal(kite, symbol=symbol, username=username)
-                
-                # Start monitoring if it's a market day and within hours
-                if monitor.is_market_day():
-                    if monitor.start_monitoring():
-                        live_monitors[symbol] = monitor
-                        logger.info(f"✅ Live monitoring started for {symbol} (user: {username})")
-                    else:
-                        logger.warning(f"⚠️  Could not start monitoring for {symbol}")
-                else:
-                    logger.info(f"ℹ️  Not a market day - {symbol} monitoring not started")
-            except Exception as e:
-                logger.error(f"Error starting monitoring for {symbol}: {str(e)}", exc_info=True)
-        
-        if live_monitors:
-            logger.info(f"✅ Intraday 9:20 Live Signal Monitoring active for: {', '.join(live_monitors.keys())}")
-        else:
-            logger.warning("⚠️  No Intraday 9:20 monitoring started")
-            
-    except ImportError as e:
-        logger.warning(f"Could not import Intraday920LiveSignal: {str(e)}")
-    except Exception as e:
-        logger.error(f"Error in Intraday 9:20 monitoring initialization: {str(e)}", exc_info=True)
 
 def start_live_monitoring():
     """Initialize and start the live signal monitoring in a separate thread."""
@@ -139,10 +80,6 @@ def main():
     ensure_ssh_tunnel()
     app = create_app()  # __init__.py starts watchdog at 10s interval
 
-    # Note: Live monitoring will be started via API endpoint after user login
-    # This ensures per-user credentials and Excel logging
-    logger.info("ℹ️  Live monitoring will start after user login via /api/start-monitoring")
-    
     # Get host and port from environment
     host = os.getenv('FLASK_HOST', '127.0.0.1')
     port = int(os.getenv('FLASK_PORT', 5000))
