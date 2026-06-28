@@ -3,6 +3,7 @@
 
 {% block head %}
 {{ super() }}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/algo.css') }}?v={{ sv('css/algo.css') }}">
 {% endblock %}
 
@@ -12,15 +13,15 @@
 
     <!-- ── Tab bar ────────────────────────────────────────────── -->
     <div class="ag-tab-bar">
-        <button class="ag-tab active" id="algo-tab-straddle"         onclick="algoSwitch('straddle')">Straddle</button>
+        <button class="ag-tab"        id="algo-tab-straddle"         onclick="algoSwitch('straddle')">Straddle</button>
         <button class="ag-tab"        id="algo-tab-rtp"              onclick="algoSwitch('rtp')">EMA RTP</button>
-        <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
+        <button class="ag-tab active" id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
 
     <!-- ════════════════════════════════════════════════════════ -->
     <!-- Straddle panel                                          -->
     <!-- ════════════════════════════════════════════════════════ -->
-    <div class="ag-panel active" id="algo-straddle-panel">
+    <div class="ag-panel" id="algo-straddle-panel">
 
     <!-- ── Header ──────────────────────────────────────────────── -->
     <div class="ag-header">
@@ -145,6 +146,40 @@
         <span class="ag-last-upd" id="rtpLastUpd" style="margin-left:auto"></span>
     </div>
 
+    <!-- ── Performance dashboard (from executed-trade JSON) ────── -->
+    <div class="ag-card" id="rtpDashCard" style="display:none">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Live Performance</span>
+            <span id="rtpDashNet" style="margin-left:auto;font-size:12px;font-weight:800"></span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="rtpDashStats"></div>
+
+            <!-- Equity curve -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">Equity Curve</span>
+                    <span id="rtpEquityMeta" class="rtp-chart-meta"></span>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="rtpEquityChart"></canvas></div>
+            </div>
+
+            <!-- P&L breakdown -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">P&amp;L Breakdown</span>
+                    <div class="rtp-period-tabs" id="rtpPeriodTabs">
+                        <button class="rtp-period-tab active" data-period="monthly" onclick="rtpSetPeriod('monthly')">Monthly</button>
+                        <button class="rtp-period-tab"        data-period="weekly"  onclick="rtpSetPeriod('weekly')">Weekly</button>
+                        <button class="rtp-period-tab"        data-period="daily"   onclick="rtpSetPeriod('daily')">Daily</button>
+                        <button class="rtp-period-tab"        data-period="yearly"  onclick="rtpSetPeriod('yearly')">Yearly</button>
+                    </div>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="rtpBreakdownChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+
     <!-- ── Active Trade card ───────────────────────────────────── -->
     <div class="ag-card" id="rtpActiveCard">
         <div class="ag-card-hdr">
@@ -181,7 +216,7 @@
     <!-- ════════════════════════════════════════════════════════ -->
     <!-- Swing Momentum panel                                     -->
     <!-- ════════════════════════════════════════════════════════ -->
-    <div class="ag-panel" id="algo-swing-momentum-panel">
+    <div class="ag-panel active" id="algo-swing-momentum-panel">
 
     <!-- ── Header ──────────────────────────────────────────────── -->
     <div class="ag-header">

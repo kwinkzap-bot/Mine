@@ -11,7 +11,7 @@ session (09:15:30–09:16:00 for a 09:15 open) defines the breakout range:
         SL     = 2nd candle High
         Target = Entry − (SL:Target ratio) × risk     (risk = High − Entry)
 
-SL : Target is 1 : 2 by default (rr_ratio = 2.0).
+SL : Target is 1 : 3 by default (rr_ratio = 3.0).
 
 Rules:
   - Only the FIRST breakout of the day is taken (one trade per day).
@@ -39,7 +39,7 @@ class SecondCandleBacktestEngine:
         self,
         df: pd.DataFrame,
         candle_index: int = 2,       # 1-based: which session candle defines the range
-        rr_ratio: float = 2.0,       # Target = rr_ratio × risk  (1:2 → 2.0)
+        rr_ratio: float = 3.0,       # Target = rr_ratio × risk  (1:3 → 3.0)
         exit_hour: int = 15,
         exit_minute: int = 25,
         enable_long: bool = True,

@@ -237,7 +237,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // VWAP investment display
     window.updateVwapInvestment = function() {
-        const lots     = Math.max(1, parseInt(document.getElementById('vwapLots')?.value     || 5));
+        const lots     = Math.max(1, parseInt(document.getElementById('vwapLots')?.value     || 1));
         const lotValue = Math.max(1, parseFloat(document.getElementById('vwapLotValue')?.value || 65));
         const total    = lots * 50000;
         const el = document.getElementById('vwapInvestmentDisplay');
@@ -246,7 +246,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 2nd 30-Sec Candle investment display
     window.updateScInvestment = function() {
-        const lots  = Math.max(1, parseInt(document.getElementById('scLots')?.value || 5));
+        const lots  = Math.max(1, parseInt(document.getElementById('scLots')?.value || 1));
         const total = lots * 50000;
         const el = document.getElementById('scInvestmentDisplay');
         if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
@@ -302,7 +302,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 endpoint = '/api/backtest/second-candle';
                 payload.interval     = document.getElementById('interval')?.value || '30second';
                 payload.candle_index = parseInt(document.getElementById('scCandleIndex')?.value || 2);
-                payload.rr_ratio     = parseFloat(document.getElementById('scRrRatio')?.value || 2);
+                payload.rr_ratio     = parseFloat(document.getElementById('scRrRatio')?.value || 3);
                 const exitTime = (document.getElementById('scExitTime')?.value || '15:25').split(':');
                 payload.exit_hour    = parseInt(exitTime[0] || 15);
                 payload.exit_minute  = parseInt(exitTime[1] || 25);
@@ -325,7 +325,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // RTP-specific payload fields
             if (strat === 'rtp') {
                 payload.entry_mode = document.getElementById('rtpEntryMode')?.value || 'RTP(20 & 9)';
-                payload.use_adx    = document.getElementById('rtpUseAdx')?.checked ?? true;
+                payload.use_adx    = document.getElementById('rtpUseAdx')?.checked ?? false;
                 payload.adx_thresh = parseFloat(document.getElementById('rtpAdxThresh')?.value || 20);
                 const slVal    = document.getElementById('rtpSL')?.value;
                 const tgtVal   = document.getElementById('rtpTarget')?.value;
@@ -475,7 +475,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (avgLossEl) avgLossEl.textContent = summary.avg_loss != null ? '-' + Math.abs(Number(summary.avg_loss)).toFixed(1) + ' pts' : '—';
 
             const dd      = summary.max_drawdown ?? 0;
-            const vLots   = Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value     || 5));
+            const vLots   = Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value     || 1));
             const vLotVal = Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value || 65));
             const ddPtsEl = document.getElementById('statMaxDDPts');
             const ddEl    = document.getElementById('statMaxDD');
@@ -502,7 +502,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Equity curve + period breakdown
         const lots2     = (isVwap || isSc)
-            ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 5))
+            ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 1))
             : Math.max(1, parseInt(document.getElementById('rtpLots')?.value       || 1));
         const lotValue2 = (isVwap || isSc)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))

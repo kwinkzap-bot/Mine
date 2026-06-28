@@ -238,38 +238,63 @@ class RTPBacktestEngine:
         n  = len(df)
         trades: List[Dict] = []
 
+        # Pre-extract hot-path columns into numpy arrays. Row-by-row df.iloc[]
+        # access is ~100x slower and, across an 80-combo optimise sweep over
+        # multi-year minute data, makes uncached runs effectively never finish.
+        o   = df['open'].to_numpy()
+        h   = df['high'].to_numpy()
+        l   = df['low'].to_numpy()
+        cl  = df['close'].to_numpy()
+        ema9  = df['ema9'].to_numpy()
+        ema20 = df['ema20'].to_numpy()
+        ema50 = df['ema50'].to_numpy()
+        session_ok = df['session_ok'].to_numpy()
+        rway_up    = df['rway_up'].to_numpy()
+        rway_dn    = df['rway_dn'].to_numpy()
+        bull_stack = df['bull_stack'].to_numpy()
+        bear_stack = df['bear_stack'].to_numpy()
+        buy_touch  = df['buy_touch'].to_numpy()
+        sell_touch = df['sell_touch'].to_numpy()
+        buy_pat    = df['buy_pat'].to_numpy()
+        sell_pat   = df['sell_pat'].to_numpy()
+        hour = df['_hour'].to_numpy()
+        minute = df['_min'].to_numpy()
+        # Keep tz-aware Timestamps (tolist preserves tz; to_numpy() would drop it)
+        dt_list = df['datetime'].tolist()
+        date_list = [t.date() for t in dt_list]
+
+        is_rtp50 = self.entry_mode == 'RTP(50)'
+
         sell_needs_reset = False
         buy_needs_reset  = False
 
         i = 200  # Skip warmup: EMA50 needs ~200 bars to converge on 1-min data
         while i < n:
-            row = df.iloc[i]
-
             # Reset candle check (mirrors Pine var bool logic)
             if sell_needs_reset:
-                if self.entry_mode == 'RTP(50)':
-                    if row['high'] < row['ema50']:
+                if is_rtp50:
+                    if h[i] < ema50[i]:
                         sell_needs_reset = False
                 else:
-                    if row['high'] < min(row['ema9'], row['ema20']):
+                    if h[i] < min(ema9[i], ema20[i]):
                         sell_needs_reset = False
 
             if buy_needs_reset:
-                if self.entry_mode == 'RTP(50)':
-                    if row['low'] > row['ema50']:
+                if is_rtp50:
+                    if l[i] > ema50[i]:
                         buy_needs_reset = False
                 else:
-                    if row['low'] > max(row['ema9'], row['ema20']):
+                    if l[i] > max(ema9[i], ema20[i]):
                         buy_needs_reset = False
 
             # Signal check
             buy_signal = bool(
-                row['session_ok'] and row['rway_up'] and row['bull_stack'] and
-                row['buy_touch']  and row['buy_pat'] and not buy_needs_reset
+                session_ok[i] and rway_up[i] and bull_stack[i] and
+                buy_touch[i]  and buy_pat[i] and not buy_needs_reset
             )
             sell_signal = bool(
-                row['session_ok'] and row['rway_dn'] and row['bear_stack'] and
-                row['sell_touch'] and row['sell_pat'] and not sell_needs_reset
+                session_ok[i] and rway_dn[i] and bear_stack[i] and
+                sell_touch[i] and sell_pat[i] and not sell_needs_reset
             )
 
             if sell_signal:
@@ -286,9 +311,9 @@ class RTPBacktestEngine:
                 i += 1
                 continue
 
-            next_bar    = df.iloc[i + 1]
-            entry_price = next_bar['open']
-            entry_time  = next_bar['datetime']
+            entry_price = o[i + 1]
+            entry_time  = dt_list[i + 1]
+            entry_date  = date_list[i + 1]
             direction   = 'BUY' if buy_signal else 'SELL'
 
             # Scan forward for SL / Target
@@ -304,62 +329,59 @@ class RTPBacktestEngine:
                            else (entry_price + self.sl_points)
 
             for j in range(i + 1, n):
-                c = df.iloc[j]
-
                 # Force-close at 3:28 PM or on next day (no overnight holds)
-                eod_cutoff = (c['_hour'] == 15 and c['_min'] >= 28) or c['_hour'] > 15
-                if c['datetime'].date() != entry_time.date() or eod_cutoff:
-                    exit_price  = c['close']
-                    exit_time   = c['datetime']
+                eod_cutoff = (hour[j] == 15 and minute[j] >= 28) or hour[j] > 15
+                if date_list[j] != entry_date or eod_cutoff:
+                    exit_price  = cl[j]
+                    exit_time   = dt_list[j]
                     exit_reason = 'EOD'
                     exit_idx    = j
                     break
 
                 if direction == 'BUY':
                     # Update trailing SL
-                    if trail and c['high'] > best_price:
-                        best_price = c['high']
+                    if trail and h[j] > best_price:
+                        best_price = h[j]
                         steps = int((best_price - entry_price) / trail)
                         new_sl = (entry_price - self.sl_points) + steps * trail
                         current_sl = max(current_sl, new_sl)
 
-                    if c['low'] <= current_sl:
+                    if l[j] <= current_sl:
                         exit_price  = current_sl
-                        exit_time   = c['datetime']
+                        exit_time   = dt_list[j]
                         exit_reason = 'TRAIL_SL' if trail else 'SL'
                         exit_idx    = j
                         break
-                    if c['high'] >= entry_price + self.tgt_points:
+                    if h[j] >= entry_price + self.tgt_points:
                         exit_price  = entry_price + self.tgt_points
-                        exit_time   = c['datetime']
+                        exit_time   = dt_list[j]
                         exit_reason = 'TARGET'
                         exit_idx    = j
                         break
                 else:
                     # Update trailing SL
-                    if trail and c['low'] < best_price:
-                        best_price = c['low']
+                    if trail and l[j] < best_price:
+                        best_price = l[j]
                         steps = int((entry_price - best_price) / trail)
                         new_sl = (entry_price + self.sl_points) - steps * trail
                         current_sl = min(current_sl, new_sl)
 
-                    if c['high'] >= current_sl:
+                    if h[j] >= current_sl:
                         exit_price  = current_sl
-                        exit_time   = c['datetime']
+                        exit_time   = dt_list[j]
                         exit_reason = 'TRAIL_SL' if trail else 'SL'
                         exit_idx    = j
                         break
-                    if c['low'] <= entry_price - self.tgt_points:
+                    if l[j] <= entry_price - self.tgt_points:
                         exit_price  = entry_price - self.tgt_points
-                        exit_time   = c['datetime']
+                        exit_time   = dt_list[j]
                         exit_reason = 'TARGET'
                         exit_idx    = j
                         break
 
             if exit_price is None:
-                last = df.iloc[-1]
-                exit_price  = last['close']
-                exit_time   = last['datetime']
+                exit_price  = cl[-1]
+                exit_time   = dt_list[-1]
                 exit_reason = 'EOD'
                 exit_idx    = n - 1
 

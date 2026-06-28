@@ -3028,7 +3028,7 @@ def run_second_candle_backtest_api():
         # 'minute' and above retain ~10 years.
         interval       = data.get('interval', '30second')
         candle_index   = int(data.get('candle_index', 2))
-        rr_ratio       = float(data.get('rr_ratio', 2.0))
+        rr_ratio       = float(data.get('rr_ratio', 3.0))
         exit_hour      = int(data.get('exit_hour', 15))
         exit_minute    = int(data.get('exit_minute', 25))
         enable_long    = bool(data.get('enable_long', True))

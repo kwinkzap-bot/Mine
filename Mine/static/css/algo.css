@@ -1680,3 +1680,47 @@ body.ocean-theme .algo-page {
 .sm-flow-confirm-swp { background: var(--ag-neg, #ef4444); color: #fff; }
 .sm-flow-confirm-swp:hover:not(:disabled) { filter: brightness(.93); }
 .sm-gl-btn:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ── RTP live performance dashboard (charts + period tabs) ────── */
+.rtp-chart-block { margin-top: 14px; }
+.rtp-chart-hdr {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.rtp-chart-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--ag-text-3);
+}
+.rtp-chart-meta { font-size: 12px; font-weight: 700; }
+.rtp-chart-wrap {
+    position: relative;
+    height: 240px;
+    width: 100%;
+}
+.rtp-period-tabs {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+.rtp-period-tab {
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid var(--ag-border);
+    background: var(--ag-bg);
+    color: var(--ag-text-2);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+.rtp-period-tab:hover { background: var(--ag-row-hover); }
+.rtp-period-tab.active {
+    background: var(--ag-accent);
+    border-color: var(--ag-accent);
+    color: #fff;
+}

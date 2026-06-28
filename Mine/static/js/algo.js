@@ -10,7 +10,7 @@ const _ALGO_TABS = ['straddle', 'rtp', 'swing-momentum'];
 
 function algoLoad() {
     const hash = location.hash.replace('#', '');
-    algoSwitch(_ALGO_TABS.includes(hash) ? hash : 'straddle');
+    algoSwitch(_ALGO_TABS.includes(hash) ? hash : 'swing-momentum');
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -135,6 +135,9 @@ function _rtpRenderHistory(trades) {
     const countEl = document.getElementById('rtpHistCount');
     const body    = document.getElementById('rtpHistBody');
 
+    // Performance dashboard (cards + charts) built from the same JSON
+    _rtpRenderDashboard(trades);
+
     if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
     if (!trades.length) {
@@ -204,6 +207,262 @@ function _rtpRenderHistory(trades) {
     </tbody>
 </table>
 </div>`;
+}
+
+// ── RTP live performance dashboard (cards + charts from history JSON) ──────────
+let _rtpEquityChart    = null;
+let _rtpBreakdownChart = null;
+let _rtpDashTrades     = [];
+let _rtpDashPeriod     = 'monthly';
+
+// Plugin: draw +/- ₹ labels above/below each breakdown bar.
+const _rtpBarLabelPlugin = {
+    id: 'rtpBarLabels',
+    afterDatasetsDraw(chart, _, opts) {
+        const { ctx, data } = chart;
+        const m = chart.getDatasetMeta(0);
+        ctx.save();
+        ctx.font = '600 9px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+        ctx.textAlign = 'center';
+        m.data.forEach((bar, i) => {
+            const v = data.datasets[0].data[i];
+            if (v == null) return;
+            ctx.fillStyle = v >= 0 ? '#16a34a' : '#dc2626';
+            if (v >= 0) { ctx.textBaseline = 'bottom'; ctx.fillText(opts.fmt(v), bar.x, bar.y - 3); }
+            else        { ctx.textBaseline = 'top';    ctx.fillText(opts.fmt(v), bar.x, bar.y + 3); }
+        });
+        ctx.restore();
+    }
+};
+
+function _rtpRenderDashboard(trades) {
+    const card = document.getElementById('rtpDashCard');
+    if (!card) return;
+
+    // Only completed trades carrying a realised ₹ figure feed the dashboard.
+    const done = (trades || []).filter(t => t.opt_pnl_inr != null);
+    _rtpDashTrades = done;
+
+    if (!done.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+
+    // ── Aggregate stats straight from the JSON ─────────────────
+    let wins = 0, losses = 0, grossWin = 0, grossLoss = 0;
+    let netInr = 0, netPts = 0, winPts = 0, lossPts = 0;
+    let cntEod = 0, cntSl = 0, cntTgt = 0;
+    done.forEach(t => {
+        const inr = Number(t.opt_pnl_inr) || 0;
+        const pts = Number(t.opt_pnl_pts) || 0;   // option points
+        netInr += inr; netPts += pts;
+        if (inr >= 0) { wins++;   grossWin  += inr;           winPts  += pts; }
+        else          { losses++; grossLoss += Math.abs(inr); lossPts += pts; }
+        const reason = String(t.reason || '').toUpperCase();
+        if      (reason === 'EOD')    cntEod++;
+        else if (reason === 'SL')     cntSl++;
+        else if (reason === 'TARGET') cntTgt++;
+    });
+    const total   = done.length;
+    const winRate = total ? (wins / total * 100) : 0;
+    const pf      = grossLoss > 0 ? (grossWin / grossLoss) : (grossWin > 0 ? Infinity : 0);
+    const avgWin  = wins   ? winPts  / wins   : null;
+    const avgLoss = losses ? lossPts / losses : null;
+    const maxDD   = _rtpMaxDrawdown(done);   // ₹, ≤ 0
+
+    const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
+
+    const tiles = [
+        { label: 'Total Trades',  value: total },
+        { label: 'Wins',          value: wins,   cls: 'ag-pos' },
+        { label: 'Losses',        value: losses, cls: 'ag-neg' },
+        { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
+        { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtpPnlCls(netInr) },
+        { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtpPnlCls(netPts) },
+        { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
+        { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
+        { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
+        { label: 'Max Drawdown',  value: '-₹' + Math.abs(Math.round(maxDD)).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Target',        value: cntTgt, cls: 'ag-pos' },
+        { label: 'SL',            value: cntSl,  cls: 'ag-neg' },
+        { label: 'EOD',           value: cntEod, cls: 'ag-warn' },
+    ];
+
+    document.getElementById('rtpDashStats').innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+
+    const netEl = document.getElementById('rtpDashNet');
+    if (netEl) {
+        netEl.textContent = inrFmt(netInr);
+        netEl.style.color = netInr >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+
+    _rtpRenderEquity(done);
+    _rtpRenderBreakdown(done, _rtpDashPeriod);
+}
+
+function _rtpMaxDrawdown(trades) {
+    const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    let cum = 0, peak = 0, maxDD = 0;
+    sorted.forEach(t => {
+        cum += Number(t.opt_pnl_inr) || 0;
+        if (cum > peak) peak = cum;
+        const dd = cum - peak;
+        if (dd < maxDD) maxDD = dd;
+    });
+    return maxDD;   // ≤ 0
+}
+
+function _rtpRenderEquity(trades) {
+    const ctx = document.getElementById('rtpEquityChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const sorted  = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    const labels  = ['Start'];
+    const dataPts = [0];
+    const dates   = [''];
+    let cum = 0;
+    sorted.forEach((t, i) => {
+        cum += Number(t.opt_pnl_inr) || 0;
+        labels.push('T' + (i + 1));
+        dataPts.push(Math.round(cum));
+        dates.push(t.entry_time ? String(t.entry_time).replace('T', ' ').slice(0, 16) : '');
+    });
+
+    const net    = dataPts[dataPts.length - 1];
+    const profit = net >= 0;
+    const line   = profit ? '#2962ff' : '#ff1744';
+    const fill   = profit ? 'rgba(41,98,255,0.07)' : 'rgba(255,23,68,0.06)';
+
+    const meta = document.getElementById('rtpEquityMeta');
+    if (meta) {
+        meta.textContent = (net >= 0 ? '+₹' : '-₹') + Math.abs(net).toLocaleString('en-IN');
+        meta.style.color = profit ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+
+    const fmtY = v => {
+        const a = Math.abs(v), s = v < 0 ? '-' : '';
+        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(0) + 'K';
+        return s + '₹' + a;
+    };
+
+    if (_rtpEquityChart) { _rtpEquityChart.destroy(); _rtpEquityChart = null; }
+    _rtpEquityChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [{
+            data: dataPts, borderColor: line, backgroundColor: fill,
+            fill: true, tension: 0.25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2,
+        }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: {
+                    title: items => { const i = items[0].dataIndex; return i === 0 ? 'Start' : `Trade ${i} · ${dates[i]}`; },
+                    label: item => '  Cum P&L: ' + (item.raw >= 0 ? '+₹' : '-₹') + Math.abs(item.raw).toLocaleString('en-IN'),
+                } },
+            },
+            scales: {
+                x: { ticks: { maxTicksLimit: 15, color: '#999', font: { size: 11 }, autoSkip: true }, grid: { color: 'rgba(128,128,128,0.08)' } },
+                y: { ticks: { color: '#999', font: { size: 11 }, callback: fmtY }, grid: { color: 'rgba(128,128,128,0.1)' } },
+            }
+        }
+    });
+}
+
+function rtpSetPeriod(period) {
+    _rtpDashPeriod = period;
+    document.querySelectorAll('#rtpPeriodTabs .rtp-period-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.period === period));
+    _rtpRenderBreakdown(_rtpDashTrades, period);
+}
+
+function _rtpPeriodKey(d, period) {
+    if (period === 'daily')  return d.toISOString().slice(0, 10);
+    if (period === 'weekly') {
+        const x = new Date(d); x.setHours(0, 0, 0, 0);
+        x.setDate(x.getDate() - x.getDay() + 1);   // Monday
+        return x.toISOString().slice(0, 10);
+    }
+    if (period === 'monthly') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    return `${d.getFullYear()}`;
+}
+
+function _rtpRenderBreakdown(trades, period) {
+    const ctx = document.getElementById('rtpBreakdownChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const groups = {};
+    (trades || []).forEach(t => {
+        const key = _rtpPeriodKey(new Date(t.entry_time), period);
+        if (!groups[key]) groups[key] = { inr: 0, wins: 0, losses: 0 };
+        const inr = Number(t.opt_pnl_inr) || 0;
+        groups[key].inr += inr;
+        if (inr >= 0) groups[key].wins++; else groups[key].losses++;
+    });
+    const keys   = Object.keys(groups).sort();
+    const labels = keys.map(k => {
+        if (period === 'monthly') { const [y, m] = k.split('-'); return new Date(+y, +m - 1).toLocaleString('default', { month: 'short', year: '2-digit' }); }
+        if (period === 'weekly')  return 'W ' + k.slice(5);
+        if (period === 'daily')   return k.slice(5);
+        return k;
+    });
+    const values = keys.map(k => Math.round(groups[k].inr));
+    const meta   = keys.map(k => groups[k]);
+    const bg  = values.map(v => v >= 0 ? 'rgba(34,197,94,.20)' : 'rgba(239,68,68,.20)');
+    const brd = values.map(v => v >= 0 ? 'rgba(34,197,94,.90)' : 'rgba(239,68,68,.90)');
+
+    const fmtBar = v => {
+        const a = Math.abs(v), s = v >= 0 ? '+' : '−';
+        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(1) + 'K';
+        return s + '₹' + a;
+    };
+
+    if (_rtpBreakdownChart) { _rtpBreakdownChart.destroy(); _rtpBreakdownChart = null; }
+    _rtpBreakdownChart = new Chart(ctx.getContext('2d'), {
+        type: 'bar',
+        plugins: [_rtpBarLabelPlugin],
+        data: { labels, datasets: [{ data: values, backgroundColor: bg, borderColor: brd, borderWidth: 1.5, borderRadius: 4, borderSkipped: false }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            layout: { padding: { top: 18, bottom: 4 } },
+            plugins: {
+                legend: { display: false },
+                rtpBarLabels: { fmt: fmtBar },
+                tooltip: { displayColors: false, padding: 10, callbacks: {
+                    title: c => labels[c[0].dataIndex],
+                    label: c => {
+                        const i = c.dataIndex, v = values[i], g = meta[i];
+                        const tr = g.wins + g.losses, wr = tr ? Math.round(g.wins / tr * 100) : 0;
+                        return [
+                            ' P&L: ' + (v >= 0 ? '+₹' : '-₹') + Math.abs(v).toLocaleString('en-IN'),
+                            ` Trades: ${tr}  (${g.wins}W / ${g.losses}L)`,
+                            ` Win Rate: ${wr}%`,
+                        ];
+                    },
+                } },
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { font: { size: 9 }, color: '#94a3b8' } },
+                y: {
+                    grid: { color: c => c.tick.value === 0 ? 'rgba(128,128,128,.3)' : 'rgba(128,128,128,.08)' },
+                    ticks: { font: { size: 9 }, color: '#94a3b8', callback: v => {
+                        if (v === 0) return '0';
+                        const a = Math.abs(v), s = v < 0 ? '−' : '';
+                        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+                        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(0) + 'K';
+                        return s + '₹' + a;
+                    } },
+                },
+            }
+        }
+    });
 }
 
 // ── RTP helpers ───────────────────────────────────────────────────────────────
