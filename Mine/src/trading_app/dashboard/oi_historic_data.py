@@ -339,6 +339,43 @@ def _parse_new_bhavcopy(rows: List[Dict], symbols: List[str],
     return result
 
 
+def _fetch_nse_fii_fut_oi(date_str: str) -> Optional[int]:
+    """
+    Download the NSE participant-wise OI report for date_str and return the FII
+    *net index-futures* open interest = (Future Index Long − Future Index Short),
+    in number of contracts. This is a market-wide aggregate across all index
+    futures (not per-symbol). The day-over-day change of this value is what the
+    "Chng Fut OI" column shows (matches StockMojo's FII Fut OI change).
+
+      https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_DDMMYYYY.csv
+
+    Returns None on holiday / 404 / unparseable format.
+    """
+    try:
+        dt  = datetime.strptime(date_str, '%Y-%m-%d')
+        url = (f'https://nsearchives.nseindia.com/content/nsccl/'
+               f'fao_participant_oi_{dt.strftime("%d%m%Y")}.csv')
+        resp = requests.get(url, headers=_NSE_HEADERS, timeout=30)
+        if resp.status_code != 200:
+            return None
+        lines   = resp.content.decode('utf-8', errors='replace').splitlines()
+        hdr_idx = next((i for i, l in enumerate(lines) if 'Client Type' in l), None)
+        if hdr_idx is None:
+            return None
+        for row in csv.DictReader(lines[hdr_idx:]):
+            if (row.get('Client Type') or '').strip() == 'FII':
+                try:
+                    fut_long  = float(row.get('Future Index Long',  0) or 0)
+                    fut_short = float(row.get('Future Index Short', 0) or 0)
+                    return int(fut_long - fut_short)
+                except (ValueError, TypeError):
+                    return None
+        return None
+    except Exception as e:
+        logger.warning(f"[HistoricOI] FII participant OI fetch failed for {date_str}: {e}")
+        return None
+
+
 def _business_days(from_date: str, to_date: str) -> List[str]:
     """Return Mon–Fri date strings (YYYY-MM-DD) between from_date and to_date inclusive."""
     start = datetime.strptime(from_date, '%Y-%m-%d').date()
@@ -408,6 +445,7 @@ def fetch_and_store(symbol: str, provider=None,
             'low':               ohlc.get('low',   0),
             'close':             ohlc.get('close', 0),
             'idx_fut_oi':        bhav.get('idx_fut_oi') or None,
+            'fii_fut_oi':        _fetch_nse_fii_fut_oi(today),
             'FII_Index_futures': 0,
         }
 
@@ -417,10 +455,13 @@ def fetch_and_store(symbol: str, provider=None,
             for i, r in enumerate(records):
                 if r.get('date') == today and r.get('symbol') == symbol:
                     # Merge: preserve FII_Index_futures (manual) and fall back to
-                    # existing idx_fut_oi if bhavcopy didn't provide one today.
+                    # existing idx_fut_oi / fii_fut_oi if not fetched today
+                    # (participant OI is only published after market close).
                     record['FII_Index_futures'] = r.get('FII_Index_futures', 0)
                     if record['idx_fut_oi'] is None:
                         record['idx_fut_oi'] = r.get('idx_fut_oi')
+                    if record['fii_fut_oi'] is None:
+                        record['fii_fut_oi'] = r.get('fii_fut_oi')
                     records[i] = record
                     updated = True
                     break
@@ -633,6 +674,57 @@ def sync_fii_from_moneycontrol() -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f'[HistoricOI] FII sync failed: {e}', exc_info=True)
+        return {'success': False, 'error': str(e)}
+
+
+def backfill_fii_fut_oi(force: bool = False) -> Dict[str, Any]:
+    """
+    Populate `fii_fut_oi` (FII net index-futures OI, in contracts) on every
+    record by downloading the NSE participant-wise OI report per unique date.
+    The value is a market-wide aggregate, so all symbols on a given date share
+    it. Dates already populated are skipped unless force=True. The "Chng Fut OI"
+    column displays the day-over-day change of this stored level.
+    """
+    try:
+        with _lock:
+            records = _load_records()
+
+        all_dates = sorted({r['date'] for r in records if r.get('date')})
+        if not force:
+            have = {r['date'] for r in records if r.get('fii_fut_oi') is not None}
+            todo = [d for d in all_dates if d not in have]
+        else:
+            todo = all_dates
+
+        fetched: Dict[str, int] = {}
+        for d in todo:
+            val = _fetch_nse_fii_fut_oi(d)
+            if val is not None:
+                fetched[d] = val
+            time.sleep(0.4)  # gentle rate limit between NSE requests
+
+        updated = 0
+        for i, r in enumerate(records):
+            d = r.get('date', '')
+            if d in fetched:
+                records[i] = {**r, 'fii_fut_oi': fetched[d]}
+                updated += 1
+
+        with _lock:
+            _save_records(records)
+
+        dates = sorted(fetched)
+        rng   = f'{dates[0]} to {dates[-1]}' if dates else ''
+        logger.info(f'[HistoricOI] FII Fut OI backfill: {updated} records updated '
+                    f'({len(fetched)} dates) {rng}')
+        return {
+            'success':       True,
+            'updated':       updated,
+            'dates_fetched': len(fetched),
+            'date_range':    rng,
+        }
+    except Exception as e:
+        logger.error(f'[HistoricOI] FII Fut OI backfill failed: {e}', exc_info=True)
         return {'success': False, 'error': str(e)}
 
 

@@ -2752,6 +2752,7 @@ def run_rtp_backtest_api():
         sl_points      = float(data['sl_points'])     if data.get('sl_points')     else None
         tgt_points     = float(data['tgt_points'])    if data.get('tgt_points')    else None
         trail_points   = float(data['trail_points'])  if data.get('trail_points')  else None
+        exit_on        = data.get('exit_on', 'value')
 
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
@@ -2809,6 +2810,7 @@ def run_rtp_backtest_api():
             sl_points=sl_points,
             tgt_points=tgt_points,
             trail_points=trail_points,
+            exit_on=exit_on,
         )
         results = engine.run()
         trades  = results.get('trades', [])
@@ -2845,6 +2847,7 @@ def run_rtp_backtest_api():
                 'sl_points':     results['sl_points'],
                 'tgt_points':    results['tgt_points'],
                 'trail_points':  results.get('trail_points'),
+                'exit_on':       results.get('exit_on', 'value'),
             }
         })
 

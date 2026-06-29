@@ -49,6 +49,7 @@ class RTPBacktestEngine:
         sl_points: Optional[float] = None,
         tgt_points: Optional[float] = None,
         trail_points: Optional[float] = None,
+        exit_on: str = 'value',
     ):
         self.df = df.copy()
         self.entry_mode = entry_mode
@@ -57,6 +58,12 @@ class RTPBacktestEngine:
         self.use_adx = use_adx
         self.adx_len = adx_len
         self.adx_thresh = adx_thresh
+        # Exit evaluation mode:
+        #   'value' — SL/Target hit when the candle's high/low pierces the level
+        #             (intrabar fill at the level). This is the original behaviour.
+        #   'close' — SL/Target hit only when the candle CLOSE crosses the level,
+        #             and the fill is taken at that close.
+        self.exit_on = 'close' if str(exit_on).lower() == 'close' else 'value'
 
         auto_sl, auto_tgt = self._AUTO_LEVELS.get(interval_minutes, (25.0, 50.0))
         self.sl_points    = sl_points    if sl_points    is not None else auto_sl
@@ -263,7 +270,8 @@ class RTPBacktestEngine:
         dt_list = df['datetime'].tolist()
         date_list = [t.date() for t in dt_list]
 
-        is_rtp50 = self.entry_mode == 'RTP(50)'
+        is_rtp50    = self.entry_mode == 'RTP(50)'
+        close_exit  = self.exit_on == 'close'
 
         sell_needs_reset = False
         buy_needs_reset  = False
@@ -338,42 +346,48 @@ class RTPBacktestEngine:
                     exit_idx    = j
                     break
 
+                # In 'close' mode the SL/Target levels are tested against the bar
+                # close only (and filled at the close); in 'value' mode they are
+                # tested against the bar high/low (and filled at the level).
+                test_hi = cl[j] if close_exit else h[j]
+                test_lo = cl[j] if close_exit else l[j]
+
                 if direction == 'BUY':
                     # Update trailing SL
-                    if trail and h[j] > best_price:
-                        best_price = h[j]
+                    if trail and test_hi > best_price:
+                        best_price = test_hi
                         steps = int((best_price - entry_price) / trail)
                         new_sl = (entry_price - self.sl_points) + steps * trail
                         current_sl = max(current_sl, new_sl)
 
-                    if l[j] <= current_sl:
-                        exit_price  = current_sl
+                    if test_lo <= current_sl:
+                        exit_price  = cl[j] if close_exit else current_sl
                         exit_time   = dt_list[j]
                         exit_reason = 'TRAIL_SL' if trail else 'SL'
                         exit_idx    = j
                         break
-                    if h[j] >= entry_price + self.tgt_points:
-                        exit_price  = entry_price + self.tgt_points
+                    if test_hi >= entry_price + self.tgt_points:
+                        exit_price  = cl[j] if close_exit else entry_price + self.tgt_points
                         exit_time   = dt_list[j]
                         exit_reason = 'TARGET'
                         exit_idx    = j
                         break
                 else:
                     # Update trailing SL
-                    if trail and l[j] < best_price:
-                        best_price = l[j]
+                    if trail and test_lo < best_price:
+                        best_price = test_lo
                         steps = int((entry_price - best_price) / trail)
                         new_sl = (entry_price + self.sl_points) - steps * trail
                         current_sl = min(current_sl, new_sl)
 
-                    if h[j] >= current_sl:
-                        exit_price  = current_sl
+                    if test_hi >= current_sl:
+                        exit_price  = cl[j] if close_exit else current_sl
                         exit_time   = dt_list[j]
                         exit_reason = 'TRAIL_SL' if trail else 'SL'
                         exit_idx    = j
                         break
-                    if l[j] <= entry_price - self.tgt_points:
-                        exit_price  = entry_price - self.tgt_points
+                    if test_lo <= entry_price - self.tgt_points:
+                        exit_price  = cl[j] if close_exit else entry_price - self.tgt_points
                         exit_time   = dt_list[j]
                         exit_reason = 'TARGET'
                         exit_idx    = j
@@ -456,6 +470,7 @@ class RTPBacktestEngine:
             'tgt_points':    self.tgt_points,
             'trail_points':  self.trail_points,
             'entry_mode':    self.entry_mode,
+            'exit_on':       self.exit_on,
             'trades':        trades,
         }
 

@@ -57,8 +57,10 @@ function _hoiRenderAll(records) {
             const dayCell = isMon ? '<span class="hoi-day-mon">Mon</span>' : `<span style="color:var(--pf-text-2);font-size:11px;font-weight:600">${_day}</span>`;
             const monBox  = txt => isMon ? `<span class="hoi-mon-box">${txt}</span>` : txt;
             const prevRec    = rows[idx + 1];
-            const curFut     = r.idx_fut_oi != null ? Number(r.idx_fut_oi) : null;
-            const prevFut    = prevRec?.idx_fut_oi != null ? Number(prevRec.idx_fut_oi) : null;
+            // "Chng Fut OI" = day-over-day change in FII net index-futures OI
+            // (FII Future Index Long − Short, from NSE participant-wise OI).
+            const curFut     = r.fii_fut_oi != null ? Number(r.fii_fut_oi) : null;
+            const prevFut    = prevRec?.fii_fut_oi != null ? Number(prevRec.fii_fut_oi) : null;
             const chngFut    = (curFut != null && prevFut != null) ? curFut - prevFut : null;
             const chngFutCls = chngFut == null ? 'hoi-flat' : chngFut > 0 ? 'hoi-up' : 'hoi-down';
             const chngFutTxt = chngFut == null ? '—' : (chngFut > 0 ? '+' : '-') + _hoiFmt(Math.abs(chngFut));

@@ -333,6 +333,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (slVal)    payload.sl_points    = parseFloat(slVal);
                 if (tgtVal)   payload.tgt_points   = parseFloat(tgtVal);
                 if (trailVal) payload.trail_points = parseFloat(trailVal);
+                payload.exit_on = document.getElementById('rtpExitOn')?.value || 'value';
             }
 
             const response = await fetch(endpoint, {

@@ -93,6 +93,13 @@
                            style="font-style:italic;" oninput="this.style.fontStyle=this.value?'normal':'italic'">
                 </div>
                 <div class="form-group">
+                    <label for="rtpExitOn">Filter Type</label>
+                    <select id="rtpExitOn" title="On Value: SL/Target hit on candle high/low. On Close: hit only when the candle close crosses the level.">
+                        <option value="value">On Value (High/Low)</option>
+                        <option value="close">On Close</option>
+                    </select>
+                </div>
+                <div class="form-group">
                     <label for="rtpAdxThresh">ADX Threshold</label>
                     <input type="number" id="rtpAdxThresh" value="25" min="5" max="50" step="1">
                 </div>
