@@ -2188,219 +2188,6 @@ def notify_whatsapp() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@api_bp.route('/historical/instrument-token', methods=['GET'])
-def get_instrument_token() -> EndpointResponse:
-    """Get instrument token for a symbol."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    
-    current_provider = get_data_provider()
-    if not current_provider:
-        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
-    
-    try:
-        current_kite = get_kite()
-        if not current_kite:
-            return jsonify({'success': False, 'error': 'Kite not connected. Please login.'}), 401
-        symbol = request.args.get('symbol', '').upper()
-        symbol_type = request.args.get('type', 'fno').lower()
-        fno_type = request.args.get('fno_type', 'futures').lower()
-
-        if not symbol:
-            return jsonify({'success': False, 'error': 'Symbol parameter is required'}), 400
-
-        instrument_token = None
-
-        if symbol == 'NIFTY':
-            try:
-                kite_service = KiteService(kite_instance=current_kite)
-                instrument_token = kite_service.get_instrument_token(symbol)
-            except Exception as e:
-                logger.error(f"Error getting index token for {symbol}: {e}")
-                return jsonify({
-                    'success': False,
-                    'error': f'Error fetching token for index {symbol}: {str(e)}'
-                }), 500
-        else:
-            if fno_type == 'futures':
-                try:
-                    instruments = current_kite.instruments('NFO')
-                    for inst in instruments:
-                        if inst.get('name') == symbol and inst.get('segment') == 'NFO-FUT':
-                            instrument_token = inst.get('instrument_token')
-                            break
-                except Exception as e:
-                    logger.error(f"Error fetching NFO instruments: {e}")
-                    error_str = str(e).lower()
-                    if 'access_token' in error_str or 'unauthorized' in error_str:
-                        return jsonify({
-                            'success': False,
-                            'error': 'Authentication failed. Access token expired.',
-                            'auth_error': True
-                        }), 401
-                    return jsonify({'success': False, 'error': f'Error fetching F&O instruments: {str(e)}'}), 500
-            else:
-                return jsonify({
-                    'success': False,
-                    'error': 'Options require expiry and strike parameters'
-                }), 400
-        
-        if instrument_token:
-            return jsonify({
-                'success': True,
-                'instrument_token': instrument_token,
-                'symbol': symbol,
-                'type': symbol_type
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': f'Instrument token not found for symbol: {symbol}'
-            }), 404
-    except Exception as e:
-        logger.error(f"Error fetching instrument token: {e}", exc_info=True)
-        error_str = str(e).lower()
-        if 'access_token' in error_str or 'unauthorized' in error_str:
-            return jsonify({
-                'success': False,
-                'error': 'Authentication failed. Please login again.',
-                'auth_error': True
-            }), 401
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@api_bp.route('/historical', methods=['POST'])
-@csrf.exempt
-def get_historical_data() -> EndpointResponse:
-    """Fetch historical OHLC data."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    
-    current_kite = get_data_provider()
-    if not current_kite:
-        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
-    
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'success': False, 'error': 'Request body must be JSON'}), 400
-        
-        instrument_token = data.get('instrument_token')
-        from_date = data.get('from_date')
-        to_date = data.get('to_date')
-        interval = data.get('interval', '5minute')
-        
-        if not instrument_token or not from_date or not to_date:
-            return jsonify({
-                'success': False,
-                'error': 'Missing required parameters: instrument_token, from_date, to_date'
-            }), 400
-        
-        logger.info(f"Fetching historical data: token={instrument_token}, from={from_date}, to={to_date}, interval={interval}")
-        
-        try:
-            candles = current_kite.historical_data(
-                instrument_token=instrument_token,
-                from_date=from_date,
-                to_date=to_date,
-                interval=interval
-            )
-        except Exception as kite_error:
-            logger.error(f"KiteConnect historical_data error: {kite_error}")
-            error_str = str(kite_error).lower()
-            if 'access_token' in error_str or 'unauthorized' in error_str:
-                return jsonify({
-                    'success': False,
-                    'error': 'Authentication failed. Access token expired.',
-                    'auth_error': True
-                }), 401
-            raise kite_error
-        
-        if not candles:
-            return jsonify({
-                'success': True,
-                'data': [],
-                'message': 'No data available for the given parameters'
-            })
-        
-        formatted_data = []
-        for candle in candles:
-            formatted_data.append({
-                'date': candle['date'],
-                'open': candle['open'],
-                'high': candle['high'],
-                'low': candle['low'],
-                'close': candle['close'],
-                'volume': candle['volume'],
-                'oi': candle.get('oi', 0)
-            })
-        
-        return jsonify({
-            'success': True,
-            'data': formatted_data,
-            'count': len(formatted_data)
-        })
-    except Exception as e:
-        logger.error(f"Error fetching historical data: {e}", exc_info=True)
-        error_str = str(e).lower()
-        if 'access_token' in error_str or 'unauthorized' in error_str:
-            return jsonify({
-                'success': False,
-                'error': 'Authentication failed. Please login again.',
-                'auth_error': True
-            }), 401
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
-@csrf.exempt
-@limiter.exempt
-@api_bp.route('/strategy-backtest', methods=['POST'])
-def run_strategy_backtest() -> EndpointResponse:
-    """Run strategy backtest with given parameters."""
-    try:
-        current_kite = get_kite()
-        if not current_kite:
-            return jsonify({
-                'status': 'error',
-                'message': 'Failed to initialize KiteConnect. Check API keys or login status.'
-            }), 401
-        
-        data = request.get_json(silent=True) or {}
-        
-        if not isinstance(data, dict):
-            return jsonify({'status': 'error', 'message': 'Invalid request body format (must be JSON)'}), 400
-        
-        symbol = data.get('symbol', 'NIFTY')
-        start_date_str = data.get('start_date')
-        end_date_str = data.get('end_date')
-        
-        if not start_date_str or not end_date_str:
-            return jsonify({'status': 'error', 'message': 'start_date and end_date are required'}), 400
-        
-        start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
-        end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
-        
-        from trading_app.strategy.backtest import OptionsStrategy
-        strategy = OptionsStrategy(kite_instance=current_kite)
-        strategy.backtest_strategy(start_date, end_date, symbol)
-        
-        return jsonify({
-            'status': 'success',
-            'data': strategy.entry_exit_log
-        })
-    except Exception as e:
-        logger.error(f"Error running strategy backtest: {e}")
-        if "token" in str(e).lower() or "auth" in str(e).lower():
-            return jsonify({
-                'status': 'error',
-                'message': 'Authentication failed. Please check your login status.',
-                'auth_error': True
-            }), 401
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
 @api_bp.route('/backtest/symbols', methods=['GET'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -3503,52 +3290,6 @@ def place_live_order() -> EndpointResponse:
             'success': False,
             'error': f'Server error: {str(e)}'
         }), 500
-
-
-@api_bp.route('/multi-strike', methods=['GET'])
-@limiter.exempt  # Exempt from rate limiting
-def get_multi_strike() -> EndpointResponse:
-    """
-    Get multi-strike options data for a symbol.
-    
-    Query params:
-    - symbol: Trading symbol (e.g., 'NIFTY', 'BANKNIFTY')
-    - num_strikes: Number of strikes above/below ATM (default 3)
-    
-    Returns: Multi-strike data with PDH/PDL lines
-    """
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-    
-    symbol = request.args.get('symbol', 'NIFTY')
-    num_strikes = int(request.args.get('num_strikes', 3))
-    
-    current_provider = get_data_provider()
-    if not current_provider:
-        return jsonify({'success': False, 'error': 'Data provider initialization failed.'}), 401
-    
-    try:
-        from trading_app.service.multi_strike_service import MultiStrikeService
-        
-        multi_strike_service = MultiStrikeService(current_provider)
-        result = multi_strike_service.get_multi_strike_data(symbol, num_strikes)
-        
-        if not result.get('success'):
-            return jsonify(result), 500
-        
-        return jsonify(result), 200
-    
-    except Exception as e:
-        logger.error(f"Error in multi-strike endpoint: {e}", exc_info=True)
-        error_str = str(e).lower()
-        if 'access_token' in error_str or 'unauthorized' in error_str:
-            return jsonify({
-                'success': False,
-                'error': 'Authentication failed. Please login again.',
-                'auth_error': True
-            }), 401
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @api_bp.route('/send-notification', methods=['POST'])
@@ -7456,6 +7197,27 @@ def delete_oi_historic(date: str, symbol: str):
     if not deleted:
         return jsonify({'success': False, 'error': 'Record not found'}), 404
     return jsonify({'success': True})
+
+
+@api_bp.route('/oi-historic/refresh', methods=['POST'])
+@require_user_auth
+def oi_historic_refresh():
+    """
+    Refresh a single (date, symbol) row from every source in one call:
+    bhavcopy (OI/OHLC/Fut OI) + NSE participant Fut OI + Moneycontrol FII flow.
+    Body: { date: 'YYYY-MM-DD', symbol: 'NIFTY'|'BANKNIFTY' }
+    """
+    from trading_app.dashboard.oi_historic_data import refresh_record, get_all_records
+    from trading_app.service.provider_logic import get_data_provider
+    body   = request.get_json(silent=True) or {}
+    date   = (body.get('date') or '').strip()
+    symbol = (body.get('symbol') or '').strip()
+    if not date or not symbol:
+        return jsonify({'success': False, 'error': 'date and symbol are required'}), 400
+    provider = get_data_provider(user='Mine')
+    result   = refresh_record(date, symbol, provider=provider)
+    result['records'] = get_all_records()
+    return jsonify(result)
 
 
 @api_bp.route('/oi-historic/load-all', methods=['POST'])

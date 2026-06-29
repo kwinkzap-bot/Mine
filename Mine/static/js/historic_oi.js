@@ -48,9 +48,11 @@ function _hoiRenderAll(records) {
             const moveCls  = !hasOHLC ? 'hoi-flat' : moveUp ? 'hoi-up' : 'hoi-down';
             const moveText = !hasOHLC ? '—' : moveUp ? '▲' : '▼';
             const fmtP = n => hasOHLC && n ? n.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
-            const delCell = r.date === _today
+            const refreshBtn = `<button class="hoi-refresh-btn" title="Refresh this row from all sources (OI, OHLC, Fut OI, FII)" onclick="refreshHistoricOI('${r.date}','${r.symbol}',this)">&#x21bb;</button>`;
+            const delBtn = r.date === _today
                 ? `<button class="hoi-del-btn" title="Delete" onclick="deleteHistoricOI('${r.date}','${r.symbol}')">&#x2715;</button>`
                 : '';
+            const delCell = `${refreshBtn}${delBtn}`;
             const _DAY = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
             const _day = _DAY[new Date(r.date + 'T00:00:00').getDay()];
             const isMon = _day === 'Mon';
@@ -132,6 +134,36 @@ function deleteHistoricOI(date, symbol) {
         .catch(() => alert('Delete failed'));
 }
 
+// Refresh a single row from every source (bhavcopy OI/OHLC/Fut OI + FII flow)
+// in one call — replaces the old Record → Sync FII → Recalculate button dance.
+function refreshHistoricOI(date, symbol, btn) {
+    const status = document.getElementById('hoiStatus');
+    btn.disabled = true;
+    btn.innerHTML = '⏳';
+    status.textContent = `Refreshing ${symbol} ${date}…`;
+    fetch('/api/oi-historic/refresh', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ date, symbol }),
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (d.success) {
+            if (d.records) _hoiRenderAll(d.records); else loadHistoricOI();
+            status.textContent = `✅ Refreshed ${symbol} ${date}`;
+        } else {
+            btn.disabled = false;
+            btn.innerHTML = '↻';
+            status.textContent = '❌ ' + (d.error || 'Refresh failed');
+        }
+    })
+    .catch(() => {
+        btn.disabled = false;
+        btn.innerHTML = '↻';
+        status.textContent = '❌ Network error';
+    });
+}
+
 // ── Historic OI — Load History ──────────────────────────────────
 let _hoiPollTimer = null;
 
@@ -145,9 +177,6 @@ function hoiToggleLoadHistory() {
         document.getElementById('hoiToDate').value = today;
     }
 }
-
-function hoiStartBackfill()  { _hoiLaunchBackfill(false); }
-function hoiRecalculate()    { _hoiLaunchBackfill(true);  }
 
 function hoiSyncFII() {
     const btn = document.getElementById('hoiSyncFIIBtn');
@@ -168,43 +197,39 @@ function hoiSyncFII() {
         .catch(() => { btn.disabled = false; msg.textContent = '❌ Network error'; });
 }
 
-function _hoiLaunchBackfill(recalculate) {
+function hoiStartBackfill() {
     const src      = document.querySelector('input[name="hoiSrc"]:checked')?.value;
     const fromDate = document.getElementById('hoiFromDate').value;
     const toDate   = document.getElementById('hoiToDate').value;
     const loadBtn  = document.getElementById('hoiLoadBtn');
-    const rcalcBtn = document.getElementById('hoiRecalcBtn');
     const msg      = document.getElementById('hoiLoadMsg');
 
     if (src === 'nse' && (!fromDate || !toDate)) { msg.textContent = '⚠ Select date range'; return; }
     if (src === 'nse' && fromDate > toDate)       { msg.textContent = '⚠ From must be ≤ To'; return; }
 
-    loadBtn.disabled  = true;
-    rcalcBtn.disabled = true;
-    msg.textContent   = recalculate ? 'Recalculating…' : 'Starting…';
+    loadBtn.disabled = true;
+    msg.textContent  = 'Starting…';
     document.getElementById('hoiProgressWrap').style.display = '';
 
     fetch('/api/oi-historic/load-all', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ source: src, from_date: fromDate, to_date: toDate, recalculate }),
+        body: JSON.stringify({ source: src, from_date: fromDate, to_date: toDate }),
     })
     .then(r => r.json())
     .then(d => {
         if (d.success) {
-            msg.textContent = recalculate ? 'Recalculating…' : 'Running…';
+            msg.textContent = 'Running…';
             _hoiPollBackfill();
         } else {
-            loadBtn.disabled  = false;
-            rcalcBtn.disabled = false;
-            msg.textContent   = '❌ ' + (d.error || 'Failed to start');
+            loadBtn.disabled = false;
+            msg.textContent  = '❌ ' + (d.error || 'Failed to start');
             document.getElementById('hoiProgressWrap').style.display = 'none';
         }
     })
     .catch(() => {
-        loadBtn.disabled  = false;
-        rcalcBtn.disabled = false;
-        msg.textContent   = '❌ Network error';
+        loadBtn.disabled = false;
+        msg.textContent  = '❌ Network error';
         document.getElementById('hoiProgressWrap').style.display = 'none';
     });
 }
@@ -221,8 +246,7 @@ function _hoiPollBackfill() {
             if (st.running) {
                 _hoiPollTimer = setTimeout(_hoiPollBackfill, 3000);
             } else {
-                document.getElementById('hoiLoadBtn').disabled  = false;
-                document.getElementById('hoiRecalcBtn').disabled = false;
+                document.getElementById('hoiLoadBtn').disabled   = false;
                 document.getElementById('hoiLoadMsg').textContent = st.message || 'Done';
                 loadHistoricOI();
             }

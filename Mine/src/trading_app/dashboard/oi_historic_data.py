@@ -390,46 +390,69 @@ def _business_days(from_date: str, to_date: str) -> List[str]:
 
 
 def fetch_and_store(symbol: str, provider=None,
-                    bhavcopy_data: Optional[Dict] = None) -> Dict[str, Any]:
+                    bhavcopy_data: Optional[Dict] = None,
+                    fii_flow: Optional[float] = None) -> Dict[str, Any]:
     """
     Fetch today's OI totals for *symbol* from the broker and upsert into JSON.
     bhavcopy_data: pre-fetched bhavcopy dict for this symbol (provides idx_fut_oi).
-    Uses merge upsert so FII_Index_futures and idx_fut_oi are never silently overwritten.
+    fii_flow: today's FII index-futures flow (Cr) from Moneycontrol, if available;
+              when None the existing stored value is preserved.
+    Uses merge upsert so idx_fut_oi is never silently overwritten.
     """
     try:
         if provider is None:
             from trading_app.service.provider_logic import get_data_provider
             provider = get_data_provider(user='Mine')
 
-        if not provider:
-            return {'success': False, 'error': 'No data provider available'}
-
-        from trading_app.service.open_interest_service import OpenInterestService
-        oi_service = OpenInterestService(provider)
-        # On expiry day, use_next_expiry=True skips today's expiry and records
-        # next week's OI instead (non-expiry days: no behavioural difference).
-        data = oi_service.get_open_interest_data(symbol, use_next_expiry=True)
-
-        if not data.get('success'):
-            return {'success': False, 'error': data.get('error', 'OI fetch failed')}
-
-        ce_summary = data.get('ce_summary', {})
-        pe_summary = data.get('pe_summary', {})
-
-        # Fallback: sum from strike lists if summaries are absent
-        if not ce_summary and not pe_summary:
-            ce_strikes = data.get('ce_strikes', [])
-            pe_strikes = data.get('pe_strikes', [])
-            total_ce_oi = sum(s.get('oi', 0) for s in ce_strikes)
-            total_pe_oi = sum(s.get('oi', 0) for s in pe_strikes)
-        else:
-            total_ce_oi = ce_summary.get('total_oi', 0)
-            total_pe_oi = pe_summary.get('total_oi', 0)
-
         today = datetime.now().strftime('%Y-%m-%d')
+        bhav  = bhavcopy_data or {}
+
+        total_ce_oi = total_pe_oi = 0
+        broker_ok = False
+
+        # Broker option chain — primary source intraday (before the bhavcopy is
+        # published). Optional and best-effort: at EOD the broker session is
+        # often expired, but the bhavcopy below already has the full chain, so a
+        # broker failure must NOT abort the record (this is what broke the 8 PM
+        # auto-record). Only the ~50 ATM strikes are returned, hence fallback-only.
+        if provider:
+            try:
+                from trading_app.service.open_interest_service import OpenInterestService
+                oi_service = OpenInterestService(provider)
+                # On expiry day, use_next_expiry=True skips today's expiry and records
+                # next week's OI instead (non-expiry days: no behavioural difference).
+                data = oi_service.get_open_interest_data(symbol, use_next_expiry=True)
+                if data.get('success'):
+                    ce_summary = data.get('ce_summary', {})
+                    pe_summary = data.get('pe_summary', {})
+                    if not ce_summary and not pe_summary:
+                        total_ce_oi = sum(s.get('oi', 0) for s in data.get('ce_strikes', []))
+                        total_pe_oi = sum(s.get('oi', 0) for s in data.get('pe_strikes', []))
+                    else:
+                        total_ce_oi = ce_summary.get('total_oi', 0)
+                        total_pe_oi = pe_summary.get('total_oi', 0)
+                    broker_ok = True
+                else:
+                    logger.warning(f"[HistoricOI] Broker OI fetch failed for {symbol}: "
+                                   f"{data.get('error')} — relying on bhavcopy")
+            except Exception as e:
+                logger.warning(f"[HistoricOI] Broker OI fetch errored for {symbol}: {e} "
+                               f"— relying on bhavcopy")
+
+        # Prefer official NSE bhavcopy CE/PE OI (full nearest-expiry chain) so
+        # Record stores the same totals — and hence the same CHNG OPT OI / PCR —
+        # as the per-row refresh. The broker chain only covers ~50 ATM strikes,
+        # which understates CE/PE OI and skews PCR.
+        if bhav.get('ce_oi') or bhav.get('pe_oi'):
+            total_ce_oi = bhav.get('ce_oi', total_ce_oi)
+            total_pe_oi = bhav.get('pe_oi', total_pe_oi)
+
+        # Record only if at least one source produced option OI.
+        if not broker_ok and not (bhav.get('ce_oi') or bhav.get('pe_oi')):
+            return {'success': False,
+                    'error': 'No OI data available from broker or bhavcopy'}
 
         # Prefer bhavcopy OHLC (official SETTLE_PR); broker OHLC as fallback
-        bhav = bhavcopy_data or {}
         if bhav.get('close'):
             ohlc = {k: bhav[k] for k in ('open', 'high', 'low', 'close')}
         else:
@@ -446,7 +469,7 @@ def fetch_and_store(symbol: str, provider=None,
             'close':             ohlc.get('close', 0),
             'idx_fut_oi':        bhav.get('idx_fut_oi') or None,
             'fii_fut_oi':        _fetch_nse_fii_fut_oi(today),
-            'FII_Index_futures': 0,
+            'FII_Index_futures': fii_flow if fii_flow is not None else 0,
         }
 
         with _lock:
@@ -454,10 +477,12 @@ def fetch_and_store(symbol: str, provider=None,
             updated = False
             for i, r in enumerate(records):
                 if r.get('date') == today and r.get('symbol') == symbol:
-                    # Merge: preserve FII_Index_futures (manual) and fall back to
-                    # existing idx_fut_oi / fii_fut_oi if not fetched today
-                    # (participant OI is only published after market close).
-                    record['FII_Index_futures'] = r.get('FII_Index_futures', 0)
+                    # Merge: keep the freshly fetched FII flow when we have one,
+                    # else preserve the existing value; fall back to existing
+                    # idx_fut_oi / fii_fut_oi if not fetched today (participant OI
+                    # is only published after market close).
+                    if fii_flow is None:
+                        record['FII_Index_futures'] = r.get('FII_Index_futures', 0)
                     if record['idx_fut_oi'] is None:
                         record['idx_fut_oi'] = r.get('idx_fut_oi')
                     if record['fii_fut_oi'] is None:
@@ -595,6 +620,57 @@ def backfill_fii() -> Dict[str, Any]:
     }
 
 
+def _fetch_moneycontrol_fii_map() -> Dict[str, float]:
+    """
+    Fetch the last ~30 days of FII index-futures net flow (Crore INR) from
+    Moneycontrol. Returns {YYYY-MM-DD: fii_idx_fut_crore}, or {} on any error.
+    Shared by sync_fii_from_moneycontrol() and refresh_record().
+    """
+    from bs4 import BeautifulSoup
+
+    url = 'https://www.moneycontrol.com/stocks/marketstats/fii_dii_activity/index.php'
+    headers = {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/120.0.0.0 Safari/537.36'
+        )
+    }
+    resp = requests.get(url, headers=headers, timeout=20)
+    if resp.status_code != 200:
+        logger.warning(f'[HistoricOI] Moneycontrol returned {resp.status_code}')
+        return {}
+
+    soup = BeautifulSoup(resp.text, 'html.parser')
+    script = soup.find('script', id='__NEXT_DATA__')
+    if not script or not script.string:
+        logger.warning('[HistoricOI] Could not find Moneycontrol __NEXT_DATA__')
+        return {}
+
+    page_data  = json.loads(script.string)
+    container  = (page_data.get('props', {})
+                           .get('pageProps', {})
+                           .get('FiiDiiData', {}))
+    fii_list   = container.get('fiiDiiData', container.get('list', []))
+
+    def _parse(v):
+        if not v or v == '-':
+            return None
+        try:
+            return float(str(v).replace(',', '').strip())
+        except ValueError:
+            return None
+
+    # Build {YYYY-MM-DD: fii_idx_fut_crore} from the 30-day list
+    fii_map: Dict[str, float] = {}
+    for row in fii_list:
+        date_str = row.get('date', '')          # already YYYY-MM-DD
+        val      = _parse(row.get('fiiIdxFut'))
+        if date_str and val is not None:
+            fii_map[date_str] = val
+    return fii_map
+
+
 def sync_fii_from_moneycontrol() -> Dict[str, Any]:
     """
     Fetch last ~30 days of FII index futures net flow from Moneycontrol
@@ -602,50 +678,7 @@ def sync_fii_from_moneycontrol() -> Dict[str, Any]:
     Values are stored in Crore INR (the unit Moneycontrol reports).
     """
     try:
-        from bs4 import BeautifulSoup
-
-        url = 'https://www.moneycontrol.com/stocks/marketstats/fii_dii_activity/index.php'
-        headers = {
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/120.0.0.0 Safari/537.36'
-            )
-        }
-        resp = requests.get(url, headers=headers, timeout=20)
-        if resp.status_code != 200:
-            return {'success': False, 'error': f'Moneycontrol returned {resp.status_code}'}
-
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        script = soup.find('script', id='__NEXT_DATA__')
-        if not script or not script.string:
-            return {'success': False, 'error': 'Could not find Moneycontrol __NEXT_DATA__'}
-
-        page_data  = json.loads(script.string)
-        container  = (page_data.get('props', {})
-                               .get('pageProps', {})
-                               .get('FiiDiiData', {}))
-        fii_list   = container.get('fiiDiiData', container.get('list', []))
-
-        if not fii_list:
-            return {'success': False, 'error': 'Empty FII list from Moneycontrol'}
-
-        def _parse(v):
-            if not v or v == '-':
-                return None
-            try:
-                return float(str(v).replace(',', '').strip())
-            except ValueError:
-                return None
-
-        # Build {YYYY-MM-DD: fii_idx_fut_crore} from the 30-day list
-        fii_map: Dict[str, float] = {}
-        for row in fii_list:
-            date_str = row.get('date', '')          # already YYYY-MM-DD
-            val      = _parse(row.get('fiiIdxFut'))
-            if date_str and val is not None:
-                fii_map[date_str] = val
-
+        fii_map = _fetch_moneycontrol_fii_map()
         if not fii_map:
             return {'success': False, 'error': 'No parseable fiiIdxFut values found'}
 
@@ -1119,10 +1152,20 @@ def load_all(from_date: str = '', to_date: str = '',
 
 
 def fetch_and_store_all(provider=None) -> List[Dict[str, Any]]:
-    """Fetch and store records for all tracked symbols. Returns list of result dicts."""
-    # One bhavcopy download for today covers idx_fut_oi + official OHLC for all symbols.
+    """Fetch and store records for all tracked symbols. Returns list of result dicts.
+
+    Like the per-row refresh, this pulls every source for today in one go:
+    one bhavcopy download (idx_fut_oi + official OHLC) and one Moneycontrol
+    fetch (FII index-futures flow), both shared across all symbols.
+    """
     today = datetime.now().strftime('%Y-%m-%d')
     todays_bhavcopy = _fetch_nse_bhavcopy_oi(today, _SYMBOLS)
+    # Best-effort: a Moneycontrol hiccup must not abort the daily record.
+    try:
+        todays_fii_flow = _fetch_moneycontrol_fii_map().get(today)
+    except Exception as e:
+        logger.warning(f"[HistoricOI] Moneycontrol FII fetch failed: {e}")
+        todays_fii_flow = None
 
     results = []
     for symbol in _SYMBOLS:
@@ -1130,7 +1173,90 @@ def fetch_and_store_all(provider=None) -> List[Dict[str, Any]]:
             symbol,
             provider=provider,
             bhavcopy_data=todays_bhavcopy.get(symbol, {}),
+            fii_flow=todays_fii_flow,
         )
         result['symbol'] = symbol
         results.append(result)
     return results
+
+
+def refresh_record(date: str, symbol: str, provider=None) -> Dict[str, Any]:
+    """
+    Refresh every field of a single (date, symbol) row from all sources in one
+    pass — so the user clicks once instead of juggling Record / Load / Sync FII:
+      • NSE bhavcopy    → ce_oi, pe_oi, OHLC, idx_fut_oi
+      • broker candle   → OHLC fallback when bhavcopy is unavailable (post-archive / holiday)
+      • NSE participant → fii_fut_oi (market-wide FII net index-futures OI)
+      • Moneycontrol    → FII_Index_futures in Cr (only if date falls in the ~30-day window)
+
+    Each field is only overwritten when the source actually returns a value, so a
+    partial fetch never wipes existing data. A manually-set FII_Index_futures is
+    preserved when Moneycontrol has no value for that date.
+    Returns { success, record } or { success: False, error }.
+    """
+    symbol = symbol.upper()
+    if symbol not in _SYMBOLS:
+        return {'success': False, 'error': f'Unknown symbol {symbol}'}
+    try:
+        if provider is None:
+            from trading_app.service.provider_logic import get_data_provider
+            provider = get_data_provider(user='Mine')
+
+        # ── Bhavcopy: CE/PE OI + OHLC + idx_fut_oi ──────────────────────────
+        sym_oi = (_fetch_nse_bhavcopy_oi(date, [symbol]) or {}).get(symbol, {})
+
+        # ── OHLC: prefer bhavcopy SETTLE_PR, broker candle as fallback ──────
+        if sym_oi.get('close'):
+            ohlc = {k: sym_oi.get(k, 0) for k in ('open', 'high', 'low', 'close')}
+        elif provider:
+            ohlc = _fetch_day_ohlc(symbol, date, provider)
+        else:
+            ohlc = {}
+
+        # ── FII net index-futures OI (NSE participant report) ───────────────
+        fii_fut_oi = _fetch_nse_fii_fut_oi(date)
+
+        # ── FII index-futures flow in Cr (Moneycontrol, ~30-day window) ─────
+        fii_flow = _fetch_moneycontrol_fii_map().get(date)
+
+        with _lock:
+            records  = _load_records()
+            existing = next(
+                (r for r in records
+                 if r.get('date') == date and r.get('symbol') == symbol),
+                None,
+            )
+
+            # Nothing on disk and nothing fetched → genuinely no data for this day
+            if existing is None and not sym_oi and not ohlc.get('close'):
+                return {'success': False,
+                        'error': f'No data available for {symbol} on {date}'}
+
+            merged = dict(existing) if existing else {'date': date, 'symbol': symbol}
+            if sym_oi.get('ce_oi'):      merged['ce_oi'] = sym_oi['ce_oi']
+            if sym_oi.get('pe_oi'):      merged['pe_oi'] = sym_oi['pe_oi']
+            if ohlc.get('close'):        merged.update(ohlc)
+            if sym_oi.get('idx_fut_oi'): merged['idx_fut_oi'] = sym_oi['idx_fut_oi']
+            if fii_fut_oi is not None:   merged['fii_fut_oi'] = fii_fut_oi
+            if fii_flow is not None:     merged['FII_Index_futures'] = fii_flow
+            merged.setdefault('idx_fut_oi', None)
+            merged.setdefault('FII_Index_futures', 0)
+
+            if existing is not None:
+                records[records.index(existing)] = merged
+            else:
+                records.append(merged)
+            _save_records(records)
+
+        logger.info(
+            f'[HistoricOI] Refreshed {symbol} {date}: '
+            f"CE={merged.get('ce_oi')} PE={merged.get('pe_oi')} "
+            f"close={merged.get('close')} futOI={merged.get('idx_fut_oi')} "
+            f"fiiFutOI={merged.get('fii_fut_oi')} fiiFlow={merged.get('FII_Index_futures')}"
+        )
+        return {'success': True, 'record': merged}
+
+    except Exception as e:
+        logger.error(f'[HistoricOI] refresh_record failed for {symbol} {date}: {e}',
+                     exc_info=True)
+        return {'success': False, 'error': str(e)}

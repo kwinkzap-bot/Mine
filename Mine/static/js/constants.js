@@ -21,11 +21,7 @@ window.CONSTANTS = {
         OPTIONS_PDH_PDL: '/api/options-pdh-pdl',
 
         // Strategy endpoints
-        STRATEGY_DATA: '/api/strategy-data',
         BACKTEST_RESULTS: '/api/backtest-results',
-
-        // Historical data endpoints
-        HISTORICAL_DATA: '/api/historical-data',
 
         // Authentication endpoints
         LOGIN: '/auth/login',
@@ -183,9 +179,7 @@ window.CONSTANTS = {
         LOGIN: '/auth/login',
         DASHBOARD: '/',
         CPR_FILTER: '/cpr-filter',
-        STRATEGY: '/strategy',
         OPTIONS_CHART: '/options-chart',
-        HISTORICAL: '/historical',
         BACKTEST: '/backtest'
     },
 

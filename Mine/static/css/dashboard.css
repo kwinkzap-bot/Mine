@@ -421,6 +421,17 @@
 }
 .hoi-del-btn:hover { color: var(--pf-neg); border-color: var(--pf-neg); background: rgba(220,38,38,0.06); }
 
+.hoi-refresh-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; margin-right: 4px;
+    border: 1px solid var(--pf-border); border-radius: 5px;
+    background: transparent; color: var(--pf-text-3);
+    cursor: pointer; font-size: 13px; line-height: 1;
+    transition: background .15s, color .15s, border-color .15s;
+}
+.hoi-refresh-btn:hover:not(:disabled) { color: var(--pf-accent); border-color: var(--pf-accent); background: rgba(37,99,235,0.06); }
+.hoi-refresh-btn:disabled { opacity: .6; cursor: default; }
+
 /* ── HOI datepicker ────────────────────────────────────────────── */
 .hoi-date-wrap {
     position: relative; display: inline-flex; align-items: center;

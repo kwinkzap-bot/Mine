@@ -416,10 +416,16 @@ class MarketScheduler:
                 return
             logger.info("[HistoricOI Scheduler] Recording daily OI snapshot...")
             from trading_app.service.provider_logic import get_data_provider
-            provider = get_data_provider(user='Mine')
+            # Provider is optional at 8 PM: the EOD record is built from the
+            # official NSE bhavcopy. A live broker session is only used as an
+            # intraday fallback, so a None/expired provider must not skip the job.
+            try:
+                provider = get_data_provider(user='Mine')
+            except Exception as e:
+                logger.warning(f"[HistoricOI Scheduler] Provider unavailable ({e}) — using bhavcopy only")
+                provider = None
             if not provider:
-                logger.warning("[HistoricOI Scheduler] No data provider — skipping")
-                return
+                logger.info("[HistoricOI Scheduler] No live broker session — recording from bhavcopy only")
             from trading_app.dashboard.oi_historic_data import fetch_and_store_all
             results = fetch_and_store_all(provider=provider)
             for r in results:

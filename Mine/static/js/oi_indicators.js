@@ -872,6 +872,19 @@ function oipInitIndicatorsPopup(storageKey) {
         multiCprMaster.addEventListener('change', _syncMultiCprSubState);
         _syncMultiCprSubState();
     }
+
+    // Moving Averages (EMA) expand / collapse
+    const emaHeader    = document.getElementById('oipEmaHeader');
+    const emaExpandBtn = document.getElementById('oipEmaExpandBtn');
+    const emaSub       = document.getElementById('oipEmaSub');
+    if (emaHeader && emaSub) {
+        emaHeader.addEventListener('click', e => {
+            e.stopPropagation();
+            e.preventDefault();
+            const isNowHidden = emaSub.classList.toggle('hidden');
+            if (emaExpandBtn) emaExpandBtn.classList.toggle('expanded', !isNowHidden);
+        });
+    }
 }
 
 /* ── 9:18 ATM CE OI Lines ─────────────────────────────────── */

@@ -59,26 +59,12 @@ def debug_status():
         'message': 'Flask app is running - use /auth/login if you see 403 errors'
     })
 
-@pages_bp.route('/strategy')
-@require_user_auth
-@login_required
-def strategy():
-    """Strategy backtest page."""
-    return render_template('strategy.html')
-
 @pages_bp.route('/cpr-filter')
 @require_user_auth
 @login_required
 def cpr_filter():
     """CPR filter page."""
     return render_template('cpr_filter.html')
-
-@pages_bp.route('/historical')
-@require_user_auth
-@login_required
-def historical():
-    """Historical data page."""
-    return render_template('historical.html')
 
 @pages_bp.route('/options-chart')
 @require_user_auth
@@ -92,13 +78,6 @@ def options_chart():
 def open_interest():
     """Open interest chart page - displays options OI data."""
     return render_template('open_interest_chart.html')
-
-@pages_bp.route('/multi-strike')
-@require_user_auth
-@login_required
-def multi_strike():
-    """Multi-strike options page."""
-    return render_template('multi_strike.html')
 
 @pages_bp.route('/intraday-option')
 @require_user_auth
