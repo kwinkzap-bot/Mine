@@ -17565,12 +17565,12 @@
   {
     "date": "2026-06-29",
     "symbol": "NIFTY",
-    "ce_oi": 263648085,
-    "pe_oi": 205118050,
+    "ce_oi": 222478950,
+    "pe_oi": 162925740,
     "open": 24061.75,
     "high": 24120.0,
-    "low": 23964.85,
-    "close": 23970.1,
+    "low": 23924.55,
+    "close": 23946.25,
     "idx_fut_oi": null,
     "fii_fut_oi": null,
     "FII_Index_futures": 0

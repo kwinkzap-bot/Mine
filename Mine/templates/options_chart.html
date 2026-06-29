@@ -131,7 +131,7 @@
 <!-- Ensure constants.js is loaded first -->
 <script src="{{ url_for('static', filename='js/constants.js') }}"></script>
 {{ super() }}
-<script src="https://unpkg.com/lightweight-charts@4/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
 <script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}"></script>
 <script src="{{ url_for('static', filename='js/options_chart.js') }}"></script>
 {% endblock %}

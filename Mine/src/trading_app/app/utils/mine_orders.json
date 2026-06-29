@@ -50034,5 +50034,113 @@
     ],
     "id": "37ee13e2-3862-4ac0-a6e1-bbbdab97b2e7",
     "created_at": 1782375342602
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24250,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 280.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782724488617,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2071522763793162240"
+          },
+          "price": 280.0,
+          "response": {
+            "order_id": {
+              "order_id": "2071522763793162240"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "c7d21be3-291c-4576-bb1d-e3b85dd2ce00",
+    "created_at": 1782724488627
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24250,
+    "option_type": "PE",
+    "action": "SELL",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 290.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782724700902,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2071523654193569792"
+          },
+          "price": 290.0,
+          "response": {
+            "order_id": {
+              "order_id": "2071523654193569792"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "39437a2f-c6df-4bc4-ae52-248f9e49dadb",
+    "created_at": 1782724700909
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24250,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 278.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1782724818998,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2071524149566038016"
+          },
+          "price": 278.0,
+          "response": {
+            "order_id": {
+              "order_id": "2071524149566038016"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "307caca9-31f5-46ae-8415-6d652fb3ff3f",
+    "created_at": 1782724819009
   }
 ]

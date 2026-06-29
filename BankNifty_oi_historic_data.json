@@ -17565,12 +17565,12 @@
   {
     "date": "2026-06-29",
     "symbol": "BANKNIFTY",
-    "ce_oi": 22470330,
-    "pe_oi": 19985820,
+    "ce_oi": 19114140,
+    "pe_oi": 17174310,
     "open": 58191.45,
     "high": 58318.05,
-    "low": 57730.5,
-    "close": 57738.65,
+    "low": 57637.25,
+    "close": 57727.35,
     "idx_fut_oi": null,
     "fii_fut_oi": null,
     "FII_Index_futures": 0

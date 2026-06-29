@@ -2,6 +2,80 @@
   {
     "date": "2026-06-29",
     "direction": "SELL",
+    "entry_spot": 23933.45,
+    "exit_spot": 23965.5,
+    "pnl_pts": -32.05,
+    "reason": "SL",
+    "entry_time": "2026-06-29T15:11:04.095439",
+    "exit_time": "2026-06-29T15:27:21.268832",
+    "strike": 24200,
+    "option_type": "PE",
+    "lot_size": 65,
+    "opt_entry_price": 263.35,
+    "opt_exit_price": 239.8,
+    "opt_pnl_pts": -23.55,
+    "opt_pnl_inr": -1530.75,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2071529364985929728'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUN24200PE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2071529370987978752'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUN24200PE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
+    "date": "2026-06-29",
+    "direction": "SELL",
+    "entry_spot": 23952.2,
+    "exit_spot": 23984.85,
+    "pnl_pts": -32.65,
+    "reason": "SL",
+    "entry_time": "2026-06-29T13:26:04.293541",
+    "exit_time": "2026-06-29T15:00:26.424947",
+    "strike": 24250,
+    "option_type": "PE",
+    "lot_size": 65,
+    "opt_entry_price": 303.9,
+    "opt_exit_price": 251.05,
+    "opt_pnl_pts": -52.85,
+    "opt_pnl_inr": -3435.25,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2071502941227245568'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUN24250PE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2071502947166380032'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUN24250PE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
+    "date": "2026-06-29",
+    "direction": "SELL",
     "entry_spot": 23945.3,
     "exit_spot": 23975.35,
     "pnl_pts": -30.05,

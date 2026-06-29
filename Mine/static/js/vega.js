@@ -140,7 +140,7 @@ function _vegaInitChart() {
     });
 
     // Price (left scale) — dashed gray
-    _vegaPriceSeries = _vegaChart.addLineSeries({
+    _vegaPriceSeries = _vegaChart.addSeries(LightweightCharts.LineSeries, {
         priceScaleId: 'left',
         color: '#94a3b8', lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dashed,
@@ -150,7 +150,7 @@ function _vegaInitChart() {
 
     // Put Vega — red baseline series: fills from 0 downward (negative = below zero = red zone)
     // When put_vega is positive (unusual), it fills above zero with a lighter red.
-    _vegaPutSeries = _vegaChart.addBaselineSeries({
+    _vegaPutSeries = _vegaChart.addSeries(LightweightCharts.BaselineSeries, {
         priceScaleId: 'right',
         baseValue: { type: 'price', price: 0 },
         topLineColor:    '#ef4444',
@@ -165,7 +165,7 @@ function _vegaInitChart() {
     });
 
     // Call Vega — green baseline series: fills from 0 upward (positive = above zero = green zone)
-    _vegaCallSeries = _vegaChart.addBaselineSeries({
+    _vegaCallSeries = _vegaChart.addSeries(LightweightCharts.BaselineSeries, {
         priceScaleId: 'right',
         baseValue: { type: 'price', price: 0 },
         topLineColor:    '#22c55e',

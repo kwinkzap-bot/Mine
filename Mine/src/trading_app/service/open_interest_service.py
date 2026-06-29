@@ -752,6 +752,116 @@ class OpenInterestService:
             logger.error(f"[OI] get_intraday_pcr_history error: {e}")
             return []
 
+    def get_atm_ce_oi_strikes(self, symbol: str = 'NIFTY', step: int = 50,
+                              date_str: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Pick two strikes off the ~09:18 OI snapshot based on CE OI.
+
+        Computed once from the first snapshot at/after 09:18 on ``date_str``
+        (defaults to today). Works for the live day and for historical/replay
+        dates as long as a snapshot exists in ``oi_history``.
+
+        Rule (CE-OI based):
+            ATM = round(snapshot_price / step) * step
+            If CE_OI(ATM + step) > CE_OI(ATM) -> select [ATM, ATM + step]
+            Else                              -> select [ATM, ATM - step]
+
+        Example: ATM 24100 CE has 1.1 Cr OI. If 24150 CE OI > 24100 CE OI,
+        select 24100 and 24150; otherwise select 24100 and 24050.
+
+        Returns a dict ready for the frontend to draw horizontal lines at the
+        two selected strike price levels.
+        """
+        try:
+            symbol = (symbol or 'NIFTY').strip().upper()
+            step = int(step) or 50
+            if not date_str:
+                date_str = datetime.now().strftime('%Y-%m-%d')
+
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                # First snapshot at/after 09:18 on the target day.
+                cursor.execute('''
+                    SELECT timestamp, current_price, active_strikes
+                    FROM oi_history
+                    WHERE symbol = ?
+                      AND date(timestamp) = ?
+                      AND time(timestamp) >= '09:18:00'
+                      AND current_price > 0
+                    ORDER BY timestamp ASC
+                    LIMIT 1
+                ''', (symbol, date_str))
+                row = cursor.fetchone()
+                if row is None:
+                    # Fallback: earliest snapshot of the day (partial data days).
+                    cursor.execute('''
+                        SELECT timestamp, current_price, active_strikes
+                        FROM oi_history
+                        WHERE symbol = ?
+                          AND date(timestamp) = ?
+                          AND current_price > 0
+                        ORDER BY timestamp ASC
+                        LIMIT 1
+                    ''', (symbol, date_str))
+                    row = cursor.fetchone()
+
+            if row is None:
+                return {'success': False,
+                        'error': f'No OI snapshot found for {symbol} on {date_str}'}
+
+            price = float(row['current_price'])
+            try:
+                strikes = json.loads(row['active_strikes']) or []
+            except Exception:
+                strikes = []
+
+            # strike -> CE OI (snapped to the step grid for robust lookups)
+            ce_oi_map: Dict[int, float] = {}
+            for s in strikes:
+                try:
+                    k = int(round(float(s.get('strike')) / step) * step)
+                    ce_oi_map[k] = float(s.get('ce_oi') or 0)
+                except (TypeError, ValueError):
+                    continue
+
+            atm = int(round(price / step) * step)
+            up, dn = atm + step, atm - step
+            atm_oi = ce_oi_map.get(atm)
+            up_oi = ce_oi_map.get(up)
+            dn_oi = ce_oi_map.get(dn)
+
+            if atm_oi is None:
+                return {'success': False,
+                        'error': f'ATM strike {atm} CE OI missing in snapshot for {symbol} on {date_str}'}
+
+            # Compare ATM CE OI with the next (upper) strike CE OI.
+            if up_oi is not None and up_oi > atm_oi:
+                second, second_oi = up, up_oi
+            else:
+                second, second_oi = dn, dn_oi
+
+            return {
+                'success': True,
+                'symbol': symbol,
+                'date': date_str,
+                'snapshot_time': row['timestamp'],
+                'price': price,
+                'step': step,
+                'atm_strike': atm,
+                'atm_ce_oi': atm_oi,
+                'up_strike': up, 'up_ce_oi': up_oi,
+                'dn_strike': dn, 'dn_ce_oi': dn_oi,
+                'second_strike': second, 'second_ce_oi': second_oi,
+                'selected': [
+                    {'strike': atm, 'ce_oi': atm_oi},
+                    {'strike': second, 'ce_oi': second_oi},
+                ],
+            }
+        except Exception as e:
+            logger.error(f"[OI] get_atm_ce_oi_strikes error: {e}")
+            return {'success': False, 'error': str(e)}
+
     def get_intraday_vega_history(self, symbol: str, date_str: str) -> List[Dict[str, Any]]:
         """Return per-minute Call/Put Vega time-series.
 

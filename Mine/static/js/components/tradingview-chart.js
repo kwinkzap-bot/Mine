@@ -4,6 +4,27 @@
  * Used across multiple pages: options_chart.html, intraday_option.html, etc.
  */
 
+// v5 markers helper — manages a createSeriesMarkers primitive cached on the
+// series instance (v5 removed series.setMarkers). Falls back to v4 if present.
+// Defined globally so oi_indicators.js / oi_replay.js can use it too.
+window.lwSetMarkers = window.lwSetMarkers || function (series, markers) {
+    if (!series) return;
+    markers = markers || [];
+    if (typeof LightweightCharts !== 'undefined' && LightweightCharts.createSeriesMarkers) {
+        if (series.__lwMarkers) series.__lwMarkers.setMarkers(markers);
+        else series.__lwMarkers = LightweightCharts.createSeriesMarkers(series, markers);
+    } else if (typeof series.setMarkers === 'function') {
+        series.setMarkers(markers);
+    }
+};
+
+// v5 z-order helper — lifts the candle series above overlay indicators so it
+// renders on top (v5 added ISeriesApi.setSeriesOrder; higher index = on top).
+// A large index is clamped to the current top of the pane's series collection.
+window.lwBringToFront = window.lwBringToFront || function (series) {
+    try { if (series && typeof series.setSeriesOrder === 'function') series.setSeriesOrder(1e6); } catch (e) {}
+};
+
 window.TradingViewChart = (function () {
     'use strict';
 
@@ -440,9 +461,7 @@ window.TradingViewChart = (function () {
                     scaleMargins: { top: 0, bottom: 0 },
                     entireTextOnly: true
                 },
-                watermark: {
-                    color: '#d1d5db'                // Light grey watermark
-                },
+                // (v5: the watermark create-option was removed; it was text-less here anyway.)
                 // Apply IST timezone formatter to x-axis
                 localization: {
                     locale: 'en-IN',
@@ -502,7 +521,7 @@ window.TradingViewChart = (function () {
                 };
 
                 // Create CE series (primary series - green and red)
-                ceSeries = chart.addCandlestickSeries({
+                ceSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
                     upColor: '#1b9981',      // Green for CE up
                     downColor: '#f23645',    // Red for CE down
                     borderUpColor: '#1b9981',
@@ -514,10 +533,11 @@ window.TradingViewChart = (function () {
                     priceLineWidth: 1
                 });
                 ceSeries.applyOptions({ autoscaleInfoProvider: customAutoscale(ceSeries) });
+                lwBringToFront(ceSeries);
 
                 // Create PE series (secondary series - violet/black or grey based on theme)
                 const peDownColor = isLightTheme ? '#1f2937' : '#6b7280';
-                peSeries = chart.addCandlestickSeries({
+                peSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
                     upColor: '#8b5cf6',      // Violet for PE up
                     downColor: peDownColor,
                     borderUpColor: '#8b5cf6',
@@ -529,9 +549,10 @@ window.TradingViewChart = (function () {
                     priceLineWidth: 1
                 });
                 peSeries.applyOptions({ autoscaleInfoProvider: customAutoscale(peSeries) });
+                lwBringToFront(peSeries);
 
                 // Create Sum Series (Line series for total premium)
-                const sumSeries = chart.addLineSeries({
+                const sumSeries = chart.addSeries(LightweightCharts.LineSeries, {
                     color: '#6366f1', // Indigo for combined
                     lineWidth: 2,
                     title: 'TOTAL',
@@ -564,14 +585,14 @@ window.TradingViewChart = (function () {
                     return { priceRange: { minValue: min - pad, maxValue: max + pad } };
                 };
 
-                series = chart.addLineSeries({
+                series = chart.addSeries(LightweightCharts.LineSeries, {
                     color: config.lineColor || '#2962ff',
                     lineWidth: 2,
                     crosshairMarkerVisible: true
                 });
                 series.applyOptions({ autoscaleInfoProvider: customAutoscaleLine(series) });
             } else {
-                series = chart.addCandlestickSeries({
+                series = chart.addSeries(LightweightCharts.CandlestickSeries, {
                     upColor: upColor,
                     downColor: downColor,
                     borderUpColor: borderUpColor,
@@ -581,6 +602,7 @@ window.TradingViewChart = (function () {
                     priceLineStyle: 1,
                     priceLineWidth: 1
                 });
+                lwBringToFront(series);
             }
 
             // Format and set data; strip whitespace for CandlestickSeries (LINE keeps them)
@@ -596,7 +618,7 @@ window.TradingViewChart = (function () {
             // LC v4.1.1 Candlestick renderer crashes; this LineSeries fills the gap.
             let alignSeries = null;
             if (type !== 'LINE') {
-                alignSeries = chart.addLineSeries({
+                alignSeries = chart.addSeries(LightweightCharts.LineSeries, {
                     visible: false,
                     priceLineVisible: false,
                     lastValueVisible: false,
@@ -803,10 +825,10 @@ window.TradingViewChart = (function () {
                 setMarkers: function (ceMarkers, peMarkers = []) {
                     try {
                         if (this.isCombined) {
-                            if (this.ceSeries) this.ceSeries.setMarkers(ceMarkers || []);
-                            if (this.peSeries) this.peSeries.setMarkers(peMarkers || []);
+                            if (this.ceSeries) lwSetMarkers(this.ceSeries, ceMarkers || []);
+                            if (this.peSeries) lwSetMarkers(this.peSeries, peMarkers || []);
                         } else if (this.series) {
-                            this.series.setMarkers(ceMarkers || peMarkers || []);
+                            lwSetMarkers(this.series, ceMarkers || peMarkers || []);
                         }
                     } catch (e) {
                         console.warn('[Chart] Error setting markers:', e);

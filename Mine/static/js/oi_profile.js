@@ -192,6 +192,7 @@ function oipInitElems() {
     oipElems.itmCE = document.getElementById('oipLegendCE');
     oipElems.itmPE = document.getElementById('oipLegendPE');
     oipElems.hdrPrice = document.getElementById('hdrPrice');
+    oipElems.hdrPcr = document.getElementById('hdrPcr');
     oipElems.hdrCeOI = document.getElementById('hdrCeOI');
     oipElems.hdrCeChg = document.getElementById('hdrCeChg');
     oipElems.hdrPeOI = document.getElementById('hdrPeOI');
@@ -257,6 +258,8 @@ document.addEventListener('DOMContentLoaded', () => {
     oipElems.symbolInput?.addEventListener('input', (e) => oipRenderDropdown(e.target.value.toUpperCase(), oipElems.symbolList));
     oipElems.showOIBars?.addEventListener('change', () => oipRequestDraw());
     oipElems.showSignals?.addEventListener('change', () => { if (oipOIData?.candles) oipDrawSignals(oipOIData.candles); });
+    // Toggle only redraws from cached data — the 9:18 selection is computed on load regardless.
+    document.getElementById('oipShowAtmCeOi')?.addEventListener('change', () => oipDrawAtmCeOiLines());
     oipElems.symbolInput?.addEventListener('click', function (e) {
         e.stopPropagation();
         if (oipElems.symbolList?.classList.contains('show')) {
@@ -375,6 +378,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('oipShow2nd5mCandle')?.addEventListener('change', () => {
         if (oipOIData?.candles) oipDraw2nd5mCandleBox(oipOIData.candles);
+    });
+    document.getElementById('oipShowMondayBox')?.addEventListener('change', () => {
+        if (oipOIData?.candles) oipDrawMondayBox(oipOIData.candles);
     });
     document.getElementById('oipShow30mReversalLines')?.addEventListener('change', () => {
         if (oipFullCandles) oipDraw30mReversalLines(oipFullCandles);
@@ -518,24 +524,25 @@ function oipInitCharts() {
             return { priceRange: { minValue: min - pad, maxValue: max + pad } };
         };
 
-        oipOISeries = oipOIChart.addCandlestickSeries({
+        oipOISeries = oipOIChart.addSeries(LightweightCharts.CandlestickSeries, {
             ...candleStyle(),
             autoscaleInfoProvider: customAutoscale
         });
-        oipVwapSeries = oipOIChart.addLineSeries({
+        lwBringToFront(oipOISeries);
+        oipVwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
             color: '#f59e0b', lineWidth: 2, title: '',
             visible: oipElems.showVwapOI?.checked ?? false,
             priceLineVisible: false, lastValueVisible: false,
             autoscaleInfoProvider: () => null
         });
         // CVWAP (current-session) + PVWAP (previous-session flat line)
-        oipCvwapSeries = oipOIChart.addLineSeries({
+        oipCvwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
             color: '#3b82f6', lineWidth: 2, title: '',
             visible: oipElems.showCVWAP?.checked ?? false,
             priceLineVisible: false, lastValueVisible: false,
             autoscaleInfoProvider: () => null
         });
-        oipPvwapSeries = oipOIChart.addLineSeries({
+        oipPvwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
             color: '#f97316', lineWidth: 2, title: '',
             visible: oipElems.showPVWAP?.checked ?? false,
             priceLineVisible: false, lastValueVisible: false,
@@ -543,14 +550,14 @@ function oipInitCharts() {
         });
 
         // Fixed EMA series matching Mine CPR Pine script
-        oipEma9Series = oipOIChart.addLineSeries({ color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
-        oipEma20Series = oipOIChart.addLineSeries({ color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
-        oipEma50Series = oipOIChart.addLineSeries({ color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
-        oipEma100Series = oipOIChart.addLineSeries({ color: '#3b82f6', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
-        oipEma200Series = oipOIChart.addLineSeries({ color: '#000000', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
+        oipEma9Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
+        oipEma20Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
+        oipEma50Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
+        oipEma100Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
+        oipEma200Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#000000', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: false, autoscaleInfoProvider: () => null });
 
         /* 
-        oipMaxPainSeries = oipOIChart.addLineSeries({ 
+        oipMaxPainSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, { 
             color: '#2563eb', lineWidth: 2, 
             lineStyle: 2, // Dashed
             title: 'Max Pain History',
@@ -621,9 +628,9 @@ function creatBaseChart(el) {
 
 function candleStyle() {
     return {
-        upColor: '#10b981', downColor: '#ef4444',
-        borderUpColor: '#10b981', borderDownColor: '#ef4444',
-        wickUpColor: '#10b981', wickDownColor: '#ef4444',
+        upColor: '#1b9981', downColor: '#f23645',
+        borderUpColor: '#1b9981', borderDownColor: '#f23645',
+        wickUpColor: '#1b9981', wickDownColor: '#f23645',
         priceLineStyle: 1, priceLineWidth: 1
     };
 }
@@ -1021,6 +1028,12 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
             oipDrawCpr(validCandles);
             oipDrawMultiCPR(validCandles);
             oipDrawRSI(validCandles);
+
+            // 9:18 ATM CE OI lines — always compute & cache (kept ready);
+            // oipDrawAtmCeOiLines() only renders when the checkbox is on.
+            const _atmCeOiDate = (window.oipReplayMode && oipElems.startDate?.value) ? oipElems.startDate.value : null;
+            await oipFetchAtmCeOiStrikes(oipSymbol, oipStrikeStep, _atmCeOiDate);
+            oipDrawAtmCeOiLines();
         }
 
         if (data.intrinsic?.spot_high && oipElems.spotHigh) {
@@ -1038,6 +1051,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                 // No option data in index view — draw OI-chart boxes only
                 oipDraw2ndCandle30sBox(validCandles);
                 oipDraw2nd5mCandleBox(validCandles);
+                oipDrawMondayBox(validCandles);
                 oipDraw30mReversalLines(validCandles);
                 oipDraw1DReversalLines(validCandles);
             } else {
@@ -1062,9 +1076,14 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                 // Draw boxes after oipOptionData is refreshed so CE/PE charts use the new strike's candles
                 oipDraw2ndCandle30sBox(validCandles);
                 oipDraw2nd5mCandleBox(validCandles);
+                oipDrawMondayBox(validCandles);
                 oipDraw30mReversalLines(validCandles);
                 oipDraw1DReversalLines(validCandles);
             }
+
+            // After every overlay/box has been (re)added, enforce the full z-policy
+            // (fills → lines → candles) so nothing hides behind another indicator.
+            if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
 
             oipFullCandles = validCandles;
             oipFullOptionData = oipOptionData;
@@ -1257,10 +1276,10 @@ function oipInitPremiumSeries() {
         priceLineVisible: false, lastValueVisible: true,
         crosshairMarkerVisible: false, visible: false
     };
-    oipPremiumSeries.entry = chart.addLineSeries({ ...base, color: '#4caf50', lineWidth: 2 });
-    oipPremiumSeries.current = chart.addLineSeries({ ...base, color: '#2196f3', lineWidth: 2 });
-    oipPremiumSeries.t1 = chart.addLineSeries({ ...base, color: '#e040fb', lineWidth: 1 });
-    oipPremiumSeries.t2 = chart.addLineSeries({ ...base, color: '#f97316', lineWidth: 1 });
+    oipPremiumSeries.entry = chart.addSeries(LightweightCharts.LineSeries, { ...base, color: '#4caf50', lineWidth: 2 });
+    oipPremiumSeries.current = chart.addSeries(LightweightCharts.LineSeries, { ...base, color: '#2196f3', lineWidth: 2 });
+    oipPremiumSeries.t1 = chart.addSeries(LightweightCharts.LineSeries, { ...base, color: '#e040fb', lineWidth: 1 });
+    oipPremiumSeries.t2 = chart.addSeries(LightweightCharts.LineSeries, { ...base, color: '#f97316', lineWidth: 1 });
 }
 
 /**
@@ -1588,6 +1607,7 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
     if (oipOIData.intrinsic) oipDrawIntrinsicLines(oipOIData.intrinsic, view);
     if (oipOIData.intrinsic) oipDrawPremiumLines(oipOIData.intrinsic, view);
     oipDrawPremStrikeLines();
+    oipDrawAtmCeOiLines();
 }
 
 
@@ -1611,25 +1631,29 @@ function _oipColorAlpha(color, alpha) {
 
 // Draw a 1px-border + fill box on the given LightweightCharts instance.
 // Returns { chart, fill, top, bottom } for later cleanup.
-function _oipDrawCandleBox(chart, hi, lo, times, color) {
+function _oipDrawCandleBox(chart, hi, lo, times, color, fillAlpha = 0.10, borderAlpha = 0.65, borderColor = null) {
     const safeTimes = times.filter(t => t != null && isFinite(t) && t > 0);
     if (!safeTimes.length) return null;
-    const fillCol   = _oipColorAlpha(color, 0.10);
-    const borderCol = _oipColorAlpha(color, 0.65);
+    const fillCol   = _oipColorAlpha(color, fillAlpha);
+    const borderCol = _oipColorAlpha(borderColor || color, borderAlpha);
     const shared = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
     try {
-        const fill = chart.addBaselineSeries({
-            baseValue: { type: 'price', price: lo },
-            topFillColor1: fillCol, topFillColor2: fillCol, topLineColor: 'transparent',
-            bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
-            lineWidth: 1, ...shared
-        });
-        fill.setData(safeTimes.map(t => ({ time: t, value: hi })));
+        // Skip the fill series entirely when the background opacity is zero.
+        let fill = null;
+        if (fillAlpha > 0) {
+            fill = chart.addSeries(LightweightCharts.BaselineSeries, {
+                baseValue: { type: 'price', price: lo },
+                topFillColor1: fillCol, topFillColor2: fillCol, topLineColor: 'transparent',
+                bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
+                lineWidth: 1, ...shared
+            });
+            fill.setData(safeTimes.map(t => ({ time: t, value: hi })));
+        }
 
-        const top = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+        const top = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
         top.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-        const bottom = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+        const bottom = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
         bottom.setData(safeTimes.map(t => ({ time: t, value: lo })));
 
         return { chart, fill, top, bottom };
@@ -1733,8 +1757,10 @@ function oipDraw2ndCandle30sBox(candles) {
                 oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'), _ce30sMap);
             if (oipPEChart?.chart && oipOptionData)
                 oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'), _pe30sMap);
+            if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder();
         } catch(e) {}
     });
+    if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
 }
 
 // ── 2nd 5-minute candle box (09:20–09:25) — all days, 1m/2m/3m/5m ───────────
@@ -1763,7 +1789,8 @@ function oipDraw2nd5mCandleBox(candles) {
             const lo = Math.min(...w.map(_oipL));
             if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
             const times = day.filter(c => c.time >= w[0].time).map(c => c.time);
-            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#00D2FF'));
+            // #2dd2ff background @ 10% opacity with a solid #2dd2ff border (candles render on top).
+            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#2dd2ff', 0.1, 1, '#2dd2ff'));
         });
         return boxes;
     }
@@ -1781,8 +1808,44 @@ function oipDraw2nd5mCandleBox(candles) {
                 oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
             if (oipPEChart?.chart && oipOptionData)
                 oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+            if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder();
         } catch(e) {}
     });
+    if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
+}
+
+// ── Monday High/Low Box — recent weeks ───────────────────────────────────────
+// For every Monday present in the loaded candles, draw a box at that Monday's
+// high/low extended across the rest of the week (mirrors the Pine "Monday H/L
+// Box"). Drawn on the main (underlying) pane only.
+let oipMondayBoxes = [];
+
+function oipDrawMondayBox(candles) {
+    oipMondayBoxes.forEach(_oipRemoveBoxSeries);
+    oipMondayBoxes = [];
+
+    if (!oipOIChart || !candles || !candles.length) return;
+    if (!document.getElementById('oipShowMondayBox')?.checked) return;
+
+    const dayMap = _oipGroupByDay(candles);
+    Object.keys(dayMap).sort().forEach(dk => {
+        const day = dayMap[dk];
+        const first = day[0];
+        // Fake-IST encoding: getUTCDay() === 1 means Monday.
+        if (new Date(first.time * 1000).getUTCDay() !== 1) return;
+
+        let hi = -Infinity, lo = Infinity;
+        day.forEach(c => { hi = Math.max(hi, _oipH(c)); lo = Math.min(lo, _oipL(c)); });
+        if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
+
+        // Extend the box horizontally across the week (Monday → just before next Monday).
+        const weekStart = first.time;
+        const weekEnd   = weekStart + 7 * 86400;
+        const times = candles.filter(c => c.time >= weekStart && c.time < weekEnd).map(c => c.time);
+        // Solid black border lines, zero background opacity.
+        if (times.length) oipMondayBoxes.push(_oipDrawCandleBox(oipOIChart, hi, lo, times, '#000000', 0, 1));
+    });
+    if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
 }
 
 function oipAutoFillHighLow() {

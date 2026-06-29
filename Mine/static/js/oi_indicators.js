@@ -25,9 +25,9 @@ let oipRSIMarkers = [];
 const _OIP_IND_IDS = [
     'oipShowOIBars', 'oipShowVwapOI', 'oipShowVwapInt', 'oipShowCVWAP', 'oipShowPVWAP',
     'oipShowCpr', 'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
-    'oipShowSignals', 'oipShowRSI',
+    'oipShowSignals', 'oipShowRSI', 'oipShowAtmCeOi',
     'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
-    'oipShowMaxPain', 'oipShow2ndCandle30s', 'oipShow2nd5mCandle', 'oipShowPremium',
+    'oipShowMaxPain', 'oipShow2ndCandle30s', 'oipShow2nd5mCandle', 'oipShowMondayBox', 'oipShowPremium',
     'oipShow30mReversalLines', 'oipReversal30mCountUp', 'oipReversal30mCountDn', 'oipReversal30mRange',
     'oipShow1DReversalLines',  'oipReversal1DCount',  'oipReversal1DRange',
     'oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h'
@@ -382,7 +382,7 @@ function oipCalculateRSISnR(candles) {
 function oipUpdateAllMarkers() {
     if (!oipOISeries) return;
     const combined = [...oipSignalMarkers, ...oipRSIMarkers].sort((a, b) => a.time - b.time);
-    oipOISeries.setMarkers(combined);
+    lwSetMarkers(oipOISeries, combined);
 }
 
 function oipDrawCpr(candles) {
@@ -398,9 +398,9 @@ function oipDrawCpr(candles) {
     const lineStyles = {
         prevH: { color: '#ef07f9', lineWidth: 1 },
         prevL: { color: '#ef07f9', lineWidth: 1 },
-        pp:    { color: '#3366ff', lineWidth: 1 },
-        bc:    { color: '#3366ff', lineWidth: 1 },
-        tc:    { color: '#3366ff', lineWidth: 1 },
+        pp:    { color: '#00008B', lineWidth: 1 },
+        bc:    { color: '#00008B', lineWidth: 1 },
+        tc:    { color: '#00008B', lineWidth: 1 },
         r1:    { color: '#006400', lineWidth: 1 },
         r2:    { color: '#006400', lineWidth: 1 },
         r3:    { color: '#006400', lineWidth: 1 },
@@ -414,7 +414,7 @@ function oipDrawCpr(candles) {
     };
 
     const boxColors = {
-        'cpr':   'rgba(51, 102, 255, 0.05)',
+        'cpr':   'rgba(51, 102, 255, 0.2)',   // #3366ff @ 20%
         'r1_r2': 'rgba(0, 204, 102, 0.02)',
         'r2_r3': 'rgba(0, 204, 102, 0.02)',
         'r3_r4': 'rgba(0, 204, 102, 0.02)',
@@ -438,28 +438,14 @@ function oipDrawCpr(candles) {
     const subChecked = id => document.getElementById(id)?.checked !== false;
 
     daysData.forEach((day, dayIdx) => {
-        Object.keys(day.levels).forEach(key => {
-            const seriesKey = `line_${key}_${dayIdx}`;
-            let series = oipCprSeriesMap[seriesKey];
-            if (!series) {
-                series = oipOIChart.addLineSeries({
-                    ...lineStyles[key],
-                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
-                    autoscaleInfoProvider: () => null
-                });
-                oipCprSeriesMap[seriesKey] = series;
-            }
-            const val = day.levels[key];
-            const visible = subChecked(keyGroup[key]);
-            series.setData(visible && val != null && !isNaN(val) ? day.times.map(t => ({ time: t, value: val })) : []);
-        });
-
+        // Draw the box fills FIRST so the pivot lines (PP/BC/TC, R/S) render on
+        // top of them — otherwise an opaque band fill hides the lines.
         day.boxes.forEach((box, boxIdx) => {
             const seriesKey = `box_${box.type}_${dayIdx}_${boxIdx}`;
             let series = oipCprSeriesMap[seriesKey];
             if (!series) {
                 const col = boxColors[box.type];
-                series = oipOIChart.addBaselineSeries({
+                series = oipOIChart.addSeries(LightweightCharts.BaselineSeries, {
                     baseValue: { type: 'price', price: box.min },
                     topFillColor1: col, topFillColor2: col, topLineColor: 'transparent',
                     bottomFillColor1: col, bottomFillColor2: col, bottomLineColor: 'transparent',
@@ -472,7 +458,24 @@ function oipDrawCpr(candles) {
             series.applyOptions({ baseValue: { type: 'price', price: box.min } });
             series.setData(day.times.map(t => ({ time: t, value: box.max })));
         });
+
+        Object.keys(day.levels).forEach(key => {
+            const seriesKey = `line_${key}_${dayIdx}`;
+            let series = oipCprSeriesMap[seriesKey];
+            if (!series) {
+                series = oipOIChart.addSeries(LightweightCharts.LineSeries, {
+                    ...lineStyles[key],
+                    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+                    autoscaleInfoProvider: () => null
+                });
+                oipCprSeriesMap[seriesKey] = series;
+            }
+            const val = day.levels[key];
+            const visible = subChecked(keyGroup[key]);
+            series.setData(visible && val != null && !isNaN(val) ? day.times.map(t => ({ time: t, value: val })) : []);
+        });
     });
+    oipApplyZOrder();
 }
 
 function oipDrawSignals(candles) {
@@ -555,10 +558,10 @@ function oipDrawRSI(candles) {
     if (!oipRSISeriesObj) {
         const baseObj = { lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false };
         oipRSISeriesObj = {
-            ob:   oipOIChart.addLineSeries({ ...baseObj, color: '#14b8a6', lineWidth: 2, lineStyle: 0 }),
-            bull: oipOIChart.addLineSeries({ ...baseObj, color: '#14b8a6', lineWidth: 1, lineStyle: 0 }),
-            os:   oipOIChart.addLineSeries({ ...baseObj, color: '#ef4444', lineWidth: 2, lineStyle: 0 }),
-            bear: oipOIChart.addLineSeries({ ...baseObj, color: '#ef4444', lineWidth: 1, lineStyle: 0 })
+            ob:   oipOIChart.addSeries(LightweightCharts.LineSeries, { ...baseObj, color: '#14b8a6', lineWidth: 2, lineStyle: 0 }),
+            bull: oipOIChart.addSeries(LightweightCharts.LineSeries, { ...baseObj, color: '#14b8a6', lineWidth: 1, lineStyle: 0 }),
+            os:   oipOIChart.addSeries(LightweightCharts.LineSeries, { ...baseObj, color: '#ef4444', lineWidth: 2, lineStyle: 0 }),
+            bear: oipOIChart.addSeries(LightweightCharts.LineSeries, { ...baseObj, color: '#ef4444', lineWidth: 1, lineStyle: 0 })
         };
     }
     const show = oipElems.showRSI?.checked;
@@ -624,58 +627,171 @@ function oipDrawMultiCPR(candles) {
     const configs = [
         { id: 'oipMultiCpr15m', minutes: 15, color: '#f97316', fill: 'rgba(249,115,22,0.07)'  },
         { id: 'oipMultiCpr30m', minutes: 30, color: '#06b6d4', fill: 'rgba(6,182,212,0.07)'   },
-        { id: 'oipMultiCpr1h',  minutes: 60, color: '#a855f7', fill: 'rgba(168,85,247,0.07)'  }
+        { id: 'oipMultiCpr1h',  minutes: 60, color: '#9c28b0', fill: 'rgba(235, 212, 239, 0.5)'  }  // #ebd4ef @ 50%
     ];
 
+    // Build per-config CONTINUOUS line data (one stepped line spanning all
+    // buckets) plus per-bucket fill segments (BaselineSeries needs a per-bucket
+    // baseValue, so the band fill stays segmented while the lines run continuous).
+    const fillSegs  = [];
+    const lineSpecs = [];
     configs.forEach(({ id, minutes, color, fill }) => {
         const enabled = document.getElementById(id)?.checked !== false;
         const bars    = _oipAggregateToNMin(candles, minutes);
-
+        const ppData = [], bcData = [], tcData = [];
         for (let i = 1; i < bars.length; i++) {
             const prev = bars[i - 1], curr = bars[i];
             if (!curr.times.length) continue;
-
             const oH = prev.high, oL = prev.low, oC = prev.close;
             const pp = (oH + oL + oC) / 3;
             const bc = (oH + oL) / 2;
             const tc = 2 * pp - bc;
+            // Append this bucket's times to the continuous line (steps at the boundary).
+            for (const t of curr.times) {
+                ppData.push({ time: t, value: pp });
+                bcData.push({ time: t, value: bc });
+                tcData.push({ time: t, value: tc });
+            }
+            fillSegs.push({ fill, enabled, times: curr.times, tc, bc, fillKey: `mc_fill_${minutes}_${i}` });
+        }
+        lineSpecs.push({
+            color, enabled, ppData, bcData, tcData,
+            tcKey: `mc_tc_${minutes}`, ppKey: `mc_pp_${minutes}`, bcKey: `mc_bc_${minutes}`
+        });
+    });
 
-            const tcKey   = `mc_tc_${minutes}_${i}`;
-            const ppKey   = `mc_pp_${minutes}_${i}`;
-            const bcKey   = `mc_bc_${minutes}_${i}`;
-            const fillKey = `mc_fill_${minutes}_${i}`;
-
-            if (!oipMultiCprSeriesMap[tcKey]) {
-                oipMultiCprSeriesMap[tcKey] = oipOIChart.addLineSeries({ color, lineWidth: 1, lineStyle: 0, ...shared });
-            }
-            if (!oipMultiCprSeriesMap[ppKey]) {
-                oipMultiCprSeriesMap[ppKey] = oipOIChart.addLineSeries({ color, lineWidth: 1, lineStyle: 1, ...shared });
-            }
-            if (!oipMultiCprSeriesMap[bcKey]) {
-                oipMultiCprSeriesMap[bcKey] = oipOIChart.addLineSeries({ color, lineWidth: 1, lineStyle: 0, ...shared });
-            }
-            if (!oipMultiCprSeriesMap[fillKey]) {
-                oipMultiCprSeriesMap[fillKey] = oipOIChart.addBaselineSeries({
-                    baseValue: { type: 'price', price: Math.min(tc, bc) },
-                    topFillColor1: fill, topFillColor2: fill, topLineColor: 'transparent',
-                    bottomFillColor1: fill, bottomFillColor2: fill, bottomLineColor: 'transparent',
-                    lineWidth: 0, ...shared
-                });
-            }
-
-            const pts = enabled ? curr.times.map(t => ({ time: t, value: tc })) : [];
-            oipMultiCprSeriesMap[tcKey].setData(pts);
-            oipMultiCprSeriesMap[ppKey].setData(enabled ? curr.times.map(t => ({ time: t, value: pp })) : []);
-            oipMultiCprSeriesMap[bcKey].setData(enabled ? curr.times.map(t => ({ time: t, value: bc })) : []);
-
-            if (enabled) {
-                oipMultiCprSeriesMap[fillKey].applyOptions({ baseValue: { type: 'price', price: Math.min(tc, bc) } });
-                oipMultiCprSeriesMap[fillKey].setData(curr.times.map(t => ({ time: t, value: Math.max(tc, bc) })));
-            } else {
-                oipMultiCprSeriesMap[fillKey].setData([]);
-            }
+    // Pass 1 — create + set ALL fills first (lowest in the z-stack).
+    fillSegs.forEach(s => {
+        if (!oipMultiCprSeriesMap[s.fillKey]) {
+            oipMultiCprSeriesMap[s.fillKey] = oipOIChart.addSeries(LightweightCharts.BaselineSeries, {
+                baseValue: { type: 'price', price: Math.min(s.tc, s.bc) },
+                topFillColor1: s.fill, topFillColor2: s.fill, topLineColor: 'transparent',
+                bottomFillColor1: s.fill, bottomFillColor2: s.fill, bottomLineColor: 'transparent',
+                lineWidth: 0, ...shared
+            });
+        }
+        if (s.enabled) {
+            oipMultiCprSeriesMap[s.fillKey].applyOptions({ baseValue: { type: 'price', price: Math.min(s.tc, s.bc) } });
+            oipMultiCprSeriesMap[s.fillKey].setData(s.times.map(t => ({ time: t, value: Math.max(s.tc, s.bc) })));
+        } else {
+            oipMultiCprSeriesMap[s.fillKey].setData([]);
         }
     });
+
+    // Pass 2 — one continuous PP/BC/TC line per config, drawn above every fill.
+    lineSpecs.forEach(s => {
+        if (!oipMultiCprSeriesMap[s.tcKey]) {
+            oipMultiCprSeriesMap[s.tcKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: s.color, lineWidth: 1, lineStyle: 0, ...shared });
+        }
+        if (!oipMultiCprSeriesMap[s.ppKey]) {
+            oipMultiCprSeriesMap[s.ppKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: s.color, lineWidth: 1, lineStyle: 0, ...shared });
+        }
+        if (!oipMultiCprSeriesMap[s.bcKey]) {
+            oipMultiCprSeriesMap[s.bcKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: s.color, lineWidth: 1, lineStyle: 0, ...shared });
+        }
+        oipMultiCprSeriesMap[s.tcKey].setData(s.enabled ? s.tcData : []);
+        oipMultiCprSeriesMap[s.ppKey].setData(s.enabled ? s.ppData : []);
+        oipMultiCprSeriesMap[s.bcKey].setData(s.enabled ? s.bcData : []);
+    });
+    oipApplyZOrder();
+}
+
+/* ── Global z-order policy (main OI pane) ─────────────────────
+ * Enforces a single, deterministic stack so no indicator is hidden behind
+ * another regardless of which order indicators were toggled on:
+ *     band/box FILLS  (bottom)  →  all LINES  →  candles  (top)
+ * Uses v5 ISeriesApi.setSeriesOrder with contiguous indices. Safe no-op on v4.
+ */
+function oipApplyZOrder() {
+    if (!oipOISeries || typeof oipOISeries.setSeriesOrder !== 'function') return;
+
+    const fills = [];
+    const lines = [];
+
+    // CPR levels: box_* are fills, line_* are lines.
+    Object.keys(oipCprSeriesMap).forEach(k => {
+        const s = oipCprSeriesMap[k];
+        if (s) (k.startsWith('box_') ? fills : lines).push(s);
+    });
+    // Multi-CPR: mc_fill_* are fills, mc_tc/pp/bc_* are lines.
+    Object.keys(oipMultiCprSeriesMap).forEach(k => {
+        const s = oipMultiCprSeriesMap[k];
+        if (s) (k.startsWith('mc_fill_') ? fills : lines).push(s);
+    });
+    // EMAs + VWAP variants + max-pain (all lines on the main pane).
+    [oipEma9Series, oipEma20Series, oipEma50Series, oipEma100Series, oipEma200Series,
+     typeof oipVwapSeries    !== 'undefined' ? oipVwapSeries    : null,
+     typeof oipCvwapSeries   !== 'undefined' ? oipCvwapSeries   : null,
+     typeof oipPvwapSeries   !== 'undefined' ? oipPvwapSeries   : null,
+     typeof oipMaxPainSeries !== 'undefined' ? oipMaxPainSeries : null
+    ].forEach(s => { if (s) lines.push(s); });
+
+    // RSI S&R lines (drawn on the price pane).
+    if (oipRSISeriesObj) Object.values(oipRSISeriesObj).forEach(s => { if (s) lines.push(s); });
+
+    // Candle boxes (main pane only): fill → fills, top/bottom borders → lines.
+    const pushBoxes = arr => (arr || []).forEach(b => {
+        if (!b || b.chart !== oipOIChart) return;
+        if (b.fill) fills.push(b.fill);
+        if (b.top) lines.push(b.top);
+        if (b.bottom) lines.push(b.bottom);
+    });
+    if (typeof oip2ndCandle30sBox !== 'undefined') pushBoxes(oip2ndCandle30sBox.oi);
+    if (typeof oip2nd5mCandleBox  !== 'undefined') pushBoxes(oip2nd5mCandleBox.oi);
+    if (typeof oipMondayBoxes     !== 'undefined') pushBoxes(oipMondayBoxes);
+
+    // Reversal lines (kept above fills).
+    (oip30mReversalSeries || []).forEach(s => { if (s) lines.push(s); });
+    if (typeof oip1DReversalSeries !== 'undefined')
+        (oip1DReversalSeries || []).forEach(s => { if (s) lines.push(s); });
+
+    let order = 0;
+    fills.forEach(s => { try { s.setSeriesOrder(order++); } catch (e) {} });
+    lines.forEach(s => { try { s.setSeriesOrder(order++); } catch (e) {} });
+    try { oipOISeries.setSeriesOrder(order++); } catch (e) {}  // candles on top
+
+    oipApplyOptionZOrder();
+}
+
+// Layer a single option-premium pane: box FILLS (bottom) → EMA/VWAP/box-border
+// LINES → candle(s) on top. Used for the CE, PE and combined premium charts.
+function _oipLayerPane(candleSeries, lineSeries, boxArrays) {
+    const fills = [];
+    const lines = [];
+    lineSeries.forEach(s => { if (s) lines.push(s); });
+    boxArrays.forEach(arr => (arr || []).forEach(b => {
+        if (!b) return;
+        if (b.fill) fills.push(b.fill);
+        if (b.top) lines.push(b.top);
+        if (b.bottom) lines.push(b.bottom);
+    }));
+    let order = 0;
+    const set = s => { if (s && typeof s.setSeriesOrder === 'function') { try { s.setSeriesOrder(order++); } catch (e) {} } };
+    fills.forEach(set);
+    lines.forEach(set);
+    candleSeries.forEach(set); // candles on top of their own pane
+}
+
+// Keep candles on top across the CE / PE / combined premium panes.
+function oipApplyOptionZOrder() {
+    const box30 = typeof oip2ndCandle30sBox !== 'undefined' ? oip2ndCandle30sBox : { ce: [], pe: [] };
+    const box5m = typeof oip2nd5mCandleBox  !== 'undefined' ? oip2nd5mCandleBox  : { ce: [], pe: [] };
+
+    _oipLayerPane(
+        [oipCESeries],
+        [oipCEEma9Series, oipCEEma20Series, oipCEEma50Series, oipCECvwapSeries, oipCEPvwapSeries],
+        [box30.ce, box5m.ce]
+    );
+    _oipLayerPane(
+        [oipPESeries],
+        [oipPEEma9Series, oipPEEma20Series, oipPEEma50Series, oipPECvwapSeries, oipPEPvwapSeries],
+        [box30.pe, box5m.pe]
+    );
+    _oipLayerPane(
+        [oipIntrinsicSeries, oipIntrinsicPeSeries],
+        [oipVwapIntSeries, oipVwapIntPeSeries, oipCvwapIntSeries, oipCvwapIntPeSeries, oipPvwapIntSeries, oipPvwapIntPeSeries],
+        []
+    );
 }
 
 /* ── Indicators popup ─────────────────────────────────────── */
@@ -756,6 +872,58 @@ function oipInitIndicatorsPopup(storageKey) {
         multiCprMaster.addEventListener('change', _syncMultiCprSubState);
         _syncMultiCprSubState();
     }
+}
+
+/* ── 9:18 ATM CE OI Lines ─────────────────────────────────── */
+// Selected at 09:18: the ATM strike plus the adjacent strike chosen by CE OI.
+// Drawn as horizontal price lines on the main (underlying) candle series.
+let oipAtmCeOiData  = null;   // cached result from /api/oi-profile/atm-ce-oi-strikes
+let oipAtmCeOiLines = [];     // price-line handles on oipOISeries
+
+function oipClearAtmCeOiLines() {
+    oipAtmCeOiLines.forEach(l => { try { oipOISeries?.removePriceLine(l); } catch (e) {} });
+    oipAtmCeOiLines = [];
+}
+
+// Fetch + cache the 09:18 ATM CE OI strike selection. Always runs so the data
+// is "kept ready" regardless of the checkbox; drawing is gated separately.
+// NIFTY only. `dateStr` (YYYY-MM-DD) is passed in replay mode; omit for today.
+async function oipFetchAtmCeOiStrikes(symbol, step, dateStr) {
+    oipAtmCeOiData = null;
+    if ((symbol || '').toUpperCase() !== 'NIFTY') return;
+    try {
+        let url = `/api/oi-profile/atm-ce-oi-strikes?symbol=${encodeURIComponent(symbol)}&step=${step || 50}`;
+        if (dateStr) url += `&date=${dateStr}`;
+        const res  = await fetch(url);
+        const data = await res.json();
+        if (data && data.success) oipAtmCeOiData = data;
+        else console.warn('[OIP] ATM CE OI:', data && data.error);
+    } catch (e) {
+        console.warn('[OIP] ATM CE OI fetch failed:', e);
+    }
+}
+
+// Draw the two cached strike levels as horizontal price lines. Cheap to call
+// repeatedly (clears + recreates 2 lines); gated by the checkbox.
+function oipDrawAtmCeOiLines() {
+    oipClearAtmCeOiLines();
+    if (!oipOISeries) return;
+    if (!document.getElementById('oipShowAtmCeOi')?.checked) return;
+
+    const d = oipAtmCeOiData;
+    if (!d || !Array.isArray(d.selected)) return;
+
+    d.selected.forEach((s) => {
+        if (s.strike == null) return;
+        oipAtmCeOiLines.push(oipOISeries.createPriceLine({
+            price: s.strike,
+            color: '#e11d48',          // same as the indicator label color
+            lineWidth: 2,
+            lineStyle: 0,              // both lines solid
+            axisLabelVisible: false,
+            title: ''
+        }));
+    });
 }
 
 /* ── 30-min Reversal Lines ────────────────────────────────── */
@@ -928,7 +1096,7 @@ function oipDraw30mReversalLines(candles, recompute = true) {
             .filter(c => c.time >= time)
             .map(c => ({ time: c.time, value: level }));
         const future = futureTimes.map(t => ({ time: t, value: level }));
-        const s = oipOIChart.addLineSeries({
+        const s = oipOIChart.addSeries(LightweightCharts.LineSeries, {
             color: '#f97316',
             lineWidth: 1,
             lineStyle: 0,
@@ -940,6 +1108,7 @@ function oipDraw30mReversalLines(candles, recompute = true) {
         s.setData([...historical, ...future]);
         oip30mReversalSeries.push(s);
     });
+    oipApplyZOrder();
 }
 
 /* ── 1-Day Reversal Lines ─────────────────────────────────── */
@@ -1033,17 +1202,17 @@ function oipDraw1DReversalLines(candles) {
         ];
 
         // Top border
-        const topS = oipOIChart.addLineSeries({ color: lineColor, lineWidth: 1, lineStyle: 0, ...shared });
+        const topS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: 0, ...shared });
         topS.setData(allTimes.map(t => ({ time: t, value: top })));
         oip1DReversalSeries.push(topS);
 
         // Bottom border
-        const botS = oipOIChart.addLineSeries({ color: lineColor, lineWidth: 1, lineStyle: 0, ...shared });
+        const botS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: 0, ...shared });
         botS.setData(allTimes.map(t => ({ time: t, value: bottom })));
         oip1DReversalSeries.push(botS);
 
         // Fill between top and bottom
-        const fillS = oipOIChart.addBaselineSeries({
+        const fillS = oipOIChart.addSeries(LightweightCharts.BaselineSeries, {
             baseValue: { type: 'price', price: bottom },
             topFillColor1: fillColor, topFillColor2: fillColor, topLineColor: 'transparent',
             bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
@@ -1053,8 +1222,9 @@ function oipDraw1DReversalLines(candles) {
         oip1DReversalSeries.push(fillS);
 
         // Center line (dashed)
-        const cenS = oipOIChart.addLineSeries({ color: lineColor, lineWidth: 1, lineStyle: 1, ...shared });
+        const cenS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: 1, ...shared });
         cenS.setData(allTimes.map(t => ({ time: t, value: center })));
         oip1DReversalSeries.push(cenS);
     });
+    oipApplyZOrder();
 }

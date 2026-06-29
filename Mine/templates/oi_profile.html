@@ -4,7 +4,7 @@
 {% block head %}
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}">
-<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
 <script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
 {% endblock %}
 
@@ -92,7 +92,7 @@
                                             <input type="checkbox" id="oipCprShowPrevHL" checked><span style="color:#ef07f9">Prev H / L</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowBand" checked><span style="color:#3366ff">PP / BC / TC</span>
+                                            <input type="checkbox" id="oipCprShowBand" checked><span style="color:#00008B">PP / BC / TC</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
                                             <input type="checkbox" id="oipCprShowResistance" checked><span style="color:#006400">R1 – R4</span>
@@ -119,7 +119,7 @@
                                             <input type="checkbox" id="oipMultiCpr30m" checked><span style="color:#06b6d4">30 Min</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr1h" checked><span style="color:#a855f7">1 Hour</span>
+                                            <input type="checkbox" id="oipMultiCpr1h" checked><span style="color:#9c28b0">1 Hour</span>
                                         </label>
                                     </div>
                                 </div>
@@ -128,6 +128,9 @@
                                 </label>
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowRSI"><span>RSI S&amp;R</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowAtmCeOi" checked><span style="color:#e11d48">9:18 ATM CE OI Lines</span>
                                 </label>
                             </div>
 
@@ -187,6 +190,9 @@
                                 </label>
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShow2nd5mCandle" checked><span style="color:#00D2FF">2nd 5Min Candle</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowMondayBox"><span style="color:#FFD700">Monday H/L Box</span>
                                 </label>
                             </div>
                         </div>

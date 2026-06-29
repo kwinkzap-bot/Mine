@@ -6837,6 +6837,35 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(exc)}), 500
 
 
+@api_bp.route('/oi-profile/atm-ce-oi-strikes', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def oi_profile_atm_ce_oi_strikes() -> EndpointResponse:
+    """
+    Select two strikes from the ~09:18 OI snapshot for the 'ATM CE OI Lines'
+    indicator in OI Profile.
+
+    Finds the ATM strike from the snapshot price, then compares ATM CE OI with
+    the adjacent strike CE OI: if the upper strike's CE OI is higher, returns
+    [ATM, ATM+step], otherwise [ATM, ATM-step]. NIFTY only by design (the
+    frontend only requests it for NIFTY).
+    """
+    try:
+        symbol   = request.args.get('symbol', 'NIFTY').upper()
+        step     = request.args.get('step', 50, type=int) or 50
+        date_str = request.args.get('date')
+
+        from trading_app.service.open_interest_service import OpenInterestService
+        kite = get_kite(instance=1)
+        provider = get_data_provider()
+        svc = OpenInterestService(provider if provider else kite)
+        return jsonify(svc.get_atm_ce_oi_strikes(symbol, step, date_str))
+
+    except Exception as exc:
+        logger.error(f'[ATM-CE-OI] Error: {exc}', exc_info=True)
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
 def _build_portfolio_broker_configs(username: str) -> list:
     """Build list of active broker configs for portfolio endpoints."""
     from trading_app.app.utils.user_env import UserEnvManager

@@ -151,11 +151,11 @@ window.oipInitSecondaryCharts = function() {
         oipIntrinsicSeries = oipIntrinsicChart.ceSeries || oipIntrinsicChart.series;
         oipIntrinsicPeSeries = oipIntrinsicChart.peSeries;
         const showV = oipElems.showVwapInt?.checked;
-        oipVwapIntSeries = oipIntrinsicChart.chart.addLineSeries({
+        oipVwapIntSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
             color: '#1b9981', lineWidth: 1, title: '', visible: showV,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
-        oipVwapIntPeSeries = oipIntrinsicChart.chart.addLineSeries({
+        oipVwapIntPeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
             color: '#8b5cf6', lineWidth: 1, title: '', visible: showV,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
@@ -178,13 +178,13 @@ window.oipInitSecondaryCharts = function() {
         const showEma20 = oipElems.showEma20?.checked ?? false;
         const showEma50 = oipElems.showEma50?.checked ?? false;
 
-        oipCEEma9Series = oipCEChart.chart.addLineSeries({ color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
-        oipCEEma20Series = oipCEChart.chart.addLineSeries({ color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma20, autoscaleInfoProvider: () => null });
-        oipCEEma50Series = oipCEChart.chart.addLineSeries({ color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
+        oipCEEma9Series = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
+        oipCEEma20Series = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma20, autoscaleInfoProvider: () => null });
+        oipCEEma50Series = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
 
-        oipPEEma9Series = oipPEChart.chart.addLineSeries({ color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
-        oipPEEma20Series = oipPEChart.chart.addLineSeries({ color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma20, autoscaleInfoProvider: () => null });
-        oipPEEma50Series = oipPEChart.chart.addLineSeries({ color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
+        oipPEEma9Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
+        oipPEEma20Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma20, autoscaleInfoProvider: () => null });
+        oipPEEma50Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
 
         oipInitPremiumSeries();
 
@@ -362,16 +362,17 @@ function oipInitCharts() {
             localization: { locale: 'en-IN', timeFormatter: t => { const d = new Date(t * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }, timezone: 'Etc/UTC' }
         });
 
-        oipOISeries = oipOIChart.addCandlestickSeries({ 
-            upColor: '#10b981', downColor: '#ef4444', borderUpColor: '#10b981', borderDownColor: '#ef4444', wickUpColor: '#10b981', wickDownColor: '#ef4444',
+        oipOISeries = oipOIChart.addSeries(LightweightCharts.CandlestickSeries, {
+            upColor: '#1b9981', downColor: '#f23645', borderUpColor: '#1b9981', borderDownColor: '#f23645', wickUpColor: '#1b9981', wickDownColor: '#f23645',
             autoscaleInfoProvider: customAutoscale
         });
-        oipVwapSeries = oipOIChart.addLineSeries({ color: '#f59e0b', lineWidth: 2, visible: false, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
-        oipEma9Series = oipOIChart.addLineSeries({ color: '#22c55e', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
-        oipEma20Series = oipOIChart.addLineSeries({ color: '#f97316', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
-        oipEma50Series = oipOIChart.addLineSeries({ color: '#ef4444', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
-        oipEma100Series = oipOIChart.addLineSeries({ color: '#3b82f6', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
-        oipEma200Series = oipOIChart.addLineSeries({ color: '#000000', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
+        lwBringToFront(oipOISeries);
+        oipVwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#f59e0b', lineWidth: 2, visible: false, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipEma9Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
+        oipEma20Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
+        oipEma50Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
+        oipEma100Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
+        oipEma200Series = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: '#000000', lineWidth: 1, visible: false, lastValueVisible: false, priceLineVisible: false, autoscaleInfoProvider: () => null });
 
         oipOIChartReady = true;
         
@@ -734,7 +735,7 @@ function oipRefreshLocalView(view, resetZoom, index) {
     }
     
     oipSignalMarkers = [];
-    oipOISeries?.setMarkers([]);
+    if (oipOISeries) lwSetMarkers(oipOISeries, []);
 
     // CPR Redraw
     if (oipCachedIndicators.cpr) {
@@ -913,7 +914,7 @@ function oipRenderPrecalculatedCPR(daysData, maxTime) {
             const seriesKey = `line_${key}_${dayIdx}`;
             let s = oipCprSeriesMap[seriesKey];
             if (!s) {
-                s = oipOIChart.addLineSeries({ ...lineStyles[key], lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+                s = oipOIChart.addSeries(LightweightCharts.LineSeries, { ...lineStyles[key], lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
                 oipCprSeriesMap[seriesKey] = s;
             }
             s.setData(subChecked(keyGroup[key]) ? visibleTimes.map(t => ({ time: t, value: day.levels[key] })) : []);
@@ -923,7 +924,7 @@ function oipRenderPrecalculatedCPR(daysData, maxTime) {
             let s = oipCprSeriesMap[seriesKey];
             if (!s) {
                 const col = 'rgba(51, 102, 255, 0.05)';
-                s = oipOIChart.addBaselineSeries({ baseValue: { type: 'price', price: box.min }, topFillColor1: col, topFillColor2: col, topLineColor: 'transparent', bottomFillColor1: col, bottomFillColor2: col, bottomLineColor: 'transparent', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+                s = oipOIChart.addSeries(LightweightCharts.BaselineSeries, { baseValue: { type: 'price', price: box.min }, topFillColor1: col, topFillColor2: col, topLineColor: 'transparent', bottomFillColor1: col, bottomFillColor2: col, bottomLineColor: 'transparent', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
                 oipCprSeriesMap[seriesKey] = s;
             }
             if (!subChecked(boxGroup[box.type])) { s.setData([]); return; }
@@ -1100,10 +1101,10 @@ function oipInitPremiumSeries() {
     const chart = oipIntrinsicChart?.chart;
     if (!chart) return;
     const base = { priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, visible: false };
-    oipPremiumSeries.entry = chart.addLineSeries({ ...base, color: '#4caf50', lineWidth: 2 });
-    oipPremiumSeries.current = chart.addLineSeries({ ...base, color: '#2196f3', lineWidth: 2 });
-    oipPremiumSeries.t1 = chart.addLineSeries({ ...base, color: '#e040fb', lineWidth: 1 });
-    oipPremiumSeries.t2 = chart.addLineSeries({ ...base, color: '#f97316', lineWidth: 1 });
+    oipPremiumSeries.entry = chart.addSeries(LightweightCharts.LineSeries, { ...base, color: '#4caf50', lineWidth: 2 });
+    oipPremiumSeries.current = chart.addSeries(LightweightCharts.LineSeries, { ...base, color: '#2196f3', lineWidth: 2 });
+    oipPremiumSeries.t1 = chart.addSeries(LightweightCharts.LineSeries, { ...base, color: '#e040fb', lineWidth: 1 });
+    oipPremiumSeries.t2 = chart.addSeries(LightweightCharts.LineSeries, { ...base, color: '#f97316', lineWidth: 1 });
 }
 
 /* ── Bootstrap ────────────────────────────────────────────── */
@@ -1427,7 +1428,7 @@ function _oipDrawCandleBox(chart, hi, lo, times, color) {
     const borderCol = _oipColorAlpha(color, 0.65);
     const shared = { priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null };
     try {
-        const fill = chart.addBaselineSeries({
+        const fill = chart.addSeries(LightweightCharts.BaselineSeries, {
             baseValue: { type: 'price', price: lo },
             topFillColor1: fillCol, topFillColor2: fillCol, topLineColor: 'transparent',
             bottomFillColor1: 'transparent', bottomFillColor2: 'transparent', bottomLineColor: 'transparent',
@@ -1435,10 +1436,10 @@ function _oipDrawCandleBox(chart, hi, lo, times, color) {
         });
         fill.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-        const top = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+        const top = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
         top.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-        const bottom = chart.addLineSeries({ color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+        const bottom = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
         bottom.setData(safeTimes.map(t => ({ time: t, value: lo })));
 
         return { chart, fill, top, bottom };

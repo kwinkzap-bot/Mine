@@ -182,14 +182,14 @@ function _pcrInitCharts() {
     };
 
     _pcrChart1 = LightweightCharts.createChart(el1, _pcrBuildOpts(cfg));
-    _pcrPriceSeries1 = _pcrChart1.addLineSeries({
+    _pcrPriceSeries1 = _pcrChart1.addSeries(LightweightCharts.LineSeries, {
         priceScaleId: 'left',
         color: '#94a3b8', lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dashed,
         lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false,
         priceFormat: { type: 'custom', formatter: _fmtPrice, minMove: 0.5 },
     });
-    _pcrRatioSeries = _pcrChart1.addLineSeries({
+    _pcrRatioSeries = _pcrChart1.addSeries(LightweightCharts.LineSeries, {
         priceScaleId: 'right',
         color: '#2962ff', lineWidth: 3,
         lastValueVisible: true, priceLineVisible: true, priceLineColor: '#2962ff',
@@ -197,20 +197,20 @@ function _pcrInitCharts() {
     });
 
     _pcrChart2 = LightweightCharts.createChart(el2, _pcrBuildOpts(cfg));
-    _pcrPriceSeries2 = _pcrChart2.addLineSeries({
+    _pcrPriceSeries2 = _pcrChart2.addSeries(LightweightCharts.LineSeries, {
         priceScaleId: 'left',
         color: '#94a3b8', lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dashed,
         lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false,
         priceFormat: { type: 'custom', formatter: _fmtPrice, minMove: 0.5 },
     });
-    _pcrCESeries = _pcrChart2.addLineSeries({
+    _pcrCESeries = _pcrChart2.addSeries(LightweightCharts.LineSeries, {
         priceScaleId: 'right',
         color: '#ef4444', lineWidth: 2,
         lastValueVisible: true, priceLineVisible: true, priceLineColor: '#ef4444',
         priceFormat: { type: 'custom', formatter: _fmtOI, minMove: 0.01 },
     });
-    _pcrPESeries = _pcrChart2.addLineSeries({
+    _pcrPESeries = _pcrChart2.addSeries(LightweightCharts.LineSeries, {
         priceScaleId: 'right',
         color: '#22c55e', lineWidth: 2,
         lastValueVisible: true, priceLineVisible: true, priceLineColor: '#22c55e',
@@ -218,20 +218,20 @@ function _pcrInitCharts() {
     });
 
     _pcrChart3 = LightweightCharts.createChart(el3, _pcrBuildOpts(cfg));
-    _pcrPriceSeries3 = _pcrChart3.addLineSeries({
+    _pcrPriceSeries3 = _pcrChart3.addSeries(LightweightCharts.LineSeries, {
         priceScaleId: 'left',
         color: '#94a3b8', lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dashed,
         lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false,
         priceFormat: { type: 'custom', formatter: _fmtPrice, minMove: 0.5 },
     });
-    _pcrCEOISeries = _pcrChart3.addLineSeries({
+    _pcrCEOISeries = _pcrChart3.addSeries(LightweightCharts.LineSeries, {
         priceScaleId: 'right',
         color: '#ef4444', lineWidth: 2,
         lastValueVisible: true, priceLineVisible: true, priceLineColor: '#ef4444',
         priceFormat: { type: 'custom', formatter: _fmtOI, minMove: 0.01 },
     });
-    _pcrPEOISeries = _pcrChart3.addLineSeries({
+    _pcrPEOISeries = _pcrChart3.addSeries(LightweightCharts.LineSeries, {
         priceScaleId: 'right',
         color: '#22c55e', lineWidth: 2,
         lastValueVisible: true, priceLineVisible: true, priceLineColor: '#22c55e',
