@@ -10,7 +10,7 @@
 /* Use premium typography for a clean Terminal/Dashboard feel */
 body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    background: #f1f5f9;
     font-size: 80%;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -64,15 +64,16 @@ body.embed-mode main {
 .nav-link-logout {
     text-decoration: none;
     color: #475569;
-    padding: 4px 8px; /* Reduced from 6px 14px */
+    padding: 6px 9px;
     font-weight: 600;
     font-size: 11px; /* Reduced from 13px */
-    border-radius: 8px; /* Reduced from 10px */
+    border-radius: 6px 6px 0 0;
     display: inline-flex;
     align-items: center;
     gap: 4px; /* Reduced from 6px */
-    border: 1px solid transparent;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    border: none;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s ease, border-color 0.15s ease;
     user-select: none;
 }
 
@@ -92,6 +93,7 @@ body.embed-mode main {
     color: #28a745;
     background: none;
     border: none;
+    border-radius: 8px;
     cursor: pointer;
 }
 
@@ -99,14 +101,15 @@ body.embed-mode main {
     color: #dc3545;
     background: none;
     border: none;
+    border-radius: 8px;
     cursor: pointer;
     transition: all 0.2s;
 }
 
 .nav-link:hover {
-    background: rgba(0, 0, 0, 0.04);
+    background: transparent;
     color: #0f172a;
-    transform: translateY(-0.5px);
+    border-bottom-color: rgba(15, 23, 42, 0.25);
 }
 
 .nav-link-login:hover {
@@ -358,6 +361,8 @@ body.ocean-theme .custom-tooltip-el {
 
 .nav-link.active {
     font-weight: 700;
+    color: #0969da;
+    border-bottom-color: #0969da;
 }
 
 /* --- Global Form & Button Styles (Promoted from feature files) --- */
@@ -552,14 +557,12 @@ body.dark-theme .nav-link {
     color: #94a3b8;
 }
 body.dark-theme .nav-link:hover {
-    background: rgba(59, 130, 246, 0.1);
     color: #3b82f6;
+    border-bottom-color: rgba(59, 130, 246, 0.45);
 }
 body.dark-theme .nav-link.active {
-    background: rgba(59, 130, 246, 0.15);
     color: #60a5fa !important;
-    border: 1px solid rgba(59, 130, 246, 0.4);
-    box-shadow: 0 0 10px rgba(59, 130, 246, 0.25);
+    border-bottom-color: #60a5fa;
 }
 body.dark-theme .login-dropdown button#loginToggle {
     color: #3b82f6;
@@ -592,14 +595,12 @@ body.forest-theme .nav-link {
     color: #6ba88f;
 }
 body.forest-theme .nav-link:hover {
-    background: rgba(16, 185, 129, 0.08);
     color: #10b981;
+    border-bottom-color: rgba(16, 185, 129, 0.45);
 }
 body.forest-theme .nav-link.active {
-    background: rgba(16, 185, 129, 0.15);
     color: #34d399 !important;
-    border: 1px solid rgba(16, 185, 129, 0.4);
-    box-shadow: 0 0 10px rgba(16, 185, 129, 0.25);
+    border-bottom-color: #34d399;
 }
 body.forest-theme .login-dropdown button#loginToggle {
     color: #10b981;
@@ -632,14 +633,12 @@ body.cream-theme .nav-link {
     color: #7c7267;
 }
 body.cream-theme .nav-link:hover {
-    background: rgba(180, 83, 9, 0.06);
     color: #b45309;
+    border-bottom-color: rgba(180, 83, 9, 0.4);
 }
 body.cream-theme .nav-link.active {
-    background: rgba(180, 83, 9, 0.08);
     color: #b45309 !important;
-    border: 1px solid rgba(180, 83, 9, 0.35);
-    box-shadow: 0 2px 8px rgba(180, 83, 9, 0.1);
+    border-bottom-color: #b45309;
 }
 body.cream-theme .login-dropdown button#loginToggle {
     color: #b45309;
@@ -661,7 +660,7 @@ body.cream-theme .dropdown-item:hover {
 
 /* ── 4. Light Theme ──────────────────────────────────────── */
 body.light-theme {
-    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    background: #f1f5f9;
 }
 body.light-theme .navigation-bar {
     background: rgba(255, 255, 255, 0.8);
@@ -672,14 +671,12 @@ body.light-theme .nav-link {
     color: #475569;
 }
 body.light-theme .nav-link:hover {
-    background: rgba(0, 102, 204, 0.05);
     color: #0969da;
+    border-bottom-color: rgba(9, 105, 218, 0.4);
 }
 body.light-theme .nav-link.active {
-    background: rgba(9, 105, 218, 0.08);
     color: #0969da !important;
-    border: 1px solid rgba(9, 105, 218, 0.35);
-    box-shadow: 0 2px 8px rgba(9, 105, 218, 0.1);
+    border-bottom-color: #0969da;
 }
 body.light-theme .login-dropdown button#loginToggle {
     color: #28a745;
@@ -701,10 +698,10 @@ body.light-theme .dropdown-item:hover {
 
 /* ── 5. Ocean Theme (Light Blue Ice) ─────────────────────── */
 body.ocean-theme {
-    background: linear-gradient(135deg, #f0f6fc 0%, #e0edf8 100%);
+    background: #eef5fc;
 }
 body.ocean-theme .navigation-bar {
-    background: rgba(240, 246, 252, 0.85);
+    /* background: rgba(240, 246, 252, 0.85); */
     border-color: rgba(2, 132, 199, 0.15);
     box-shadow: 0 4px 20px rgba(2, 132, 199, 0.03);
 }
@@ -712,14 +709,12 @@ body.ocean-theme .nav-link {
     color: #475569;
 }
 body.ocean-theme .nav-link:hover {
-    background: rgba(2, 132, 199, 0.08);
     color: #0284c7;
+    border-bottom-color: rgba(2, 132, 199, 0.4);
 }
 body.ocean-theme .nav-link.active {
-    background: rgba(2, 132, 199, 0.08);
     color: #0284c7 !important;
-    border: 1px solid rgba(2, 132, 199, 0.35);
-    box-shadow: 0 2px 8px rgba(2, 132, 199, 0.1);
+    border-bottom-color: #0284c7;
 }
 body.ocean-theme .login-dropdown button#loginToggle {
     color: #0284c7;

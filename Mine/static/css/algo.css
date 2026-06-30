@@ -8,7 +8,7 @@
 .algo-page {
     --ag-bg:            #f8fafc;
     --ag-surface:       #ffffff;
-    --ag-border:        #e2e8f0;
+    --ag-border:        #cbd5e1;
     --ag-border-sub:    #f1f5f9;
     --ag-text:          #1e293b;
     --ag-text-2:        #475569;
@@ -16,8 +16,8 @@
     --ag-accent:        #3b82f6;
     --ag-accent-dim:    rgba(59,130,246,0.08);
     --ag-row-hover:     #f8fafc;
-    --ag-shadow:        0 1px 4px rgba(0,0,0,0.07);
-    --ag-shadow-card:   0 2px 8px rgba(0,0,0,0.06);
+    --ag-shadow:        0 4px 12px rgba(0,0,0,0.15);
+    --ag-shadow-card:   0 4px 12px rgba(0,0,0,0.15);
     --ag-pos:           #16a34a;
     --ag-neg:           #dc2626;
     --ag-warning:       #d97706;
@@ -47,7 +47,7 @@
 body.dark-theme .algo-page {
     --ag-bg:            #090e17;
     --ag-surface:       #111827;
-    --ag-border:        #1e293b;
+    --ag-border:        #1f2937;
     --ag-border-sub:    #1a2332;
     --ag-text:          #f1f5f9;
     --ag-text-2:        #94a3b8;
@@ -55,8 +55,8 @@ body.dark-theme .algo-page {
     --ag-accent:        #60a5fa;
     --ag-accent-dim:    rgba(96,165,250,0.1);
     --ag-row-hover:     rgba(59,130,246,0.04);
-    --ag-shadow:        none;
-    --ag-shadow-card:   none;
+    --ag-shadow:        0 4px 12px rgba(0,0,0,0.15);
+    --ag-shadow-card:   0 4px 12px rgba(0,0,0,0.15);
     --ag-pos:           #4ade80;
     --ag-neg:           #f87171;
     --ag-warning:       #fbbf24;
@@ -86,7 +86,7 @@ body.dark-theme .algo-page {
 body.forest-theme .algo-page {
     --ag-bg:            #060c09;
     --ag-surface:       #0a1810;
-    --ag-border:        #14532d;
+    --ag-border:        #142820;
     --ag-border-sub:    #0a1e14;
     --ag-text:          #ecfdf5;
     --ag-text-2:        #6ba88f;
@@ -94,8 +94,8 @@ body.forest-theme .algo-page {
     --ag-accent:        #34d399;
     --ag-accent-dim:    rgba(52,211,153,0.1);
     --ag-row-hover:     rgba(16,185,129,0.04);
-    --ag-shadow:        none;
-    --ag-shadow-card:   none;
+    --ag-shadow:        0 4px 12px rgba(0,0,0,0.15);
+    --ag-shadow-card:   0 4px 12px rgba(0,0,0,0.15);
     --ag-pos:           #86efac;
     --ag-neg:           #fca5a5;
     --ag-warning:       #fcd34d;
@@ -125,7 +125,7 @@ body.forest-theme .algo-page {
 body.cream-theme .algo-page {
     --ag-bg:            #fdfbf7;
     --ag-surface:       #fdf6e9;
-    --ag-border:        #d4b896;
+    --ag-border:        #e6dfd3;
     --ag-border-sub:    #eeddc4;
     --ag-text:          #3b2f20;
     --ag-text-2:        #9b7a52;
@@ -133,8 +133,8 @@ body.cream-theme .algo-page {
     --ag-accent:        #b45309;
     --ag-accent-dim:    rgba(180,83,9,0.08);
     --ag-row-hover:     #f5ead8;
-    --ag-shadow:        0 1px 4px rgba(139,92,26,0.08);
-    --ag-shadow-card:   0 2px 8px rgba(139,92,26,0.06);
+    --ag-shadow:        0 4px 12px rgba(0,0,0,0.15);
+    --ag-shadow-card:   0 4px 12px rgba(0,0,0,0.15);
     --ag-pos:           #15803d;
     --ag-neg:           #b91c1c;
     --ag-warning:       #b45309;
@@ -164,7 +164,7 @@ body.cream-theme .algo-page {
 body.ocean-theme .algo-page {
     --ag-bg:            #f0f6fc;
     --ag-surface:       #ffffff;
-    --ag-border:        #bae0f8;
+    --ag-border:        #dbebfa;
     --ag-border-sub:    #dbedf8;
     --ag-text:          #0f172a;
     --ag-text-2:        #475569;
@@ -172,8 +172,8 @@ body.ocean-theme .algo-page {
     --ag-accent:        #0284c7;
     --ag-accent-dim:    rgba(2,132,199,0.08);
     --ag-row-hover:     #e8f4fd;
-    --ag-shadow:        0 1px 4px rgba(2,132,199,0.06);
-    --ag-shadow-card:   0 2px 8px rgba(2,132,199,0.06);
+    --ag-shadow:        0 4px 12px rgba(0,0,0,0.15);
+    --ag-shadow-card:   0 4px 12px rgba(0,0,0,0.15);
     --ag-pos:           #15803d;
     --ag-neg:           #dc2626;
     --ag-warning:       #d97706;
@@ -201,7 +201,6 @@ body.ocean-theme .algo-page {
 
 /* ── Page shell ───────────────────────────────────────────────── */
 .algo-page {
-    background: var(--ag-bg);
     min-height: calc(100vh - 80px);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color: var(--ag-text);
@@ -212,7 +211,7 @@ body.ocean-theme .algo-page {
     margin: 0 auto;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 8px;
 }
 
 /* ── Header ───────────────────────────────────────────────────── */
@@ -649,35 +648,43 @@ body.ocean-theme .algo-page {
     .ag-btn { padding: 8px 14px; font-size: 0.8rem; }
 }
 
-/* ── Tab bar ──────────────────────────────────────────────────── */
+/* ── Tab bar (modern segmented track — shared design with /dashboard) ── */
 .ag-tab-bar {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 2px;
+    padding: 4px 8px;
+    background: linear-gradient(rgba(0,0,0,0.06), rgba(0,0,0,0.06)), var(--ag-bg);
     border-bottom: 1px solid var(--ag-border);
-    background: var(--ag-surface);
     position: sticky;
     top: 0;
     z-index: 10;
-    padding: 0 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
 }
+.ag-tab-bar::-webkit-scrollbar { display: none; }
 
 .ag-tab {
-    padding: 8px 14px 7px;
+    padding: 6px 14px;
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 600;
     color: var(--ag-text-2);
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
     cursor: pointer;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-    margin-bottom: -1px;
-    transition: color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+    letter-spacing: 0.01em;
+    transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
 .ag-tab:hover  { color: var(--ag-text); }
-.ag-tab.active { color: var(--ag-accent); border-bottom-color: var(--ag-accent); }
+.ag-tab.active {
+    color: var(--ag-accent);
+    font-weight: 700;
+    background: linear-gradient(rgba(255,255,255,0.08), rgba(255,255,255,0.08)), var(--ag-surface);
+    border-color: var(--ag-border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
 
 /* ── Panel visibility ─────────────────────────────────────────── */
 .ag-panel        { display: none; }

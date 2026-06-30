@@ -6,7 +6,7 @@
 :root {
     --scan-bg: #ffffff;
     --scan-text: #333333;
-    --scan-border: #e0f2f1;
+    --scan-border: #cbd5e1;
     --scan-header-bg: linear-gradient(135deg, #0f766e 0%, #14919b 100%);
     --scan-th-bg: #f0fffe;
     --scan-th-text: #0f766e;
@@ -22,7 +22,7 @@
 body.light-theme {
     --scan-bg: #ffffff;
     --scan-text: #1e293b;
-    --scan-border: #e2e8f0;
+    --scan-border: #cbd5e1;
     --scan-header-bg: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
     --scan-th-bg: #f1f5f9;
     --scan-th-text: #475569;
@@ -38,7 +38,7 @@ body.light-theme {
 body.dark-theme {
     --scan-bg: #0f172a;
     --scan-text: #f8fafc;
-    --scan-border: #1e293b;
+    --scan-border: #1f2937;
     --scan-header-bg: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
     --scan-th-bg: #1e293b;
     --scan-th-text: #38bdf8;
@@ -117,7 +117,7 @@ body.ocean-theme {
     padding: 6px 12px;
     border-radius: 8px;
     margin-bottom: 12px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -165,7 +165,7 @@ body.ocean-theme {
     margin-bottom: 12px;
     font-size: 12px;
     font-weight: 500;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     letter-spacing: 0.3px;
     display: flex;
     justify-content: flex-end;
@@ -204,7 +204,7 @@ body.ocean-theme {
 .results-block {
     background: var(--scan-bg);
     border-radius: 12px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     padding: 0;
     overflow: hidden;
     transition: all 0.2s ease;
@@ -620,7 +620,7 @@ body.dark-theme .scanner-header-row,
 body.forest-theme .scanner-header-row {
     background: var(--scan-header-bg);
     border: 1px solid var(--scan-border);
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 
 body.dark-theme .results h3,

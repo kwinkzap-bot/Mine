@@ -73,7 +73,7 @@
         justify-content: space-between;
         flex-wrap: wrap;
         gap: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
 
     .td-ctrl-title {
@@ -152,7 +152,7 @@
         border: 1px solid var(--td-border);
         border-radius: 8px;
         padding: 12px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
 
     .td-card-hdr {
@@ -403,7 +403,6 @@
         </div>
         <div class="td-ctrl-inputs">
             <div class="td-ctrl-group">
-                <div class="td-ctrl-label">Symbol</div>
                 <select id="tdSymbol" class="td-select">
                     <option value="NIFTY" selected>NIFTY</option>
                     <option value="BANKNIFTY">BANKNIFTY</option>
@@ -414,7 +413,6 @@
                 </select>
             </div>
             <div class="td-ctrl-group">
-                <div class="td-ctrl-label">Lookback</div>
                 <select id="tdLookback" class="td-select">
                     <option value="10">10 days</option>
                     <option value="15">15 days</option>
@@ -424,7 +422,6 @@
                 </select>
             </div>
             <div class="td-ctrl-group">
-                <div class="td-ctrl-label">Date</div>
                 <input type="date" id="tdDate" class="td-date-input" />
             </div>
         </div>

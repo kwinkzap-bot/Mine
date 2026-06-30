@@ -4,11 +4,11 @@
 :root {
     --tp-bg: #ffffff;
     --tp-header-bg: #f4f6f9;
-    --tp-border: #dfe3ea;
+    --tp-border: #cbd5e1;
     --tp-text: #1f2733;
     --tp-muted: #6b7686;
     --tp-accent: #2563eb;
-    --tp-shadow: 0 8px 28px rgba(20, 30, 50, 0.16);
+    --tp-shadow: 0 4px 12px rgba(0,0,0,0.15);
     --tp-buy: #16a34a;
     --tp-sell: #dc2626;
 }
@@ -107,21 +107,21 @@ body.tp-no-select, body.tp-no-select * {
 
 /* ───────────────────── theme overrides ──────────────────── */
 body.dark-theme {
-    --tp-bg: #111827; --tp-header-bg: #161f2e; --tp-border: #243044;
+    --tp-bg: #111827; --tp-header-bg: #161f2e; --tp-border: #1f2937;
     --tp-text: #e7edf6; --tp-muted: #8a97ab; --tp-accent: #60a5fa;
-    --tp-shadow: 0 10px 30px rgba(0,0,0,.55);
+    --tp-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 body.forest-theme {
-    --tp-bg: #0a1410; --tp-header-bg: #0e1c16; --tp-border: #1c3528;
+    --tp-bg: #0a1410; --tp-header-bg: #0e1c16; --tp-border: #142820;
     --tp-text: #e8f7f0; --tp-muted: #6ba88f; --tp-accent: #34d399;
-    --tp-shadow: 0 10px 30px rgba(0,0,0,.5);
+    --tp-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 body.ocean-theme {
-    --tp-bg: #0c1a2b; --tp-header-bg: #102338; --tp-border: #1d3954;
+    --tp-bg: #0c1a2b; --tp-header-bg: #102338; --tp-border: #dbebfa;
     --tp-text: #e6f1fb; --tp-muted: #7fa0bd; --tp-accent: #38bdf8;
-    --tp-shadow: 0 10px 30px rgba(2,12,27,.55);
+    --tp-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 body.cream-theme {
-    --tp-bg: #fffaf0; --tp-header-bg: #f6efe0; --tp-border: #e6d9bf;
+    --tp-bg: #fffaf0; --tp-header-bg: #f6efe0; --tp-border: #e6dfd3;
     --tp-text: #4a3b22; --tp-muted: #9c8458; --tp-accent: #b45309;
 }

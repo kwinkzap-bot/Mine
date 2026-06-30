@@ -89,7 +89,7 @@ body.ocean-theme, .oip-page.ocean-theme {
     display: flex;
     flex-direction: column;
     overflow: visible;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     /* No fixed height — chart wrap controls the size */
     transition: background-color 0.3s ease, border-color 0.3s ease;
 }
@@ -453,7 +453,7 @@ body.ocean-theme, .oip-page.ocean-theme {
     border-radius: 10px;
     margin-bottom: 10px;
     align-items: center;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
 }
 
 .oip-live-title {

@@ -90,11 +90,11 @@
         {% if not request.args.get('embed') %}
         <div class="navigation-bar">
             <!-- <a href="/" class="nav-link home-link" title="Home">🏠</a> -->
-            <a href="/cpr-filter"
-                class="nav-link {% if request.path == '/cpr-filter' or request.path == '/ema-rsi-filter' %}active{% endif %}">🔍
-                Scanners</a>
             <a href="/dashboard" class="nav-link {% if request.path in ['/dashboard', '/replay'] %}active{% endif %}">📊
                 Dashboard</a>
+            <a href="/trend-detection"
+                class="nav-link {% if request.path == '/trend-detection' %}active{% endif %}">📈
+                Trend</a>
             <a href="/backtest" class="nav-link {% if request.path == '/backtest' %}active{% endif %}">🧪 Backtest</a>
             <a href="/contracts" class="nav-link {% if request.path == '/contracts' %}active{% endif %}">📜
                 Contracts</a>

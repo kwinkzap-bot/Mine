@@ -118,6 +118,12 @@ class SecondCandleAlgo:
         self._expiry: Optional[date] = None
         self._lot_size: int = 75
         self._spot_fail_count: int = 0
+        # Range candle (2nd 30-sec candle) High/Low, cached once per day so that
+        # live entries can react to the spot tick-by-tick instead of waiting for
+        # the next watch bar to close.
+        self._range_high: Optional[float] = None
+        self._range_low:  Optional[float] = None
+        self._range_date: Optional[str]   = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -382,6 +388,103 @@ class SecondCandleAlgo:
             }
 
         return None
+
+    # ── Live breakout (tick-by-tick against the range candle) ──────────────────
+
+    def _ensure_range(
+        self, provider: Any, params: Dict[str, Any], now_ist: pd.Timestamp,
+    ) -> bool:
+        """Lock in the range candle's High/Low once it has closed.
+
+        Unlike _check_breakout (which waits for a *watch* bar to close), this only
+        needs the range candle itself to be complete. The range candle is the
+        candle_index-th 30-sec candle of the session, which closes at
+        09:15:00 + candle_index × 30s (09:16:00 for the default 2nd candle).
+        Cached for the rest of the day so entries can run off the live spot.
+        """
+        today = now_ist.date().isoformat()
+        if self._range_date != today:        # new day → reset
+            self._range_high = None
+            self._range_low  = None
+            self._range_date = today
+
+        if self._range_high is not None:      # already locked in
+            return True
+
+        candle_index = int(params['candle_index'])
+
+        # Don't even fetch until the range candle could have closed
+        session_start = now_ist.normalize() + pd.Timedelta(hours=9, minutes=15)
+        range_ready   = session_start + pd.Timedelta(seconds=30 * candle_index)
+        if now_ist < range_ready:
+            return False
+
+        df = self._fetch_today_30s_candles(provider)
+        if df is None or df.empty:
+            return False
+
+        completed = df[df['datetime'] <= (now_ist - pd.Timedelta(seconds=30))].reset_index(drop=True)
+        if len(completed) < candle_index:     # range candle not closed yet
+            return False
+
+        rc = completed.iloc[candle_index - 1]  # 1-based range candle
+        rh, rl = float(rc['high']), float(rc['low'])
+        if rh <= rl:
+            return False
+
+        self._range_high = rh
+        self._range_low  = rl
+        logger.info(f"[SC] Range candle locked: high={rh} low={rl} bar={rc['datetime']}")
+        return True
+
+    def _eval_live_breakout(
+        self, spot: float, params: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Detect a breakout of the cached range using the live spot price.
+
+        Level math mirrors Backtest/second_candle_engine._run_day:
+          BUY  (spot crosses above range High): entry = range_high, SL = range_low
+          SELL (spot crosses below range Low):  entry = range_low,  SL = range_high
+          Target = entry ± rr × risk
+        """
+        if self._range_high is None or self._range_low is None:
+            return None
+
+        rr           = float(params['rr_ratio'])
+        enable_long  = bool(params['enable_long'])
+        enable_short = bool(params['enable_short'])
+        rh, rl       = self._range_high, self._range_low
+
+        long_break  = enable_long  and spot >= rh
+        short_break = enable_short and spot <= rl
+        if not long_break and not short_break:
+            return None
+
+        go_long = long_break
+        if long_break and short_break:        # spot beyond both (rare) → nearer side
+            go_long = (rh - spot) <= (spot - rl)
+
+        if go_long:
+            entry = rh
+            sl_level = rl
+            risk = entry - sl_level
+            tgt_level = entry + rr * risk
+            direction = 'BUY'
+        else:
+            entry = rl
+            sl_level = rh
+            risk = sl_level - entry
+            tgt_level = entry - rr * risk
+            direction = 'SELL'
+
+        return {
+            'direction':    direction,
+            'entry_ref':    round(entry, 2),
+            'sl_level':     round(sl_level, 2),
+            'target_level': round(tgt_level, 2),
+            'range_high':   round(rh, 2),
+            'range_low':    round(rl, 2),
+        }
 
     # ── Instruments ───────────────────────────────────────────────────────────
 
@@ -1038,21 +1141,29 @@ class SecondCandleAlgo:
                         time.sleep(5)
                         continue
 
-                    # ── No trade → check for a breakout once per new minute
-                    if m != last_signal_minute:
-                        last_signal_minute = m
-                        df = self._fetch_today_30s_candles(provider)
-                        sig = self._check_breakout(df, normalise_params(params)) if df is not None else None
-                        if sig:
-                            logger.info(
-                                f"[SC] Breakout {sig['direction']} entry_ref={sig['entry_ref']}"
-                                f" sl={sig['sl_level']} tgt={sig['target_level']}"
-                                f" range=[{sig['range_low']}, {sig['range_high']}]"
-                            )
-                            self._enter_trade(
-                                sig['direction'], sig['entry_ref'],
-                                sig['sl_level'], sig['target_level'], provider,
-                            )
+                    # ── No trade → live breakout against the range candle.
+                    # Checked every loop tick (≈1s) off the live spot so entry
+                    # fires the instant price crosses the 2nd candle H/L, instead
+                    # of waiting for the next 30-sec watch bar to close.
+                    _p       = normalise_params(params)
+                    now_ist  = pd.Timestamp.now(tz='Asia/Kolkata')
+                    cutoff   = int(_p['exit_hour']) * 60 + int(_p['exit_minute'])
+                    if (now_ist.hour * 60 + now_ist.minute) < cutoff and \
+                            self._ensure_range(provider, _p, now_ist):
+                        spot = self._get_nifty_spot(provider)
+                        if spot:
+                            sig = self._eval_live_breakout(spot, _p)
+                            if sig:
+                                logger.info(
+                                    f"[SC] Breakout {sig['direction']} spot={spot}"
+                                    f" entry_ref={sig['entry_ref']} sl={sig['sl_level']}"
+                                    f" tgt={sig['target_level']}"
+                                    f" range=[{sig['range_low']}, {sig['range_high']}]"
+                                )
+                                self._enter_trade(
+                                    sig['direction'], sig['entry_ref'],
+                                    sig['sl_level'], sig['target_level'], provider,
+                                )
 
             except Exception as e:
                 logger.error(f"[SC] Monitor error: {e}", exc_info=True)

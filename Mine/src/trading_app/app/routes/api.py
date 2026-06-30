@@ -2021,6 +2021,16 @@ def get_cpr_high_iv_results() -> EndpointResponse:
 
 _TREND_INDEX_SYMBOLS = {'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'NIFTYNXT50'}
 
+# Index short-names don't match a tradingsymbol in the NSE equity dump, so the
+# CPR service can't resolve their token by name. Map them to their kite tokens
+# (the data-provider layer translates these for Fyers too).
+_TREND_INDEX_TOKENS = {
+    'NIFTY':      256265,
+    'BANKNIFTY':  260105,
+    'FINNIFTY':   257801,
+    'MIDCPNIFTY': 288009,
+}
+
 
 @api_bp.route('/trend-detection', methods=['GET'])
 @limiter.exempt
@@ -2046,7 +2056,8 @@ def get_trend_detection() -> EndpointResponse:
         return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
 
     cpr_svc = _get_cpr_service(current_kite)
-    df = cpr_svc.get_hist_data(symbol, days=lookback + 80, end_date=end_date)
+    df = cpr_svc.get_hist_data(symbol, days=lookback + 80, end_date=end_date,
+                               token=_TREND_INDEX_TOKENS.get(symbol))
     if df is None or len(df) < lookback + 20:
         return jsonify({'success': False, 'error': 'Insufficient historical data for this symbol'}), 400
 

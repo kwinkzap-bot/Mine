@@ -6,7 +6,7 @@
 .ac-page {
     --ac-bg:         #f8fafc;
     --ac-surface:    #ffffff;
-    --ac-border:     #e2e8f0;
+    --ac-border:     #cbd5e1;
     --ac-border-sub: #f1f5f9;
     --ac-text:       #1e293b;
     --ac-text-2:     #64748b;
@@ -14,7 +14,7 @@
     --ac-accent:     #3b82f6;
     --ac-accent-dim: rgba(59,130,246,0.08);
     --ac-row-hover:  #f8fafc;
-    --ac-shadow:     0 1px 3px rgba(0,0,0,0.06);
+    --ac-shadow:     0 4px 12px rgba(0,0,0,0.15);
     --ac-pos:        #16a34a;
     --ac-neg:        #dc2626;
     --ac-high:       #059669;
@@ -24,7 +24,7 @@
 body.dark-theme .ac-page {
     --ac-bg:         #090e17;
     --ac-surface:    #111827;
-    --ac-border:     #1e293b;
+    --ac-border:     #1f2937;
     --ac-border-sub: #1a2332;
     --ac-text:       #f1f5f9;
     --ac-text-2:     #94a3b8;
@@ -32,7 +32,7 @@ body.dark-theme .ac-page {
     --ac-accent:     #60a5fa;
     --ac-accent-dim: rgba(96,165,250,0.1);
     --ac-row-hover:  rgba(59,130,246,0.04);
-    --ac-shadow:     none;
+    --ac-shadow:     0 4px 12px rgba(0,0,0,0.15);
     --ac-pos:        #4ade80;
     --ac-neg:        #f87171;
     --ac-high:       #4ade80;
@@ -42,7 +42,7 @@ body.dark-theme .ac-page {
 body.forest-theme .ac-page {
     --ac-bg:         #060c09;
     --ac-surface:    #0a1810;
-    --ac-border:     #14532d;
+    --ac-border:     #142820;
     --ac-border-sub: #0a1e14;
     --ac-text:       #ecfdf5;
     --ac-text-2:     #6ba88f;
@@ -50,7 +50,7 @@ body.forest-theme .ac-page {
     --ac-accent:     #34d399;
     --ac-accent-dim: rgba(52,211,153,0.1);
     --ac-row-hover:  rgba(16,185,129,0.04);
-    --ac-shadow:     none;
+    --ac-shadow:     0 4px 12px rgba(0,0,0,0.15);
     --ac-pos:        #86efac;
     --ac-neg:        #fca5a5;
     --ac-high:       #86efac;
@@ -60,7 +60,7 @@ body.forest-theme .ac-page {
 body.cream-theme .ac-page {
     --ac-bg:         #fdfbf7;
     --ac-surface:    #fdf6e9;
-    --ac-border:     #d4b896;
+    --ac-border:     #e6dfd3;
     --ac-border-sub: #eeddc4;
     --ac-text:       #3b2f20;
     --ac-text-2:     #9b7a52;
@@ -68,7 +68,7 @@ body.cream-theme .ac-page {
     --ac-accent:     #b45309;
     --ac-accent-dim: rgba(180,83,9,0.08);
     --ac-row-hover:  #f5ead8;
-    --ac-shadow:     0 1px 3px rgba(0,0,0,0.04);
+    --ac-shadow:     0 4px 12px rgba(0,0,0,0.15);
     --ac-pos:        #15803d;
     --ac-neg:        #b91c1c;
     --ac-high:       #15803d;
@@ -78,7 +78,7 @@ body.cream-theme .ac-page {
 body.ocean-theme .ac-page {
     --ac-bg:         #f0f6fc;
     --ac-surface:    #ffffff;
-    --ac-border:     #bae0f8;
+    --ac-border:     #dbebfa;
     --ac-border-sub: #dbedf8;
     --ac-text:       #0f172a;
     --ac-text-2:     #475569;
@@ -86,7 +86,7 @@ body.ocean-theme .ac-page {
     --ac-accent:     #0284c7;
     --ac-accent-dim: rgba(2,132,199,0.08);
     --ac-row-hover:  #f0f6fc;
-    --ac-shadow:     0 1px 3px rgba(0,0,0,0.04);
+    --ac-shadow:     0 4px 12px rgba(0,0,0,0.15);
     --ac-pos:        #15803d;
     --ac-neg:        #b91c1c;
     --ac-high:       #15803d;
@@ -95,13 +95,11 @@ body.ocean-theme .ac-page {
 
 /* ── Page shell ──────────────────────────────────────────────── */
 .ac-page {
-    background: var(--ac-bg);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color: var(--ac-text);
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 8px 0;
     /* Fill the viewport below the nav chrome so the table reaches the bottom
        instead of leaving a gap. */
     height: calc(100vh - 60px);

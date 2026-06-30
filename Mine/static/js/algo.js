@@ -12,6 +12,17 @@ let _scLastEntryTime   = null;
 let _scLastActiveFlag  = false;
 const _ALGO_TABS = ['straddle', 'rtp', 'sc', 'swing-momentum'];
 
+// Round-trip brokerage charged per lot (1 lot = 65 qty). The performance
+// dashboards express ₹ P&L on a single-lot basis (opt_pnl_pts × lot_size), so
+// exactly one lot's brokerage is deducted from each completed trade.
+const _ALGO_BROKERAGE_PER_LOT = 135;
+
+// Realised ₹ for a completed trade, net of round-trip brokerage.
+function _algoNetInr(t) {
+    if (!t || t.opt_pnl_inr == null) return 0;
+    return (Number(t.opt_pnl_inr) || 0) - _ALGO_BROKERAGE_PER_LOT;
+}
+
 function algoLoad() {
     const hash = location.hash.replace('#', '');
     algoSwitch(_ALGO_TABS.includes(hash) ? hash : 'swing-momentum');
@@ -261,7 +272,7 @@ function _rtpRenderDashboard(trades) {
     let netInr = 0, netPts = 0, winPts = 0, lossPts = 0;
     let cntEod = 0, cntSl = 0, cntTgt = 0;
     done.forEach(t => {
-        const inr = Number(t.opt_pnl_inr) || 0;
+        const inr = _algoNetInr(t);   // ₹ net of round-trip brokerage
         const pts = Number(t.opt_pnl_pts) || 0;   // option points
         netInr += inr; netPts += pts;
         if (inr >= 0) { wins++;   grossWin  += inr;           winPts  += pts; }
@@ -277,6 +288,7 @@ function _rtpRenderDashboard(trades) {
     const avgWin  = wins   ? winPts  / wins   : null;
     const avgLoss = losses ? lossPts / losses : null;
     const maxDD   = _rtpMaxDrawdown(done);   // ₹, ≤ 0
+    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
 
     const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
     const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
@@ -288,6 +300,7 @@ function _rtpRenderDashboard(trades) {
         { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
         { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtpPnlCls(netInr) },
         { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtpPnlCls(netPts) },
+        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
         { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
         { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
         { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
@@ -318,7 +331,7 @@ function _rtpMaxDrawdown(trades) {
     const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
     let cum = 0, peak = 0, maxDD = 0;
     sorted.forEach(t => {
-        cum += Number(t.opt_pnl_inr) || 0;
+        cum += _algoNetInr(t);
         if (cum > peak) peak = cum;
         const dd = cum - peak;
         if (dd < maxDD) maxDD = dd;
@@ -336,7 +349,7 @@ function _rtpRenderEquity(trades) {
     const dates   = [''];
     let cum = 0;
     sorted.forEach((t, i) => {
-        cum += Number(t.opt_pnl_inr) || 0;
+        cum += _algoNetInr(t);
         labels.push('T' + (i + 1));
         dataPts.push(Math.round(cum));
         dates.push(t.entry_time ? String(t.entry_time).replace('T', ' ').slice(0, 16) : '');
@@ -411,7 +424,7 @@ function _rtpRenderBreakdown(trades, period) {
     (trades || []).forEach(t => {
         const key = _rtpPeriodKey(new Date(t.entry_time), period);
         if (!groups[key]) groups[key] = { inr: 0, wins: 0, losses: 0 };
-        const inr = Number(t.opt_pnl_inr) || 0;
+        const inr = _algoNetInr(t);
         groups[key].inr += inr;
         if (inr >= 0) groups[key].wins++; else groups[key].losses++;
     });
@@ -837,7 +850,7 @@ function _scRenderDashboard(trades) {
     let netInr = 0, netPts = 0, winPts = 0, lossPts = 0;
     let cntEod = 0, cntSl = 0, cntTgt = 0;
     done.forEach(t => {
-        const inr = Number(t.opt_pnl_inr) || 0;
+        const inr = _algoNetInr(t);   // ₹ net of round-trip brokerage
         const pts = Number(t.opt_pnl_pts) || 0;
         netInr += inr; netPts += pts;
         if (inr >= 0) { wins++;   grossWin  += inr;           winPts  += pts; }
@@ -853,6 +866,7 @@ function _scRenderDashboard(trades) {
     const avgWin  = wins   ? winPts  / wins   : null;
     const avgLoss = losses ? lossPts / losses : null;
     const maxDD   = _rtpMaxDrawdown(done);
+    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
 
     const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
     const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
@@ -864,6 +878,7 @@ function _scRenderDashboard(trades) {
         { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
         { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtpPnlCls(netInr) },
         { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtpPnlCls(netPts) },
+        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
         { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
         { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
         { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
@@ -900,7 +915,7 @@ function _scRenderEquity(trades) {
     const dates   = [''];
     let cum = 0;
     sorted.forEach((t, i) => {
-        cum += Number(t.opt_pnl_inr) || 0;
+        cum += _algoNetInr(t);
         labels.push('T' + (i + 1));
         dataPts.push(Math.round(cum));
         dates.push(t.entry_time ? String(t.entry_time).replace('T', ' ').slice(0, 16) : '');
@@ -964,7 +979,7 @@ function _scRenderBreakdown(trades, period) {
     (trades || []).forEach(t => {
         const key = _rtpPeriodKey(new Date(t.entry_time), period);
         if (!groups[key]) groups[key] = { inr: 0, wins: 0, losses: 0 };
-        const inr = Number(t.opt_pnl_inr) || 0;
+        const inr = _algoNetInr(t);
         groups[key].inr += inr;
         if (inr >= 0) groups[key].wins++; else groups[key].losses++;
     });

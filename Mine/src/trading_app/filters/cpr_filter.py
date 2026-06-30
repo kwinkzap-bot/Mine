@@ -187,17 +187,22 @@ class CPRFilterService:
 
         return None
 
-    def get_hist_data(self, symbol: str, days: int = 300, interval='day', end_date: Optional[datetime] = None) -> Optional[pd.DataFrame]:
-        """Fetch historical data for a symbol. Default 300 days for CPR calculations."""
+    def get_hist_data(self, symbol: str, days: int = 300, interval='day', end_date: Optional[datetime] = None, token: Optional[int] = None) -> Optional[pd.DataFrame]:
+        """Fetch historical data for a symbol. Default 300 days for CPR calculations.
+
+        Pass ``token`` explicitly for index symbols (e.g. NIFTY -> 256265) whose
+        short name does not match a tradingsymbol in the NSE instrument dump.
+        """
         end_dt = end_date if end_date else datetime.now()
         start_dt = end_dt - timedelta(days=days)
-        
+
         key = f"{symbol}_{start_dt.date()}_{end_dt.date()}_{interval}"
         with self._cache_lock:
-            if key in self._historical_data_cache: 
+            if key in self._historical_data_cache:
                 return self._historical_data_cache[key]
 
-        token = self.get_token(symbol)
+        if token is None:
+            token = self.get_token(symbol)
         if not token:
             return None
 

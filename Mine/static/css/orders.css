@@ -8,7 +8,7 @@
 .orders-page {
     --ord-bg:         #f8fafc;
     --ord-surface:    #ffffff;
-    --ord-border:     #e2e8f0;
+    --ord-border:     #cbd5e1;
     --ord-border-sub: #f1f5f9;
     --ord-text:       #1e293b;
     --ord-text-2:     #64748b;
@@ -18,7 +18,7 @@
     --ord-row-hover:  #f8fafc;
     --ord-input-bg:   #f1f5f9;
     --ord-btn-hover:  #f1f5f9;
-    --ord-shadow:     0 1px 3px rgba(0,0,0,0.06);
+    --ord-shadow:     0 4px 12px rgba(0,0,0,0.15);
 
     /* status colours */
     --ord-pending-fg:   #c2410c;  --ord-pending-bg:   #fff7ed;  --ord-pending-bd:   #fed7aa;
@@ -32,7 +32,7 @@
 body.dark-theme .orders-page {
     --ord-bg:         #090e17;
     --ord-surface:    #111827;
-    --ord-border:     #1e293b;
+    --ord-border:     #1f2937;
     --ord-border-sub: #1a2332;
     --ord-text:       #f1f5f9;
     --ord-text-2:     #94a3b8;
@@ -42,7 +42,7 @@ body.dark-theme .orders-page {
     --ord-row-hover:  rgba(59,130,246,0.04);
     --ord-input-bg:   #1e293b;
     --ord-btn-hover:  #1e293b;
-    --ord-shadow:     none;
+    --ord-shadow:     0 4px 12px rgba(0,0,0,0.15);
     --ord-pending-fg:   #fb923c; --ord-pending-bg:   #431407; --ord-pending-bd:   #7c2d12;
     --ord-executing-fg: #fbbf24; --ord-executing-bg: #422006; --ord-executing-bd: #92400e;
     --ord-executed-fg:  #4ade80; --ord-executed-bg:  #14321e; --ord-executed-bd:  #166534;
@@ -53,7 +53,7 @@ body.dark-theme .orders-page {
 body.forest-theme .orders-page {
     --ord-bg:         #060c09;
     --ord-surface:    #0a1810;
-    --ord-border:     #14532d;
+    --ord-border:     #142820;
     --ord-border-sub: #0a1e14;
     --ord-text:       #ecfdf5;
     --ord-text-2:     #6ba88f;
@@ -63,7 +63,7 @@ body.forest-theme .orders-page {
     --ord-row-hover:  rgba(16,185,129,0.04);
     --ord-input-bg:   #0a1e14;
     --ord-btn-hover:  #0a1e14;
-    --ord-shadow:     none;
+    --ord-shadow:     0 4px 12px rgba(0,0,0,0.15);
     --ord-pending-fg:   #fb923c; --ord-pending-bg:   #431407; --ord-pending-bd:   #7c2d12;
     --ord-executing-fg: #fcd34d; --ord-executing-bg: #422006; --ord-executing-bd: #92400e;
     --ord-executed-fg:  #86efac; --ord-executed-bg:  #14532d; --ord-executed-bd:  #166534;
@@ -74,7 +74,7 @@ body.forest-theme .orders-page {
 body.cream-theme .orders-page {
     --ord-bg:         #fdfbf7;
     --ord-surface:    #fdf6e9;
-    --ord-border:     #d4b896;
+    --ord-border:     #e6dfd3;
     --ord-border-sub: #eeddc4;
     --ord-text:       #3b2f20;
     --ord-text-2:     #9b7a52;
@@ -89,7 +89,7 @@ body.cream-theme .orders-page {
 body.ocean-theme .orders-page {
     --ord-bg:         #f0f6fc;
     --ord-surface:    #ffffff;
-    --ord-border:     #bae0f8;
+    --ord-border:     #dbebfa;
     --ord-border-sub: #dbedf8;
     --ord-text:       #0f172a;
     --ord-text-2:     #475569;
@@ -104,7 +104,6 @@ body.ocean-theme .orders-page {
 /* ── Page shell — flush to container, no extra padding ───────── */
 .orders-page {
     /* no padding here — container already provides 12px */
-    background: var(--ord-bg);
     min-height: calc(100vh - 80px);
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color: var(--ord-text);
