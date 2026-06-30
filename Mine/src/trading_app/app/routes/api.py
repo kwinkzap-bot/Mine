@@ -6526,8 +6526,11 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         # ── 5. Compute CE/PE strikes ───────────────────────────────────
         ce_val   = base_ce_close or 0
         pe_val   = base_pe_close or 0
-        ce_strike = int(round((base_strike - ce_val) / step) * step)
-        pe_strike = int(round((base_strike + pe_val) / step) * step)
+        # Round outward from the base strike (CE down, PE up) so the selected
+        # strikes sit at least the premium distance away — nearest-rounding would
+        # otherwise pull a strike back inward (e.g. 24021.15 -> 24000 instead of 24050).
+        ce_strike = int(math.floor((base_strike - ce_val) / step) * step)
+        pe_strike = int(math.ceil((base_strike + pe_val) / step) * step)
 
         logger.info(
             f'[PremStrikes] {symbol}: idx_close={idx_close:.2f}, ATM={atm}, '

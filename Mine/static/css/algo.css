@@ -1688,6 +1688,32 @@ body.ocean-theme .algo-page {
 .sm-flow-confirm-swp:hover:not(:disabled) { filter: brightness(.93); }
 .sm-gl-btn:disabled { opacity: .6; cursor: not-allowed; }
 
+/* ── Per-stock Buy/Sell row menu + order popup ─────────────────── */
+.sm-th-action, .sm-td-action { width: 34px; text-align: center; }
+.sm-row-menu-btn {
+    background: transparent; border: none; cursor: pointer; font-weight: 700;
+    font-size: 16px; line-height: 1; letter-spacing: 1px; padding: 2px 7px;
+    border-radius: 6px; color: var(--ag-text-3, #94a3b8);
+}
+.sm-row-menu-btn:hover { background: var(--ag-row-hover, #f8fafc); color: var(--ag-text, #1e293b); }
+.sm-row-menu {
+    position: absolute; z-index: 1000; min-width: 120px; padding: 5px;
+    display: flex; flex-direction: column; gap: 2px;
+    background: var(--ag-surface, #fff); border: 1px solid var(--ag-border, #e2e8f0);
+    border-radius: 8px; box-shadow: var(--ag-shadow, 0 4px 12px rgba(0,0,0,.15));
+}
+.sm-row-menu-item {
+    background: transparent; border: none; text-align: left; cursor: pointer;
+    padding: 8px 10px; border-radius: 6px; font-size: 13px; font-weight: 700;
+    color: var(--ag-text, #1e293b);
+}
+.sm-row-menu-item:hover { background: var(--ag-row-hover, #f8fafc); }
+.sm-rm-buy  { color: var(--ag-pos, #16a34a); }
+.sm-rm-sell { color: var(--ag-neg, #dc2626); }
+.sm-so-meta { display: flex; gap: 18px; margin-bottom: 12px; font-size: 13px; color: var(--ag-text-2, #475569); }
+.sm-so-est { margin-top: 10px; font-size: 13px; color: var(--ag-text-2, #475569); }
+.sm-so-meta strong, .sm-so-est strong { color: var(--ag-text, #1e293b); }
+
 /* ── RTP live performance dashboard (charts + period tabs) ────── */
 .rtp-chart-block { margin-top: 14px; }
 .rtp-chart-hdr {

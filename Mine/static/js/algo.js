@@ -1872,6 +1872,7 @@ function _smRenderLiveMode(id, panel, d) {
                     <th>Invested</th><th>Curr Value</th>
                     <th class="sm-th-today">Today ₹</th><th class="sm-th-today">Today %</th>
                     <th>Total ₹</th><th>Total %</th>
+                    <th class="sm-th-action"></th>
                 </tr></thead>
                 <tbody>
                 ${holdings.map((h) => {
@@ -1895,6 +1896,9 @@ function _smRenderLiveMode(id, panel, d) {
                         <td class="${tCls} sm-td-today">${tPct}</td>
                         <td class="${pCls} sm-pnl-abs">${pSign}${Math.abs(h.pnl_abs).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
                         <td class="${pCls} sm-pnl-pct">${pPct}</td>
+                        <td class="sm-td-action">
+                            <button class="sm-row-menu-btn" title="Buy / Sell" onclick="_smRowMenu(event, '${id}', '${h.symbol}')">⋯</button>
+                        </td>
                     </tr>`;
                 }).join('')}
                 </tbody>
@@ -1902,7 +1906,7 @@ function _smRenderLiveMode(id, panel, d) {
         : '<div class="ag-empty">No live holdings</div>';
 
     // Stash holdings + meta so the SIP/SWP popup can compute allocations client-side
-    _smHoldingsData[id] = { holdings, broker: d.broker || null };
+    _smHoldingsData[id] = { holdings, broker: d.broker || null, configuredInvestment: cfgInv };
 
     const totalSwp = d.total_swp_taken || 0;
 
@@ -2051,21 +2055,59 @@ function _smSaveInv(id) {
 // id → { holdings: [...], broker: {...}|null } captured at render time
 const _smHoldingsData = {};
 
-// Compute equal-₹ split allocations for a SIP/SWP amount across holdings.
-function _smComputeFlowAllocations(holdings, mode, amount) {
+// Build the SIP/SWP plan: equal-₹ split across holdings.
+// For a SIP, the amount actually split = entered SIP + any idle (undeployed) cash,
+// where idle cash = original investment − currently deployed value (clamped ≥ 0).
+// This way the leftover base capital that never got deployed is also put to work,
+// instead of splitting only the freshly entered SIP amount.
+function _smFlowPlan(holdings, mode, amount, configuredInvestment = 0) {
     const n = holdings.length;
-    if (!n || !(amount > 0)) return [];
-    const perStock = amount / n;
-    return holdings.map(h => {
+    const empty = { allocs: [], sipAmount: amount, idle: 0, deployedBase: 0, splitAmount: 0 };
+    if (!n || !(amount > 0)) return empty;
+
+    let idle = 0, deployedBase = 0;
+    if (mode === 'sip') {
+        // Deployed value = cost basis currently sitting in the holdings.
+        deployedBase = holdings.reduce((s, h) => {
+            const bv = Number(h.buy_value);
+            return s + (Number.isFinite(bv) ? bv
+                        : (Number(h.entry_price) || 0) * (Number(h.qty) || 0));
+        }, 0);
+        idle = Math.max(0, (Number(configuredInvestment) || 0) - deployedBase);
+    }
+
+    const splitAmount = amount + idle;
+    const perStock    = splitAmount / n;
+    const allocs = holdings.map(h => {
         const price = Number(h.current_price) || 0;
         let qty = price > 0 ? Math.floor(perStock / price) : 0;
         if (mode === 'swp') qty = Math.min(qty, Number(h.qty) || 0);
         return { symbol: h.symbol, price, qty, held: Number(h.qty) || 0,
                  entry: Number(h.entry_price) || 0 };
     });
+    return { allocs, sipAmount: amount, idle, deployedBase, splitAmount };
 }
 
 function _smOpenFlowModal(id, mode) {
+    // Open immediately with whatever we already have, then refresh the group's
+    // data (holdings, live prices, deployed value) and recompute the split so the
+    // popup always reflects the current state — not a stale snapshot.
+    _smBuildFlowModal(id, mode);
+    _smInvalidateCache(id);
+    _smPrefetch(id, true);
+    _smCache[id]?.signal.then(d => {
+        if (!d || !d.success) return;
+        if (!document.getElementById('smFlowModal')) return;   // popup closed meanwhile
+        _smHoldingsData[id] = {
+            holdings:             d.live_holdings || [],
+            broker:               d.broker || (_smHoldingsData[id] || {}).broker || null,
+            configuredInvestment: d.configured_investment || 0,
+        };
+        _smRenderFlowTable(id, mode);
+    });
+}
+
+function _smBuildFlowModal(id, mode) {
     document.getElementById('smFlowModal')?.remove();
     const data     = _smHoldingsData[id] || { holdings: [], broker: null };
     const holdings = data.holdings || [];
@@ -2139,10 +2181,12 @@ function _smOpenFlowModal(id, mode) {
 }
 
 function _smRenderFlowTable(id, mode) {
-    const holdings = (_smHoldingsData[id] || {}).holdings || [];
+    const data     = _smHoldingsData[id] || {};
+    const holdings = data.holdings || [];
     const amount   = parseFloat(document.getElementById('flowAmount').value) || 0;
     const isSip    = mode === 'sip';
-    const allocs   = _smComputeFlowAllocations(holdings, mode, amount);
+    const plan     = _smFlowPlan(holdings, mode, amount, data.configuredInvestment || 0);
+    const allocs   = plan.allocs;
     const body     = document.getElementById('flowTableBody');
     const fmt      = v => '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
 
@@ -2168,16 +2212,23 @@ function _smRenderFlowTable(id, mode) {
         </tr>`;
     }).join('');
 
+    const splitFor   = isSip ? plan.splitAmount : amount;
+    const breakdown  = (isSip && plan.idle > 0)
+        ? `<span class="sm-flow-sub"> · SIP ${fmt(amount)} + idle cash ${fmt(plan.idle)} = ${fmt(plan.splitAmount)} to split</span>`
+        : '';
     document.getElementById('flowSummary').innerHTML =
         `${isSip ? 'Total to deploy' : 'Total to withdraw'}: <strong>${fmt(deployed)}</strong>` +
-        `<span class="sm-flow-sub"> · ${allocs.filter(a => a.qty > 0).length}/${holdings.length} stocks · idle cash ${fmt(Math.max(0, amount - deployed))}</span>`;
+        breakdown +
+        `<span class="sm-flow-sub"> · ${allocs.filter(a => a.qty > 0).length}/${holdings.length} stocks · idle cash ${fmt(Math.max(0, splitFor - deployed))}</span>`;
 }
 
 function _smSubmitFlow(id, mode) {
-    const holdings = (_smHoldingsData[id] || {}).holdings || [];
+    const data     = _smHoldingsData[id] || {};
+    const holdings = data.holdings || [];
     const amount   = parseFloat(document.getElementById('flowAmount').value) || 0;
     if (!(amount > 0)) { window.showNotification && window.showNotification('Enter a valid amount', 'error'); return; }
-    const allocs   = _smComputeFlowAllocations(holdings, mode, amount).filter(a => a.qty > 0);
+    const allocs   = _smFlowPlan(holdings, mode, amount, data.configuredInvestment || 0)
+                        .allocs.filter(a => a.qty > 0);
     if (!allocs.length) { window.showNotification && window.showNotification('Amount too small for any share', 'error'); return; }
 
     const brokerSel = document.getElementById('flowBroker');
@@ -2221,6 +2272,161 @@ function _smSubmitFlow(id, mode) {
         setTimeout(() => { document.getElementById('smFlowModal')?.remove(); _smLiveLoadSignal(id); }, 1300);
     }).catch(() => {
         btn.disabled = false; btn.textContent = mode === 'sip' ? 'Confirm & Buy' : 'Confirm & Sell';
+        window.showNotification && window.showNotification('Request failed', 'error');
+    });
+}
+
+// ── Per-stock manual Buy/Sell (three-dot row menu) ────────────────────────────
+
+function _smRowMenu(ev, id, sym) {
+    ev.stopPropagation();
+    document.getElementById('sm-row-menu')?.remove();
+    const r = ev.currentTarget.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.id = 'sm-row-menu';
+    menu.className = 'sm-row-menu';
+    menu.innerHTML = `
+        <button class="sm-row-menu-item sm-rm-buy"  onclick="_smOpenStockOrder('${id}','${sym}','BUY')">▲ Buy</button>
+        <button class="sm-row-menu-item sm-rm-sell" onclick="_smOpenStockOrder('${id}','${sym}','SELL')">▼ Sell</button>`;
+    menu.style.top  = (r.bottom + window.scrollY + 4) + 'px';
+    menu.style.left = (r.right  + window.scrollX - 124) + 'px';
+    document.body.appendChild(menu);
+    setTimeout(() => document.addEventListener('click', _smCloseRowMenu), 0);
+}
+
+function _smCloseRowMenu(e) {
+    const menu = document.getElementById('sm-row-menu');
+    if (menu && !menu.contains(e.target)) {
+        menu.remove();
+        document.removeEventListener('click', _smCloseRowMenu);
+    }
+}
+
+function _smOpenStockOrder(id, sym, side) {
+    document.getElementById('sm-row-menu')?.remove();
+    document.removeEventListener('click', _smCloseRowMenu);
+    const data = _smHoldingsData[id] || { holdings: [], broker: null };
+    const h    = (data.holdings || []).find(x => x.symbol === sym);
+    if (!h) { window.showNotification && window.showNotification('Holding not found', 'error'); return; }
+
+    const isBuy  = side === 'BUY';
+    const price  = Number(h.current_price) || 0;
+    const held   = Number(h.qty) || 0;
+    const defQty = isBuy ? 1 : held;
+    const accent = isBuy ? 'sm-flow-sip' : 'sm-flow-swp';
+
+    document.getElementById('smStockOrderModal')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'smStockOrderModal';
+    modal.className = 'sm-gl-overlay';
+    modal.innerHTML = `
+<div class="sm-gl-box ${accent}">
+    <div class="sm-gl-hdr">
+        <span class="sm-gl-title">${isBuy ? '▲ Buy' : '▼ Sell'} &mdash; ${sym}</span>
+        <button class="sm-gl-close" onclick="document.getElementById('smStockOrderModal').remove()">✕</button>
+    </div>
+    <div class="sm-gl-body">
+        <div class="sm-so-meta">
+            <span>Price <strong>₹${price.toFixed(2)}</strong></span>
+            <span>Held <strong>${held}</strong></span>
+        </div>
+        <div class="sm-flow-controls">
+            <label class="sm-gl-field"><span>${isBuy ? 'Buy quantity' : 'Sell quantity'}</span>
+                <input type="number" id="soQty" value="${defQty}" step="1" min="1" ${isBuy ? '' : `max="${held}"`}></label>
+            <label class="sm-gl-field sm-gl-field-wide"><span>Broker (optional)</span>
+                <select id="soBroker"><option value="">None — update list only (no real order)</option></select></label>
+        </div>
+        <div class="sm-so-est" id="soEst"></div>
+        <div class="sm-gl-summary" id="soResult" style="display:none"></div>
+    </div>
+    <div class="sm-gl-footer">
+        <button class="sm-gl-btn sm-gl-cancel" onclick="document.getElementById('smStockOrderModal').remove()">Cancel</button>
+        <button class="sm-gl-btn ${isBuy ? 'sm-gl-confirm' : 'sm-flow-confirm-swp'}" id="soConfirmBtn">
+            ${isBuy ? 'Confirm & Buy' : 'Confirm & Sell'}</button>
+    </div>
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+
+    // Broker dropdown (preselect the config's broker if any)
+    fetch('/api/available-brokers').then(r => r.json()).then(bd => {
+        const sel = document.getElementById('soBroker');
+        if (!sel || !bd || !bd.brokers) return;
+        bd.brokers.filter(b => b.active !== false).forEach(b => {
+            const opt = document.createElement('option');
+            opt.value = b.instance_num;
+            opt.dataset.type = b.broker_type || '';
+            opt.dataset.name = b.name || b.broker_type || '';
+            opt.textContent = `${b.name || b.broker_type} (${(b.broker_type || '').toUpperCase()})` +
+                              (b.is_logged_in ? '' : ' — not connected');
+            opt.disabled = !b.is_logged_in;
+            if (data.broker && Number(data.broker.instance) === Number(b.instance_num)) opt.selected = true;
+            sel.appendChild(opt);
+        });
+    }).catch(() => {});
+
+    const est = () => {
+        const q = parseInt(document.getElementById('soQty').value) || 0;
+        document.getElementById('soEst').innerHTML =
+            `Order value: <strong>₹${(q * price).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</strong>` +
+            (isBuy ? '' : ` · ${Math.max(0, held - q)} left${held - q <= 0 ? ' (exit)' : ''}`);
+    };
+    document.getElementById('soQty').addEventListener('input', est);
+    document.getElementById('soConfirmBtn').addEventListener('click', () => _smSubmitStockOrder(id, sym, side, price));
+    est();
+}
+
+function _smSubmitStockOrder(id, sym, side, price) {
+    const isBuy = side === 'BUY';
+    const data  = _smHoldingsData[id] || {};
+    const h     = (data.holdings || []).find(x => x.symbol === sym) || {};
+    const held  = Number(h.qty) || 0;
+    let qty = parseInt(document.getElementById('soQty').value) || 0;
+    if (!(qty > 0)) { window.showNotification && window.showNotification('Enter a valid quantity', 'error'); return; }
+    if (!isBuy && qty > held) qty = held;
+
+    const brokerSel  = document.getElementById('soBroker');
+    const brokerOpt  = brokerSel.selectedOptions[0];
+    const brokerInst = brokerSel.value;
+
+    const payload = {
+        mode: isBuy ? 'sip' : 'swp',
+        amount: qty * (Number(price) || 0),
+        note: `Manual ${side} ${sym}`,
+        allocations: [{ symbol: sym, qty }],
+    };
+    if (brokerInst) {
+        payload.broker_instance = brokerInst;
+        payload.broker_type     = brokerOpt?.dataset.type || '';
+        payload.broker_name     = brokerOpt?.dataset.name || '';
+    }
+
+    const btn = document.getElementById('soConfirmBtn');
+    btn.disabled = true;
+    btn.textContent = brokerInst ? 'Placing order…' : 'Updating…';
+
+    fetch(`/api/algo/swing-momentum/configs/${id}/sip-swp`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+    }).then(r => r.json()).then(d => {
+        if (!d.success) {
+            btn.disabled = false; btn.textContent = isBuy ? 'Confirm & Buy' : 'Confirm & Sell';
+            window.showNotification && window.showNotification(d.error || 'Failed', 'error');
+            return;
+        }
+        const res = document.getElementById('soResult');
+        const bs  = d.broker_summary;
+        let msg = `✅ ${isBuy ? 'Bought' : 'Sold'} ${qty} ${sym}.`;
+        if (bs) msg += bs.placed ? ` Order placed on ${bs.broker}.`
+                                 : ` ⚠ ${bs.error || 'No order placed'} (list updated).`;
+        res.className = 'sm-gl-summary ' + (bs && !bs.placed ? 'sm-gl-summary-err' : 'sm-gl-summary-ok');
+        res.style.display = 'block';
+        res.textContent = msg;
+        window.showNotification && window.showNotification(`${side} executed`, 'success');
+        setTimeout(() => { document.getElementById('smStockOrderModal')?.remove(); _smLiveLoadSignal(id); }, 1300);
+    }).catch(() => {
+        btn.disabled = false; btn.textContent = isBuy ? 'Confirm & Buy' : 'Confirm & Sell';
         window.showNotification && window.showNotification('Request failed', 'error');
     });
 }
