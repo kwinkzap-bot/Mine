@@ -282,6 +282,197 @@
           "entry_date": "2026-06-22"
         }
       ]
+    },
+    {
+      "id": "e3e1025e",
+      "label": "Nifty 500 \u00b7 Monthly \u00b7 Top 12 \u00b7 Exit >50",
+      "index": "NIFTY 500",
+      "top_n": 12,
+      "exit_rank": 50,
+      "rebalance_freq": "monthly",
+      "investment": 100000.0,
+      "monthly_add": 0.0,
+      "monthly_add_type": "static",
+      "monthly_investment_log": [],
+      "start_date": "2025-01-01",
+      "status": "watching",
+      "added_at": "2026-07-01 09:48",
+      "live_since": "2026-07-01",
+      "live_entries": [
+        {
+          "symbol": "HFCL",
+          "entry_price": 214.0,
+          "qty": 38,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "CPPLUS",
+          "entry_price": 3616.4,
+          "qty": 2,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "KIRLOSENG",
+          "entry_price": 2430.1,
+          "qty": 3,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "ACUTAAS",
+          "entry_price": 3549.0,
+          "qty": 2,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "CEMPRO",
+          "entry_price": 1318.3,
+          "qty": 6,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "WELCORP",
+          "entry_price": 1509.0,
+          "qty": 5,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "SYRMA",
+          "entry_price": 1409.7,
+          "qty": 6,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "RRKABEL",
+          "entry_price": 2415.3,
+          "qty": 3,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "SCHNEIDER",
+          "entry_price": 1389.3,
+          "qty": 7,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "AEGISLOG",
+          "entry_price": 1188.7,
+          "qty": 8,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "ATHERENERG",
+          "entry_price": 1167.1,
+          "qty": 8,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        },
+        {
+          "symbol": "EMMVEE",
+          "entry_price": 343.75,
+          "qty": 30,
+          "entry_date": "2026-07-01",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": null,
+            "status": "failed",
+            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+          }
+        }
+      ],
+      "broker": {
+        "instance": 6,
+        "broker_type": "zerodha",
+        "broker_name": "Kavin (Kite)"
+      }
     }
   ]
 }

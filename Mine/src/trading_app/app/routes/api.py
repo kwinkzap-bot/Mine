@@ -7863,16 +7863,11 @@ def _sm_build_order_service(username: str, instance_num: int, broker_type: str):
             return DhanOrderService(access_token=at, client_id=cid)
 
         if broker_type == 'zerodha':
-            from kiteconnect import KiteConnect
-            from trading_app.service.kite_order_services import apply_kite_proxy
-            at = session.get(f'zerodha_{instance_num}_access_token') or env('ACCESS_TOKEN')
-            api_key = env('API_KEY') or os.getenv('API_KEY')
-            if not at or not api_key:
-                return None
-            k = KiteConnect(api_key=api_key)
-            apply_kite_proxy(k)
-            k.set_access_token(at)
-            return k  # KiteConnect instance used directly
+            # Use the canonical builder: it reads the fresh env access token
+            # (source of truth, refreshed on login) and applies the SSH/SOCKS proxy.
+            # Zerodha tokens expire daily, so preferring a possibly-stale session
+            # token here silently broke order placement.
+            return get_kite(user=username, instance=instance_num)
 
         if broker_type == 'kotak':
             from trading_app.service.kotak_order_services import KotakOrderService
@@ -7954,6 +7949,7 @@ def _sm_place_portfolio_orders(username: str, instance_num: int, broker_type: st
                 'error': f'{broker_name}: not connected / missing credentials'}
 
     placed, failed, order_ids = 0, 0, []
+    first_err = None
     for e in live_entries:
         oid, err = _sm_place_equity_order(broker_type, svc, e['symbol'], e['qty'], 'BUY')
         if oid:
@@ -7963,6 +7959,8 @@ def _sm_place_portfolio_orders(username: str, instance_num: int, broker_type: st
                           'instance': instance_num, 'order_id': str(oid), 'status': 'placed'}
         else:
             failed += 1
+            first_err = first_err or err
+            logger.error(f'[sm-order] {broker_name} BUY {e["qty"]} {e["symbol"]} failed: {err}')
             e['order'] = {'broker': broker_name, 'broker_type': broker_type,
                           'instance': instance_num, 'order_id': None,
                           'status': 'failed', 'error': err}
@@ -7977,8 +7975,12 @@ def _sm_place_portfolio_orders(username: str, instance_num: int, broker_type: st
                 e['order']['avg_price'] = round(avg, 2)
                 e['order']['status'] = 'filled'
 
-    return {'placed': placed, 'failed': failed, 'broker': broker_name,
-            'error': None if placed else f'{broker_name}: no orders filled'}
+    # Surface the real broker rejection (e.g. "Insufficient funds") rather than a
+    # generic message, so the user can act on it.
+    err_msg = None
+    if not placed:
+        err_msg = f'{broker_name}: {first_err}' if first_err else f'{broker_name}: no orders placed'
+    return {'placed': placed, 'failed': failed, 'broker': broker_name, 'error': err_msg}
 
 
 def _sm_current_prices(symbols: list) -> dict:
@@ -8083,13 +8085,15 @@ def sm_live_sip_swp(config_id):
                 broker_summary = {'placed': 0, 'failed': len(plan),
                                   'error': f'{broker_name}: not connected'}
             else:
-                placed, failed, oids = 0, 0, []
+                placed, failed, oids, first_err = 0, 0, [], None
                 for e, q, _p in plan:
                     oid, err = _sm_place_equity_order(broker_type, svc, e['symbol'], q, side)
                     if oid:
                         placed += 1; oids.append((e['symbol'], oid))
                     else:
                         failed += 1
+                        first_err = first_err or err
+                        logger.error(f'[sm-{mode}] {broker_name} {side} {q} {e["symbol"]} failed: {err}')
                 if oids:
                     _t.sleep(2.0)
                     for sym, oid in oids:
@@ -8097,7 +8101,8 @@ def sm_live_sip_swp(config_id):
                         if avg and avg > 0:
                             fill_prices[sym] = round(avg, 2)
                 broker_summary = {'placed': placed, 'failed': failed, 'broker': broker_name,
-                                  'error': None if placed else f'{broker_name}: no orders placed'}
+                                  'error': None if placed else
+                                  (f'{broker_name}: {first_err}' if first_err else f'{broker_name}: no orders placed')}
         except Exception as ex:
             logger.error(f'[sm-{mode}] broker placement failed: {ex}', exc_info=True)
             broker_summary = {'placed': 0, 'failed': len(plan), 'error': str(ex)}
@@ -8166,21 +8171,16 @@ def sm_live_configs_add():
             'entry_date':  str(today),
         })
 
-    # Optional: place real CNC MARKET orders on a chosen broker, then record the
-    # average fill price as each holding's entry price.
+    # Go Live only records the config to the Live Algo JSON. Real broker orders are
+    # placed later, explicitly, from the Live Algo screen's "Place Orders" button
+    # (POST .../place-orders). The chosen broker is stored here as the default.
     broker_summary = None
     broker_instance = body.get('broker_instance')
-    if broker_instance and live_entries:
+    if broker_instance:
         try:
-            username = session.get('username', 'Mine')
             broker_instance = int(broker_instance)
-            broker_type = (body.get('broker_type') or '').strip().lower()
-            broker_name = body.get('broker_name') or broker_type.title()
-            broker_summary = _sm_place_portfolio_orders(
-                username, broker_instance, broker_type, broker_name, live_entries)
-        except Exception as e:
-            logger.error(f'[sm-order] portfolio placement failed: {e}', exc_info=True)
-            broker_summary = {'placed': 0, 'failed': len(live_entries), 'error': str(e)}
+        except (TypeError, ValueError):
+            broker_instance = None
 
     config = {
         'id':                     str(uuid.uuid4())[:8],
@@ -8208,6 +8208,68 @@ def sm_live_configs_add():
     configs.append(config)
     _sm_save_live_configs(configs)
     return jsonify({'success': True, 'config': config, 'broker_summary': broker_summary})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/place-orders', methods=['POST'])
+def sm_live_place_orders(config_id):
+    """Place real CNC MARKET BUY orders on the chosen broker for this config's
+    current JSON holdings.
+
+    - Order quantity matches the stored qty exactly (JSON is the source of truth).
+    - NSE equity lot size is 1, so the JSON qty is a valid order quantity as-is.
+    - On fill, each holding's entry_price is updated to the average fill price and
+      an 'order' record (order_id, status, avg_price) is attached, then saved.
+    - Idempotent: holdings that already carry a broker order_id are skipped unless
+      the request passes force=true.
+
+    Body: {broker_instance, broker_type, broker_name, force?}
+    """
+    body    = request.get_json() or {}
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+
+    entries = config.get('live_entries') or []
+    if not entries:
+        return jsonify({'success': False, 'error': 'No holdings to place'}), 400
+
+    broker_instance = body.get('broker_instance')
+    if not broker_instance:
+        return jsonify({'success': False, 'error': 'Select a broker to place orders'}), 400
+
+    force = bool(body.get('force'))
+    # Only place holdings that have a real quantity and are not already ordered.
+    pending = [e for e in entries
+               if int(e.get('qty', 0) or 0) > 0
+               and (force or not (e.get('order') or {}).get('order_id'))]
+    if not pending:
+        return jsonify({'success': False,
+                        'error': 'All holdings already have broker orders. Use force to re-place.'}), 400
+
+    try:
+        username        = session.get('username', 'Mine')
+        broker_instance = int(broker_instance)
+        broker_type     = (body.get('broker_type') or '').strip().lower()
+        broker_name     = body.get('broker_name') or broker_type.title()
+        # Mutates the pending entries (references into config['live_entries']) in
+        # place: sets entry_price to the avg fill and attaches the order record.
+        summary = _sm_place_portfolio_orders(
+            username, broker_instance, broker_type, broker_name, pending)
+    except Exception as e:
+        logger.error(f'[sm-place] placement failed: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    # Remember the broker as this config's default for next time.
+    config['broker'] = {'instance':    broker_instance,
+                        'broker_type': body.get('broker_type'),
+                        'broker_name': body.get('broker_name')}
+    _sm_save_live_configs(configs)
+
+    return jsonify({'success': True, 'broker_summary': summary,
+                    'placed': summary.get('placed', 0),
+                    'failed': summary.get('failed', 0),
+                    'attempted': len(pending)})
 
 
 @api_bp.route('/algo/swing-momentum/configs/<config_id>', methods=['DELETE'])
@@ -8435,6 +8497,8 @@ def sm_live_signal(config_id):
                 'today_pct':      today_pct,
                 'current_rank':   None,
                 'momentum_score': None,
+                'ordered':        bool((e.get('order') or {}).get('order_id')),
+                'order_status':   (e.get('order') or {}).get('status'),
             })
 
         unrealised_pnl  = round(total_curr_val - total_invested, 2)

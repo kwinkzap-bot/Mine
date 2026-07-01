@@ -17574,5 +17574,30 @@
     "idx_fut_oi": 2880600,
     "fii_fut_oi": -234451,
     "FII_Index_futures": -1800.11
+  },
+  {
+    "date": "2026-07-01",
+    "symbol": "BANKNIFTY",
+    "ce_oi": 9032820,
+    "pe_oi": 7222860,
+    "open": 57573.35,
+    "high": 57664.75,
+    "low": 57487.85,
+    "close": 57601.0,
+    "idx_fut_oi": null,
+    "fii_fut_oi": null,
+    "FII_Index_futures": 0
+  },
+  {
+    "date": "2026-06-30",
+    "symbol": "BANKNIFTY",
+    "ce_oi": 26198640,
+    "pe_oi": 21135780,
+    "open": 57572.6,
+    "high": 58050.0,
+    "low": 57469.6,
+    "close": 57542.9,
+    "idx_fut_oi": 3048450,
+    "FII_Index_futures": -6812.27
   }
 ]

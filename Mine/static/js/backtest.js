@@ -1483,12 +1483,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 <input type="number" id="glExitRank" value="${p.exitRank}" min="11" max="200"></label>
             <label class="sm-gl-field"><span>Rebalance</span>
                 <select id="glRebalFreq">${freqOpts}</select></label>
-            <label class="sm-gl-field sm-gl-field-wide"><span>Broker (optional)</span>
-                <select id="glBroker"><option value="">None — track only (no real orders)</option></select></label>
+            <label class="sm-gl-field sm-gl-field-wide"><span>Default broker (optional)</span>
+                <select id="glBroker"><option value="">None — choose later</option></select></label>
         </div>
         <div class="sm-gl-note" id="glBrokerNote">
-            With no broker, entries are tracked at current ranking prices. Pick a broker to place
-            <strong>CNC MARKET</strong> buy orders and record the actual average fill price.
+            Go Live only saves this portfolio to <strong>Algo → Swing Momentum</strong> (tracked at
+            current ranking prices). Place the real <strong>CNC MARKET</strong> orders later with the
+            <strong>Place Orders</strong> button on the Live Algo screen. The broker picked here is just
+            the default for that screen.
         </div>
         <div class="sm-gl-summary" id="glSummary" style="display:none"></div>
     </div>
@@ -1546,7 +1548,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const cbtn = document.getElementById('glConfirmBtn');
         cbtn.disabled = true;
-        cbtn.textContent = brokerInst ? 'Placing orders…' : 'Saving…';
+        cbtn.textContent = 'Saving…';
 
         fetch('/api/algo/swing-momentum/configs', {
             method:  'POST',

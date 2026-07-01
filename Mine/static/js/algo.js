@@ -1921,6 +1921,7 @@ function _smRenderLiveMode(id, panel, d) {
     </div>
     <span class="sm-ab-divider"></span>
     <div class="sm-ab-sip">
+        <button class="ag-btn ag-btn-enter sm-ab-btn sm-ab-place" onclick="_smOpenPlaceOrders('${id}')">🛒 Place Orders</button>
         <button class="ag-btn ag-btn-preview sm-ab-btn" onclick="_smOpenFlowModal('${id}', 'sip')">＋ SIP</button>
         <button class="ag-btn ag-btn-exit sm-ab-btn" onclick="_smOpenFlowModal('${id}', 'swp')">－ SWP</button>
         ${sipLog.length ? `<button class="sm-history-btn sm-ab-btn" onclick="_smShowSipHistory('${id}')">History (${sipLog.length})</button>` : ''}
@@ -2427,6 +2428,142 @@ function _smSubmitStockOrder(id, sym, side, price) {
         setTimeout(() => { document.getElementById('smStockOrderModal')?.remove(); _smLiveLoadSignal(id); }, 1300);
     }).catch(() => {
         btn.disabled = false; btn.textContent = isBuy ? 'Confirm & Buy' : 'Confirm & Sell';
+        window.showNotification && window.showNotification('Request failed', 'error');
+    });
+}
+
+// ── Place Orders to broker (Live Algo screen) ─────────────────────────────────
+
+function _smOpenPlaceOrders(id) {
+    const data     = _smHoldingsData[id] || { holdings: [], broker: null };
+    const holdings = data.holdings || [];
+    if (!holdings.length) { window.showNotification && window.showNotification('No holdings to place', 'error'); return; }
+
+    const pending = holdings.filter(h => !h.ordered);
+    const already = holdings.length - pending.length;
+
+    document.getElementById('smPlaceModal')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'smPlaceModal';
+    modal.className = 'sm-gl-overlay';
+    modal.innerHTML = `
+<div class="sm-gl-box sm-flow-sip">
+    <div class="sm-gl-hdr">
+        <span class="sm-gl-title">🛒 Place Orders — Broker</span>
+        <button class="sm-gl-close" onclick="document.getElementById('smPlaceModal').remove()">✕</button>
+    </div>
+    <div class="sm-gl-body">
+        <div class="sm-flow-controls">
+            <label class="sm-gl-field sm-gl-field-wide"><span>Broker</span>
+                <select id="poBroker"><option value="">Select a broker…</option></select></label>
+        </div>
+        <div class="sm-flow-table-wrap">
+            <table class="sm-flow-table">
+                <thead><tr><th>Symbol</th><th>Order Qty</th><th>Price</th><th>Order Value</th><th>Status</th></tr></thead>
+                <tbody id="poTableBody"></tbody>
+            </table>
+        </div>
+        <div class="sm-flow-summary" id="poSummary"></div>
+        <label class="sm-po-force" style="display:${already ? 'flex' : 'none'}">
+            <input type="checkbox" id="poForce"> Re-place the ${already} holding(s) that already have orders
+        </label>
+        <div class="sm-gl-summary" id="poResult" style="display:none"></div>
+    </div>
+    <div class="sm-gl-footer">
+        <button class="sm-gl-btn sm-gl-cancel" onclick="document.getElementById('smPlaceModal').remove()">Cancel</button>
+        <button class="sm-gl-btn sm-gl-confirm" id="poConfirmBtn">Confirm & Place Orders</button>
+    </div>
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+
+    const fmt = v => '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const renderTable = () => {
+        const force = document.getElementById('poForce')?.checked;
+        const rows  = force ? holdings : pending;
+        let total = 0;
+        document.getElementById('poTableBody').innerHTML = holdings.map(h => {
+            const willPlace = force || !h.ordered;
+            if (willPlace) total += (Number(h.qty) || 0) * (Number(h.current_price) || 0);
+            const status = h.ordered
+                ? `<span class="sm-po-badge sm-po-done">${h.order_status || 'placed'}</span>`
+                : (willPlace ? '<span class="sm-po-badge sm-po-new">will place</span>' : '');
+            return `<tr class="${willPlace ? '' : 'sm-po-skip'}">
+                <td class="sm-col-sym"><strong>${h.symbol}</strong></td>
+                <td><strong>${h.qty}</strong></td>
+                <td>₹${Number(h.current_price).toFixed(2)}</td>
+                <td>${fmt((Number(h.qty) || 0) * (Number(h.current_price) || 0))}</td>
+                <td>${status}</td>
+            </tr>`;
+        }).join('');
+        const count = (force ? holdings : pending).length;
+        document.getElementById('poSummary').innerHTML =
+            `Placing <strong>${count}</strong> CNC MARKET order(s) · est. <strong>${fmt(total)}</strong>` +
+            (already && !force ? ` · <span class="sm-flow-sub">${already} already placed (skipped)</span>` : '');
+    };
+
+    // Broker dropdown — preselect the config's stored default broker
+    fetch('/api/available-brokers').then(r => r.json()).then(bd => {
+        const sel = document.getElementById('poBroker');
+        if (!sel || !bd || !bd.brokers) return;
+        bd.brokers.filter(b => b.active !== false).forEach(b => {
+            const opt = document.createElement('option');
+            opt.value = b.instance_num;
+            opt.dataset.type = b.broker_type || '';
+            opt.dataset.name = b.name || b.broker_type || '';
+            opt.textContent = `${b.name || b.broker_type} (${(b.broker_type || '').toUpperCase()})` +
+                              (b.is_logged_in ? '' : ' — not connected');
+            opt.disabled = !b.is_logged_in;
+            if (data.broker && Number(data.broker.instance) === Number(b.instance_num)) opt.selected = true;
+            sel.appendChild(opt);
+        });
+    }).catch(() => {});
+
+    document.getElementById('poForce')?.addEventListener('change', renderTable);
+    document.getElementById('poConfirmBtn').addEventListener('click', () => _smSubmitPlaceOrders(id));
+    renderTable();
+}
+
+function _smSubmitPlaceOrders(id) {
+    const brokerSel  = document.getElementById('poBroker');
+    const brokerOpt  = brokerSel.selectedOptions[0];
+    const brokerInst = brokerSel.value;
+    if (!brokerInst) { window.showNotification && window.showNotification('Select a broker', 'error'); return; }
+
+    const payload = {
+        broker_instance: brokerInst,
+        broker_type:     brokerOpt?.dataset.type || '',
+        broker_name:     brokerOpt?.dataset.name || '',
+        force:           !!document.getElementById('poForce')?.checked,
+    };
+
+    const btn = document.getElementById('poConfirmBtn');
+    btn.disabled = true;
+    btn.textContent = 'Placing orders…';
+
+    fetch(`/api/algo/swing-momentum/configs/${id}/place-orders`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+    }).then(r => r.json()).then(d => {
+        if (!d.success) {
+            btn.disabled = false; btn.textContent = 'Confirm & Place Orders';
+            window.showNotification && window.showNotification(d.error || 'Failed', 'error');
+            return;
+        }
+        const res = document.getElementById('poResult');
+        const bs  = d.broker_summary || {};
+        const ok  = bs.placed > 0;
+        res.className = 'sm-gl-summary ' + (ok ? 'sm-gl-summary-ok' : 'sm-gl-summary-err');
+        res.style.display = 'block';
+        res.textContent = ok
+            ? `✅ Placed ${bs.placed} order(s) on ${bs.broker || 'broker'}` +
+              (bs.failed ? ` · ⚠ ${bs.failed} failed` : '') + '. Entry prices updated from fills.'
+            : `⚠ ${bs.error || 'No orders placed'}`;
+        window.showNotification && window.showNotification(ok ? 'Orders placed' : 'Placement failed', ok ? 'success' : 'error');
+        setTimeout(() => { document.getElementById('smPlaceModal')?.remove(); _smLiveLoadSignal(id); }, 1600);
+    }).catch(() => {
+        btn.disabled = false; btn.textContent = 'Confirm & Place Orders';
         window.showNotification && window.showNotification('Request failed', 'error');
     });
 }

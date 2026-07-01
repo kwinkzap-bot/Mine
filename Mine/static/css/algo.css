@@ -1713,6 +1713,12 @@ body.ocean-theme .algo-page {
 .sm-so-meta { display: flex; gap: 18px; margin-bottom: 12px; font-size: 13px; color: var(--ag-text-2, #475569); }
 .sm-so-est { margin-top: 10px; font-size: 13px; color: var(--ag-text-2, #475569); }
 .sm-so-meta strong, .sm-so-est strong { color: var(--ag-text, #1e293b); }
+.sm-ab-place { font-weight: 700; }
+.sm-po-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.sm-po-done { background: var(--ag-badge-active-bg, rgba(22,163,74,.12)); color: var(--ag-badge-active-text, #15803d); }
+.sm-po-new  { background: var(--ag-accent-dim, rgba(59,130,246,.08)); color: var(--ag-accent, #3b82f6); }
+.sm-po-skip { opacity: .5; }
+.sm-po-force { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; color: var(--ag-text-2, #475569); cursor: pointer; }
 
 /* ── RTP live performance dashboard (charts + period tabs) ────── */
 .rtp-chart-block { margin-top: 14px; }
