@@ -2132,8 +2132,6 @@ function _smBuildFlowModal(id, mode) {
         <div class="sm-flow-controls">
             <label class="sm-gl-field"><span>${isSip ? 'Invest amount (₹)' : 'Withdraw amount (₹)'}</span>
                 <input type="number" id="flowAmount" value="${defAmt}" step="500" min="0"></label>
-            <label class="sm-gl-field sm-gl-field-wide"><span>Broker (optional)</span>
-                <select id="flowBroker"><option value="">None — update list only (no real orders)</option></select></label>
         </div>
         <div class="sm-flow-table-wrap">
             <table class="sm-flow-table">
@@ -2158,22 +2156,6 @@ function _smBuildFlowModal(id, mode) {
     modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
     document.body.appendChild(modal);
 
-    // Populate broker dropdown (preselect the config's broker if any)
-    fetch('/api/available-brokers').then(r => r.json()).then(bd => {
-        const sel = document.getElementById('flowBroker');
-        if (!sel || !bd || !bd.brokers) return;
-        bd.brokers.filter(b => b.active !== false).forEach(b => {
-            const opt = document.createElement('option');
-            opt.value = b.instance_num;
-            opt.dataset.type = b.broker_type || '';
-            opt.dataset.name = b.name || b.broker_type || '';
-            opt.textContent = `${b.name || b.broker_type} (${(b.broker_type || '').toUpperCase()})` +
-                              (b.is_logged_in ? '' : ' — not connected');
-            opt.disabled = !b.is_logged_in;
-            if (data.broker && Number(data.broker.instance) === Number(b.instance_num)) opt.selected = true;
-            sel.appendChild(opt);
-        });
-    }).catch(() => {});
 
     const recompute = () => _smRenderFlowTable(id, mode);
     document.getElementById('flowAmount').addEventListener('input', recompute);
@@ -2232,24 +2214,23 @@ function _smSubmitFlow(id, mode) {
                         .allocs.filter(a => a.qty > 0);
     if (!allocs.length) { window.showNotification && window.showNotification('Amount too small for any share', 'error'); return; }
 
-    const brokerSel = document.getElementById('flowBroker');
-    const brokerOpt = brokerSel.selectedOptions[0];
-    const brokerInst = brokerSel.value;
+    // Use this group's stored broker automatically (no picker in the popup).
+    const broker = data.broker || null;
 
     const payload = {
         mode, amount,
         date: new Date().toISOString().split('T')[0],
         allocations: allocs.map(a => ({ symbol: a.symbol, qty: a.qty })),
     };
-    if (brokerInst) {
-        payload.broker_instance = brokerInst;
-        payload.broker_type     = brokerOpt?.dataset.type || '';
-        payload.broker_name     = brokerOpt?.dataset.name || '';
+    if (broker && broker.instance) {
+        payload.broker_instance = broker.instance;
+        payload.broker_type     = broker.broker_type || '';
+        payload.broker_name     = broker.broker_name || '';
     }
 
     const btn = document.getElementById('flowConfirmBtn');
     btn.disabled = true;
-    btn.textContent = brokerInst ? 'Placing orders…' : 'Updating…';
+    btn.textContent = (broker && broker.instance) ? 'Placing orders…' : 'Updating…';
 
     fetch(`/api/algo/swing-momentum/configs/${id}/sip-swp`, {
         method:  'POST',
@@ -2321,7 +2302,7 @@ function _smOpenStockOrder(id, sym, side) {
     modal.id = 'smStockOrderModal';
     modal.className = 'sm-gl-overlay';
     modal.innerHTML = `
-<div class="sm-gl-box ${accent}">
+<div class="sm-gl-box sm-gl-narrow ${accent}">
     <div class="sm-gl-hdr">
         <span class="sm-gl-title">${isBuy ? '▲ Buy' : '▼ Sell'} &mdash; ${sym}</span>
         <button class="sm-gl-close" onclick="document.getElementById('smStockOrderModal').remove()">✕</button>
@@ -2334,8 +2315,6 @@ function _smOpenStockOrder(id, sym, side) {
         <div class="sm-flow-controls">
             <label class="sm-gl-field"><span>${isBuy ? 'Buy quantity' : 'Sell quantity'}</span>
                 <input type="number" id="soQty" value="${defQty}" step="1" min="1" ${isBuy ? '' : `max="${held}"`}></label>
-            <label class="sm-gl-field sm-gl-field-wide"><span>Broker (optional)</span>
-                <select id="soBroker"><option value="">None — update list only (no real order)</option></select></label>
         </div>
         <div class="sm-so-est" id="soEst"></div>
         <div class="sm-gl-summary" id="soResult" style="display:none"></div>
@@ -2348,23 +2327,6 @@ function _smOpenStockOrder(id, sym, side) {
 </div>`;
     modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
     document.body.appendChild(modal);
-
-    // Broker dropdown (preselect the config's broker if any)
-    fetch('/api/available-brokers').then(r => r.json()).then(bd => {
-        const sel = document.getElementById('soBroker');
-        if (!sel || !bd || !bd.brokers) return;
-        bd.brokers.filter(b => b.active !== false).forEach(b => {
-            const opt = document.createElement('option');
-            opt.value = b.instance_num;
-            opt.dataset.type = b.broker_type || '';
-            opt.dataset.name = b.name || b.broker_type || '';
-            opt.textContent = `${b.name || b.broker_type} (${(b.broker_type || '').toUpperCase()})` +
-                              (b.is_logged_in ? '' : ' — not connected');
-            opt.disabled = !b.is_logged_in;
-            if (data.broker && Number(data.broker.instance) === Number(b.instance_num)) opt.selected = true;
-            sel.appendChild(opt);
-        });
-    }).catch(() => {});
 
     const est = () => {
         const q = parseInt(document.getElementById('soQty').value) || 0;
@@ -2386,9 +2348,8 @@ function _smSubmitStockOrder(id, sym, side, price) {
     if (!(qty > 0)) { window.showNotification && window.showNotification('Enter a valid quantity', 'error'); return; }
     if (!isBuy && qty > held) qty = held;
 
-    const brokerSel  = document.getElementById('soBroker');
-    const brokerOpt  = brokerSel.selectedOptions[0];
-    const brokerInst = brokerSel.value;
+    // Use this group's stored broker automatically (no picker in the popup).
+    const broker = data.broker || null;
 
     const payload = {
         mode: isBuy ? 'sip' : 'swp',
@@ -2396,15 +2357,15 @@ function _smSubmitStockOrder(id, sym, side, price) {
         note: `Manual ${side} ${sym}`,
         allocations: [{ symbol: sym, qty }],
     };
-    if (brokerInst) {
-        payload.broker_instance = brokerInst;
-        payload.broker_type     = brokerOpt?.dataset.type || '';
-        payload.broker_name     = brokerOpt?.dataset.name || '';
+    if (broker && broker.instance) {
+        payload.broker_instance = broker.instance;
+        payload.broker_type     = broker.broker_type || '';
+        payload.broker_name     = broker.broker_name || '';
     }
 
     const btn = document.getElementById('soConfirmBtn');
     btn.disabled = true;
-    btn.textContent = brokerInst ? 'Placing order…' : 'Updating…';
+    btn.textContent = (broker && broker.instance) ? 'Placing order…' : 'Updating…';
 
     fetch(`/api/algo/swing-momentum/configs/${id}/sip-swp`, {
         method:  'POST',
@@ -2442,6 +2403,11 @@ function _smOpenPlaceOrders(id) {
     const pending = holdings.filter(h => !h.ordered);
     const already = holdings.length - pending.length;
 
+    const cfgBroker   = data.broker || null;
+    const brokerLabel = cfgBroker
+        ? `${cfgBroker.broker_name || cfgBroker.broker_type} (${(cfgBroker.broker_type || '').toUpperCase()})`
+        : '⚠ No broker set for this group — assign one at Go Live';
+
     document.getElementById('smPlaceModal')?.remove();
     const modal = document.createElement('div');
     modal.id = 'smPlaceModal';
@@ -2453,10 +2419,7 @@ function _smOpenPlaceOrders(id) {
         <button class="sm-gl-close" onclick="document.getElementById('smPlaceModal').remove()">✕</button>
     </div>
     <div class="sm-gl-body">
-        <div class="sm-flow-controls">
-            <label class="sm-gl-field sm-gl-field-wide"><span>Broker</span>
-                <select id="poBroker"><option value="">Select a broker…</option></select></label>
-        </div>
+        <div class="sm-po-broker"><span>Broker</span><strong>${brokerLabel}</strong></div>
         <div class="sm-flow-table-wrap">
             <table class="sm-flow-table">
                 <thead><tr><th>Symbol</th><th>Order Qty</th><th>Price</th><th>Order Value</th><th>Status</th></tr></thead>
@@ -2502,38 +2465,23 @@ function _smOpenPlaceOrders(id) {
             (already && !force ? ` · <span class="sm-flow-sub">${already} already placed (skipped)</span>` : '');
     };
 
-    // Broker dropdown — preselect the config's stored default broker
-    fetch('/api/available-brokers').then(r => r.json()).then(bd => {
-        const sel = document.getElementById('poBroker');
-        if (!sel || !bd || !bd.brokers) return;
-        bd.brokers.filter(b => b.active !== false).forEach(b => {
-            const opt = document.createElement('option');
-            opt.value = b.instance_num;
-            opt.dataset.type = b.broker_type || '';
-            opt.dataset.name = b.name || b.broker_type || '';
-            opt.textContent = `${b.name || b.broker_type} (${(b.broker_type || '').toUpperCase()})` +
-                              (b.is_logged_in ? '' : ' — not connected');
-            opt.disabled = !b.is_logged_in;
-            if (data.broker && Number(data.broker.instance) === Number(b.instance_num)) opt.selected = true;
-            sel.appendChild(opt);
-        });
-    }).catch(() => {});
-
     document.getElementById('poForce')?.addEventListener('change', renderTable);
     document.getElementById('poConfirmBtn').addEventListener('click', () => _smSubmitPlaceOrders(id));
     renderTable();
 }
 
 function _smSubmitPlaceOrders(id) {
-    const brokerSel  = document.getElementById('poBroker');
-    const brokerOpt  = brokerSel.selectedOptions[0];
-    const brokerInst = brokerSel.value;
-    if (!brokerInst) { window.showNotification && window.showNotification('Select a broker', 'error'); return; }
+    // Use this group's stored broker automatically (no picker in the popup).
+    const broker = (_smHoldingsData[id] || {}).broker || null;
+    if (!broker || !broker.instance) {
+        window.showNotification && window.showNotification('No broker set for this group. Assign one at Go Live.', 'error');
+        return;
+    }
 
     const payload = {
-        broker_instance: brokerInst,
-        broker_type:     brokerOpt?.dataset.type || '',
-        broker_name:     brokerOpt?.dataset.name || '',
+        broker_instance: broker.instance,
+        broker_type:     broker.broker_type || '',
+        broker_name:     broker.broker_name || '',
         force:           !!document.getElementById('poForce')?.checked,
     };
 

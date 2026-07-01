@@ -43,6 +43,7 @@ _STRIKE_STEP    = 50.0
 _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
 _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute of data gap)
 _FALLBACK_IV    = 0.15  # assumed annual IV when ATM IV cannot be computed (NIFTY typical 13–18%)
+_BREAKOUT_SCAN_SECS = 15  # cadence of the authoritative completed-candle first-breakout scan
 
 # Defaults match the 2nd 30-Sec Candle backtest (second_candle_engine.py)
 DEFAULT_PARAMS: Dict[str, Any] = {
@@ -124,6 +125,8 @@ class SecondCandleAlgo:
         self._range_high: Optional[float] = None
         self._range_low:  Optional[float] = None
         self._range_date: Optional[str]   = None
+        # Throttle for the authoritative completed-candle breakout scan
+        self._last_breakout_scan: Optional[pd.Timestamp] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -1141,29 +1144,63 @@ class SecondCandleAlgo:
                         time.sleep(5)
                         continue
 
-                    # ── No trade → live breakout against the range candle.
-                    # Checked every loop tick (≈1s) off the live spot so entry
-                    # fires the instant price crosses the 2nd candle H/L, instead
-                    # of waiting for the next 30-sec watch bar to close.
+                    # ── No trade → detect the FIRST breakout of the range candle.
+                    #
+                    # A breakout on a COMPLETED 30-sec candle is authoritative: it
+                    # mirrors the backtest's first-breakout scan (_check_breakout)
+                    # and uses candle High/Low, so it catches fast wicks and any
+                    # breakout that closed *before* the algo finished arming. The
+                    # live-spot check (_eval_live_breakout) only reacts to the
+                    # currently forming candle, so on its own it can miss the true
+                    # first breakout and take the opposite side (see the 01-Jul case
+                    # where the backtest went SHORT at 09:17 but live went LONG at 09:19).
+                    #
+                    # Strategy: keep the tick-fast live-spot trigger for latency, but
+                    # confirm/override direction with the completed-candle scan whenever
+                    # we're about to enter, plus a throttled periodic scan so a missed
+                    # earlier breakout is caught even before the spot moves again.
                     _p       = normalise_params(params)
                     now_ist  = pd.Timestamp.now(tz='Asia/Kolkata')
                     cutoff   = int(_p['exit_hour']) * 60 + int(_p['exit_minute'])
                     if (now_ist.hour * 60 + now_ist.minute) < cutoff and \
                             self._ensure_range(provider, _p, now_ist):
-                        spot = self._get_nifty_spot(provider)
-                        if spot:
-                            sig = self._eval_live_breakout(spot, _p)
-                            if sig:
+                        spot     = self._get_nifty_spot(provider)
+                        live_sig = self._eval_live_breakout(spot, _p) if spot else None
+
+                        # Run the authoritative completed-candle scan when a live
+                        # trigger wants to enter (to confirm direction) or when the
+                        # periodic catch-up interval is due.
+                        _due = (self._last_breakout_scan is None or
+                                (now_ist - self._last_breakout_scan).total_seconds()
+                                    >= _BREAKOUT_SCAN_SECS)
+                        sig = None
+                        if live_sig is not None or _due:
+                            self._last_breakout_scan = now_ist
+                            _bdf       = self._fetch_today_30s_candles(provider)
+                            candle_sig = self._check_breakout(_bdf, _p, now_ist)
+                            # Completed candle wins → matches the backtest direction
+                            sig = candle_sig or live_sig
+                            if (candle_sig is not None and live_sig is not None and
+                                    candle_sig['direction'] != live_sig['direction']):
                                 logger.info(
-                                    f"[SC] Breakout {sig['direction']} spot={spot}"
-                                    f" entry_ref={sig['entry_ref']} sl={sig['sl_level']}"
-                                    f" tgt={sig['target_level']}"
-                                    f" range=[{sig['range_low']}, {sig['range_high']}]"
+                                    f"[SC] Direction override: live spot said "
+                                    f"{live_sig['direction']} but first completed "
+                                    f"breakout was {candle_sig['direction']} — taking "
+                                    f"the completed-candle breakout"
                                 )
-                                self._enter_trade(
-                                    sig['direction'], sig['entry_ref'],
-                                    sig['sl_level'], sig['target_level'], provider,
-                                )
+
+                        if sig:
+                            _src = 'live-spot' if sig is live_sig else 'candle'
+                            logger.info(
+                                f"[SC] Breakout {sig['direction']} ({_src}) spot={spot}"
+                                f" entry_ref={sig['entry_ref']} sl={sig['sl_level']}"
+                                f" tgt={sig['target_level']}"
+                                f" range=[{sig['range_low']}, {sig['range_high']}]"
+                            )
+                            self._enter_trade(
+                                sig['direction'], sig['entry_ref'],
+                                sig['sl_level'], sig['target_level'], provider,
+                            )
 
             except Exception as e:
                 logger.error(f"[SC] Monitor error: {e}", exc_info=True)

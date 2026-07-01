@@ -687,7 +687,20 @@ class OpenInterestService:
                 })
             
             active_strikes_json = json.dumps(simple_strikes)
-            
+
+            # Expiry-roll sanity check: on expiry day the recorder should store the
+            # NEXT expiry's chain (use_next_expiry). If a stored expiry equals the
+            # trading date, we're still capturing the expiring contract — its call
+            # OI is settlement/pin noise and its vega collapses (T→0), which corrupts
+            # the Vega Analysis call series. Warn so the roll can be verified live.
+            snap_expiry = next((s.get('expiry') for s in simple_strikes if s.get('expiry')), None)
+            if snap_expiry and str(snap_expiry)[:10] == timestamp[:10]:
+                logger.warning(
+                    f"[OI] {symbol}: snapshot expiry {snap_expiry} == trading date "
+                    f"{timestamp[:10]} — recording the EXPIRING contract (expiry roll "
+                    f"did NOT apply). Vega Analysis call series will be unreliable today."
+                )
+
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
@@ -862,26 +875,65 @@ class OpenInterestService:
             logger.error(f"[OI] get_atm_ce_oi_strikes error: {e}")
             return {'success': False, 'error': str(e)}
 
-    def get_intraday_vega_history(self, symbol: str, date_str: str) -> List[Dict[str, Any]]:
-        """Return per-minute Call/Put Vega time-series.
+    def _strike_vega(self, s: dict, opt_type: str, vega_key: str, iv_key: str,
+                     ltp_key: str, spot: float, K: float, expiry) -> float:
+        """Per-share vega for one strike side, per 1% IV move.
 
-        Formula: -Σ(weight × Δoi_lots) / 1e7  in ₹ Crore.
-
-        Sign convention (negated — option-writer vega perspective):
-          OI INCREASES from 9:15 baseline → new positions written → negative vega
-          OI DECREASES from 9:15 baseline → positions covered/closed → positive vega
-
-        Weight per strike per snapshot (priority order):
-          1. Fyers live vega Greek (ce_vega / pe_vega) when stored.
-          2. Time value of the option = LTP − intrinsic value.
-             Time value ≈ 0 for deep ITM options (on expiry day these have
-             large LTP but zero vega), preventing sign reversal when ITM
-             positions unwind.
-
-        Both call_vega and put_vega start at 0.00 at 9:15 AM.
+        Priority: stored Fyers live greek → Black-Scholes vega from stored IV →
+        full LTP→IV→vega inversion. Returns 0.0 when none can be resolved.
         """
-        _LOT_SIZES = {'NIFTY': 75, 'BANKNIFTY': 35, 'FINNIFTY': 40, 'MIDCPNIFTY': 120}
-        lot_size = _LOT_SIZES.get(symbol, 75)
+        live = s.get(vega_key)
+        if live is not None:
+            try:
+                return float(live)
+            except (TypeError, ValueError):
+                pass
+
+        iv = s.get(iv_key)
+        if iv:
+            try:
+                v = self.greeks_calculator.calculate_vega_from_iv(
+                    opt_type, spot, K, expiry, float(iv))
+                if v > 0:
+                    return v
+            except (TypeError, ValueError):
+                pass
+
+        ltp = float(s.get(ltp_key) or 0)
+        if ltp > 0:
+            return self.greeks_calculator.calculate_greeks(
+                opt_type, ltp, spot, K, expiry).get('Vega', 0.0)
+        return 0.0
+
+    def get_intraday_vega_history(self, symbol: str, date_str: str) -> List[Dict[str, Any]]:
+        """Return per-minute Call/Put Vega time-series (StockMojo-style Vega Analysis).
+
+        Construction — cumulative OI-weighted vega CHANGE from the 9:15 baseline:
+
+          For each strike:  Δoi_ce = oi_ce_now − oi_ce_0915   (in shares)
+          call_vega = +Σ(vega_ce × Δoi_ce) / SCALE   (green, above zero)
+          put_vega  = −Σ(vega_pe × Δoi_pe) / SCALE   (red,  below zero)
+          diff      =  put_vega − call_vega           (Put − Call Difference)
+
+        Sign convention (matches StockMojo "Vega Analysis"):
+          Call side is plotted with its natural sign — call OI building up
+          (Δoi_ce > 0) reads as positive/green; call OI unwinding reads negative.
+          Put side is negated purely for chart layout, so put writing
+          (Δoi_pe > 0) reads as negative/red below zero.
+        Because it is a change-from-open, both call_vega and put_vega start at
+        exactly 0.00 at 9:15 AM and either side can be positive or negative.
+
+        Vega per strike (per share, per 1% IV move), in priority order:
+          1. Fyers live vega Greek (ce_vega / pe_vega) when stored.
+          2. Black-Scholes vega from the stored IV (ce_iv / pe_iv) — fast, and
+             stable on expiry day where an LTP→IV re-inversion often fails.
+          3. Full LTP → implied volatility → Black-Scholes vega inversion.
+        Snapshots that rely on 2 or 3 are flagged estimated=True.
+
+        SCALE renders the aggregate in ₹ Crore-ish units; tune it to match the
+        desired y-axis range without changing the shape of the curves.
+        """
+        SCALE = 5e6  # tuned to StockMojo-style magnitude; shape is scale-invariant
 
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -912,9 +964,8 @@ class OpenInterestService:
                     baseline_ce_oi[k] = s.get('ce_oi') or 0
                     baseline_pe_oi[k] = s.get('pe_oi') or 0
 
-            # ── Per-minute vega accumulation ──────────────────────────────────
+            # ── Per-minute cumulative vega change from baseline ───────────────
             seen: dict = {}
-            has_fyers_vega = False
 
             for row in rows:
                 try:
@@ -928,50 +979,48 @@ class OpenInterestService:
                     spot          = row['current_price']
                     call_vega_sum = 0.0
                     put_vega_sum  = 0.0
+                    estimated     = False
 
                     for s in strikes:
                         strike = s.get('strike')
                         if not strike:
                             continue
 
-                        ce_lots = (s.get('ce_oi') or 0) - baseline_ce_oi.get(strike, s.get('ce_oi') or 0)
-                        pe_lots = (s.get('pe_oi') or 0) - baseline_pe_oi.get(strike, s.get('pe_oi') or 0)
-                        ce_lots /= lot_size
-                        pe_lots /= lot_size
-
-                        if ce_lots == 0 and pe_lots == 0:
+                        # Δ OI (shares) vs the 9:15 baseline for this strike
+                        d_ce = (s.get('ce_oi') or 0) - baseline_ce_oi.get(strike, s.get('ce_oi') or 0)
+                        d_pe = (s.get('pe_oi') or 0) - baseline_pe_oi.get(strike, s.get('pe_oi') or 0)
+                        if d_ce == 0 and d_pe == 0:
                             continue
 
                         K = float(strike)
-                        ce_vega_g = s.get('ce_vega')
-                        pe_vega_g = s.get('pe_vega')
+                        expiry = s.get('expiry')
 
-                        if ce_vega_g is not None:
-                            has_fyers_vega = True
-                            ce_w = float(ce_vega_g)
-                        else:
-                            # Time value = LTP − intrinsic: approaches 0 for deep ITM,
-                            # maximum at ATM — mirrors the vega profile naturally.
-                            ce_ltp = float(s.get('ce_ltp') or 0)
-                            ce_w   = max(ce_ltp - max(spot - K, 0.0), 0.0)
+                        # ── Per-share vega: live greek → stored IV → LTP inversion
+                        if d_ce != 0:
+                            ce_v = self._strike_vega(
+                                s, 'CE', 'ce_vega', 'ce_iv', 'ce_ltp', spot, K, expiry)
+                            if ce_v > 0:
+                                call_vega_sum += ce_v * d_ce
+                            if s.get('ce_vega') is None:
+                                estimated = True
 
-                        if pe_vega_g is not None:
-                            pe_w = float(pe_vega_g)
-                        else:
-                            pe_ltp = float(s.get('pe_ltp') or 0)
-                            pe_w   = max(pe_ltp - max(K - spot, 0.0), 0.0)
+                        if d_pe != 0:
+                            pe_v = self._strike_vega(
+                                s, 'PE', 'pe_vega', 'pe_iv', 'pe_ltp', spot, K, expiry)
+                            if pe_v > 0:
+                                put_vega_sum  += pe_v * d_pe
+                            if s.get('pe_vega') is None:
+                                estimated = True
 
-                        if ce_lots != 0 and ce_w > 0:
-                            call_vega_sum += ce_w * ce_lots
-                        if pe_lots != 0 and pe_w > 0:
-                            put_vega_sum  += pe_w * pe_lots
-
+                    call_vega = round(call_vega_sum / SCALE, 2)   # call plotted with natural sign
+                    put_vega  = round(-put_vega_sum / SCALE, 2)   # put negated for chart layout
                     seen[minute_ts] = {
                         'time':      minute_ts,
                         'price':     spot,
-                        'call_vega': round(-call_vega_sum / 1e7, 2),
-                        'put_vega':  round(-put_vega_sum / 1e7, 2),
-                        'estimated': not has_fyers_vega,
+                        'call_vega': call_vega,
+                        'put_vega':  put_vega,
+                        'diff':      round(put_vega - call_vega, 2),
+                        'estimated': estimated,
                     }
                 except Exception:
                     continue

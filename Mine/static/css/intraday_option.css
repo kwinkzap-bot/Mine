@@ -403,21 +403,4 @@
     }
 }
 
-/* Scrollbar Styling - Modern */
-.signals-log::-webkit-scrollbar {
-    width: 6px;
-}
-
-.signals-log::-webkit-scrollbar-track {
-    background: var(--bg-light);
-    border-radius: 3px;
-}
-
-.signals-log::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
-    border-radius: 3px;
-}
-
-.signals-log::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
-}
+/* Scrollbar styled globally in main.css (modern thin/floating) */

@@ -290,7 +290,14 @@ class MarketScheduler:
             for symbol in symbols:
                 try:
                     logger.info(f"OI Persistence: Fetching data for {symbol}...")
-                    data = oi_service.get_open_interest_data(symbol)
+                    # use_next_expiry=True mirrors the EOD historic recorder
+                    # (oi_historic_data.py). On expiry day the expiring contract's
+                    # OI is dominated by settlement/pin/unwind noise and its vega
+                    # collapses (T→0), which corrupts the Vega Analysis call series;
+                    # rolling to next week's chain gives a stable vega and a clean
+                    # OI signal. Non-expiry days: nearest expiry is unchanged, so
+                    # there is no behavioural difference.
+                    data = oi_service.get_open_interest_data(symbol, use_next_expiry=True)
                     
                     if data.get('success'):
                         oi_service.save_oi_snapshot(symbol, data)

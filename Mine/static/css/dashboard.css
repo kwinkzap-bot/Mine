@@ -385,21 +385,6 @@
 
 /* ── Historic OI — inherits --pf-* theme vars from .sw-wrap ─────── */
 
-/* symbol tabs (HOI-specific; SW has no equivalent) */
-.hoi-sym-tab-group {
-    display: flex; border: 1px solid var(--pf-border);
-    border-radius: 6px; overflow: hidden; margin-bottom: 10px;
-}
-.hoi-sym-tab {
-    padding: 5px 18px; font-size: 11px; font-weight: 600; font-family: inherit;
-    border: none; background: transparent; color: var(--pf-text-2);
-    cursor: pointer; transition: background .15s, color .15s;
-    border-right: 1px solid var(--pf-border);
-}
-.hoi-sym-tab:last-child { border-right: none; }
-.hoi-sym-tab.active { background: var(--pf-accent); color: #fff; }
-.hoi-sym-tab:hover:not(.active) { background: var(--pf-accent-dim); color: var(--pf-text); }
-
 /* semantic colours — theme-aware via --pf-pos / --pf-neg */
 .hoi-ce   { color: var(--pf-neg) !important; }
 .hoi-pe   { color: var(--pf-pos) !important; }

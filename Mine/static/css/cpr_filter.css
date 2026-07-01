@@ -269,22 +269,7 @@ body.ocean-theme {
     background: var(--scan-bg);
 }
 
-.results-scroll::-webkit-scrollbar {
-    width: 6px;
-}
-
-.results-scroll::-webkit-scrollbar-track {
-    background: var(--scan-bg);
-}
-
-.results-scroll::-webkit-scrollbar-thumb {
-    background: var(--scan-th-text);
-    border-radius: 3px;
-}
-
-.results-scroll::-webkit-scrollbar-thumb:hover {
-    background: var(--scan-text);
-}
+/* Scrollbar styled globally in main.css (modern thin/floating) */
 
 .results-scroll table {
     margin: 0;
@@ -704,14 +689,6 @@ body.forest-theme #highIvRefreshBtn {
 body.forest-theme #highIvRefreshBtn:hover {
     background: rgba(249, 115, 22, 0.16);
     box-shadow: 0 0 10px rgba(249, 115, 22, 0.2);
-}
-
-/* Enhanced scrollbars in tables for high tech terminal feel */
-body.dark-theme .results-scroll::-webkit-scrollbar-thumb {
-    background: var(--scan-border);
-}
-body.dark-theme .results-scroll::-webkit-scrollbar-thumb:hover {
-    background: var(--scan-th-text);
 }
 
 /* ─── High Contrast Font & Background Overrides for Dark/Forest Themes ─── */

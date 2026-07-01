@@ -7,25 +7,21 @@
 {% block content %}
   <div class="sw-wrap">
 
-    <!-- Topbar -->
+    <!-- Topbar: two primary actions -->
     <div class="sw-topbar">
-      <span class="sw-title">Historic OI</span>
+      <span class="sw-title">Historic OI (NIFTY)</span>
+      <span class="sw-updated" style="margin-left:12px;color:var(--pf-text-3);font-size:11px">⏱ Auto-records daily at 8:00 PM IST</span>
       <span id="hoiStatus" class="sw-updated" style="margin-left:auto;margin-right:8px;"></span>
-      <button class="sw-refresh-btn" style="margin-right:6px;opacity:.75" onclick="hoiToggleLoadHistory()">⬆ Load History</button>
-      <button id="hoiRecordBtn" class="sw-refresh-btn" onclick="recordHistoricOI()">⏺ Record</button>
+      <button class="sw-refresh-btn" style="margin-right:6px;opacity:.85" onclick="hoiToggleHistorical()">🗓 Historical Update</button>
+      <button id="hoiFetchLatestBtn" class="sw-refresh-btn" onclick="hoiFetchLatest()">⟳ Fetch Latest</button>
     </div>
-    <!-- Load History panel (hidden by default) -->
-    <div id="hoiLoadHistoryPanel" style="display:none;padding:10px 14px;background:var(--pf-row-alt);border-bottom:1px solid var(--pf-border);gap:10px;flex-wrap:wrap;align-items:center">
+    <!-- Historical Update panel — backfill a date range from NSE bhavcopy (hidden by default) -->
+    <div id="hoiHistoricalPanel" style="display:none;padding:10px 14px;background:var(--pf-row-alt);border-bottom:1px solid var(--pf-border);gap:10px;flex-wrap:wrap;align-items:center">
       <label style="font-size:12px;color:var(--pf-text-2);font-weight:600">From</label>
       <div class="hoi-date-wrap"><input type="date" id="hoiFromDate" value="2021-01-01"></div>
       <label style="font-size:12px;color:var(--pf-text-2);font-weight:600">To</label>
       <div class="hoi-date-wrap"><input type="date" id="hoiToDate"></div>
-      <label style="font-size:12px;color:var(--pf-text-2);font-weight:600">Source</label>
-      <label style="font-size:12px;cursor:pointer"><input type="radio" name="hoiSrc" value="nse" checked> NSE Bhavcopy <span style="color:var(--pf-text-3)">(5 yr)</span></label>
-      <label style="font-size:12px;cursor:pointer"><input type="radio" name="hoiSrc" value="sqlite"> SQLite <span style="color:var(--pf-text-3)">(local, fast)</span></label>
-      <button class="sw-refresh-btn" onclick="hoiStartBackfill()" id="hoiLoadBtn">▶ Start</button>
-      <span style="width:1px;height:20px;background:var(--pf-border);display:inline-block;margin:0 2px"></span>
-      <button class="sw-refresh-btn" onclick="hoiSyncFII()" id="hoiSyncFIIBtn" style="background:#0284c7;border-color:#0284c7">↓ Sync FII <span style="font-size:10px;opacity:.8">(30d)</span></button>
+      <button class="sw-refresh-btn" onclick="hoiHistoricalUpdate()" id="hoiUpdateBtn">▶ Update Range</button>
       <span id="hoiLoadMsg" style="font-size:11px;color:var(--pf-text-2)"></span>
     </div>
     <!-- Backfill progress bar -->
@@ -39,15 +35,8 @@
       </div>
     </div>
 
-    <!-- Symbol tab group -->
-    <div class="hoi-sym-tab-group">
-      <button class="hoi-sym-tab active" id="hoi-tab-NIFTY"     onclick="hoiSymbolSwitch('NIFTY')">NIFTY</button>
-      <button class="hoi-sym-tab"        id="hoi-tab-BANKNIFTY" onclick="hoiSymbolSwitch('BANKNIFTY')">BANKNIFTY</button>
-    </div>
-
-    <!-- Per-symbol grids -->
-    {% for sym in ['NIFTY', 'BANKNIFTY'] %}
-    <div class="sw-table-wrap" id="hoi-panel-{{ sym }}"{% if not loop.first %} style="display:none"{% endif %}>
+    <!-- NIFTY grid -->
+    <div class="sw-table-wrap" id="hoi-panel-NIFTY">
       <table class="sw-table">
         <thead>
           <tr>
@@ -65,12 +54,11 @@
             <th class="sw-th-c"></th>
           </tr>
         </thead>
-        <tbody id="hoiTbody-{{ sym }}">
+        <tbody id="hoiTbody-NIFTY">
           <tr><td colspan="12" class="sw-empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
-    {% endfor %}
 
   </div>
 {% endblock %}

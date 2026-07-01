@@ -67,6 +67,27 @@ class GreeksCalculator:
             return 0.0
 
     @staticmethod
+    def calculate_vega_from_iv(option_type: str, underlying_price: float, strike_price: float, expiry_date: str, iv: float, risk_free_rate: float = 0.07) -> float:
+        """Vega (per share, per 1% IV move) computed directly from a known IV.
+
+        Faster and more stable than re-inverting IV from the LTP — useful when a
+        pre-computed IV is already stored (e.g. ce_iv / pe_iv in the option chain),
+        and it avoids solver failures on expiry day for deep ITM/OTM strikes.
+
+        :param iv: Implied Volatility as a decimal (e.g. 0.20 for 20%)
+        """
+        try:
+            if underlying_price <= 0 or strike_price <= 0 or iv is None or iv <= 0:
+                return 0.0
+            flag = 'c' if option_type.upper() == 'CE' else 'p'
+            t = GreeksCalculator.calculate_time_to_expiry(expiry_date)
+            # py_vollib vega already returns the change for a 1% change in IV
+            return round(vega(flag, underlying_price, strike_price, t, risk_free_rate, min(iv, 5.0)), 4)
+        except Exception as e:
+            logger.debug(f"Vega-from-IV failed for {option_type} {strike_price}: {e}")
+            return 0.0
+
+    @staticmethod
     def calculate_greeks(option_type: str, ltp: float, underlying_price: float, strike_price: float, expiry_date: str, risk_free_rate: float = 0.07):
         """
         Calculates IV and all major Greeks.

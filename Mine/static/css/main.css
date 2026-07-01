@@ -745,3 +745,37 @@ body.dark-theme th:hover,
 body.forest-theme th:hover {
     background: rgba(255, 255, 255, 0.12) !important;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Modern scrollbars — applied globally across the application.
+   Thin, rounded, "floating" thumb over a transparent track.
+   ───────────────────────────────────────────────────────────── */
+* {
+    scrollbar-width: thin;                                    /* Firefox */
+    scrollbar-color: rgba(148, 163, 184, 0.55) transparent;   /* thumb track */
+}
+*::-webkit-scrollbar { width: 7px; height: 7px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.55);
+    border-radius: 999px;
+    border: 1.5px solid transparent;      /* padding around thumb → floating look */
+    background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover  { background: rgba(100, 116, 139, 0.80); background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:active { background: rgba(71, 85, 105, 0.95);  background-clip: padding-box; }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+/* Dark / forest themes — lighter thumb on dark surfaces */
+body.dark-theme, body.dark-theme *,
+body.forest-theme, body.forest-theme * {
+    scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+}
+body.dark-theme *::-webkit-scrollbar-thumb,
+body.forest-theme *::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.40); background-clip: padding-box;
+}
+body.dark-theme *::-webkit-scrollbar-thumb:hover,
+body.forest-theme *::-webkit-scrollbar-thumb:hover {
+    background: rgba(203, 213, 225, 0.70); background-clip: padding-box;
+}

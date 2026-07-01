@@ -5278,7 +5278,11 @@ def get_open_interest() -> EndpointResponse:
             # If the UI specifically asks, we try to fetch.
 
             logger.info(f"⚠️ DB data missing or stale for {symbol}. Fetching live...")
-            oi_data = oi_service.get_open_interest_data(symbol)
+            # use_next_expiry=True to match the scheduler recorder — this fallback
+            # writes into the same oi_history table, so both must use the same
+            # expiry basis or an expiry-day series would mix current/next-expiry
+            # rows and corrupt the PCR/Vega charts. (Non-expiry days: no change.)
+            oi_data = oi_service.get_open_interest_data(symbol, use_next_expiry=True)
             
             if not oi_data.get('success'):
                 return jsonify(oi_data), 400
@@ -7877,8 +7881,13 @@ def _sm_build_order_service(username: str, instance_num: int, broker_type: str):
     return None
 
 
-def _sm_place_equity_order(broker_type: str, svc, symbol: str, qty: int, side: str = 'BUY'):
-    """Place a CNC MARKET BUY/SELL for one NSE equity. Returns (order_id, error)."""
+def _sm_place_equity_order(broker_type: str, svc, symbol: str, qty: int, side: str = 'BUY',
+                           price: Optional[float] = None):
+    """Place a CNC MARKET BUY/SELL for one NSE equity. Returns (order_id, error).
+
+    `price` is the last known price (from the data provider) used to price the
+    padded-LIMIT fallback when a broker blocks bare MARKET orders.
+    """
     side = side.upper()
     try:
         if broker_type == 'fyers':
@@ -7896,12 +7905,60 @@ def _sm_place_equity_order(broker_type: str, svc, symbol: str, qty: int, side: s
             return (r.get('order_id'), None) if r.get('success') else (None, r.get('error'))
 
         if broker_type == 'zerodha':
-            txn = svc.TRANSACTION_TYPE_BUY if side == 'BUY' else svc.TRANSACTION_TYPE_SELL
-            oid = svc.place_order(variety=svc.VARIETY_REGULAR, exchange=svc.EXCHANGE_NSE,
-                                  tradingsymbol=symbol, transaction_type=txn,
-                                  quantity=qty, product=svc.PRODUCT_CNC,
-                                  order_type=svc.ORDER_TYPE_MARKET)
-            return (oid, None)
+            txn    = svc.TRANSACTION_TYPE_BUY if side == 'BUY' else svc.TRANSACTION_TYPE_SELL
+            common = dict(variety=svc.VARIETY_REGULAR, exchange=svc.EXCHANGE_NSE,
+                          tradingsymbol=symbol, transaction_type=txn,
+                          quantity=qty, product=svc.PRODUCT_CNC)
+            try:
+                # Try a plain MARKET order first via the SDK (no special permission).
+                oid = svc.place_order(order_type=svc.ORDER_TYPE_MARKET, **common)
+                return (oid, None)
+            except Exception as e:
+                msg = str(e).lower()
+                if all(s not in msg for s in ('market protection', 'limit order', 'market order')):
+                    raise
+                # Zerodha blocks bare MARKET orders on NSE equity via API. Fall back to
+                # a padded LIMIT (buy +5% / sell -5%) that fills like a market order —
+                # still a normal order, no market_protection / market-data permission.
+                # Prefer the price passed in (data provider); only hit Kite ltp if
+                # nothing was supplied (that call needs a market-data subscription).
+                px = float(price) if price else 0
+                if not px:
+                    try:
+                        ltp = svc.ltp(f'NSE:{symbol}')
+                        px = (ltp.get(f'NSE:{symbol}') or {}).get('last_price', 0) if isinstance(ltp, dict) else 0
+                    except Exception:
+                        px = 0
+                if not px:
+                    return (None, 'Market order blocked and no price available for LIMIT fallback')
+                # Place the LIMIT at the current price (snapped to a valid ₹0.05 tick:
+                # round up for a BUY / down for a SELL so it still fills). This stays
+                # within the circuit band by definition — no padding over the limit.
+                import math
+                tick = 0.05
+                limit_price = round((math.ceil(px / tick) if side == 'BUY'
+                                     else math.floor(px / tick)) * tick, 2)
+                logger.warning(f'[sm-order] {symbol}: MARKET blocked, retrying as LIMIT @ {limit_price}')
+                try:
+                    oid = svc.place_order(order_type=svc.ORDER_TYPE_LIMIT, price=limit_price, **common)
+                    return (oid, None)
+                except Exception as e2:
+                    # Padded price crossed the price band → cap to the circuit limit
+                    # Zerodha reports in the error, then place within range.
+                    import re, math
+                    m = re.search(r'circuit limit of ([\d,]+\.?\d*)', str(e2))
+                    if not m:
+                        raise
+                    band = float(m.group(1).replace(',', ''))
+                    # Snap to a valid ₹0.05 tick on the safe side of the band:
+                    # floor for a BUY (stay ≤ upper circuit), ceil for a SELL.
+                    tick = 0.05
+                    capped = (math.floor(band / tick) if side == 'BUY'
+                              else math.ceil(band / tick)) * tick
+                    capped = round(capped, 2)
+                    logger.warning(f'[sm-order] {symbol}: LIMIT capped to circuit band {band} -> {capped}')
+                    oid = svc.place_order(order_type=svc.ORDER_TYPE_LIMIT, price=capped, **common)
+                    return (oid, None)
 
         if broker_type == 'kotak':
             r = svc.place_order(tradingsymbol=symbol, transaction_type=side, price=0.0,
@@ -7948,10 +8005,15 @@ def _sm_place_portfolio_orders(username: str, instance_num: int, broker_type: st
         return {'placed': 0, 'failed': len(live_entries),
                 'error': f'{broker_name}: not connected / missing credentials'}
 
+    # Fresh prices (via data provider) to price any padded-LIMIT fallback; fall
+    # back to the stored entry_price if a quote is missing.
+    prices = _sm_current_prices([e['symbol'] for e in live_entries])
+
     placed, failed, order_ids = 0, 0, []
     first_err = None
     for e in live_entries:
-        oid, err = _sm_place_equity_order(broker_type, svc, e['symbol'], e['qty'], 'BUY')
+        px = prices.get(e['symbol']) or e.get('entry_price')
+        oid, err = _sm_place_equity_order(broker_type, svc, e['symbol'], e['qty'], 'BUY', price=px)
         if oid:
             placed += 1
             order_ids.append((e, oid))
@@ -8087,7 +8149,7 @@ def sm_live_sip_swp(config_id):
             else:
                 placed, failed, oids, first_err = 0, 0, [], None
                 for e, q, _p in plan:
-                    oid, err = _sm_place_equity_order(broker_type, svc, e['symbol'], q, side)
+                    oid, err = _sm_place_equity_order(broker_type, svc, e['symbol'], q, side, price=_p)
                     if oid:
                         placed += 1; oids.append((e['symbol'], oid))
                     else:
@@ -8131,6 +8193,13 @@ def sm_live_sip_swp(config_id):
         'note':   body.get('note', ''),
         'type':   mode,
     })
+
+    # Remember the broker used as this config's default (so every order popup
+    # preselects the group's broker next time).
+    if broker_inst:
+        config['broker'] = {'instance':    broker_inst,
+                            'broker_type': body.get('broker_type'),
+                            'broker_name': body.get('broker_name')}
 
     _sm_save_live_configs(configs)
     return jsonify({'success': True, 'mode': mode,
@@ -8548,6 +8617,7 @@ def sm_live_signal(config_id):
             'total_sip_added':        round(total_sip, 2),
             'total_swp_taken':        round(total_swp, 2),
             'cagr_pct':               cagr_pct,
+            'broker':                 config.get('broker'),
             'rankings_pending':       True,
         })
     except Exception as e:

@@ -5,6 +5,7 @@ let _vegaChart = null;
 let _vegaPriceSeries = null;
 let _vegaCallSeries = null;
 let _vegaPutSeries = null;
+let _vegaDiffSeries = null;
 let _vegaRawData = [];
 let _vegaInited = false;
 let _vegaRangeSyncing = false;
@@ -13,7 +14,7 @@ let _vegaRangeSyncing = false;
 function _vegaCleanup() {
     try { if (_vegaChart) _vegaChart.remove(); } catch (e) {}
     _vegaChart = null;
-    _vegaPriceSeries = _vegaCallSeries = _vegaPutSeries = null;
+    _vegaPriceSeries = _vegaCallSeries = _vegaPutSeries = _vegaDiffSeries = null;
     _vegaInited = false;
 }
 
@@ -179,6 +180,15 @@ function _vegaInitChart() {
         priceFormat: { type: 'custom', formatter: _fmtVega, minMove: 0.01 },
     });
 
+    // Put-Call Difference (Call Vega − Put Vega) — dotted grey line, right scale
+    _vegaDiffSeries = _vegaChart.addSeries(LightweightCharts.LineSeries, {
+        priceScaleId: 'right',
+        color: '#8b8fa3', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dotted,
+        lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false,
+        priceFormat: { type: 'custom', formatter: _fmtVega, minMove: 0.01 },
+    });
+
     // (no separate band series needed — baseline fill handles the shading)
 
     // Crosshair → tooltip
@@ -209,6 +219,7 @@ function _vegaRender(data) {
     const priceData = data.map(d => ({ time: d.time, value: d.price }));
     const callData  = data.map(d => ({ time: d.time, value: d.call_vega }));
     const putData   = data.map(d => ({ time: d.time, value: d.put_vega }));
+    const diffData  = data.map(d => ({ time: d.time, value: d.diff != null ? d.diff : (d.put_vega - d.call_vega) }));
 
     const isEstimated = data.some(d => d.estimated);
 
@@ -218,6 +229,7 @@ function _vegaRender(data) {
             _vegaPriceSeries.setData(priceData);
             _vegaPutSeries.setData(putData);
             _vegaCallSeries.setData(callData);
+            if (_vegaDiffSeries) _vegaDiffSeries.setData(diffData);
         } catch (e) {
             console.error('[Vega] setData error', e);
             return;
@@ -255,10 +267,12 @@ function _vegaShowTooltip(param) {
     const h = dt.getUTCHours(), m = String(dt.getUTCMinutes()).padStart(2, '0');
     const ampm = h >= 12 ? 'PM' : 'AM', h12 = h % 12 || 12;
     const timeStr = h12 + ':' + m + ' ' + ampm;
+    const diffVal = d.diff != null ? d.diff : (d.put_vega - d.call_vega);
     tt.innerHTML = '<b>' + timeStr + '</b>'
         + ' &nbsp; Fut: <b>' + d.price.toFixed(2) + '</b>'
         + ' &nbsp; Call Vega: <b style="color:#22c55e">' + d.call_vega.toFixed(2) + 'Cr</b>'
         + ' &nbsp; Put Vega: <b style="color:#ef4444">' + d.put_vega.toFixed(2) + 'Cr</b>'
+        + ' &nbsp; Diff: <b style="color:#8b8fa3">' + diffVal.toFixed(2) + 'Cr</b>'
 ;
     tt.classList.remove('hidden');
 }

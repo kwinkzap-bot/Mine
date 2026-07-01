@@ -44,7 +44,10 @@
 }
 
 /* ── Dark Theme ───────────────────────────────────────────────── */
-body.dark-theme .algo-page {
+/* .sm-gl-overlay is appended to <body> (outside .algo-page), so it must be
+   listed here too or the popups fall back to the light :root variables. */
+body.dark-theme .algo-page,
+body.dark-theme .sm-gl-overlay {
     --ag-bg:            #090e17;
     --ag-surface:       #111827;
     --ag-border:        #1f2937;
@@ -83,7 +86,8 @@ body.dark-theme .algo-page {
 }
 
 /* ── Forest Theme ────────────────────────────────────────────── */
-body.forest-theme .algo-page {
+body.forest-theme .algo-page,
+body.forest-theme .sm-gl-overlay {
     --ag-bg:            #060c09;
     --ag-surface:       #0a1810;
     --ag-border:        #142820;
@@ -122,7 +126,8 @@ body.forest-theme .algo-page {
 }
 
 /* ── Cream Theme ─────────────────────────────────────────────── */
-body.cream-theme .algo-page {
+body.cream-theme .algo-page,
+body.cream-theme .sm-gl-overlay {
     --ag-bg:            #fdfbf7;
     --ag-surface:       #fdf6e9;
     --ag-border:        #e6dfd3;
@@ -161,7 +166,8 @@ body.cream-theme .algo-page {
 }
 
 /* ── Ocean Theme ─────────────────────────────────────────────── */
-body.ocean-theme .algo-page {
+body.ocean-theme .algo-page,
+body.ocean-theme .sm-gl-overlay {
     --ag-bg:            #f0f6fc;
     --ag-surface:       #ffffff;
     --ag-border:        #dbebfa;
@@ -1094,6 +1100,10 @@ body.ocean-theme .algo-page {
     border-bottom: 1px solid var(--ag-border-sub);
     color: var(--ag-text);
 }
+/* Neutralize the global white tr:nth-child(even) zebra so the faint hover tint
+   (--ag-row-hover) never exposes a white row underneath in dark themes. */
+.sm-signal-table tbody tr,
+.sm-signal-table tbody tr:nth-child(even) { background: transparent; }
 .sm-signal-table tr:hover td { background: var(--ag-row-hover); }
 .sm-signal-table tr:last-child td { border-bottom: none; }
 .sm-signal-table tbody tr:nth-child(even) td { background: var(--ag-border-sub); }
@@ -1637,50 +1647,66 @@ body.ocean-theme .algo-page {
     display: flex; align-items: center; justify-content: center;
 }
 .sm-gl-box {
-    width: 620px; max-width: 94vw; max-height: 90vh; overflow: auto;
-    background: var(--ag-surface, #fff); border-radius: 14px;
-    box-shadow: 0 20px 60px rgba(0,0,0,.3); display: flex; flex-direction: column;
-    border-top: 4px solid var(--ag-accent, #2563eb);
+    width: 460px; max-width: 94vw; max-height: 88vh;
+    overflow-x: hidden; overflow-y: auto;
+    background: var(--ag-surface, #fff); border-radius: 11px;
+    box-shadow: 0 16px 48px rgba(0,0,0,.3); display: flex; flex-direction: column;
+    border-top: 3px solid var(--ag-accent, #2563eb);
 }
 .sm-gl-box.sm-flow-sip { border-top-color: var(--ag-pos, #16a34a); }
 .sm-gl-box.sm-flow-swp { border-top-color: var(--ag-neg, #ef4444); }
+.sm-gl-box.sm-gl-narrow { width: 330px; }
+.sm-po-broker {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+    font-size: 12px; color: var(--ag-text, #0f172a);
+}
+.sm-po-broker > span {
+    font-size: 10px; font-weight: 700; color: var(--ag-text-3, #64748b);
+    text-transform: uppercase; letter-spacing: .3px;
+}
+.sm-po-broker > strong { font-weight: 700; }
 .sm-gl-hdr {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 16px 20px; border-bottom: 1px solid var(--ag-border, #eef0f3);
+    padding: 10px 14px; border-bottom: 1px solid var(--ag-border, #eef0f3);
 }
-.sm-gl-title { font-size: 15px; font-weight: 800; color: var(--ag-text, #0f172a); }
-.sm-gl-close { border: none; background: none; font-size: 16px; cursor: pointer; color: var(--ag-text-3, #94a3b8); padding: 4px; }
+.sm-gl-title { font-size: 13.5px; font-weight: 800; color: var(--ag-text, #0f172a); }
+.sm-gl-close { border: none; background: none; font-size: 15px; cursor: pointer; color: var(--ag-text-3, #94a3b8); padding: 2px; }
 .sm-gl-close:hover { color: var(--ag-text, #0f172a); }
-.sm-gl-body { padding: 18px 20px; }
-.sm-flow-controls { display: grid; grid-template-columns: 200px 1fr; gap: 12px 16px; margin-bottom: 14px; }
-.sm-gl-field { display: flex; flex-direction: column; gap: 5px; }
-.sm-gl-field-wide { grid-column: auto; }
-.sm-gl-field > span { font-size: 11px; font-weight: 700; color: var(--ag-text-3, #64748b); text-transform: uppercase; letter-spacing: .4px; }
+.sm-gl-body { padding: 12px 14px; }
+.sm-flow-controls { display: grid; grid-template-columns: 140px 1fr; gap: 8px 12px; margin-bottom: 10px; }
+.sm-gl-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.sm-gl-field-wide { grid-column: 1 / -1; }
+.sm-gl-field > span { font-size: 10px; font-weight: 700; color: var(--ag-text-3, #64748b); text-transform: uppercase; letter-spacing: .3px; }
 .sm-gl-field input, .sm-gl-field select {
-    height: 38px; padding: 0 12px; font-size: 13px; font-weight: 600;
-    border: 1.5px solid var(--ag-border, #e2e8f0); border-radius: 8px;
+    width: 100%; box-sizing: border-box;
+    height: 31px; padding: 0 8px; font-size: 11.5px; font-weight: 600;
+    border: 1.5px solid var(--ag-border, #e2e8f0); border-radius: 7px;
     color: var(--ag-text, #0f172a); background: var(--ag-bg, #f8fafc); outline: none;
 }
 .sm-gl-field input:focus, .sm-gl-field select:focus { border-color: var(--ag-accent, #2563eb); }
-.sm-flow-table-wrap { max-height: 320px; overflow: auto; border: 1px solid var(--ag-border, #e2e8f0); border-radius: 8px; }
-.sm-flow-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.sm-flow-table-wrap { max-height: 230px; overflow-x: hidden; overflow-y: auto; border: 1px solid var(--ag-border, #e2e8f0); border-radius: 7px; }
+.sm-flow-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+.sm-flow-table td, .sm-flow-table th { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Override the global table zebra/colors so the popup table stays themed */
+.sm-flow-table tbody tr { background: transparent; }
+.sm-flow-table tbody tr:nth-child(even) { background: var(--ag-row-hover, rgba(0,0,0,0.02)); }
 .sm-flow-table thead th {
-    position: sticky; top: 0; background: var(--ag-bg, #f8fafc);
-    text-align: right; padding: 8px 10px; font-size: 10.5px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .3px; color: var(--ag-text-3, #64748b);
-    border-bottom: 1px solid var(--ag-border, #e2e8f0);
+    position: sticky; top: 0; background: var(--ag-surface, #fff);
+    text-align: right; padding: 5px 8px; font-size: 9.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .2px; color: var(--ag-text-3, #64748b);
+    border-bottom: 1px solid var(--ag-border, #e2e8f0); cursor: default;
 }
 .sm-flow-table thead th:first-child { text-align: left; }
-.sm-flow-table tbody td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--ag-border-sub, #f1f5f9); color: var(--ag-text, #0f172a); }
+.sm-flow-table tbody td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--ag-border-sub, #f1f5f9); color: var(--ag-text, #0f172a); background: transparent; }
 .sm-flow-table tbody td.sm-col-sym { text-align: left; }
-.sm-flow-out { color: var(--ag-neg, #ef4444); font-size: 10px; font-weight: 700; }
-.sm-flow-summary { margin-top: 12px; font-size: 13px; font-weight: 700; color: var(--ag-text, #0f172a); }
-.sm-flow-sub { font-size: 11.5px; font-weight: 500; color: var(--ag-text-3, #64748b); }
-.sm-gl-summary { margin-top: 12px; padding: 10px 12px; font-size: 12.5px; font-weight: 600; border-radius: 8px; }
+.sm-flow-out { color: var(--ag-neg, #ef4444); font-size: 9px; font-weight: 700; }
+.sm-flow-summary { margin-top: 8px; font-size: 12px; font-weight: 700; color: var(--ag-text, #0f172a); }
+.sm-flow-sub { font-size: 10.5px; font-weight: 500; color: var(--ag-text-3, #64748b); }
+.sm-gl-summary { margin-top: 8px; padding: 7px 10px; font-size: 11.5px; font-weight: 600; border-radius: 7px; }
 .sm-gl-summary-ok  { background: rgba(22,163,74,.1);  color: var(--ag-pos, #15803d); }
 .sm-gl-summary-err { background: rgba(234,179,8,.12);  color: #a16207; }
-.sm-gl-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--ag-border, #eef0f3); }
-.sm-gl-btn { padding: 9px 18px; font-size: 13px; font-weight: 700; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+.sm-gl-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--ag-border, #eef0f3); }
+.sm-gl-btn { padding: 7px 15px; font-size: 12.5px; font-weight: 700; border-radius: 7px; cursor: pointer; border: 1px solid transparent; }
 .sm-gl-cancel  { background: var(--ag-surface, #fff); border-color: var(--ag-border, #e2e8f0); color: var(--ag-text-2, #475569); }
 .sm-gl-confirm { background: var(--ag-pos, #16a34a); color: #fff; }
 .sm-gl-confirm:hover:not(:disabled) { filter: brightness(.93); }
@@ -1710,15 +1736,15 @@ body.ocean-theme .algo-page {
 .sm-row-menu-item:hover { background: var(--ag-row-hover, #f8fafc); }
 .sm-rm-buy  { color: var(--ag-pos, #16a34a); }
 .sm-rm-sell { color: var(--ag-neg, #dc2626); }
-.sm-so-meta { display: flex; gap: 18px; margin-bottom: 12px; font-size: 13px; color: var(--ag-text-2, #475569); }
-.sm-so-est { margin-top: 10px; font-size: 13px; color: var(--ag-text-2, #475569); }
+.sm-so-meta { display: flex; gap: 16px; margin-bottom: 9px; font-size: 12.5px; color: var(--ag-text-2, #475569); }
+.sm-so-est { margin-top: 8px; font-size: 12.5px; color: var(--ag-text-2, #475569); }
 .sm-so-meta strong, .sm-so-est strong { color: var(--ag-text, #1e293b); }
 .sm-ab-place { font-weight: 700; }
-.sm-po-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.sm-po-badge { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 999px; }
 .sm-po-done { background: var(--ag-badge-active-bg, rgba(22,163,74,.12)); color: var(--ag-badge-active-text, #15803d); }
 .sm-po-new  { background: var(--ag-accent-dim, rgba(59,130,246,.08)); color: var(--ag-accent, #3b82f6); }
 .sm-po-skip { opacity: .5; }
-.sm-po-force { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; color: var(--ag-text-2, #475569); cursor: pointer; }
+.sm-po-force { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-size: 11.5px; color: var(--ag-text-2, #475569); cursor: pointer; }
 
 /* ── RTP live performance dashboard (charts + period tabs) ────── */
 .rtp-chart-block { margin-top: 14px; }

@@ -1,15 +1,6 @@
 // Historic OI page logic (extracted from dashboard.html)
 // ── Historic OI ────────────────────────────────────────────────
-const _HOI_SYMBOLS = ['NIFTY', 'BANKNIFTY'];
-let _hoiActiveSymbol = 'NIFTY';
-
-function hoiSymbolSwitch(sym) {
-    _hoiActiveSymbol = sym;
-    _HOI_SYMBOLS.forEach(s => {
-        document.getElementById('hoi-tab-' + s).classList.toggle('active', s === sym);
-        document.getElementById('hoi-panel-' + s).style.display = (s === sym) ? '' : 'none';
-    });
-}
+const _HOI_SYMBOLS = ['NIFTY'];
 
 function _hoiFmt(n) {
     if (n == null) return '—';
@@ -100,28 +91,30 @@ function loadHistoricOI() {
         });
 }
 
-function recordHistoricOI() {
-    const btn = document.getElementById('hoiRecordBtn');
+// Fetch Latest — record today's snapshot for all symbols (OI/OHLC/Fut OI) and
+// sync the FII flow window in one call. Same action the 8:00 PM IST job runs.
+function hoiFetchLatest() {
+    const btn = document.getElementById('hoiFetchLatestBtn');
     const status = document.getElementById('hoiStatus');
     btn.disabled = true;
-    btn.textContent = '⏳ Recording…';
+    btn.textContent = '⏳ Fetching…';
     status.textContent = '';
     fetch('/api/oi-historic/record', { method: 'POST' })
         .then(r => r.json())
         .then(d => {
             btn.disabled = false;
-            btn.textContent = '⏺ Record';
+            btn.textContent = '⟳ Fetch Latest';
             if (d.success) {
                 _hoiRenderAll(d.records);
                 const errs = (d.errors || []).filter(e => !e.success).map(e => e.symbol).join(', ');
-                status.textContent = errs ? `⚠️ Errors: ${errs}` : '✅ Saved';
+                status.textContent = errs ? `⚠️ Errors: ${errs}` : '✅ Latest saved';
             } else {
                 status.textContent = '❌ ' + (d.error || 'Failed');
             }
         })
         .catch(() => {
             btn.disabled = false;
-            btn.textContent = '⏺ Record';
+            btn.textContent = '⟳ Fetch Latest';
             status.textContent = '❌ Network error';
         });
 }
@@ -164,11 +157,11 @@ function refreshHistoricOI(date, symbol, btn) {
     });
 }
 
-// ── Historic OI — Load History ──────────────────────────────────
+// ── Historic OI — Historical Update (date-range backfill) ───────
 let _hoiPollTimer = null;
 
-function hoiToggleLoadHistory() {
-    const panel = document.getElementById('hoiLoadHistoryPanel');
+function hoiToggleHistorical() {
+    const panel = document.getElementById('hoiHistoricalPanel');
     const showing = panel.style.display !== 'none';
     panel.style.display = showing ? 'none' : 'flex';
     if (!showing) {
@@ -178,43 +171,25 @@ function hoiToggleLoadHistory() {
     }
 }
 
-function hoiSyncFII() {
-    const btn = document.getElementById('hoiSyncFIIBtn');
-    const msg = document.getElementById('hoiLoadMsg');
-    btn.disabled = true;
-    msg.textContent = 'Syncing FII data…';
-    fetch('/api/oi-historic/sync-fii', { method: 'POST' })
-        .then(r => r.json())
-        .then(d => {
-            btn.disabled = false;
-            if (d.success) {
-                msg.textContent = `✓ FII synced: ${d.updated} records (${d.date_range || ''})`;
-                loadHistoricOI();
-            } else {
-                msg.textContent = '❌ ' + (d.error || 'Sync failed');
-            }
-        })
-        .catch(() => { btn.disabled = false; msg.textContent = '❌ Network error'; });
-}
-
-function hoiStartBackfill() {
-    const src      = document.querySelector('input[name="hoiSrc"]:checked')?.value;
+// Historical Update — backfill every trading day in [from, to] from NSE
+// bhavcopy (OI/OHLC/Fut OI), then sync the FII flow window server-side.
+function hoiHistoricalUpdate() {
     const fromDate = document.getElementById('hoiFromDate').value;
     const toDate   = document.getElementById('hoiToDate').value;
-    const loadBtn  = document.getElementById('hoiLoadBtn');
+    const updateBtn = document.getElementById('hoiUpdateBtn');
     const msg      = document.getElementById('hoiLoadMsg');
 
-    if (src === 'nse' && (!fromDate || !toDate)) { msg.textContent = '⚠ Select date range'; return; }
-    if (src === 'nse' && fromDate > toDate)       { msg.textContent = '⚠ From must be ≤ To'; return; }
+    if (!fromDate || !toDate) { msg.textContent = '⚠ Select date range'; return; }
+    if (fromDate > toDate)    { msg.textContent = '⚠ From must be ≤ To'; return; }
 
-    loadBtn.disabled = true;
+    updateBtn.disabled = true;
     msg.textContent  = 'Starting…';
     document.getElementById('hoiProgressWrap').style.display = '';
 
     fetch('/api/oi-historic/load-all', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ source: src, from_date: fromDate, to_date: toDate }),
+        body: JSON.stringify({ source: 'nse', from_date: fromDate, to_date: toDate }),
     })
     .then(r => r.json())
     .then(d => {
@@ -222,13 +197,13 @@ function hoiStartBackfill() {
             msg.textContent = 'Running…';
             _hoiPollBackfill();
         } else {
-            loadBtn.disabled = false;
+            updateBtn.disabled = false;
             msg.textContent  = '❌ ' + (d.error || 'Failed to start');
             document.getElementById('hoiProgressWrap').style.display = 'none';
         }
     })
     .catch(() => {
-        loadBtn.disabled = false;
+        updateBtn.disabled = false;
         msg.textContent  = '❌ Network error';
         document.getElementById('hoiProgressWrap').style.display = 'none';
     });
@@ -246,7 +221,7 @@ function _hoiPollBackfill() {
             if (st.running) {
                 _hoiPollTimer = setTimeout(_hoiPollBackfill, 3000);
             } else {
-                document.getElementById('hoiLoadBtn').disabled   = false;
+                document.getElementById('hoiUpdateBtn').disabled  = false;
                 document.getElementById('hoiLoadMsg').textContent = st.message || 'Done';
                 loadHistoricOI();
             }

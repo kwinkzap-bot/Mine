@@ -310,7 +310,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -324,7 +324,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -338,7 +338,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -352,7 +352,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -366,7 +366,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -380,7 +380,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -394,7 +394,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -408,7 +408,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -422,7 +422,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -436,7 +436,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -450,7 +450,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         },
         {
@@ -464,7 +464,7 @@
             "instance": 6,
             "order_id": null,
             "status": "failed",
-            "error": "NSE is disabled for your account. You can activate the segment on [Console.](https://console.zerodha.com/account/segment-activation)"
+            "error": "Your order could not be converted to a After Market Order (AMO)."
           }
         }
       ],

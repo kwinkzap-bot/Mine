@@ -1,8 +1,8 @@
 """
 OI Historic Data — daily end-of-day CE/PE open interest snapshot.
 
-Records are stored in per-symbol JSON files at the project root:
-  Nifty_oi_historic_data.json, BankNifty_oi_historic_data.json
+Records are stored in a per-symbol JSON file at the project root:
+  Nifty_oi_historic_data.json
 Each record: { date, symbol, ce_oi, pe_oi, open, high, low, close, idx_fut_oi }
 Upsert logic: one record per (date, symbol); re-fetching on the same day overwrites.
 """
@@ -22,12 +22,11 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 
-_SYMBOLS = ['NIFTY', 'BANKNIFTY']
+_SYMBOLS = ['NIFTY']
 
 # Per-symbol JSON filenames at the project root
 _SYMBOL_FILE = {
-    'NIFTY':     'Nifty_oi_historic_data.json',
-    'BANKNIFTY': 'BankNifty_oi_historic_data.json',
+    'NIFTY': 'Nifty_oi_historic_data.json',
 }
 
 _PROJECT_ROOT = os.path.normpath(
@@ -116,12 +115,10 @@ def get_backfill_status() -> Dict[str, Any]:
 
 _SYMBOL_INSTRUMENT_KEY = {
     'fyers': {
-        'NIFTY':     'NSE:NIFTY50-INDEX',
-        'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
+        'NIFTY': 'NSE:NIFTY50-INDEX',
     },
     'kite': {
-        'NIFTY':     'NSE:NIFTY 50',
-        'BANKNIFTY': 'NSE:NIFTY BANK',
+        'NIFTY': 'NSE:NIFTY 50',
     },
 }
 
@@ -373,6 +370,42 @@ def _fetch_nse_fii_fut_oi(date_str: str) -> Optional[int]:
         return None
     except Exception as e:
         logger.warning(f"[HistoricOI] FII participant OI fetch failed for {date_str}: {e}")
+        return None
+
+
+def _fetch_nse_fii_idx_fut_flow(date_str: str) -> Optional[float]:
+    """
+    Download NSE's FII Derivative Statistics report for date_str and return the
+    FII *net index-futures flow* in Crore INR = (Index Futures Buy Amt − Sell Amt).
+
+      https://nsearchives.nseindia.com/content/fo/fii_stats_DD-Mon-YYYY.xls
+
+    This is the same figure Moneycontrol republishes as `fiiIdxFut`, but NSE
+    publishes it the *same evening* (Moneycontrol lags ~1 day), so it fills the
+    "FII Fut" column on the day of the 8 PM record instead of leaving it blank.
+    Returns None on holiday / 404 / unparseable format.
+    """
+    try:
+        import xlrd
+    except ImportError:
+        logger.warning("[HistoricOI] xlrd not installed — cannot read NSE FII stats .xls")
+        return None
+    try:
+        dt  = datetime.strptime(date_str, '%Y-%m-%d')
+        url = (f'https://nsearchives.nseindia.com/content/fo/'
+               f'fii_stats_{dt.strftime("%d-%b-%Y")}.xls')
+        resp = requests.get(url, headers=_NSE_HEADERS, timeout=30)
+        if resp.status_code != 200 or not resp.content:
+            return None
+        sheet = xlrd.open_workbook(file_contents=resp.content).sheet_by_index(0)
+        for i in range(sheet.nrows):
+            if str(sheet.cell_value(i, 0)).strip().upper() == 'INDEX FUTURES':
+                buy  = float(str(sheet.cell_value(i, 2)).replace(',', '') or 0)
+                sell = float(str(sheet.cell_value(i, 4)).replace(',', '') or 0)
+                return round(buy - sell, 2)
+        return None
+    except Exception as e:
+        logger.warning(f"[HistoricOI] NSE FII stats fetch failed for {date_str}: {e}")
         return None
 
 
@@ -671,6 +704,27 @@ def _fetch_moneycontrol_fii_map() -> Dict[str, float]:
     return fii_map
 
 
+def _patch_fii_flow(fii_map: Dict[str, float]) -> int:
+    """
+    Patch FII_Index_futures (Crore INR) on every stored record whose date is in
+    fii_map. Only writes when the value actually changed. Returns the number of
+    records updated. Shared by sync_fii_from_moneycontrol(), fetch_and_store_all()
+    and the historical load so FII flow is folded into every write path.
+    """
+    with _lock:
+        records = _load_records()
+    updated = 0
+    for i, r in enumerate(records):
+        d = r.get('date', '')
+        if d in fii_map and r.get('FII_Index_futures') != fii_map[d]:
+            records[i] = {**r, 'FII_Index_futures': fii_map[d]}
+            updated += 1
+    if updated:
+        with _lock:
+            _save_records(records)
+    return updated
+
+
 def sync_fii_from_moneycontrol() -> Dict[str, Any]:
     """
     Fetch last ~30 days of FII index futures net flow from Moneycontrol
@@ -682,20 +736,8 @@ def sync_fii_from_moneycontrol() -> Dict[str, Any]:
         if not fii_map:
             return {'success': False, 'error': 'No parseable fiiIdxFut values found'}
 
-        with _lock:
-            records = _load_records()
-
-        updated = 0
-        for i, r in enumerate(records):
-            d = r.get('date', '')
-            if d in fii_map:
-                records[i] = {**r, 'FII_Index_futures': fii_map[d]}
-                updated += 1
-
-        with _lock:
-            _save_records(records)
-
-        dates = sorted(fii_map)
+        updated = _patch_fii_flow(fii_map)
+        dates   = sorted(fii_map)
         logger.info(f'[HistoricOI] FII sync: {updated} records updated '
                     f'({dates[0]} → {dates[-1]})')
         return {
@@ -1097,6 +1139,16 @@ def _run_load_all(from_date: str, to_date: str,
                 with _lock:
                     _save_records(records)
 
+        # Fold-in FII sync: after a historical load, patch the recent ~30-day
+        # FII flow window so the FII Fut column fills in without a separate step.
+        try:
+            _backfill_status['message'] = 'Syncing FII flow…'
+            fii_map = _fetch_moneycontrol_fii_map()
+            if fii_map:
+                _patch_fii_flow(fii_map)
+        except Exception as e:
+            logger.warning(f'[HistoricOI] FII sync after load_all failed: {e}')
+
         if inserted == 0 and updated == 0:
             done_msg = f'Already up to date ({len(days)} days checked, nothing to add)'
         else:
@@ -1160,12 +1212,19 @@ def fetch_and_store_all(provider=None) -> List[Dict[str, Any]]:
     """
     today = datetime.now().strftime('%Y-%m-%d')
     todays_bhavcopy = _fetch_nse_bhavcopy_oi(today, _SYMBOLS)
-    # Best-effort: a Moneycontrol hiccup must not abort the daily record.
+    # FII index-futures flow (Moneycontrol, ~30-day window). Best-effort: a
+    # Moneycontrol hiccup must not abort the daily record.
     try:
-        todays_fii_flow = _fetch_moneycontrol_fii_map().get(today)
+        fii_map = _fetch_moneycontrol_fii_map()
     except Exception as e:
         logger.warning(f"[HistoricOI] Moneycontrol FII fetch failed: {e}")
-        todays_fii_flow = None
+        fii_map = {}
+    # NSE publishes the FII index-futures flow the same evening; Moneycontrol
+    # lags ~1 day. Prefer NSE so today's record is never left blank, and fall
+    # back to Moneycontrol's ~30-day map when NSE has no file (holiday/pre-EOD).
+    todays_fii_flow = _fetch_nse_fii_idx_fut_flow(today)
+    if todays_fii_flow is None:
+        todays_fii_flow = fii_map.get(today)
 
     results = []
     for symbol in _SYMBOLS:
@@ -1177,6 +1236,12 @@ def fetch_and_store_all(provider=None) -> List[Dict[str, Any]]:
         )
         result['symbol'] = symbol
         results.append(result)
+
+    # Fold-in FII sync: patch the whole ~30-day window, not just today. This
+    # backfills the FII Fut column on prior days that Moneycontrol only publishes
+    # on T+1, so the manual button and the 8 PM job never leave a stale gap.
+    if fii_map:
+        _patch_fii_flow(fii_map)
     return results
 
 
@@ -1216,8 +1281,11 @@ def refresh_record(date: str, symbol: str, provider=None) -> Dict[str, Any]:
         # ── FII net index-futures OI (NSE participant report) ───────────────
         fii_fut_oi = _fetch_nse_fii_fut_oi(date)
 
-        # ── FII index-futures flow in Cr (Moneycontrol, ~30-day window) ─────
-        fii_flow = _fetch_moneycontrol_fii_map().get(date)
+        # ── FII index-futures flow in Cr — NSE same-day report (authoritative,
+        #    available any date), Moneycontrol ~30-day map as fallback ────────
+        fii_flow = _fetch_nse_fii_idx_fut_flow(date)
+        if fii_flow is None:
+            fii_flow = _fetch_moneycontrol_fii_map().get(date)
 
         with _lock:
             records  = _load_records()
