@@ -6454,27 +6454,17 @@ def oi_profile_premium_strikes() -> EndpointResponse:
 
         now = datetime.now()
 
-        # ── 1. Previous-day index close ────────────────────────────────
-        idx_close = kite_svc.get_previous_trading_day_close(symbol)
-        if not idx_close:
-            return jsonify({'success': False, 'error': 'Could not fetch previous-day close for index'}), 500
-
-        atm = int(round(idx_close / step) * step)
-
-        # ── 2. Candidate strikes (5) sorted by distance from idx_close ─
-        candidates = sorted(
-            [atm + i * step for i in range(-2, 3)],
-            key=lambda s: abs(s - idx_close)
-        )
-
         # Helper: previous-day close for a single instrument token
         def _fetch_prev_close(token):
             try:
                 from_dt = (now - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
                 if _is_fyers and _data_provider:
+                    # Previous-day daily bars are immutable intraday, so allow the
+                    # historical cache to serve them — avoids ~15 fresh /history
+                    # calls per request that add to Fyers rate-limit (429) pressure.
                     raw = _data_provider.historical_data(
                         str(token), from_dt.strftime('%Y-%m-%d'),
-                        now.strftime('%Y-%m-%d'), 'day', use_cache=False)
+                        now.strftime('%Y-%m-%d'), 'day', use_cache=True)
                 elif kite:
                     raw = kite_svc._historical_with_retry(int(token), from_dt, now, 'day')
                 else:
@@ -6490,6 +6480,80 @@ def oi_profile_premium_strikes() -> EndpointResponse:
             except Exception as exc:
                 logger.warning(f'[PremStrikes] prev-close fetch failed for {token}: {exc}')
             return None
+
+        # ── 1. Previous-day index close ────────────────────────────────
+        # Kite resolves the index via integer instrument token; Fyers needs its
+        # own index symbol (e.g. NSE:NIFTY50-INDEX), so branch on provider.
+        # Well-known Kite index tokens (indices are not reliably resolvable via
+        # KiteService.get_instrument_token, which returned None here and caused
+        # the "Could not fetch previous-day close" error).
+        _KITE_INDEX_TOKENS = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105, 'FINNIFTY': 257801,
+            'MIDCPNIFTY': 288009, 'NIFTY MIDCAP 150': 266249, 'NIFTY AUTO': 263433,
+            'NIFTY Smallcap 100': 267017, 'NIFTY SMLCAP 100': 267017,
+            'NIFTY FMCG': 261897, 'NIFTY METAL': 263689, 'NIFTY PHARAMA': 262409,
+            'NIFTY PHARMA': 262409, 'NIFTY PSU BANK': 262921, 'NIFTY IT': 259849,
+        }
+        idx_close = None
+        if _is_fyers and _data_provider:
+            idx_token = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-INDEX'
+            idx_close = _fetch_prev_close(idx_token)
+        else:
+            idx_close = kite_svc.get_previous_trading_day_close(symbol)
+            if not idx_close:
+                # Fallback: resolve the index via the known Kite token directly.
+                kite_tok = _KITE_INDEX_TOKENS.get(symbol) or kite_svc.get_instrument_token(symbol)
+                if kite_tok:
+                    idx_close = _fetch_prev_close(kite_tok)
+
+        logger.info(
+            f'[PremStrikes] idx_close resolution: symbol={symbol}, '
+            f'provider={"fyers" if _is_fyers else "kite"}, idx_close={idx_close}'
+        )
+        if not idx_close:
+            # Previous-day close unavailable (e.g. Fyers /history rate-limited).
+            # Degrade gracefully: derive ATM from the current spot and return the
+            # ATM strike for both the CE and PE legs instead of erroring out.
+            spot = None
+            try:
+                if _is_fyers and _data_provider:
+                    fsym = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-INDEX'
+                    q = _data_provider.ltp([fsym]) or {}
+                    spot = (q.get(fsym) or {}).get('last_price')
+                else:
+                    spot = kite_svc.get_current_ltp(symbol)
+            except Exception as exc:
+                logger.warning(f'[PremStrikes] spot fallback failed for {symbol}: {exc}')
+
+            if not spot:
+                return jsonify({'success': False, 'error': 'Could not fetch previous-day close for index'}), 500
+
+            atm_fb = int(round(spot / step) * step)
+            logger.info(
+                f'[PremStrikes] {symbol}: prev-close unavailable, ATM fallback '
+                f'from spot={spot} -> ATM={atm_fb} (returning ATM for both CE & PE)'
+            )
+            return jsonify({
+                'success':        True,
+                'symbol':         symbol,
+                'atm_fallback':   True,
+                'base_strike':    atm_fb,
+                'base_ce_close':  None,
+                'base_pe_close':  None,
+                'ce_strike':      atm_fb,
+                'pe_strike':      atm_fb,
+                'strike_diff':    0,
+                'ce_strike_data': {'ce_close': None, 'pe_close': None},
+                'pe_strike_data': {'ce_close': None, 'pe_close': None},
+            })
+
+        atm = int(round(idx_close / step) * step)
+
+        # ── 2. Candidate strikes (5) sorted by distance from idx_close ─
+        candidates = sorted(
+            [atm + i * step for i in range(-2, 3)],
+            key=lambda s: abs(s - idx_close)
+        )
 
         # ── 3. Resolve tokens and fetch CE/PE closes for all candidates in parallel ─
         tok_map = {}  # strike -> {ce: token, pe: token}
@@ -7992,6 +8056,26 @@ def _sm_avg_fill_price(broker_type: str, svc, order_id) -> Optional[float]:
     return None
 
 
+def _sm_record_exit(config: dict, symbol: str, qty: int, entry_price: float,
+                    entry_date: str, exit_price: float, exit_date: Optional[str] = None):
+    """Append a realized-exit record to the config's exit_history (per group)."""
+    qty      = int(qty)
+    invested = round(entry_price * qty, 2)
+    final    = round(exit_price * qty, 2)
+    config.setdefault('exit_history', []).append({
+        'symbol':      symbol,
+        'qty':         qty,
+        'entry_date':  entry_date or '',
+        'exit_date':   exit_date or datetime.today().strftime('%Y-%m-%d'),
+        'entry_price': round(entry_price, 2),
+        'exit_price':  round(exit_price, 2),
+        'invested':    invested,
+        'final_value': final,
+        'pnl':         round(final - invested, 2),
+        'pnl_pct':     round((exit_price - entry_price) / entry_price * 100, 2) if entry_price else 0,
+    })
+
+
 def _sm_place_portfolio_orders(username: str, instance_num: int, broker_type: str,
                                broker_name: str, live_entries: list):
     """Place CNC MARKET BUY for every holding on the chosen broker.
@@ -8183,6 +8267,9 @@ def sm_live_sip_swp(config_id):
             sell_q = min(q, int(e['qty']))
             e['qty'] = int(e['qty']) - sell_q
             deployed += sell_q * fill
+            if sell_q > 0:
+                _sm_record_exit(config, e['symbol'], sell_q, float(e['entry_price']),
+                                e.get('entry_date', ''), fill, body.get('date'))
     # Drop fully sold-out holdings
     config['live_entries'] = [e for e in entries if int(e['qty']) > 0]
 
@@ -8339,6 +8426,214 @@ def sm_live_place_orders(config_id):
                     'placed': summary.get('placed', 0),
                     'failed': summary.get('failed', 0),
                     'attempted': len(pending)})
+
+
+def _sm_compute_rebalance(config: dict):
+    """Work out the rebalance plan for a live config from today's rankings.
+
+    Returns (sells, buys, error) where:
+      sells = [{symbol, qty, price, value, current_rank}]  (rank fell past exit_rank)
+      buys  = [{symbol, price, qty, value, current_rank}]  (top replacements, sized
+              by the proceeds split equally across the freed slots)
+    """
+    entries   = config.get('live_entries') or []
+    exit_rank = config['exit_rank']
+
+    ranked = _sm_rankings_cached(config['index'])
+    if not ranked:
+        return None, None, 'Rankings unavailable — try again in a moment'
+    rank_by_sym = {s['symbol']: s for s in ranked}
+    held        = {e['symbol'] for e in entries}
+
+    sell_entries = [e for e in entries
+                    if rank_by_sym.get(e['symbol'], {}).get('rank', 9999) > exit_rank]
+    if not sell_entries:
+        return [], [], None
+
+    buy_cands = [s for s in ranked if s['symbol'] not in held][:len(sell_entries)]
+
+    prices = _sm_current_prices([e['symbol'] for e in sell_entries]
+                                + [b['symbol'] for b in buy_cands])
+
+    sells, proceeds = [], 0.0
+    for e in sell_entries:
+        px  = prices.get(e['symbol']) or e['entry_price']
+        val = int(e['qty']) * px
+        proceeds += val
+        sells.append({'symbol': e['symbol'], 'qty': int(e['qty']), 'price': round(px, 2),
+                      'value': round(val, 2),
+                      'current_rank': rank_by_sym.get(e['symbol'], {}).get('rank')})
+
+    budget = proceeds / len(buy_cands) if buy_cands else 0
+    buys = []
+    for b in buy_cands:
+        px  = prices.get(b['symbol']) or b['price']
+        qty = int(budget / px) if px else 0
+        if qty <= 0:
+            continue
+        buys.append({'symbol': b['symbol'], 'price': round(px, 2), 'qty': qty,
+                     'value': round(qty * px, 2), 'current_rank': b['rank']})
+    return sells, buys, None
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/rebalance/preview', methods=['GET'])
+def sm_live_rebalance_preview(config_id):
+    """Preview the rebalance: which stocks are sold, which replace them, and the
+    quantities sized from the sale proceeds."""
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+    sells, buys, err = _sm_compute_rebalance(config)
+    if err:
+        return jsonify({'success': False, 'error': err}), 503
+    return jsonify({'success': True, 'sells': sells, 'buys': buys,
+                    'proceeds': round(sum(s['value'] for s in sells), 2),
+                    'deploy':   round(sum(b['value'] for b in buys), 2),
+                    'broker':   config.get('broker')})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/rebalance', methods=['POST'])
+def sm_live_rebalance(config_id):
+    """Execute the rebalance: SELL holdings that dropped past exit_rank, then BUY
+    the top-ranked replacements sized by the proceeds. Places real orders on the
+    config's broker and rewrites live_entries in the JSON."""
+    import time as _t
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+
+    sells, buys, err = _sm_compute_rebalance(config)
+    if err:
+        return jsonify({'success': False, 'error': err}), 503
+    if not sells:
+        return jsonify({'success': False, 'error': 'No holdings past exit rank — nothing to rebalance'}), 400
+
+    broker = config.get('broker') or {}
+    if not broker.get('instance'):
+        return jsonify({'success': False, 'error': 'No broker set for this group. Assign one at Go Live / Place Orders.'}), 400
+    username    = session.get('username', 'Mine')
+    instance    = int(broker['instance'])
+    broker_type = (broker.get('broker_type') or '').strip().lower()
+    broker_name = broker.get('broker_name') or broker_type.title()
+    svc = _sm_build_order_service(username, instance, broker_type)
+    if svc is None:
+        return jsonify({'success': False, 'error': f'{broker_name}: not connected'}), 400
+
+    entries   = config.get('live_entries') or []
+    by_sym    = {e['symbol']: e for e in entries}
+    sold_syms, new_entries = [], []
+    summary   = {'sold': 0, 'bought': 0, 'failed': 0, 'errors': []}
+
+    def _order_rec(oid, status='placed', avg=None, error=None):
+        rec = {'broker': broker_name, 'broker_type': broker_type, 'instance': instance,
+               'order_id': str(oid) if oid else None, 'status': status}
+        if avg is not None:   rec['avg_price'] = avg
+        if error is not None: rec['error'] = error
+        return rec
+
+    # 1) SELL the exiting holdings
+    for s in sells:
+        oid, e = _sm_place_equity_order(broker_type, svc, s['symbol'], s['qty'], 'SELL', price=s['price'])
+        if oid:
+            summary['sold'] += 1
+            sold_syms.append(s['symbol'])
+            orig = by_sym.get(s['symbol'], {})
+            _sm_record_exit(config, s['symbol'], s['qty'],
+                            float(orig.get('entry_price', s['price'])),
+                            orig.get('entry_date', ''), s['price'])
+        else:
+            summary['failed'] += 1
+            summary['errors'].append(f"SELL {s['symbol']}: {e}")
+
+    # 2) BUY the replacements sized by the proceeds
+    buy_oids = []
+    for b in buys:
+        oid, e = _sm_place_equity_order(broker_type, svc, b['symbol'], b['qty'], 'BUY', price=b['price'])
+        if oid:
+            summary['bought'] += 1
+            entry = {'symbol': b['symbol'], 'entry_price': b['price'], 'qty': b['qty'],
+                     'entry_date': datetime.today().strftime('%Y-%m-%d'),
+                     'order': _order_rec(oid)}
+            new_entries.append(entry)
+            buy_oids.append((entry, oid))
+        else:
+            summary['failed'] += 1
+            summary['errors'].append(f"BUY {b['symbol']}: {e}")
+
+    # Read back BUY fill prices for accurate entry price
+    if buy_oids:
+        _t.sleep(2.0)
+        for entry, oid in buy_oids:
+            avg = _sm_avg_fill_price(broker_type, svc, oid)
+            if avg and avg > 0:
+                entry['entry_price']       = round(avg, 2)
+                entry['order']['avg_price'] = round(avg, 2)
+                entry['order']['status']    = 'filled'
+
+    # 3) Rewrite holdings: drop the sold, add the new
+    config['live_entries'] = [e for e in entries if e['symbol'] not in sold_syms] + new_entries
+    config.setdefault('monthly_investment_log', []).append({
+        'date':   datetime.today().strftime('%Y-%m-%d'),
+        'amount': 0.0,
+        'note':   f"Rebalance: sold {summary['sold']}, bought {summary['bought']}",
+        'type':   'rebalance',
+    })
+    _sm_save_live_configs(configs)
+
+    return jsonify({'success': True, 'summary': summary,
+                    'holdings': len(config['live_entries'])})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/holdings/edit', methods=['POST'])
+def sm_live_edit_holding(config_id):
+    """Edit a single holding's fields in the JSON. Body: {symbol, qty?, entry_date?,
+    entry_price?, invested?}. `invested` sets entry_price = invested / qty (qty kept).
+    A qty of 0 removes the holding. Only the fields present in the body are changed."""
+    body    = request.get_json() or {}
+    symbol  = body.get('symbol')
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+    entries = config.get('live_entries') or []
+    entry   = next((e for e in entries if e['symbol'] == symbol), None)
+    if not entry:
+        return jsonify({'success': False, 'error': 'Holding not found'}), 404
+
+    try:
+        if body.get('qty') not in (None, ''):
+            entry['qty'] = int(float(body['qty']))
+        if body.get('entry_date'):
+            entry['entry_date'] = str(body['entry_date'])
+        # invested wins over entry_price when both are sent (derive avg cost)
+        if body.get('invested') not in (None, ''):
+            q = int(entry.get('qty', 0)) or 1
+            entry['entry_price'] = round(float(body['invested']) / q, 2)
+        elif body.get('entry_price') not in (None, ''):
+            entry['entry_price'] = round(float(body['entry_price']), 2)
+    except (TypeError, ValueError) as e:
+        return jsonify({'success': False, 'error': f'Invalid value: {e}'}), 400
+
+    # Remove the holding entirely if quantity was set to zero
+    if int(entry.get('qty', 0)) <= 0:
+        config['live_entries'] = [e for e in entries if e['symbol'] != symbol]
+
+    _sm_save_live_configs(configs)
+    return jsonify({'success': True, 'entry': entry})
+
+
+@api_bp.route('/algo/swing-momentum/configs/<config_id>/exit-history', methods=['GET'])
+def sm_live_exit_history(config_id):
+    """Return the group's realized exit history (sold stocks with entry/exit P&L)."""
+    configs = _sm_load_live_configs()
+    config  = next((c for c in configs if c['id'] == config_id), None)
+    if not config:
+        return jsonify({'success': False, 'error': 'Config not found'}), 404
+    hist = config.get('exit_history', [])
+    return jsonify({'success': True, 'exits': hist,
+                    'realized_pnl': round(sum(h.get('pnl', 0) for h in hist), 2)})
 
 
 @api_bp.route('/algo/swing-momentum/configs/<config_id>', methods=['DELETE'])

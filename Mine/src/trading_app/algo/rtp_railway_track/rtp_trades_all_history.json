@@ -1,5 +1,79 @@
 [
   {
+    "date": "2026-07-02",
+    "direction": "BUY",
+    "entry_spot": 24132.75,
+    "exit_spot": 24170.2,
+    "pnl_pts": 37.45,
+    "reason": "EOD",
+    "entry_time": "2026-07-02T12:47:06.564071",
+    "exit_time": "2026-07-02T15:28:19.599140",
+    "strike": 23800,
+    "option_type": "CE",
+    "lot_size": 65,
+    "opt_entry_price": 370.05,
+    "opt_exit_price": 404.8,
+    "opt_pnl_pts": 34.75,
+    "opt_pnl_inr": 2258.75,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2072580299271102464'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2670723800CE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2072580305088602112'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2670723800CE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
+    "date": "2026-07-02",
+    "direction": "BUY",
+    "entry_spot": 24108.75,
+    "exit_spot": 24078.8,
+    "pnl_pts": -29.95,
+    "reason": "SL",
+    "entry_time": "2026-07-02T10:50:02.010257",
+    "exit_time": "2026-07-02T11:34:04.768699",
+    "strike": 23750,
+    "option_type": "CE",
+    "lot_size": 65,
+    "opt_entry_price": 391.85,
+    "opt_exit_price": 369.6,
+    "opt_pnl_pts": -22.25,
+    "opt_pnl_inr": -1446.25,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2072550840916697088'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2670723750CE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2072550842321788928'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2670723750CE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
     "date": "2026-07-01",
     "direction": "BUY",
     "entry_spot": 24009.55,

@@ -16,73 +16,73 @@
         {
           "symbol": "HFCL",
           "entry_price": 211.29,
-          "qty": 85,
+          "qty": 45,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "CPPLUS",
           "entry_price": 3639.3,
-          "qty": 4,
+          "qty": 2,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "KIRLOSENG",
           "entry_price": 2375.06,
-          "qty": 7,
+          "qty": 4,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "CEMPRO",
           "entry_price": 1286.93,
-          "qty": 13,
+          "qty": 8,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "ACUTAAS",
           "entry_price": 3387.9,
-          "qty": 4,
+          "qty": 2,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "SYRMA",
           "entry_price": 1368.56,
-          "qty": 13,
+          "qty": 8,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "RRKABEL",
           "entry_price": 2377.24,
-          "qty": 7,
+          "qty": 4,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "DATAPATTNS",
           "entry_price": 4623.27,
-          "qty": 3,
+          "qty": 2,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "WELCORP",
           "entry_price": 1468.49,
-          "qty": 11,
+          "qty": 6,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "SCHNEIDER",
           "entry_price": 1374.91,
-          "qty": 12,
+          "qty": 7,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "EMMVEE",
           "entry_price": 334.89,
-          "qty": 53,
+          "qty": 30,
           "entry_date": "2026-06-22"
         },
         {
           "symbol": "IFCI",
           "entry_price": 78.53,
-          "qty": 230,
+          "qty": 122,
           "entry_date": "2026-06-22"
         }
       ],
@@ -102,6 +102,158 @@
           "amount": 109108.98,
           "note": "",
           "type": "sip"
+        },
+        {
+          "date": "2026-07-02",
+          "amount": -86868.43,
+          "note": "",
+          "type": "swp"
+        }
+      ],
+      "exit_history": [
+        {
+          "symbol": "HFCL",
+          "qty": 40,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 211.29,
+          "exit_price": 204.59,
+          "invested": 8451.6,
+          "final_value": 8183.6,
+          "pnl": -268.0,
+          "pnl_pct": -3.17
+        },
+        {
+          "symbol": "CPPLUS",
+          "qty": 2,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 3639.3,
+          "exit_price": 3480.3,
+          "invested": 7278.6,
+          "final_value": 6960.6,
+          "pnl": -318.0,
+          "pnl_pct": -4.37
+        },
+        {
+          "symbol": "KIRLOSENG",
+          "qty": 3,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 2375.06,
+          "exit_price": 2321.4,
+          "invested": 7125.18,
+          "final_value": 6964.2,
+          "pnl": -160.98,
+          "pnl_pct": -2.26
+        },
+        {
+          "symbol": "CEMPRO",
+          "qty": 5,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 1286.93,
+          "exit_price": 1431.4,
+          "invested": 6434.65,
+          "final_value": 7157.0,
+          "pnl": 722.35,
+          "pnl_pct": 11.23
+        },
+        {
+          "symbol": "ACUTAAS",
+          "qty": 2,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 3387.9,
+          "exit_price": 3691.8,
+          "invested": 6775.8,
+          "final_value": 7383.6,
+          "pnl": 607.8,
+          "pnl_pct": 8.97
+        },
+        {
+          "symbol": "SYRMA",
+          "qty": 5,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 1368.56,
+          "exit_price": 1398.3,
+          "invested": 6842.8,
+          "final_value": 6991.5,
+          "pnl": 148.7,
+          "pnl_pct": 2.17
+        },
+        {
+          "symbol": "RRKABEL",
+          "qty": 3,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 2377.24,
+          "exit_price": 2393.5,
+          "invested": 7131.72,
+          "final_value": 7180.5,
+          "pnl": 48.78,
+          "pnl_pct": 0.68
+        },
+        {
+          "symbol": "DATAPATTNS",
+          "qty": 1,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 4623.27,
+          "exit_price": 4656.7,
+          "invested": 4623.27,
+          "final_value": 4656.7,
+          "pnl": 33.43,
+          "pnl_pct": 0.72
+        },
+        {
+          "symbol": "WELCORP",
+          "qty": 5,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 1468.49,
+          "exit_price": 1498.8,
+          "invested": 7342.45,
+          "final_value": 7494.0,
+          "pnl": 151.55,
+          "pnl_pct": 2.06
+        },
+        {
+          "symbol": "SCHNEIDER",
+          "qty": 5,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 1374.91,
+          "exit_price": 1453.9,
+          "invested": 6874.55,
+          "final_value": 7269.5,
+          "pnl": 394.95,
+          "pnl_pct": 5.75
+        },
+        {
+          "symbol": "EMMVEE",
+          "qty": 23,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 334.89,
+          "exit_price": 362.25,
+          "invested": 7702.47,
+          "final_value": 8331.75,
+          "pnl": 629.28,
+          "pnl_pct": 8.17
+        },
+        {
+          "symbol": "IFCI",
+          "qty": 108,
+          "entry_date": "2026-06-22",
+          "exit_date": "2026-07-02",
+          "entry_price": 78.53,
+          "exit_price": 76.81,
+          "invested": 8481.24,
+          "final_value": 8295.48,
+          "pnl": -185.76,
+          "pnl_pct": -2.19
         }
       ]
     },
@@ -284,7 +436,7 @@
       ]
     },
     {
-      "id": "e3e1025e",
+      "id": "8771a12a",
       "label": "Nifty 500 \u00b7 Monthly \u00b7 Top 12 \u00b7 Exit >50",
       "index": "NIFTY 500",
       "top_n": 12,
@@ -296,175 +448,173 @@
       "monthly_investment_log": [],
       "start_date": "2025-01-01",
       "status": "watching",
-      "added_at": "2026-07-01 09:48",
-      "live_since": "2026-07-01",
+      "added_at": "2026-07-02 09:21",
+      "live_since": "2026-07-02",
       "live_entries": [
         {
           "symbol": "HFCL",
-          "entry_price": 214.0,
-          "qty": 38,
-          "entry_date": "2026-07-01",
+          "entry_price": 205.95,
+          "qty": 40,
+          "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
             "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
+            "order_id": "260702190121568",
+            "status": "placed"
           }
         },
         {
           "symbol": "CPPLUS",
-          "entry_price": 3616.4,
+          "entry_price": 3497.0,
           "qty": 2,
-          "entry_date": "2026-07-01",
+          "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
             "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
-          }
-        },
-        {
-          "symbol": "KIRLOSENG",
-          "entry_price": 2430.1,
-          "qty": 3,
-          "entry_date": "2026-07-01",
-          "order": {
-            "broker": "Kavin (Kite)",
-            "broker_type": "zerodha",
-            "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
+            "order_id": "260702190121611",
+            "status": "filled",
+            "avg_price": 3497.0
           }
         },
         {
           "symbol": "ACUTAAS",
-          "entry_price": 3549.0,
+          "entry_price": 3628.5,
           "qty": 2,
-          "entry_date": "2026-07-01",
+          "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
             "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
+            "order_id": "260702190121645",
+            "status": "filled",
+            "avg_price": 3628.5
+          }
+        },
+        {
+          "symbol": "KIRLOSENG",
+          "entry_price": 2408.0,
+          "qty": 3,
+          "entry_date": "2026-07-02",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": "260702190121701",
+            "status": "filled",
+            "avg_price": 2408.0
           }
         },
         {
           "symbol": "CEMPRO",
-          "entry_price": 1318.3,
+          "entry_price": 1431.4,
           "qty": 6,
-          "entry_date": "2026-07-01",
+          "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
             "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
-          }
-        },
-        {
-          "symbol": "WELCORP",
-          "entry_price": 1509.0,
-          "qty": 5,
-          "entry_date": "2026-07-01",
-          "order": {
-            "broker": "Kavin (Kite)",
-            "broker_type": "zerodha",
-            "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
+            "order_id": "260702190121749",
+            "status": "placed"
           }
         },
         {
           "symbol": "SYRMA",
-          "entry_price": 1409.7,
+          "entry_price": 1407.7,
           "qty": 6,
-          "entry_date": "2026-07-01",
+          "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
             "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
-          }
-        },
-        {
-          "symbol": "RRKABEL",
-          "entry_price": 2415.3,
-          "qty": 3,
-          "entry_date": "2026-07-01",
-          "order": {
-            "broker": "Kavin (Kite)",
-            "broker_type": "zerodha",
-            "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
-          }
-        },
-        {
-          "symbol": "SCHNEIDER",
-          "entry_price": 1389.3,
-          "qty": 7,
-          "entry_date": "2026-07-01",
-          "order": {
-            "broker": "Kavin (Kite)",
-            "broker_type": "zerodha",
-            "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
+            "order_id": "260702190121784",
+            "status": "filled",
+            "avg_price": 1407.7
           }
         },
         {
           "symbol": "AEGISLOG",
-          "entry_price": 1188.7,
-          "qty": 8,
-          "entry_date": "2026-07-01",
+          "entry_price": 1235.9,
+          "qty": 7,
+          "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
             "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
+            "order_id": "260702190121825",
+            "status": "filled",
+            "avg_price": 1235.9
           }
         },
         {
-          "symbol": "ATHERENERG",
-          "entry_price": 1167.1,
-          "qty": 8,
-          "entry_date": "2026-07-01",
+          "symbol": "WELCORP",
+          "entry_price": 1491.0,
+          "qty": 5,
+          "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
             "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
+            "order_id": "260702190121875",
+            "status": "filled",
+            "avg_price": 1491.0
+          }
+        },
+        {
+          "symbol": "RRKABEL",
+          "entry_price": 2389.6,
+          "qty": 3,
+          "entry_date": "2026-07-02",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": "260702190121920",
+            "status": "filled",
+            "avg_price": 2389.6
           }
         },
         {
           "symbol": "EMMVEE",
-          "entry_price": 343.75,
-          "qty": 30,
-          "entry_date": "2026-07-01",
+          "entry_price": 347.45,
+          "qty": 28,
+          "entry_date": "2026-07-02",
           "order": {
             "broker": "Kavin (Kite)",
             "broker_type": "zerodha",
             "instance": 6,
-            "order_id": null,
-            "status": "failed",
-            "error": "Your order could not be converted to a After Market Order (AMO)."
+            "order_id": "260702190121972",
+            "status": "filled",
+            "avg_price": 347.45
+          }
+        },
+        {
+          "symbol": "SCHNEIDER",
+          "entry_price": 1367.5,
+          "qty": 7,
+          "entry_date": "2026-07-02",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": "260702190122035",
+            "status": "filled",
+            "avg_price": 1367.5
+          }
+        },
+        {
+          "symbol": "DATAPATTNS",
+          "entry_price": 4561.2,
+          "qty": 2,
+          "entry_date": "2026-07-02",
+          "order": {
+            "broker": "Kavin (Kite)",
+            "broker_type": "zerodha",
+            "instance": 6,
+            "order_id": "260702190122090",
+            "status": "filled",
+            "avg_price": 4561.2
           }
         }
       ],

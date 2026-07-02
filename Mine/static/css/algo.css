@@ -1035,6 +1035,7 @@ body.ocean-theme .sm-gl-overlay {
 .sm-meta-item.sm-meta-pos { color: var(--ag-pos); }
 .sm-meta-item.sm-meta-neg { color: var(--ag-neg); }
 .sm-meta-item.sm-meta-pnl { font-weight: 700; }
+.sm-meta-item.sm-meta-idle { color: var(--ag-warning, #d97706); }
 .sm-meta-sep {
     color: var(--ag-border);
     flex-shrink: 0;
@@ -1148,6 +1149,9 @@ body.ocean-theme .sm-gl-overlay {
 .sm-pnl-pct   { font-weight: 700; }
 .sm-th-today  { background: var(--ag-accent-dim) !important; }
 .sm-td-today  { font-weight: 700; background: var(--ag-accent-dim); }
+/* Merged value + % cells (Today / Total) — inline: value (percentage) */
+.sm-td-today, .sm-pnl-abs { white-space: nowrap; }
+.sm-cell-pct { font-size: 10.5px; font-weight: 600; opacity: .8; }
 
 .sm-signal-error {
     font-size: 0.82rem;
@@ -1656,6 +1660,7 @@ body.ocean-theme .sm-gl-overlay {
 .sm-gl-box.sm-flow-sip { border-top-color: var(--ag-pos, #16a34a); }
 .sm-gl-box.sm-flow-swp { border-top-color: var(--ag-neg, #ef4444); }
 .sm-gl-box.sm-gl-narrow { width: 330px; }
+.sm-gl-box.sm-gl-wide { width: 760px; }
 .sm-po-broker {
     display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
     font-size: 12px; color: var(--ag-text, #0f172a);
@@ -1716,6 +1721,15 @@ body.ocean-theme .sm-gl-overlay {
 
 /* ── Per-stock Buy/Sell row menu + order popup ─────────────────── */
 .sm-th-action, .sm-td-action { width: 34px; text-align: center; }
+/* Inline-editable holding cells */
+.sm-editable { cursor: text; position: relative; }
+.sm-editable:hover { background: var(--ag-accent-dim, rgba(59,130,246,.08)); box-shadow: inset 0 0 0 1px var(--ag-border, #e2e8f0); }
+.sm-edit-input {
+    width: 100%; box-sizing: border-box; height: 24px; padding: 0 5px;
+    font-size: 12px; font-weight: 600; text-align: inherit;
+    border: 1.5px solid var(--ag-accent, #2563eb); border-radius: 5px;
+    background: var(--ag-surface, #fff); color: var(--ag-text, #0f172a); outline: none;
+}
 .sm-row-menu-btn {
     background: transparent; border: none; cursor: pointer; font-weight: 700;
     font-size: 16px; line-height: 1; letter-spacing: 1px; padding: 2px 7px;
@@ -1745,6 +1759,11 @@ body.ocean-theme .sm-gl-overlay {
 .sm-po-new  { background: var(--ag-accent-dim, rgba(59,130,246,.08)); color: var(--ag-accent, #3b82f6); }
 .sm-po-skip { opacity: .5; }
 .sm-po-force { display: flex; align-items: center; gap: 7px; margin-top: 9px; font-size: 11.5px; color: var(--ag-text-2, #475569); cursor: pointer; }
+.sm-rebal-header-right { display: flex; align-items: center; gap: 8px; }
+.sm-rebal-exec-btn { font-weight: 700; padding: 4px 12px; font-size: 12px; border-radius: 7px; white-space: nowrap; }
+.sm-rb-tag { font-size: 11px; font-weight: 700; margin: 4px 0 6px; padding: 4px 9px; border-radius: 6px; display: inline-block; }
+.sm-rb-tag-sell { background: var(--ag-msg-err-bg, rgba(220,38,38,.08)); color: var(--ag-neg, #dc2626); }
+.sm-rb-tag-buy  { background: var(--ag-msg-ok-bg, rgba(22,163,74,.08)); color: var(--ag-pos, #16a34a); }
 
 /* ── RTP live performance dashboard (charts + period tabs) ────── */
 .rtp-chart-block { margin-top: 14px; }

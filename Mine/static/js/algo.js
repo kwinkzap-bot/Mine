@@ -1609,6 +1609,8 @@ function _smLiveBuildCard(c) {
     <div class="sm-card-meta-row" id="sm-meta-${c.id}">
         <span class="sm-meta-item" id="sm-meta-dep-${c.id}">Deployed —</span>
         <span class="sm-meta-sep">·</span>
+        <span class="sm-meta-item sm-meta-idle" id="sm-meta-idle-${c.id}">Unused —</span>
+        <span class="sm-meta-sep">·</span>
         <span class="sm-meta-item" id="sm-meta-cur-${c.id}">Current —</span>
         <span class="sm-meta-sep">·</span>
         <span class="sm-meta-item sm-meta-pnl" id="sm-meta-today-${c.id}">Today —</span>
@@ -1680,6 +1682,13 @@ function _smUpdateMetaRow(id, d) {
 
     if (dep) dep.textContent = 'Deployed ' + _smFmtInr(d.total_invested || 0);
     if (cur) cur.textContent = 'Current '  + _smFmtInr(d.current_port_val || 0);
+
+    const idleEl = document.getElementById(`sm-meta-idle-${id}`);
+    if (idleEl) {
+        // Unused (idle) cash = total capital (base + SIP − SWP) not yet deployed.
+        const capital = (d.configured_investment || 0) + (d.total_sip_added || 0) - (d.total_swp_taken || 0);
+        idleEl.textContent = 'Unused ' + _smFmtInr(Math.max(0, capital - (d.total_invested || 0)));
+    }
 
     const todayAbs = d.today_pnl      || 0;
     const todayPct = d.today_pct      || 0;
@@ -1818,7 +1827,7 @@ function _smApplyRankings(id, d) {
 
     // Fill rebalance preview
     const wrap = document.getElementById(`sm-rebal-preview-${id}`);
-    if (wrap) wrap.innerHTML = _smRebalPreviewHtml(d);
+    if (wrap) wrap.innerHTML = _smRebalPreviewHtml(d, id);
 }
 
 function _smLiveLoadSignal(id) {
@@ -1870,8 +1879,8 @@ function _smRenderLiveMode(id, panel, d) {
                     <th>Symbol</th><th>Qty</th><th>Entry Date</th>
                     <th>Entry ₹</th><th>Curr ₹</th>
                     <th>Invested</th><th>Curr Value</th>
-                    <th class="sm-th-today">Today ₹</th><th class="sm-th-today">Today %</th>
-                    <th>Total ₹</th><th>Total %</th>
+                    <th class="sm-th-today">Today</th>
+                    <th>Total</th>
                     <th class="sm-th-action"></th>
                 </tr></thead>
                 <tbody>
@@ -1886,16 +1895,14 @@ function _smRenderLiveMode(id, panel, d) {
                         <td class="sm-td-rank"><span class="sm-rank-pill sm-rank-cell">—</span></td>
                         <td class="sm-td-score sm-score-cell" style="color:var(--ag-text-3)">…</td>
                         <td class="sm-col-sym"><strong>${h.symbol}</strong></td>
-                        <td class="sm-col-num">${h.qty}</td>
-                        <td class="sm-td-date">${h.entry_date || '—'}</td>
-                        <td>₹${Number(h.entry_price).toFixed(2)}</td>
+                        <td class="sm-col-num sm-editable" title="Double-click to edit" ondblclick="_smEditHolding(this,'${id}','${h.symbol}','qty')">${h.qty}</td>
+                        <td class="sm-td-date sm-editable" title="Double-click to edit" ondblclick="_smEditHolding(this,'${id}','${h.symbol}','entry_date')">${h.entry_date || '—'}</td>
+                        <td class="sm-editable" title="Double-click to edit" ondblclick="_smEditHolding(this,'${id}','${h.symbol}','entry_price')">₹${Number(h.entry_price).toFixed(2)}</td>
                         <td>₹${Number(h.current_price).toFixed(2)}</td>
-                        <td>₹${Number(h.buy_value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                        <td class="sm-editable" title="Double-click to edit" ondblclick="_smEditHolding(this,'${id}','${h.symbol}','invested')">₹${Number(h.buy_value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
                         <td>₹${Number(h.current_value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
-                        <td class="${tCls} sm-td-today">${tSign}${Math.abs(h.today_abs || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
-                        <td class="${tCls} sm-td-today">${tPct}</td>
-                        <td class="${pCls} sm-pnl-abs">${pSign}${Math.abs(h.pnl_abs).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
-                        <td class="${pCls} sm-pnl-pct">${pPct}</td>
+                        <td class="${tCls} sm-td-today">${tSign}${Math.abs(h.today_abs || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })} <span class="sm-cell-pct">(${tPct})</span></td>
+                        <td class="${pCls} sm-pnl-abs">${pSign}${Math.abs(h.pnl_abs).toLocaleString('en-IN', { maximumFractionDigits: 0 })} <span class="sm-cell-pct">(${pPct})</span></td>
                         <td class="sm-td-action">
                             <button class="sm-row-menu-btn" title="Buy / Sell" onclick="_smRowMenu(event, '${id}', '${h.symbol}')">⋯</button>
                         </td>
@@ -1924,7 +1931,8 @@ function _smRenderLiveMode(id, panel, d) {
         <button class="ag-btn ag-btn-enter sm-ab-btn sm-ab-place" onclick="_smOpenPlaceOrders('${id}')">🛒 Place Orders</button>
         <button class="ag-btn ag-btn-preview sm-ab-btn" onclick="_smOpenFlowModal('${id}', 'sip')">＋ SIP</button>
         <button class="ag-btn ag-btn-exit sm-ab-btn" onclick="_smOpenFlowModal('${id}', 'swp')">－ SWP</button>
-        ${sipLog.length ? `<button class="sm-history-btn sm-ab-btn" onclick="_smShowSipHistory('${id}')">History (${sipLog.length})</button>` : ''}
+        <button class="sm-history-btn sm-ab-btn" onclick="_smOpenExitHistory('${id}')">📕 Order History</button>
+        ${sipLog.length ? `<button class="sm-history-btn sm-ab-btn" onclick="_smShowSipHistory('${id}')">SIP/SWP Log (${sipLog.length})</button>` : ''}
     </div>
 </div>
 
@@ -2258,6 +2266,60 @@ function _smSubmitFlow(id, mode) {
     });
 }
 
+// ── Inline edit of a holding (Qty / Entry Date / Entry ₹ / Invested) ──────────
+
+function _smEditHolding(td, id, sym, field) {
+    if (td.querySelector('input')) return;   // already editing
+    const h = ((_smHoldingsData[id] || {}).holdings || []).find(x => x.symbol === sym) || {};
+    const cur = field === 'qty'         ? h.qty
+              : field === 'entry_price' ? h.entry_price
+              : field === 'entry_date'  ? h.entry_date
+              : field === 'invested'    ? h.buy_value
+              : '';
+    const orig  = td.innerHTML;
+    const input = document.createElement('input');
+    input.className = 'sm-edit-input';
+    if (field === 'entry_date') { input.type = 'date'; }
+    else { input.type = 'number'; input.step = field === 'qty' ? '1' : '0.01'; input.min = '0'; }
+    input.value = cur != null ? cur : '';
+    td.innerHTML = '';
+    td.appendChild(input);
+    input.focus();
+    if (input.select) input.select();
+
+    let done = false;
+    const finish = (save) => {
+        if (done) return; done = true;
+        const val = input.value;
+        if (!save || val === '' || String(val) === String(cur)) { td.innerHTML = orig; return; }
+        _smSaveHolding(id, sym, field, val, td, orig);
+    };
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        else if (e.key === 'Escape') { finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+}
+
+function _smSaveHolding(id, sym, field, val, td, orig) {
+    fetch(`/api/algo/swing-momentum/configs/${id}/holdings/edit`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ symbol: sym, [field]: val }),
+    }).then(r => r.json()).then(d => {
+        if (!d.success) {
+            td.innerHTML = orig;
+            window.showNotification && window.showNotification(d.error || 'Update failed', 'error');
+            return;
+        }
+        window.showNotification && window.showNotification(`${sym} updated`, 'success');
+        _smLiveLoadSignal(id);   // reload so derived values (invested, P&L) refresh
+    }).catch(() => {
+        td.innerHTML = orig;
+        window.showNotification && window.showNotification('Request failed', 'error');
+    });
+}
+
 // ── Per-stock manual Buy/Sell (three-dot row menu) ────────────────────────────
 
 function _smRowMenu(ev, id, sym) {
@@ -2518,7 +2580,7 @@ function _smSubmitPlaceOrders(id) {
 
 // ── Shared: rebalance preview section ─────────────────────────────────────────
 
-function _smRebalPreviewHtml(d) {
+function _smRebalPreviewHtml(d, id) {
     const sellList = d.sell_preview || [];
     const buyList  = d.buy_preview  || [];
 
@@ -2560,7 +2622,13 @@ function _smRebalPreviewHtml(d) {
             <span class="sm-rebal-header-title">Next Rebalance Preview</span>
             <span class="sm-rebal-header-date">${d.next_rebalance || '—'}</span>
         </div>
-        <span class="sm-rebal-status ${statusCls}">${statusTxt}</span>
+        <div class="sm-rebal-header-right">
+            <span class="sm-rebal-status ${statusCls}">${statusTxt}</span>
+            ${d.rebalance_needed && id ? `
+            <button class="ag-btn ag-btn-enter sm-rebal-exec-btn" onclick="_smOpenRebalance('${id}')">
+                ⚖ Rebalance
+            </button>` : ''}
+        </div>
     </div>
     <div class="sm-rebal-grid">
         <div class="sm-rebal-col sm-rebal-col-sell">
@@ -2581,6 +2649,153 @@ function _smRebalPreviewHtml(d) {
 </div>`;
 }
 
+
+function _smOpenRebalance(id) {
+    document.getElementById('smRebalModal')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'smRebalModal';
+    modal.className = 'sm-gl-overlay';
+    modal.innerHTML = `
+<div class="sm-gl-box">
+    <div class="sm-gl-hdr">
+        <span class="sm-gl-title">⚖ Rebalance — Review</span>
+        <button class="sm-gl-close" onclick="document.getElementById('smRebalModal').remove()">✕</button>
+    </div>
+    <div class="sm-gl-body">
+        <div id="rbBody" class="sm-signal-loading" style="padding:16px 0">Computing rebalance…</div>
+        <div class="sm-gl-summary" id="rbResult" style="display:none"></div>
+    </div>
+    <div class="sm-gl-footer">
+        <button class="sm-gl-btn sm-gl-cancel" onclick="document.getElementById('smRebalModal').remove()">Cancel</button>
+        <button class="sm-gl-btn sm-gl-confirm" id="rbConfirmBtn" disabled>Confirm &amp; Place Orders</button>
+    </div>
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+
+    const fmt = v => '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+    fetch(`/api/algo/swing-momentum/configs/${id}/rebalance/preview`)
+        .then(r => r.json()).then(d => {
+            const body = document.getElementById('rbBody');
+            if (!d.success) { body.innerHTML = `<div class="ag-empty">⚠ ${d.error || 'Failed'}</div>`; return; }
+            const sells = d.sells || [], buys = d.buys || [];
+            if (!sells.length) { body.innerHTML = '<div class="ag-empty">No holdings past exit rank — nothing to rebalance.</div>'; return; }
+
+            const sellRows = sells.map(s => `<tr>
+                <td class="sm-col-sym"><strong>${s.symbol}</strong></td>
+                <td>${s.qty}</td><td>₹${Number(s.price).toFixed(2)}</td>
+                <td>${fmt(s.value)}</td><td>#${s.current_rank ?? '—'}</td></tr>`).join('');
+            const buyRows = buys.length ? buys.map(b => `<tr>
+                <td class="sm-col-sym"><strong>${b.symbol}</strong></td>
+                <td>${b.qty}</td><td>₹${Number(b.price).toFixed(2)}</td>
+                <td>${fmt(b.value)}</td><td>#${b.current_rank ?? '—'}</td></tr>`).join('')
+                : '<tr><td colspan="5" style="text-align:center;color:var(--ag-text-3)">No replacements</td></tr>';
+
+            body.innerHTML = `
+                <div class="sm-rb-tag sm-rb-tag-sell">↓ SELL ${sells.length} — proceeds ${fmt(d.proceeds)}</div>
+                <div class="sm-flow-table-wrap" style="margin-bottom:10px">
+                    <table class="sm-flow-table"><thead><tr>
+                        <th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>Rank</th>
+                    </tr></thead><tbody>${sellRows}</tbody></table>
+                </div>
+                <div class="sm-rb-tag sm-rb-tag-buy">↑ BUY ${buys.length} — deploy ${fmt(d.deploy)}</div>
+                <div class="sm-flow-table-wrap">
+                    <table class="sm-flow-table"><thead><tr>
+                        <th>Symbol</th><th>Qty</th><th>Price</th><th>Value</th><th>Rank</th>
+                    </tr></thead><tbody>${buyRows}</tbody></table>
+                </div>
+                <div class="sm-flow-summary" style="margin-top:10px">
+                    Broker: <strong>${d.broker ? (d.broker.broker_name || d.broker.broker_type) : '⚠ none set'}</strong>
+                </div>`;
+            const btn = document.getElementById('rbConfirmBtn');
+            if (d.broker && d.broker.instance) btn.disabled = false;
+            else { btn.disabled = true; btn.title = 'Assign a broker via Place Orders first'; }
+            btn.onclick = () => _smSubmitRebalance(id);
+        })
+        .catch(() => { document.getElementById('rbBody').innerHTML = '<div class="ag-empty">Request failed</div>'; });
+}
+
+function _smSubmitRebalance(id) {
+    const btn = document.getElementById('rbConfirmBtn');
+    btn.disabled = true; btn.textContent = 'Placing orders…';
+    fetch(`/api/algo/swing-momentum/configs/${id}/rebalance`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    }).then(r => r.json()).then(d => {
+        const res = document.getElementById('rbResult');
+        if (!d.success) {
+            btn.disabled = false; btn.textContent = 'Confirm & Place Orders';
+            window.showNotification && window.showNotification(d.error || 'Failed', 'error');
+            return;
+        }
+        const s = d.summary || {};
+        const ok = (s.sold || s.bought);
+        res.className = 'sm-gl-summary ' + (s.failed && !ok ? 'sm-gl-summary-err' : 'sm-gl-summary-ok');
+        res.style.display = 'block';
+        res.textContent = `✅ Sold ${s.sold || 0}, bought ${s.bought || 0}`
+            + (s.failed ? ` · ⚠ ${s.failed} failed` : '') + '. Holdings updated.';
+        window.showNotification && window.showNotification('Rebalance executed', 'success');
+        setTimeout(() => { document.getElementById('smRebalModal')?.remove(); _smLiveLoadSignal(id); }, 1600);
+    }).catch(() => {
+        btn.disabled = false; btn.textContent = 'Confirm & Place Orders';
+        window.showNotification && window.showNotification('Request failed', 'error');
+    });
+}
+
+function _smOpenExitHistory(id) {
+    document.getElementById('smExitModal')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'smExitModal';
+    modal.className = 'sm-gl-overlay';
+    modal.innerHTML = `
+<div class="sm-gl-box sm-gl-wide">
+    <div class="sm-gl-hdr">
+        <span class="sm-gl-title">📕 Order History — Exited Stocks</span>
+        <button class="sm-gl-close" onclick="document.getElementById('smExitModal').remove()">✕</button>
+    </div>
+    <div class="sm-gl-body">
+        <div id="ehBody" class="sm-signal-loading" style="padding:16px 0">Loading…</div>
+    </div>
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+
+    const fmt = v => '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    fetch(`/api/algo/swing-momentum/configs/${id}/exit-history`).then(r => r.json()).then(d => {
+        const body = document.getElementById('ehBody');
+        if (!d.success) { body.innerHTML = `<div class="ag-empty">⚠ ${d.error || 'Failed'}</div>`; return; }
+        const exits = d.exits || [];
+        if (!exits.length) { body.innerHTML = '<div class="ag-empty">No exited stocks yet.</div>'; return; }
+        const rows = [...exits].reverse().map(x => {
+            const cls  = x.pnl >= 0 ? 'sm-pos' : 'sm-neg';
+            const sign = x.pnl >= 0 ? '+₹' : '-₹';
+            const pct  = (x.pnl_pct >= 0 ? '+' : '') + Number(x.pnl_pct).toFixed(1) + '%';
+            return `<tr>
+                <td class="sm-col-sym"><strong>${x.symbol}</strong></td>
+                <td>${x.qty}</td>
+                <td>${x.entry_date || '—'}</td>
+                <td>${x.exit_date || '—'}</td>
+                <td>₹${Number(x.entry_price).toFixed(2)}</td>
+                <td>₹${Number(x.exit_price).toFixed(2)}</td>
+                <td>${fmt(x.invested)}</td>
+                <td>${fmt(x.final_value)}</td>
+                <td class="${cls}">${sign}${Math.abs(x.pnl).toLocaleString('en-IN', { maximumFractionDigits: 0 })} <span class="sm-cell-pct">(${pct})</span></td>
+            </tr>`;
+        }).join('');
+        const rcls = d.realized_pnl >= 0 ? 'sm-pos' : 'sm-neg';
+        body.innerHTML = `
+            <div class="sm-flow-summary" style="margin-bottom:8px">
+                ${exits.length} exit(s) · Realized P&amp;L:
+                <strong class="${rcls}">${d.realized_pnl >= 0 ? '+₹' : '-₹'}${Math.abs(d.realized_pnl).toLocaleString('en-IN')}</strong>
+            </div>
+            <div class="sm-flow-table-wrap" style="max-height:340px">
+                <table class="sm-flow-table"><thead><tr>
+                    <th>Symbol</th><th>Qty</th><th>Entry Date</th><th>Exit Date</th>
+                    <th>Entry ₹</th><th>Exit ₹</th><th>Invested</th><th>Final</th><th>P&amp;L</th>
+                </tr></thead><tbody>${rows}</tbody></table>
+            </div>`;
+    }).catch(() => { document.getElementById('ehBody').innerHTML = '<div class="ag-empty">Request failed</div>'; });
+}
 
 function _smFmtInr(v) {
     if (v == null) return '—';
