@@ -1,7 +1,7 @@
 {
   "active_trade": null,
   "traded_today": true,
-  "trade_date": "2026-07-02",
+  "trade_date": "2026-07-03",
   "params": {
     "candle_index": 2,
     "rr_ratio": 3.0,
@@ -12,7 +12,7 @@
   },
   "last_exit": {
     "reason": "SL",
-    "spot": 24082.95,
-    "time": "2026-07-02T09:16:40.201704"
+    "spot": 24327.45,
+    "time": "2026-07-03T09:22:03.229174"
   }
 }

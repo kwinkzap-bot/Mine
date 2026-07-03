@@ -31,14 +31,20 @@ class IntrinsicOrderManager:
 
     @staticmethod
     def _monitor_trade(broker_type, instance_id, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, sec_id, kite_opt_sym, username, session_data, stop_event, key):
-        from trading_app.service.provider_logic import get_kite
+        from trading_app.service.provider_logic import get_kite, get_data_provider
         from trading_app.app.utils.user_env import UserEnvManager
 
-        kite = get_kite(user=username, instance=1)
-        if not kite:
-            logger.error("[Intrinsic Monitor] Kite not available")
+        # Market-data source respects the user's configured DATA_PROVIDER (Kite or Fyers).
+        # Forcing Kite instance 1 here fails with "Insufficient permission for that call"
+        # when the Zerodha app has no quote-data subscription (e.g. DATA_PROVIDER=FYERS).
+        data_provider = get_data_provider(user=username)
+        if not data_provider:
+            logger.error("[Intrinsic Monitor] Data provider not available")
             _active_monitors.pop(key, None)
             return
+        # KiteConnect exposes set_access_token; the Fyers adapter does not — used to
+        # gate the Kite-only proxy re-apply on connection errors below.
+        _is_kite_provider = hasattr(data_provider, 'set_access_token')
 
         targets_reached = [False]
         target_prices = [entry_price + 10]
@@ -88,7 +94,7 @@ class IntrinsicOrderManager:
                     break
                 try:
                     prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
-                    ltp_data = kite.ltp([f'{prefix}:{kite_opt_sym}'])
+                    ltp_data = data_provider.ltp([f'{prefix}:{kite_opt_sym}'])
                     ltp = ltp_data.get(f'{prefix}:{kite_opt_sym}', {}).get('last_price', 0)
                     if ltp == 0:
                         continue
@@ -134,11 +140,11 @@ class IntrinsicOrderManager:
                 except Exception as e:
                     logger.error(f"[Intrinsic Monitor] Loop error: {e}")
                     _err = str(e).lower()
-                    if any(k in _err for k in ('connection refused', 'connectionerror', 'proxyerror', 'newconnectionerror')):
+                    if _is_kite_provider and any(k in _err for k in ('connection refused', 'connectionerror', 'proxyerror', 'newconnectionerror')):
                         logger.warning("[Intrinsic Monitor] Proxy connection error — re-applying static IP proxy...")
                         try:
                             from trading_app.service.kite_order_services import apply_kite_proxy
-                            apply_kite_proxy(kite)
+                            apply_kite_proxy(data_provider)
                             logger.info("[Intrinsic Monitor] Proxy re-applied, resuming monitoring")
                         except Exception as _te:
                             logger.error(f"[Intrinsic Monitor] Proxy re-apply exception: {_te}")

@@ -2,7 +2,7 @@
 Background scheduler for recurring tasks during market hours.
 Handles market hours checking and scheduled API calls.
 """
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Optional, Any
 from trading_app.app.utils.logger import logger
 
@@ -443,6 +443,73 @@ class MarketScheduler:
         except Exception as e:
             logger.error(f"[HistoricOI Scheduler] Unexpected error: {e}", exc_info=True)
 
+    def _run_historic_oi_catchup(self):
+        """Startup recovery: backfill any recent trading day whose 8 PM OI record
+        was missed because the process wasn't alive at 20:00 IST.
+
+        The historic_oi_record cron only fires when this process happens to be
+        running at that exact minute — a laptop asleep, a restart, or a machine
+        that's only up during market hours silently drops that evening's record
+        with no retry (this is what left gaps like May 28 / June 26). On every
+        startup we look back over the last week and rebuild any missing weekday
+        from the official NSE bhavcopy. refresh_record is self-limiting: on
+        holidays / dates with no published bhavcopy it returns 'No data
+        available' and no row is created, so this never invents fake rows.
+        """
+        try:
+            try:
+                from zoneinfo import ZoneInfo
+                now_ist = datetime.now(ZoneInfo('Asia/Kolkata'))
+            except Exception:
+                now_ist = datetime.now()
+
+            from trading_app.dashboard.oi_historic_data import (
+                get_all_records, refresh_record,
+            )
+            recorded = {
+                r.get('date') for r in get_all_records()
+                if r.get('symbol') == 'NIFTY'
+            }
+
+            # Provider is a best-effort intraday fallback; the backfill is built
+            # from the bhavcopy, so a None/expired broker session is fine.
+            try:
+                from trading_app.service.provider_logic import get_data_provider
+                provider = get_data_provider(user='Mine')
+            except Exception:
+                provider = None
+
+            today = now_ist.date()
+            backfilled = 0
+            for back in range(1, 8):
+                d = today - timedelta(days=back)
+                if d.weekday() >= 5:            # skip Sat/Sun
+                    continue
+                ds = d.isoformat()
+                if ds in recorded:
+                    continue
+                res = refresh_record(ds, 'NIFTY', provider=provider)
+                if res.get('success'):
+                    backfilled += 1
+                    logger.info(f"[HistoricOI Catchup] ✅ backfilled missed day {ds}")
+                else:
+                    logger.info(
+                        f"[HistoricOI Catchup] {ds}: {res.get('error')} "
+                        "(holiday / no bhavcopy — skipped)"
+                    )
+
+            # Today: if the 8 PM window has already passed and today's record is
+            # still missing, run the full EOD task now (it also patches FII flow).
+            tds = today.isoformat()
+            if now_ist.weekday() < 5 and now_ist.hour >= 20 and tds not in recorded:
+                logger.info(f"[HistoricOI Catchup] Today {tds} missing past 8 PM — recording now")
+                self._run_historic_oi_record_task()
+
+            if backfilled:
+                logger.info(f"[HistoricOI Catchup] Backfilled {backfilled} missed trading day(s)")
+        except Exception as e:
+            logger.error(f"[HistoricOI Catchup] Unexpected error: {e}", exc_info=True)
+
 
 # Global scheduler instance
 market_scheduler = MarketScheduler()
@@ -461,6 +528,18 @@ def init_scheduler(app):
         # cron already passed and the algo thread was never launched. Start it now.
         market_scheduler._ensure_rtp_running(source='Startup')
         market_scheduler._ensure_sc_running(source='Startup')
+        # Historic OI self-heal: backfill any recent trading day whose 8 PM
+        # record was missed while this process was down. Runs off-thread so a
+        # slow NSE bhavcopy fetch never blocks app startup.
+        try:
+            import threading
+            threading.Thread(
+                target=market_scheduler._run_historic_oi_catchup,
+                name='historic-oi-catchup',
+                daemon=True,
+            ).start()
+        except Exception as e:
+            logger.error(f"[HistoricOI Catchup] failed to launch startup thread: {e}")
 
     import atexit
     atexit.register(market_scheduler.stop)
