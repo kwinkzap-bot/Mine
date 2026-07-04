@@ -492,7 +492,7 @@ _ADX_THRESHOLDS = [20, 25, 30]
 _USE_ADX_FLAGS  = [True, False]
 
 _INTERVAL_MAP = {
-    'minute': 1, '2minute': 2, '3minute': 3,
+    'minute': 1, '2minute': 2, '3minute': 3, '4minute': 4,
     '5minute': 5, '10minute': 10, '15minute': 15,
     '30minute': 30, '60minute': 60,
 }

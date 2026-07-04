@@ -20,7 +20,7 @@
             <select id="strategySelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
                 <option value="rtp">RTP (Railway Track)</option>
                 <option value="vwap">📈 C/P VWAP Strategy</option>
-                <option value="second_candle">🕒 2nd 30 Sec Candle</option>
+                <option value="second_candle">🕒 Candle Breakout</option>
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
@@ -55,15 +55,10 @@
                     <label for="interval">Timeframe</label>
                     <select id="interval">
                         <option value="30second">30 Second (≈1 month)</option>
-                        <option value="minute">1 Minute</option>
+                        <option value="minute" selected>1 Minute</option>
                         <option value="2minute">2 Minute</option>
                         <option value="3minute">3 Minute</option>
-                        <option value="4minute">4 Minute</option>
                         <option value="5minute">5 Minute</option>
-                        <option value="15minute">15 Minute</option>
-                        <option value="30minute">30 Minute</option>
-                        <option value="60minute" selected>60 Minute</option>
-                        <option value="day">Daily</option>
                     </select>
                 </div>
             </div>
@@ -157,7 +152,7 @@
                 </div>
             </div>
 
-            <!-- 2nd 30-Sec Candle params -->
+            <!-- Candle Breakout params -->
             <div id="secondCandleParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
                     <label for="scCandleIndex">Range Candle #</label>
@@ -189,7 +184,7 @@
                 </div>
             </div>
 
-            <!-- 2nd 30-Sec Candle position sizing -->
+            <!-- Candle Breakout position sizing -->
             <div id="secondCandleLotRow" class="form-row" style="display:none">
                 <div class="form-group">
                     <label for="scLots">Lots</label>
@@ -249,50 +244,17 @@
         <!-- ── RIGHT: stats cards + equity chart ────────────────── -->
         <div class="bt-right">
 
-            <!-- Loader (centered in right panel while running) -->
-            <div id="loading" class="bt-loading" style="display:none;">
-                <div class="bt-spinner"></div>
-                <p>Running backtest…</p>
-                <small>Fetching candles &amp; scanning signals</small>
-            </div>
-
-            <!-- Placeholder before first run -->
-            <div id="btRightPlaceholder" class="bt-right-placeholder">
-                <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-                </svg>
-                <p>Run backtest to see results</p>
-            </div>
-
             <!-- Optimise results panel -->
             <div id="rtpOptimisePanel" style="display:none;">
-                <div class="opt-header">
+                <div class="opt-header" data-collapse="#rtpOptGrids">
                     <div style="display:flex;align-items:center;gap:8px;">
                         <h4 style="margin:0;">⚡ Parameter Optimisation Results</h4>
                         <button id="recalculateOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
                     </div>
                     <small id="optMeta"></small>
                 </div>
-                <div class="opt-table-wrap">
-                    <table class="opt-table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Mode</th>
-                                <th>SL</th>
-                                <th>Target</th>
-                                <th>ADX</th>
-                                <th>Trades</th>
-                                <th>Win%</th>
-                                <th>Net P&amp;L (pts)</th>
-                                <th>Prof. Factor</th>
-                                <th>Max DD</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="optTableBody"></tbody>
-                    </table>
-                </div>
+                <!-- One sortable grid per timeframe, built by renderOptResults() -->
+                <div id="rtpOptGrids"></div>
             </div>
 
             <!-- SM Optimise results panel -->
@@ -354,34 +316,44 @@
                 </div>
             </div>
 
-            <!-- 2nd 30-Sec Candle Optimise results panel -->
+            <!-- Candle Breakout Optimise results panel — one grid per timeframe -->
             <div id="secondCandleOptimisePanel" style="display:none;">
-                <div class="opt-header">
+                <div class="opt-header" data-collapse="#scOptGrids">
                     <div style="display:flex;align-items:center;gap:8px;">
-                        <h4 style="margin:0;">⚡ 2nd Candle Best Params</h4>
+                        <h4 style="margin:0;">⚡ Candle Breakout Best Params</h4>
                         <button id="scRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
                     </div>
                     <small id="scOptMeta"></small>
                 </div>
-                <div class="opt-table-wrap">
-                    <table class="opt-table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Candle</th>
-                                <th>SL:Target</th>
-                                <th>Direction</th>
-                                <th>Trades</th>
-                                <th>Win%</th>
-                                <th>Net P&amp;L (pts)</th>
-                                <th>Prof. Factor</th>
-                                <th>Max DD</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="scOptTableBody"></tbody>
-                    </table>
+                <!-- One sortable grid per timeframe, built by renderScOptResults() -->
+                <div id="scOptGrids"></div>
+            </div>
+
+            <!-- Loader — sits below the optimisation panel, above results -->
+            <div id="loading" class="bt-loading" style="display:none;">
+                <div class="bt-loader">
+                    <div class="bt-candles" aria-hidden="true">
+                        <span class="bt-candle"></span>
+                        <span class="bt-candle"></span>
+                        <span class="bt-candle"></span>
+                        <span class="bt-candle"></span>
+                        <span class="bt-candle"></span>
+                        <span class="bt-candle"></span>
+                        <span class="bt-candle"></span>
+                    </div>
+                    <div class="bt-loader-text">
+                        <p class="bt-loader-title">Running backtest<span class="bt-dots"></span></p>
+                        <small>Fetching candles &amp; scanning signals</small>
+                    </div>
                 </div>
+            </div>
+
+            <!-- Placeholder before first run -->
+            <div id="btRightPlaceholder" class="bt-right-placeholder">
+                <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                </svg>
+                <p>Run backtest to see results</p>
             </div>
 
             <!-- Results area (hidden until run completes) -->
@@ -473,7 +445,7 @@
 
                 <!-- Equity Curve -->
                 <div id="equityCurveSection" class="equity-curve-container" style="display:none;">
-                    <div class="equity-curve-header">
+                    <div class="equity-curve-header" data-collapse=".equity-chart-wrap">
                         <h3>Equity Curve</h3>
                         <div class="equity-curve-meta">
                             <span class="equity-meta-item" id="equityCurveFinalPnl" style="font-weight:700;"></span>
@@ -486,7 +458,7 @@
 
                 <!-- Period P&L Breakdown -->
                 <div id="periodBreakdownSection" class="period-breakdown" style="display:none;">
-                    <div class="period-breakdown-header">
+                    <div class="period-breakdown-header" data-collapse=".period-chart-wrap">
                         <h3>P&amp;L Breakdown</h3>
                         <div class="period-tabs">
                             <button class="period-tab active" data-period="monthly">Monthly</button>
@@ -502,7 +474,7 @@
 
                 <!-- Trade History (below chart, inside right panel) -->
                 <div id="btTradesSection" style="display:none; margin-top:8px;">
-                    <div class="bt-trades-header">
+                    <div class="bt-trades-header" data-collapse=".trades-table-container">
                         <h3>Trade History</h3>
                     </div>
                     <div class="trades-table-container" style="margin-top:0;">

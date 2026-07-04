@@ -1644,6 +1644,114 @@ body.ocean-theme .sm-gl-overlay {
 .sm-mtag-sip { background: rgba(22,163,74,.12);  color: var(--ag-pos, #16a34a); }
 .sm-mtag-swp { background: rgba(239,68,68,.12);   color: var(--ag-neg, #ef4444); }
 
+/* ── Strategy "Logic" info button (header, right of title) ─────── */
+.ag-info-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px 3px 7px;
+    border-radius: 20px;
+    border: 1px solid var(--ag-accent, #3b82f6);
+    background: var(--ag-accent-dim, rgba(59,130,246,.1));
+    color: var(--ag-accent, #3b82f6);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: .2px;
+    cursor: pointer;
+    transition: all .13s ease;
+}
+.ag-info-btn:hover {
+    background: var(--ag-accent, #3b82f6);
+    color: #fff;
+}
+.ag-info-btn svg { flex-shrink: 0; }
+
+/* ── Strategy logic modal (compact) ────────────────────────────── */
+.rtp-logic-modal { max-width: 420px; }
+.rtp-logic-body { overflow-y: auto; flex: 1; padding: 14px 16px 16px; }
+.rtp-logic-body code {
+    font-size: 0.68rem; font-weight: 700; padding: 1px 5px; border-radius: 4px;
+    background: var(--ag-accent-dim, rgba(59,130,246,.1)); color: var(--ag-accent, #3b82f6);
+}
+.rtp-logic-body b { color: var(--ag-text, #1e293b); font-weight: 700; }
+
+/* timeframe pill */
+.rtp-tf {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 11px; margin-bottom: 12px;
+    border: 1px solid var(--ag-border, #e2e8f0); border-radius: 10px;
+    background: var(--ag-border-sub, #f8fafc);
+}
+.rtp-tf-lbl {
+    font-size: 0.62rem; font-weight: 800; letter-spacing: .5px; text-transform: uppercase;
+    color: var(--ag-text-3, #94a3b8);
+}
+.rtp-tf-val {
+    font-size: 0.82rem; font-weight: 800; color: var(--ag-text, #1e293b);
+}
+.rtp-tf-sub {
+    margin-left: auto; font-size: 0.7rem; font-weight: 600;
+    color: var(--ag-accent, #3b82f6);
+    background: var(--ag-accent-dim, rgba(59,130,246,.1));
+    padding: 2px 8px; border-radius: 6px;
+}
+
+.rtp-idea {
+    margin: 0 0 14px; font-size: 0.78rem; line-height: 1.5;
+    color: var(--ag-text-2, #475569);
+}
+
+/* block label */
+.rtp-blk-lbl {
+    display: inline-block; margin-bottom: 8px;
+    font-size: 0.66rem; font-weight: 800; letter-spacing: .4px; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 6px;
+}
+.rtp-blk-lbl.entry { background: rgba(22,163,74,.12); color: var(--ag-pos, #16a34a); }
+.rtp-blk-lbl.exit  { background: rgba(239,68,68,.12); color: var(--ag-neg, #ef4444); margin-top: 14px; }
+
+/* BUY / SELL duo */
+.rtp-duo { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.rtp-duo-card {
+    border: 1px solid var(--ag-border, #e2e8f0); border-radius: 10px;
+    padding: 9px 10px 10px; background: var(--ag-border-sub, #f8fafc);
+}
+.rtp-duo-card.buy  { border-top: 2px solid var(--ag-pos, #16a34a); }
+.rtp-duo-card.sell { border-top: 2px solid var(--ag-neg, #ef4444); }
+.rtp-duo-hd { font-size: 0.76rem; font-weight: 800; margin-bottom: 6px; }
+.rtp-duo-card.buy  .rtp-duo-hd { color: var(--ag-pos, #16a34a); }
+.rtp-duo-card.sell .rtp-duo-hd { color: var(--ag-neg, #ef4444); }
+.rtp-duo-row {
+    font-size: 0.74rem; line-height: 1.35; color: var(--ag-text-2, #475569);
+    padding: 3px 0; border-top: 1px dashed var(--ag-border, #e2e8f0);
+}
+.rtp-duo-row:first-of-type { border-top: none; }
+
+.rtp-mode-note {
+    margin-top: 8px; font-size: 0.72rem; line-height: 1.45;
+    color: var(--ag-text-3, #94a3b8);
+}
+
+/* exit chips */
+.rtp-chips { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.rtp-chip {
+    display: flex; align-items: center; gap: 8px;
+    border: 1px solid var(--ag-border, #e2e8f0); border-radius: 10px;
+    padding: 8px 10px; background: var(--ag-border-sub, #f8fafc);
+}
+.rtp-chip-ic {
+    width: 26px; height: 26px; flex-shrink: 0; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.9rem; font-weight: 800; line-height: 1;
+}
+.rtp-chip-wide { grid-column: 1 / -1; }
+.rtp-chip-ic.tgt { background: rgba(22,163,74,.14);  color: var(--ag-pos, #16a34a); }
+.rtp-chip-ic.sl  { background: rgba(239,68,68,.14);  color: var(--ag-neg, #ef4444); }
+.rtp-chip-ic.eod { background: rgba(217,119,6,.14);  color: #d97706; }
+.rtp-chip > div { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
+.rtp-chip b    { font-size: 0.75rem; }
+.rtp-chip span { font-size: 0.67rem; color: var(--ag-text-3, #94a3b8); }
+
 /* ── SIP/SWP flow modal (Live Watch page) ──────────────────────── */
 .sm-gl-overlay {
     position: fixed; inset: 0; z-index: 9999;

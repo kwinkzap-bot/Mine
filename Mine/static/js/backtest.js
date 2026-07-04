@@ -17,6 +17,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Declared up top so cancelRtpOptimise() is safe to call during init.
     let _rtpOptRun   = 0;     // generation token — only the latest run is honoured
     let _rtpOptAbort = null;  // AbortController for the in-flight POST request
+    // Same generation-token pattern for the 2nd-Candle optimise.
+    let _scOptRun    = 0;
+    let _scOptAbort  = null;
 
     // Initialize dates (default to Jan 1st 2017)
     const today = new Date();
@@ -95,6 +98,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 this.value = selectedSymbol;
                 applyLotValueForSymbol(selectedSymbol);
                 cancelRtpOptimise(); // stale: results would be for the old symbol
+                cancelScOptimise();
                 this.blur();
             } else {
                 this.blur();
@@ -109,6 +113,7 @@ document.addEventListener('DOMContentLoaded', function() {
             symbolList.classList.remove('show');
             applyLotValueForSymbol(selectedSymbol);
             cancelRtpOptimise(); // stale: results would be for the old symbol
+            cancelScOptimise();
         }
     });
 
@@ -143,8 +148,9 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateStrategyView() {
         if (!strategySelect) return;
 
-        // Switching strategy abandons any in-flight RTP optimise run.
+        // Switching strategy abandons any in-flight RTP / 2nd-Candle optimise run.
         if (typeof cancelRtpOptimise === 'function') cancelRtpOptimise();
+        if (typeof cancelScOptimise === 'function') cancelScOptimise();
 
         const intervalSelect = document.getElementById('interval');
         const startDateInput = document.getElementById('startDate');
@@ -268,22 +274,22 @@ document.addEventListener('DOMContentLoaded', function() {
             interval: document.getElementById('interval').value,
         };
 
-        loading.style.display = 'block';
+        loading.style.display = 'flex';   // flex so the loader card centres (see .bt-loading)
         resultsArea.style.display = 'none';
         const btTradesSec   = document.getElementById('btTradesSection');
         const btPlaceholder = document.getElementById('btRightPlaceholder');
         const periodSec     = document.getElementById('periodBreakdownSection');
-        const optPanel      = document.getElementById('rtpOptimisePanel');
         const smOptPanel    = document.getElementById('smOptimisePanel');
         const vwapOptPanel2 = document.getElementById('vwapOptimisePanel');
-        const scOptPanel2   = document.getElementById('secondCandleOptimisePanel');
         if (btTradesSec)    btTradesSec.style.display    = 'none';
-        if (btPlaceholder)  btPlaceholder.style.display  = '';
+        if (btPlaceholder)  btPlaceholder.style.display  = 'none';
         if (periodSec)      periodSec.style.display      = 'none';
-        if (optPanel)       optPanel.style.display       = 'none';
+        // Keep the RTP / Candle Breakout "Best Params" panels visible across a
+        // backtest run, but collapse their grids so the results take focus.
+        setCollapsed(document.querySelector('#rtpOptimisePanel .opt-header'), true);
+        setCollapsed(document.querySelector('#secondCandleOptimisePanel .opt-header'), true);
         if (smOptPanel)     smOptPanel.style.display     = 'none';
         if (vwapOptPanel2)  vwapOptPanel2.style.display  = 'none';
-        if (scOptPanel2)    scOptPanel2.style.display    = 'none';
 
         try {
             const strat = strategySelect ? strategySelect.value : 'rtp';
@@ -355,6 +361,11 @@ document.addEventListener('DOMContentLoaded', function() {
             window.showNotification('An error occurred during backtest', 'error');
         } finally {
             loading.style.display = 'none';
+            // If the run produced no results (error/failure), restore the idle prompt.
+            if (resultsArea.style.display !== 'block') {
+                const ph = document.getElementById('btRightPlaceholder');
+                if (ph) ph.style.display = '';
+            }
         }
     });
 
@@ -928,11 +939,149 @@ document.addEventListener('DOMContentLoaded', function() {
         return d.toLocaleString();
     }
 
+    // ── Expand / collapse ────────────────────────────────────────────
+    // Any element carrying [data-collapse="<selector>"] becomes a clickable
+    // header that toggles the matching element (searched inside its parent,
+    // then document-wide). A ▾/▸ chevron reflects state. Idempotent — safe to
+    // call repeatedly, including on dynamically-rendered content.
+    function initCollapsibles(root) {
+        (root || document).querySelectorAll('[data-collapse]').forEach(h => {
+            if (h._collapseWired) return;
+            h._collapseWired = true;
+            h.classList.add('collapsible-h');
+            // Resolve the target once (searched inside the parent, then
+            // document-wide). Persisted elements keep this reference valid.
+            const sel = h.dataset.collapse;
+            const target = (h.parentElement && h.parentElement.querySelector(sel))
+                         || document.querySelector(sel);
+            const chev = document.createElement('span');
+            chev.className = 'collapse-chev';
+            // Chevron reflects the *initial* state, so a section that starts
+            // collapsed (has .collapsed-hide in markup) shows ▸.
+            chev.textContent = (target && target.classList.contains('collapsed-hide')) ? '▸' : '▾';
+            // Nest the chevron inside the heading (or the header itself when
+            // there's no heading) so it stays beside the title instead of being
+            // pushed apart by a space-between header layout.
+            const anchor = h.querySelector('h2, h3, h4, h5') || h;
+            anchor.insertBefore(chev, anchor.firstChild);
+            h.addEventListener('click', (e) => {
+                // Ignore clicks on interactive controls living in the header.
+                if (e.target.closest('button, a, input, select')) return;
+                if (!target) return;
+                const collapsed = target.classList.toggle('collapsed-hide');
+                chev.textContent = collapsed ? '▸' : '▾';
+            });
+        });
+    }
+    initCollapsibles();
+
+    // Programmatically collapse/expand a [data-collapse] header, keeping its
+    // chevron in sync with the toggle handler wired in initCollapsibles().
+    function setCollapsed(header, collapse) {
+        if (!header) return;
+        const sel = header.dataset.collapse;
+        const target = (header.parentElement && header.parentElement.querySelector(sel))
+                     || document.querySelector(sel);
+        if (!target) return;
+        target.classList.toggle('collapsed-hide', collapse);
+        const chev = header.querySelector('.collapse-chev');
+        if (chev) chev.textContent = collapse ? '▸' : '▾';
+    }
+
     // ── Optimise helpers ─────────────────────────────────────────────
+    // Position sizing for the optimise grid's ₹ columns, read from the RTP
+    // lot inputs (same defaults as the result cards: 1 lot × 75 qty).
+    function _optMoney() {
+        const lots     = Math.max(1, parseInt(document.getElementById('rtpLots')?.value    || 1));
+        const lotValue = Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value || 75));
+        return { lots, lotValue };
+    }
+    // Round-trip brokerage for a result row = per-trade brokerage × trade count.
+    function _optBrokerage(r, lots) {
+        return calcBrokeragePerTrade(lots) * (r.total_trades || 0);
+    }
+    // Net P&L in ₹ = gross ₹ (pts × qty × lots) − total brokerage.
+    function _optNetRs(r, lots, lotValue) {
+        return (r.net_pnl || 0) * lotValue * lots - _optBrokerage(r, lots);
+    }
+
+    // Column spec for the per-timeframe grids. `key` (when set) is the result
+    // field the column sorts on; `fmt(r)` renders the cell.
+    const OPT_COLS = [
+        { label: '#',             key: null,            fmt: (r, i) => i + 1 },
+        { label: 'Mode',          key: 'entry_mode',    fmt: r => `<span style="white-space:nowrap">${r.entry_mode}</span>` },
+        { label: 'SL',            key: 'sl_points',     fmt: r => r.sl_points },
+        { label: 'Target',        key: 'tgt_points',    fmt: r => r.tgt_points },
+        { label: 'ADX',           key: 'adx_thresh',    fmt: r => r.use_adx ? `≥${r.adx_thresh}` : 'Off' },
+        { label: 'Trades',        key: 'total_trades',  fmt: r => r.total_trades },
+        { label: 'Win%',          key: 'win_rate',      fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
+        { label: 'Net P&L (pts)', key: 'net_pnl',       fmt: r => `<span class="${r.net_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.net_pnl >= 0 ? '+' : '') + r.net_pnl.toFixed(1)} pts</span>` },
+        { label: 'Net P&L (₹)',   key: 'net_pnl_inr',   fmt: r => { const { lots, lotValue } = _optMoney(); const v = _optNetRs(r, lots, lotValue); return `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN')}</span>`; } },
+        { label: 'Brokerage (₹)', key: 'brokerage_inr', fmt: r => { const { lots } = _optMoney(); const b = _optBrokerage(r, lots); return `<span class="pnl-negative">-₹${Math.round(b).toLocaleString('en-IN')}</span>`; } },
+        { label: 'Prof. Factor',  key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD',        key: 'max_drawdown',  fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: '',              key: null,            fmt: () => '' },   // Use button (handled below)
+    ];
+
+    // Per-timeframe render state, keyed by tf_label: { rows, key, dir, displayed }.
+    let _optGroupsByTf = {};
+
+    function _optSortRows(rows, key, dir) {
+        const { lots, lotValue } = _optMoney();   // for the derived ₹ columns
+        const sorted = rows.slice();
+        sorted.sort((a, b) => {
+            let va, vb;
+            if (key === 'win_rate') {   // stored as counts, compare the ratio
+                va = a.total_trades ? a.wins / a.total_trades : 0;
+                vb = b.total_trades ? b.wins / b.total_trades : 0;
+            } else if (key === 'net_pnl_inr') {   // derived: ₹ net of brokerage
+                va = _optNetRs(a, lots, lotValue); vb = _optNetRs(b, lots, lotValue);
+            } else if (key === 'brokerage_inr') { // derived: ₹ brokerage
+                va = _optBrokerage(a, lots); vb = _optBrokerage(b, lots);
+            } else {
+                va = a[key]; vb = b[key];
+            }
+            if (va == null) va = -Infinity;
+            if (vb == null) vb = -Infinity;
+            if (typeof va === 'string' || typeof vb === 'string') {
+                return dir === 'asc'
+                    ? String(va).localeCompare(String(vb))
+                    : String(vb).localeCompare(String(va));
+            }
+            return dir === 'asc' ? va - vb : vb - va;
+        });
+        return sorted;
+    }
+
+    function _renderTfBody(tf) {
+        const st = _optGroupsByTf[tf];
+        if (!st) return;
+        const table = document.querySelector(`#rtpOptGrids table[data-tf="${CSS.escape(tf)}"]`);
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        // Rows are sorted by the active column (default: Net P&L ₹, high→low).
+        const rows = st.key ? _optSortRows(st.rows, st.key, st.dir) : st.rows;
+        st.displayed = rows;
+        // Highlight the top row only while it's the leader (Net P&L ₹ descending).
+        const highlightBest = st.key === 'net_pnl_inr' && st.dir === 'desc';
+        tbody.innerHTML = rows.map((r, i) => `
+            <tr class="${(i === 0 && highlightBest) ? 'opt-best' : ''}">
+                ${OPT_COLS.map(c => `<td>${
+                    c.label === '' ? `<button class="btn-opt-use" data-tf="${tf}" data-idx="${i}">Use</button>` : c.fmt(r, i)
+                }</td>`).join('')}
+            </tr>`).join('');
+        tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const st2 = _optGroupsByTf[btn.dataset.tf];
+                applyOptResult(st2.displayed[parseInt(btn.dataset.idx)]);
+            });
+        });
+    }
+
     function renderOptResults(data) {
-        const panel  = document.getElementById('rtpOptimisePanel');
-        const tbody  = document.getElementById('optTableBody');
-        const metaEl = document.getElementById('optMeta');
+        const panel     = document.getElementById('rtpOptimisePanel');
+        const container = document.getElementById('rtpOptGrids');
+        const metaEl    = document.getElementById('optMeta');
         const recalcBtn = document.getElementById('recalculateOptBtn');
 
         if (metaEl) {
@@ -941,34 +1090,55 @@ document.addEventListener('DOMContentLoaded', function() {
             metaEl.textContent = meta;
         }
 
-        if (tbody) {
-            tbody.innerHTML = (data.results || []).map((r, i) => {
-                const adxStr = r.use_adx ? `≥${r.adx_thresh}` : 'Off';
-                const pnlFmt = (r.net_pnl >= 0 ? '+' : '') + r.net_pnl.toFixed(1) + ' pts';
-                const ddFmt  = r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—';
-                const wr     = r.total_trades > 0
-                    ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0';
-                return `
-                <tr class="${i === 0 ? 'opt-best' : ''}">
-                    <td>${i + 1}</td>
-                    <td style="white-space:nowrap">${r.entry_mode}</td>
-                    <td>${r.sl_points}</td>
-                    <td>${r.tgt_points}</td>
-                    <td>${adxStr}</td>
-                    <td>${r.total_trades}</td>
-                    <td>${wr}%</td>
-                    <td class="${r.net_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${pnlFmt}</td>
-                    <td>${(r.profit_factor || 0).toFixed(2)}</td>
-                    <td class="pnl-negative">${ddFmt}</td>
-                    <td><button class="btn-opt-use" data-idx="${i}">Use</button></td>
-                </tr>`;
-            }).join('');
+        const groups = data.timeframes || [];
+        _optGroupsByTf = {};
 
-            tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    applyOptResult(data.results[parseInt(btn.dataset.idx)]);
+        if (container) {
+            container.innerHTML = groups.map(g => `
+                <div class="opt-tf-block">
+                    <div class="opt-tf-title" data-collapse=".opt-table-wrap">${g.tf_label}
+                        <span>best ${(g.results || []).length} of ${g.total}</span>
+                    </div>
+                    <div class="opt-table-wrap collapsed-hide">
+                        <table class="opt-table" data-tf="${g.tf_label}">
+                            <thead><tr>${OPT_COLS.map(c =>
+                                `<th ${c.key ? `class="opt-sort" data-key="${c.key}"` : ''}>${c.label}</th>`
+                            ).join('')}</tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>`).join('') || '<div class="opt-tf-title">No timeframe produced enough trades.</div>';
+
+            groups.forEach(g => {
+                // Default sort: Net P&L (₹) column, value high → low.
+                _optGroupsByTf[g.tf_label] = {
+                    rows: (g.results || []).slice(), key: 'net_pnl_inr', dir: 'desc',
+                    displayed: (g.results || []).slice(),
+                };
+                _renderTfBody(g.tf_label);
+                // Reflect the default sort on the Net P&L (₹) header.
+                const th = document.querySelector(
+                    `#rtpOptGrids table[data-tf="${CSS.escape(g.tf_label)}"] th.opt-sort[data-key="net_pnl_inr"]`
+                );
+                if (th) th.classList.add('sort-desc');
+            });
+
+            // Column-header sorting, scoped to each grid.
+            container.querySelectorAll('th.opt-sort').forEach(th => {
+                th.addEventListener('click', () => {
+                    const tf  = th.closest('table').dataset.tf;
+                    const key = th.dataset.key;
+                    const st  = _optGroupsByTf[tf];
+                    if (!st) return;
+                    if (st.key === key) st.dir = st.dir === 'asc' ? 'desc' : 'asc';
+                    else { st.key = key; st.dir = 'desc'; }
+                    _renderTfBody(tf);
+                    th.closest('thead').querySelectorAll('th').forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
+                    th.classList.add(st.dir === 'asc' ? 'sort-asc' : 'sort-desc');
                 });
             });
+
+            initCollapsibles(container);   // wire the per-timeframe collapse toggles
         }
 
         if (panel) panel.style.display = '';
@@ -1088,14 +1258,27 @@ document.addEventListener('DOMContentLoaded', function() {
         const adxThresh = document.getElementById('rtpAdxThresh');
         const sl        = document.getElementById('rtpSL');
         const tgt       = document.getElementById('rtpTarget');
+        const intervalSel = document.getElementById('interval');
         if (entryMode) entryMode.value = r.entry_mode;
         if (useAdx)    useAdx.checked  = r.use_adx;
         if (adxThresh && r.adx_thresh != null) adxThresh.value = r.adx_thresh;
         if (sl)        sl.value        = r.sl_points;
         if (tgt)       tgt.value       = r.tgt_points;
+        // The optimiser sweeps neither a trailing stop nor the on-close exit
+        // filter, so reset both to their defaults (Trail off, exit on value).
+        // Otherwise a follow-up backtest would apply a trail/close filter the
+        // grid row never used and its Net P&L (pts and ₹) wouldn't match.
+        const trailSL = document.getElementById('rtpTrailSL');
+        const exitOn  = document.getElementById('rtpExitOn');
+        if (trailSL) { trailSL.value = ''; trailSL.style.fontStyle = 'italic'; }
+        if (exitOn)  exitOn.value = 'value';
+        // Winning timeframe → main interval dropdown, so a follow-up single
+        // backtest reproduces the optimised run.
+        if (intervalSel && r.interval) intervalSel.value = r.interval;
         if (window.showNotification) {
+            const tfStr = r.tf_label ? `${r.tf_label} · ` : '';
             window.showNotification(
-                `Applied: ${r.entry_mode}  ·  SL ${r.sl_points}  ·  TGT ${r.tgt_points}`, 'success'
+                `Applied: ${tfStr}${r.entry_mode}  ·  SL ${r.sl_points}  ·  TGT ${r.tgt_points}`, 'success'
             );
         }
     }
@@ -1195,45 +1378,158 @@ document.addEventListener('DOMContentLoaded', function() {
     const vwapRecalcBtn = document.getElementById('vwapRecalcOptBtn');
     if (vwapRecalcBtn) vwapRecalcBtn.addEventListener('click', () => runVwapOptimise(true));
 
-    // ── 2nd 30-Sec Candle Optimise (Find Best Params) ─────────────────
+    // ── Candle Breakout Optimise (Find Best Params) — one grid per timeframe ───
+    // Position sizing for the 2nd-Candle grid's ₹ columns, from its lot inputs
+    // (defaults: 1 lot × 65 ₹/pt — the NIFTY value, same as the result cards).
+    function _scOptMoney() {
+        const lots     = Math.max(1, parseInt(document.getElementById('scLots')?.value    || 1));
+        const lotValue = Math.max(1, parseFloat(document.getElementById('scLotValue')?.value || 65));
+        return { lots, lotValue };
+    }
+    function _scOptBrokerage(r, lots) { return calcBrokeragePerTrade(lots) * (r.total_trades || 0); }
+    function _scOptNetRs(r, lots, lotValue) { return (r.total_pnl || 0) * lotValue * lots - _scOptBrokerage(r, lots); }
+
+    // Column spec for the per-timeframe grids (mirrors the RTP grid, with the
+    // 2nd-candle params). `key` (when set) is the field the column sorts on.
+    const SC_OPT_COLS = [
+        { label: '#',             key: null,            fmt: (r, i) => i + 1 },
+        { label: 'Candle',        key: 'candle_index',  fmt: r => r.candle_index },
+        { label: 'Dir',           key: 'direction',     fmt: r => `<span style="white-space:nowrap">${r.direction}</span>` },
+        { label: 'SL:Target',     key: 'rr_ratio',      fmt: r => `1:${r.rr_ratio}` },
+        { label: 'Trades',        key: 'total_trades',  fmt: r => r.total_trades },
+        { label: 'Win%',          key: 'win_rate',      fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
+        { label: 'Net P&L (pts)', key: 'total_pnl',     fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1)} pts</span>` },
+        { label: 'Net P&L (₹)',   key: 'net_pnl_inr',   fmt: r => { const { lots, lotValue } = _scOptMoney(); const v = _scOptNetRs(r, lots, lotValue); return `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN')}</span>`; } },
+        { label: 'Brokerage (₹)', key: 'brokerage_inr', fmt: r => { const { lots } = _scOptMoney(); const b = _scOptBrokerage(r, lots); return `<span class="pnl-negative">-₹${Math.round(b).toLocaleString('en-IN')}</span>`; } },
+        { label: 'Prof. Factor',  key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD',        key: 'max_drawdown',  fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: '',              key: null,            fmt: () => '' },   // Use button
+    ];
+
+    let _scOptGroupsByTf = {};
+
+    function _scOptSortRows(rows, key, dir) {
+        const { lots, lotValue } = _scOptMoney();   // for the derived ₹ columns
+        const sorted = rows.slice();
+        sorted.sort((a, b) => {
+            let va, vb;
+            if (key === 'win_rate') {   // stored as counts, compare the ratio
+                va = a.total_trades ? a.wins / a.total_trades : 0;
+                vb = b.total_trades ? b.wins / b.total_trades : 0;
+            } else if (key === 'net_pnl_inr') {   // derived: ₹ net of brokerage
+                va = _scOptNetRs(a, lots, lotValue); vb = _scOptNetRs(b, lots, lotValue);
+            } else if (key === 'brokerage_inr') { // derived: ₹ brokerage
+                va = _scOptBrokerage(a, lots); vb = _scOptBrokerage(b, lots);
+            } else {
+                va = a[key]; vb = b[key];
+            }
+            if (va == null) va = -Infinity;
+            if (vb == null) vb = -Infinity;
+            if (typeof va === 'string' || typeof vb === 'string') {
+                return dir === 'asc' ? String(va).localeCompare(String(vb))
+                                     : String(vb).localeCompare(String(va));
+            }
+            return dir === 'asc' ? va - vb : vb - va;
+        });
+        return sorted;
+    }
+
+    function _renderScTfBody(tf) {
+        const st = _scOptGroupsByTf[tf];
+        if (!st) return;
+        const table = document.querySelector(`#scOptGrids table[data-tf="${CSS.escape(tf)}"]`);
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        const rows  = st.key ? _scOptSortRows(st.rows, st.key, st.dir) : st.rows;
+        st.displayed = rows;
+        const highlightBest = st.key === 'net_pnl_inr' && st.dir === 'desc';
+        tbody.innerHTML = rows.map((r, i) => `
+            <tr class="${(i === 0 && highlightBest) ? 'opt-best' : ''}">
+                ${SC_OPT_COLS.map(c => `<td>${
+                    c.label === '' ? `<button class="btn-opt-use" data-tf="${tf}" data-idx="${i}">Use</button>` : c.fmt(r, i)
+                }</td>`).join('')}
+            </tr>`).join('');
+        tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const st2 = _scOptGroupsByTf[btn.dataset.tf];
+                applyScOptResult(st2.displayed[parseInt(btn.dataset.idx)]);
+            });
+        });
+    }
+
     function renderScOptResults(data) {
         const panel     = document.getElementById('secondCandleOptimisePanel');
-        const tbody     = document.getElementById('scOptTableBody');
+        const container = document.getElementById('scOptGrids');
         const metaEl    = document.getElementById('scOptMeta');
         const recalcBtn = document.getElementById('scRecalcOptBtn');
 
-        if (metaEl) metaEl.textContent = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
+        if (metaEl) {
+            let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
+            if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
+            metaEl.textContent = meta;
+        }
 
-        const dirLabel = d => d === 'long' ? 'Buy' : (d === 'short' ? 'Sell' : 'Buy & Sell');
+        const groups = data.timeframes || [];
+        _scOptGroupsByTf = {};
 
-        if (tbody) {
-            tbody.innerHTML = (data.results || []).map((r, i) => {
-                const pnlFmt = (r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1) + ' pts';
-                const ddFmt  = r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—';
-                const wr     = r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0';
-                return `
-                <tr class="${i === 0 ? 'opt-best' : ''}">
-                    <td>${i + 1}</td>
-                    <td>${r.candle_index}</td>
-                    <td>1:${r.rr_ratio}</td>
-                    <td>${dirLabel(r.direction)}</td>
-                    <td>${r.total_trades}</td>
-                    <td>${wr}%</td>
-                    <td class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${pnlFmt}</td>
-                    <td>${(r.profit_factor || 0).toFixed(2)}</td>
-                    <td class="pnl-negative">${ddFmt}</td>
-                    <td><button class="btn-opt-use" data-idx="${i}">Use</button></td>
-                </tr>`;
-            }).join('');
+        if (container) {
+            container.innerHTML = groups.map(g => `
+                <div class="opt-tf-block">
+                    <div class="opt-tf-title" data-collapse=".opt-table-wrap">${g.tf_label}
+                        <span>best ${(g.results || []).length} of ${g.total}</span>
+                    </div>
+                    <div class="opt-table-wrap collapsed-hide">
+                        <table class="opt-table" data-tf="${g.tf_label}">
+                            <thead><tr>${SC_OPT_COLS.map(c =>
+                                `<th ${c.key ? `class="opt-sort" data-key="${c.key}"` : ''}>${c.label}</th>`
+                            ).join('')}</tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>`).join('') || '<div class="opt-tf-title">No timeframe produced enough trades.</div>';
 
-            tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
-                btn.addEventListener('click', () => applyScOptResult(data.results[parseInt(btn.dataset.idx)]));
+            groups.forEach(g => {
+                // Default sort: Net P&L (₹) column, value high → low (like RTP).
+                _scOptGroupsByTf[g.tf_label] = {
+                    rows: (g.results || []).slice(), key: 'net_pnl_inr', dir: 'desc',
+                    displayed: (g.results || []).slice(),
+                };
+                _renderScTfBody(g.tf_label);
+                const th = document.querySelector(
+                    `#scOptGrids table[data-tf="${CSS.escape(g.tf_label)}"] th.opt-sort[data-key="net_pnl_inr"]`
+                );
+                if (th) th.classList.add('sort-desc');
             });
+
+            container.querySelectorAll('th.opt-sort').forEach(th => {
+                th.addEventListener('click', () => {
+                    const tf  = th.closest('table').dataset.tf;
+                    const key = th.dataset.key;
+                    const st  = _scOptGroupsByTf[tf];
+                    if (!st) return;
+                    if (st.key === key) st.dir = st.dir === 'asc' ? 'desc' : 'asc';
+                    else { st.key = key; st.dir = 'desc'; }
+                    _renderScTfBody(tf);
+                    th.closest('thead').querySelectorAll('th').forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
+                    th.classList.add(st.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+                });
+            });
+
+            initCollapsibles(container);
         }
 
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
         if (data.best) applyScOptResult(data.best);
+    }
+
+    // Abort any running 2nd-Candle optimise (pending request + polling loop).
+    function cancelScOptimise() {
+        _scOptRun += 1;
+        if (_scOptAbort) {
+            try { _scOptAbort.abort(); } catch (e) { /* noop */ }
+            _scOptAbort = null;
+        }
     }
 
     async function runScOptimise(recalculate) {
@@ -1248,41 +1544,96 @@ document.addEventListener('DOMContentLoaded', function() {
         if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
         if (panel) panel.style.display = 'none';
 
+        cancelScOptimise();
+        const myRun      = _scOptRun;
+        const controller = new AbortController();
+        _scOptAbort      = controller;
+
         const exitTime = (document.getElementById('scExitTime')?.value || '15:25').split(':');
         try {
             const resp = await fetch('/api/backtest/second-candle/optimise', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
                 body: JSON.stringify({
                     symbol,
                     start_date:  document.getElementById('startDate').value,
                     end_date:    document.getElementById('endDate').value,
-                    interval:    document.getElementById('interval').value,
                     exit_hour:   parseInt(exitTime[0] || 15),
                     exit_minute: parseInt(exitTime[1] || 25),
+                    recalculate: recalculate,
                 })
             });
             const data = await resp.json();
-            if (!data.success) { window.showNotification(data.error || 'Optimisation failed', 'error'); return; }
-            renderScOptResults(data);
+            if (myRun !== _scOptRun) return; // superseded
+            if (!data.success) {
+                window.showNotification(data.error || 'Optimisation failed', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            if (data.from_cache) {
+                _scOptAbort = null;
+                renderScOptResults(data);
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            _pollScOptimise(data.task_id, activeBtn, origText, Date.now(), myRun);
         } catch (err) {
+            if (err && err.name === 'AbortError') return;
             console.error('2nd Candle optimise error:', err);
             window.showNotification('Optimisation request failed', 'error');
-        } finally {
             if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
         }
+    }
+
+    function _pollScOptimise(taskId, activeBtn, origText, startMs, myRun) {
+        const MAX_WAIT_MS = 10 * 60 * 1000;
+        function tick() {
+            if (myRun !== _scOptRun) return;
+            const elapsed = Math.round((Date.now() - startMs) / 1000);
+            if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s…`;
+            if (Date.now() - startMs > MAX_WAIT_MS) {
+                window.showNotification('Optimisation timed out — try a shorter date range', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            fetch(`/api/backtest/second-candle/optimise/status/${taskId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (myRun !== _scOptRun) return;
+                    if (data.status === 'running') { setTimeout(tick, 2000); return; }
+                    _scOptAbort = null;
+                    if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                    if (!data.success || data.status === 'error') {
+                        window.showNotification(data.error || 'Optimisation failed', 'error');
+                        return;
+                    }
+                    renderScOptResults(data);
+                })
+                .catch(err => {
+                    if (myRun !== _scOptRun) return;
+                    console.error('2nd Candle poll error:', err);
+                    setTimeout(tick, 3000);
+                });
+        }
+        setTimeout(tick, 2000);
     }
 
     function applyScOptResult(r) {
         const ci  = document.getElementById('scCandleIndex');
         const rr  = document.getElementById('scRrRatio');
         const dir = document.getElementById('scDirection');
+        const intervalSel = document.getElementById('interval');
         if (ci) ci.value = r.candle_index;
         if (rr) rr.value = r.rr_ratio;
         if (dir) dir.value = r.direction;
+        // Winning timeframe → main interval dropdown, so a follow-up single
+        // backtest reproduces the optimised run.
+        if (intervalSel && r.interval) intervalSel.value = r.interval;
         if (window.showNotification) {
+            const tfStr = r.tf_label ? `${r.tf_label} · ` : '';
             window.showNotification(
-                `Applied: Candle ${r.candle_index}  ·  1:${r.rr_ratio}  ·  ${r.direction}  ·  Win% ${((r.wins / r.total_trades) * 100).toFixed(0)}%`, 'success'
+                `Applied: ${tfStr}Candle ${r.candle_index}  ·  1:${r.rr_ratio}  ·  ${r.direction}  ·  Win% ${((r.wins / r.total_trades) * 100).toFixed(0)}%`, 'success'
             );
         }
     }

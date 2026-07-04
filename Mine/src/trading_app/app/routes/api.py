@@ -97,6 +97,10 @@ _sm_opt_tasks_lock = threading.Lock()
 _rtp_opt_tasks: Dict[str, Dict] = {}
 _rtp_opt_tasks_lock = threading.Lock()
 
+# In-memory task store for long-running 2nd-Candle optimisation background jobs
+_sc_opt_tasks: Dict[str, Dict] = {}
+_sc_opt_tasks_lock = threading.Lock()
+
 # Rankings cache — keyed by index name, expires after 15 min
 _sm_rankings_cache: Dict[str, tuple] = {}
 _SM_RANKINGS_TTL = 900  # seconds
@@ -2954,75 +2958,200 @@ def run_second_candle_backtest_api():
 @csrf.exempt
 @require_user_auth
 def run_second_candle_optimise():
-    """Sweep the 2nd 30-Sec Candle (candle # × SL:Target × direction) grid."""
+    """Sweep the 2nd-Candle (candle # × SL:Target × direction) grid across every
+    intraday timeframe (30s–5 min) and return one leaderboard per timeframe —
+    the same per-timeframe shape as /backtest/rtp/optimise."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
     try:
         data           = request.get_json()
         symbol         = data.get('symbol', 'NIFTY')
-        start_date_str = data.get('start_date')
+        start_date_str = data.get('start_date', '2017-01-01')
         end_date_str   = data.get('end_date')
-        interval       = data.get('interval', '30second')
         exit_hour      = int(data.get('exit_hour', 15))
         exit_minute    = int(data.get('exit_minute', 25))
+        recalculate    = bool(data.get('recalculate', False))
 
-        if not symbol or not start_date_str or not end_date_str:
+        if not symbol or not start_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+        if not end_date_str:
+            end_date_str = datetime.today().strftime('%Y-%m-%d')
+
+        # One run sweeps every intraday timeframe, so the cache is keyed by
+        # symbol + exit-time alone. v2 adds Net P&L (₹) / Brokerage columns and
+        # excludes combos with a negative Net P&L (₹).
+        cache_key = f"{symbol}_sc_multiTF_{exit_hour:02d}{exit_minute:02d}_v2"
+
+        # ── Serve from cache unless caller asked to recalculate ──────────────
+        if not recalculate:
+            cache = _load_opt_cache()
+            if cache_key in cache:
+                entry = cache[cache_key]
+                return jsonify({
+                    'success':            True,
+                    'from_cache':         True,
+                    'cached_at':          entry.get('cached_at'),
+                    'symbol':             entry['symbol'],
+                    'interval':           entry['interval'],
+                    'total_combos_tested': entry['total_combos_tested'],
+                    'best':               entry['best'],
+                    'timeframes':         entry.get('timeframes', []),
+                })
 
         current_kite = get_data_provider()
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
-        fyers_indices = {
-            'NIFTY':      'NSE:NIFTY50-INDEX',
-            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
-            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
-            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-            'SENSEX':     'BSE:SENSEX-INDEX',
-        }
-        kite_indices = {
-            'NIFTY': 256265, 'BANKNIFTY': 260105,
-            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
-        }
-        if hasattr(current_kite, 'fyers'):
-            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
-        else:
-            instrument_token = kite_indices.get(symbol, symbol)
+        task_id = str(uuid.uuid4())
+        with _sc_opt_tasks_lock:
+            _sc_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time()}
 
-        candles = current_kite.historical_data(
-            instrument_token=instrument_token,
-            from_date=start_date_str,
-            to_date=end_date_str,
-            interval=interval,
-            use_cache=False,
-        )
-        if not candles:
-            return jsonify({'success': False, 'error': f'No {interval} data found for the given range'}), 404
+        def _run():
+            try:
+                fyers_indices = {
+                    'NIFTY':      'NSE:NIFTY50-INDEX',
+                    'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+                    'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+                    'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+                    'SENSEX':     'BSE:SENSEX-INDEX',
+                }
+                if hasattr(current_kite, 'fyers'):
+                    instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+                else:
+                    kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105,
+                                    'FINNIFTY': 257801, 'MIDCPNIFTY': 288009}
+                    instrument_token = kite_indices.get(symbol, symbol)
 
-        import pandas as pd
-        import importlib
-        import trading_app.Backtest.second_candle_engine as _sc_mod
-        importlib.reload(_sc_mod)
-        from trading_app.Backtest.second_candle_engine import optimise_second_candle
+                import pandas as pd
+                import importlib
+                import trading_app.Backtest.second_candle_engine as _sc_mod
+                importlib.reload(_sc_mod)
+                from trading_app.Backtest.second_candle_engine import optimise_second_candle
 
-        df = pd.DataFrame(candles)
-        results = optimise_second_candle(df, exit_hour=exit_hour, exit_minute=exit_minute)
+                grid_size = (len(_sc_mod._CANDLE_GRID) * len(_sc_mod._RR_GRID)
+                             * len(_sc_mod._DIR_GRID))
+                lot_value     = _rtp_lot_value(symbol)   # ₹/pt, shared with RTP
+                tf_groups     = []   # one leaderboard per timeframe
+                combos_tested = 0
 
-        logger.info('[2ndCandle OPT] %d combos with trades', len(results))
+                def _sweep(candles, interval_str, tf_label, tf_min):
+                    """Run the full 2nd-candle sweep on one timeframe, keep its top 10."""
+                    nonlocal combos_tested
+                    if not candles:
+                        logger.info("[2ndCandle OPT] timeframe %s: no data — skipped", interval_str)
+                        return
+                    tf_results = optimise_second_candle(
+                        pd.DataFrame(candles), exit_hour=exit_hour, exit_minute=exit_minute
+                    )
+                    combos_tested += grid_size
+                    for r in tf_results:
+                        r['tf_label'] = tf_label
+                        r['interval'] = interval_str
+                        # ₹ net of brokerage (1 lot) — same economics as RTP. The
+                        # 2nd-candle result's Net P&L field is `total_pnl`.
+                        brok = _rtp_brokerage_per_trade(1) * (r.get('total_trades') or 0)
+                        r['net_pnl_inr'] = round((r.get('total_pnl') or 0) * lot_value - brok, 2)
+                    # Only combos still profitable after brokerage belong on the board.
+                    profitable = [r for r in tf_results if r['net_pnl_inr'] > 0]
+                    top_by_pnl = sorted(
+                        profitable, key=lambda r: r.get('total_pnl', 0), reverse=True
+                    )[:10]
+                    tf_groups.append({
+                        'tf_label': tf_label,
+                        'tf_min':   tf_min,
+                        'interval': interval_str,
+                        'total':    len(tf_results),
+                        'results':  top_by_pnl,
+                    })
 
-        return jsonify({
-            'success': True,
-            'symbol': symbol,
-            'interval': interval,
-            'total_combos_tested': len(_sc_mod._CANDLE_GRID) * len(_sc_mod._RR_GRID) * len(_sc_mod._DIR_GRID),
-            'results': results[:25],
-            'best': results[0] if results else None,
-        })
+                # ── Minute timeframes: native fetch per interval ─────────────
+                for minutes, interval_str, tf_label in [
+                    (1, 'minute', '1m'), (2, '2minute', '2m'),
+                    (3, '3minute', '3m'), (5, '5minute', '5m'),
+                ]:
+                    try:
+                        _sweep(current_kite.historical_data(
+                            instrument_token=instrument_token,
+                            from_date=start_date_str, to_date=end_date_str,
+                            interval=interval_str, use_cache=False,
+                        ), interval_str, tf_label, minutes)
+                    except Exception as tf_exc:
+                        logger.warning(f"[2ndCandle OPT] timeframe {interval_str} failed: {tf_exc}")
+
+                # ── 30-second: native fetch, capped to a recent window ───────
+                # A full multi-year 30s pull is thousands of chunk calls, so cap
+                # the range (best-effort; skip on any failure).
+                try:
+                    from datetime import timedelta as _td
+                    _end_dt   = datetime.strptime(end_date_str, '%Y-%m-%d')
+                    _start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
+                    sec_from  = max(_start_dt, _end_dt - _td(days=90)).strftime('%Y-%m-%d')
+                    _sweep(current_kite.historical_data(
+                        instrument_token=instrument_token,
+                        from_date=sec_from, to_date=end_date_str,
+                        interval='30second', use_cache=False,
+                    ), '30second', '30s', 0.5)
+                except Exception as sec_exc:
+                    logger.warning(f"[2ndCandle OPT] 30-second timeframe failed: {sec_exc}")
+
+                if not tf_groups:
+                    with _sc_opt_tasks_lock:
+                        _sc_opt_tasks[task_id] = {'status': 'error', 'error': 'No historical data returned'}
+                    return
+
+                # Order the grids fastest→slowest (30s, 1m, 2m, 3m, 5m).
+                tf_groups.sort(key=lambda g: g['tf_min'])
+
+                # Overall best across every timeframe (highest Net P&L).
+                all_top = [g['results'][0] for g in tf_groups if g['results']]
+                best_overall = max(all_top, key=lambda r: r.get('total_pnl', 0), default=None)
+
+                payload = {
+                    'symbol':             symbol,
+                    'interval':           'multi-TF (30s–5 min)',
+                    'total_combos_tested': combos_tested,
+                    'best':               best_overall,
+                    'timeframes':         tf_groups,
+                    'cached_at':          datetime.now().strftime('%Y-%m-%d %H:%M'),
+                }
+
+                disk_cache            = _load_opt_cache()
+                disk_cache[cache_key] = payload
+                _save_opt_cache(disk_cache)
+
+                with _sc_opt_tasks_lock:
+                    _sc_opt_tasks[task_id] = {'status': 'complete', 'payload': payload}
+            except Exception as e:
+                logger.error(f"[2ndCandle OPT] background error: {e}", exc_info=True)
+                with _sc_opt_tasks_lock:
+                    _sc_opt_tasks[task_id] = {'status': 'error', 'error': str(e)}
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
 
     except Exception as e:
         logger.error(f"Error in 2nd Candle optimise API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/second-candle/optimise/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def run_second_candle_optimise_status(task_id):
+    """Poll the status of a background 2nd-Candle optimisation job."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _sc_opt_tasks_lock:
+        task = _sc_opt_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running'})
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
 
 
 @api_bp.route('/backtest/vwap/optimise', methods=['POST'], strict_slashes=False)
@@ -3106,6 +3235,27 @@ def run_vwap_optimise():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ── Optimise-grid ₹ economics (mirrors the frontend so the leaderboard drops
+# combos whose Net P&L is negative *after brokerage*, not just in points) ──────
+_RTP_LOT_VALUE_BY_SYMBOL = {'NIFTY': 65, 'BANKNIFTY': 30, 'SENSEX': 20}
+
+def _rtp_lot_value(symbol: str) -> float:
+    """₹ per point for one lot, by symbol (defaults to NIFTY's 65)."""
+    return _RTP_LOT_VALUE_BY_SYMBOL.get((symbol or '').upper(), 65)
+
+def _rtp_brokerage_per_trade(lots: int = 1) -> float:
+    """Round-trip brokerage per trade for NIFTY, by lot count (matches backtest.js)."""
+    lookup = {1: 103, 2: 158, 3: 213, 4: 268, 5: 330}
+    if lots <= 5:
+        return lookup.get(max(1, int(lots)), 103)
+    return 330 + (int(lots) - 5) * 62
+
+def _rtp_net_inr(r: Dict[str, Any], lot_value: float, lots: int = 1) -> float:
+    """Net P&L in ₹ = gross ₹ (pts × ₹/pt × lots) − round-trip brokerage."""
+    brok = _rtp_brokerage_per_trade(lots) * (r.get('total_trades') or 0)
+    return (r.get('net_pnl') or 0) * lot_value * lots - brok
+
+
 @api_bp.route('/backtest/rtp/optimise', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -3119,13 +3269,18 @@ def run_rtp_optimise():
         symbol         = data.get('symbol', 'NIFTY')
         start_date_str = data.get('start_date', '2017-01-01')
         end_date_str   = data.get('end_date')
-        interval       = data.get('interval', '5minute')
         recalculate    = bool(data.get('recalculate', False))
 
         if not end_date_str:
             end_date_str = datetime.today().strftime('%Y-%m-%d')
 
-        cache_key = f"{symbol}_{interval}"
+        # We sweep every intraday timeframe (30s–5 min) in one run and return a
+        # per-timeframe leaderboard, so the cache is keyed by symbol alone.
+        # _v2 marks the per-timeframe payload shape (was a flat combined list).
+        # v3: grids now use native per-timeframe candles (was 1-min resampled).
+        # v4: leaderboard excludes combos with a negative Net P&L (₹, net of
+        # brokerage). Bump the key to invalidate stale cache entries.
+        cache_key = f"{symbol}_multiTF_v4"
 
         # ── Serve from cache unless caller asked to recalculate ──────────────
         if not recalculate:
@@ -3140,7 +3295,7 @@ def run_rtp_optimise():
                     'interval':           entry['interval'],
                     'total_combos_tested': entry['total_combos_tested'],
                     'best':               entry['best'],
-                    'results':            entry['results'],
+                    'timeframes':         entry.get('timeframes', []),
                 })
 
         # ── Run optimisation ─────────────────────────────────────────────────
@@ -3172,29 +3327,111 @@ def run_rtp_optimise():
                                     'FINNIFTY': 257801, 'MIDCPNIFTY': 288009}
                     instrument_token = kite_indices.get(symbol, symbol)
 
-                candles = current_kite.historical_data(
-                    instrument_token=instrument_token,
-                    from_date=start_date_str,
-                    to_date=end_date_str,
-                    interval=interval,
-                    use_cache=False,
-                )
-                if not candles:
+                from trading_app.Backtest.rtp_backtest_engine import optimise_rtp
+
+                tf_groups     = []   # one leaderboard per timeframe
+                combos_tested = 0
+
+                lot_value = _rtp_lot_value(symbol)
+
+                def _sweep(df_tf, interval_str, tf_label, tf_min):
+                    """Run the full param sweep on one timeframe, keep its top 10 by Net P&L."""
+                    nonlocal combos_tested
+                    if df_tf is None or df_tf.empty:
+                        return
+                    tf_results = optimise_rtp(df_tf, interval=interval_str, min_trades=15)
+                    combos_tested += len(tf_results)
+                    for r in tf_results:
+                        r['timeframe_min'] = tf_min      # numeric (0.5 for 30s)
+                        r['tf_label']      = tf_label     # display label
+                        r['interval']      = interval_str
+                        r['net_pnl_inr']   = round(_rtp_net_inr(r, lot_value), 2)  # ₹ net (1 lot)
+                    # Only combos that are still profitable after brokerage belong on
+                    # the leaderboard — drop any with a negative Net P&L (₹).
+                    profitable = [r for r in tf_results if r['net_pnl_inr'] > 0]
+                    # Rank the leaderboard by Net P&L (highest first) and keep the top 10.
+                    top_by_pnl = sorted(
+                        profitable, key=lambda r: r.get('net_pnl', 0), reverse=True
+                    )[:10]
+                    tf_groups.append({
+                        'tf_label': tf_label,
+                        'tf_min':   tf_min,
+                        'interval': interval_str,
+                        'total':    len(tf_results),      # combos that passed min_trades
+                        'results':  top_by_pnl,           # top 10 profitable by Net P&L
+                    })
+
+                # ── Minute timeframes: native fetch per interval ─────────────────
+                # Fetch each timeframe natively — the SAME data path the single
+                # backtest uses — so an optimise grid row reproduces exactly what
+                # a manual backtest at that timeframe produces. Deriving 2/3/5-min
+                # by resampling 1-min drifted from the broker's native N-min
+                # candles (different bar highs/lows → different SL/target hits),
+                # which made the grid's Net P&L disagree with the backtest card.
+                any_data = False
+                for minutes, interval_str, tf_label in [
+                    (1, 'minute', '1m'), (2, '2minute', '2m'),
+                    (3, '3minute', '3m'), (5, '5minute', '5m'),
+                ]:
+                    try:
+                        tf_candles = current_kite.historical_data(
+                            instrument_token=instrument_token,
+                            from_date=start_date_str,
+                            to_date=end_date_str,
+                            interval=interval_str,
+                            use_cache=False,
+                        )
+                        if not tf_candles:
+                            logger.info("[RTPOptimise] timeframe %s: no data returned — skipped", interval_str)
+                            continue
+                        any_data = True
+                        _sweep(pd.DataFrame(tf_candles), interval_str, tf_label, minutes)
+                    except Exception as tf_exc:
+                        logger.warning(f"[RTPOptimise] timeframe {interval_str} failed: {tf_exc}")
+                if not any_data:
                     with _rtp_opt_tasks_lock:
                         _rtp_opt_tasks[task_id] = {'status': 'error', 'error': 'No historical data returned'}
                     return
 
-                from trading_app.Backtest.rtp_backtest_engine import optimise_rtp
+                # ── 30-second: native fetch, can't be derived from 1-min ─────────
+                # Fyers only serves seconds-resolution history for a recent window,
+                # so cap the range (a full multi-year 30s pull would be thousands
+                # of mostly-empty chunk calls). Best-effort: skip on any failure.
+                try:
+                    from datetime import timedelta as _td
+                    _end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
+                    _cap_dt = _end_dt - _td(days=90)
+                    _start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
+                    sec_from = max(_start_dt, _cap_dt).strftime('%Y-%m-%d')
+                    sec_candles = current_kite.historical_data(
+                        instrument_token=instrument_token,
+                        from_date=sec_from,
+                        to_date=end_date_str,
+                        interval='30second',
+                        use_cache=False,
+                    )
+                    if sec_candles:
+                        _sweep(pd.DataFrame(sec_candles), '30second', '30s', 0.5)
+                    else:
+                        logger.info("[RTPOptimise] 30-second timeframe: no data returned — skipped")
+                except Exception as sec_exc:
+                    logger.warning(f"[RTPOptimise] 30-second timeframe failed: {sec_exc}")
 
-                df      = pd.DataFrame(candles)
-                results = optimise_rtp(df, interval=interval, min_trades=15)
+                # Order the grids fastest→slowest (30s, 1m, 2m, 3m, 5m).
+                tf_groups.sort(key=lambda g: g['tf_min'])
+
+                # Overall best across every timeframe — used to auto-apply the
+                # top result to the form when the run completes. Each grid is now
+                # ranked by Net P&L, so pick the highest Net P&L across timeframes.
+                all_top = [g['results'][0] for g in tf_groups if g['results']]
+                best_overall = max(all_top, key=lambda r: r.get('net_pnl', 0), default=None)
 
                 payload = {
                     'symbol':             symbol,
-                    'interval':           interval,
-                    'total_combos_tested': len(results),
-                    'best':               results[0] if results else None,
-                    'results':            results[:15],
+                    'interval':           'multi-TF (30s–5 min)',
+                    'total_combos_tested': combos_tested,
+                    'best':               best_overall,
+                    'timeframes':         tf_groups,
                     'cached_at':          datetime.now().strftime('%Y-%m-%d %H:%M'),
                 }
 
@@ -5815,7 +6052,7 @@ def algo_sc_start() -> EndpointResponse:
 
         algo = SecondCandleAlgo(username=username)
         algo.start()
-        return jsonify({'success': True, 'message': '2nd-candle algo started'})
+        return jsonify({'success': True, 'message': 'Candle Breakout algo started'})
     except Exception as e:
         logger.error(f'[sc/start] {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500

@@ -535,6 +535,76 @@ function _rtpDeleteTrade(entryTime) {
 
 // ── RTP Force Exit ────────────────────────────────────────────────────────────
 
+// ── RTP Strategy Logic popup ──────────────────────────────────────────────────
+// Info button (right of the "EMA RTP — Railway Track" title) opens a modal that
+// explains the strategy logic plus the available Entry and Exit options.
+
+function rtpShowLogic() {
+    document.getElementById('rtpLogicModal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'rtpLogicModal';
+    modal.className = 'sm-modal-overlay';
+    modal.innerHTML = `
+<div class="sm-modal-box rtp-logic-modal">
+
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><polyline points="4 15 9 9 13 13 20 5"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">EMA RTP — Railway Track</span>
+            <span class="sm-modal-subtitle">How it enters &amp; exits</span>
+        </div>
+        <button class="sm-modal-close" onclick="document.getElementById('rtpLogicModal').remove()" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+
+    <div class="rtp-logic-body">
+
+        <!-- Timeframe -->
+        <div class="rtp-tf"><span class="rtp-tf-lbl">Timeframe</span><span class="rtp-tf-val">1&#8209;min candles</span><span class="rtp-tf-sub">EMA 9 · 20 · 50</span></div>
+
+        <!-- One-line idea -->
+        <p class="rtp-idea">Trade only when EMA&nbsp;20 &amp; 50 run <b>parallel and trending</b> — like two railway tracks. Enter on a pullback that touches the track and holds.</p>
+
+        <!-- Entry: BUY vs SELL side by side -->
+        <div class="rtp-blk-lbl entry">Entry — price touches EMA, then closes beyond it</div>
+        <div class="rtp-duo">
+            <div class="rtp-duo-card buy">
+                <div class="rtp-duo-hd">▲ BUY</div>
+                <div class="rtp-duo-row">Low <b>touches</b> EMA&nbsp;20</div>
+                <div class="rtp-duo-row"><b>Close above</b> EMA&nbsp;9 &amp; 20</div>
+            </div>
+            <div class="rtp-duo-card sell">
+                <div class="rtp-duo-hd">▼ SELL</div>
+                <div class="rtp-duo-row">High <b>touches</b> EMA&nbsp;20</div>
+                <div class="rtp-duo-row"><b>Close below</b> EMA&nbsp;9 &amp; 20</div>
+            </div>
+        </div>
+        <div class="rtp-mode-note"><code>RTP(50)</code> mode uses EMA&nbsp;50 alone. Fill on <b>next candle open</b>.</div>
+
+        <!-- Exit: compact chip grid -->
+        <div class="rtp-blk-lbl exit">Exit — whichever hits first</div>
+        <div class="rtp-chips">
+            <div class="rtp-chip"><span class="rtp-chip-ic tgt">◎</span><div><b>Target +90 pts</b><span>book profit</span></div></div>
+            <div class="rtp-chip"><span class="rtp-chip-ic sl">✕</span><div><b>Stop Loss −30 pts</b><span>fixed, no trail</span></div></div>
+            <div class="rtp-chip rtp-chip-wide"><span class="rtp-chip-ic eod">⏱</span><div><b>EOD 3:28 PM</b><span>force exit · no overnight hold</span></div></div>
+        </div>
+        <div class="rtp-mode-note">Levels are measured in points from the <b>NIFTY entry spot</b>. Stop Loss is <b>fixed</b> — no trailing.</div>
+
+    </div>
+
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.addEventListener('keydown', function esc(ev) {
+        if (ev.key === 'Escape') { document.getElementById('rtpLogicModal')?.remove(); document.removeEventListener('keydown', esc); }
+    });
+    document.body.appendChild(modal);
+}
+
+
 function rtpExitNow(btn) {
     if (!confirm('Force-close the active RTP trade? A market SELL order will be sent immediately.')) return;
     _setBusy(btn, 'Exiting…');
@@ -1061,8 +1131,75 @@ function _scDeleteTrade(entryTime) {
         .catch(e => alert('Request failed: ' + e));
 }
 
+// ── Candle Breakout Strategy Logic popup ──────────────────────────────────────
+// Info button (right of the "Candle Breakout" title) opens a modal
+// that explains the strategy logic plus its Entry and Exit rules.
+
+function scShowLogic() {
+    document.getElementById('scLogicModal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'scLogicModal';
+    modal.className = 'sm-modal-overlay';
+    modal.innerHTML = `
+<div class="sm-modal-box rtp-logic-modal">
+
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><polyline points="4 15 9 9 13 13 20 5"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">Candle Breakout</span>
+            <span class="sm-modal-subtitle">How it enters &amp; exits</span>
+        </div>
+        <button class="sm-modal-close" onclick="document.getElementById('scLogicModal').remove()" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+
+    <div class="rtp-logic-body">
+
+        <!-- One-line idea -->
+        <p class="rtp-idea">Take the <b>2nd 30-second candle</b> of the day — its High &amp; Low set the range. Trade the <b>first breakout</b> of that range. <b>One trade per day</b>, no re-entry.</p>
+
+        <!-- Entry: BUY vs SELL side by side -->
+        <div class="rtp-blk-lbl entry">Entry — first breakout of the range candle</div>
+        <div class="rtp-duo">
+            <div class="rtp-duo-card buy">
+                <div class="rtp-duo-hd">▲ BUY</div>
+                <div class="rtp-duo-row">Price breaks <b>above</b> range High</div>
+                <div class="rtp-duo-row">Buy <b>CE</b> (delta ≈ 0.90)</div>
+            </div>
+            <div class="rtp-duo-card sell">
+                <div class="rtp-duo-hd">▼ SELL</div>
+                <div class="rtp-duo-row">Price breaks <b>below</b> range Low</div>
+                <div class="rtp-duo-row">Buy <b>PE</b> (delta ≈ 0.90)</div>
+            </div>
+        </div>
+        <div class="rtp-mode-note">Range = the <b>2nd 30-sec candle</b> (09:15:30–09:16:00). Only the <b>first</b> side to break triggers.</div>
+
+        <!-- Exit: compact chip grid -->
+        <div class="rtp-blk-lbl exit">Exit — whichever hits first</div>
+        <div class="rtp-chips">
+            <div class="rtp-chip"><span class="rtp-chip-ic tgt">◎</span><div><b>Target 1:3</b><span>3× the risk</span></div></div>
+            <div class="rtp-chip"><span class="rtp-chip-ic sl">✕</span><div><b>Stop Loss</b><span>opposite range end</span></div></div>
+            <div class="rtp-chip rtp-chip-wide"><span class="rtp-chip-ic eod">⏱</span><div><b>Cut-off 3:25 PM</b><span>force exit · no overnight hold</span></div></div>
+        </div>
+        <div class="rtp-mode-note"><b>Risk</b> = range height (High − Low). <b>Target</b> = entry ± 3 × risk (reward-to-risk 1:3).</div>
+
+    </div>
+
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.addEventListener('keydown', function esc(ev) {
+        if (ev.key === 'Escape') { document.getElementById('scLogicModal')?.remove(); document.removeEventListener('keydown', esc); }
+    });
+    document.body.appendChild(modal);
+}
+
+
 function scExitNow(btn) {
-    if (!confirm('Force-close the active 2nd-candle trade? A market SELL order will be sent immediately.')) return;
+    if (!confirm('Force-close the active Candle Breakout trade? A market SELL order will be sent immediately.')) return;
     _setBusy(btn, 'Exiting…');
     fetch('/api/algo/sc/exit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
         .then(r => r.json())

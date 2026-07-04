@@ -140,6 +140,16 @@
     <!-- ── Header ──────────────────────────────────────────────── -->
     <div class="ag-header">
         <span class="ag-title">EMA RTP — Railway Track</span>
+        <button class="ag-info-btn" id="rtpLogicBtn" onclick="rtpShowLogic()"
+                title="View strategy logic, entry &amp; exit rules" aria-label="Strategy logic">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>Logic</span>
+        </button>
         <span id="rtpBadge" class="ag-badge inactive">
             <span class="ag-badge-dot"></span>
             <span id="rtpBadgeText">No Trade</span>
@@ -215,13 +225,23 @@
     </div><!-- #algo-rtp-panel -->
 
     <!-- ════════════════════════════════════════════════════════ -->
-    <!-- 2nd 30-Sec Candle panel                                  -->
+    <!-- Candle Breakout panel                                    -->
     <!-- ════════════════════════════════════════════════════════ -->
     <div class="ag-panel" id="algo-sc-panel">
 
     <!-- ── Header ──────────────────────────────────────────────── -->
     <div class="ag-header">
-        <span class="ag-title">2nd 30-Sec Candle — Breakout</span>
+        <span class="ag-title">Candle Breakout</span>
+        <button class="ag-info-btn" id="scLogicBtn" onclick="scShowLogic()"
+                title="View strategy logic, entry &amp; exit rules" aria-label="Strategy logic">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>Logic</span>
+        </button>
         <span id="scBadge" class="ag-badge inactive">
             <span class="ag-badge-dot"></span>
             <span id="scBadgeText">No Trade</span>

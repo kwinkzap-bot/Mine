@@ -81,12 +81,11 @@
     grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)) !important;
 }
 .bt-right .bt-loading {
-    position: absolute;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    margin: 0; padding: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    min-height: calc(100vh - 260px); gap: 0;
+    margin: 0; padding: 24px 0;
     background: transparent; border: none; border-radius: 0;
-    width: max-content;
 }
 
 .bt-right-placeholder {
@@ -152,21 +151,56 @@
 .btn-run:hover  { opacity: .85; }
 .btn-run:active { opacity: 1; }
 
+/* Loader wrapper — JS shows it as flex so the card centres both axes. It fills
+   the space left below the optimisation panel so the card sits mid-area. */
 .bt-loading {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 10px; padding: 32px 20px;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    min-height: 55vh; padding: 24px 20px; gap: 0;
     background: transparent; border: none;
 }
-.bt-spinner {
-    width: 32px; height: 32px;
-    border: 3px solid var(--oip-border);
-    border-top-color: var(--oip-accent);
-    border-radius: 50%;
-    animation: bt-spin .7s linear infinite;
+.bt-loader {
+    display: inline-flex; flex-direction: column; align-items: center; gap: 14px;
+    margin: 0 auto; padding: 24px 34px; text-align: center;
+    background: var(--oip-card-bg, #fff);
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 14px;
+    box-shadow: 0 8px 26px rgba(15, 23, 42, .07);
+    animation: bt-loader-in .3s ease-out;
 }
-@keyframes bt-spin { to { transform: rotate(360deg); } }
-.bt-loading p     { margin: 0; font-size: 12px; font-weight: 600; color: var(--oip-accent); }
-.bt-loading small { margin: 0; font-size: 10px; color: var(--oip-metric-lbl); }
+@keyframes bt-loader-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* Animated candlestick bars — an on-theme "market scanning" motion. */
+.bt-candles { display: flex; align-items: flex-end; gap: 5px; height: 42px; }
+.bt-candle {
+    width: 7px; border-radius: 3px;
+    background: linear-gradient(180deg, var(--oip-accent, #2962ff), #60a5fa);
+    animation: bt-candle 1s ease-in-out infinite;
+}
+.bt-candle:nth-child(1) { animation-delay: 0s;   }
+.bt-candle:nth-child(2) { animation-delay: .1s;  }
+.bt-candle:nth-child(3) { animation-delay: .2s;  }
+.bt-candle:nth-child(4) { animation-delay: .3s;  }
+.bt-candle:nth-child(5) { animation-delay: .4s;  }
+.bt-candle:nth-child(6) { animation-delay: .5s;  }
+.bt-candle:nth-child(7) { animation-delay: .6s;  }
+@keyframes bt-candle {
+    0%, 100% { height: 10px; opacity: .5; }
+    50%      { height: 42px; opacity: 1;  }
+}
+
+.bt-loader-text { display: flex; flex-direction: column; gap: 3px; }
+.bt-loader-title { margin: 0; font-size: 13px; font-weight: 700; color: var(--oip-accent, #2962ff); letter-spacing: .2px; }
+.bt-loader small, .bt-loading small { margin: 0; font-size: 10.5px; color: var(--oip-metric-lbl, #64748b); }
+
+/* Animated ellipsis after the title. */
+.bt-dots::after { content: ''; animation: bt-dots 1.4s steps(1, end) infinite; }
+@keyframes bt-dots {
+    0%   { content: ''; }
+    25%  { content: '.'; }
+    50%  { content: '..'; }
+    75%, 100% { content: '...'; }
+}
 
 .results-section { margin-top: 8px; }
 .results-row     { display: grid; gap: 6px; margin-bottom: 6px; }
@@ -231,6 +265,28 @@
 .opt-header h4 { margin: 0; font-size: 11px; font-weight: 700; color: var(--oip-text); }
 .opt-header small { font-size: 10px; color: var(--oip-metric-lbl); }
 .opt-table-wrap { overflow-x: auto; }
+/* Per-timeframe optimisation grids */
+.opt-tf-block { border-top: 3px solid var(--oip-border); }
+.opt-tf-block:first-child { border-top: none; }
+.opt-tf-title {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 6px 12px; font-size: 12px; font-weight: 700;
+    color: var(--oip-text); background: var(--oip-header-bg);
+}
+.opt-tf-title span {
+    font-size: 9px; font-weight: 600; color: var(--oip-metric-lbl);
+    text-transform: uppercase; letter-spacing: .4px;
+}
+.opt-table th.opt-sort { cursor: pointer; user-select: none; position: relative; padding-right: 20px; }
+.opt-table th.opt-sort:hover { color: var(--oip-text); }
+/* Expand / collapse sections */
+.collapsible-h { cursor: pointer; user-select: none; }
+.collapse-chev {
+    display: inline-block; width: 12px; margin-right: 5px;
+    font-size: 9px; color: var(--oip-metric-lbl);
+    text-align: center; vertical-align: middle;
+}
+.collapsed-hide { display: none !important; }
 .opt-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 10px; }
 .opt-table th {
     background: var(--oip-header-bg); color: var(--oip-metric-lbl);
