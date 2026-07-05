@@ -45,14 +45,14 @@ _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute
 _FALLBACK_IV    = 0.15  # assumed annual IV when ATM IV cannot be computed (NIFTY typical 13–18%)
 _BREAKOUT_SCAN_SECS = 15  # cadence of the authoritative completed-candle first-breakout scan
 
-# Defaults match the 2nd 30-Sec Candle backtest (second_candle_engine.py)
+# Live defaults: 2nd 30-Sec candle range, SL:Target 1:3, cut-off 3:25 PM, Buy-only.
 DEFAULT_PARAMS: Dict[str, Any] = {
     'candle_index': 2,
     'rr_ratio':     3.0,
     'exit_hour':    15,
     'exit_minute':  25,
     'enable_long':  True,
-    'enable_short': True,
+    'enable_short': False,
 }
 
 

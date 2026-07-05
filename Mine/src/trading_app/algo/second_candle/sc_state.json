@@ -8,7 +8,7 @@
     "exit_hour": 15,
     "exit_minute": 25,
     "enable_long": true,
-    "enable_short": true
+    "enable_short": false
   },
   "last_exit": {
     "reason": "SL",

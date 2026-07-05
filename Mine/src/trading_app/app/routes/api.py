@@ -38,6 +38,36 @@ _RTP_HISTORY_PATH = os.path.normpath(
 _RTP_ALL_HISTORY_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_all_history.json')
 )
+# RTP 30s variant (same package, _30s-suffixed state/history files)
+_RTP30S_STATE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_state_30s.json')
+)
+_RTP30S_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_history_30s.json')
+)
+_RTP30S_ALL_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_all_history_30s.json')
+)
+# RTP 3m variant (same package, _3m-suffixed state/history files)
+_RTP3M_STATE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_state_3m.json')
+)
+_RTP3M_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_history_3m.json')
+)
+_RTP3M_ALL_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_all_history_3m.json')
+)
+# RTP 5m variant (same package, _5m-suffixed state/history files)
+_RTP5M_STATE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_state_5m.json')
+)
+_RTP5M_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_history_5m.json')
+)
+_RTP5M_ALL_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_all_history_5m.json')
+)
 _NIFTY_FYERS_IDX = 'NSE:NIFTY50-INDEX'
 
 # 2nd 30-Sec Candle algo state and history files
@@ -5877,6 +5907,552 @@ def algo_rtp_start() -> EndpointResponse:
         return jsonify({'success': True, 'message': 'RTP algo started'})
     except Exception as e:
         logger.error(f'[rtp/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── EMA RTP 30s live algo (same RTP logic, 30-second candles) ────────────────
+
+@api_bp.route('/algo/rtp30s/status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp30s_status() -> EndpointResponse:
+    """Return current RTP 30s active trade + live NIFTY spot and P&L."""
+    try:
+        try:
+            with open(_RTP30S_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {'active_trade': None, 'buy_needs_reset': False, 'sell_needs_reset': False}
+
+        trade = state.get('active_trade')
+        if not trade:
+            return jsonify({'success': True, 'active': False, 'state': state, 'live': None})
+
+        # Fetch live NIFTY spot for P&L calculation
+        live = None
+        try:
+            provider = get_data_provider()
+            if provider:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+                if spot:
+                    direction  = trade.get('direction', 'BUY')
+                    entry_spot = float(trade.get('entry_spot', 0))
+                    pnl_pts    = spot - entry_spot if direction == 'BUY' else entry_spot - spot
+                    pnl_pts    = round(pnl_pts, 2)
+                    broker_entries = trade.get('broker_entries', [])
+                    pnl_inr_total  = round(
+                        sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
+                    )
+                    live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+        except Exception as _e:
+            logger.warning(f'[rtp30s/status] live fetch failed: {_e}')
+
+        return jsonify({'success': True, 'active': True, 'state': state, 'live': live})
+    except Exception as e:
+        logger.error(f'[rtp30s/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp30s/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp30s_history() -> EndpointResponse:
+    """Return all completed RTP 30s trades from rtp_trades_all_history_30s.json (latest-first)."""
+    try:
+        try:
+            with open(_RTP30S_ALL_HISTORY_PATH, 'r') as _f:
+                all_trades = json.load(_f)
+            if not isinstance(all_trades, list):
+                all_trades = []
+        except Exception:
+            all_trades = []
+
+        # Strip broker_entries to keep payload lean
+        trades = [
+            {k: v for k, v in t.items() if k != 'broker_entries'}
+            for t in all_trades
+        ]
+        return jsonify({'success': True, 'trades': trades, 'count': len(trades)})
+    except Exception as e:
+        logger.error(f'[rtp30s/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp30s/history', methods=['DELETE'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp30s_history_delete() -> EndpointResponse:
+    """Delete a trade record by entry_time from both daily and all-time 30s history files."""
+    try:
+        data = request.get_json(silent=True) or {}
+        entry_time = data.get('entry_time')
+        if not entry_time:
+            return jsonify({'success': False, 'error': 'entry_time required'}), 400
+
+        for path in [_RTP30S_HISTORY_PATH, _RTP30S_ALL_HISTORY_PATH]:
+            try:
+                with open(path, 'r') as _f:
+                    records = json.load(_f)
+                if isinstance(records, list):
+                    records = [r for r in records if r.get('entry_time') != entry_time]
+                    with open(path, 'w') as _f:
+                        json.dump(records, _f, indent=2, default=str)
+            except Exception:
+                pass
+
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f'[rtp30s/history/delete] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp30s/exit', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp30s_force_exit() -> EndpointResponse:
+    """Manually close the active RTP 30s trade on all brokers."""
+    try:
+        try:
+            with open(_RTP30S_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {}
+
+        if not state.get('active_trade'):
+            return jsonify({'success': False, 'error': 'No active trade to exit'}), 400
+
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        # Prefer the running instance so cached broker services are reused
+        algo = get_instance(username, '30s')
+        if algo is None:
+            algo = RTPAlgo(username=username, variant='30s')
+
+        provider = get_data_provider()
+        spot = 0.0
+        if provider:
+            try:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+            except Exception:
+                pass
+
+        algo._exit_trade('MANUAL', spot)
+        return jsonify({'success': True, 'exit_spot': spot})
+    except Exception as e:
+        logger.error(f'[rtp30s/exit] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp30s/delta-strikes', methods=['GET'])
+@require_user_auth
+def algo_rtp30s_delta_strikes() -> EndpointResponse:
+    """Return the CE and PE strikes closest to ±0.90 delta at the current NIFTY spot."""
+    try:
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        provider = get_data_provider()
+        if not provider:
+            return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
+
+        # Prefer the running instance (has instruments already cached)
+        algo = get_instance(username, '30s') or RTPAlgo(username=username, variant='30s')
+        result = algo.get_delta_strikes(provider)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'[rtp30s/delta-strikes] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp30s/start', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp30s_start() -> EndpointResponse:
+    """Start (or restart) the RTP 30s monitoring thread."""
+    try:
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        existing = get_instance(username, '30s')
+        if existing and existing.is_running():
+            return jsonify({'success': False, 'error': 'Algo already running'}), 409
+
+        algo = RTPAlgo(username=username, variant='30s')
+        algo.start()
+        return jsonify({'success': True, 'message': 'RTP 30s algo started'})
+    except Exception as e:
+        logger.error(f'[rtp30s/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── EMA RTP 3m live algo (same RTP logic, 3-minute candles) ──────────────────
+
+@api_bp.route('/algo/rtp3m/status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp3m_status() -> EndpointResponse:
+    """Return current RTP 3m active trade + live NIFTY spot and P&L."""
+    try:
+        try:
+            with open(_RTP3M_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {'active_trade': None, 'buy_needs_reset': False, 'sell_needs_reset': False}
+
+        trade = state.get('active_trade')
+        if not trade:
+            return jsonify({'success': True, 'active': False, 'state': state, 'live': None})
+
+        # Fetch live NIFTY spot for P&L calculation
+        live = None
+        try:
+            provider = get_data_provider()
+            if provider:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+                if spot:
+                    direction  = trade.get('direction', 'BUY')
+                    entry_spot = float(trade.get('entry_spot', 0))
+                    pnl_pts    = spot - entry_spot if direction == 'BUY' else entry_spot - spot
+                    pnl_pts    = round(pnl_pts, 2)
+                    broker_entries = trade.get('broker_entries', [])
+                    pnl_inr_total  = round(
+                        sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
+                    )
+                    live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+        except Exception as _e:
+            logger.warning(f'[rtp3m/status] live fetch failed: {_e}')
+
+        return jsonify({'success': True, 'active': True, 'state': state, 'live': live})
+    except Exception as e:
+        logger.error(f'[rtp3m/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp3m/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp3m_history() -> EndpointResponse:
+    """Return all completed RTP 3m trades from rtp_trades_all_history_3m.json (latest-first)."""
+    try:
+        try:
+            with open(_RTP3M_ALL_HISTORY_PATH, 'r') as _f:
+                all_trades = json.load(_f)
+            if not isinstance(all_trades, list):
+                all_trades = []
+        except Exception:
+            all_trades = []
+
+        # Strip broker_entries to keep payload lean
+        trades = [
+            {k: v for k, v in t.items() if k != 'broker_entries'}
+            for t in all_trades
+        ]
+        return jsonify({'success': True, 'trades': trades, 'count': len(trades)})
+    except Exception as e:
+        logger.error(f'[rtp3m/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp3m/history', methods=['DELETE'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp3m_history_delete() -> EndpointResponse:
+    """Delete a trade record by entry_time from both daily and all-time 3m history files."""
+    try:
+        data = request.get_json(silent=True) or {}
+        entry_time = data.get('entry_time')
+        if not entry_time:
+            return jsonify({'success': False, 'error': 'entry_time required'}), 400
+
+        for path in [_RTP3M_HISTORY_PATH, _RTP3M_ALL_HISTORY_PATH]:
+            try:
+                with open(path, 'r') as _f:
+                    records = json.load(_f)
+                if isinstance(records, list):
+                    records = [r for r in records if r.get('entry_time') != entry_time]
+                    with open(path, 'w') as _f:
+                        json.dump(records, _f, indent=2, default=str)
+            except Exception:
+                pass
+
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f'[rtp3m/history/delete] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp3m/exit', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp3m_force_exit() -> EndpointResponse:
+    """Manually close the active RTP 3m trade on all brokers."""
+    try:
+        try:
+            with open(_RTP3M_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {}
+
+        if not state.get('active_trade'):
+            return jsonify({'success': False, 'error': 'No active trade to exit'}), 400
+
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        # Prefer the running instance so cached broker services are reused
+        algo = get_instance(username, '3m')
+        if algo is None:
+            algo = RTPAlgo(username=username, variant='3m')
+
+        provider = get_data_provider()
+        spot = 0.0
+        if provider:
+            try:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+            except Exception:
+                pass
+
+        algo._exit_trade('MANUAL', spot)
+        return jsonify({'success': True, 'exit_spot': spot})
+    except Exception as e:
+        logger.error(f'[rtp3m/exit] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp3m/delta-strikes', methods=['GET'])
+@require_user_auth
+def algo_rtp3m_delta_strikes() -> EndpointResponse:
+    """Return the CE and PE strikes closest to ±0.90 delta at the current NIFTY spot."""
+    try:
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        provider = get_data_provider()
+        if not provider:
+            return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
+
+        # Prefer the running instance (has instruments already cached)
+        algo = get_instance(username, '3m') or RTPAlgo(username=username, variant='3m')
+        result = algo.get_delta_strikes(provider)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'[rtp3m/delta-strikes] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp3m/start', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp3m_start() -> EndpointResponse:
+    """Start (or restart) the RTP 3m monitoring thread."""
+    try:
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        existing = get_instance(username, '3m')
+        if existing and existing.is_running():
+            return jsonify({'success': False, 'error': 'Algo already running'}), 409
+
+        algo = RTPAlgo(username=username, variant='3m')
+        algo.start()
+        return jsonify({'success': True, 'message': 'RTP 3m algo started'})
+    except Exception as e:
+        logger.error(f'[rtp3m/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── EMA RTP 5m live algo (same RTP logic, 5-minute candles) ──────────────────
+
+@api_bp.route('/algo/rtp5m/status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp5m_status() -> EndpointResponse:
+    """Return current RTP 5m active trade + live NIFTY spot and P&L."""
+    try:
+        try:
+            with open(_RTP5M_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {'active_trade': None, 'buy_needs_reset': False, 'sell_needs_reset': False}
+
+        trade = state.get('active_trade')
+        if not trade:
+            return jsonify({'success': True, 'active': False, 'state': state, 'live': None})
+
+        # Fetch live NIFTY spot for P&L calculation
+        live = None
+        try:
+            provider = get_data_provider()
+            if provider:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+                if spot:
+                    direction  = trade.get('direction', 'BUY')
+                    entry_spot = float(trade.get('entry_spot', 0))
+                    pnl_pts    = spot - entry_spot if direction == 'BUY' else entry_spot - spot
+                    pnl_pts    = round(pnl_pts, 2)
+                    broker_entries = trade.get('broker_entries', [])
+                    pnl_inr_total  = round(
+                        sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
+                    )
+                    live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+        except Exception as _e:
+            logger.warning(f'[rtp5m/status] live fetch failed: {_e}')
+
+        return jsonify({'success': True, 'active': True, 'state': state, 'live': live})
+    except Exception as e:
+        logger.error(f'[rtp5m/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp5m/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp5m_history() -> EndpointResponse:
+    """Return all completed RTP 5m trades from rtp_trades_all_history_5m.json (latest-first)."""
+    try:
+        try:
+            with open(_RTP5M_ALL_HISTORY_PATH, 'r') as _f:
+                all_trades = json.load(_f)
+            if not isinstance(all_trades, list):
+                all_trades = []
+        except Exception:
+            all_trades = []
+
+        # Strip broker_entries to keep payload lean
+        trades = [
+            {k: v for k, v in t.items() if k != 'broker_entries'}
+            for t in all_trades
+        ]
+        return jsonify({'success': True, 'trades': trades, 'count': len(trades)})
+    except Exception as e:
+        logger.error(f'[rtp5m/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp5m/history', methods=['DELETE'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp5m_history_delete() -> EndpointResponse:
+    """Delete a trade record by entry_time from both daily and all-time 5m history files."""
+    try:
+        data = request.get_json(silent=True) or {}
+        entry_time = data.get('entry_time')
+        if not entry_time:
+            return jsonify({'success': False, 'error': 'entry_time required'}), 400
+
+        for path in [_RTP5M_HISTORY_PATH, _RTP5M_ALL_HISTORY_PATH]:
+            try:
+                with open(path, 'r') as _f:
+                    records = json.load(_f)
+                if isinstance(records, list):
+                    records = [r for r in records if r.get('entry_time') != entry_time]
+                    with open(path, 'w') as _f:
+                        json.dump(records, _f, indent=2, default=str)
+            except Exception:
+                pass
+
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f'[rtp5m/history/delete] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp5m/exit', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp5m_force_exit() -> EndpointResponse:
+    """Manually close the active RTP 5m trade on all brokers."""
+    try:
+        try:
+            with open(_RTP5M_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {}
+
+        if not state.get('active_trade'):
+            return jsonify({'success': False, 'error': 'No active trade to exit'}), 400
+
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        # Prefer the running instance so cached broker services are reused
+        algo = get_instance(username, '5m')
+        if algo is None:
+            algo = RTPAlgo(username=username, variant='5m')
+
+        provider = get_data_provider()
+        spot = 0.0
+        if provider:
+            try:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+            except Exception:
+                pass
+
+        algo._exit_trade('MANUAL', spot)
+        return jsonify({'success': True, 'exit_spot': spot})
+    except Exception as e:
+        logger.error(f'[rtp5m/exit] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp5m/delta-strikes', methods=['GET'])
+@require_user_auth
+def algo_rtp5m_delta_strikes() -> EndpointResponse:
+    """Return the CE and PE strikes closest to ±0.90 delta at the current NIFTY spot."""
+    try:
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        provider = get_data_provider()
+        if not provider:
+            return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
+
+        # Prefer the running instance (has instruments already cached)
+        algo = get_instance(username, '5m') or RTPAlgo(username=username, variant='5m')
+        result = algo.get_delta_strikes(provider)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'[rtp5m/delta-strikes] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp5m/start', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp5m_start() -> EndpointResponse:
+    """Start (or restart) the RTP 5m monitoring thread."""
+    try:
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        existing = get_instance(username, '5m')
+        if existing and existing.is_running():
+            return jsonify({'success': False, 'error': 'Algo already running'}), 409
+
+        algo = RTPAlgo(username=username, variant='5m')
+        algo.start()
+        return jsonify({'success': True, 'message': 'RTP 5m algo started'})
+    except Exception as e:
+        logger.error(f'[rtp5m/start] {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

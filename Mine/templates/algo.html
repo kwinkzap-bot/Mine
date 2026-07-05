@@ -14,7 +14,10 @@
     <!-- ── Tab bar ────────────────────────────────────────────── -->
     <div class="ag-tab-bar">
         <button class="ag-tab"        id="algo-tab-straddle"         onclick="algoSwitch('straddle')">Straddle</button>
-        <button class="ag-tab"        id="algo-tab-rtp"              onclick="algoSwitch('rtp')">EMA RTP</button>
+        <button class="ag-tab"        id="algo-tab-rtp"              onclick="algoSwitch('rtp')">EMA RTP 1m</button>
+        <button class="ag-tab"        id="algo-tab-rtp30s"          onclick="algoSwitch('rtp30s')">EMA RTP 30s</button>
+        <button class="ag-tab"        id="algo-tab-rtp3m"           onclick="algoSwitch('rtp3m')">EMA RTP 3m</button>
+        <button class="ag-tab"        id="algo-tab-rtp5m"           onclick="algoSwitch('rtp5m')">EMA RTP 5m</button>
         <button class="ag-tab"        id="algo-tab-sc"              onclick="algoSwitch('sc')">2nd 30s Candle</button>
         <button class="ag-tab active" id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
@@ -139,7 +142,7 @@
 
     <!-- ── Header ──────────────────────────────────────────────── -->
     <div class="ag-header">
-        <span class="ag-title">EMA RTP — Railway Track</span>
+        <span class="ag-title">EMA RTP 1m — Railway Track</span>
         <button class="ag-info-btn" id="rtpLogicBtn" onclick="rtpShowLogic()"
                 title="View strategy logic, entry &amp; exit rules" aria-label="Strategy logic">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -223,6 +226,282 @@
     </div>
 
     </div><!-- #algo-rtp-panel -->
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- EMA RTP 30s panel (same logic, 30-second candles)       -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-rtp30s-panel">
+
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <div class="ag-header">
+        <span class="ag-title">EMA RTP 30s — Railway Track</span>
+        <button class="ag-info-btn" id="rtp30sLogicBtn" onclick="rtp30sShowLogic()"
+                title="View strategy logic, entry &amp; exit rules" aria-label="Strategy logic">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>Logic</span>
+        </button>
+        <span id="rtp30sBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="rtp30sBadgeText">No Trade</span>
+        </span>
+        <span class="ag-last-upd" id="rtp30sLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <!-- ── Active Trade card ───────────────────────────────────── -->
+    <div class="ag-card" id="rtp30sActiveCard">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Active Trade</span>
+            <div class="ag-card-hdr-actions">
+                <button class="ag-btn ag-btn-strikes" id="rtp30sStrikesBtn"
+                        onclick="rtp30sFetchDeltaStrikes(this)">Δ Strikes</button>
+                <button class="ag-btn ag-btn-exit" id="rtp30sExitBtn"
+                        onclick="rtp30sExitNow(this)" disabled>Force Exit</button>
+            </div>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="rtp30sActiveGrid">
+                <div class="ag-empty">No active trade</div>
+            </div>
+            <!-- Delta strike result panel — shown after button click -->
+            <div id="rtp30sStrikesResult" style="display:none"></div>
+        </div>
+    </div>
+
+    <!-- ── Performance dashboard (from executed-trade JSON) ────── -->
+    <div class="ag-card" id="rtp30sDashCard" style="display:none">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Live Performance</span>
+            <span id="rtp30sDashNet" style="margin-left:auto;font-size:12px;font-weight:800"></span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="rtp30sDashStats"></div>
+
+            <!-- Equity curve -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">Equity Curve</span>
+                    <span id="rtp30sEquityMeta" class="rtp-chart-meta"></span>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="rtp30sEquityChart"></canvas></div>
+            </div>
+
+            <!-- P&L breakdown -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">P&amp;L Breakdown</span>
+                    <div class="rtp-period-tabs" id="rtp30sPeriodTabs">
+                        <button class="rtp-period-tab active" data-period="monthly" onclick="rtp30sSetPeriod('monthly')">Monthly</button>
+                        <button class="rtp-period-tab"        data-period="weekly"  onclick="rtp30sSetPeriod('weekly')">Weekly</button>
+                        <button class="rtp-period-tab"        data-period="daily"   onclick="rtp30sSetPeriod('daily')">Daily</button>
+                        <button class="rtp-period-tab"        data-period="yearly"  onclick="rtp30sSetPeriod('yearly')">Yearly</button>
+                    </div>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="rtp30sBreakdownChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Executed Trade History ──────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Executed Trade History</span>
+            <span id="rtp30sHistCount" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+        </div>
+        <div id="rtp30sHistBody">
+            <div class="ag-empty">No completed trades</div>
+        </div>
+    </div>
+
+    </div><!-- #algo-rtp30s-panel -->
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- EMA RTP 3m panel (same logic, 3-minute candles)         -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-rtp3m-panel">
+
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <div class="ag-header">
+        <span class="ag-title">EMA RTP 3m — Railway Track</span>
+        <button class="ag-info-btn" id="rtp3mLogicBtn" onclick="rtp3mShowLogic()"
+                title="View strategy logic, entry &amp; exit rules" aria-label="Strategy logic">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>Logic</span>
+        </button>
+        <span id="rtp3mBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="rtp3mBadgeText">No Trade</span>
+        </span>
+        <span class="ag-last-upd" id="rtp3mLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <!-- ── Active Trade card ───────────────────────────────────── -->
+    <div class="ag-card" id="rtp3mActiveCard">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Active Trade</span>
+            <div class="ag-card-hdr-actions">
+                <button class="ag-btn ag-btn-strikes" id="rtp3mStrikesBtn"
+                        onclick="rtp3mFetchDeltaStrikes(this)">Δ Strikes</button>
+                <button class="ag-btn ag-btn-exit" id="rtp3mExitBtn"
+                        onclick="rtp3mExitNow(this)" disabled>Force Exit</button>
+            </div>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="rtp3mActiveGrid">
+                <div class="ag-empty">No active trade</div>
+            </div>
+            <!-- Delta strike result panel — shown after button click -->
+            <div id="rtp3mStrikesResult" style="display:none"></div>
+        </div>
+    </div>
+
+    <!-- ── Performance dashboard (from executed-trade JSON) ────── -->
+    <div class="ag-card" id="rtp3mDashCard" style="display:none">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Live Performance</span>
+            <span id="rtp3mDashNet" style="margin-left:auto;font-size:12px;font-weight:800"></span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="rtp3mDashStats"></div>
+
+            <!-- Equity curve -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">Equity Curve</span>
+                    <span id="rtp3mEquityMeta" class="rtp-chart-meta"></span>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="rtp3mEquityChart"></canvas></div>
+            </div>
+
+            <!-- P&L breakdown -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">P&amp;L Breakdown</span>
+                    <div class="rtp-period-tabs" id="rtp3mPeriodTabs">
+                        <button class="rtp-period-tab active" data-period="monthly" onclick="rtp3mSetPeriod('monthly')">Monthly</button>
+                        <button class="rtp-period-tab"        data-period="weekly"  onclick="rtp3mSetPeriod('weekly')">Weekly</button>
+                        <button class="rtp-period-tab"        data-period="daily"   onclick="rtp3mSetPeriod('daily')">Daily</button>
+                        <button class="rtp-period-tab"        data-period="yearly"  onclick="rtp3mSetPeriod('yearly')">Yearly</button>
+                    </div>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="rtp3mBreakdownChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Executed Trade History ──────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Executed Trade History</span>
+            <span id="rtp3mHistCount" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+        </div>
+        <div id="rtp3mHistBody">
+            <div class="ag-empty">No completed trades</div>
+        </div>
+    </div>
+
+    </div><!-- #algo-rtp3m-panel -->
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- EMA RTP 5m panel (same logic, 5-minute candles)         -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-rtp5m-panel">
+
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <div class="ag-header">
+        <span class="ag-title">EMA RTP 5m — Railway Track</span>
+        <button class="ag-info-btn" id="rtp5mLogicBtn" onclick="rtp5mShowLogic()"
+                title="View strategy logic, entry &amp; exit rules" aria-label="Strategy logic">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>Logic</span>
+        </button>
+        <span id="rtp5mBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="rtp5mBadgeText">No Trade</span>
+        </span>
+        <span class="ag-last-upd" id="rtp5mLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <!-- ── Active Trade card ───────────────────────────────────── -->
+    <div class="ag-card" id="rtp5mActiveCard">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Active Trade</span>
+            <div class="ag-card-hdr-actions">
+                <button class="ag-btn ag-btn-strikes" id="rtp5mStrikesBtn"
+                        onclick="rtp5mFetchDeltaStrikes(this)">Δ Strikes</button>
+                <button class="ag-btn ag-btn-exit" id="rtp5mExitBtn"
+                        onclick="rtp5mExitNow(this)" disabled>Force Exit</button>
+            </div>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="rtp5mActiveGrid">
+                <div class="ag-empty">No active trade</div>
+            </div>
+            <!-- Delta strike result panel — shown after button click -->
+            <div id="rtp5mStrikesResult" style="display:none"></div>
+        </div>
+    </div>
+
+    <!-- ── Performance dashboard (from executed-trade JSON) ────── -->
+    <div class="ag-card" id="rtp5mDashCard" style="display:none">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Live Performance</span>
+            <span id="rtp5mDashNet" style="margin-left:auto;font-size:12px;font-weight:800"></span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="rtp5mDashStats"></div>
+
+            <!-- Equity curve -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">Equity Curve</span>
+                    <span id="rtp5mEquityMeta" class="rtp-chart-meta"></span>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="rtp5mEquityChart"></canvas></div>
+            </div>
+
+            <!-- P&L breakdown -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">P&amp;L Breakdown</span>
+                    <div class="rtp-period-tabs" id="rtp5mPeriodTabs">
+                        <button class="rtp-period-tab active" data-period="monthly" onclick="rtp5mSetPeriod('monthly')">Monthly</button>
+                        <button class="rtp-period-tab"        data-period="weekly"  onclick="rtp5mSetPeriod('weekly')">Weekly</button>
+                        <button class="rtp-period-tab"        data-period="daily"   onclick="rtp5mSetPeriod('daily')">Daily</button>
+                        <button class="rtp-period-tab"        data-period="yearly"  onclick="rtp5mSetPeriod('yearly')">Yearly</button>
+                    </div>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="rtp5mBreakdownChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Executed Trade History ──────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Executed Trade History</span>
+            <span id="rtp5mHistCount" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+        </div>
+        <div id="rtp5mHistBody">
+            <div class="ag-empty">No completed trades</div>
+        </div>
+    </div>
+
+    </div><!-- #algo-rtp5m-panel -->
 
     <!-- ════════════════════════════════════════════════════════ -->
     <!-- Candle Breakout panel                                    -->

@@ -152,7 +152,7 @@ class MarketScheduler:
                 timezone='Asia/Kolkata',
             ),
             id='rtp_algo_start',
-            name='RTP Railway Track Algo Start',
+            name='RTP 1m Railway Track Algo Start',
             replace_existing=True,
             misfire_grace_time=120,
         )
@@ -168,7 +168,103 @@ class MarketScheduler:
                 timezone='Asia/Kolkata',
             ),
             id='rtp_algo_watchdog',
-            name='RTP Algo Watchdog',
+            name='RTP 1m Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
+        # RTP 30s (same logic, 30-second candles): start at 9:15 AM weekdays
+        self.scheduler.add_job(
+            self._start_rtp30s_monitoring,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=9,
+                minute=15,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='rtp30s_algo_start',
+            name='RTP 30s Railway Track Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
+        # Watchdog: restart the RTP 30s thread if it crashes mid-day
+        self.scheduler.add_job(
+            self._watchdog_rtp30s,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/5',
+                second=30,
+                timezone='Asia/Kolkata',
+            ),
+            id='rtp30s_algo_watchdog',
+            name='RTP 30s Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
+        # RTP 3m (same logic, 3-minute candles): start at 9:15 AM weekdays
+        self.scheduler.add_job(
+            self._start_rtp3m_monitoring,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=9,
+                minute=15,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='rtp3m_algo_start',
+            name='RTP 3m Railway Track Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
+        # Watchdog: restart the RTP 3m thread if it crashes mid-day
+        self.scheduler.add_job(
+            self._watchdog_rtp3m,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/5',
+                second=30,
+                timezone='Asia/Kolkata',
+            ),
+            id='rtp3m_algo_watchdog',
+            name='RTP 3m Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
+        # RTP 5m (same logic, 5-minute candles): start at 9:15 AM weekdays
+        self.scheduler.add_job(
+            self._start_rtp5m_monitoring,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=9,
+                minute=15,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='rtp5m_algo_start',
+            name='RTP 5m Railway Track Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
+        # Watchdog: restart the RTP 5m thread if it crashes mid-day
+        self.scheduler.add_job(
+            self._watchdog_rtp5m,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/5',
+                second=30,
+                timezone='Asia/Kolkata',
+            ),
+            id='rtp5m_algo_watchdog',
+            name='RTP 5m Algo Watchdog',
             replace_existing=True,
             misfire_grace_time=60,
         )
@@ -337,17 +433,18 @@ class MarketScheduler:
 
     def _rtp_active(self) -> bool:
         from trading_app.app.utils.user_env import UserEnvManager
-        val = UserEnvManager.get_user_var(self._rtp_username(), 'EMA_RTP_ACTIVE', 'false')
+        val = UserEnvManager.get_user_var(self._rtp_username(), 'EMA_RTP_1M_ACTIVE', 'false')
         return val.strip().lower() == 'true'
 
-    def _ensure_rtp_running(self, source: str = '') -> None:
-        """Start the RTP monitoring thread if it is not already running.
-        Always starts during market hours regardless of EMA_RTP_ACTIVE — the
-        kill-switch lives inside the loop and gates signal detection only.
-        Gating thread startup on EMA_RTP_ACTIVE would leave the algo dormant
-        until the next 5-min watchdog tick after the user enables the flag.
+    def _ensure_rtp_running(self, source: str = '', variant: str = '1m') -> None:
+        """Start an RTP monitoring thread (per timeframe variant) if not already running.
+        Always starts during market hours regardless of the variant's active flag —
+        the kill-switch lives inside the loop and gates signal detection only.
+        Gating thread startup on the flag would leave the algo dormant until the
+        next 5-min watchdog tick after the user enables it.
         Guards against duplicate starts via the module-level instance registry.
         """
+        tag = f"RTP{'' if variant == '1m' else variant} {source}"
         try:
             if not self.is_trading_day():
                 return
@@ -361,24 +458,48 @@ class MarketScheduler:
                 return
             from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
             username = self._rtp_username()
-            existing = get_instance(username)
+            existing = get_instance(username, variant)
             if existing and existing.is_running():
                 return  # Already alive
             if existing:
-                logger.warning(f"[RTP {source}] Monitoring thread dead — restarting")
+                logger.warning(f"[{tag}] Monitoring thread dead — restarting")
             else:
-                logger.info(f"[RTP {source}] Starting monitoring thread for user={username}")
-            RTPAlgo(username=username).start()
+                logger.info(f"[{tag}] Starting monitoring thread for user={username}")
+            RTPAlgo(username=username, variant=variant).start()
         except Exception as e:
-            logger.error(f"[RTP {source}] _ensure_rtp_running failed: {e}", exc_info=True)
+            logger.error(f"[{tag}] _ensure_rtp_running failed: {e}", exc_info=True)
 
     def _start_rtp_monitoring(self) -> None:
-        """9:15 AM weekdays: start RTP Railway Track algo monitoring thread."""
-        self._ensure_rtp_running(source='Scheduler')
+        """9:15 AM weekdays: start RTP 1m Railway Track algo monitoring thread."""
+        self._ensure_rtp_running(source='Scheduler', variant='1m')
 
     def _watchdog_rtp(self) -> None:
-        """Every 5 minutes during market hours: restart RTP thread if it crashed."""
-        self._ensure_rtp_running(source='Watchdog')
+        """Every 5 minutes during market hours: restart RTP 1m thread if it crashed."""
+        self._ensure_rtp_running(source='Watchdog', variant='1m')
+
+    def _start_rtp30s_monitoring(self) -> None:
+        """9:15 AM weekdays: start RTP 30s Railway Track algo monitoring thread."""
+        self._ensure_rtp_running(source='Scheduler', variant='30s')
+
+    def _watchdog_rtp30s(self) -> None:
+        """Every 5 minutes during market hours: restart RTP 30s thread if it crashed."""
+        self._ensure_rtp_running(source='Watchdog', variant='30s')
+
+    def _start_rtp3m_monitoring(self) -> None:
+        """9:15 AM weekdays: start RTP 3m Railway Track algo monitoring thread."""
+        self._ensure_rtp_running(source='Scheduler', variant='3m')
+
+    def _watchdog_rtp3m(self) -> None:
+        """Every 5 minutes during market hours: restart RTP 3m thread if it crashed."""
+        self._ensure_rtp_running(source='Watchdog', variant='3m')
+
+    def _start_rtp5m_monitoring(self) -> None:
+        """9:15 AM weekdays: start RTP 5m Railway Track algo monitoring thread."""
+        self._ensure_rtp_running(source='Scheduler', variant='5m')
+
+    def _watchdog_rtp5m(self) -> None:
+        """Every 5 minutes during market hours: restart RTP 5m thread if it crashed."""
+        self._ensure_rtp_running(source='Watchdog', variant='5m')
 
     # ── 2nd 30-Sec Candle algo management ─────────────────────────────────────
 
@@ -526,7 +647,10 @@ def init_scheduler(app):
         market_scheduler.start()
         # Startup recovery: if the server restarted during market hours the 9:15 AM
         # cron already passed and the algo thread was never launched. Start it now.
-        market_scheduler._ensure_rtp_running(source='Startup')
+        market_scheduler._ensure_rtp_running(source='Startup', variant='1m')
+        market_scheduler._ensure_rtp_running(source='Startup', variant='30s')
+        market_scheduler._ensure_rtp_running(source='Startup', variant='3m')
+        market_scheduler._ensure_rtp_running(source='Startup', variant='5m')
         market_scheduler._ensure_sc_running(source='Startup')
         # Historic OI self-heal: backfill any recent trading day whose 8 PM
         # record was missed while this process was down. Runs off-thread so a

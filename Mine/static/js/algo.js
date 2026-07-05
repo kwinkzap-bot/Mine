@@ -1,4 +1,4 @@
-/* algo.js — Algo page: Straddle + EMA RTP tabs */
+/* algo.js — Algo page: Straddle + EMA RTP 1m + EMA RTP 30s tabs */
 'use strict';
 
 let _algoTimer         = null;
@@ -6,11 +6,23 @@ let _rtpStatusTimer    = null;
 let _rtpHistoryTimer   = null;
 let _rtpLastEntryTime  = null;  // tracks last seen entry_time to detect trade changes
 let _rtpLastActiveFlag = false; // tracks last seen active flag
+let _rtp30sStatusTimer    = null;
+let _rtp30sHistoryTimer   = null;
+let _rtp30sLastEntryTime  = null;
+let _rtp30sLastActiveFlag = false;
+let _rtp3mStatusTimer     = null;
+let _rtp3mHistoryTimer    = null;
+let _rtp3mLastEntryTime   = null;
+let _rtp3mLastActiveFlag  = false;
+let _rtp5mStatusTimer     = null;
+let _rtp5mHistoryTimer    = null;
+let _rtp5mLastEntryTime   = null;
+let _rtp5mLastActiveFlag  = false;
 let _scStatusTimer     = null;
 let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;
 let _scLastActiveFlag  = false;
-const _ALGO_TABS = ['straddle', 'rtp', 'sc', 'swing-momentum'];
+const _ALGO_TABS = ['straddle', 'rtp', 'rtp30s', 'rtp3m', 'rtp5m', 'sc', 'swing-momentum'];
 
 // Round-trip brokerage charged per lot (1 lot = 65 qty). The performance
 // dashboards express ₹ P&L on a single-lot basis (opt_pnl_pts × lot_size), so
@@ -39,6 +51,12 @@ function algoSwitch(tab) {
     clearTimeout(_algoTimer);
     clearTimeout(_rtpStatusTimer);
     clearTimeout(_rtpHistoryTimer);
+    clearTimeout(_rtp30sStatusTimer);
+    clearTimeout(_rtp30sHistoryTimer);
+    clearTimeout(_rtp3mStatusTimer);
+    clearTimeout(_rtp3mHistoryTimer);
+    clearTimeout(_rtp5mStatusTimer);
+    clearTimeout(_rtp5mHistoryTimer);
     clearTimeout(_scStatusTimer);
     clearTimeout(_scHistoryTimer);
     if (tab === 'straddle') {
@@ -46,6 +64,15 @@ function algoSwitch(tab) {
     } else if (tab === 'rtp') {
         _rtpFetchStatus();
         _rtpFetchHistory();
+    } else if (tab === 'rtp30s') {
+        _rtp30sFetchStatus();
+        _rtp30sFetchHistory();
+    } else if (tab === 'rtp3m') {
+        _rtp3mFetchStatus();
+        _rtp3mFetchHistory();
+    } else if (tab === 'rtp5m') {
+        _rtp5mFetchStatus();
+        _rtp5mFetchHistory();
     } else if (tab === 'sc') {
         scLoadSettings();
         _scFetchStatus();
@@ -536,7 +563,7 @@ function _rtpDeleteTrade(entryTime) {
 // ── RTP Force Exit ────────────────────────────────────────────────────────────
 
 // ── RTP Strategy Logic popup ──────────────────────────────────────────────────
-// Info button (right of the "EMA RTP — Railway Track" title) opens a modal that
+// Info button (right of the "EMA RTP 1m — Railway Track" title) opens a modal that
 // explains the strategy logic plus the available Entry and Exit options.
 
 function rtpShowLogic() {
@@ -553,7 +580,7 @@ function rtpShowLogic() {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><polyline points="4 15 9 9 13 13 20 5"/></svg>
         </div>
         <div class="sm-modal-hdr-text">
-            <span class="sm-modal-title">EMA RTP — Railway Track</span>
+            <span class="sm-modal-title">EMA RTP 1m — Railway Track</span>
             <span class="sm-modal-subtitle">How it enters &amp; exits</span>
         </div>
         <button class="sm-modal-close" onclick="document.getElementById('rtpLogicModal').remove()" aria-label="Close">
@@ -677,6 +704,1896 @@ function rtpFetchDeltaStrikes(btn) {
             panel.style.display = 'block';
         });
 }
+
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// EMA RTP 30s live algo (same RTP logic on 30-second candles; reuses generic helpers)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── RTP 30s status ────────────────────────────────────────────────────────────────
+
+function _rtp30sFetchStatus() {
+    fetch('/api/algo/rtp30s/status')
+        .then(r => r.json())
+        .then(data => {
+            _rtp30sRenderStatus(data);
+            // Detect trade state changes and immediately refresh history so opt
+            // entry/exit values reflect the just-completed or just-entered trade
+            // rather than waiting up to 30 s for the scheduled history poll.
+            const newEntryTime = data.state && data.state.active_trade
+                ? data.state.active_trade.entry_time : null;
+            const newActive = !!data.active;
+            const tradeChanged = newEntryTime !== _rtp30sLastEntryTime ||
+                                 newActive !== _rtp30sLastActiveFlag;
+            _rtp30sLastEntryTime  = newEntryTime;
+            _rtp30sLastActiveFlag = newActive;
+            if (tradeChanged) {
+                clearTimeout(_rtp30sHistoryTimer);
+                _rtp30sFetchHistory();
+            }
+            clearTimeout(_rtp30sStatusTimer);
+            _rtp30sStatusTimer = setTimeout(_rtp30sFetchStatus, newActive ? 5000 : 30000);
+        })
+        .catch(() => {
+            clearTimeout(_rtp30sStatusTimer);
+            _rtp30sStatusTimer = setTimeout(_rtp30sFetchStatus, 30000);
+        });
+}
+
+function _rtp30sRenderStatus(data) {
+    const trade  = data.state && data.state.active_trade;
+    const live   = data.live || null;
+    const active = !!data.active;
+
+    // Badge
+    const badge = document.getElementById('rtp30sBadge');
+    badge.className = 'ag-badge ' + (active ? 'active' : 'inactive');
+    document.getElementById('rtp30sBadgeText').textContent =
+        active ? (trade.direction + ' ' + trade.option_type) : 'No Trade';
+
+    // Timestamp
+    document.getElementById('rtp30sLastUpd').textContent =
+        new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Active trade grid
+    const grid = document.getElementById('rtp30sActiveGrid');
+    if (!active || !trade) {
+        grid.innerHTML = '<div class="ag-empty">No active trade</div>';
+        return;
+    }
+
+    const pnlPts = live ? live.pnl_pts : null;
+    const pnlInr = live ? live.pnl_inr_total : null;
+    const spotStr = live ? '₹' + _num(live.spot) : '…';
+
+    const tiles = [
+        { label: 'Direction',    value: trade.direction,
+          cls: trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg' },
+        { label: 'Option',       value: trade.option_type + ' ' + trade.strike },
+        { label: 'Entry Spot',   value: '₹' + _num(trade.entry_spot) },
+        { label: 'Live Spot',    value: spotStr },
+        { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
+        { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
+        { label: 'P&L (pts)',    value: _rtp30sFmtPts(pnlPts),  cls: _rtp30sPnlCls(pnlPts) },
+        { label: 'P&L (₹ est)', value: _rtp30sFmtInr(pnlInr),  cls: _rtp30sPnlCls(pnlInr) },
+        { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
+    ];
+
+    grid.innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+
+    // Toggle Force Exit button based on trade state
+    const exitBtn = document.getElementById('rtp30sExitBtn');
+    if (exitBtn) exitBtn.disabled = !active;
+}
+
+// ── RTP history ───────────────────────────────────────────────────────────────
+
+function _rtp30sFetchHistory() {
+    fetch('/api/algo/rtp30s/history')
+        .then(r => r.json())
+        .then(data => {
+            _rtp30sRenderHistory(data.trades || []);
+            clearTimeout(_rtp30sHistoryTimer);
+            _rtp30sHistoryTimer = setTimeout(_rtp30sFetchHistory, 30000);
+        })
+        .catch(() => {
+            clearTimeout(_rtp30sHistoryTimer);
+            _rtp30sHistoryTimer = setTimeout(_rtp30sFetchHistory, 30000);
+        });
+}
+
+function _rtp30sRenderHistory(trades) {
+    const countEl = document.getElementById('rtp30sHistCount');
+    const body    = document.getElementById('rtp30sHistBody');
+
+    // Performance dashboard (cards + charts) built from the same JSON
+    _rtp30sRenderDashboard(trades);
+
+    if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
+
+    if (!trades.length) {
+        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
+        return;
+    }
+
+    function _fmtOpt(val) {
+        if (val == null) return '—';
+        return '₹' + Number(val).toFixed(2);
+    }
+    function _fmtPts(val, suffix) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
+    }
+    function _fmtInr(val) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
+    }
+
+    body.innerHTML = `
+<div class="ag-hist-scroll">
+<table class="ag-hist-table">
+    <thead>
+        <tr>
+            <th class="ag-hist-th">Date</th>
+            <th class="ag-hist-th">Entry Time</th>
+            <th class="ag-hist-th">Exit Time</th>
+            <th class="ag-hist-th">Strike</th>
+            <th class="ag-hist-th">Opt Entry</th>
+            <th class="ag-hist-th">Opt Exit</th>
+            <th class="ag-hist-th">N Entry</th>
+            <th class="ag-hist-th">N Exit</th>
+            <th class="ag-hist-th">N P&amp;L</th>
+            <th class="ag-hist-th">Opt P&amp;L</th>
+            <th class="ag-hist-th">Reason</th>
+            <th class="ag-hist-th"></th>
+        </tr>
+    </thead>
+    <tbody>
+    ${trades.map(t => {
+        const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
+        const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
+        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const oPnlCls   = (t.opt_pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
+        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
+        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
+        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
+        return `<tr>
+            <td class="ag-hist-td">${dateStr}</td>
+            <td class="ag-hist-td">${entryTime}</td>
+            <td class="ag-hist-td">${exitTime}</td>
+            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
+            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
+            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
+            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
+            <td class="ag-hist-td">${_rtp30sFmtReason(t.reason)}</td>
+            <td class="ag-hist-td ag-hist-td-del">
+                <button class="ag-hist-del-btn" onclick="_rtp30sDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
+            </td>
+        </tr>`;
+    }).join('')}
+    </tbody>
+</table>
+</div>`;
+}
+
+// ── RTP live performance dashboard (cards + charts from history JSON) ──────────
+let _rtp30sEquityChart    = null;
+let _rtp30sBreakdownChart = null;
+let _rtp30sDashTrades     = [];
+let _rtp30sDashPeriod     = 'monthly';
+
+// Plugin: draw +/- ₹ labels above/below each breakdown bar.
+const _rtp30sBarLabelPlugin = {
+    id: 'rtp30sBarLabels',
+    afterDatasetsDraw(chart, _, opts) {
+        const { ctx, data } = chart;
+        const m = chart.getDatasetMeta(0);
+        ctx.save();
+        ctx.font = '600 9px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+        ctx.textAlign = 'center';
+        m.data.forEach((bar, i) => {
+            const v = data.datasets[0].data[i];
+            if (v == null) return;
+            ctx.fillStyle = v >= 0 ? '#16a34a' : '#dc2626';
+            if (v >= 0) { ctx.textBaseline = 'bottom'; ctx.fillText(opts.fmt(v), bar.x, bar.y - 3); }
+            else        { ctx.textBaseline = 'top';    ctx.fillText(opts.fmt(v), bar.x, bar.y + 3); }
+        });
+        ctx.restore();
+    }
+};
+
+function _rtp30sRenderDashboard(trades) {
+    const card = document.getElementById('rtp30sDashCard');
+    if (!card) return;
+
+    // Only completed trades carrying a realised ₹ figure feed the dashboard.
+    const done = (trades || []).filter(t => t.opt_pnl_inr != null);
+    _rtp30sDashTrades = done;
+
+    if (!done.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+
+    // ── Aggregate stats straight from the JSON ─────────────────
+    let wins = 0, losses = 0, grossWin = 0, grossLoss = 0;
+    let netInr = 0, netPts = 0, winPts = 0, lossPts = 0;
+    let cntEod = 0, cntSl = 0, cntTgt = 0;
+    done.forEach(t => {
+        const inr = _algoNetInr(t);   // ₹ net of round-trip brokerage
+        const pts = Number(t.opt_pnl_pts) || 0;   // option points
+        netInr += inr; netPts += pts;
+        if (inr >= 0) { wins++;   grossWin  += inr;           winPts  += pts; }
+        else          { losses++; grossLoss += Math.abs(inr); lossPts += pts; }
+        const reason = String(t.reason || '').toUpperCase();
+        if      (reason === 'EOD')    cntEod++;
+        else if (reason === 'SL')     cntSl++;
+        else if (reason === 'TARGET') cntTgt++;
+    });
+    const total   = done.length;
+    const winRate = total ? (wins / total * 100) : 0;
+    const pf      = grossLoss > 0 ? (grossWin / grossLoss) : (grossWin > 0 ? Infinity : 0);
+    const avgWin  = wins   ? winPts  / wins   : null;
+    const avgLoss = losses ? lossPts / losses : null;
+    const maxDD   = _rtp30sMaxDrawdown(done);   // ₹, ≤ 0
+    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
+
+    const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
+
+    const tiles = [
+        { label: 'Total Trades',  value: total },
+        { label: 'Wins',          value: wins,   cls: 'ag-pos' },
+        { label: 'Losses',        value: losses, cls: 'ag-neg' },
+        { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
+        { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtp30sPnlCls(netInr) },
+        { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtp30sPnlCls(netPts) },
+        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
+        { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
+        { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
+        { label: 'Max Drawdown',  value: '-₹' + Math.abs(Math.round(maxDD)).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Target',        value: cntTgt, cls: 'ag-pos' },
+        { label: 'SL',            value: cntSl,  cls: 'ag-neg' },
+        { label: 'EOD',           value: cntEod, cls: 'ag-warn' },
+    ];
+
+    document.getElementById('rtp30sDashStats').innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+
+    const netEl = document.getElementById('rtp30sDashNet');
+    if (netEl) {
+        netEl.textContent = inrFmt(netInr);
+        netEl.style.color = netInr >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+
+    _rtp30sRenderEquity(done);
+    _rtp30sRenderBreakdown(done, _rtp30sDashPeriod);
+}
+
+function _rtp30sMaxDrawdown(trades) {
+    const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    let cum = 0, peak = 0, maxDD = 0;
+    sorted.forEach(t => {
+        cum += _algoNetInr(t);
+        if (cum > peak) peak = cum;
+        const dd = cum - peak;
+        if (dd < maxDD) maxDD = dd;
+    });
+    return maxDD;   // ≤ 0
+}
+
+function _rtp30sRenderEquity(trades) {
+    const ctx = document.getElementById('rtp30sEquityChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const sorted  = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    const labels  = ['Start'];
+    const dataPts = [0];
+    const dates   = [''];
+    let cum = 0;
+    sorted.forEach((t, i) => {
+        cum += _algoNetInr(t);
+        labels.push('T' + (i + 1));
+        dataPts.push(Math.round(cum));
+        dates.push(t.entry_time ? String(t.entry_time).replace('T', ' ').slice(0, 16) : '');
+    });
+
+    const net    = dataPts[dataPts.length - 1];
+    const profit = net >= 0;
+    const line   = profit ? '#2962ff' : '#ff1744';
+    const fill   = profit ? 'rgba(41,98,255,0.07)' : 'rgba(255,23,68,0.06)';
+
+    const meta = document.getElementById('rtp30sEquityMeta');
+    if (meta) {
+        meta.textContent = (net >= 0 ? '+₹' : '-₹') + Math.abs(net).toLocaleString('en-IN');
+        meta.style.color = profit ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+
+    const fmtY = v => {
+        const a = Math.abs(v), s = v < 0 ? '-' : '';
+        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(0) + 'K';
+        return s + '₹' + a;
+    };
+
+    if (_rtp30sEquityChart) { _rtp30sEquityChart.destroy(); _rtp30sEquityChart = null; }
+    _rtp30sEquityChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [{
+            data: dataPts, borderColor: line, backgroundColor: fill,
+            fill: true, tension: 0.25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2,
+        }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: {
+                    title: items => { const i = items[0].dataIndex; return i === 0 ? 'Start' : `Trade ${i} · ${dates[i]}`; },
+                    label: item => '  Cum P&L: ' + (item.raw >= 0 ? '+₹' : '-₹') + Math.abs(item.raw).toLocaleString('en-IN'),
+                } },
+            },
+            scales: {
+                x: { ticks: { maxTicksLimit: 15, color: '#999', font: { size: 11 }, autoSkip: true }, grid: { color: 'rgba(128,128,128,0.08)' } },
+                y: { ticks: { color: '#999', font: { size: 11 }, callback: fmtY }, grid: { color: 'rgba(128,128,128,0.1)' } },
+            }
+        }
+    });
+}
+
+function rtp30sSetPeriod(period) {
+    _rtp30sDashPeriod = period;
+    document.querySelectorAll('#rtp30sPeriodTabs .rtp-period-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.period === period));
+    _rtp30sRenderBreakdown(_rtp30sDashTrades, period);
+}
+
+function _rtp30sPeriodKey(d, period) {
+    if (period === 'daily')  return d.toISOString().slice(0, 10);
+    if (period === 'weekly') {
+        const x = new Date(d); x.setHours(0, 0, 0, 0);
+        x.setDate(x.getDate() - x.getDay() + 1);   // Monday
+        return x.toISOString().slice(0, 10);
+    }
+    if (period === 'monthly') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    return `${d.getFullYear()}`;
+}
+
+function _rtp30sRenderBreakdown(trades, period) {
+    const ctx = document.getElementById('rtp30sBreakdownChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const groups = {};
+    (trades || []).forEach(t => {
+        const key = _rtp30sPeriodKey(new Date(t.entry_time), period);
+        if (!groups[key]) groups[key] = { inr: 0, wins: 0, losses: 0 };
+        const inr = _algoNetInr(t);
+        groups[key].inr += inr;
+        if (inr >= 0) groups[key].wins++; else groups[key].losses++;
+    });
+    const keys   = Object.keys(groups).sort();
+    const labels = keys.map(k => {
+        if (period === 'monthly') { const [y, m] = k.split('-'); return new Date(+y, +m - 1).toLocaleString('default', { month: 'short', year: '2-digit' }); }
+        if (period === 'weekly')  return 'W ' + k.slice(5);
+        if (period === 'daily')   return k.slice(5);
+        return k;
+    });
+    const values = keys.map(k => Math.round(groups[k].inr));
+    const meta   = keys.map(k => groups[k]);
+    const bg  = values.map(v => v >= 0 ? 'rgba(34,197,94,.20)' : 'rgba(239,68,68,.20)');
+    const brd = values.map(v => v >= 0 ? 'rgba(34,197,94,.90)' : 'rgba(239,68,68,.90)');
+
+    const fmtBar = v => {
+        const a = Math.abs(v), s = v >= 0 ? '+' : '−';
+        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(1) + 'K';
+        return s + '₹' + a;
+    };
+
+    if (_rtp30sBreakdownChart) { _rtp30sBreakdownChart.destroy(); _rtp30sBreakdownChart = null; }
+    _rtp30sBreakdownChart = new Chart(ctx.getContext('2d'), {
+        type: 'bar',
+        plugins: [_rtp30sBarLabelPlugin],
+        data: { labels, datasets: [{ data: values, backgroundColor: bg, borderColor: brd, borderWidth: 1.5, borderRadius: 4, borderSkipped: false }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            layout: { padding: { top: 18, bottom: 4 } },
+            plugins: {
+                legend: { display: false },
+                rtp30sBarLabels: { fmt: fmtBar },
+                tooltip: { displayColors: false, padding: 10, callbacks: {
+                    title: c => labels[c[0].dataIndex],
+                    label: c => {
+                        const i = c.dataIndex, v = values[i], g = meta[i];
+                        const tr = g.wins + g.losses, wr = tr ? Math.round(g.wins / tr * 100) : 0;
+                        return [
+                            ' P&L: ' + (v >= 0 ? '+₹' : '-₹') + Math.abs(v).toLocaleString('en-IN'),
+                            ` Trades: ${tr}  (${g.wins}W / ${g.losses}L)`,
+                            ` Win Rate: ${wr}%`,
+                        ];
+                    },
+                } },
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { font: { size: 9 }, color: '#94a3b8' } },
+                y: {
+                    grid: { color: c => c.tick.value === 0 ? 'rgba(128,128,128,.3)' : 'rgba(128,128,128,.08)' },
+                    ticks: { font: { size: 9 }, color: '#94a3b8', callback: v => {
+                        if (v === 0) return '0';
+                        const a = Math.abs(v), s = v < 0 ? '−' : '';
+                        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+                        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(0) + 'K';
+                        return s + '₹' + a;
+                    } },
+                },
+            }
+        }
+    });
+}
+
+// ── RTP helpers ───────────────────────────────────────────────────────────────
+
+function _rtp30sFmtPts(pts) {
+    if (pts == null) return '…';
+    return (pts >= 0 ? '+' : '') + Number(pts).toFixed(1) + ' pts';
+}
+
+function _rtp30sFmtInr(inr) {
+    if (inr == null) return '…';
+    return (inr >= 0 ? '+₹' : '-₹') + Math.abs(inr).toFixed(0);
+}
+
+function _rtp30sPnlCls(val) {
+    if (val == null) return '';
+    return val >= 0 ? 'ag-pos' : 'ag-neg';
+}
+
+function _rtp30sFmtReason(reason) {
+    const map = {
+        TARGET: '<span class="ag-reason-badge target">TARGET</span>',
+        SL:     '<span class="ag-reason-badge sl">SL</span>',
+        EOD:    '<span class="ag-reason-badge eod">EOD</span>',
+        MANUAL: '<span class="ag-reason-badge manual">MANUAL</span>',
+    };
+    return map[reason] || reason || '—';
+}
+
+// ── RTP Delete History Record ─────────────────────────────────────────────────
+
+function _rtp30sDeleteTrade(entryTime) {
+    if (!confirm('Delete this trade record? This cannot be undone.')) return;
+    fetch('/api/algo/rtp30s/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ entry_time: entryTime }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_rtp30sHistoryTimer);
+            _rtp30sFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
+// ── RTP Force Exit ────────────────────────────────────────────────────────────
+
+// ── RTP Strategy Logic popup ──────────────────────────────────────────────────
+// Info button (right of the "EMA RTP 30s — Railway Track" title) opens a modal that
+// explains the strategy logic plus the available Entry and Exit options.
+
+function rtp30sShowLogic() {
+    document.getElementById('rtp30sLogicModal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'rtp30sLogicModal';
+    modal.className = 'sm-modal-overlay';
+    modal.innerHTML = `
+<div class="sm-modal-box rtp-logic-modal">
+
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><polyline points="4 15 9 9 13 13 20 5"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">EMA RTP 30s — Railway Track</span>
+            <span class="sm-modal-subtitle">How it enters &amp; exits</span>
+        </div>
+        <button class="sm-modal-close" onclick="document.getElementById('rtp30sLogicModal').remove()" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+
+    <div class="rtp-logic-body">
+
+        <!-- Timeframe -->
+        <div class="rtp-tf"><span class="rtp-tf-lbl">Timeframe</span><span class="rtp-tf-val">30&#8209;sec candles</span><span class="rtp-tf-sub">EMA 9 · 20 · 50 · ADX&nbsp;≥&nbsp;30</span></div>
+
+        <!-- One-line idea -->
+        <p class="rtp-idea">Trade only when EMA&nbsp;20 &amp; 50 run <b>parallel and trending</b> — like two railway tracks — and <b>ADX&nbsp;≥&nbsp;30</b> confirms trend strength. Enter on a pullback that touches the track and holds.</p>
+
+        <!-- Entry: BUY vs SELL side by side -->
+        <div class="rtp-blk-lbl entry">Entry — price touches EMA, then closes beyond it</div>
+        <div class="rtp-duo">
+            <div class="rtp-duo-card buy">
+                <div class="rtp-duo-hd">▲ BUY</div>
+                <div class="rtp-duo-row">Low <b>touches</b> EMA&nbsp;20</div>
+                <div class="rtp-duo-row"><b>Close above</b> EMA&nbsp;9 &amp; 20</div>
+            </div>
+            <div class="rtp-duo-card sell">
+                <div class="rtp-duo-hd">▼ SELL</div>
+                <div class="rtp-duo-row">High <b>touches</b> EMA&nbsp;20</div>
+                <div class="rtp-duo-row"><b>Close below</b> EMA&nbsp;9 &amp; 20</div>
+            </div>
+        </div>
+        <div class="rtp-mode-note"><code>RTP(50)</code> mode uses EMA&nbsp;50 alone. Fill on <b>next candle open</b>.</div>
+
+        <!-- Exit: compact chip grid -->
+        <div class="rtp-blk-lbl exit">Exit — whichever hits first</div>
+        <div class="rtp-chips">
+            <div class="rtp-chip"><span class="rtp-chip-ic tgt">◎</span><div><b>Target +75 pts</b><span>book profit</span></div></div>
+            <div class="rtp-chip"><span class="rtp-chip-ic sl">✕</span><div><b>Stop Loss −25 pts</b><span>fixed, no trail</span></div></div>
+            <div class="rtp-chip rtp-chip-wide"><span class="rtp-chip-ic eod">⏱</span><div><b>EOD 3:28 PM</b><span>force exit · no overnight hold</span></div></div>
+        </div>
+        <div class="rtp-mode-note">Levels are measured in points from the <b>NIFTY entry spot</b>. Stop Loss is <b>fixed</b> — no trailing.</div>
+
+    </div>
+
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.addEventListener('keydown', function esc(ev) {
+        if (ev.key === 'Escape') { document.getElementById('rtp30sLogicModal')?.remove(); document.removeEventListener('keydown', esc); }
+    });
+    document.body.appendChild(modal);
+}
+
+
+function rtp30sExitNow(btn) {
+    if (!confirm('Force-close the active RTP trade? A market SELL order will be sent immediately.')) return;
+    _setBusy(btn, 'Exiting…');
+    fetch('/api/algo/rtp30s/exit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Exit failed: ' + (d.error || 'Unknown error')); _unbusy(btn, 'Force Exit'); return; }
+            clearTimeout(_rtp30sStatusTimer);
+            clearTimeout(_rtp30sHistoryTimer);
+            _rtp30sFetchStatus();
+            _rtp30sFetchHistory();
+        })
+        .catch(e => { alert('Request failed: ' + e); _unbusy(btn, 'Force Exit'); });
+}
+
+
+// ── RTP Delta Strikes ─────────────────────────────────────────────────────────
+
+function rtp30sFetchDeltaStrikes(btn) {
+    const panel = document.getElementById('rtp30sStrikesResult');
+    btn.disabled = true;
+    btn.classList.add('busy');
+    btn.textContent = 'Loading…';
+    panel.style.display = 'none';
+
+    fetch('/api/algo/rtp30s/delta-strikes')
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            btn.classList.remove('busy');
+            btn.textContent = 'Δ Strikes';
+
+            if (!d.success) {
+                panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ ${d.error || 'Failed to fetch strikes'}</span>`;
+                panel.style.display = 'block';
+                return;
+            }
+
+            const fmt  = v => v != null ? v.toLocaleString('en-IN') : '—';
+            const fmtD = v => v != null ? (v > 0 ? '+' : '') + v.toFixed(3) : '—';
+            const fmtL = v => v != null ? '₹' + v.toLocaleString('en-IN', {minimumFractionDigits:2}) : '—';
+
+            const ce = d.CE || {};
+            const pe = d.PE || {};
+
+            panel.innerHTML = `
+              <div style="font-size:11px;color:#7986cb;font-weight:600;margin-bottom:4px;letter-spacing:.4px;">
+                NIFTY SPOT: <span style="color:#1a237e;font-size:13px;">${fmt(d.spot)}</span>
+                &nbsp;·&nbsp; Expiry: <span style="color:#555;">${d.expiry || '—'}</span>
+              </div>
+              <div class="rtp-strikes-row">
+                <span class="rsr-type ce">CE</span>
+                <span class="rsr-strike">${fmt(ce.strike)}</span>
+                <span class="rsr-delta">δ ${fmtD(ce.delta)}</span>
+                <span class="rsr-ltp">LTP ${fmtL(ce.ltp)}</span>
+              </div>
+              <div class="rtp-strikes-row">
+                <span class="rsr-type pe">PE</span>
+                <span class="rsr-strike">${fmt(pe.strike)}</span>
+                <span class="rsr-delta">δ ${fmtD(pe.delta)}</span>
+                <span class="rsr-ltp">LTP ${fmtL(pe.ltp)}</span>
+              </div>`;
+            panel.style.display = 'block';
+        })
+        .catch(e => {
+            btn.disabled = false;
+            btn.classList.remove('busy');
+            btn.textContent = 'Δ Strikes';
+            panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ Request failed: ${e}</span>`;
+            panel.style.display = 'block';
+        });
+}
+
+
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// EMA RTP 3m live algo (same RTP logic on 3-minute candles; reuses generic helpers)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── RTP 3m status ────────────────────────────────────────────────────────────────
+
+function _rtp3mFetchStatus() {
+    fetch('/api/algo/rtp3m/status')
+        .then(r => r.json())
+        .then(data => {
+            _rtp3mRenderStatus(data);
+            // Detect trade state changes and immediately refresh history so opt
+            // entry/exit values reflect the just-completed or just-entered trade
+            // rather than waiting up to 30 s for the scheduled history poll.
+            const newEntryTime = data.state && data.state.active_trade
+                ? data.state.active_trade.entry_time : null;
+            const newActive = !!data.active;
+            const tradeChanged = newEntryTime !== _rtp3mLastEntryTime ||
+                                 newActive !== _rtp3mLastActiveFlag;
+            _rtp3mLastEntryTime  = newEntryTime;
+            _rtp3mLastActiveFlag = newActive;
+            if (tradeChanged) {
+                clearTimeout(_rtp3mHistoryTimer);
+                _rtp3mFetchHistory();
+            }
+            clearTimeout(_rtp3mStatusTimer);
+            _rtp3mStatusTimer = setTimeout(_rtp3mFetchStatus, newActive ? 5000 : 30000);
+        })
+        .catch(() => {
+            clearTimeout(_rtp3mStatusTimer);
+            _rtp3mStatusTimer = setTimeout(_rtp3mFetchStatus, 30000);
+        });
+}
+
+function _rtp3mRenderStatus(data) {
+    const trade  = data.state && data.state.active_trade;
+    const live   = data.live || null;
+    const active = !!data.active;
+
+    // Badge
+    const badge = document.getElementById('rtp3mBadge');
+    badge.className = 'ag-badge ' + (active ? 'active' : 'inactive');
+    document.getElementById('rtp3mBadgeText').textContent =
+        active ? (trade.direction + ' ' + trade.option_type) : 'No Trade';
+
+    // Timestamp
+    document.getElementById('rtp3mLastUpd').textContent =
+        new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Active trade grid
+    const grid = document.getElementById('rtp3mActiveGrid');
+    if (!active || !trade) {
+        grid.innerHTML = '<div class="ag-empty">No active trade</div>';
+        return;
+    }
+
+    const pnlPts = live ? live.pnl_pts : null;
+    const pnlInr = live ? live.pnl_inr_total : null;
+    const spotStr = live ? '₹' + _num(live.spot) : '…';
+
+    const tiles = [
+        { label: 'Direction',    value: trade.direction,
+          cls: trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg' },
+        { label: 'Option',       value: trade.option_type + ' ' + trade.strike },
+        { label: 'Entry Spot',   value: '₹' + _num(trade.entry_spot) },
+        { label: 'Live Spot',    value: spotStr },
+        { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
+        { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
+        { label: 'P&L (pts)',    value: _rtp3mFmtPts(pnlPts),  cls: _rtp3mPnlCls(pnlPts) },
+        { label: 'P&L (₹ est)', value: _rtp3mFmtInr(pnlInr),  cls: _rtp3mPnlCls(pnlInr) },
+        { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
+    ];
+
+    grid.innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+
+    // Toggle Force Exit button based on trade state
+    const exitBtn = document.getElementById('rtp3mExitBtn');
+    if (exitBtn) exitBtn.disabled = !active;
+}
+
+// ── RTP history ───────────────────────────────────────────────────────────────
+
+function _rtp3mFetchHistory() {
+    fetch('/api/algo/rtp3m/history')
+        .then(r => r.json())
+        .then(data => {
+            _rtp3mRenderHistory(data.trades || []);
+            clearTimeout(_rtp3mHistoryTimer);
+            _rtp3mHistoryTimer = setTimeout(_rtp3mFetchHistory, 30000);
+        })
+        .catch(() => {
+            clearTimeout(_rtp3mHistoryTimer);
+            _rtp3mHistoryTimer = setTimeout(_rtp3mFetchHistory, 30000);
+        });
+}
+
+function _rtp3mRenderHistory(trades) {
+    const countEl = document.getElementById('rtp3mHistCount');
+    const body    = document.getElementById('rtp3mHistBody');
+
+    // Performance dashboard (cards + charts) built from the same JSON
+    _rtp3mRenderDashboard(trades);
+
+    if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
+
+    if (!trades.length) {
+        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
+        return;
+    }
+
+    function _fmtOpt(val) {
+        if (val == null) return '—';
+        return '₹' + Number(val).toFixed(2);
+    }
+    function _fmtPts(val, suffix) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
+    }
+    function _fmtInr(val) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
+    }
+
+    body.innerHTML = `
+<div class="ag-hist-scroll">
+<table class="ag-hist-table">
+    <thead>
+        <tr>
+            <th class="ag-hist-th">Date</th>
+            <th class="ag-hist-th">Entry Time</th>
+            <th class="ag-hist-th">Exit Time</th>
+            <th class="ag-hist-th">Strike</th>
+            <th class="ag-hist-th">Opt Entry</th>
+            <th class="ag-hist-th">Opt Exit</th>
+            <th class="ag-hist-th">N Entry</th>
+            <th class="ag-hist-th">N Exit</th>
+            <th class="ag-hist-th">N P&amp;L</th>
+            <th class="ag-hist-th">Opt P&amp;L</th>
+            <th class="ag-hist-th">Reason</th>
+            <th class="ag-hist-th"></th>
+        </tr>
+    </thead>
+    <tbody>
+    ${trades.map(t => {
+        const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
+        const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
+        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const oPnlCls   = (t.opt_pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
+        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
+        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
+        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
+        return `<tr>
+            <td class="ag-hist-td">${dateStr}</td>
+            <td class="ag-hist-td">${entryTime}</td>
+            <td class="ag-hist-td">${exitTime}</td>
+            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
+            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
+            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
+            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
+            <td class="ag-hist-td">${_rtp3mFmtReason(t.reason)}</td>
+            <td class="ag-hist-td ag-hist-td-del">
+                <button class="ag-hist-del-btn" onclick="_rtp3mDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
+            </td>
+        </tr>`;
+    }).join('')}
+    </tbody>
+</table>
+</div>`;
+}
+
+// ── RTP live performance dashboard (cards + charts from history JSON) ──────────
+let _rtp3mEquityChart    = null;
+let _rtp3mBreakdownChart = null;
+let _rtp3mDashTrades     = [];
+let _rtp3mDashPeriod     = 'monthly';
+
+// Plugin: draw +/- ₹ labels above/below each breakdown bar.
+const _rtp3mBarLabelPlugin = {
+    id: 'rtp3mBarLabels',
+    afterDatasetsDraw(chart, _, opts) {
+        const { ctx, data } = chart;
+        const m = chart.getDatasetMeta(0);
+        ctx.save();
+        ctx.font = '600 9px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+        ctx.textAlign = 'center';
+        m.data.forEach((bar, i) => {
+            const v = data.datasets[0].data[i];
+            if (v == null) return;
+            ctx.fillStyle = v >= 0 ? '#16a34a' : '#dc2626';
+            if (v >= 0) { ctx.textBaseline = 'bottom'; ctx.fillText(opts.fmt(v), bar.x, bar.y - 3); }
+            else        { ctx.textBaseline = 'top';    ctx.fillText(opts.fmt(v), bar.x, bar.y + 3); }
+        });
+        ctx.restore();
+    }
+};
+
+function _rtp3mRenderDashboard(trades) {
+    const card = document.getElementById('rtp3mDashCard');
+    if (!card) return;
+
+    // Only completed trades carrying a realised ₹ figure feed the dashboard.
+    const done = (trades || []).filter(t => t.opt_pnl_inr != null);
+    _rtp3mDashTrades = done;
+
+    if (!done.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+
+    // ── Aggregate stats straight from the JSON ─────────────────
+    let wins = 0, losses = 0, grossWin = 0, grossLoss = 0;
+    let netInr = 0, netPts = 0, winPts = 0, lossPts = 0;
+    let cntEod = 0, cntSl = 0, cntTgt = 0;
+    done.forEach(t => {
+        const inr = _algoNetInr(t);   // ₹ net of round-trip brokerage
+        const pts = Number(t.opt_pnl_pts) || 0;   // option points
+        netInr += inr; netPts += pts;
+        if (inr >= 0) { wins++;   grossWin  += inr;           winPts  += pts; }
+        else          { losses++; grossLoss += Math.abs(inr); lossPts += pts; }
+        const reason = String(t.reason || '').toUpperCase();
+        if      (reason === 'EOD')    cntEod++;
+        else if (reason === 'SL')     cntSl++;
+        else if (reason === 'TARGET') cntTgt++;
+    });
+    const total   = done.length;
+    const winRate = total ? (wins / total * 100) : 0;
+    const pf      = grossLoss > 0 ? (grossWin / grossLoss) : (grossWin > 0 ? Infinity : 0);
+    const avgWin  = wins   ? winPts  / wins   : null;
+    const avgLoss = losses ? lossPts / losses : null;
+    const maxDD   = _rtp3mMaxDrawdown(done);   // ₹, ≤ 0
+    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
+
+    const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
+
+    const tiles = [
+        { label: 'Total Trades',  value: total },
+        { label: 'Wins',          value: wins,   cls: 'ag-pos' },
+        { label: 'Losses',        value: losses, cls: 'ag-neg' },
+        { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
+        { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtp3mPnlCls(netInr) },
+        { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtp3mPnlCls(netPts) },
+        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
+        { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
+        { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
+        { label: 'Max Drawdown',  value: '-₹' + Math.abs(Math.round(maxDD)).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Target',        value: cntTgt, cls: 'ag-pos' },
+        { label: 'SL',            value: cntSl,  cls: 'ag-neg' },
+        { label: 'EOD',           value: cntEod, cls: 'ag-warn' },
+    ];
+
+    document.getElementById('rtp3mDashStats').innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+
+    const netEl = document.getElementById('rtp3mDashNet');
+    if (netEl) {
+        netEl.textContent = inrFmt(netInr);
+        netEl.style.color = netInr >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+
+    _rtp3mRenderEquity(done);
+    _rtp3mRenderBreakdown(done, _rtp3mDashPeriod);
+}
+
+function _rtp3mMaxDrawdown(trades) {
+    const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    let cum = 0, peak = 0, maxDD = 0;
+    sorted.forEach(t => {
+        cum += _algoNetInr(t);
+        if (cum > peak) peak = cum;
+        const dd = cum - peak;
+        if (dd < maxDD) maxDD = dd;
+    });
+    return maxDD;   // ≤ 0
+}
+
+function _rtp3mRenderEquity(trades) {
+    const ctx = document.getElementById('rtp3mEquityChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const sorted  = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    const labels  = ['Start'];
+    const dataPts = [0];
+    const dates   = [''];
+    let cum = 0;
+    sorted.forEach((t, i) => {
+        cum += _algoNetInr(t);
+        labels.push('T' + (i + 1));
+        dataPts.push(Math.round(cum));
+        dates.push(t.entry_time ? String(t.entry_time).replace('T', ' ').slice(0, 16) : '');
+    });
+
+    const net    = dataPts[dataPts.length - 1];
+    const profit = net >= 0;
+    const line   = profit ? '#2962ff' : '#ff1744';
+    const fill   = profit ? 'rgba(41,98,255,0.07)' : 'rgba(255,23,68,0.06)';
+
+    const meta = document.getElementById('rtp3mEquityMeta');
+    if (meta) {
+        meta.textContent = (net >= 0 ? '+₹' : '-₹') + Math.abs(net).toLocaleString('en-IN');
+        meta.style.color = profit ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+
+    const fmtY = v => {
+        const a = Math.abs(v), s = v < 0 ? '-' : '';
+        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(0) + 'K';
+        return s + '₹' + a;
+    };
+
+    if (_rtp3mEquityChart) { _rtp3mEquityChart.destroy(); _rtp3mEquityChart = null; }
+    _rtp3mEquityChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [{
+            data: dataPts, borderColor: line, backgroundColor: fill,
+            fill: true, tension: 0.25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2,
+        }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: {
+                    title: items => { const i = items[0].dataIndex; return i === 0 ? 'Start' : `Trade ${i} · ${dates[i]}`; },
+                    label: item => '  Cum P&L: ' + (item.raw >= 0 ? '+₹' : '-₹') + Math.abs(item.raw).toLocaleString('en-IN'),
+                } },
+            },
+            scales: {
+                x: { ticks: { maxTicksLimit: 15, color: '#999', font: { size: 11 }, autoSkip: true }, grid: { color: 'rgba(128,128,128,0.08)' } },
+                y: { ticks: { color: '#999', font: { size: 11 }, callback: fmtY }, grid: { color: 'rgba(128,128,128,0.1)' } },
+            }
+        }
+    });
+}
+
+function rtp3mSetPeriod(period) {
+    _rtp3mDashPeriod = period;
+    document.querySelectorAll('#rtp3mPeriodTabs .rtp-period-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.period === period));
+    _rtp3mRenderBreakdown(_rtp3mDashTrades, period);
+}
+
+function _rtp3mPeriodKey(d, period) {
+    if (period === 'daily')  return d.toISOString().slice(0, 10);
+    if (period === 'weekly') {
+        const x = new Date(d); x.setHours(0, 0, 0, 0);
+        x.setDate(x.getDate() - x.getDay() + 1);   // Monday
+        return x.toISOString().slice(0, 10);
+    }
+    if (period === 'monthly') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    return `${d.getFullYear()}`;
+}
+
+function _rtp3mRenderBreakdown(trades, period) {
+    const ctx = document.getElementById('rtp3mBreakdownChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const groups = {};
+    (trades || []).forEach(t => {
+        const key = _rtp3mPeriodKey(new Date(t.entry_time), period);
+        if (!groups[key]) groups[key] = { inr: 0, wins: 0, losses: 0 };
+        const inr = _algoNetInr(t);
+        groups[key].inr += inr;
+        if (inr >= 0) groups[key].wins++; else groups[key].losses++;
+    });
+    const keys   = Object.keys(groups).sort();
+    const labels = keys.map(k => {
+        if (period === 'monthly') { const [y, m] = k.split('-'); return new Date(+y, +m - 1).toLocaleString('default', { month: 'short', year: '2-digit' }); }
+        if (period === 'weekly')  return 'W ' + k.slice(5);
+        if (period === 'daily')   return k.slice(5);
+        return k;
+    });
+    const values = keys.map(k => Math.round(groups[k].inr));
+    const meta   = keys.map(k => groups[k]);
+    const bg  = values.map(v => v >= 0 ? 'rgba(34,197,94,.20)' : 'rgba(239,68,68,.20)');
+    const brd = values.map(v => v >= 0 ? 'rgba(34,197,94,.90)' : 'rgba(239,68,68,.90)');
+
+    const fmtBar = v => {
+        const a = Math.abs(v), s = v >= 0 ? '+' : '−';
+        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(1) + 'K';
+        return s + '₹' + a;
+    };
+
+    if (_rtp3mBreakdownChart) { _rtp3mBreakdownChart.destroy(); _rtp3mBreakdownChart = null; }
+    _rtp3mBreakdownChart = new Chart(ctx.getContext('2d'), {
+        type: 'bar',
+        plugins: [_rtp3mBarLabelPlugin],
+        data: { labels, datasets: [{ data: values, backgroundColor: bg, borderColor: brd, borderWidth: 1.5, borderRadius: 4, borderSkipped: false }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            layout: { padding: { top: 18, bottom: 4 } },
+            plugins: {
+                legend: { display: false },
+                rtp3mBarLabels: { fmt: fmtBar },
+                tooltip: { displayColors: false, padding: 10, callbacks: {
+                    title: c => labels[c[0].dataIndex],
+                    label: c => {
+                        const i = c.dataIndex, v = values[i], g = meta[i];
+                        const tr = g.wins + g.losses, wr = tr ? Math.round(g.wins / tr * 100) : 0;
+                        return [
+                            ' P&L: ' + (v >= 0 ? '+₹' : '-₹') + Math.abs(v).toLocaleString('en-IN'),
+                            ` Trades: ${tr}  (${g.wins}W / ${g.losses}L)`,
+                            ` Win Rate: ${wr}%`,
+                        ];
+                    },
+                } },
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { font: { size: 9 }, color: '#94a3b8' } },
+                y: {
+                    grid: { color: c => c.tick.value === 0 ? 'rgba(128,128,128,.3)' : 'rgba(128,128,128,.08)' },
+                    ticks: { font: { size: 9 }, color: '#94a3b8', callback: v => {
+                        if (v === 0) return '0';
+                        const a = Math.abs(v), s = v < 0 ? '−' : '';
+                        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+                        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(0) + 'K';
+                        return s + '₹' + a;
+                    } },
+                },
+            }
+        }
+    });
+}
+
+// ── RTP helpers ───────────────────────────────────────────────────────────────
+
+function _rtp3mFmtPts(pts) {
+    if (pts == null) return '…';
+    return (pts >= 0 ? '+' : '') + Number(pts).toFixed(1) + ' pts';
+}
+
+function _rtp3mFmtInr(inr) {
+    if (inr == null) return '…';
+    return (inr >= 0 ? '+₹' : '-₹') + Math.abs(inr).toFixed(0);
+}
+
+function _rtp3mPnlCls(val) {
+    if (val == null) return '';
+    return val >= 0 ? 'ag-pos' : 'ag-neg';
+}
+
+function _rtp3mFmtReason(reason) {
+    const map = {
+        TARGET: '<span class="ag-reason-badge target">TARGET</span>',
+        SL:     '<span class="ag-reason-badge sl">SL</span>',
+        EOD:    '<span class="ag-reason-badge eod">EOD</span>',
+        MANUAL: '<span class="ag-reason-badge manual">MANUAL</span>',
+    };
+    return map[reason] || reason || '—';
+}
+
+// ── RTP Delete History Record ─────────────────────────────────────────────────
+
+function _rtp3mDeleteTrade(entryTime) {
+    if (!confirm('Delete this trade record? This cannot be undone.')) return;
+    fetch('/api/algo/rtp3m/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ entry_time: entryTime }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_rtp3mHistoryTimer);
+            _rtp3mFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
+// ── RTP Force Exit ────────────────────────────────────────────────────────────
+
+// ── RTP Strategy Logic popup ──────────────────────────────────────────────────
+// Info button (right of the "EMA RTP 3m — Railway Track" title) opens a modal that
+// explains the strategy logic plus the available Entry and Exit options.
+
+function rtp3mShowLogic() {
+    document.getElementById('rtp3mLogicModal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'rtp3mLogicModal';
+    modal.className = 'sm-modal-overlay';
+    modal.innerHTML = `
+<div class="sm-modal-box rtp-logic-modal">
+
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><polyline points="4 15 9 9 13 13 20 5"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">EMA RTP 3m — Railway Track</span>
+            <span class="sm-modal-subtitle">How it enters &amp; exits</span>
+        </div>
+        <button class="sm-modal-close" onclick="document.getElementById('rtp3mLogicModal').remove()" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+
+    <div class="rtp-logic-body">
+
+        <!-- Timeframe -->
+        <div class="rtp-tf"><span class="rtp-tf-lbl">Timeframe</span><span class="rtp-tf-val">3&#8209;min candles</span><span class="rtp-tf-sub">EMA 9 · 20 · 50</span></div>
+
+        <!-- One-line idea -->
+        <p class="rtp-idea">Trade only when EMA&nbsp;20 &amp; 50 run <b>parallel and trending</b> — like two railway tracks. Enter on a pullback that touches the track and holds.</p>
+
+        <!-- Entry: BUY vs SELL side by side -->
+        <div class="rtp-blk-lbl entry">Entry — price touches EMA, then closes beyond it</div>
+        <div class="rtp-duo">
+            <div class="rtp-duo-card buy">
+                <div class="rtp-duo-hd">▲ BUY</div>
+                <div class="rtp-duo-row">Low <b>touches</b> EMA&nbsp;20</div>
+                <div class="rtp-duo-row"><b>Close above</b> EMA&nbsp;9 &amp; 20</div>
+            </div>
+            <div class="rtp-duo-card sell">
+                <div class="rtp-duo-hd">▼ SELL</div>
+                <div class="rtp-duo-row">High <b>touches</b> EMA&nbsp;20</div>
+                <div class="rtp-duo-row"><b>Close below</b> EMA&nbsp;9 &amp; 20</div>
+            </div>
+        </div>
+        <div class="rtp-mode-note"><code>RTP(50)</code> mode uses EMA&nbsp;50 alone. Fill on <b>next candle open</b>.</div>
+
+        <!-- Exit: compact chip grid -->
+        <div class="rtp-blk-lbl exit">Exit — whichever hits first</div>
+        <div class="rtp-chips">
+            <div class="rtp-chip"><span class="rtp-chip-ic tgt">◎</span><div><b>Target +90 pts</b><span>book profit</span></div></div>
+            <div class="rtp-chip"><span class="rtp-chip-ic sl">✕</span><div><b>Stop Loss −30 pts</b><span>fixed, no trail</span></div></div>
+            <div class="rtp-chip rtp-chip-wide"><span class="rtp-chip-ic eod">⏱</span><div><b>EOD 3:28 PM</b><span>force exit · no overnight hold</span></div></div>
+        </div>
+        <div class="rtp-mode-note">Levels are measured in points from the <b>NIFTY entry spot</b>. Stop Loss is <b>fixed</b> — no trailing.</div>
+
+    </div>
+
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.addEventListener('keydown', function esc(ev) {
+        if (ev.key === 'Escape') { document.getElementById('rtp3mLogicModal')?.remove(); document.removeEventListener('keydown', esc); }
+    });
+    document.body.appendChild(modal);
+}
+
+
+function rtp3mExitNow(btn) {
+    if (!confirm('Force-close the active RTP trade? A market SELL order will be sent immediately.')) return;
+    _setBusy(btn, 'Exiting…');
+    fetch('/api/algo/rtp3m/exit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Exit failed: ' + (d.error || 'Unknown error')); _unbusy(btn, 'Force Exit'); return; }
+            clearTimeout(_rtp3mStatusTimer);
+            clearTimeout(_rtp3mHistoryTimer);
+            _rtp3mFetchStatus();
+            _rtp3mFetchHistory();
+        })
+        .catch(e => { alert('Request failed: ' + e); _unbusy(btn, 'Force Exit'); });
+}
+
+
+// ── RTP Delta Strikes ─────────────────────────────────────────────────────────
+
+function rtp3mFetchDeltaStrikes(btn) {
+    const panel = document.getElementById('rtp3mStrikesResult');
+    btn.disabled = true;
+    btn.classList.add('busy');
+    btn.textContent = 'Loading…';
+    panel.style.display = 'none';
+
+    fetch('/api/algo/rtp3m/delta-strikes')
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            btn.classList.remove('busy');
+            btn.textContent = 'Δ Strikes';
+
+            if (!d.success) {
+                panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ ${d.error || 'Failed to fetch strikes'}</span>`;
+                panel.style.display = 'block';
+                return;
+            }
+
+            const fmt  = v => v != null ? v.toLocaleString('en-IN') : '—';
+            const fmtD = v => v != null ? (v > 0 ? '+' : '') + v.toFixed(3) : '—';
+            const fmtL = v => v != null ? '₹' + v.toLocaleString('en-IN', {minimumFractionDigits:2}) : '—';
+
+            const ce = d.CE || {};
+            const pe = d.PE || {};
+
+            panel.innerHTML = `
+              <div style="font-size:11px;color:#7986cb;font-weight:600;margin-bottom:4px;letter-spacing:.4px;">
+                NIFTY SPOT: <span style="color:#1a237e;font-size:13px;">${fmt(d.spot)}</span>
+                &nbsp;·&nbsp; Expiry: <span style="color:#555;">${d.expiry || '—'}</span>
+              </div>
+              <div class="rtp-strikes-row">
+                <span class="rsr-type ce">CE</span>
+                <span class="rsr-strike">${fmt(ce.strike)}</span>
+                <span class="rsr-delta">δ ${fmtD(ce.delta)}</span>
+                <span class="rsr-ltp">LTP ${fmtL(ce.ltp)}</span>
+              </div>
+              <div class="rtp-strikes-row">
+                <span class="rsr-type pe">PE</span>
+                <span class="rsr-strike">${fmt(pe.strike)}</span>
+                <span class="rsr-delta">δ ${fmtD(pe.delta)}</span>
+                <span class="rsr-ltp">LTP ${fmtL(pe.ltp)}</span>
+              </div>`;
+            panel.style.display = 'block';
+        })
+        .catch(e => {
+            btn.disabled = false;
+            btn.classList.remove('busy');
+            btn.textContent = 'Δ Strikes';
+            panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ Request failed: ${e}</span>`;
+            panel.style.display = 'block';
+        });
+}
+
+
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// EMA RTP 5m live algo (same RTP logic on 5-minute candles; reuses generic helpers)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── RTP 5m status ────────────────────────────────────────────────────────────────
+
+function _rtp5mFetchStatus() {
+    fetch('/api/algo/rtp5m/status')
+        .then(r => r.json())
+        .then(data => {
+            _rtp5mRenderStatus(data);
+            // Detect trade state changes and immediately refresh history so opt
+            // entry/exit values reflect the just-completed or just-entered trade
+            // rather than waiting up to 30 s for the scheduled history poll.
+            const newEntryTime = data.state && data.state.active_trade
+                ? data.state.active_trade.entry_time : null;
+            const newActive = !!data.active;
+            const tradeChanged = newEntryTime !== _rtp5mLastEntryTime ||
+                                 newActive !== _rtp5mLastActiveFlag;
+            _rtp5mLastEntryTime  = newEntryTime;
+            _rtp5mLastActiveFlag = newActive;
+            if (tradeChanged) {
+                clearTimeout(_rtp5mHistoryTimer);
+                _rtp5mFetchHistory();
+            }
+            clearTimeout(_rtp5mStatusTimer);
+            _rtp5mStatusTimer = setTimeout(_rtp5mFetchStatus, newActive ? 5000 : 30000);
+        })
+        .catch(() => {
+            clearTimeout(_rtp5mStatusTimer);
+            _rtp5mStatusTimer = setTimeout(_rtp5mFetchStatus, 30000);
+        });
+}
+
+function _rtp5mRenderStatus(data) {
+    const trade  = data.state && data.state.active_trade;
+    const live   = data.live || null;
+    const active = !!data.active;
+
+    // Badge
+    const badge = document.getElementById('rtp5mBadge');
+    badge.className = 'ag-badge ' + (active ? 'active' : 'inactive');
+    document.getElementById('rtp5mBadgeText').textContent =
+        active ? (trade.direction + ' ' + trade.option_type) : 'No Trade';
+
+    // Timestamp
+    document.getElementById('rtp5mLastUpd').textContent =
+        new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Active trade grid
+    const grid = document.getElementById('rtp5mActiveGrid');
+    if (!active || !trade) {
+        grid.innerHTML = '<div class="ag-empty">No active trade</div>';
+        return;
+    }
+
+    const pnlPts = live ? live.pnl_pts : null;
+    const pnlInr = live ? live.pnl_inr_total : null;
+    const spotStr = live ? '₹' + _num(live.spot) : '…';
+
+    const tiles = [
+        { label: 'Direction',    value: trade.direction,
+          cls: trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg' },
+        { label: 'Option',       value: trade.option_type + ' ' + trade.strike },
+        { label: 'Entry Spot',   value: '₹' + _num(trade.entry_spot) },
+        { label: 'Live Spot',    value: spotStr },
+        { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
+        { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
+        { label: 'P&L (pts)',    value: _rtp5mFmtPts(pnlPts),  cls: _rtp5mPnlCls(pnlPts) },
+        { label: 'P&L (₹ est)', value: _rtp5mFmtInr(pnlInr),  cls: _rtp5mPnlCls(pnlInr) },
+        { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
+    ];
+
+    grid.innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+
+    // Toggle Force Exit button based on trade state
+    const exitBtn = document.getElementById('rtp5mExitBtn');
+    if (exitBtn) exitBtn.disabled = !active;
+}
+
+// ── RTP history ───────────────────────────────────────────────────────────────
+
+function _rtp5mFetchHistory() {
+    fetch('/api/algo/rtp5m/history')
+        .then(r => r.json())
+        .then(data => {
+            _rtp5mRenderHistory(data.trades || []);
+            clearTimeout(_rtp5mHistoryTimer);
+            _rtp5mHistoryTimer = setTimeout(_rtp5mFetchHistory, 30000);
+        })
+        .catch(() => {
+            clearTimeout(_rtp5mHistoryTimer);
+            _rtp5mHistoryTimer = setTimeout(_rtp5mFetchHistory, 30000);
+        });
+}
+
+function _rtp5mRenderHistory(trades) {
+    const countEl = document.getElementById('rtp5mHistCount');
+    const body    = document.getElementById('rtp5mHistBody');
+
+    // Performance dashboard (cards + charts) built from the same JSON
+    _rtp5mRenderDashboard(trades);
+
+    if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
+
+    if (!trades.length) {
+        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
+        return;
+    }
+
+    function _fmtOpt(val) {
+        if (val == null) return '—';
+        return '₹' + Number(val).toFixed(2);
+    }
+    function _fmtPts(val, suffix) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
+    }
+    function _fmtInr(val) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
+    }
+
+    body.innerHTML = `
+<div class="ag-hist-scroll">
+<table class="ag-hist-table">
+    <thead>
+        <tr>
+            <th class="ag-hist-th">Date</th>
+            <th class="ag-hist-th">Entry Time</th>
+            <th class="ag-hist-th">Exit Time</th>
+            <th class="ag-hist-th">Strike</th>
+            <th class="ag-hist-th">Opt Entry</th>
+            <th class="ag-hist-th">Opt Exit</th>
+            <th class="ag-hist-th">N Entry</th>
+            <th class="ag-hist-th">N Exit</th>
+            <th class="ag-hist-th">N P&amp;L</th>
+            <th class="ag-hist-th">Opt P&amp;L</th>
+            <th class="ag-hist-th">Reason</th>
+            <th class="ag-hist-th"></th>
+        </tr>
+    </thead>
+    <tbody>
+    ${trades.map(t => {
+        const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
+        const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
+        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const oPnlCls   = (t.opt_pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
+        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
+        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
+        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
+        return `<tr>
+            <td class="ag-hist-td">${dateStr}</td>
+            <td class="ag-hist-td">${entryTime}</td>
+            <td class="ag-hist-td">${exitTime}</td>
+            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
+            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
+            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
+            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
+            <td class="ag-hist-td">${_rtp5mFmtReason(t.reason)}</td>
+            <td class="ag-hist-td ag-hist-td-del">
+                <button class="ag-hist-del-btn" onclick="_rtp5mDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
+            </td>
+        </tr>`;
+    }).join('')}
+    </tbody>
+</table>
+</div>`;
+}
+
+// ── RTP live performance dashboard (cards + charts from history JSON) ──────────
+let _rtp5mEquityChart    = null;
+let _rtp5mBreakdownChart = null;
+let _rtp5mDashTrades     = [];
+let _rtp5mDashPeriod     = 'monthly';
+
+// Plugin: draw +/- ₹ labels above/below each breakdown bar.
+const _rtp5mBarLabelPlugin = {
+    id: 'rtp5mBarLabels',
+    afterDatasetsDraw(chart, _, opts) {
+        const { ctx, data } = chart;
+        const m = chart.getDatasetMeta(0);
+        ctx.save();
+        ctx.font = '600 9px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+        ctx.textAlign = 'center';
+        m.data.forEach((bar, i) => {
+            const v = data.datasets[0].data[i];
+            if (v == null) return;
+            ctx.fillStyle = v >= 0 ? '#16a34a' : '#dc2626';
+            if (v >= 0) { ctx.textBaseline = 'bottom'; ctx.fillText(opts.fmt(v), bar.x, bar.y - 3); }
+            else        { ctx.textBaseline = 'top';    ctx.fillText(opts.fmt(v), bar.x, bar.y + 3); }
+        });
+        ctx.restore();
+    }
+};
+
+function _rtp5mRenderDashboard(trades) {
+    const card = document.getElementById('rtp5mDashCard');
+    if (!card) return;
+
+    // Only completed trades carrying a realised ₹ figure feed the dashboard.
+    const done = (trades || []).filter(t => t.opt_pnl_inr != null);
+    _rtp5mDashTrades = done;
+
+    if (!done.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+
+    // ── Aggregate stats straight from the JSON ─────────────────
+    let wins = 0, losses = 0, grossWin = 0, grossLoss = 0;
+    let netInr = 0, netPts = 0, winPts = 0, lossPts = 0;
+    let cntEod = 0, cntSl = 0, cntTgt = 0;
+    done.forEach(t => {
+        const inr = _algoNetInr(t);   // ₹ net of round-trip brokerage
+        const pts = Number(t.opt_pnl_pts) || 0;   // option points
+        netInr += inr; netPts += pts;
+        if (inr >= 0) { wins++;   grossWin  += inr;           winPts  += pts; }
+        else          { losses++; grossLoss += Math.abs(inr); lossPts += pts; }
+        const reason = String(t.reason || '').toUpperCase();
+        if      (reason === 'EOD')    cntEod++;
+        else if (reason === 'SL')     cntSl++;
+        else if (reason === 'TARGET') cntTgt++;
+    });
+    const total   = done.length;
+    const winRate = total ? (wins / total * 100) : 0;
+    const pf      = grossLoss > 0 ? (grossWin / grossLoss) : (grossWin > 0 ? Infinity : 0);
+    const avgWin  = wins   ? winPts  / wins   : null;
+    const avgLoss = losses ? lossPts / losses : null;
+    const maxDD   = _rtp5mMaxDrawdown(done);   // ₹, ≤ 0
+    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
+
+    const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
+
+    const tiles = [
+        { label: 'Total Trades',  value: total },
+        { label: 'Wins',          value: wins,   cls: 'ag-pos' },
+        { label: 'Losses',        value: losses, cls: 'ag-neg' },
+        { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
+        { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtp5mPnlCls(netInr) },
+        { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtp5mPnlCls(netPts) },
+        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
+        { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
+        { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
+        { label: 'Max Drawdown',  value: '-₹' + Math.abs(Math.round(maxDD)).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Target',        value: cntTgt, cls: 'ag-pos' },
+        { label: 'SL',            value: cntSl,  cls: 'ag-neg' },
+        { label: 'EOD',           value: cntEod, cls: 'ag-warn' },
+    ];
+
+    document.getElementById('rtp5mDashStats').innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+
+    const netEl = document.getElementById('rtp5mDashNet');
+    if (netEl) {
+        netEl.textContent = inrFmt(netInr);
+        netEl.style.color = netInr >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+
+    _rtp5mRenderEquity(done);
+    _rtp5mRenderBreakdown(done, _rtp5mDashPeriod);
+}
+
+function _rtp5mMaxDrawdown(trades) {
+    const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    let cum = 0, peak = 0, maxDD = 0;
+    sorted.forEach(t => {
+        cum += _algoNetInr(t);
+        if (cum > peak) peak = cum;
+        const dd = cum - peak;
+        if (dd < maxDD) maxDD = dd;
+    });
+    return maxDD;   // ≤ 0
+}
+
+function _rtp5mRenderEquity(trades) {
+    const ctx = document.getElementById('rtp5mEquityChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const sorted  = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    const labels  = ['Start'];
+    const dataPts = [0];
+    const dates   = [''];
+    let cum = 0;
+    sorted.forEach((t, i) => {
+        cum += _algoNetInr(t);
+        labels.push('T' + (i + 1));
+        dataPts.push(Math.round(cum));
+        dates.push(t.entry_time ? String(t.entry_time).replace('T', ' ').slice(0, 16) : '');
+    });
+
+    const net    = dataPts[dataPts.length - 1];
+    const profit = net >= 0;
+    const line   = profit ? '#2962ff' : '#ff1744';
+    const fill   = profit ? 'rgba(41,98,255,0.07)' : 'rgba(255,23,68,0.06)';
+
+    const meta = document.getElementById('rtp5mEquityMeta');
+    if (meta) {
+        meta.textContent = (net >= 0 ? '+₹' : '-₹') + Math.abs(net).toLocaleString('en-IN');
+        meta.style.color = profit ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+
+    const fmtY = v => {
+        const a = Math.abs(v), s = v < 0 ? '-' : '';
+        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(0) + 'K';
+        return s + '₹' + a;
+    };
+
+    if (_rtp5mEquityChart) { _rtp5mEquityChart.destroy(); _rtp5mEquityChart = null; }
+    _rtp5mEquityChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets: [{
+            data: dataPts, borderColor: line, backgroundColor: fill,
+            fill: true, tension: 0.25, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2,
+        }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: {
+                    title: items => { const i = items[0].dataIndex; return i === 0 ? 'Start' : `Trade ${i} · ${dates[i]}`; },
+                    label: item => '  Cum P&L: ' + (item.raw >= 0 ? '+₹' : '-₹') + Math.abs(item.raw).toLocaleString('en-IN'),
+                } },
+            },
+            scales: {
+                x: { ticks: { maxTicksLimit: 15, color: '#999', font: { size: 11 }, autoSkip: true }, grid: { color: 'rgba(128,128,128,0.08)' } },
+                y: { ticks: { color: '#999', font: { size: 11 }, callback: fmtY }, grid: { color: 'rgba(128,128,128,0.1)' } },
+            }
+        }
+    });
+}
+
+function rtp5mSetPeriod(period) {
+    _rtp5mDashPeriod = period;
+    document.querySelectorAll('#rtp5mPeriodTabs .rtp-period-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.period === period));
+    _rtp5mRenderBreakdown(_rtp5mDashTrades, period);
+}
+
+function _rtp5mPeriodKey(d, period) {
+    if (period === 'daily')  return d.toISOString().slice(0, 10);
+    if (period === 'weekly') {
+        const x = new Date(d); x.setHours(0, 0, 0, 0);
+        x.setDate(x.getDate() - x.getDay() + 1);   // Monday
+        return x.toISOString().slice(0, 10);
+    }
+    if (period === 'monthly') return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    return `${d.getFullYear()}`;
+}
+
+function _rtp5mRenderBreakdown(trades, period) {
+    const ctx = document.getElementById('rtp5mBreakdownChart');
+    if (!ctx || typeof Chart === 'undefined') return;
+
+    const groups = {};
+    (trades || []).forEach(t => {
+        const key = _rtp5mPeriodKey(new Date(t.entry_time), period);
+        if (!groups[key]) groups[key] = { inr: 0, wins: 0, losses: 0 };
+        const inr = _algoNetInr(t);
+        groups[key].inr += inr;
+        if (inr >= 0) groups[key].wins++; else groups[key].losses++;
+    });
+    const keys   = Object.keys(groups).sort();
+    const labels = keys.map(k => {
+        if (period === 'monthly') { const [y, m] = k.split('-'); return new Date(+y, +m - 1).toLocaleString('default', { month: 'short', year: '2-digit' }); }
+        if (period === 'weekly')  return 'W ' + k.slice(5);
+        if (period === 'daily')   return k.slice(5);
+        return k;
+    });
+    const values = keys.map(k => Math.round(groups[k].inr));
+    const meta   = keys.map(k => groups[k]);
+    const bg  = values.map(v => v >= 0 ? 'rgba(34,197,94,.20)' : 'rgba(239,68,68,.20)');
+    const brd = values.map(v => v >= 0 ? 'rgba(34,197,94,.90)' : 'rgba(239,68,68,.90)');
+
+    const fmtBar = v => {
+        const a = Math.abs(v), s = v >= 0 ? '+' : '−';
+        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(1) + 'K';
+        return s + '₹' + a;
+    };
+
+    if (_rtp5mBreakdownChart) { _rtp5mBreakdownChart.destroy(); _rtp5mBreakdownChart = null; }
+    _rtp5mBreakdownChart = new Chart(ctx.getContext('2d'), {
+        type: 'bar',
+        plugins: [_rtp5mBarLabelPlugin],
+        data: { labels, datasets: [{ data: values, backgroundColor: bg, borderColor: brd, borderWidth: 1.5, borderRadius: 4, borderSkipped: false }] },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            layout: { padding: { top: 18, bottom: 4 } },
+            plugins: {
+                legend: { display: false },
+                rtp5mBarLabels: { fmt: fmtBar },
+                tooltip: { displayColors: false, padding: 10, callbacks: {
+                    title: c => labels[c[0].dataIndex],
+                    label: c => {
+                        const i = c.dataIndex, v = values[i], g = meta[i];
+                        const tr = g.wins + g.losses, wr = tr ? Math.round(g.wins / tr * 100) : 0;
+                        return [
+                            ' P&L: ' + (v >= 0 ? '+₹' : '-₹') + Math.abs(v).toLocaleString('en-IN'),
+                            ` Trades: ${tr}  (${g.wins}W / ${g.losses}L)`,
+                            ` Win Rate: ${wr}%`,
+                        ];
+                    },
+                } },
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { font: { size: 9 }, color: '#94a3b8' } },
+                y: {
+                    grid: { color: c => c.tick.value === 0 ? 'rgba(128,128,128,.3)' : 'rgba(128,128,128,.08)' },
+                    ticks: { font: { size: 9 }, color: '#94a3b8', callback: v => {
+                        if (v === 0) return '0';
+                        const a = Math.abs(v), s = v < 0 ? '−' : '';
+                        if (a >= 100000) return s + '₹' + (a / 100000).toFixed(1) + 'L';
+                        if (a >= 1000)   return s + '₹' + (a / 1000).toFixed(0) + 'K';
+                        return s + '₹' + a;
+                    } },
+                },
+            }
+        }
+    });
+}
+
+// ── RTP helpers ───────────────────────────────────────────────────────────────
+
+function _rtp5mFmtPts(pts) {
+    if (pts == null) return '…';
+    return (pts >= 0 ? '+' : '') + Number(pts).toFixed(1) + ' pts';
+}
+
+function _rtp5mFmtInr(inr) {
+    if (inr == null) return '…';
+    return (inr >= 0 ? '+₹' : '-₹') + Math.abs(inr).toFixed(0);
+}
+
+function _rtp5mPnlCls(val) {
+    if (val == null) return '';
+    return val >= 0 ? 'ag-pos' : 'ag-neg';
+}
+
+function _rtp5mFmtReason(reason) {
+    const map = {
+        TARGET: '<span class="ag-reason-badge target">TARGET</span>',
+        SL:     '<span class="ag-reason-badge sl">SL</span>',
+        EOD:    '<span class="ag-reason-badge eod">EOD</span>',
+        MANUAL: '<span class="ag-reason-badge manual">MANUAL</span>',
+    };
+    return map[reason] || reason || '—';
+}
+
+// ── RTP Delete History Record ─────────────────────────────────────────────────
+
+function _rtp5mDeleteTrade(entryTime) {
+    if (!confirm('Delete this trade record? This cannot be undone.')) return;
+    fetch('/api/algo/rtp5m/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ entry_time: entryTime }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_rtp5mHistoryTimer);
+            _rtp5mFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
+// ── RTP Force Exit ────────────────────────────────────────────────────────────
+
+// ── RTP Strategy Logic popup ──────────────────────────────────────────────────
+// Info button (right of the "EMA RTP 5m — Railway Track" title) opens a modal that
+// explains the strategy logic plus the available Entry and Exit options.
+
+function rtp5mShowLogic() {
+    document.getElementById('rtp5mLogicModal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'rtp5mLogicModal';
+    modal.className = 'sm-modal-overlay';
+    modal.innerHTML = `
+<div class="sm-modal-box rtp-logic-modal">
+
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><polyline points="4 15 9 9 13 13 20 5"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">EMA RTP 5m — Railway Track</span>
+            <span class="sm-modal-subtitle">How it enters &amp; exits</span>
+        </div>
+        <button class="sm-modal-close" onclick="document.getElementById('rtp5mLogicModal').remove()" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+
+    <div class="rtp-logic-body">
+
+        <!-- Timeframe -->
+        <div class="rtp-tf"><span class="rtp-tf-lbl">Timeframe</span><span class="rtp-tf-val">5&#8209;min candles</span><span class="rtp-tf-sub">EMA 9 · 20 · 50</span></div>
+
+        <!-- One-line idea -->
+        <p class="rtp-idea">Trade only when EMA&nbsp;20 &amp; 50 run <b>parallel and trending</b> — like two railway tracks. Enter on a pullback that touches the track and holds.</p>
+
+        <!-- Entry: BUY vs SELL side by side -->
+        <div class="rtp-blk-lbl entry">Entry — price touches EMA, then closes beyond it</div>
+        <div class="rtp-duo">
+            <div class="rtp-duo-card buy">
+                <div class="rtp-duo-hd">▲ BUY</div>
+                <div class="rtp-duo-row">Low <b>touches</b> EMA&nbsp;20</div>
+                <div class="rtp-duo-row"><b>Close above</b> EMA&nbsp;9 &amp; 20</div>
+            </div>
+            <div class="rtp-duo-card sell">
+                <div class="rtp-duo-hd">▼ SELL</div>
+                <div class="rtp-duo-row">High <b>touches</b> EMA&nbsp;20</div>
+                <div class="rtp-duo-row"><b>Close below</b> EMA&nbsp;9 &amp; 20</div>
+            </div>
+        </div>
+        <div class="rtp-mode-note"><code>RTP(50)</code> mode uses EMA&nbsp;50 alone. Fill on <b>next candle open</b>.</div>
+
+        <!-- Exit: compact chip grid -->
+        <div class="rtp-blk-lbl exit">Exit — whichever hits first</div>
+        <div class="rtp-chips">
+            <div class="rtp-chip"><span class="rtp-chip-ic tgt">◎</span><div><b>Target +90 pts</b><span>book profit</span></div></div>
+            <div class="rtp-chip"><span class="rtp-chip-ic sl">✕</span><div><b>Stop Loss −30 pts</b><span>fixed, no trail</span></div></div>
+            <div class="rtp-chip rtp-chip-wide"><span class="rtp-chip-ic eod">⏱</span><div><b>EOD 3:28 PM</b><span>force exit · no overnight hold</span></div></div>
+        </div>
+        <div class="rtp-mode-note">Levels are measured in points from the <b>NIFTY entry spot</b>. Stop Loss is <b>fixed</b> — no trailing.</div>
+
+    </div>
+
+</div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.addEventListener('keydown', function esc(ev) {
+        if (ev.key === 'Escape') { document.getElementById('rtp5mLogicModal')?.remove(); document.removeEventListener('keydown', esc); }
+    });
+    document.body.appendChild(modal);
+}
+
+
+function rtp5mExitNow(btn) {
+    if (!confirm('Force-close the active RTP trade? A market SELL order will be sent immediately.')) return;
+    _setBusy(btn, 'Exiting…');
+    fetch('/api/algo/rtp5m/exit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Exit failed: ' + (d.error || 'Unknown error')); _unbusy(btn, 'Force Exit'); return; }
+            clearTimeout(_rtp5mStatusTimer);
+            clearTimeout(_rtp5mHistoryTimer);
+            _rtp5mFetchStatus();
+            _rtp5mFetchHistory();
+        })
+        .catch(e => { alert('Request failed: ' + e); _unbusy(btn, 'Force Exit'); });
+}
+
+
+// ── RTP Delta Strikes ─────────────────────────────────────────────────────────
+
+function rtp5mFetchDeltaStrikes(btn) {
+    const panel = document.getElementById('rtp5mStrikesResult');
+    btn.disabled = true;
+    btn.classList.add('busy');
+    btn.textContent = 'Loading…';
+    panel.style.display = 'none';
+
+    fetch('/api/algo/rtp5m/delta-strikes')
+        .then(r => r.json())
+        .then(d => {
+            btn.disabled = false;
+            btn.classList.remove('busy');
+            btn.textContent = 'Δ Strikes';
+
+            if (!d.success) {
+                panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ ${d.error || 'Failed to fetch strikes'}</span>`;
+                panel.style.display = 'block';
+                return;
+            }
+
+            const fmt  = v => v != null ? v.toLocaleString('en-IN') : '—';
+            const fmtD = v => v != null ? (v > 0 ? '+' : '') + v.toFixed(3) : '—';
+            const fmtL = v => v != null ? '₹' + v.toLocaleString('en-IN', {minimumFractionDigits:2}) : '—';
+
+            const ce = d.CE || {};
+            const pe = d.PE || {};
+
+            panel.innerHTML = `
+              <div style="font-size:11px;color:#7986cb;font-weight:600;margin-bottom:4px;letter-spacing:.4px;">
+                NIFTY SPOT: <span style="color:#1a237e;font-size:13px;">${fmt(d.spot)}</span>
+                &nbsp;·&nbsp; Expiry: <span style="color:#555;">${d.expiry || '—'}</span>
+              </div>
+              <div class="rtp-strikes-row">
+                <span class="rsr-type ce">CE</span>
+                <span class="rsr-strike">${fmt(ce.strike)}</span>
+                <span class="rsr-delta">δ ${fmtD(ce.delta)}</span>
+                <span class="rsr-ltp">LTP ${fmtL(ce.ltp)}</span>
+              </div>
+              <div class="rtp-strikes-row">
+                <span class="rsr-type pe">PE</span>
+                <span class="rsr-strike">${fmt(pe.strike)}</span>
+                <span class="rsr-delta">δ ${fmtD(pe.delta)}</span>
+                <span class="rsr-ltp">LTP ${fmtL(pe.ltp)}</span>
+              </div>`;
+            panel.style.display = 'block';
+        })
+        .catch(e => {
+            btn.disabled = false;
+            btn.classList.remove('busy');
+            btn.textContent = 'Δ Strikes';
+            panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ Request failed: ${e}</span>`;
+            panel.style.display = 'block';
+        });
+}
+
 
 
 // ══════════════════════════════════════════════════════════════════════════════
