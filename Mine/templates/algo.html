@@ -13,127 +13,44 @@
 
     <!-- ── Tab bar ────────────────────────────────────────────── -->
     <div class="ag-tab-bar">
-        <button class="ag-tab"        id="algo-tab-straddle"         onclick="algoSwitch('straddle')">Straddle</button>
+        <button class="ag-tab active" id="algo-tab-active"           onclick="algoSwitch('active')">Active Trade</button>
         <button class="ag-tab"        id="algo-tab-rtp"              onclick="algoSwitch('rtp')">EMA RTP 1m</button>
         <button class="ag-tab"        id="algo-tab-rtp30s"          onclick="algoSwitch('rtp30s')">EMA RTP 30s</button>
         <button class="ag-tab"        id="algo-tab-rtp3m"           onclick="algoSwitch('rtp3m')">EMA RTP 3m</button>
         <button class="ag-tab"        id="algo-tab-rtp5m"           onclick="algoSwitch('rtp5m')">EMA RTP 5m</button>
         <button class="ag-tab"        id="algo-tab-sc"              onclick="algoSwitch('sc')">2nd 30s Candle</button>
-        <button class="ag-tab active" id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
+        <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
 
     <!-- ════════════════════════════════════════════════════════ -->
-    <!-- Straddle panel                                          -->
+    <!-- Active Trade panel (all live algos consolidated)         -->
     <!-- ════════════════════════════════════════════════════════ -->
-    <div class="ag-panel" id="algo-straddle-panel">
+    <div class="ag-panel active" id="algo-active-panel">
 
     <!-- ── Header ──────────────────────────────────────────────── -->
     <div class="ag-header">
-        <span class="ag-title">NIFTY Weekly Straddle</span>
-        <span id="algoBadge" class="ag-badge inactive">
+        <span class="ag-title">Active Trades — All Live Algos</span>
+        <span id="activeBadge" class="ag-badge inactive">
             <span class="ag-badge-dot"></span>
-            <span id="algoBadgeText">Inactive</span>
+            <span id="activeBadgeText">No active trades</span>
         </span>
-        <div class="ag-actions" style="margin-left:auto; gap:8px;">
-            <button id="algoPreviewBtn" class="ag-btn ag-btn-preview" onclick="algoPreview(this)">Preview Strikes</button>
-            <span class="ag-last-upd" id="algoLastUpd"></span>
+        <div class="ag-card-hdr-actions" style="margin-left:auto">
+            <button class="ag-btn ag-btn-strikes" id="activeRefreshBtn"
+                    onclick="_activeFetchAll(this)">↻ Refresh</button>
+            <span class="ag-last-upd" id="activeLastUpd"></span>
         </div>
     </div>
 
-    <!-- ── Message bar ─────────────────────────────────────────── -->
-    <div id="algoMsg" class="ag-msg"></div>
-
-    <!-- ── Status card ─────────────────────────────────────────── -->
+    <!-- ── Consolidated active-trade table ─────────────────────── -->
     <div class="ag-card">
-        <div class="ag-card-hdr">
-            <span class="ag-card-title">Trade Status</span>
-        </div>
         <div class="ag-card-body">
-            <div class="ag-grid">
-                <div class="ag-stat">
-                    <span class="ag-stat-label">Status</span>
-                    <span class="ag-stat-value" id="algoStatusVal">—</span>
-                </div>
-                <div class="ag-stat">
-                    <span class="ag-stat-label">Current Expiry</span>
-                    <span class="ag-stat-value" id="algoExpiry">—</span>
-                </div>
-                <div class="ag-stat">
-                    <span class="ag-stat-label">Next Expiry</span>
-                    <span class="ag-stat-value" id="algoNextExpiry">—</span>
-                </div>
-                <div class="ag-stat">
-                    <span class="ag-stat-label">Underlying at Entry</span>
-                    <span class="ag-stat-value" id="algoUnderlying">—</span>
-                </div>
-                <div class="ag-stat">
-                    <span class="ag-stat-label">Entry Time</span>
-                    <span class="ag-stat-value" id="algoEntryTime">—</span>
-                </div>
-                <div class="ag-stat">
-                    <span class="ag-stat-label">Lots × Lot Size</span>
-                    <span class="ag-stat-value" id="algoLots">—</span>
-                </div>
+            <div id="activeTradesBody">
+                <div class="ag-empty">No active trades</div>
             </div>
         </div>
     </div>
 
-    <!-- ── Legs grid ───────────────────────────────────────────── -->
-    <div class="ag-card">
-        <div class="ag-card-hdr">
-            <span class="ag-card-title">Legs</span>
-        </div>
-        <div class="ag-legs-grid" id="algoLegsGrid">
-            <div class="ag-empty">No active trade</div>
-        </div>
-    </div>
-
-    <!-- ── Combined P&L card ───────────────────────────────────── -->
-    <div class="ag-card">
-        <div class="ag-card-hdr">
-            <span class="ag-card-title">Combined P&amp;L</span>
-        </div>
-        <div class="ag-card-body">
-            <div class="ag-grid">
-                <div class="ag-stat">
-                    <span class="ag-stat-label">Entry Premium</span>
-                    <span class="ag-stat-value" id="agCombEntry">—</span>
-                </div>
-                <div class="ag-stat">
-                    <span class="ag-stat-label">Current Premium</span>
-                    <span class="ag-stat-value" id="agCombCurrent">—</span>
-                </div>
-                <div class="ag-stat">
-                    <span class="ag-stat-label">SL Trigger</span>
-                    <span class="ag-stat-value ag-warn" id="agSL">—</span>
-                </div>
-                <div class="ag-stat">
-                    <span class="ag-stat-label">SL Distance</span>
-                    <span class="ag-stat-value" id="agSLDist">—</span>
-                </div>
-                <div class="ag-stat">
-                    <span class="ag-stat-label">P&amp;L / lot</span>
-                    <span class="ag-stat-value" id="agPnlLot">—</span>
-                </div>
-                <div class="ag-stat">
-                    <span class="ag-stat-label">Total P&amp;L</span>
-                    <span class="ag-stat-value" id="agPnlTotal">—</span>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ── Action buttons ──────────────────────────────────────── -->
-    <div class="ag-actions">
-        <button class="ag-btn ag-btn-enter" id="algoEnterBtn" onclick="algoEnterNow(this)">
-            Enter Straddle Now
-        </button>
-        <button class="ag-btn ag-btn-exit" id="algoExitBtn" onclick="algoExitNow(this)" disabled>
-            Exit Now
-        </button>
-    </div>
-
-    </div><!-- #algo-straddle-panel -->
+    </div><!-- #algo-active-panel -->
 
     <!-- ════════════════════════════════════════════════════════ -->
     <!-- EMA RTP panel                                           -->
@@ -631,7 +548,7 @@
     <!-- ════════════════════════════════════════════════════════ -->
     <!-- Swing Momentum panel                                     -->
     <!-- ════════════════════════════════════════════════════════ -->
-    <div class="ag-panel active" id="algo-swing-momentum-panel">
+    <div class="ag-panel" id="algo-swing-momentum-panel">
 
     <!-- ── Header ──────────────────────────────────────────────── -->
     <div class="ag-header">

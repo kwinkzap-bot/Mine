@@ -153,7 +153,7 @@ const oipElems = {
     view: null, showVwapOI: null, showVwapInt: null, showCVWAP: null, showPVWAP: null,
     showCpr: null, showEMA: null, showRSI: null, showOIBars: null, autoHL: null, chartWrap: null, canvas: null,
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
-    hdrPrice: null, hdrPcr: null, hdrMaxPain: null, hdrCeOI: null,
+    hdrPrice: null, hdrPcr: null, hdrPcrCard: null, hdrMaxPain: null, hdrCeOI: null,
     hdrCeChg: null, hdrPeOI: null,
     hdrPeChg: null, hdrTrend: null, hdrAtm: null, brokerSelect: null,
     showPremium: null, showSignals: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
@@ -193,6 +193,7 @@ function oipInitElems() {
     oipElems.itmPE = document.getElementById('oipLegendPE');
     oipElems.hdrPrice = document.getElementById('hdrPrice');
     oipElems.hdrPcr = document.getElementById('hdrPcr');
+    oipElems.hdrPcrCard = document.getElementById('hdrPcrCard');
     oipElems.hdrCeOI = document.getElementById('hdrCeOI');
     oipElems.hdrCeChg = document.getElementById('hdrCeChg');
     oipElems.hdrPeOI = document.getElementById('hdrPeOI');
@@ -1145,6 +1146,18 @@ function oipUpdateHeader(data) {
 
     if (oipElems.hdrPrice) oipElems.hdrPrice.textContent = p.toLocaleString('en-IN', { minimumFractionDigits: 2 });
     if (oipElems.hdrPcr) oipElems.hdrPcr.textContent = pcr.toFixed(2);
+    if (oipElems.hdrPcrCard) {
+        const pcrDark = pcr >= 1.7 || pcr <= 0.7;
+        if (pcr >= 1.7) {
+            oipElems.hdrPcrCard.style.background = '#7f1d1d'; // dark red
+        } else if (pcr <= 0.7) {
+            oipElems.hdrPcrCard.style.background = '#14532d'; // dark green
+        } else {
+            oipElems.hdrPcrCard.style.background = '';
+        }
+        oipElems.hdrPcrCard.querySelectorAll('.oip-hdr-lbl, .oip-hdr-val')
+            .forEach(el => { el.style.color = pcrDark ? '#ffffff' : ''; });
+    }
     if (oipElems.hdrAtm) oipElems.hdrAtm.textContent = mp;
     if (oipElems.hdrLotSize) oipElems.hdrLotSize.textContent = oipLotSize || '--';
 

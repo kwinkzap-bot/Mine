@@ -165,7 +165,7 @@ def trend_detection():
 @require_user_auth
 @login_required
 def algo():
-    """NIFTY Weekly Straddle algo trading page."""
+    """Live Algo trading page (EMA RTP / 2nd candle / swing momentum)."""
     return render_template('algo.html')
 
 

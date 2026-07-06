@@ -1,7 +1,6 @@
-/* algo.js — Algo page: Straddle + EMA RTP 1m + EMA RTP 30s tabs */
+/* algo.js — Algo page: Active Trade + EMA RTP (1m/30s/3m/5m) + 2nd Candle + Swing Momentum tabs */
 'use strict';
 
-let _algoTimer         = null;
 let _rtpStatusTimer    = null;
 let _rtpHistoryTimer   = null;
 let _rtpLastEntryTime  = null;  // tracks last seen entry_time to detect trade changes
@@ -22,7 +21,8 @@ let _scStatusTimer     = null;
 let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;
 let _scLastActiveFlag  = false;
-const _ALGO_TABS = ['straddle', 'rtp', 'rtp30s', 'rtp3m', 'rtp5m', 'sc', 'swing-momentum'];
+let _activeTimer       = null;
+const _ALGO_TABS = ['active', 'rtp', 'rtp30s', 'rtp3m', 'rtp5m', 'sc', 'swing-momentum'];
 
 // Round-trip brokerage charged per lot (1 lot = 65 qty). The performance
 // dashboards express ₹ P&L on a single-lot basis (opt_pnl_pts × lot_size), so
@@ -35,9 +35,102 @@ function _algoNetInr(t) {
     return (Number(t.opt_pnl_inr) || 0) - _ALGO_BROKERAGE_PER_LOT;
 }
 
+// ── Active Trade tab (all live option algos consolidated) ─────────────────────
+// Each source shares the same status shape: { active, state.active_trade, live }.
+const _ACTIVE_SOURCES = [
+    { label: 'EMA RTP 1m',     url: '/api/algo/rtp/status'    },
+    { label: 'EMA RTP 30s',    url: '/api/algo/rtp30s/status' },
+    { label: 'EMA RTP 3m',     url: '/api/algo/rtp3m/status'  },
+    { label: 'EMA RTP 5m',     url: '/api/algo/rtp5m/status'  },
+    { label: '2nd 30s Candle', url: '/api/algo/sc/status'     },
+];
+
+function _activeFetchAll(btn) {
+    if (btn) { btn.disabled = true; btn.classList.add('busy'); }
+    Promise.all(_ACTIVE_SOURCES.map(s =>
+        fetch(s.url)
+            .then(r => r.json())
+            .then(data => ({ src: s, data }))
+            .catch(() => ({ src: s, data: null }))
+    )).then(results => {
+        const rows = [];
+        results.forEach(({ src, data }) => {
+            const trade = data && data.active && data.state ? data.state.active_trade : null;
+            if (trade) rows.push({ label: src.label, trade, live: data.live || null });
+        });
+        _activeRender(rows);
+        document.getElementById('activeLastUpd').textContent =
+            new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }).finally(() => {
+        if (btn) { btn.disabled = false; btn.classList.remove('busy'); }
+        // Auto-refresh only while this tab is still open
+        clearTimeout(_activeTimer);
+        const panel = document.getElementById('algo-active-panel');
+        if (panel && panel.classList.contains('active')) {
+            _activeTimer = setTimeout(() => _activeFetchAll(), 15000);
+        }
+    });
+}
+
+function _activeRender(rows) {
+    const badge    = document.getElementById('activeBadge');
+    const badgeTxt = document.getElementById('activeBadgeText');
+    const body     = document.getElementById('activeTradesBody');
+
+    badge.className = 'ag-badge ' + (rows.length ? 'active' : 'inactive');
+    badgeTxt.textContent = rows.length
+        ? `${rows.length} active trade${rows.length > 1 ? 's' : ''}`
+        : 'No active trades';
+
+    if (!rows.length) {
+        body.innerHTML = '<div class="ag-empty">No active trades</div>';
+        return;
+    }
+
+    body.innerHTML = `
+<div class="ag-hist-scroll">
+<table class="ag-hist-table">
+    <thead>
+        <tr>
+            <th class="ag-hist-th">Logic Type</th>
+            <th class="ag-hist-th">Direction</th>
+            <th class="ag-hist-th">Option</th>
+            <th class="ag-hist-th">Entry Spot</th>
+            <th class="ag-hist-th">Live Spot</th>
+            <th class="ag-hist-th">SL Level</th>
+            <th class="ag-hist-th">Target</th>
+            <th class="ag-hist-th">P&amp;L (pts)</th>
+            <th class="ag-hist-th">P&amp;L (₹ est)</th>
+            <th class="ag-hist-th">Entry Time</th>
+        </tr>
+    </thead>
+    <tbody>
+    ${rows.map(({ label, trade, live }) => {
+        const dirCls  = trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg';
+        const pnlPts  = live ? live.pnl_pts : null;
+        const pnlInr  = live ? live.pnl_inr_total : null;
+        const spotStr = live ? '₹' + _num(live.spot) : '…';
+        return `<tr>
+            <td class="ag-hist-td" style="font-weight:700">${label}</td>
+            <td class="ag-hist-td ${dirCls}" style="font-weight:700">${trade.direction ?? '—'}</td>
+            <td class="ag-hist-td">${(trade.option_type ?? '') + ' ' + (trade.strike ?? '—')}</td>
+            <td class="ag-hist-td">₹${_num(trade.entry_spot)}</td>
+            <td class="ag-hist-td">${spotStr}</td>
+            <td class="ag-hist-td ag-warn">₹${_num(trade.sl_level)}</td>
+            <td class="ag-hist-td ag-pos">₹${_num(trade.target_level)}</td>
+            <td class="ag-hist-td ${_rtpPnlCls(pnlPts)}" style="font-weight:700">${_rtpFmtPts(pnlPts)}</td>
+            <td class="ag-hist-td ${_rtpPnlCls(pnlInr)}" style="font-weight:700">${_rtpFmtInr(pnlInr)}</td>
+            <td class="ag-hist-td">${trade.entry_time ? _fmtTime(trade.entry_time) : '—'}</td>
+        </tr>`;
+    }).join('')}
+    </tbody>
+</table>
+</div>`;
+}
+
 function algoLoad() {
     const hash = location.hash.replace('#', '');
-    algoSwitch(_ALGO_TABS.includes(hash) ? hash : 'swing-momentum');
+    algoSwitch(_ALGO_TABS.includes(hash) ? hash : 'active');
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -48,7 +141,6 @@ function algoSwitch(tab) {
         document.getElementById('algo-tab-'  + t).classList.toggle('active', t === tab);
     });
     history.replaceState(null, '', '#' + tab);
-    clearTimeout(_algoTimer);
     clearTimeout(_rtpStatusTimer);
     clearTimeout(_rtpHistoryTimer);
     clearTimeout(_rtp30sStatusTimer);
@@ -59,8 +151,9 @@ function algoSwitch(tab) {
     clearTimeout(_rtp5mHistoryTimer);
     clearTimeout(_scStatusTimer);
     clearTimeout(_scHistoryTimer);
-    if (tab === 'straddle') {
-        _fetchStatus();
+    clearTimeout(_activeTimer);
+    if (tab === 'active') {
+        _activeFetchAll();
     } else if (tab === 'rtp') {
         _rtpFetchStatus();
         _rtpFetchHistory();
@@ -3185,248 +3278,11 @@ function scFetchDeltaStrikes(btn) {
         });
 }
 
-
-// ── Fetch & render ────────────────────────────────────────────────────────────
-
-function _fetchStatus() {
-    fetch('/api/algo/straddle/status')
-        .then(r => r.json())
-        .then(data => {
-            _renderState(data);
-            clearTimeout(_algoTimer);
-            _algoTimer = setTimeout(_fetchStatus, data.active ? 5000 : 30000);
-        })
-        .catch(() => {
-            clearTimeout(_algoTimer);
-            _algoTimer = setTimeout(_fetchStatus, 30000);
-        });
-}
-
-function _renderState(data) {
-    const state  = data.state || {};
-    const live   = data.live  || null;
-    const active = !!data.active;
-
-    // Badge
-    const badge = document.getElementById('algoBadge');
-    badge.className = 'ag-badge ' + (active ? 'active' : 'inactive');
-    document.getElementById('algoBadgeText').textContent = active ? 'Active' : 'Inactive';
-
-    // Last updated
-    document.getElementById('algoLastUpd').textContent =
-        new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-    // Status grid
-    _setText('algoStatusVal',  active ? 'Active' : 'Inactive');
-    _setText('algoExpiry',     state.current_expiry  || '—');
-    _setText('algoNextExpiry', state.next_expiry      || '—');
-    _setText('algoUnderlying', state.underlying_at_entry ? '₹' + _num(state.underlying_at_entry) : '—');
-    _setText('algoEntryTime',  state.entry_time ? _fmtTime(state.entry_time) : '—');
-    _setText('algoLots',       state.lots && state.lot_size ? `${state.lots} × ${state.lot_size}` : '—');
-
-    // Legs
-    _renderLegs(state, live);
-
-    // P&L card
-    _setText('agCombEntry',   state.combined_entry != null ? state.combined_entry.toFixed(2) : '—');
-    _setText('agCombCurrent', live ? live.combined_current.toFixed(2) : (active ? '…' : '—'));
-    _setText('agSL',          state.sl_trigger != null ? state.sl_trigger.toFixed(2) : '—');
-
-    if (live) {
-        const dist = live.sl_distance;
-        const distEl = document.getElementById('agSLDist');
-        distEl.textContent = dist.toFixed(2);
-        distEl.className = 'ag-stat-value ' + (dist < 5 ? 'ag-neg' : dist < 15 ? 'ag-warn' : 'ag-pos');
-        _setPnl('agPnlLot',   live.pnl_per_lot);
-        _setPnl('agPnlTotal', live.pnl_total);
-    } else {
-        _setText('agSLDist', '—');
-        document.getElementById('agSLDist').className = 'ag-stat-value ag-muted';
-        _setText('agPnlLot',   '—');
-        _setText('agPnlTotal', '—');
-    }
-
-    // Buttons — Preview and Enter both disabled while trade is active
-    document.getElementById('algoPreviewBtn').disabled = active;
-    document.getElementById('algoEnterBtn').disabled   = active;
-    document.getElementById('algoExitBtn').disabled    = !active;
-}
-
-function _renderLegs(state, live) {
-    const grid = document.getElementById('algoLegsGrid');
-    if (!state.active) {
-        grid.innerHTML = '<div class="ag-empty">No active trade</div>';
-        return;
-    }
-    const lot_size = state.lot_size || 1;
-    const legs = [
-        { type: 'CE', cls: 'ce', strike: state.ce_strike, sym: state.ce_kite_tradingsymbol, entry: state.ce_entry_ltp, curr: live ? live.ce_ltp : null },
-        { type: 'PE', cls: 'pe', strike: state.pe_strike, sym: state.pe_kite_tradingsymbol, entry: state.pe_entry_ltp, curr: live ? live.pe_ltp : null },
-    ];
-    grid.innerHTML = legs.map(r => {
-        const currStr = r.curr != null ? r.curr.toFixed(2) : '…';
-        const pnl     = r.curr != null ? (r.entry - r.curr) * lot_size : null;
-        const pnlStr  = pnl != null ? (pnl >= 0 ? '+₹' : '−₹') + Math.abs(pnl).toFixed(2) : '—';
-        const pnlCls  = pnl == null ? '' : pnl >= 0 ? 'ag-pos' : 'ag-neg';
-        return `<div class="ag-leg-card ${r.cls}-leg">
-            <div class="ag-leg-hdr">
-                <span class="ag-leg-type ${r.cls}">${r.type}</span>
-                <span class="ag-leg-strike">${r.strike ?? '—'}</span>
-                <span class="ag-leg-sym">${r.sym || '—'}</span>
-            </div>
-            <div class="ag-leg-metrics">
-                <div class="ag-leg-metric">
-                    <span class="ag-leg-lbl">Entry</span>
-                    <span class="ag-leg-val">${r.entry != null ? r.entry.toFixed(2) : '—'}</span>
-                </div>
-                <div class="ag-leg-metric">
-                    <span class="ag-leg-lbl">Current</span>
-                    <span class="ag-leg-val">${currStr}</span>
-                </div>
-                <div class="ag-leg-metric">
-                    <span class="ag-leg-lbl">P&amp;L / lot</span>
-                    <span class="ag-leg-val ${pnlCls}">${pnlStr}</span>
-                </div>
-            </div>
-        </div>`;
-    }).join('');
-}
-
-// ── Preview ───────────────────────────────────────────────────────────────────
-
-function algoPreview(btn) {
-    btn.disabled = true;
-    const orig = btn.textContent;
-    btn.textContent = 'Loading…';
-    _hideMsg();
-    fetch('/api/algo/straddle/preview')
-        .then(r => r.json())
-        .then(d => {
-            if (!d.success) { _showMsg('error', d.error || 'Preview failed'); return; }
-            _renderPreviewState(d);
-        })
-        .catch(e => _showMsg('error', 'Preview failed: ' + e))
-        .finally(() => { btn.disabled = false; btn.textContent = orig; });
-}
-
-function _renderPreviewState(d) {
-    // Fabricate a state object that matches the live-state shape so all
-    // existing render helpers work without modification.
-    const state = {
-        active: true,
-        ce_strike: d.ce_strike,
-        pe_strike: d.pe_strike,
-        ce_kite_tradingsymbol: d.ce_kite_tradingsymbol,
-        pe_kite_tradingsymbol: d.pe_kite_tradingsymbol,
-        ce_entry_ltp: d.ce_ltp,
-        pe_entry_ltp: d.pe_ltp,
-        combined_entry: d.combined_premium,
-        sl_trigger: d.sl_trigger,
-        current_expiry: d.current_expiry,
-        next_expiry: d.next_expiry,
-        underlying_at_entry: d.underlying,
-        lots: d.lots,
-        lot_size: d.lot_size,
-        entry_time: null,
-    };
-    // At preview time entry == current, so P&L is zero — exactly right for a just-entered position.
-    const live = {
-        ce_ltp: d.ce_ltp,
-        pe_ltp: d.pe_ltp,
-        combined_current: d.combined_premium,
-        sl_distance: d.sl_trigger - d.combined_premium,
-        pnl_per_lot: 0,
-        pnl_total: 0,
-    };
-
-    // Badge
-    const badge = document.getElementById('algoBadge');
-    badge.className = 'ag-badge preview';
-    document.getElementById('algoBadgeText').textContent = 'Preview';
-
-    _setText('algoLastUpd', new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-
-    // Status grid
-    _setText('algoStatusVal',  'Preview');
-    _setText('algoExpiry',     state.current_expiry  || '—');
-    _setText('algoNextExpiry', state.next_expiry      || '—');
-    _setText('algoUnderlying', '₹' + _num(state.underlying_at_entry));
-    _setText('algoEntryTime',  '—');
-    _setText('algoLots',       `${state.lots} × ${state.lot_size}`);
-
-    // Legs table
-    _renderLegs(state, live);
-
-    // P&L card
-    _setText('agCombEntry',   state.combined_entry.toFixed(2));
-    _setText('agCombCurrent', live.combined_current.toFixed(2));
-    _setText('agSL',          state.sl_trigger.toFixed(2));
-
-    const dist = live.sl_distance;
-    const distEl = document.getElementById('agSLDist');
-    distEl.textContent = dist.toFixed(2);
-    distEl.className = 'ag-stat-value ' + (dist < 5 ? 'ag-neg' : dist < 15 ? 'ag-warn' : 'ag-pos');
-
-    _setPnl('agPnlLot',   0);
-    _setPnl('agPnlTotal', 0);
-
-    // Keep Enter enabled (not yet placed), Exit disabled
-    document.getElementById('algoEnterBtn').disabled = false;
-    document.getElementById('algoExitBtn').disabled  = true;
-
-    _showMsg('info',
-        `Preview — δ ${d.delta_target} | SL cap ₹${Number(d.sl_cap).toLocaleString('en-IN')} | ` +
-        `Strikes computed at NIFTY ₹${_num(d.underlying)}`
-    );
-}
-
-// ── Enter ─────────────────────────────────────────────────────────────────────
-
-function algoEnterNow(btn) {
-    if (!confirm('Place NIFTY straddle orders now? Orders will be sent to the broker immediately.')) return;
-    _setBusy(btn, 'Placing…');
-    _hideMsg();
-    fetch('/api/algo/straddle/enter', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-        .then(r => r.json())
-        .then(d => {
-            if (!d.success) { _showMsg('error', d.error || 'Entry failed'); _unbusy(btn, 'Enter Straddle Now'); return; }
-            _showMsg('success', 'Straddle entered — SL monitor is running');
-            clearTimeout(_algoTimer);
-            _fetchStatus();
-        })
-        .catch(e => { _showMsg('error', 'Request failed: ' + e); _unbusy(btn, 'Enter Straddle Now'); });
-}
-
-// ── Exit ──────────────────────────────────────────────────────────────────────
-
-function algoExitNow(btn) {
-    if (!confirm('Exit the active straddle? Both legs will be squared off at market price.')) return;
-    _setBusy(btn, 'Exiting…');
-    _hideMsg();
-    fetch('/api/algo/straddle/exit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-        .then(r => r.json())
-        .then(d => {
-            if (!d.success) { _showMsg('error', d.error || 'Exit failed'); _unbusy(btn, 'Exit Now'); return; }
-            _showMsg('success', 'Straddle exited (' + (d.reason || 'MANUAL') + ')');
-            clearTimeout(_algoTimer);
-            _fetchStatus();
-        })
-        .catch(e => { _showMsg('error', 'Request failed: ' + e); _unbusy(btn, 'Exit Now'); });
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function _setText(id, val) {
     const el = document.getElementById(id);
     if (el) el.textContent = val;
-}
-
-function _setPnl(id, val) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    if (val == null) { el.textContent = '—'; el.className = 'ag-stat-value ag-muted'; return; }
-    el.textContent = (val >= 0 ? '+₹' : '-₹') + Math.abs(val).toFixed(2);
-    el.className = 'ag-stat-value ' + (val >= 0 ? 'ag-pos' : 'ag-neg');
 }
 
 function _num(v) {

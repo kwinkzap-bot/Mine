@@ -97,21 +97,6 @@ class MarketScheduler:
             misfire_grace_time=60
         )
         
-        self.scheduler.add_job(
-            self._run_straddle_rollover,
-            CronTrigger(
-                day_of_week='tue',
-                hour=15,
-                minute=15,
-                second=0,
-                timezone='Asia/Kolkata',
-            ),
-            id='nifty_straddle_rollover',
-            name='NIFTY Weekly Straddle Rollover',
-            replace_existing=True,
-            misfire_grace_time=120,
-        )
-
         self.historic_oi_job = self.scheduler.add_job(
             self._run_historic_oi_record_task,
             CronTrigger(
@@ -304,38 +289,13 @@ class MarketScheduler:
         self.scheduler.start()
         jobs = {j.id: str(j.next_run_time) for j in self.scheduler.get_jobs()}
         logger.info(f"Market scheduler started — jobs registered: {list(jobs.keys())}")
-        logger.info(f"[Straddle Rollover] next run: {jobs.get('nifty_straddle_rollover', 'NOT REGISTERED')}")
-    
+
     def stop(self):
         """Stop the background scheduler."""
         if not self.scheduler or not self.scheduler.running:
             return
         self.scheduler.shutdown()
         logger.info("Market scheduler stopped")
-    
-    def _run_straddle_rollover(self):
-        """Tuesday 3:15 PM: exit current week straddle and enter next week."""
-        import os
-        try:
-            if not self.is_trading_day():
-                return
-            from trading_app.app.routes.api import _get_straddle_broker
-            from trading_app.service.provider_logic import get_data_provider, get_kite
-            username = os.getenv('MONITORING_USERNAME', 'Mine')
-            broker_instance = _get_straddle_broker(username)
-            if not broker_instance:
-                logger.info("[Straddle Scheduler] No broker with STRADDLE_ACTIVE=true — skipping")
-                return
-            provider = get_data_provider(user=username)
-            kite = get_kite(user=username, instance=broker_instance)
-            if not provider or not kite:
-                logger.warning("[Straddle Scheduler] Provider or Kite not available — skipping")
-                return
-            from trading_app.algo.nifty_weekly_straddle import NiftyWeeklyStraddle
-            result = NiftyWeeklyStraddle(provider, kite, broker_instance, username).rollover_or_enter()
-            logger.info(f"[Straddle Scheduler] Rollover result: {result.get('success')} — {result.get('error', '')}")
-        except Exception as e:
-            logger.error(f"[Straddle Scheduler] Error in rollover: {e}", exc_info=True)
 
     def _run_cpr_filter_task(self):
         """Execute CPR filter task (called by scheduler)."""
