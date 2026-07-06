@@ -99,17 +99,24 @@ function _activeRender(rows) {
             <th class="ag-hist-th">Live Spot</th>
             <th class="ag-hist-th">SL Level</th>
             <th class="ag-hist-th">Target</th>
-            <th class="ag-hist-th">P&amp;L (pts)</th>
-            <th class="ag-hist-th">P&amp;L (₹ est)</th>
+            <th class="ag-hist-th">Opt Entry ₹</th>
+            <th class="ag-hist-th">Opt LTP ₹</th>
+            <th class="ag-hist-th">Opt P&amp;L (₹)</th>
             <th class="ag-hist-th">Entry Time</th>
         </tr>
     </thead>
     <tbody>
     ${rows.map(({ label, trade, live }) => {
-        const dirCls  = trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg';
-        const pnlPts  = live ? live.pnl_pts : null;
-        const pnlInr  = live ? live.pnl_inr_total : null;
-        const spotStr = live ? '₹' + _num(live.spot) : '…';
+        const dirCls   = trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg';
+        const spotStr  = live ? '₹' + _num(live.spot) : '…';
+        const optEntry = live && live.opt_entry_price != null
+            ? live.opt_entry_price : trade.opt_entry_price;
+        const optCur   = live ? live.opt_current_price : null;
+        // Long option position → profit is premium-based (current − entry).
+        const optPnlInr = live ? live.opt_pnl_inr : null;
+        const optPnlPts = live ? live.opt_pnl_pts : null;
+        const optPnlStr = optPnlInr != null ? _rtpFmtInr(optPnlInr)
+                        : optPnlPts != null ? _rtpFmtPts(optPnlPts) : '…';
         return `<tr>
             <td class="ag-hist-td" style="font-weight:700">${label}</td>
             <td class="ag-hist-td ${dirCls}" style="font-weight:700">${trade.direction ?? '—'}</td>
@@ -118,8 +125,9 @@ function _activeRender(rows) {
             <td class="ag-hist-td">${spotStr}</td>
             <td class="ag-hist-td ag-warn">₹${_num(trade.sl_level)}</td>
             <td class="ag-hist-td ag-pos">₹${_num(trade.target_level)}</td>
-            <td class="ag-hist-td ${_rtpPnlCls(pnlPts)}" style="font-weight:700">${_rtpFmtPts(pnlPts)}</td>
-            <td class="ag-hist-td ${_rtpPnlCls(pnlInr)}" style="font-weight:700">${_rtpFmtInr(pnlInr)}</td>
+            <td class="ag-hist-td">${optEntry != null ? '₹' + _num(optEntry) : '—'}</td>
+            <td class="ag-hist-td">${optCur != null ? '₹' + _num(optCur) : '…'}</td>
+            <td class="ag-hist-td ${_rtpPnlCls(optPnlPts)}" style="font-weight:700">${optPnlStr}</td>
             <td class="ag-hist-td">${trade.entry_time ? _fmtTime(trade.entry_time) : '—'}</td>
         </tr>`;
     }).join('')}
@@ -312,7 +320,8 @@ function _rtpRenderHistory(trades) {
             <th class="ag-hist-th">Opt Exit</th>
             <th class="ag-hist-th">N Entry</th>
             <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N P&amp;L</th>
+            <th class="ag-hist-th">N Pts</th>
+            <th class="ag-hist-th">Opt Pts</th>
             <th class="ag-hist-th">Opt P&amp;L</th>
             <th class="ag-hist-th">Reason</th>
             <th class="ag-hist-th"></th>
@@ -323,7 +332,9 @@ function _rtpRenderHistory(trades) {
         const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
         const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
         const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const oPnlCls   = (t.opt_pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
+                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
+        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
         const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
         const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
         const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
@@ -338,6 +349,7 @@ function _rtpRenderHistory(trades) {
             <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
             <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
             <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
             <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
             <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
             <td class="ag-hist-td ag-hist-td-del">
@@ -941,7 +953,8 @@ function _rtp30sRenderHistory(trades) {
             <th class="ag-hist-th">Opt Exit</th>
             <th class="ag-hist-th">N Entry</th>
             <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N P&amp;L</th>
+            <th class="ag-hist-th">N Pts</th>
+            <th class="ag-hist-th">Opt Pts</th>
             <th class="ag-hist-th">Opt P&amp;L</th>
             <th class="ag-hist-th">Reason</th>
             <th class="ag-hist-th"></th>
@@ -952,7 +965,9 @@ function _rtp30sRenderHistory(trades) {
         const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
         const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
         const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const oPnlCls   = (t.opt_pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
+                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
+        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
         const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
         const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
         const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
@@ -967,6 +982,7 @@ function _rtp30sRenderHistory(trades) {
             <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
             <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
             <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
             <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
             <td class="ag-hist-td">${_rtp30sFmtReason(t.reason)}</td>
             <td class="ag-hist-td ag-hist-td-del">
@@ -1571,7 +1587,8 @@ function _rtp3mRenderHistory(trades) {
             <th class="ag-hist-th">Opt Exit</th>
             <th class="ag-hist-th">N Entry</th>
             <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N P&amp;L</th>
+            <th class="ag-hist-th">N Pts</th>
+            <th class="ag-hist-th">Opt Pts</th>
             <th class="ag-hist-th">Opt P&amp;L</th>
             <th class="ag-hist-th">Reason</th>
             <th class="ag-hist-th"></th>
@@ -1582,7 +1599,9 @@ function _rtp3mRenderHistory(trades) {
         const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
         const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
         const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const oPnlCls   = (t.opt_pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
+                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
+        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
         const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
         const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
         const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
@@ -1597,6 +1616,7 @@ function _rtp3mRenderHistory(trades) {
             <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
             <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
             <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
             <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
             <td class="ag-hist-td">${_rtp3mFmtReason(t.reason)}</td>
             <td class="ag-hist-td ag-hist-td-del">
@@ -2201,7 +2221,8 @@ function _rtp5mRenderHistory(trades) {
             <th class="ag-hist-th">Opt Exit</th>
             <th class="ag-hist-th">N Entry</th>
             <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N P&amp;L</th>
+            <th class="ag-hist-th">N Pts</th>
+            <th class="ag-hist-th">Opt Pts</th>
             <th class="ag-hist-th">Opt P&amp;L</th>
             <th class="ag-hist-th">Reason</th>
             <th class="ag-hist-th"></th>
@@ -2212,7 +2233,9 @@ function _rtp5mRenderHistory(trades) {
         const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
         const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
         const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const oPnlCls   = (t.opt_pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
+                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
+        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
         const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
         const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
         const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
@@ -2227,6 +2250,7 @@ function _rtp5mRenderHistory(trades) {
             <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
             <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
             <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
             <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
             <td class="ag-hist-td">${_rtp5mFmtReason(t.reason)}</td>
             <td class="ag-hist-td ag-hist-td-del">
@@ -2878,7 +2902,8 @@ function _scRenderHistory(trades) {
             <th class="ag-hist-th">Opt Exit</th>
             <th class="ag-hist-th">N Entry</th>
             <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N P&amp;L</th>
+            <th class="ag-hist-th">N Pts</th>
+            <th class="ag-hist-th">Opt Pts</th>
             <th class="ag-hist-th">Opt P&amp;L</th>
             <th class="ag-hist-th">Reason</th>
             <th class="ag-hist-th"></th>
@@ -2887,7 +2912,9 @@ function _scRenderHistory(trades) {
     <tbody>
     ${trades.map(t => {
         const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const oPnlCls   = (t.opt_pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
+                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
+        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
         const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
         const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
         const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
@@ -2902,6 +2929,7 @@ function _scRenderHistory(trades) {
             <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
             <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
             <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
             <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
             <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
             <td class="ag-hist-td ag-hist-td-del">

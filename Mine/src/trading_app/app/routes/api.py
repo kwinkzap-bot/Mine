@@ -81,6 +81,35 @@ _SC_ALL_HISTORY_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'second_candle', 'sc_trades_all_history.json')
 )
 
+def _algo_option_live(trade: dict, provider) -> dict:
+    """Live option-premium P&L for an active algo trade.
+
+    The algos always hold a long option (BUY CE/PE), so profit is simply
+    current premium − entry premium. Fetches the option LTP via the traded
+    fyers symbol and returns entry price, current price and premium-based
+    profit in points and rupees. Returns partial/empty data when the symbol
+    or LTP is unavailable.
+    """
+    result: dict = {'opt_entry_price': trade.get('opt_entry_price')}
+    try:
+        broker_entries = trade.get('broker_entries', []) or []
+        fyers_sym = next((e['fyers_sym'] for e in broker_entries if e.get('fyers_sym')), '')
+        if not fyers_sym:
+            return result
+        ltp_data = provider.ltp([fyers_sym])
+        raw = ltp_data.get(fyers_sym, {}).get('last_price', 0)
+        opt_cur = round(float(raw), 2) if raw else None
+        result['opt_current_price'] = opt_cur
+        opt_entry = result['opt_entry_price']
+        if opt_entry is not None and opt_cur is not None:
+            opt_pnl_pts = round(opt_cur - float(opt_entry), 2)
+            total_qty   = sum(float(e.get('quantity', 0) or 0) for e in broker_entries)
+            result['opt_pnl_pts'] = opt_pnl_pts
+            result['opt_pnl_inr'] = round(opt_pnl_pts * total_qty, 2) if total_qty else None
+    except Exception as _e:
+        logger.warning(f'[algo] option live fetch failed: {_e}')
+    return result
+
 def _load_opt_cache() -> dict:
     try:
         if os.path.exists(_RTP_OPT_CACHE_PATH):
@@ -5665,6 +5694,7 @@ def algo_rtp_status() -> EndpointResponse:
                         sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
                     )
                     live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+                    live.update(_algo_option_live(trade, provider))
         except Exception as _e:
             logger.warning(f'[rtp/status] live fetch failed: {_e}')
 
@@ -5847,6 +5877,7 @@ def algo_rtp30s_status() -> EndpointResponse:
                         sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
                     )
                     live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+                    live.update(_algo_option_live(trade, provider))
         except Exception as _e:
             logger.warning(f'[rtp30s/status] live fetch failed: {_e}')
 
@@ -6029,6 +6060,7 @@ def algo_rtp3m_status() -> EndpointResponse:
                         sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
                     )
                     live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+                    live.update(_algo_option_live(trade, provider))
         except Exception as _e:
             logger.warning(f'[rtp3m/status] live fetch failed: {_e}')
 
@@ -6211,6 +6243,7 @@ def algo_rtp5m_status() -> EndpointResponse:
                         sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
                     )
                     live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+                    live.update(_algo_option_live(trade, provider))
         except Exception as _e:
             logger.warning(f'[rtp5m/status] live fetch failed: {_e}')
 
@@ -6392,6 +6425,7 @@ def algo_sc_status() -> EndpointResponse:
                         sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
                     )
                     live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+                    live.update(_algo_option_live(trade, provider))
         except Exception as _e:
             logger.warning(f'[sc/status] live fetch failed: {_e}')
 

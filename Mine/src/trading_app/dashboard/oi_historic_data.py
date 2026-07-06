@@ -151,11 +151,74 @@ def _fetch_day_ohlc(symbol: str, date_str: str, provider) -> Dict[str, Any]:
     return {}
 
 
+# Symbol → index name as it appears in NSE's daily index snapshot CSV
+_SYMBOL_NSE_INDEX_NAME = {
+    'NIFTY': 'Nifty 50',
+}
+
+
+def _fetch_nse_index_spot_ohlc(date_str: str,
+                               symbols: Optional[List[str]] = None) -> Dict[str, Dict]:
+    """
+    Download NSE's daily index snapshot for date_str and return *spot* index
+    OHLC per symbol: { symbol: { open, high, low, close } }.
+
+      https://nsearchives.nseindia.com/content/indices/ind_close_all_DDMMYYYY.csv
+
+    This is the official NIFTY 50 index value (not futures). Returns {} on
+    holiday / 404.
+    """
+    if symbols is None:
+        symbols = _SYMBOLS
+    try:
+        dt  = datetime.strptime(date_str, '%Y-%m-%d')
+        url = (f'https://nsearchives.nseindia.com/content/indices/'
+               f'ind_close_all_{dt.strftime("%d%m%Y")}.csv')
+        resp = requests.get(url, headers=_NSE_HEADERS, timeout=30)
+        if resp.status_code != 200:
+            return {}
+        name_map = {_SYMBOL_NSE_INDEX_NAME[s]: s
+                    for s in symbols if s in _SYMBOL_NSE_INDEX_NAME}
+        result: Dict[str, Dict] = {}
+        reader = csv.DictReader(io.StringIO(resp.content.decode('utf-8', errors='replace')))
+        for row in reader:
+            sym = name_map.get((row.get('Index Name') or '').strip())
+            if not sym or sym in result:
+                continue
+            try:
+                result[sym] = {
+                    'open':  round(float(row['Open Index Value']), 2),
+                    'high':  round(float(row['High Index Value']), 2),
+                    'low':   round(float(row['Low Index Value']), 2),
+                    'close': round(float(row['Closing Index Value']), 2),
+                }
+            except (ValueError, TypeError, KeyError):
+                continue
+        return result
+    except Exception as e:
+        logger.warning(f"[HistoricOI] Index spot OHLC fetch failed for {date_str}: {e}")
+        return {}
+
+
+def _fetch_spot_ohlc(symbol: str, date_str: str, provider=None) -> Dict[str, Any]:
+    """
+    Spot index OHLC for one symbol — NSE index snapshot first (official),
+    broker day-candle of the index as fallback. Never futures data.
+    """
+    ohlc = _fetch_nse_index_spot_ohlc(date_str, [symbol]).get(symbol, {})
+    if ohlc.get('close'):
+        return ohlc
+    if provider:
+        return _fetch_day_ohlc(symbol, date_str, provider)
+    return {}
+
 
 def _fetch_nse_bhavcopy_oi(date_str: str, symbols: List[str]) -> Dict[str, Dict]:
     """
     Download NSE F&O bhavcopy ZIP for date_str and return per-symbol data:
-      { symbol: { ce_oi, pe_oi, idx_fut_oi, open, high, low, close } }
+      { symbol: { ce_oi, pe_oi, idx_fut_oi } }
+    (OHLC is NOT taken from the bhavcopy — futures prices differ from the
+     index spot; use _fetch_nse_index_spot_ohlc / _fetch_spot_ohlc instead.)
 
     Two URL formats are tried in order:
       1. Old archive (2021–2024-07-05):
@@ -207,12 +270,11 @@ def _fetch_nse_bhavcopy_oi(date_str: str, symbols: List[str]) -> Dict[str, Dict]
 def _parse_old_bhavcopy(rows: List[Dict], symbols: List[str],
                          sym_set: set, today_dt) -> Dict[str, Dict]:
     """Parse the pre-2024-07-08 bhavcopy format (INSTRUMENT / SYMBOL / EXPIRY_DT columns)."""
-    expiry_map:     Dict[str, Any] = {}
-    fut_expiry_map: Dict[str, Any] = {}
+    expiry_map: Dict[str, Any] = {}
 
     for row in rows:
         instr = row.get('INSTRUMENT', '').strip()
-        if instr not in ('OPTIDX', 'FUTIDX'):
+        if instr != 'OPTIDX':
             continue
         sym = row.get('SYMBOL', '').strip()
         if sym not in sym_set:
@@ -222,16 +284,11 @@ def _parse_old_bhavcopy(rows: List[Dict], symbols: List[str],
         except (ValueError, KeyError):
             continue
         if exp_dt >= today_dt:
-            if instr == 'OPTIDX':
-                if sym not in expiry_map or exp_dt < expiry_map[sym]:
-                    expiry_map[sym] = exp_dt
-            else:
-                if sym not in fut_expiry_map or exp_dt < fut_expiry_map[sym]:
-                    fut_expiry_map[sym] = exp_dt
+            if sym not in expiry_map or exp_dt < expiry_map[sym]:
+                expiry_map[sym] = exp_dt
 
     result: Dict[str, Dict] = {
-        s: {'ce_oi': 0, 'pe_oi': 0, 'idx_fut_oi': 0,
-            'open': 0.0, 'high': 0.0, 'low': 0.0, 'close': 0.0}
+        s: {'ce_oi': 0, 'pe_oi': 0, 'idx_fut_oi': 0}
         for s in symbols
     }
     for row in rows:
@@ -258,27 +315,17 @@ def _parse_old_bhavcopy(rows: List[Dict], symbols: List[str],
                 result[sym]['pe_oi'] += oi_val
         elif instr == 'FUTIDX':
             result[sym]['idx_fut_oi'] += oi_val
-            if sym in fut_expiry_map and exp_dt == fut_expiry_map[sym]:
-                try:
-                    result[sym]['open']  = round(float(row.get('OPEN',      0) or 0), 2)
-                    result[sym]['high']  = round(float(row.get('HIGH',      0) or 0), 2)
-                    result[sym]['low']   = round(float(row.get('LOW',       0) or 0), 2)
-                    result[sym]['close'] = round(float(
-                        row.get('SETTLE_PR', 0) or row.get('CLOSE', 0) or 0), 2)
-                except (ValueError, TypeError):
-                    pass
     return result
 
 
 def _parse_new_bhavcopy(rows: List[Dict], symbols: List[str],
                          sym_set: set, today_dt) -> Dict[str, Dict]:
     """Parse the post-2024-07-08 bhavcopy format (FinInstrmTp / TckrSymb / XpryDt columns)."""
-    expiry_map:     Dict[str, Any] = {}
-    fut_expiry_map: Dict[str, Any] = {}
+    expiry_map: Dict[str, Any] = {}
 
     for row in rows:
         instr = row.get('FinInstrmTp', '').strip()
-        if instr not in ('IDO', 'IDF'):
+        if instr != 'IDO':
             continue
         sym = row.get('TckrSymb', '').strip()
         if sym not in sym_set:
@@ -288,16 +335,11 @@ def _parse_new_bhavcopy(rows: List[Dict], symbols: List[str],
         except (ValueError, KeyError):
             continue
         if exp_dt >= today_dt:
-            if instr == 'IDO':
-                if sym not in expiry_map or exp_dt < expiry_map[sym]:
-                    expiry_map[sym] = exp_dt
-            else:
-                if sym not in fut_expiry_map or exp_dt < fut_expiry_map[sym]:
-                    fut_expiry_map[sym] = exp_dt
+            if sym not in expiry_map or exp_dt < expiry_map[sym]:
+                expiry_map[sym] = exp_dt
 
     result: Dict[str, Dict] = {
-        s: {'ce_oi': 0, 'pe_oi': 0, 'idx_fut_oi': 0,
-            'open': 0.0, 'high': 0.0, 'low': 0.0, 'close': 0.0}
+        s: {'ce_oi': 0, 'pe_oi': 0, 'idx_fut_oi': 0}
         for s in symbols
     }
     for row in rows:
@@ -324,15 +366,6 @@ def _parse_new_bhavcopy(rows: List[Dict], symbols: List[str],
                 result[sym]['pe_oi'] += oi_val
         elif instr == 'IDF':
             result[sym]['idx_fut_oi'] += oi_val
-            if sym in fut_expiry_map and exp_dt == fut_expiry_map[sym]:
-                try:
-                    result[sym]['open']  = round(float(row.get('OpnPric', 0) or 0), 2)
-                    result[sym]['high']  = round(float(row.get('HghPric', 0) or 0), 2)
-                    result[sym]['low']   = round(float(row.get('LwPric',  0) or 0), 2)
-                    result[sym]['close'] = round(float(
-                        row.get('SttlmPric', 0) or row.get('ClsPric', 0) or 0), 2)
-                except (ValueError, TypeError):
-                    pass
     return result
 
 
@@ -485,11 +518,9 @@ def fetch_and_store(symbol: str, provider=None,
             return {'success': False,
                     'error': 'No OI data available from broker or bhavcopy'}
 
-        # Prefer bhavcopy OHLC (official SETTLE_PR); broker OHLC as fallback
-        if bhav.get('close'):
-            ohlc = {k: bhav[k] for k in ('open', 'high', 'low', 'close')}
-        else:
-            ohlc = _fetch_day_ohlc(symbol, today, provider)
+        # OHLC from the NIFTY index *spot* (NSE index snapshot; broker index
+        # candle as fallback) — never from futures prices.
+        ohlc = _fetch_spot_ohlc(symbol, today, provider)
 
         record = {
             'date':              today,
@@ -574,7 +605,7 @@ def backfill_ohlc(provider=None) -> Dict[str, Any]:
             skipped += 1
             continue
 
-        ohlc = _fetch_day_ohlc(symbol, date_str, provider)
+        ohlc = _fetch_spot_ohlc(symbol, date_str, provider)
         if not ohlc or ohlc.get('close', 0) == 0:
             errors.append(f"{symbol} {date_str}")
             skipped += 1
@@ -858,7 +889,7 @@ def backfill_from_sqlite(symbols: Optional[List[str]] = None,
             skipped += 1
             continue
 
-        ohlc = _fetch_day_ohlc(symbol, d, provider) if provider else {}
+        ohlc = _fetch_spot_ohlc(symbol, d, provider)
 
         record = {
             'date':   d,
@@ -933,7 +964,7 @@ def _run_nse_backfill(from_date: str, to_date: str,
                     errors.append(f"{symbol} {day}")
                     continue
 
-                ohlc = _fetch_day_ohlc(symbol, day, provider) if provider else {}
+                ohlc = _fetch_spot_ohlc(symbol, day, provider)
 
                 record = {
                     'date':        day,
@@ -1009,8 +1040,9 @@ def _run_load_all(from_date: str, to_date: str,
                   source: str, symbols: List[str], provider,
                   force: bool = False) -> None:
     """
-    Single-pass background worker — one bhavcopy download per day covers
-    CE/PE OI + Fut OI + OHLC (near-month futures SETTLE_PR as close proxy).
+    Single-pass background worker — per day: one bhavcopy download covers
+    CE/PE OI + Fut OI, and one NSE index snapshot download covers spot OHLC
+    (the grid shows NIFTY index values, never futures prices).
     force=True re-downloads and overwrites existing records (preserving FII_Index_futures).
     """
     global _backfill_status
@@ -1074,10 +1106,10 @@ def _run_load_all(from_date: str, to_date: str,
                             'symbol':            symbol,
                             'ce_oi':             sym_oi.get('ce_oi', 0),
                             'pe_oi':             sym_oi.get('pe_oi', 0),
-                            'open':              sym_oi.get('open', 0),
-                            'high':              sym_oi.get('high', 0),
-                            'low':               sym_oi.get('low', 0),
-                            'close':             sym_oi.get('close', 0),
+                            'open':              0,
+                            'high':              0,
+                            'low':               0,
+                            'close':             0,
                             'idx_fut_oi':        sym_oi.get('idx_fut_oi') or None,
                             'FII_Index_futures': 0,
                         })
@@ -1092,48 +1124,38 @@ def _run_load_all(from_date: str, to_date: str,
                                 **rec,
                                 'ce_oi':      sym_oi.get('ce_oi', rec.get('ce_oi', 0)),
                                 'pe_oi':      sym_oi.get('pe_oi', rec.get('pe_oi', 0)),
-                                'open':       sym_oi.get('open', 0),
-                                'high':       sym_oi.get('high', 0),
-                                'low':        sym_oi.get('low', 0),
-                                'close':      sym_oi.get('close', 0),
                                 'idx_fut_oi': sym_oi.get('idx_fut_oi') or None,
                             }
                             changed = True
                             updated += 1
                         else:
-                            patch: Dict[str, Any] = {}
-                            if not float(rec.get('close', 0) or 0) and sym_oi.get('close'):
-                                patch.update({
-                                    'open':  sym_oi.get('open', 0),
-                                    'high':  sym_oi.get('high', 0),
-                                    'low':   sym_oi.get('low', 0),
-                                    'close': sym_oi.get('close', 0),
-                                })
                             if rec.get('idx_fut_oi') is None and sym_oi.get('idx_fut_oi'):
-                                patch['idx_fut_oi'] = sym_oi['idx_fut_oi']
-                            if patch:
-                                records[idx_map[key]] = {**rec, **patch}
+                                records[idx_map[key]] = {
+                                    **rec, 'idx_fut_oi': sym_oi['idx_fut_oi'],
+                                }
                                 changed = True
                                 updated += 1
 
-            # ── Broker OHLC fallback ─────────────────────────────────────────
-            # Only runs when bhavcopy failed (post-2024 archive cutoff or holiday).
+            # ── Spot OHLC (NSE index snapshot; broker index candle fallback) ─
+            # OHLC always comes from the NIFTY index spot, never futures.
             # Normal mode: fills missing OHLC only.
             # Force/recalculate mode: refreshes OHLC for all existing records.
-            if provider and not oi_data:
-                for symbol in symbols:
-                    key = (day, symbol)
-                    if key not in existing_keys:
-                        continue
-                    rec = records[idx_map[key]]
-                    if float(rec.get('close', 0) or 0) > 0 and not force:
-                        continue  # has OHLC in normal mode — skip
+            spot_map = _fetch_nse_index_spot_ohlc(day, symbols)
+            for symbol in symbols:
+                key = (day, symbol)
+                if key not in existing_keys:
+                    continue
+                rec = records[idx_map[key]]
+                if float(rec.get('close', 0) or 0) > 0 and not force:
+                    continue  # has OHLC in normal mode — skip
+                ohlc = spot_map.get(symbol) or {}
+                if not ohlc.get('close') and provider:
                     _backfill_status['message'] = f'OHLC {symbol} {day}…'
                     ohlc = _fetch_day_ohlc(symbol, day, provider)
-                    if ohlc.get('close'):
-                        records[idx_map[key]] = {**records[idx_map[key]], **ohlc}
-                        changed = True
-                        updated += 1
+                if ohlc.get('close') and any(rec.get(k) != v for k, v in ohlc.items()):
+                    records[idx_map[key]] = {**records[idx_map[key]], **ohlc}
+                    changed = True
+                    updated += 1
 
             if changed:
                 with _lock:
@@ -1249,8 +1271,9 @@ def refresh_record(date: str, symbol: str, provider=None) -> Dict[str, Any]:
     """
     Refresh every field of a single (date, symbol) row from all sources in one
     pass — so the user clicks once instead of juggling Record / Load / Sync FII:
-      • NSE bhavcopy    → ce_oi, pe_oi, OHLC, idx_fut_oi
-      • broker candle   → OHLC fallback when bhavcopy is unavailable (post-archive / holiday)
+      • NSE bhavcopy    → ce_oi, pe_oi, idx_fut_oi
+      • NSE index snapshot → spot OHLC (NIFTY index values, never futures)
+      • broker candle   → spot OHLC fallback when the index snapshot is unavailable
       • NSE participant → fii_fut_oi (market-wide FII net index-futures OI)
       • Moneycontrol    → FII_Index_futures in Cr (only if date falls in the ~30-day window)
 
@@ -1267,16 +1290,11 @@ def refresh_record(date: str, symbol: str, provider=None) -> Dict[str, Any]:
             from trading_app.service.provider_logic import get_data_provider
             provider = get_data_provider(user='Mine')
 
-        # ── Bhavcopy: CE/PE OI + OHLC + idx_fut_oi ──────────────────────────
+        # ── Bhavcopy: CE/PE OI + idx_fut_oi ─────────────────────────────────
         sym_oi = (_fetch_nse_bhavcopy_oi(date, [symbol]) or {}).get(symbol, {})
 
-        # ── OHLC: prefer bhavcopy SETTLE_PR, broker candle as fallback ──────
-        if sym_oi.get('close'):
-            ohlc = {k: sym_oi.get(k, 0) for k in ('open', 'high', 'low', 'close')}
-        elif provider:
-            ohlc = _fetch_day_ohlc(symbol, date, provider)
-        else:
-            ohlc = {}
+        # ── OHLC: NIFTY index spot (NSE index snapshot; broker fallback) ────
+        ohlc = _fetch_spot_ohlc(symbol, date, provider)
 
         # ── FII net index-futures OI (NSE participant report) ───────────────
         fii_fut_oi = _fetch_nse_fii_fut_oi(date)
