@@ -1,5 +1,81 @@
 [
   {
+    "date": "2026-07-06",
+    "direction": "SELL",
+    "entry_spot": 24394.05,
+    "exit_spot": 24424.3,
+    "pnl_pts": -30.25,
+    "reason": "SL",
+    "entry_time": "2026-07-06T14:53:04.886582",
+    "exit_time": "2026-07-06T15:01:07.253241",
+    "strike": 24600,
+    "option_type": "PE",
+    "lot_size": 65,
+    "opt_entry_price": 219.85,
+    "opt_exit_price": 194.7,
+    "opt_pnl_pts": -25.15,
+    "opt_pnl_inr": -1634.75,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2074061552818249728'}",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2670724600PE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2074061558522503168'}",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2670724600PE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
+    "date": "2026-07-06",
+    "direction": "BUY",
+    "entry_spot": 24381.45,
+    "exit_spot": 24406.65,
+    "pnl_pts": 25.2,
+    "reason": "BROKER_CLOSED",
+    "entry_time": "2026-07-06T10:09:04.029884",
+    "exit_time": "2026-07-06T14:41:52.644306",
+    "strike": 24150,
+    "option_type": "CE",
+    "lot_size": 65,
+    "opt_entry_price": 243.0,
+    "opt_exit_price": 262.0,
+    "opt_pnl_pts": 19.0,
+    "opt_pnl_inr": 1235.0,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2073990081630625792'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2670724150CE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2073990082922471424'}",
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2670724150CE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
     "date": "2026-07-03",
     "direction": "BUY",
     "entry_spot": 24344.7,

@@ -44,6 +44,7 @@ _WARMUP_BARS    = 200  # Must match backtest warmup — EMA50 needs ~200 bars to
 _LOOKBACK_DAYS  = 5    # Calendar days to look back for warmup candles (covers weekends/holidays)
 _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute of data gap)
 _FALLBACK_IV    = 0.15  # assumed annual IV when ATM IV cannot be computed (NIFTY typical range 13–18%)
+_RECONCILE_SECS = 25   # how often to reconcile active_trade against real broker positions
 
 
 @dataclass(frozen=True)
@@ -961,8 +962,13 @@ class RTPAlgo:
             f" brokers={len(broker_entries)}"
         )
 
-    def _exit_trade(self, reason: str, spot: float) -> None:
-        """Square off option position on all brokers and clear active trade in state."""
+    def _exit_trade(self, reason: str, spot: float, square_off: bool = True) -> None:
+        """Clear the active trade in state and (by default) square off on all brokers.
+
+        square_off=False skips broker SELL orders — used when the position is
+        already flat at the broker (closed manually/externally) so we only need to
+        reconcile local state without firing a stray naked SELL.
+        """
         state = self._load_state()
         trade = state.get('active_trade')
         if not trade:
@@ -984,7 +990,7 @@ class RTPAlgo:
         except Exception as _e:
             self.log.warning(f"Could not fetch option exit LTP: {_e}")
 
-        for entry in trade.get('broker_entries', []):
+        for entry in ([] if not square_off else trade.get('broker_entries', [])):
             idx         = entry['broker_idx']
             broker_type = entry.get('broker_type', 'zerodha')
             kite_ts     = entry.get('tradingsymbol', '')
@@ -1029,7 +1035,110 @@ class RTPAlgo:
         self._append_history(trade, spot, reason, opt_exit_price=opt_exit_price)
         self._save_state(state)
         self._spot_fail_count = 0
-        self.log.info(f"EXITED ({reason}): spot={spot} opt_exit_ltp={opt_exit_price}")
+        self.log.info(
+            f"EXITED ({reason}): spot={spot} opt_exit_ltp={opt_exit_price}"
+            f"{'' if square_off else ' (no square-off — already flat at broker)'}"
+        )
+
+    # ── Broker-position reconciliation ────────────────────────────────────────
+
+    def _broker_net_qty(
+        self, idx: int, broker_type: str, svc: Any, strike: Any, opt_type: str
+    ) -> Optional[int]:
+        """Net position quantity for one NIFTY strike+type on a single broker.
+
+        Returns 0 when the broker holds nothing for this strike (position closed),
+        a non-zero qty when it still holds it, or None when the position could not
+        be read (auth/API error). The caller MUST treat None as 'unknown' and never
+        as 'flat', so a transient query failure can never clear a live trade.
+        """
+        strike_s = str(int(strike))
+        ot       = opt_type.upper()
+        try:
+            if broker_type == 'zerodha':
+                kite = getattr(svc, 'kite', None)
+                if kite is None:
+                    return None
+                nets = (kite.positions() or {}).get('net', []) or []
+                total, matched = 0, False
+                for p in nets:
+                    ts = str(p.get('tradingsymbol', '')).upper()
+                    if 'NIFTY' in ts and strike_s in ts and ts.endswith(ot):
+                        total  += int(p.get('quantity', 0) or 0)
+                        matched = True
+                return total if matched else 0
+
+            # fyers / dhan / kotak all expose get_positions() -> {success, positions:[...]}
+            getter = getattr(svc, 'get_positions', None)
+            if getter is None:
+                return None
+            resp = getter() or {}
+            if not resp.get('success'):
+                return None
+            total, matched = 0, False
+            for p in resp.get('positions', []) or []:
+                if not isinstance(p, dict):
+                    continue
+                sym = ''
+                for k in ('symbol', 'tradingSymbol', 'trdSym', 'tradingsymbol',
+                          'sym', 'displaySymbol'):
+                    if p.get(k):
+                        sym = str(p[k]).upper()
+                        break
+                if not ('NIFTY' in sym and strike_s in sym and ot in sym):
+                    continue
+                for qk in ('netQty', 'net_quantity', 'quantity', 'netqty', 'netTrdQty'):
+                    if p.get(qk) is not None:
+                        try:
+                            total  += int(float(p[qk]))
+                            matched = True
+                        except (TypeError, ValueError):
+                            pass
+                        break
+            return total if matched else 0
+        except Exception as e:
+            self.log.warning(f"[{broker_type.upper()}_{idx}] position query failed: {e}")
+            return None
+
+    def _is_position_flat(self, trade: Dict[str, Any]) -> Optional[bool]:
+        """Reconcile the active trade against real broker positions.
+
+        Returns True  → every entered broker reports a flat (0) net position,
+                False → at least one broker still holds the position,
+                None  → could not determine (query error / no readable broker).
+        None is returned if ANY entered broker can't be read, so we never conclude
+        'flat' — and clear a live trade — on a partial or failed reconciliation.
+        """
+        strike   = trade.get('strike')
+        opt_type = trade.get('option_type', '')
+        if strike is None or not opt_type:
+            return None
+
+        readings: List[Optional[int]] = []
+        for entry in trade.get('broker_entries', []):
+            if not entry.get('entry_success', bool(entry.get('order_id'))):
+                continue
+            idx = entry.get('broker_idx')
+            bt  = entry.get('broker_type', 'zerodha')
+            cached = self._broker_map.get(idx)
+            svc    = cached[1] if cached else None
+            if svc is None:
+                try:
+                    svc = self._init_broker_svc(idx, bt)
+                except Exception:
+                    svc = None
+            if svc is None:
+                readings.append(None)
+                continue
+            readings.append(self._broker_net_qty(idx, bt, svc, strike, opt_type))
+
+        if not readings:
+            return None
+        if any(r is None for r in readings):
+            return None                       # unknown — never clear on a failed read
+        if any((r or 0) != 0 for r in readings):
+            return False                      # still holding somewhere
+        return True                           # every entered broker flat
 
     # ── needs_reset replay ────────────────────────────────────────────────────
 
@@ -1233,6 +1342,7 @@ class RTPAlgo:
         last_exit_candle_minute: int                     = -1
         last_exit_candle_dt:     Optional[pd.Timestamp]  = None
         tracked_trade_entry_time: Optional[str]          = None
+        last_reconcile_ts:       float                   = 0.0
 
         while not self._stop_event.is_set():
             try:
@@ -1255,7 +1365,9 @@ class RTPAlgo:
                                 break
                             if _retry < 4:
                                 time.sleep(0.5)
-                        self._exit_trade('EOD', spot or 0.0)
+                        # Don't square off a position that's already flat at the broker
+                        _flat = self._is_position_flat(state['active_trade'])
+                        self._exit_trade('EOD', spot or 0.0, square_off=(_flat is not True))
                     self.log.info("EOD cutoff reached — monitor loop ending")
                     break
 
@@ -1270,6 +1382,9 @@ class RTPAlgo:
                         tracked_trade_entry_time = _entry_now
                         last_exit_candle_dt      = None
                         last_exit_candle_minute  = -1
+                        # Grace period: give the broker fill time to appear before
+                        # the first reconciliation so we don't false-flag a fresh trade.
+                        last_reconcile_ts        = time.time()
 
                     spot = self._get_nifty_spot(provider)
                     if spot:
@@ -1380,6 +1495,28 @@ class RTPAlgo:
                                                     break
                             except Exception as _ce:
                                 self.log.warning(f"Candle exit check error: {_ce}")
+
+                    # ── Broker-position reconciliation ───────────────────────────────
+                    # SL/Target/candle checks only close a position the algo still
+                    # believes it holds. If the position is closed by any other path
+                    # (manual square-off, broker auto-close, an SL order the algo did
+                    # not place, or a SELL whose state-write failed), nothing above
+                    # would ever clear active_trade: the trade shows 'active' forever,
+                    # blocks re-entries, and fires a stray SELL at EOD. Poll the real
+                    # broker net qty periodically; if every entered broker is flat,
+                    # close the trade locally without squaring off again.
+                    if (time.time() - last_reconcile_ts) >= _RECONCILE_SECS:
+                        last_reconcile_ts = time.time()
+                        _rs = self._load_state()
+                        _rt = _rs.get('active_trade')
+                        if _rt and self._is_position_flat(_rt) is True:
+                            self.log.warning(
+                                "Broker position flat — trade closed outside the algo."
+                                " Clearing active_trade (no square-off)."
+                            )
+                            _spot_now = self._get_nifty_spot(provider) or 0.0
+                            self._exit_trade('BROKER_CLOSED', _spot_now, square_off=False)
+                            last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
 
                 else:
                     # ── Runtime kill-switch — only blocks new signal entries
