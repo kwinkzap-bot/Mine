@@ -8000,6 +8000,14 @@ def get_oi_historic():
     return jsonify({'success': True, 'records': records})
 
 
+@api_bp.route('/oi-historic/predict', methods=['GET'])
+@require_user_auth
+def oi_historic_predict():
+    """Next-session outlook from 5-year conditional statistics of the historic OI data."""
+    from trading_app.dashboard.oi_historic_data import analyze_and_predict
+    return jsonify(analyze_and_predict('NIFTY'))
+
+
 @api_bp.route('/oi-historic/record', methods=['POST'])
 @require_user_auth
 def record_oi_historic():

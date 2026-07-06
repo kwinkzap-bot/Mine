@@ -220,6 +220,12 @@ def _fetch_nse_bhavcopy_oi(date_str: str, symbols: List[str]) -> Dict[str, Dict]
     (OHLC is NOT taken from the bhavcopy — futures prices differ from the
      index spot; use _fetch_nse_index_spot_ohlc / _fetch_spot_ohlc instead.)
 
+    CE/PE OI is summed over the nearest expiry *strictly after* date_str: on
+    expiry day (Tue currently, Thu before Sep 2025, holiday-shifted otherwise)
+    the expiring chain is skipped and next week's chain is recorded instead —
+    same roll rule as the broker path (use_next_expiry=True), so CHNG OPT OI
+    and PCR are never computed from a chain that dies that evening.
+
     Two URL formats are tried in order:
       1. Old archive (2021–2024-07-05):
          nsearchives.nseindia.com/content/historical/DERIVATIVES/YYYY/MON/foDDMMMYYYYbhav.csv.zip
@@ -283,7 +289,9 @@ def _parse_old_bhavcopy(rows: List[Dict], symbols: List[str],
             exp_dt = datetime.strptime(row['EXPIRY_DT'].strip(), '%d-%b-%Y').date()
         except (ValueError, KeyError):
             continue
-        if exp_dt >= today_dt:
+        # Strictly after the record date: on expiry day the expiring chain is
+        # skipped and next expiry's OI is recorded (dynamic — no weekday assumed)
+        if exp_dt > today_dt:
             if sym not in expiry_map or exp_dt < expiry_map[sym]:
                 expiry_map[sym] = exp_dt
 
@@ -334,7 +342,9 @@ def _parse_new_bhavcopy(rows: List[Dict], symbols: List[str],
             exp_dt = datetime.strptime(row['XpryDt'].strip(), '%Y-%m-%d').date()
         except (ValueError, KeyError):
             continue
-        if exp_dt >= today_dt:
+        # Strictly after the record date: on expiry day the expiring chain is
+        # skipped and next expiry's OI is recorded (dynamic — no weekday assumed)
+        if exp_dt > today_dt:
             if sym not in expiry_map or exp_dt < expiry_map[sym]:
                 expiry_map[sym] = exp_dt
 
@@ -1265,6 +1275,230 @@ def fetch_and_store_all(provider=None) -> List[Dict[str, Any]]:
     if fii_map:
         _patch_fii_flow(fii_map)
     return results
+
+
+# ── Next-session prediction from 5-year conditional statistics ───────────────
+#
+# Each signal below is bucketed over the full stored history; for every bucket
+# we measure how often the NEXT session closed higher and its average return.
+# The latest record's buckets are then looked up and blended into an outlook.
+# Purely statistical tendencies (in-sample) — shown with sample sizes so the
+# user can judge the strength of each reason.
+
+_PRED_SIGNALS = [
+    {
+        'key':   'pcr',
+        'name':  'PCR (PE/CE OI)',
+        'edges': [0.7, 0.9, 1.1, 1.3],
+        'labels': ['< 0.70 extreme call-heavy', '0.70–0.90 call-heavy',
+                   '0.90–1.10 balanced', '1.10–1.30 put-heavy',
+                   '≥ 1.30 extreme put-heavy'],
+        'why': ['calls dominate the chain — positioning is max-bearish, often a capitulation zone',
+                'call writers in control — supply of calls caps upside',
+                'options positioning gives no directional edge',
+                'put writers in control — sold strikes below act as support',
+                'heavy put writing — strong support base, though stretched readings can precede pullbacks'],
+        'fmt': lambda v: f'{v:.2f}',
+    },
+    {
+        'key':   'd_diff',
+        'name':  'CHNG OPT OI shift (Δ(PE−CE) / total)',
+        'edges': [-0.08, -0.02, 0.02, 0.08],
+        'labels': ['strong call writing', 'call writing', 'balanced writing',
+                   'put writing', 'strong put writing'],
+        'why': ['today\'s fresh OI went heavily into calls — writers betting against a rally',
+                'net new call OI added — mild bearish positioning',
+                'fresh writing was two-sided — no positioning signal',
+                'net new put OI added — writers comfortable selling downside',
+                'today\'s fresh OI went heavily into puts — aggressive bullish positioning'],
+        'fmt': lambda v: f'{v * 100:+.1f}%',
+    },
+    {
+        'key':   'd_fii_oi',
+        'name':  'FII Chng Fut OI (contracts)',
+        'edges': [-40000, -8000, 8000, 40000],
+        'labels': ['heavy long unwind / shorting', 'net selling', 'flat',
+                   'net buying', 'aggressive long build-up'],
+        'why': ['FIIs dumped index-futures longs or added shorts — institutional bearishness',
+                'FIIs trimmed net futures longs',
+                'FII futures book barely moved',
+                'FIIs added net futures longs',
+                'FIIs built index-futures longs aggressively — institutional conviction'],
+        'fmt': lambda v: f'{v:+,.0f}',
+    },
+    {
+        'key':   'flow',
+        'name':  'FII index-futures flow (₹ Cr)',
+        'edges': [-1500, 0, 1500],
+        'labels': ['heavy outflow', 'outflow', 'inflow', 'heavy inflow'],
+        'why': ['large FII money left index futures',
+                'FII money mildly negative in index futures',
+                'FII money mildly positive in index futures',
+                'large FII money entered index futures'],
+        'fmt': lambda v: f'{v:+,.0f} Cr',
+    },
+    {
+        'key':   'ret',
+        'name':  'Today\'s NIFTY move',
+        'edges': [-0.75, -0.15, 0.15, 0.75],
+        'labels': ['sharp fall', 'dip', 'flat', 'rise', 'sharp rally'],
+        'why': ['momentum after sharp falls', 'follow-through after dips',
+                'no momentum signal from price', 'follow-through after up days',
+                'momentum after sharp rallies'],
+        'fmt': lambda v: f'{v:+.2f}%',
+    },
+]
+
+
+def _pred_bucket(value: float, edges: List[float]) -> int:
+    for i, e in enumerate(edges):
+        if value < e:
+            return i
+    return len(edges)
+
+
+def analyze_and_predict(symbol: str = 'NIFTY') -> Dict[str, Any]:
+    """
+    5-year analysis of the historic OI records → outlook for the next session.
+    Returns { success, prediction, prob_up_pct, base_rate_pct, expected_move_pct,
+              backtest_hit_pct, reasons: [...], sample_days, from/to dates, ... }.
+    """
+    recs = [r for r in get_all_records()
+            if r.get('symbol') == symbol and float(r.get('close') or 0) > 0]
+    recs.sort(key=lambda r: r['date'])
+    if len(recs) < 120:
+        return {'success': False, 'error': 'Not enough history for analysis'}
+
+    # ── Feature rows ─────────────────────────────────────────────────────────
+    feats: List[Dict[str, Any]] = []
+    for i, r in enumerate(recs):
+        prev = recs[i - 1] if i > 0 else None
+        ce, pe = float(r.get('ce_oi') or 0), float(r.get('pe_oi') or 0)
+        tot = ce + pe
+        f: Dict[str, Any] = {'date': r['date'], 'close': float(r['close'])}
+        f['pcr'] = (pe / ce) if ce > 0 else None
+        f['d_diff'] = None
+        f['ret']    = None
+        f['d_fii_oi'] = None
+        if prev:
+            p_ce, p_pe = float(prev.get('ce_oi') or 0), float(prev.get('pe_oi') or 0)
+            p_tot = p_ce + p_pe
+            # Skip Δ on chain-roll days (expiry-day records hold next week's
+            # chain, so the day-over-day delta would compare different chains)
+            if tot > 0 and p_tot > 0 and tot >= 0.7 * p_tot:
+                f['d_diff'] = ((pe - ce) - (p_pe - p_ce)) / tot
+            p_close = float(prev.get('close') or 0)
+            if p_close > 0:
+                f['ret'] = (f['close'] / p_close - 1) * 100
+            if r.get('fii_fut_oi') is not None and prev.get('fii_fut_oi') is not None:
+                f['d_fii_oi'] = float(r['fii_fut_oi']) - float(prev['fii_fut_oi'])
+        flow = r.get('FII_Index_futures')
+        f['flow'] = float(flow) if flow else None   # 0 == not published → skip
+        feats.append(f)
+
+    for i in range(len(feats) - 1):
+        feats[i]['up'] = feats[i + 1]['close'] > feats[i]['close']
+        feats[i]['next_ret'] = (feats[i + 1]['close'] / feats[i]['close'] - 1) * 100
+
+    hist   = feats[:-1]           # days with a known next-session outcome
+    latest = feats[-1]
+    base_rate = sum(1 for f in hist if f['up']) / len(hist)
+
+    # ── Bucket statistics per signal over the full history ──────────────────
+    sig_stats: Dict[str, List[Dict[str, float]]] = {}
+    for sig in _PRED_SIGNALS:
+        buckets = [{'n': 0, 'ups': 0, 'ret': 0.0} for _ in range(len(sig['edges']) + 1)]
+        for f in hist:
+            v = f.get(sig['key'])
+            if v is None:
+                continue
+            b = buckets[_pred_bucket(v, sig['edges'])]
+            b['n']   += 1
+            b['ups'] += 1 if f['up'] else 0
+            b['ret'] += f['next_ret']
+        sig_stats[sig['key']] = buckets
+
+    def _day_probs(f: Dict[str, Any]) -> List[float]:
+        out = []
+        for sig in _PRED_SIGNALS:
+            v = f.get(sig['key'])
+            if v is None:
+                continue
+            b = sig_stats[sig['key']][_pred_bucket(v, sig['edges'])]
+            if b['n'] >= 30:                       # ignore thin buckets
+                out.append(b['ups'] / b['n'])
+        return out
+
+    # ── In-sample backtest of the blended score ──────────────────────────────
+    hits = tried = 0
+    for f in hist:
+        probs = _day_probs(f)
+        if not probs:
+            continue
+        tried += 1
+        if (sum(probs) / len(probs) >= 0.5) == f['up']:
+            hits += 1
+    backtest_hit = (hits / tried * 100) if tried else None
+
+    # ── Latest day → reasons + blended outlook ───────────────────────────────
+    reasons = []
+    probs, rets = [], []
+    for sig in _PRED_SIGNALS:
+        v = latest.get(sig['key'])
+        if v is None:
+            continue
+        bi = _pred_bucket(v, sig['edges'])
+        b  = sig_stats[sig['key']][bi]
+        if b['n'] < 30:
+            continue
+        p_up    = b['ups'] / b['n']
+        avg_ret = b['ret'] / b['n']
+        probs.append(p_up)
+        rets.append(avg_ret)
+        reasons.append({
+            'name':        sig['name'],
+            'value':       sig['fmt'](v),
+            'bucket':      sig['labels'][bi],
+            'why':         sig['why'][bi],
+            'prob_up_pct': round(p_up * 100, 1),
+            'avg_ret_pct': round(avg_ret, 2),
+            'n':           b['n'],
+            'bullish':     p_up > base_rate,
+        })
+    if not probs:
+        return {'success': False, 'error': 'Latest record has no usable signals'}
+
+    prob_up = sum(probs) / len(probs)
+    edge    = (prob_up - base_rate) * 100
+    if edge >= 3:
+        prediction = 'BULLISH'
+    elif edge <= -3:
+        prediction = 'BEARISH'
+    else:
+        prediction = 'SIDEWAYS'
+    reasons.sort(key=lambda r: abs(r['prob_up_pct'] - base_rate * 100), reverse=True)
+
+    # Next session = next weekday after the latest record
+    nxt = datetime.strptime(latest['date'], '%Y-%m-%d') + timedelta(days=1)
+    while nxt.weekday() >= 5:
+        nxt += timedelta(days=1)
+
+    return {
+        'success':           True,
+        'symbol':            symbol,
+        'as_of':             latest['date'],
+        'next_session':      nxt.strftime('%Y-%m-%d'),
+        'prediction':        prediction,
+        'prob_up_pct':       round(prob_up * 100, 1),
+        'base_rate_pct':     round(base_rate * 100, 1),
+        'edge_pct':          round(edge, 1),
+        'expected_move_pct': round(sum(rets) / len(rets), 2),
+        'backtest_hit_pct':  round(backtest_hit, 1) if backtest_hit is not None else None,
+        'sample_days':       len(hist),
+        'from_date':         recs[0]['date'],
+        'to_date':           latest['date'],
+        'reasons':           reasons,
+    }
 
 
 def refresh_record(date: str, symbol: str, provider=None) -> Dict[str, Any]:

@@ -79,6 +79,54 @@ function _hoiRenderAll(records) {
     });
 }
 
+// ── Next-session prediction panel (5-year statistical analysis) ─────────────
+function _hoiRenderPrediction(d) {
+    const el = document.getElementById('hoiPredict');
+    if (!el) return;
+    if (!d || !d.success) {
+        el.innerHTML = `<span style="font-size:11px;color:var(--pf-text-3)">Prediction unavailable — ${d && d.error ? d.error : 'analysis failed'}</span>`;
+        return;
+    }
+    const col = d.prediction === 'BULLISH' ? 'var(--pf-pos)'
+              : d.prediction === 'BEARISH' ? 'var(--pf-neg)'
+              : 'var(--pf-text-2)';
+    const icon = d.prediction === 'BULLISH' ? '▲' : d.prediction === 'BEARISH' ? '▼' : '◆';
+    const mv   = d.expected_move_pct;
+    const mvTxt = (mv > 0 ? '+' : '') + mv.toFixed(2) + '%';
+    const reasons = (d.reasons || []).map(r => `
+        <div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;border-top:1px dashed var(--pf-border)">
+          <span style="color:${r.bullish ? 'var(--pf-pos)' : 'var(--pf-neg)'};font-size:10px">●</span>
+          <span style="font-size:11.5px;color:var(--pf-text-1);font-weight:600;white-space:nowrap">${r.name}: ${r.value}</span>
+          <span style="font-size:11px;color:var(--pf-text-2)">${r.bucket} — ${r.why}.
+            <b class="${r.prob_up_pct >= d.base_rate_pct ? 'hoi-up' : 'hoi-down'}">${r.prob_up_pct}%</b>
+            of similar days closed higher next session
+            (avg ${r.avg_ret_pct > 0 ? '+' : ''}${r.avg_ret_pct}%, n=${r.n})</span>
+        </div>`).join('');
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+        <span style="font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--pf-text-3)">NEXT SESSION OUTLOOK · ${d.next_session}</span>
+        <span style="font-size:15px;font-weight:800;color:${col}">${icon} ${d.prediction}</span>
+        <span style="font-size:11.5px;color:var(--pf-text-2)">
+          up-probability <b style="color:${col}">${d.prob_up_pct}%</b>
+          vs 5-yr base rate ${d.base_rate_pct}% · expected move <b style="color:${col}">${mvTxt}</b>
+        </span>
+        <span style="margin-left:auto;font-size:10.5px;color:var(--pf-text-3)">
+          model hit-rate ${d.backtest_hit_pct != null ? d.backtest_hit_pct + '%' : '—'} over ${d.sample_days.toLocaleString('en-IN')} days (${d.from_date} → ${d.to_date})
+        </span>
+      </div>
+      ${reasons}
+      <div style="font-size:10px;color:var(--pf-text-3);margin-top:5px">
+        Statistical tendencies from this grid's own 5-year history (in-sample) — not financial advice.
+      </div>`;
+}
+
+function loadHoiPrediction() {
+    fetch('/api/oi-historic/predict')
+        .then(r => r.json())
+        .then(_hoiRenderPrediction)
+        .catch(() => _hoiRenderPrediction(null));
+}
+
 function loadHistoricOI() {
     fetch('/api/oi-historic')
         .then(r => r.json())
@@ -106,6 +154,7 @@ function hoiFetchLatest() {
             btn.textContent = '⟳ Fetch Latest';
             if (d.success) {
                 _hoiRenderAll(d.records);
+                loadHoiPrediction();
                 const errs = (d.errors || []).filter(e => !e.success).map(e => e.symbol).join(', ');
                 status.textContent = errs ? `⚠️ Errors: ${errs}` : '✅ Latest saved';
             } else {
@@ -229,4 +278,7 @@ function _hoiPollBackfill() {
         .catch(() => { _hoiPollTimer = setTimeout(_hoiPollBackfill, 5000); });
 }
 
-document.addEventListener("DOMContentLoaded", loadHistoricOI);
+document.addEventListener("DOMContentLoaded", () => {
+    loadHistoricOI();
+    loadHoiPrediction();
+});
