@@ -9,7 +9,7 @@ from trading_app.app.utils.token_manager import save_access_token, clear_access_
 from trading_app.app.utils.user_auth import (
     verify_user, is_user_authenticated, login_user, logout_user
 )
-from trading_app.service.kite_order_services import apply_kite_proxy
+from trading_app.service.kite_order_services import apply_kite_proxy, generate_session_with_proxy_fallback
 
 # Server-side store for pending Zerodha OAuth logins, keyed by username.
 # Using a server-side dict instead of Flask's cookie-based session, because
@@ -312,10 +312,11 @@ def callback():
 
             logger.info(f"[server-store] Identified callback for {username}: instance {instance_num} (api_key {api_key[:10]}...)")
 
-            # Single generate_session call — request_token is single-use
+            # Single generate_session call — request_token is single-use.
+            # A proxy CONNECT failure does NOT consume the token (Kite is never
+            # reached), so the direct-fallback retry inside the helper is safe.
             kite_obj = KiteConnect(api_key=api_key)
-            apply_kite_proxy(kite_obj)
-            session_data = kite_obj.generate_session(request_token, api_secret=api_secret)
+            session_data = generate_session_with_proxy_fallback(kite_obj, request_token, api_secret)
             access_token = session_data['access_token']  # type: ignore[index]
 
             # Clean up stale session entries too
@@ -340,8 +341,7 @@ def callback():
                     logger.info(f"[session-fallback] Identified callback for instance {instance_num} (api_key {api_key[:10]}...)")
 
                     kite_obj = KiteConnect(api_key=api_key)
-                    apply_kite_proxy(kite_obj)
-                    session_data = kite_obj.generate_session(request_token, api_secret=api_secret)
+                    session_data = generate_session_with_proxy_fallback(kite_obj, request_token, api_secret)
                     access_token = session_data['access_token']  # type: ignore[index]
         
         if not instance_num or not api_key or not access_token:
@@ -357,8 +357,7 @@ def callback():
             
             # Generate session
             kite = KiteConnect(api_key=api_key)
-            apply_kite_proxy(kite)
-            data = kite.generate_session(request_token, api_secret=api_secret)
+            data = generate_session_with_proxy_fallback(kite, request_token, api_secret)
             access_token = data['access_token']  # type: ignore[index]
         
         # Validate access_token before proceeding

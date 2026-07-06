@@ -908,19 +908,27 @@ class RTPAlgo:
                 idx, broker_type, svc, opt_type, strike,
                 kite_ts, fyers_sym, quantity, 'BUY', product,
             )
+            entry_success = bool(order_id)
             broker_entries.append({
                 'broker_idx':    idx,
                 'broker_type':   broker_type,
                 'order_id':      str(order_id or ''),
+                'entry_success': entry_success,
                 'tradingsymbol': kite_ts,
                 'fyers_sym':     fyers_sym,
                 'lots':          lots,
                 'quantity':      quantity,
             })
-            self.log.info(
-                f"[{broker_type.upper()}_{idx}] BUY {opt_type} {int(strike)}"
-                f" qty={quantity} ({lots} lot(s)) order_id={order_id}"
-            )
+            if entry_success:
+                self.log.info(
+                    f"[{broker_type.upper()}_{idx}] BUY {opt_type} {int(strike)}"
+                    f" qty={quantity} ({lots} lot(s)) order_id={order_id}"
+                )
+            else:
+                self.log.error(
+                    f"[{broker_type.upper()}_{idx}] BUY {opt_type} {int(strike)} FAILED"
+                    f" — no exit will be placed for this broker"
+                )
 
         # Capture option LTP just after order placement as proxy for fill price
         opt_entry_price: Optional[float] = None
@@ -983,6 +991,15 @@ class RTPAlgo:
             fyers_sym   = entry.get('fyers_sym', '')
             # Use stored per-broker quantity; fall back to lot_size from trade (not hardcoded 75)
             quantity    = entry.get('quantity', int(trade.get('lot_size', 75)))
+            # Broker-specific guard: only square off where the entry BUY actually
+            # succeeded on this broker. Fall back to order_id for older state files
+            # written before entry_success was tracked.
+            entry_ok = entry.get('entry_success', bool(entry.get('order_id')))
+            if not entry_ok:
+                self.log.warning(
+                    f"[{broker_type.upper()}_{idx}] skipping exit — entry never succeeded"
+                )
+                continue
             try:
                 # Prefer cached service; re-init as fallback if broker wasn't in map at start
                 cached = self._broker_map.get(idx)

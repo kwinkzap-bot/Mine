@@ -1,10 +1,10 @@
 {
   "active_trade": {
     "direction": "BUY",
-    "entry_spot": 24339.8,
-    "entry_time": "2026-07-06T09:16:08.370322",
-    "sl_level": 24304.9,
-    "target_level": 24444.5,
+    "entry_spot": 24347.05,
+    "entry_time": "2026-07-06T09:28:02.762154",
+    "sl_level": 24322.0,
+    "target_level": 24422.0,
     "strike": 24150,
     "option_type": "CE",
     "lot_size": 65,
@@ -29,21 +29,8 @@
         "quantity": 65
       }
     ],
-    "opt_entry_price": 198.6
+    "opt_entry_price": 213.05
   },
-  "traded_today": true,
-  "trade_date": "2026-07-06",
-  "params": {
-    "candle_index": 2,
-    "rr_ratio": 3.0,
-    "exit_hour": 15,
-    "exit_minute": 25,
-    "enable_long": true,
-    "enable_short": false
-  },
-  "last_exit": {
-    "reason": "SL",
-    "spot": 24327.45,
-    "time": "2026-07-03T09:22:03.229174"
-  }
+  "buy_needs_reset": true,
+  "sell_needs_reset": false
 }

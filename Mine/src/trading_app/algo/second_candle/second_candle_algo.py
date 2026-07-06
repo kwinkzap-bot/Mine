@@ -853,19 +853,27 @@ class SecondCandleAlgo:
                 idx, broker_type, svc, opt_type, strike,
                 kite_ts, fyers_sym, quantity, 'BUY', product,
             )
+            entry_success = bool(order_id)
             broker_entries.append({
                 'broker_idx':    idx,
                 'broker_type':   broker_type,
                 'order_id':      str(order_id or ''),
+                'entry_success': entry_success,
                 'tradingsymbol': kite_ts,
                 'fyers_sym':     fyers_sym,
                 'lots':          lots,
                 'quantity':      quantity,
             })
-            logger.info(
-                f"[SC] [{broker_type.upper()}_{idx}] BUY {opt_type} {int(strike)}"
-                f" qty={quantity} ({lots} lot(s)) order_id={order_id}"
-            )
+            if entry_success:
+                logger.info(
+                    f"[SC] [{broker_type.upper()}_{idx}] BUY {opt_type} {int(strike)}"
+                    f" qty={quantity} ({lots} lot(s)) order_id={order_id}"
+                )
+            else:
+                logger.error(
+                    f"[SC] [{broker_type.upper()}_{idx}] BUY {opt_type} {int(strike)} FAILED"
+                    f" — no exit will be placed for this broker"
+                )
 
         # Capture option LTP just after order placement as proxy for fill price
         opt_entry_price: Optional[float] = None
@@ -929,6 +937,15 @@ class SecondCandleAlgo:
             kite_ts     = entry.get('tradingsymbol', '')
             fyers_sym   = entry.get('fyers_sym', '')
             quantity    = entry.get('quantity', int(trade.get('lot_size', 75)))
+            # Broker-specific guard: only square off where the entry BUY actually
+            # succeeded on this broker. Fall back to order_id for older state files
+            # written before entry_success was tracked.
+            entry_ok = entry.get('entry_success', bool(entry.get('order_id')))
+            if not entry_ok:
+                logger.warning(
+                    f"[SC] [{broker_type.upper()}_{idx}] skipping exit — entry never succeeded"
+                )
+                continue
             try:
                 cached = self._broker_map.get(idx)
                 if cached:

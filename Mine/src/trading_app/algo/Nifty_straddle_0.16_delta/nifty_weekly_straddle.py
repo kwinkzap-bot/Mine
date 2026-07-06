@@ -217,8 +217,16 @@ def _do_exit(broker_kite: Any, username: str, broker_instance: int, reason: str)
         quantity = state.get('lots', 1) * state.get('lot_size', 1)
         exit_orders: Dict[str, str] = {}
 
-        for leg_ts in [state.get('ce_kite_tradingsymbol'), state.get('pe_kite_tradingsymbol')]:
+        legs = [
+            (state.get('ce_kite_tradingsymbol'), state.get('ce_order_id')),
+            (state.get('pe_kite_tradingsymbol'), state.get('pe_order_id')),
+        ]
+        for leg_ts, leg_entry_oid in legs:
             if not leg_ts:
+                continue
+            # Only square off a leg whose entry order actually went through.
+            if not leg_entry_oid:
+                logger.warning(f"[Straddle] Skipping exit for {leg_ts} — entry order never succeeded")
                 continue
             try:
                 order_id = broker_kite.place_order(

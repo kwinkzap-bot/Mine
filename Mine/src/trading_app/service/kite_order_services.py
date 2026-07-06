@@ -222,6 +222,32 @@ def apply_kite_proxy(kite, raise_if_unreachable: bool = False) -> bool:
     logging.info(f"[KiteService] Static IP proxy active: {host}")
     return True
 
+
+def generate_session_with_proxy_fallback(kite, request_token: str, api_secret: str):
+    """Exchange request_token for a session, preferring the static IP proxy but
+    falling back to a DIRECT connection if the proxy is unreachable/rejecting.
+
+    The static IP proxy (staticip.in) can return 403 on CONNECT — or be down —
+    when the plan lapses or the source IP isn't whitelisted. generate_session
+    itself does not require a static IP, so a direct exchange is a safe fallback
+    that keeps login working while the proxy is being fixed.
+    """
+    from requests.exceptions import ProxyError, ConnectionError as ReqConnectionError, SSLError
+
+    apply_kite_proxy(kite)
+    used_proxy = bool(getattr(kite, 'proxies', None))
+    try:
+        return kite.generate_session(request_token, api_secret=api_secret)
+    except (ProxyError, ReqConnectionError, SSLError) as e:
+        if not used_proxy:
+            raise  # already direct — nothing to fall back to
+        logging.warning(
+            f"[KiteService] Static IP proxy failed during login ({type(e).__name__}: {e}); "
+            f"retrying generate_session DIRECT (no proxy)."
+        )
+        kite.proxies = {}
+        return kite.generate_session(request_token, api_secret=api_secret)
+
 # ── HISTORICAL CACHE ─────────────────────────────────────────────────────
 class HistoricalDataCache:
     """Thread-safe LRU cache for historical data with TTL."""
