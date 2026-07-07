@@ -76,7 +76,7 @@ def start_live_monitoring():
         logger.error(f"Error in live monitoring thread: {e}")
 
 def main():
-    """Run the Flask application and live monitoring."""
+    """Run the Flask application and live monitoring."""    
     ensure_ssh_tunnel()
     app = create_app()  # __init__.py starts watchdog at 10s interval
 

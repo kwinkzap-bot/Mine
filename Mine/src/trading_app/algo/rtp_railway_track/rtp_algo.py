@@ -24,12 +24,10 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, time as dt_time
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-
-from trading_app.service.greeks_calculator import GreeksCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +151,19 @@ def _bs_delta(flag: str, S: float, K: float, t: float, r: float, sigma: float) -
     d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * t) / (sigma * math.sqrt(t))
     nd1 = _norm_cdf(d1)
     return nd1 if flag == 'c' else nd1 - 1.0
+
+
+def _time_to_expiry_years(expiry: Any) -> float:
+    """Actual time remaining until 15:30 on expiry day, in years.
+
+    GreeksCalculator.calculate_time_to_expiry floors T at 0.001y (~8.8h),
+    which overstates T for the whole of expiry day and skews 0DTE deltas;
+    floor at 2 minutes instead so delta stays honest up to the EOD cutoff."""
+    if isinstance(expiry, datetime):
+        expiry = expiry.date()
+    exp_dt = datetime.combine(expiry, dt_time(15, 30))
+    secs = (exp_dt - datetime.now()).total_seconds()
+    return max(secs, 120.0) / (365.0 * 24.0 * 3600.0)
 
 
 # Module-level registry so the API can reach the running instance without storing it in the scheduler.
@@ -515,10 +526,12 @@ class RTPAlgo:
         })
         if not expiry_dates:
             raise ValueError("No NIFTY expiry dates found in instruments")
+        # Keep the nearest expiry even on expiry day: the Fyers option chain
+        # used for delta selection and order symbols always trades the nearest
+        # expiry, so T must be computed against that same expiry. (Bumping to
+        # next week here made T≈7d while trading 0DTE options — on expiry-day
+        # afternoons that mispriced delta and selected ~700-pt ITM strikes.)
         expiry = expiry_dates[0]
-        # On expiry day options have near-zero T; use next week for stable greeks
-        if expiry == today and len(expiry_dates) > 1:
-            expiry = expiry_dates[1]
         lot_size = 75
         for inst in instruments:
             if (inst.get('name') or '').upper() == 'NIFTY' and inst.get('expiry') == expiry:
@@ -609,6 +622,14 @@ class RTPAlgo:
                             self.log.info(f"ATM IV from LTP: {atm_sigma:.4f} (ltp={atm_ltp})")
                     except Exception:
                         pass
+                    if atm_sigma == _FALLBACK_IV and t > 0:
+                        # py_vollib rejects prices at/below the carry floor (common
+                        # on 0DTE); Brenner–Subrahmanyam ATM approximation still
+                        # yields a usable vol from the same LTP.
+                        _approx = atm_ltp / (0.4 * spot * math.sqrt(t))
+                        if 0 < _approx <= 5.0:
+                            atm_sigma = _approx
+                            self.log.info(f"ATM IV approx from LTP: {atm_sigma:.4f} (ltp={atm_ltp})")
 
         if atm_sigma == _FALLBACK_IV:
             self.log.warning(f"Using fallback IV {atm_sigma:.2f} — check /tmp/fyers_chain_debug.json")
@@ -653,7 +674,7 @@ class RTPAlgo:
             self.log.error("Expiry not set — cannot select strike")
             return atm, None
 
-        t = GreeksCalculator.calculate_time_to_expiry(self._expiry)
+        t = _time_to_expiry_years(self._expiry)
 
         if chain_deltas is None:
             chain_deltas = self._fetch_fyers_chain_deltas(provider, spot, t)
@@ -857,7 +878,7 @@ class RTPAlgo:
             except Exception as _e:
                 return {'success': False, 'error': f'Cannot determine expiry: {_e}'}
 
-        t = GreeksCalculator.calculate_time_to_expiry(self._expiry)
+        t = _time_to_expiry_years(self._expiry)
 
         # ── Fyers option chain: one call for CE + PE ──────────────────────────
         chain_deltas = self._fetch_fyers_chain_deltas(provider, spot, t)
@@ -887,7 +908,7 @@ class RTPAlgo:
     def _enter_trade(self, direction: str, spot: float, provider: Any) -> None:
         """Select delta strike, place BUY orders on all cached brokers, save state."""
         opt_type = 'CE' if direction == 'BUY' else 'PE'
-        t = GreeksCalculator.calculate_time_to_expiry(self._expiry) if self._expiry else 0.01
+        t = _time_to_expiry_years(self._expiry) if self._expiry else 0.01
         chain_deltas = self._fetch_fyers_chain_deltas(provider, spot, t)
         strike, inst = self._select_delta_strike(opt_type, spot, provider, chain_deltas)
 

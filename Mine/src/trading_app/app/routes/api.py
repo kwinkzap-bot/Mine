@@ -5530,10 +5530,12 @@ def debug_symbol():
 def get_open_interest() -> EndpointResponse:
     """
     Get open interest data for options strikes.
-    
+
     Prioritizes reading from local DB (populated by background scheduler).
     Falls back to live fetch if DB data is stale or missing.
-    
+    Both are CURRENT (nearest) expiry — only the EOD historic recorder
+    (dashboard/oi_historic_data.py) rolls to the next expiry.
+
     Returns:
         JSON with open interest data for CE and PE strikes
     """
@@ -5574,11 +5576,11 @@ def get_open_interest() -> EndpointResponse:
             # If the UI specifically asks, we try to fetch.
 
             logger.info(f"⚠️ DB data missing or stale for {symbol}. Fetching live...")
-            # use_next_expiry=True to match the scheduler recorder — this fallback
+            # CURRENT expiry, matching the scheduler recorder — this fallback
             # writes into the same oi_history table, so both must use the same
             # expiry basis or an expiry-day series would mix current/next-expiry
-            # rows and corrupt the PCR/Vega charts. (Non-expiry days: no change.)
-            oi_data = oi_service.get_open_interest_data(symbol, use_next_expiry=True)
+            # rows and corrupt the PCR/Vega charts.
+            oi_data = oi_service.get_open_interest_data(symbol)
             
             if not oi_data.get('success'):
                 return jsonify(oi_data), 400
@@ -8409,6 +8411,121 @@ def backtest_sm_optimise_status(task_id):
     return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
 
 
+def _analyze_contract_direction(contracts, spot):
+    """Derive an UP/DOWN/SIDEWAYS market-direction read from the active contract list.
+
+    Signals (weights): CE-vs-PE volume-weighted premium momentum (2),
+    spot trend (1.5), volume PCR (1), spot vs max-volume strike levels (0.5).
+    """
+    ces = [c for c in contracts if c.get('option_type') == 'CE' and c.get('volume', 0) > 0]
+    pes = [c for c in contracts if c.get('option_type') == 'PE' and c.get('volume', 0) > 0]
+    if not ces or not pes:
+        return {
+            'available': False,
+            'reason': 'Direction analysis needs live volume on both Calls and Puts '
+                      '(clear the Option Type filter or wait for market data)',
+        }
+
+    def _vw_move(rows):
+        total_vol = sum(r['volume'] for r in rows)
+        if not total_vol:
+            return 0.0
+        return round(sum(r.get('pct_change', 0) * r['volume'] for r in rows) / total_vol, 2)
+
+    ce_vol  = sum(c['volume'] for c in ces)
+    pe_vol  = sum(c['volume'] for c in pes)
+    ce_move = _vw_move(ces)
+    pe_move = _vw_move(pes)
+    volume_pcr = round(pe_vol / ce_vol, 2) if ce_vol else 0.0
+
+    # Most-traded strikes act as intraday magnets: heavy CE strike ≈ resistance, heavy PE strike ≈ support
+    resistance = max(ces, key=lambda c: c['volume']).get('strike')
+    support    = max(pes, key=lambda c: c['volume']).get('strike')
+
+    signals = []
+    score = 0.0
+
+    # 1. Premium momentum — calls gaining while puts bleed (or vice-versa) is the cleanest directional tell
+    if ce_move > 0.5 and pe_move < -0.5:
+        score += 2
+        signals.append({'name': 'Premium Momentum', 'verdict': 'bullish',
+                        'detail': f'Call premiums rising ({ce_move:+.1f}%) while put premiums fall ({pe_move:+.1f}%) — buyers positioned for upside'})
+    elif pe_move > 0.5 and ce_move < -0.5:
+        score -= 2
+        signals.append({'name': 'Premium Momentum', 'verdict': 'bearish',
+                        'detail': f'Put premiums rising ({pe_move:+.1f}%) while call premiums fall ({ce_move:+.1f}%) — buyers positioned for downside'})
+    elif ce_move > 0.5 and pe_move > 0.5:
+        signals.append({'name': 'Premium Momentum', 'verdict': 'neutral',
+                        'detail': f'Both call ({ce_move:+.1f}%) and put ({pe_move:+.1f}%) premiums rising — volatility building, big move expected but direction unclear'})
+    elif ce_move < -0.5 and pe_move < -0.5:
+        signals.append({'name': 'Premium Momentum', 'verdict': 'neutral',
+                        'detail': f'Both call ({ce_move:+.1f}%) and put ({pe_move:+.1f}%) premiums decaying — option writers in control, rangebound/sideways day'})
+    else:
+        signals.append({'name': 'Premium Momentum', 'verdict': 'neutral',
+                        'detail': f'No decisive premium shift (CE {ce_move:+.1f}%, PE {pe_move:+.1f}%)'})
+
+    # 2. Spot trend
+    spot_pct = float(spot.get('pct_change', 0) or 0) if spot else 0.0
+    if spot:
+        if spot_pct >= 0.15:
+            score += 1.5
+            signals.append({'name': 'Spot Trend', 'verdict': 'bullish',
+                            'detail': f'Index trading up {spot_pct:+.2f}% on the day'})
+        elif spot_pct <= -0.15:
+            score -= 1.5
+            signals.append({'name': 'Spot Trend', 'verdict': 'bearish',
+                            'detail': f'Index trading down {spot_pct:+.2f}% on the day'})
+        else:
+            signals.append({'name': 'Spot Trend', 'verdict': 'neutral',
+                            'detail': f'Index flat ({spot_pct:+.2f}%) — no trend from spot yet'})
+
+    # 3. Volume PCR (traded contracts, not OI)
+    if volume_pcr <= 0.7:
+        score += 1
+        signals.append({'name': 'Volume PCR', 'verdict': 'bullish',
+                        'detail': f'Call-heavy trading (PCR {volume_pcr}) — participants chasing upside'})
+    elif volume_pcr >= 1.3:
+        score -= 1
+        signals.append({'name': 'Volume PCR', 'verdict': 'bearish',
+                        'detail': f'Put-heavy trading (PCR {volume_pcr}) — hedging/downside bets dominate'})
+    else:
+        signals.append({'name': 'Volume PCR', 'verdict': 'neutral',
+                        'detail': f'Balanced call/put volume (PCR {volume_pcr})'})
+
+    # 4. Spot vs most-traded strikes (breakout / breakdown check)
+    spot_last = float(spot.get('last', 0) or 0) if spot else 0.0
+    if spot_last and support and resistance:
+        if spot_last > resistance:
+            score += 0.5
+            signals.append({'name': 'Key Levels', 'verdict': 'bullish',
+                            'detail': f'Spot ({spot_last:,.0f}) above the heaviest call strike {resistance:,.0f} — breakout territory'})
+        elif spot_last < support:
+            score -= 0.5
+            signals.append({'name': 'Key Levels', 'verdict': 'bearish',
+                            'detail': f'Spot ({spot_last:,.0f}) below the heaviest put strike {support:,.0f} — breakdown territory'})
+        else:
+            signals.append({'name': 'Key Levels', 'verdict': 'neutral',
+                            'detail': f'Spot ({spot_last:,.0f}) inside the {support:,.0f} – {resistance:,.0f} high-volume range (support – resistance)'})
+
+    max_score = 5.0
+    direction = 'UP' if score >= 1.5 else 'DOWN' if score <= -1.5 else 'SIDEWAYS'
+    return {
+        'available':      True,
+        'direction':      direction,
+        'score':          round(score, 1),
+        'max_score':      max_score,
+        'confidence_pct': round(abs(score) / max_score * 100),
+        'volume_pcr':     volume_pcr,
+        'ce_move_pct':    ce_move,
+        'pe_move_pct':    pe_move,
+        'ce_volume':      ce_vol,
+        'pe_volume':      pe_vol,
+        'support':        support,
+        'resistance':     resistance,
+        'signals':        signals,
+    }
+
+
 @api_bp.route('/active-contracts', methods=['GET'])
 def get_active_contracts():
     """Return active F&O contracts with live market data (OHLC, volume, change) from Fyers."""
@@ -8485,12 +8602,15 @@ def get_active_contracts():
             'prev_close': 0, 'last': 0, 'change': 0, 'pct_change': 0, 'volume': 0,
         })
 
-    # Fetch live quotes from Fyers raw API
+    # Fetch live quotes from Fyers raw API (index spot rides along in the first batch)
+    spot_symbol = FYERS_INDEX_SYMBOLS.get(underlying)
+    quote_map = {}
     if contracts and hasattr(provider, 'fyers') and provider.fyers:
         try:
             from trading_app.service.fyers_data_service import _rate_limiter
             tokens = [c['instrument_token'] for c in contracts if c['instrument_token']]
-            quote_map = {}
+            if spot_symbol:
+                tokens.insert(0, spot_symbol)
             batch_size = 50
             for i in range(0, len(tokens), batch_size):
                 batch = tokens[i:i + batch_size]
@@ -8525,6 +8645,17 @@ def get_active_contracts():
     # Sort by volume desc (most active first)
     contracts.sort(key=lambda x: x.get('volume', 0), reverse=True)
 
+    # Underlying spot snapshot + market-direction analysis from the contract list
+    spot_q = quote_map.get(spot_symbol) if spot_symbol else None
+    spot_payload = None
+    if spot_q:
+        spot_payload = {
+            'symbol':     spot_symbol,
+            'last':       spot_q.get('last', 0),
+            'change':     spot_q.get('change', 0),
+            'pct_change': spot_q.get('pct_change', 0),
+        }
+
     return jsonify({
         'success':        True,
         'underlying':     underlying,
@@ -8533,6 +8664,8 @@ def get_active_contracts():
         'total':          len(contracts),
         'contracts':      contracts,
         'expiry_options': expiry_options,
+        'spot':           spot_payload,
+        'analysis':       _analyze_contract_direction(contracts, spot_payload),
     })
 
 

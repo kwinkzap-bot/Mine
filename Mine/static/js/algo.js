@@ -29,6 +29,33 @@ const _ALGO_TABS = ['active', 'rtp', 'rtp30s', 'rtp3m', 'rtp5m', 'sc', 'swing-mo
 // exactly one lot's brokerage is deducted from each completed trade.
 const _ALGO_BROKERAGE_PER_LOT = 135;
 
+// NIFTY lot size — fallback when a trade record has no lot_size field.
+const _NIFTY_LOT_SIZE = 65;
+
+// Unrealised ₹ for an open trade: (opt LTP − opt entry) × lot size.
+function _activeOpenPnlInr(trade, live) {
+    const optEntry = live && live.opt_entry_price != null
+        ? live.opt_entry_price : (trade ? trade.opt_entry_price : null);
+    const optCur = live ? live.opt_current_price : null;
+    if (optCur == null || optEntry == null) return null;
+    return (optCur - optEntry) * ((trade && trade.lot_size) ?? _NIFTY_LOT_SIZE);
+}
+
+// Option-premium tiles (Opt Entry / Opt LTP / Opt P&L) shared by every algo
+// tab's Active Trade grid.
+function _algoOptTiles(trade, live) {
+    const optEntry = live && live.opt_entry_price != null
+        ? live.opt_entry_price : trade.opt_entry_price;
+    const optCur = live ? live.opt_current_price : null;
+    const optPnl = _activeOpenPnlInr(trade, live);
+    return [
+        { label: 'Opt Entry',    value: optEntry != null ? '₹' + _num(optEntry) : '—' },
+        { label: 'Opt LTP',      value: optCur   != null ? '₹' + _num(optCur)   : '…' },
+        { label: 'Opt P&L (₹)', value: optPnl   != null ? _rtpFmtInr(optPnl)   : '…',
+          cls: _rtpPnlCls(optPnl) },
+    ];
+}
+
 // Realised ₹ for a completed trade, net of round-trip brokerage.
 function _algoNetInr(t) {
     if (!t || t.opt_pnl_inr == null) return 0;
@@ -38,27 +65,57 @@ function _algoNetInr(t) {
 // ── Active Trade tab (all live option algos consolidated) ─────────────────────
 // Each source shares the same status shape: { active, state.active_trade, live }.
 const _ACTIVE_SOURCES = [
-    { label: 'EMA RTP 1m',     url: '/api/algo/rtp/status'    },
-    { label: 'EMA RTP 30s',    url: '/api/algo/rtp30s/status' },
-    { label: 'EMA RTP 3m',     url: '/api/algo/rtp3m/status'  },
-    { label: 'EMA RTP 5m',     url: '/api/algo/rtp5m/status'  },
-    { label: '2nd 30s Candle', url: '/api/algo/sc/status'     },
+    { label: 'EMA RTP 1m',     url: '/api/algo/rtp/status',    histUrl: '/api/algo/rtp/history'    },
+    { label: 'EMA RTP 30s',    url: '/api/algo/rtp30s/status', histUrl: '/api/algo/rtp30s/history' },
+    { label: 'EMA RTP 3m',     url: '/api/algo/rtp3m/status',  histUrl: '/api/algo/rtp3m/history'  },
+    { label: 'EMA RTP 5m',     url: '/api/algo/rtp5m/status',  histUrl: '/api/algo/rtp5m/history'  },
+    { label: '2nd 30s Candle', url: '/api/algo/sc/status',     histUrl: '/api/algo/sc/history'     },
 ];
+
+// Local YYYY-MM-DD (matches the `date` field the algos write in IST).
+function _activeTodayStr() {
+    const d = new Date();
+    return d.getFullYear() + '-' +
+        String(d.getMonth() + 1).padStart(2, '0') + '-' +
+        String(d.getDate()).padStart(2, '0');
+}
 
 function _activeFetchAll(btn) {
     if (btn) { btn.disabled = true; btn.classList.add('busy'); }
-    Promise.all(_ACTIVE_SOURCES.map(s =>
+    const statusReqs = _ACTIVE_SOURCES.map(s =>
         fetch(s.url)
             .then(r => r.json())
             .then(data => ({ src: s, data }))
             .catch(() => ({ src: s, data: null }))
-    )).then(results => {
+    );
+    const histReqs = _ACTIVE_SOURCES.map(s =>
+        fetch(s.histUrl)
+            .then(r => r.json())
+            .then(data => ({ src: s, trades: (data && data.trades) || [] }))
+            .catch(() => ({ src: s, trades: [] }))
+    );
+    Promise.all([Promise.all(statusReqs), Promise.all(histReqs)]).then(([statuses, histories]) => {
         const rows = [];
-        results.forEach(({ src, data }) => {
+        statuses.forEach(({ src, data }) => {
             const trade = data && data.active && data.state ? data.state.active_trade : null;
             if (trade) rows.push({ label: src.label, trade, live: data.live || null });
         });
+
+        // Completed trades from every algo, today only, newest exit first.
+        const today = _activeTodayStr();
+        const todayTrades = [];
+        histories.forEach(({ src, trades }) => {
+            trades.forEach(t => {
+                const d = t.date || (t.entry_time ? String(t.entry_time).slice(0, 10) : '');
+                if (d === today) todayTrades.push({ label: src.label, ...t });
+            });
+        });
+        todayTrades.sort((a, b) =>
+            String(b.exit_time || b.entry_time || '').localeCompare(String(a.exit_time || a.entry_time || '')));
+
         _activeRender(rows);
+        _activeRenderHistory(todayTrades);
+        _activeRenderPnl(rows, todayTrades);
         document.getElementById('activeLastUpd').textContent =
             new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }).finally(() => {
@@ -112,11 +169,9 @@ function _activeRender(rows) {
         const optEntry = live && live.opt_entry_price != null
             ? live.opt_entry_price : trade.opt_entry_price;
         const optCur   = live ? live.opt_current_price : null;
-        // Long option position → profit is premium-based (current − entry).
-        const optPnlInr = live ? live.opt_pnl_inr : null;
-        const optPnlPts = live ? live.opt_pnl_pts : null;
-        const optPnlStr = optPnlInr != null ? _rtpFmtInr(optPnlInr)
-                        : optPnlPts != null ? _rtpFmtPts(optPnlPts) : '…';
+        // Long option position → P&L = (LTP − entry premium) × lot size.
+        const optPnlInr = _activeOpenPnlInr(trade, live);
+        const optPnlStr = optPnlInr != null ? _rtpFmtInr(optPnlInr) : '…';
         return `<tr>
             <td class="ag-hist-td" style="font-weight:700">${label}</td>
             <td class="ag-hist-td ${dirCls}" style="font-weight:700">${trade.direction ?? '—'}</td>
@@ -127,8 +182,114 @@ function _activeRender(rows) {
             <td class="ag-hist-td ag-pos">₹${_num(trade.target_level)}</td>
             <td class="ag-hist-td">${optEntry != null ? '₹' + _num(optEntry) : '—'}</td>
             <td class="ag-hist-td">${optCur != null ? '₹' + _num(optCur) : '…'}</td>
-            <td class="ag-hist-td ${_rtpPnlCls(optPnlPts)}" style="font-weight:700">${optPnlStr}</td>
+            <td class="ag-hist-td ${_rtpPnlCls(optPnlInr)}" style="font-weight:700">${optPnlStr}</td>
             <td class="ag-hist-td">${trade.entry_time ? _fmtTime(trade.entry_time) : '—'}</td>
+        </tr>`;
+    }).join('')}
+    </tbody>
+</table>
+</div>`;
+}
+
+// ── Today's total P&L summary (realised from executed + unrealised from open) ──
+function _activeRenderPnl(rows, todayTrades) {
+    const statsEl = document.getElementById('activePnlStats');
+    const netEl   = document.getElementById('activePnlNet');
+    if (!statsEl) return;
+
+    const done = todayTrades.filter(t => t.opt_pnl_inr != null);
+    let realised = 0, wins = 0, losses = 0;
+    done.forEach(t => {
+        const inr = _algoNetInr(t);   // ₹ net of round-trip brokerage
+        realised += inr;
+        if (inr >= 0) wins++; else losses++;
+    });
+
+    // Unrealised ₹ across currently open trades: (LTP − entry) × lot size.
+    let unrealised = 0, openWithLive = 0;
+    rows.forEach(({ trade, live }) => {
+        const inr = _activeOpenPnlInr(trade, live);
+        if (inr != null) { unrealised += inr; openWithLive++; }
+    });
+
+    const total  = realised + unrealised;
+    const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+
+    const tiles = [
+        { label: 'Total P&L (₹)',      value: inrFmt(total),      cls: _rtpPnlCls(total) },
+        { label: 'Realised (₹)',       value: inrFmt(realised),   cls: _rtpPnlCls(realised) },
+        { label: 'Unrealised (₹)',     value: openWithLive ? inrFmt(unrealised) : '—', cls: openWithLive ? _rtpPnlCls(unrealised) : '' },
+        { label: 'Executed Trades',    value: done.length },
+        { label: 'Wins',               value: wins,   cls: 'ag-pos' },
+        { label: 'Losses',             value: losses, cls: 'ag-neg' },
+        { label: 'Open Trades',        value: rows.length },
+        { label: 'Brokerage (₹)',      value: done.length ? '-₹' + (done.length * _ALGO_BROKERAGE_PER_LOT).toLocaleString('en-IN') : '—', cls: done.length ? 'ag-neg' : '' },
+    ];
+
+    statsEl.innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+
+    if (netEl) {
+        netEl.textContent = inrFmt(total);
+        netEl.style.color = total >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+}
+
+// ── Today's executed (completed) trades across all live algos ─────────────────
+function _activeRenderHistory(trades) {
+    const countEl = document.getElementById('activeHistCount');
+    const body    = document.getElementById('activeHistBody');
+    if (!body) return;
+
+    if (countEl) countEl.textContent = trades.length
+        ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
+
+    if (!trades.length) {
+        body.innerHTML = '<div class="ag-empty">No trades executed today</div>';
+        return;
+    }
+
+    const fmtOpt = v => v == null ? '—' : '₹' + Number(v).toFixed(2);
+    const fmtInr = v => v == null ? '—' : (v >= 0 ? '+₹' : '-₹') + Math.abs(Number(v)).toFixed(0);
+
+    body.innerHTML = `
+<div class="ag-hist-scroll">
+<table class="ag-hist-table">
+    <thead>
+        <tr>
+            <th class="ag-hist-th">Logic Type</th>
+            <th class="ag-hist-th">Direction</th>
+            <th class="ag-hist-th">Option</th>
+            <th class="ag-hist-th">Entry Time</th>
+            <th class="ag-hist-th">Exit Time</th>
+            <th class="ag-hist-th">Opt Entry</th>
+            <th class="ag-hist-th">Opt Exit</th>
+            <th class="ag-hist-th">Opt Pts</th>
+            <th class="ag-hist-th">Opt P&amp;L (₹)</th>
+            <th class="ag-hist-th">Reason</th>
+        </tr>
+    </thead>
+    <tbody>
+    ${trades.map(t => {
+        const dirCls  = t.direction === 'BUY' ? 'ag-pos' : 'ag-neg';
+        const optPts  = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
+                            ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
+        const pnlCls  = _rtpPnlCls(optPts);
+        return `<tr>
+            <td class="ag-hist-td" style="font-weight:700">${t.label}</td>
+            <td class="ag-hist-td ${dirCls}" style="font-weight:700">${t.direction ?? '—'}</td>
+            <td class="ag-hist-td">${(t.option_type ?? '') + ' ' + (t.strike ?? '—')}</td>
+            <td class="ag-hist-td">${t.entry_time ? _fmtTimeOnly(t.entry_time) : '—'}</td>
+            <td class="ag-hist-td">${t.exit_time ? _fmtTimeOnly(t.exit_time) : '—'}</td>
+            <td class="ag-hist-td">${fmtOpt(t.opt_entry_price)}</td>
+            <td class="ag-hist-td">${fmtOpt(t.opt_exit_price)}</td>
+            <td class="ag-hist-td ${optPts != null ? pnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
+            <td class="ag-hist-td ${t.opt_pnl_inr != null ? pnlCls : ''}" style="font-weight:700">${fmtInr(t.opt_pnl_inr)}</td>
+            <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
         </tr>`;
     }).join('')}
     </tbody>
@@ -235,8 +396,6 @@ function _rtpRenderStatus(data) {
         return;
     }
 
-    const pnlPts = live ? live.pnl_pts : null;
-    const pnlInr = live ? live.pnl_inr_total : null;
     const spotStr = live ? '₹' + _num(live.spot) : '…';
 
     const tiles = [
@@ -247,8 +406,7 @@ function _rtpRenderStatus(data) {
         { label: 'Live Spot',    value: spotStr },
         { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
         { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
-        { label: 'P&L (pts)',    value: _rtpFmtPts(pnlPts),  cls: _rtpPnlCls(pnlPts) },
-        { label: 'P&L (₹ est)', value: _rtpFmtInr(pnlInr),  cls: _rtpPnlCls(pnlInr) },
+        ..._algoOptTiles(trade, live),
         { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
     ];
 
@@ -868,8 +1026,6 @@ function _rtp30sRenderStatus(data) {
         return;
     }
 
-    const pnlPts = live ? live.pnl_pts : null;
-    const pnlInr = live ? live.pnl_inr_total : null;
     const spotStr = live ? '₹' + _num(live.spot) : '…';
 
     const tiles = [
@@ -880,8 +1036,7 @@ function _rtp30sRenderStatus(data) {
         { label: 'Live Spot',    value: spotStr },
         { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
         { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
-        { label: 'P&L (pts)',    value: _rtp30sFmtPts(pnlPts),  cls: _rtp30sPnlCls(pnlPts) },
-        { label: 'P&L (₹ est)', value: _rtp30sFmtInr(pnlInr),  cls: _rtp30sPnlCls(pnlInr) },
+        ..._algoOptTiles(trade, live),
         { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
     ];
 
@@ -1502,8 +1657,6 @@ function _rtp3mRenderStatus(data) {
         return;
     }
 
-    const pnlPts = live ? live.pnl_pts : null;
-    const pnlInr = live ? live.pnl_inr_total : null;
     const spotStr = live ? '₹' + _num(live.spot) : '…';
 
     const tiles = [
@@ -1514,8 +1667,7 @@ function _rtp3mRenderStatus(data) {
         { label: 'Live Spot',    value: spotStr },
         { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
         { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
-        { label: 'P&L (pts)',    value: _rtp3mFmtPts(pnlPts),  cls: _rtp3mPnlCls(pnlPts) },
-        { label: 'P&L (₹ est)', value: _rtp3mFmtInr(pnlInr),  cls: _rtp3mPnlCls(pnlInr) },
+        ..._algoOptTiles(trade, live),
         { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
     ];
 
@@ -2136,8 +2288,6 @@ function _rtp5mRenderStatus(data) {
         return;
     }
 
-    const pnlPts = live ? live.pnl_pts : null;
-    const pnlInr = live ? live.pnl_inr_total : null;
     const spotStr = live ? '₹' + _num(live.spot) : '…';
 
     const tiles = [
@@ -2148,8 +2298,7 @@ function _rtp5mRenderStatus(data) {
         { label: 'Live Spot',    value: spotStr },
         { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
         { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
-        { label: 'P&L (pts)',    value: _rtp5mFmtPts(pnlPts),  cls: _rtp5mPnlCls(pnlPts) },
-        { label: 'P&L (₹ est)', value: _rtp5mFmtInr(pnlInr),  cls: _rtp5mPnlCls(pnlInr) },
+        ..._algoOptTiles(trade, live),
         { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
     ];
 
@@ -2819,8 +2968,6 @@ function _scRenderStatus(data) {
         return;
     }
 
-    const pnlPts = live ? live.pnl_pts : null;
-    const pnlInr = live ? live.pnl_inr_total : null;
     const spotStr = live ? '₹' + _num(live.spot) : '…';
 
     const tiles = [
@@ -2831,8 +2978,7 @@ function _scRenderStatus(data) {
         { label: 'Live Spot',    value: spotStr },
         { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
         { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
-        { label: 'P&L (pts)',    value: _rtpFmtPts(pnlPts),  cls: _rtpPnlCls(pnlPts) },
-        { label: 'P&L (₹ est)', value: _rtpFmtInr(pnlInr),  cls: _rtpPnlCls(pnlInr) },
+        ..._algoOptTiles(trade, live),
         { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
     ];
 

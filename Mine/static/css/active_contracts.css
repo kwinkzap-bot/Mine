@@ -447,3 +447,102 @@ body.dark-theme .ac-table thead th,
 body.forest-theme .ac-table thead th {
     color: #fff;
 }
+
+/* ── Market direction analysis panel ─────────────────────────── */
+.ac-analysis {
+    background: var(--ac-surface);
+    border: 1px solid var(--ac-border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+}
+
+.ac-ana-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.ac-dir-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+}
+.ac-dir-badge.up   { color: var(--ac-pos); background: color-mix(in srgb, var(--ac-pos) 12%, transparent); }
+.ac-dir-badge.down { color: var(--ac-neg); background: color-mix(in srgb, var(--ac-neg) 12%, transparent); }
+.ac-dir-badge.side { color: var(--ac-text-2); background: var(--ac-accent-dim); }
+
+.ac-ana-conf {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ac-text-3);
+}
+
+.ac-ana-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.ac-ana-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border: 1px solid var(--ac-border);
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--ac-text-2);
+    white-space: nowrap;
+}
+.ac-ana-chip b { color: var(--ac-text); font-variant-numeric: tabular-nums; }
+.ac-ana-spot   { border-color: var(--ac-accent); }
+
+.ac-sig-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.ac-sig-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12px;
+}
+
+.ac-sig-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    align-self: center;
+    background: var(--ac-text-3);
+}
+.ac-sig-dot.bullish { background: var(--ac-pos); }
+.ac-sig-dot.bearish { background: var(--ac-neg); }
+
+.ac-sig-name {
+    flex: none;
+    min-width: 128px;
+    font-weight: 700;
+    color: var(--ac-text);
+}
+
+.ac-sig-detail { color: var(--ac-text-2); }
+
+.ac-ana-unavailable {
+    font-size: 12px;
+    color: var(--ac-text-3);
+}

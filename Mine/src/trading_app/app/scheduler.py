@@ -346,14 +346,12 @@ class MarketScheduler:
             for symbol in symbols:
                 try:
                     logger.info(f"OI Persistence: Fetching data for {symbol}...")
-                    # use_next_expiry=True mirrors the EOD historic recorder
-                    # (oi_historic_data.py). On expiry day the expiring contract's
-                    # OI is dominated by settlement/pin/unwind noise and its vega
-                    # collapses (T→0), which corrupts the Vega Analysis call series;
-                    # rolling to next week's chain gives a stable vega and a clean
-                    # OI signal. Non-expiry days: nearest expiry is unchanged, so
-                    # there is no behavioural difference.
-                    data = oi_service.get_open_interest_data(symbol, use_next_expiry=True)
+                    # CURRENT (nearest) expiry, even on expiry day: these rows feed
+                    # the dashboard PCR/Vega tabs and the live /open-interest chain,
+                    # which must all track the actively traded (expiring) contract.
+                    # Only the EOD historic recorder (dashboard/oi_historic_data.py)
+                    # rolls to the next expiry (use_next_expiry=True).
+                    data = oi_service.get_open_interest_data(symbol)
                     
                     if data.get('success'):
                         oi_service.save_oi_snapshot(symbol, data)

@@ -100,6 +100,7 @@
 
                 populateExpiryDropdown(data.expiry_options, data.active_expiry);
                 populateStrikeDropdown(data.contracts);
+                renderAnalysis(data.analysis, data.spot, data.underlying);
                 $('acTableWrap').classList.remove('hidden');
                 render();
             })
@@ -145,6 +146,60 @@
         });
         _strike = strikes.some(s => String(Math.round(s)) === prev) ? prev : '';
         sel.value = _strike;
+    }
+
+    // ── Market direction panel ─────────────────────────────────────
+    function renderAnalysis(a, spot, underlying) {
+        const box = $('acAnalysis');
+        if (!box) return;
+
+        if (!a) {
+            box.classList.add('hidden');
+            box.innerHTML = '';
+            return;
+        }
+
+        box.classList.remove('hidden');
+
+        if (!a.available) {
+            box.innerHTML = '<div class="ac-ana-unavailable">' + esc(a.reason || 'Direction analysis unavailable') + '</div>';
+            return;
+        }
+
+        const dirClass = a.direction === 'UP' ? 'up' : a.direction === 'DOWN' ? 'down' : 'side';
+        const dirIcon  = a.direction === 'UP' ? '▲' : a.direction === 'DOWN' ? '▼' : '◆';
+        const dirLabel = a.direction === 'SIDEWAYS' ? 'SIDEWAYS' : 'MARKET ' + a.direction;
+
+        let spotChip = '';
+        if (spot && spot.last) {
+            const sCls  = spot.pct_change > 0 ? 'ac-pos' : spot.pct_change < 0 ? 'ac-neg' : '';
+            const sSign = spot.pct_change > 0 ? '+' : '';
+            spotChip = `<span class="ac-ana-chip ac-ana-spot">${esc(underlying || '')} <b>${fmtNum(spot.last, 2)}</b>
+                <span class="${sCls}">${sSign}${fmtNum(Math.abs(spot.pct_change), 2)}%</span></span>`;
+        }
+
+        const chips = [
+            `<span class="ac-ana-chip">Vol PCR <b>${a.volume_pcr}</b></span>`,
+            `<span class="ac-ana-chip">CE Move <b class="${a.ce_move_pct > 0 ? 'ac-pos' : a.ce_move_pct < 0 ? 'ac-neg' : ''}">${a.ce_move_pct > 0 ? '+' : ''}${a.ce_move_pct}%</b></span>`,
+            `<span class="ac-ana-chip">PE Move <b class="${a.pe_move_pct > 0 ? 'ac-pos' : a.pe_move_pct < 0 ? 'ac-neg' : ''}">${a.pe_move_pct > 0 ? '+' : ''}${a.pe_move_pct}%</b></span>`,
+            a.support    ? `<span class="ac-ana-chip">Support <b>${fmtNum(a.support, 0)}</b></span>`    : '',
+            a.resistance ? `<span class="ac-ana-chip">Resistance <b>${fmtNum(a.resistance, 0)}</b></span>` : '',
+        ].join('');
+
+        const sigRows = (a.signals || []).map(s =>
+            `<li class="ac-sig-row"><span class="ac-sig-dot ${s.verdict}"></span>
+             <span class="ac-sig-name">${esc(s.name)}</span>
+             <span class="ac-sig-detail">${esc(s.detail)}</span></li>`
+        ).join('');
+
+        box.innerHTML = `
+            <div class="ac-ana-head">
+                <span class="ac-dir-badge ${dirClass}">${dirIcon} ${dirLabel}</span>
+                <span class="ac-ana-conf">${a.confidence_pct}% strength</span>
+                ${spotChip}
+                <span class="ac-ana-chips">${chips}</span>
+            </div>
+            <ul class="ac-sig-list">${sigRows}</ul>`;
     }
 
     // ── Render ─────────────────────────────────────────────────────

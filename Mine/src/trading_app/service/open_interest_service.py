@@ -688,19 +688,11 @@ class OpenInterestService:
             
             active_strikes_json = json.dumps(simple_strikes)
 
-            # Expiry-roll sanity check: on expiry day the recorder should store the
-            # NEXT expiry's chain (use_next_expiry). If a stored expiry equals the
-            # trading date, we're still capturing the expiring contract — its call
-            # OI is settlement/pin noise and its vega collapses (T→0), which corrupts
-            # the Vega Analysis call series. Warn so the roll can be verified live.
-            snap_expiry = next((s.get('expiry') for s in simple_strikes if s.get('expiry')), None)
-            if snap_expiry and str(snap_expiry)[:10] == timestamp[:10]:
-                logger.warning(
-                    f"[OI] {symbol}: snapshot expiry {snap_expiry} == trading date "
-                    f"{timestamp[:10]} — recording the EXPIRING contract (expiry roll "
-                    f"did NOT apply). Vega Analysis call series will be unreliable today."
-                )
-
+            # Note: oi_history intentionally stores the CURRENT (nearest) expiry,
+            # including on expiry day — it feeds the dashboard PCR/Vega tabs and
+            # the live /open-interest chain, which track the actively traded
+            # contract. Only the EOD historic recorder (oi_historic_data.py)
+            # rolls to the next expiry, and it does not write to this table.
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
@@ -1278,14 +1270,45 @@ class OpenInterestService:
                             if not expiry_dt:
                                 expiry_dt = datetime.now().date()
 
-                            # On expiry day, skip native chain so CSV path picks next expiry
+                            # On expiry day, re-fetch the native chain for the NEXT expiry
+                            # via the optionchain `timestamp` param. The CSV fallback has
+                            # no OI column and quote() enrichment only covers the nearest
+                            # expiry, so the CSV path records all-zero OI on expiry day.
+                            rolled_to_next_expiry = False
                             if use_next_expiry and expiry_dt <= datetime.now().date():
-                                logger.info(
-                                    f"[OI] {symbol}: expiry is today ({expiry_dt}), "
-                                    f"falling back to CSV for next-expiry selection"
-                                )
-                                # Leave instruments=None → triggers CSV fallback below
-                            else:
+                                today_d = datetime.now().date()
+                                next_ts, next_dt = None, None
+                                for ed in (chain_data.get('expiryData') or []):
+                                    try:
+                                        ts = int(ed.get('expiry'))
+                                        d = datetime.fromtimestamp(ts).date()
+                                    except (TypeError, ValueError):
+                                        continue
+                                    if d > today_d:
+                                        next_ts, next_dt = ts, d
+                                        break
+                                options_list = None
+                                if next_ts:
+                                    logger.info(
+                                        f"[OI] {symbol}: expiry is today ({expiry_dt}), "
+                                        f"re-fetching native chain for next expiry {next_dt}"
+                                    )
+                                    next_resp = self.kite.fyers.optionchain(data={
+                                        "symbol": root_token,
+                                        "strikecount": 50,
+                                        "timestamp": str(next_ts),
+                                    })
+                                    if (next_resp and next_resp.get('s') == 'ok'
+                                            and next_resp.get('data', {}).get('optionsChain')):
+                                        options_list = next_resp['data']['optionsChain']
+                                        expiry_dt = next_dt
+                                        rolled_to_next_expiry = True
+                                if not options_list:
+                                    logger.warning(
+                                        f"[OI] {symbol}: next-expiry chain unavailable, "
+                                        f"falling back to CSV (OI may be zero)"
+                                    )
+                            if options_list:
                                 instruments = []
                                 for opt in options_list:
                                     # Map Fyers 'CALL'/'PUT' to internal 'CE'/'PE'
@@ -1316,13 +1339,19 @@ class OpenInterestService:
                                         'iv':               opt.get('iv', opt.get('impliedVolatility')),
                                     })
 
-                                # Populate fast token cache for chart resolution
-                                from trading_app.service.fyers_data_service import _FYERS_OPTION_TOKEN_CACHE, _FYERS_OPTION_TOKEN_LOCK
-                                with _FYERS_OPTION_TOKEN_LOCK:
-                                    for inst in instruments:
-                                        # Key: NIFTY:24100:CE -> NSE:NIFTY26MAY24100CE
-                                        c_key = f"{inst['name']}:{int(inst['strike'])}:{inst['instrument_type']}"
-                                        _FYERS_OPTION_TOKEN_CACHE[c_key] = inst['instrument_token']
+                                # Populate fast token cache for chart resolution.
+                                # ONLY from the CURRENT (nearest) expiry chain: the cache key
+                                # has no expiry, and charts (e.g. oi-profile Opt Prem) resolve
+                                # option symbols through it via find_option_symbol(). On expiry
+                                # day the recorder's rolled next-expiry chain must not overwrite
+                                # it, or premium charts would plot next week's contracts.
+                                if not rolled_to_next_expiry:
+                                    from trading_app.service.fyers_data_service import _FYERS_OPTION_TOKEN_CACHE, _FYERS_OPTION_TOKEN_LOCK
+                                    with _FYERS_OPTION_TOKEN_LOCK:
+                                        for inst in instruments:
+                                            # Key: NIFTY:24100:CE -> NSE:NIFTY26MAY24100CE
+                                            c_key = f"{inst['name']}:{int(inst['strike'])}:{inst['instrument_type']}"
+                                            _FYERS_OPTION_TOKEN_CACHE[c_key] = inst['instrument_token']
                 except Exception as e:
                     logger.warning(f"[OI] Native Fyers Chain API failed for {symbol}: {e}. Falling back to CSV.")
             
