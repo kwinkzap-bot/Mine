@@ -6602,6 +6602,74 @@ def algo_sc_settings() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/algo/live-configs', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_live_configs() -> EndpointResponse:
+    """Return the param sets of every algo currently running live.
+
+    The backtest page uses this to badge a backtest selection / Best Params
+    grid row that is already running as a live algo."""
+    try:
+        from trading_app.app.utils.user_env import UserEnvManager
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        def _flag_on(var: str) -> bool:
+            # "Live" = the per-user kill-switch env flag is enabled. Thread
+            # liveness is the wrong signal: monitor threads exit at 15:28 EOD
+            # and are started even for disabled variants (the flag only gates
+            # signal detection inside the loop).
+            return (UserEnvManager.get_user_var(username, var, 'false') or 'false') \
+                .strip().lower() == 'true'
+
+        rtp_live = []
+        try:
+            from trading_app.algo.rtp_railway_track.rtp_algo import RTP_VARIANTS
+            for key, v in RTP_VARIANTS.items():
+                if _flag_on(v.env_active):
+                    rtp_live.append({
+                        'variant':    key,
+                        'interval':   v.interval,
+                        'entry_mode': 'RTP(20 & 9)',   # live signal uses EMA 9 & 20
+                        'sl_points':  v.sl_points,
+                        'tgt_points': v.tgt_points,
+                        'use_adx':    v.use_adx,
+                        'adx_thresh': v.adx_thresh,
+                    })
+        except Exception as _e:
+            logger.warning(f'[live-configs] rtp: {_e}')
+
+        sc_live = None
+        try:
+            from trading_app.algo.second_candle.second_candle_algo import (
+                normalise_params as _sc_norm)
+            if _flag_on('SC_ALGO_ACTIVE'):
+                try:
+                    with open(_SC_STATE_PATH, 'r') as _f:
+                        _sc_state = json.load(_f)
+                except Exception:
+                    _sc_state = {}
+                p = _sc_norm((_sc_state or {}).get('params'))
+                direction = ('both' if (p['enable_long'] and p['enable_short'])
+                             else 'long' if p['enable_long'] else 'short')
+                sc_live = {
+                    'interval':     '30second',   # live SC always runs 30-sec candles
+                    'candle_index': p['candle_index'],
+                    'rr_ratio':     p['rr_ratio'],
+                    'direction':    direction,
+                    'exit_hour':    p['exit_hour'],
+                    'exit_minute':  p['exit_minute'],
+                }
+        except Exception as _e:
+            logger.warning(f'[live-configs] sc: {_e}')
+
+        return jsonify({'success': True, 'rtp': rtp_live, 'second_candle': sc_live})
+    except Exception as e:
+        logger.error(f'[live-configs] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/pcr/history', methods=['GET'])
 @csrf.exempt
 @limiter.exempt

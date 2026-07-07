@@ -35,6 +35,7 @@ _DIR = os.path.dirname(__file__)
 
 _SINGLE_LOT_QTY = 65     # NIFTY single lot — used for Opt P&L display
 _DELTA_TARGET   = 0.90
+_MAX_PREMIUM    = 500.0  # cap on option premium — if the ±0.90Δ strike costs more, shift to the strike priced nearest below this
 _STRIKE_STEP    = 50.0
 _SLOPE_BARS     = 8
 _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
@@ -43,6 +44,12 @@ _LOOKBACK_DAYS  = 5    # Calendar days to look back for warmup candles (covers w
 _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute of data gap)
 _FALLBACK_IV    = 0.15  # assumed annual IV when ATM IV cannot be computed (NIFTY typical range 13–18%)
 _RECONCILE_SECS = 25   # how often to reconcile active_trade against real broker positions
+
+# Bar duration per provider interval — a bar stamped with its open time is only
+# completed once open_time + duration <= now. Flooring "now" to the minute (the
+# old cutoff) is equivalent for 1-min bars but treats in-progress 3m/5m bars as
+# completed, firing live signals on partial candles the backtest never sees.
+_INTERVAL_SECS = {'30second': 30, 'minute': 60, '3minute': 180, '5minute': 300}
 
 
 @dataclass(frozen=True)
@@ -194,6 +201,7 @@ class RTPAlgo:
         self._expiry: Optional[date] = None
         self._lot_size: int = 75
         self._spot_fail_count: int = 0
+        self._bar_td = pd.Timedelta(seconds=_INTERVAL_SECS.get(self.cfg.interval, 60))
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -412,13 +420,16 @@ class RTPAlgo:
             )
             processed = engine.df
             if len(processed) < 2:
-                return None, state, last_bar_dt
+                return None, state, last_bar_dt, None
 
-            # Exclude the current in-progress bar (its open time == current IST minute)
-            now_ist   = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
-            completed = processed[processed['datetime'] < now_ist]
+            # Exclude the current in-progress bar: a bar stamped with its open
+            # time is completed only once open_time + bar duration <= now.
+            # (floor('min') was only correct for 1-min bars — it let the live 3m/5m
+            # variants evaluate partial candles and diverge from the backtest.)
+            now_ist   = pd.Timestamp.now(tz='Asia/Kolkata')
+            completed = processed[processed['datetime'] + self._bar_td <= now_ist]
             if len(completed) < 2:
-                return None, state, last_bar_dt
+                return None, state, last_bar_dt, None
 
             new_last_bar_dt = completed.iloc[-1]['datetime']
 
@@ -434,7 +445,7 @@ class RTPAlgo:
                 to_check = completed.iloc[-1:]
 
             if to_check.empty:
-                return None, state, new_last_bar_dt
+                return None, state, new_last_bar_dt, None
 
             buy_needs_reset  = bool(state.get('buy_needs_reset',  False))
             sell_needs_reset = bool(state.get('sell_needs_reset', False))
@@ -658,7 +669,9 @@ class RTPAlgo:
         provider: Any,
         chain_deltas: Optional[Dict] = None,
     ) -> Tuple[float, Optional[Dict]]:
-        """Return the strike from the Fyers option chain whose delta is closest to ±0.90.
+        """Return the strike from the Fyers option chain whose delta is closest to ±0.90,
+        subject to the premium cap: if that strike's LTP exceeds _MAX_PREMIUM, the
+        same-type strike priced nearest below the cap is chosen instead.
 
         Uses chain_deltas exclusively — no instruments list, no Black-Scholes fallback.
         The instrument dict is constructed from the chain symbol so that order placement
@@ -705,6 +718,34 @@ class RTPAlgo:
         if not best_symbol:
             self.log.error(f"No {opt_type} strikes found in chain for target={signed_target:+.2f}")
             return best_strike, None
+
+        # ── Premium cap: if the delta strike costs more than _MAX_PREMIUM, shift to the
+        # same-type strike whose LTP is nearest to the cap from below (keeps the highest
+        # delta still affordable) ──────────────────────────────────────────────────────
+        if best_ltp is not None and best_ltp > _MAX_PREMIUM:
+            cap_gap = float('inf')
+            capped: Optional[Tuple[float, float, str, float]] = None  # strike, delta, symbol, ltp
+            for (strike, ot), entry in chain_deltas.items():
+                if ot != opt_type.upper():
+                    continue
+                ltp = entry.get('ltp')
+                if ltp is None or ltp <= 0 or ltp > _MAX_PREMIUM:
+                    continue
+                gap = _MAX_PREMIUM - ltp
+                if gap < cap_gap:
+                    cap_gap = gap
+                    capped  = (float(strike), entry['delta'], entry.get('symbol', ''), ltp)
+            if capped and capped[2]:
+                self.log.info(
+                    f"Premium cap: {opt_type} {int(best_strike)} ltp={best_ltp} > {_MAX_PREMIUM:.0f} "
+                    f"→ shifting to {int(capped[0])} ltp={capped[3]} delta={capped[1]:+.4f}"
+                )
+                best_strike, best_delta_val, best_symbol, best_ltp = capped
+            else:
+                self.log.warning(
+                    f"Premium cap: no {opt_type} strike with LTP ≤ {_MAX_PREMIUM:.0f} in chain — "
+                    f"keeping delta strike {int(best_strike)} ltp={best_ltp}"
+                )
 
         # Build inst dict from chain symbol — works for Fyers orders and LTP calls
         # For Zerodha orders, _place_order uses symbol='NIFTY'+strike+opt_type directly
@@ -1217,12 +1258,12 @@ class RTPAlgo:
             sell_needs_reset = False
 
             # Use the same completed-bar cutoff as _check_rtp_signal:
-            # exclude bars at or after the current IST minute (may be in-progress).
+            # a bar is completed only once open_time + bar duration <= now.
             # Then further exclude the LAST completed bar so _check_rtp_signal
             # can process it fresh — if we replay the signal bar and set
             # buy/sell_needs_reset=True here, _check_rtp_signal won't fire on it.
-            now_ist    = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
-            completed  = today_bars[today_bars['datetime'] < now_ist]
+            now_ist    = pd.Timestamp.now(tz='Asia/Kolkata')
+            completed  = today_bars[today_bars['datetime'] + self._bar_td <= now_ist]
             replay_bars = completed.iloc[:-1] if len(completed) > 1 else completed.iloc[:0]
 
             for _, row in replay_bars.iterrows():
@@ -1452,8 +1493,8 @@ class RTPAlgo:
                             try:
                                 _tdf = self._fetch_today_1min_candles(provider)
                                 if _tdf is not None and not _tdf.empty:
-                                    _now_ist  = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
-                                    _completed = _tdf[_tdf['datetime'] < _now_ist]
+                                    _now_ist  = pd.Timestamp.now(tz='Asia/Kolkata')
+                                    _completed = _tdf[_tdf['datetime'] + self._bar_td <= _now_ist]
                                     if not _completed.empty:
                                         if last_exit_candle_dt is not None:
                                             _to_check = _completed[
@@ -1467,7 +1508,7 @@ class RTPAlgo:
                                             else:
                                                 _ets = _ets.tz_convert('Asia/Kolkata')
                                             _to_check = _completed[
-                                                _completed['datetime'] >= _ets.floor('min')
+                                                _completed['datetime'] >= _ets.floor(self._bar_td)
                                             ]
 
                                         _at = _cs['active_trade']

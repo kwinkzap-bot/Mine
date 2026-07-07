@@ -37,6 +37,7 @@ _ALL_HISTORY_FILE = os.path.join(os.path.dirname(__file__), 'sc_trades_all_histo
 
 _SINGLE_LOT_QTY = 65     # NIFTY single lot — used for Opt P&L display
 _DELTA_TARGET   = 0.90
+_MAX_PREMIUM    = 500.0  # cap on option premium — if the ±0.90Δ strike costs more, shift to the strike priced nearest below this
 _STRIKE_STEP    = 50.0
 _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
 _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute of data gap)
@@ -616,7 +617,9 @@ class SecondCandleAlgo:
         provider: Any,
         chain_deltas: Optional[Dict] = None,
     ) -> Tuple[float, Optional[Dict]]:
-        """Return the strike from the Fyers option chain whose delta is closest to ±0.90."""
+        """Return the strike from the Fyers option chain whose delta is closest to ±0.90,
+        subject to the premium cap: if that strike's LTP exceeds _MAX_PREMIUM, the
+        same-type strike priced nearest below the cap is chosen instead."""
         atm           = round(spot / _STRIKE_STEP) * _STRIKE_STEP
         signed_target = _DELTA_TARGET if opt_type.upper() == 'CE' else -_DELTA_TARGET
 
@@ -654,6 +657,34 @@ class SecondCandleAlgo:
         if not best_symbol:
             logger.error(f"[SC] No {opt_type} strikes found in chain for target={signed_target:+.2f}")
             return best_strike, None
+
+        # ── Premium cap: if the delta strike costs more than _MAX_PREMIUM, shift to the
+        # same-type strike whose LTP is nearest to the cap from below (keeps the highest
+        # delta still affordable) ──────────────────────────────────────────────────────
+        if best_ltp is not None and best_ltp > _MAX_PREMIUM:
+            cap_gap = float('inf')
+            capped: Optional[Tuple[float, float, str, float]] = None  # strike, delta, symbol, ltp
+            for (strike, ot), entry in chain_deltas.items():
+                if ot != opt_type.upper():
+                    continue
+                ltp = entry.get('ltp')
+                if ltp is None or ltp <= 0 or ltp > _MAX_PREMIUM:
+                    continue
+                gap = _MAX_PREMIUM - ltp
+                if gap < cap_gap:
+                    cap_gap = gap
+                    capped  = (float(strike), entry['delta'], entry.get('symbol', ''), ltp)
+            if capped and capped[2]:
+                logger.info(
+                    f"[SC] Premium cap: {opt_type} {int(best_strike)} ltp={best_ltp} > {_MAX_PREMIUM:.0f} "
+                    f"→ shifting to {int(capped[0])} ltp={capped[3]} delta={capped[1]:+.4f}"
+                )
+                best_strike, best_delta_val, best_symbol, best_ltp = capped
+            else:
+                logger.warning(
+                    f"[SC] Premium cap: no {opt_type} strike with LTP ≤ {_MAX_PREMIUM:.0f} in chain — "
+                    f"keeping delta strike {int(best_strike)} ltp={best_ltp}"
+                )
 
         inst: Dict = {
             'instrument_token': best_symbol,

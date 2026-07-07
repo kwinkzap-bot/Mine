@@ -21,6 +21,76 @@ document.addEventListener('DOMContentLoaded', function() {
     let _scOptRun    = 0;
     let _scOptAbort  = null;
 
+    // ── Live-algo configs (LIVE badges) ──────────────────────────────────
+    // Param sets currently running as live algos. Used to flag the backtest
+    // form selection and the Best Params grid rows that are already live.
+    let _liveConfigs = { rtp: [], sc: null };
+    const LIVE_BADGE_HTML = '<span class="opt-live-badge">LIVE</span>';
+
+    function _isRtpComboLive(cfg) {
+        return (_liveConfigs.rtp || []).some(v =>
+            v.interval === cfg.interval &&
+            v.entry_mode === cfg.entry_mode &&
+            Number(v.sl_points)  === Number(cfg.sl_points) &&
+            Number(v.tgt_points) === Number(cfg.tgt_points) &&
+            !!v.use_adx === !!cfg.use_adx &&
+            (!v.use_adx || Number(v.adx_thresh) === Number(cfg.adx_thresh)));
+    }
+    function _isScComboLive(cfg) {
+        const v = _liveConfigs.sc;
+        return !!v && v.interval === cfg.interval &&
+            Number(v.candle_index) === Number(cfg.candle_index) &&
+            Number(v.rr_ratio)     === Number(cfg.rr_ratio) &&
+            v.direction === cfg.direction;
+    }
+
+    // Backtest-form selection → LIVE flag next to the strategy picker.
+    function updateLiveFlagBadge() {
+        const badge = document.getElementById('liveFlagBadge');
+        if (!badge) return;
+        const strat = document.getElementById('strategySelect')?.value || 'rtp';
+        let live = false;
+        if (strat === 'rtp') {
+            live = _isRtpComboLive({
+                interval:   document.getElementById('interval')?.value,
+                entry_mode: document.getElementById('rtpEntryMode')?.value || 'RTP(20 & 9)',
+                sl_points:  parseFloat(document.getElementById('rtpSL')?.value || 30),
+                tgt_points: parseFloat(document.getElementById('rtpTarget')?.value || 90),
+                use_adx:    document.getElementById('rtpUseAdx')?.checked ?? false,
+                adx_thresh: parseFloat(document.getElementById('rtpAdxThresh')?.value || 25),
+            });
+        } else if (strat === 'second_candle') {
+            live = _isScComboLive({
+                interval:     document.getElementById('interval')?.value,
+                candle_index: parseInt(document.getElementById('scCandleIndex')?.value || 2),
+                rr_ratio:     parseFloat(document.getElementById('scRrRatio')?.value || 3),
+                direction:    document.getElementById('scDirection')?.value || 'both',
+            });
+        }
+        badge.style.display = live ? '' : 'none';
+    }
+
+    async function refreshLiveConfigs() {
+        try {
+            const resp = await fetch('/api/algo/live-configs');
+            const data = await resp.json();
+            if (data && data.success) {
+                _liveConfigs = { rtp: data.rtp || [], sc: data.second_candle || null };
+                // Re-badge anything already rendered
+                Object.keys(_optGroupsByTf).forEach(tf => _renderTfBody(tf));
+                Object.keys(_scOptGroupsByTf).forEach(tf => _renderScTfBody(tf));
+                updateLiveFlagBadge();
+            }
+        } catch (e) {
+            console.warn('live-configs fetch failed:', e);
+        }
+    }
+    refreshLiveConfigs();
+    ['strategySelect', 'interval', 'rtpEntryMode', 'rtpSL', 'rtpTarget', 'rtpUseAdx',
+     'rtpAdxThresh', 'scCandleIndex', 'scRrRatio', 'scDirection'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', updateLiveFlagBadge);
+    });
+
     // Initialize dates (default to Jan 1st 2017)
     const today = new Date();
 
@@ -1009,6 +1079,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // field the column sorts on; `fmt(r)` renders the cell.
     const OPT_COLS = [
         { label: '#',             key: null,            fmt: (r, i) => i + 1 },
+        { label: 'Live',          key: null,            fmt: r => _isRtpComboLive(r) ? LIVE_BADGE_HTML : '<span class="opt-live-off">—</span>' },
         { label: 'Mode',          key: 'entry_mode',    fmt: r => `<span style="white-space:nowrap">${r.entry_mode}</span>` },
         { label: 'SL',            key: 'sl_points',     fmt: r => r.sl_points },
         { label: 'Target',        key: 'tgt_points',    fmt: r => r.tgt_points },
@@ -1083,6 +1154,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const container = document.getElementById('rtpOptGrids');
         const metaEl    = document.getElementById('optMeta');
         const recalcBtn = document.getElementById('recalculateOptBtn');
+
+        refreshLiveConfigs();   // re-badge rows against the current live algos
 
         if (metaEl) {
             let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
@@ -1393,6 +1466,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // 2nd-candle params). `key` (when set) is the field the column sorts on.
     const SC_OPT_COLS = [
         { label: '#',             key: null,            fmt: (r, i) => i + 1 },
+        { label: 'Live',          key: null,            fmt: r => _isScComboLive(r) ? LIVE_BADGE_HTML : '<span class="opt-live-off">—</span>' },
         { label: 'Candle',        key: 'candle_index',  fmt: r => r.candle_index },
         { label: 'Dir',           key: 'direction',     fmt: r => `<span style="white-space:nowrap">${r.direction}</span>` },
         { label: 'SL:Target',     key: 'rr_ratio',      fmt: r => `1:${r.rr_ratio}` },
@@ -1462,6 +1536,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const container = document.getElementById('scOptGrids');
         const metaEl    = document.getElementById('scOptMeta');
         const recalcBtn = document.getElementById('scRecalcOptBtn');
+
+        refreshLiveConfigs();   // re-badge rows against the current live algos
 
         if (metaEl) {
             let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
