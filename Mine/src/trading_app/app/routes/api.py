@@ -5739,17 +5739,19 @@ def algo_rtp_history() -> EndpointResponse:
 def algo_rtp_history_delete() -> EndpointResponse:
     """Delete a trade record by entry_time from both daily and all-time history files."""
     try:
-        data = request.get_json(silent=True) or {}
+        data       = request.get_json(silent=True) or {}
         entry_time = data.get('entry_time')
-        if not entry_time:
-            return jsonify({'success': False, 'error': 'entry_time required'}), 400
+        delete_all = bool(data.get('all'))
+        if not entry_time and not delete_all:
+            return jsonify({'success': False, 'error': 'entry_time or all:true required'}), 400
 
         for path in [_RTP_HISTORY_PATH, _RTP_ALL_HISTORY_PATH]:
             try:
                 with open(path, 'r') as _f:
                     records = json.load(_f)
                 if isinstance(records, list):
-                    records = [r for r in records if r.get('entry_time') != entry_time]
+                    records = [] if delete_all else \
+                        [r for r in records if r.get('entry_time') != entry_time]
                     with open(path, 'w') as _f:
                         json.dump(records, _f, indent=2, default=str)
             except Exception:
@@ -5922,17 +5924,19 @@ def algo_rtp30s_history() -> EndpointResponse:
 def algo_rtp30s_history_delete() -> EndpointResponse:
     """Delete a trade record by entry_time from both daily and all-time 30s history files."""
     try:
-        data = request.get_json(silent=True) or {}
+        data       = request.get_json(silent=True) or {}
         entry_time = data.get('entry_time')
-        if not entry_time:
-            return jsonify({'success': False, 'error': 'entry_time required'}), 400
+        delete_all = bool(data.get('all'))
+        if not entry_time and not delete_all:
+            return jsonify({'success': False, 'error': 'entry_time or all:true required'}), 400
 
         for path in [_RTP30S_HISTORY_PATH, _RTP30S_ALL_HISTORY_PATH]:
             try:
                 with open(path, 'r') as _f:
                     records = json.load(_f)
                 if isinstance(records, list):
-                    records = [r for r in records if r.get('entry_time') != entry_time]
+                    records = [] if delete_all else \
+                        [r for r in records if r.get('entry_time') != entry_time]
                     with open(path, 'w') as _f:
                         json.dump(records, _f, indent=2, default=str)
             except Exception:
@@ -6105,17 +6109,19 @@ def algo_rtp3m_history() -> EndpointResponse:
 def algo_rtp3m_history_delete() -> EndpointResponse:
     """Delete a trade record by entry_time from both daily and all-time 3m history files."""
     try:
-        data = request.get_json(silent=True) or {}
+        data       = request.get_json(silent=True) or {}
         entry_time = data.get('entry_time')
-        if not entry_time:
-            return jsonify({'success': False, 'error': 'entry_time required'}), 400
+        delete_all = bool(data.get('all'))
+        if not entry_time and not delete_all:
+            return jsonify({'success': False, 'error': 'entry_time or all:true required'}), 400
 
         for path in [_RTP3M_HISTORY_PATH, _RTP3M_ALL_HISTORY_PATH]:
             try:
                 with open(path, 'r') as _f:
                     records = json.load(_f)
                 if isinstance(records, list):
-                    records = [r for r in records if r.get('entry_time') != entry_time]
+                    records = [] if delete_all else \
+                        [r for r in records if r.get('entry_time') != entry_time]
                     with open(path, 'w') as _f:
                         json.dump(records, _f, indent=2, default=str)
             except Exception:
@@ -6288,17 +6294,19 @@ def algo_rtp5m_history() -> EndpointResponse:
 def algo_rtp5m_history_delete() -> EndpointResponse:
     """Delete a trade record by entry_time from both daily and all-time 5m history files."""
     try:
-        data = request.get_json(silent=True) or {}
+        data       = request.get_json(silent=True) or {}
         entry_time = data.get('entry_time')
-        if not entry_time:
-            return jsonify({'success': False, 'error': 'entry_time required'}), 400
+        delete_all = bool(data.get('all'))
+        if not entry_time and not delete_all:
+            return jsonify({'success': False, 'error': 'entry_time or all:true required'}), 400
 
         for path in [_RTP5M_HISTORY_PATH, _RTP5M_ALL_HISTORY_PATH]:
             try:
                 with open(path, 'r') as _f:
                     records = json.load(_f)
                 if isinstance(records, list):
-                    records = [r for r in records if r.get('entry_time') != entry_time]
+                    records = [] if delete_all else \
+                        [r for r in records if r.get('entry_time') != entry_time]
                     with open(path, 'w') as _f:
                         json.dump(records, _f, indent=2, default=str)
             except Exception:
@@ -6469,17 +6477,19 @@ def algo_sc_history() -> EndpointResponse:
 def algo_sc_history_delete() -> EndpointResponse:
     """Delete a 2nd-candle trade record by entry_time from both history files."""
     try:
-        data = request.get_json(silent=True) or {}
+        data       = request.get_json(silent=True) or {}
         entry_time = data.get('entry_time')
-        if not entry_time:
-            return jsonify({'success': False, 'error': 'entry_time required'}), 400
+        delete_all = bool(data.get('all'))
+        if not entry_time and not delete_all:
+            return jsonify({'success': False, 'error': 'entry_time or all:true required'}), 400
 
         for path in [_SC_HISTORY_PATH, _SC_ALL_HISTORY_PATH]:
             try:
                 with open(path, 'r') as _f:
                     records = json.load(_f)
                 if isinstance(records, list):
-                    records = [r for r in records if r.get('entry_time') != entry_time]
+                    records = [] if delete_all else \
+                        [r for r in records if r.get('entry_time') != entry_time]
                     with open(path, 'w') as _f:
                         json.dump(records, _f, indent=2, default=str)
             except Exception:

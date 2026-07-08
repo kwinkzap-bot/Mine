@@ -1957,3 +1957,19 @@ body.ocean-theme .sm-gl-overlay {
     font-weight: 700;
     color: var(--ag-pos);
 }
+
+/* ── Delete-All history button (card header) ─────────────────── */
+.ag-hist-delall-btn {
+    background: none;
+    border: 1px solid rgba(220, 38, 38, 0.35);
+    color: var(--ag-neg);
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 5px;
+    white-space: nowrap;
+    opacity: 0.75;
+    transition: opacity .15s, background .15s;
+}
+.ag-hist-delall-btn:hover { opacity: 1; background: rgba(220, 38, 38, 0.12); }

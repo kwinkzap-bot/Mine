@@ -807,6 +807,22 @@ function _rtpFmtReason(reason) {
 
 // ── RTP Delete History Record ─────────────────────────────────────────────────
 
+function _rtpDeleteAllTrades() {
+    if (!confirm('Delete ALL EMA RTP 1m trade history records? This clears the entire Executed Trade History and cannot be undone.')) return;
+    fetch('/api/algo/rtp/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ all: true }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_rtpHistoryTimer);
+            _rtpFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
 function _rtpDeleteTrade(entryTime) {
     if (!confirm('Delete this trade record? This cannot be undone.')) return;
     fetch('/api/algo/rtp/history', {
@@ -1436,6 +1452,22 @@ function _rtp30sFmtReason(reason) {
 }
 
 // ── RTP Delete History Record ─────────────────────────────────────────────────
+
+function _rtp30sDeleteAllTrades() {
+    if (!confirm('Delete ALL EMA RTP 30s trade history records? This clears the entire Executed Trade History and cannot be undone.')) return;
+    fetch('/api/algo/rtp30s/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ all: true }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_rtp30sHistoryTimer);
+            _rtp30sFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
 
 function _rtp30sDeleteTrade(entryTime) {
     if (!confirm('Delete this trade record? This cannot be undone.')) return;
@@ -2068,6 +2100,22 @@ function _rtp3mFmtReason(reason) {
 
 // ── RTP Delete History Record ─────────────────────────────────────────────────
 
+function _rtp3mDeleteAllTrades() {
+    if (!confirm('Delete ALL EMA RTP 3m trade history records? This clears the entire Executed Trade History and cannot be undone.')) return;
+    fetch('/api/algo/rtp3m/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ all: true }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_rtp3mHistoryTimer);
+            _rtp3mFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
 function _rtp3mDeleteTrade(entryTime) {
     if (!confirm('Delete this trade record? This cannot be undone.')) return;
     fetch('/api/algo/rtp3m/history', {
@@ -2699,6 +2747,22 @@ function _rtp5mFmtReason(reason) {
 
 // ── RTP Delete History Record ─────────────────────────────────────────────────
 
+function _rtp5mDeleteAllTrades() {
+    if (!confirm('Delete ALL EMA RTP 5m trade history records? This clears the entire Executed Trade History and cannot be undone.')) return;
+    fetch('/api/algo/rtp5m/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ all: true }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_rtp5mHistoryTimer);
+            _rtp5mFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
 function _rtp5mDeleteTrade(entryTime) {
     if (!confirm('Delete this trade record? This cannot be undone.')) return;
     fetch('/api/algo/rtp5m/history', {
@@ -3298,6 +3362,22 @@ function _scRenderBreakdown(trades, period) {
 }
 
 // ── SC actions ────────────────────────────────────────────────────────────────
+
+function _scDeleteAllTrades() {
+    if (!confirm('Delete ALL 2nd 30s Candle trade history records? This clears the entire Executed Trade History and cannot be undone.')) return;
+    fetch('/api/algo/sc/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ all: true }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_scHistoryTimer);
+            _scFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
 
 function _scDeleteTrade(entryTime) {
     if (!confirm('Delete this trade record? This cannot be undone.')) return;
