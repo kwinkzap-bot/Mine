@@ -64,6 +64,10 @@ class SecondCandleBacktestEngine:
                 self.df = self.df.set_index('datetime')
             self.df.index = pd.to_datetime(self.df.index)
         self.df = self.df.sort_index()
+        # Guard against duplicate bars (Fyers can return the current day's
+        # candles twice) — a duplicated first bar would silently become the
+        # "2nd candle" and corrupt the breakout range.
+        self.df = self.df[~self.df.index.duplicated(keep='last')]
         self.df.columns = [c.lower() for c in self.df.columns]
 
     # ── Array prep (shared by run + optimiser) ─────────────────────────────────

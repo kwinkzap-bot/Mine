@@ -768,6 +768,15 @@ class FyersDataServiceAdapter:
                 
                 logger.debug(f"[FyersAdapter] Successfully parsed {len(response.get('candles', []))} candles for {instrument_token}")
             
+            # Fyers sometimes returns the current day's candles twice in one
+            # response — dedupe by timestamp (keep the last occurrence, the
+            # freshest for an in-progress bar) and keep chronological order.
+            if all_candles:
+                deduped: Dict[Any, Dict[str, Any]] = {}
+                for entry in all_candles:
+                    deduped[entry['date']] = entry
+                all_candles = [deduped[k] for k in sorted(deduped.keys())]
+
             # Save to cache
             if all_candles:
                 with _FYERS_HIST_LOCK:

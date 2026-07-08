@@ -185,10 +185,16 @@ class RTPBacktestEngine:
             df['bull_stack'] = (df['ema50'] < df['ema20']) & (df['ema20'] < df['ema9'])
             df['bear_stack'] = (df['ema50'] > df['ema20']) & (df['ema20'] > df['ema9'])
 
-        # ── Session filter (9:20 AM – 3:28 PM IST)
+        # ── Session filter (9:20 AM onwards; interval-aware close cutoff)
+        # A signal bar opening at minute M completes at M + interval_minutes, and
+        # the live algo stops checking at 3:28 — so the last actionable signal bar
+        # is the one that COMPLETES by 3:27. Allowing signal bars stamped up to
+        # :28 regardless of interval let the backtest take late trades (and, on
+        # 3m/5m, enter at the NEXT DAY's open) that live can never take.
         h, m = df['_hour'], df['_min']
         after_open    = (h > 9) | ((h == 9)  & (m >= 20))
-        before_cutoff = (h < 15) | ((h == 15) & (m <= 28))
+        last_sig_min  = 27 - self.interval_minutes
+        before_cutoff = (h < 15) | ((h == 15) & (m <= last_sig_min))
         df['session_ok'] = after_open & before_cutoff
 
         # ── Candlestick patterns
@@ -337,8 +343,13 @@ class RTPBacktestEngine:
                            else (entry_price + self.sl_points)
 
             for j in range(i + 1, n):
-                # Force-close at 3:28 PM or on next day (no overnight holds)
-                eod_cutoff = (hour[j] == 15 and minute[j] >= 28) or hour[j] > 15
+                # Force-close on the last bar that completes by ~3:28 PM, or on
+                # the next day as a safety net. A bar opening at minute M spans
+                # M..M+interval, so waiting for a bar stamped >= :28 on 3m/5m
+                # grids (last bars 15:27 / 15:25) skipped to the NEXT DAY and
+                # held overnight — the live algo hard-squares-off at 3:28.
+                eod_cutoff = (hour[j] == 15 and minute[j] + self.interval_minutes > 28) \
+                             or hour[j] > 15
                 if date_list[j] != entry_date or eod_cutoff:
                     exit_price  = cl[j]
                     exit_time   = dt_list[j]

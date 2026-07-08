@@ -8,8 +8,8 @@ Multiple re-entries allowed per day. Auto-started at 9:15 AM by the scheduler.
 
 Timeframe variants share this identical logic (see RTP_VARIANTS):
   '1m'  — 1-minute candles,  SL 30 / Target 90, ADX off
-  '30s' — 30-second candles, SL 25 / Target 75, ADX on @ 30
-  '3m'  — 3-minute candles,  SL 30 / Target 90, ADX off
+  '30s' — 30-second candles, SL 25 / Target 75, ADX off
+  '3m'  — 3-minute candles,  SL 30 / Target 90, ADX on @ 25
   '5m'  — 5-minute candles,  SL 30 / Target 90, ADX off
 
 Per-user env vars (VAR is 'RTP_1M' for 1m, 'RTP_30S' for 30s, etc.):
@@ -41,6 +41,10 @@ _SLOPE_BARS     = 8
 _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
 _WARMUP_BARS    = 200  # Must match backtest warmup — EMA50 needs ~200 bars to converge
 _LOOKBACK_DAYS  = 5    # Calendar days to look back for warmup candles (covers weekends/holidays)
+# Coarser intervals produce far fewer bars/day (5m: ~75 vs 1m: ~375), so they need a
+# longer lookback to clear the 200-bar warmup gate even across holiday weekends and
+# to converge EMAs close to the backtest's long history.
+_LOOKBACK_DAYS_BY_INTERVAL = {'30second': 5, 'minute': 5, '3minute': 9, '5minute': 14}
 _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute of data gap)
 _FALLBACK_IV    = 0.15  # assumed annual IV when ATM IV cannot be computed (NIFTY typical range 13–18%)
 _RECONCILE_SECS = 25   # how often to reconcile active_trade against real broker positions
@@ -95,8 +99,8 @@ RTP_VARIANTS: Dict[str, RTPVariant] = {
         interval='30second',
         sl_points=25.0,
         tgt_points=75.0,
-        use_adx=True,
-        adx_thresh=30.0,
+        use_adx=False,
+        adx_thresh=20.0,
         state_file=os.path.join(_DIR, 'rtp_state_30s.json'),
         history_file=os.path.join(_DIR, 'rtp_trades_history_30s.json'),
         all_history_file=os.path.join(_DIR, 'rtp_trades_all_history_30s.json'),
@@ -110,7 +114,7 @@ RTP_VARIANTS: Dict[str, RTPVariant] = {
         interval='3minute',
         sl_points=30.0,
         tgt_points=90.0,
-        use_adx=False,
+        use_adx=True,
         adx_thresh=25.0,
         state_file=os.path.join(_DIR, 'rtp_state_3m.json'),
         history_file=os.path.join(_DIR, 'rtp_trades_history_3m.json'),
@@ -201,7 +205,17 @@ class RTPAlgo:
         self._expiry: Optional[date] = None
         self._lot_size: int = 75
         self._spot_fail_count: int = 0
-        self._bar_td = pd.Timedelta(seconds=_INTERVAL_SECS.get(self.cfg.interval, 60))
+        self._bar_secs = _INTERVAL_SECS.get(self.cfg.interval, 60)
+        self._bar_td = pd.Timedelta(seconds=self._bar_secs)
+        # Signal/exit checks run once per bucket: every 30s for the 30s variant
+        # (a bar completing at :30 must be acted on immediately), else per minute.
+        self._check_secs = min(self._bar_secs, 60)
+        # Engine session/EOD rules are interval-aware — must match the live bars.
+        self._engine_interval_min = max(1, self._bar_secs // 60)
+        self._lookback_days = _LOOKBACK_DAYS_BY_INTERVAL.get(self.cfg.interval, _LOOKBACK_DAYS)
+        # Last bar consumed by _replay_today_needs_reset — the monitor loop starts
+        # _check_rtp_signal from the bar after it (no gap, no double-processing).
+        self._replay_last_bar_dt: Optional[pd.Timestamp] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -369,7 +383,7 @@ class RTPAlgo:
         """
         try:
             today     = date.today()
-            from_date = (today - timedelta(days=_LOOKBACK_DAYS)).strftime('%Y-%m-%d')
+            from_date = (today - timedelta(days=self._lookback_days)).strftime('%Y-%m-%d')
             candles   = provider.historical_data(
                 instrument_token=_NIFTY_FYERS,
                 from_date=from_date,
@@ -411,7 +425,7 @@ class RTPAlgo:
             engine = RTPBacktestEngine(
                 df=df,
                 entry_mode='RTP(20 & 9)',
-                interval_minutes=1,
+                interval_minutes=self._engine_interval_min,
                 slope_bars=_SLOPE_BARS,
                 use_adx=self.cfg.use_adx,
                 adx_thresh=self.cfg.adx_thresh,
@@ -957,8 +971,8 @@ class RTPAlgo:
             self.log.error(f"No delta strike found for {opt_type} near spot={spot}")
             return
 
-        sl_level  = round(spot - self.cfg.sl_points,  1) if direction == 'BUY' else round(spot + self.cfg.sl_points,  1)
-        tgt_level = round(spot + self.cfg.tgt_points, 1) if direction == 'BUY' else round(spot - self.cfg.tgt_points, 1)
+        sl_level  = round(spot - self.cfg.sl_points,  2) if direction == 'BUY' else round(spot + self.cfg.sl_points,  2)
+        tgt_level = round(spot + self.cfg.tgt_points, 2) if direction == 'BUY' else round(spot - self.cfg.tgt_points, 2)
         fyers_sym = inst.get('instrument_token', '')
         kite_ts   = inst.get('tradingsymbol', '')
 
@@ -1205,10 +1219,17 @@ class RTPAlgo:
     # ── needs_reset replay ────────────────────────────────────────────────────
 
     def _replay_today_needs_reset(self, provider: Any) -> Tuple[bool, bool]:
-        """Re-derive buy/sell_needs_reset by replaying today's bars, skipping bars
-        that fall inside already-completed trades. Mirrors the backtest's bar-by-bar
-        tracking so mid-day restarts don't get stuck with a stale True flag.
+        """Re-derive buy/sell_needs_reset by replaying every completed bar in the
+        lookback window — not just today's. The backtest engine carries these flags
+        across day boundaries (Pine `var bool` semantics) and never processes bars
+        inside its own trades (it jumps to the bar after each exit), so the replay
+        must do the same or live signals drift from the backtest.
+
+        Records the last replayed bar in self._replay_last_bar_dt so the monitor
+        loop can start _check_rtp_signal exactly one bar later — no gap, no
+        double-processing.
         """
+        self._replay_last_bar_dt = None
         try:
             df = self._fetch_1min_candles(provider)
             if df is None or df.empty:
@@ -1218,7 +1239,7 @@ class RTPAlgo:
             engine = RTPBacktestEngine(
                 df=df,
                 entry_mode='RTP(20 & 9)',
-                interval_minutes=1,
+                interval_minutes=self._engine_interval_min,
                 slope_bars=_SLOPE_BARS,
                 use_adx=self.cfg.use_adx,
                 adx_thresh=self.cfg.adx_thresh,
@@ -1227,28 +1248,23 @@ class RTPAlgo:
             )
             processed = engine.df
 
-            today = date.today()
-            today_bars = processed[processed['datetime'].dt.date == today].copy()
-            if today_bars.empty:
-                return False, False
-
-            # Build trade-period exclusion list from today's closed trade history
+            # Trade-period exclusions from recorded history — any day inside the
+            # lookback window, since the replay now spans multiple days. Entry
+            # timestamps are floored to the bar grid so the entry bar itself is
+            # excluded (live entries happen seconds after the entry bar opens).
             trade_periods: List[Tuple] = []
             try:
                 with open(self.cfg.history_file, 'r') as _f:
                     history = json.load(_f)
-                today_str = today.isoformat()
                 _IST = 'Asia/Kolkata'
                 for t in history:
-                    if t.get('date') != today_str:
-                        continue
                     try:
                         _e = pd.Timestamp(t['entry_time'])
                         _x = pd.Timestamp(t['exit_time'])
                         # Localize to IST so comparison with IST-aware bar_dt works
                         e = _e.tz_localize(_IST) if _e.tzinfo is None else _e.tz_convert(_IST)
                         x = _x.tz_localize(_IST) if _x.tzinfo is None else _x.tz_convert(_IST)
-                        trade_periods.append((e, x))
+                        trade_periods.append((e.floor(self._bar_td), x))
                     except Exception:
                         pass
             except Exception:
@@ -1257,20 +1273,28 @@ class RTPAlgo:
             buy_needs_reset  = False
             sell_needs_reset = False
 
-            # Use the same completed-bar cutoff as _check_rtp_signal:
-            # a bar is completed only once open_time + bar duration <= now.
-            # Then further exclude the LAST completed bar so _check_rtp_signal
-            # can process it fresh — if we replay the signal bar and set
-            # buy/sell_needs_reset=True here, _check_rtp_signal won't fire on it.
-            now_ist    = pd.Timestamp.now(tz='Asia/Kolkata')
-            completed  = today_bars[today_bars['datetime'] + self._bar_td <= now_ist]
-            replay_bars = completed.iloc[:-1] if len(completed) > 1 else completed.iloc[:0]
+            # Completed-bar cutoff (same rule as _check_rtp_signal), then exclude
+            # the LAST completed bar so _check_rtp_signal can process it fresh —
+            # if we replayed the signal bar and set buy/sell_needs_reset=True
+            # here, _check_rtp_signal wouldn't fire on it. Skip the engine's
+            # warmup: it starts flag/signal tracking at bar _WARMUP_BARS, and the
+            # flags must evolve from the same starting bar to match.
+            now_ist     = pd.Timestamp.now(tz='Asia/Kolkata')
+            completed   = processed[processed['datetime'] + self._bar_td <= now_ist]
+            replay_bars = completed.iloc[_WARMUP_BARS:-1] \
+                          if len(completed) > _WARMUP_BARS + 1 else completed.iloc[:0]
 
             for _, row in replay_bars.iterrows():
                 bar_dt = row['datetime']
 
-                # Needs-reset clears on ALL bars (the backtest's sequential loop
-                # does not gate this on session_ok, so neither should we here).
+                # Bars inside a recorded trade are skipped entirely — no signal
+                # check AND no needs-reset clears — mirroring the engine's jump
+                # to the bar after each exit.
+                if any(e <= bar_dt <= x for e, x in trade_periods):
+                    continue
+
+                # Needs-reset clears on ALL remaining bars (the backtest's
+                # sequential loop does not gate this on session_ok).
                 if sell_needs_reset and row['high'] < min(row['ema9'], row['ema20']):
                     sell_needs_reset = False
                 if buy_needs_reset and row['low'] > max(row['ema9'], row['ema20']):
@@ -1278,10 +1302,6 @@ class RTPAlgo:
 
                 if not row.get('session_ok', False):
                     continue  # skip signal check; reset updates above still ran
-
-                # Skip bars that occurred inside a past trade (mirrors backtest skip)
-                if any(e <= bar_dt <= x for e, x in trade_periods):
-                    continue
 
                 buy_sig  = bool(row['rway_up'] and row['bull_stack'] and
                                 row['buy_touch'] and row['buy_pat'] and not buy_needs_reset)
@@ -1291,6 +1311,9 @@ class RTPAlgo:
                     buy_needs_reset = True
                 if sell_sig:
                     sell_needs_reset = True
+
+            if len(replay_bars) > 0:
+                self._replay_last_bar_dt = replay_bars.iloc[-1]['datetime']
 
             self.log.info(
                 f"needs_reset replayed — buy={buy_needs_reset} sell={sell_needs_reset}"
@@ -1341,25 +1364,17 @@ class RTPAlgo:
             self._save_state(state)
 
         if not state.get('active_trade'):
-            now = datetime.now()
-            if now.hour < 9 or (now.hour == 9 and now.minute < 20):
-                # True day start: clear both flags unconditionally
-                state['buy_needs_reset']  = False
-                state['sell_needs_reset'] = False
-                self._save_state(state)
-                self.log.info("buy/sell_needs_reset cleared for new trading day")
-            else:
-                # Mid-day restart (watchdog / server recovery):
-                # replay today's bars so we don't lose a reset that happened
-                # while the thread was down, and don't falsely clear a live flag.
-                buy_nr, sell_nr = self._replay_today_needs_reset(provider)
-                state['buy_needs_reset']  = buy_nr
-                state['sell_needs_reset'] = sell_nr
-                self._save_state(state)
-                self.log.info(
-                    f"Mid-day restart — replayed needs_reset:"
-                    f" buy={buy_nr} sell={sell_nr}"
-                )
+            # Seed needs_reset by replaying the lookback window. The backtest
+            # carries these flags across days (Pine `var bool` semantics), so a
+            # fresh morning must NOT blindly clear them — a railway-track trend
+            # still running from yesterday keeps suppressing signals in the
+            # backtest until price closes back across the EMAs. The same replay
+            # also covers mid-day restarts (watchdog / server recovery).
+            buy_nr, sell_nr = self._replay_today_needs_reset(provider)
+            state['buy_needs_reset']  = buy_nr
+            state['sell_needs_reset'] = sell_nr
+            self._save_state(state)
+            self.log.info(f"needs_reset seeded from replay: buy={buy_nr} sell={sell_nr}")
 
         # Cache broker services once — avoids repeated session re-initialisation per trade
         self.log.info("Initialising broker services...")
@@ -1391,7 +1406,8 @@ class RTPAlgo:
             self.log.info("Monitor loop stopped during instrument fetch")
             return
 
-        # last_signal_minute: throttles the candle fetch to once per minute.
+        # last_signal_bucket: throttles the candle fetch to once per check bucket
+        #   (30s for the 30s variant, once per minute otherwise).
         # last_checked_bar_dt: tracks the datetime of the last bar we checked for
         #   a signal. On every fetch we process ALL bars after this pointer (not
         #   just the single last bar). This handles the Fyers historical-data API
@@ -1399,8 +1415,11 @@ class RTPAlgo:
         #   the time we notice it, and would be missed by a last-bar-only scan.
         #   After a trade exits, we reset this to the current IST minute so that
         #   bars during the trade period are not re-evaluated as new signals.
-        last_signal_minute:      Optional[int]            = None
-        last_checked_bar_dt:     Optional[pd.Timestamp]  = None
+        last_signal_bucket:      Optional[int]            = None
+        # Start signal checks from the bar right after the replay's last bar —
+        # this way pre-9:20 bars (and yesterday's tail) still get their
+        # needs-reset clears processed instead of being skipped.
+        last_checked_bar_dt:     Optional[pd.Timestamp]  = self._replay_last_bar_dt
         last_exit_candle_minute: int                     = -1
         last_exit_candle_dt:     Optional[pd.Timestamp]  = None
         tracked_trade_entry_time: Optional[str]          = None
@@ -1461,17 +1480,17 @@ class RTPAlgo:
                                 self._exit_trade('SL', spot)
                                 # Advance bar pointer to now so post-trade signal
                                 # check starts fresh (not from pre-entry bars).
-                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
+                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor(self._bar_td)
                             elif spot >= tgt_level:
                                 self._exit_trade('TARGET', spot)
-                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
+                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor(self._bar_td)
                         else:  # SELL direction → PE bought
                             if spot >= sl_level:
                                 self._exit_trade('SL', spot)
-                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
+                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor(self._bar_td)
                             elif spot <= tgt_level:
                                 self._exit_trade('TARGET', spot)
-                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
+                                last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor(self._bar_td)
                     else:
                         self._spot_fail_count += 1
                         if self._spot_fail_count >= _MAX_SPOT_FAILS:
@@ -1485,8 +1504,9 @@ class RTPAlgo:
                     # the price dips and recovers between polls.  Checking the completed
                     # 1-min candle's high/low once per minute mirrors the backtest
                     # exactly (backtest exits on c['low'] <= SL or c['high'] >= Target).
-                    if m != last_exit_candle_minute:
-                        last_exit_candle_minute = m
+                    _xbucket = int(time.time() // self._check_secs)
+                    if _xbucket != last_exit_candle_minute:
+                        last_exit_candle_minute = _xbucket
                         # Re-read state: the spot check above may have already exited.
                         _cs = self._load_state()
                         if _cs.get('active_trade'):
@@ -1528,7 +1548,11 @@ class RTPAlgo:
                                                         f"{_c['datetime']} low={_c['low']} <= sl={_sl}"
                                                     )
                                                     self._exit_trade('SL', _sl)
-                                                    last_checked_bar_dt = _now_ist
+                                                    # Resume signal scanning at the bar AFTER the
+                                                    # exit bar — exactly like the engine's
+                                                    # exit_idx + 1 (not "now", which could skip a
+                                                    # completed-but-unchecked bar).
+                                                    last_checked_bar_dt = _c['datetime']
                                                     break
                                                 if _c['high'] >= _tgt:
                                                     self.log.info(
@@ -1536,7 +1560,11 @@ class RTPAlgo:
                                                         f"{_c['datetime']} high={_c['high']} >= tgt={_tgt}"
                                                     )
                                                     self._exit_trade('TARGET', _tgt)
-                                                    last_checked_bar_dt = _now_ist
+                                                    # Resume signal scanning at the bar AFTER the
+                                                    # exit bar — exactly like the engine's
+                                                    # exit_idx + 1 (not "now", which could skip a
+                                                    # completed-but-unchecked bar).
+                                                    last_checked_bar_dt = _c['datetime']
                                                     break
                                             else:
                                                 if _c['high'] >= _sl:
@@ -1545,7 +1573,11 @@ class RTPAlgo:
                                                         f"{_c['datetime']} high={_c['high']} >= sl={_sl}"
                                                     )
                                                     self._exit_trade('SL', _sl)
-                                                    last_checked_bar_dt = _now_ist
+                                                    # Resume signal scanning at the bar AFTER the
+                                                    # exit bar — exactly like the engine's
+                                                    # exit_idx + 1 (not "now", which could skip a
+                                                    # completed-but-unchecked bar).
+                                                    last_checked_bar_dt = _c['datetime']
                                                     break
                                                 if _c['low'] <= _tgt:
                                                     self.log.info(
@@ -1553,7 +1585,11 @@ class RTPAlgo:
                                                         f"{_c['datetime']} low={_c['low']} <= tgt={_tgt}"
                                                     )
                                                     self._exit_trade('TARGET', _tgt)
-                                                    last_checked_bar_dt = _now_ist
+                                                    # Resume signal scanning at the bar AFTER the
+                                                    # exit bar — exactly like the engine's
+                                                    # exit_idx + 1 (not "now", which could skip a
+                                                    # completed-but-unchecked bar).
+                                                    last_checked_bar_dt = _c['datetime']
                                                     break
                             except Exception as _ce:
                                 self.log.warning(f"Candle exit check error: {_ce}")
@@ -1578,7 +1614,7 @@ class RTPAlgo:
                             )
                             _spot_now = self._get_nifty_spot(provider) or 0.0
                             self._exit_trade('BROKER_CLOSED', _spot_now, square_off=False)
-                            last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor('min')
+                            last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor(self._bar_td)
 
                 else:
                     # ── Runtime kill-switch — only blocks new signal entries
@@ -1586,13 +1622,15 @@ class RTPAlgo:
                         time.sleep(5)
                         continue
 
-                    # ── No trade → check for signal once per new minute.
-                    # Uses m != last_signal_minute (not s == 0) so that a slow
-                    # network call at second 0 never causes the whole minute to be
-                    # skipped.  Within the check we scan ALL bars since
-                    # last_checked_bar_dt, not just the newest one.
-                    if m != last_signal_minute:
-                        last_signal_minute = m
+                    # ── No trade → check for signal once per check bucket (30s
+                    # for the 30s variant so a bar completing at :30 is acted on
+                    # immediately, else once per minute). Bucketing on wall-clock
+                    # (not s == 0) means a slow network call never causes a whole
+                    # bucket to be skipped. Within the check we scan ALL bars
+                    # since last_checked_bar_dt, not just the newest one.
+                    _bucket = int(time.time() // self._check_secs)
+                    if _bucket != last_signal_bucket:
+                        last_signal_bucket = _bucket
                         df = self._fetch_1min_candles(provider)
                         if df is not None and len(df) >= _WARMUP_BARS:
                             signal, state, last_checked_bar_dt, sig_bar_close = \
