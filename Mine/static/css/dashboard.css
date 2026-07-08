@@ -132,10 +132,10 @@
     .form-row-5,.form-row-6,.form-row-7 { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 600px) {
-    .bt-left, .bt-right { padding: 12px; }
-    .bt-right .results-row-6, .bt-right .results-row-5 { grid-template-columns: repeat(2, 1fr); }
+    .bt-left, .bt-right { padding: 8px 10px; }
+    .bt-right .results-row-6, .bt-right .results-row-5 { grid-template-columns: repeat(3, 1fr); }
     .form-row-3,.form-row-4,.form-row-5,.form-row-6,.form-row-7 { grid-template-columns: repeat(2, 1fr); }
-    #btTradesSection .bt-trades-header { padding: 10px 12px 0; }
+    #btTradesSection .bt-trades-header { padding: 8px 10px 0; }
 }
 @media (max-width: 400px) {
     .bt-right .results-row-6, .bt-right .results-row-5 { grid-template-columns: repeat(2, 1fr); }
@@ -146,6 +146,20 @@
 .form-group label { font-size: 10px; font-weight: 600; color: var(--oip-metric-lbl); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 3px; }
 .form-group input, .form-group select { height: 28px; padding: 0 8px; border: 1px solid var(--oip-border); border-radius: 5px; font-size: 12px; font-weight: 500; width: 100%; box-sizing: border-box; background: var(--oip-bg); color: var(--oip-text); transition: border-color .15s; }
 .form-group input:focus, .form-group select:focus { border-color: var(--oip-accent); box-shadow: 0 0 0 2px rgba(0,0,0,.05); outline: none; }
+
+.bt-header-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.investment-display {
+    height: 42px; padding: 0 14px;
+    border: 1.5px solid #e0e0e0; border-radius: 10px;
+    font-size: 14px; font-weight: 700; letter-spacing: .3px;
+    color: #1a237e; background: #f5f7ff;
+    display: flex; align-items: center;
+}
+
+.form-check-group { flex-direction: row; align-items: center; gap: 8px; padding-top: 22px; }
+.form-check-group input[type="checkbox"] { width: 16px; height: 16px; accent-color: #2962ff; cursor: pointer; flex-shrink: 0; }
+.form-check-group label { font-size: 13px; font-weight: 600; color: #555; cursor: pointer; margin: 0; text-transform: uppercase; letter-spacing: .4px; }
 
 .btn-run { width: 100%; padding: 8px; background: var(--oip-accent); color: #fff; border: none; border-radius: 5px; cursor: pointer; font-weight: 700; font-size: 11px; transition: opacity .15s; margin-top: 4px; text-transform: uppercase; letter-spacing: .8px; }
 .btn-run:hover  { opacity: .85; }
@@ -460,6 +474,52 @@
 .symbol-item { padding: 7px 10px; cursor: pointer; border-bottom: 1px solid var(--oip-border); font-weight: 500; font-size: 12px; color: var(--oip-text); transition: background .12s; list-style: none; }
 .symbol-item:last-child { border-bottom: none; }
 .symbol-item:hover { background: var(--oip-header-bg); color: var(--oip-accent); }
+
+/* ── Backtest — compact layout on small screens ─────────────────── */
+@media (max-width: 900px) {
+    /* Header */
+    .bt-header { padding: 6px 10px; gap: 5px; }
+    .bt-header-controls { width: 100%; gap: 6px; }
+    .bt-header-controls #strategySelect { flex: 1 1 130px; min-width: 110px; height: 28px !important; font-size: 11px !important; padding: 0 24px 0 8px !important; background-position: right 7px center !important; }
+    .bt-header-controls #runBacktestBtn { padding: 6px 12px !important; font-size: 10px !important; letter-spacing: .4px !important; }
+    .bt-header-controls .btn-optimise { padding: 5px 8px; font-size: 10px; }
+    .bt-header-controls .btn-sm-golive-main { padding: 5px 9px; font-size: 10px; }
+    .bt-live-flag { padding: 2px 8px; font-size: 9px; }
+
+    /* Options / form controls */
+    .bt-left .form-row { gap: 6px 8px; margin-bottom: 6px; }
+    .bt-left .form-group label { font-size: 8.5px; letter-spacing: .3px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bt-left .form-group input, .bt-left .form-group select { height: 26px; padding: 0 6px; font-size: 11px; border-radius: 4px; }
+    .investment-display { height: 26px; padding: 0 8px; font-size: 11px; border-radius: 4px; border-width: 1px; }
+    /* Checkbox group: boxed like an input and bottom-aligned with the
+       controls on its row */
+    .form-check-group { align-self: end; height: 26px; padding: 0 8px; gap: 6px; border: 1px solid var(--oip-border); border-radius: 4px; background: var(--oip-bg); box-sizing: border-box; }
+    .form-check-group input[type="checkbox"] { width: 14px; height: 14px; }
+    .form-check-group label { font-size: 10px; }
+
+    /* Results */
+    .results-row { gap: 5px; margin-bottom: 5px; }
+    .stat-card { padding: 6px 6px 5px; border-radius: 5px; }
+    .stat-card__lbl { font-size: 8px; letter-spacing: .3px; }
+    .stat-card__val { font-size: 13px; }
+    .stat-card__sub { font-size: 8px; }
+    .equity-chart-wrap { height: 200px; }
+    .period-chart-wrap { height: 170px; }
+    .period-tab { padding: 2px 7px; font-size: 9px; }
+    .opt-header { padding: 6px 10px; }
+    #btTradesSection .trades-table th, #btTradesSection .trades-table td { padding: 5px 6px; font-size: 10px; }
+}
+/* Once the layout stacks to one column, use a fixed column count so
+   fields line up vertically across every row */
+@media (max-width: 860px) {
+    .bt-left .form-row { grid-template-columns: repeat(4, 1fr) !important; }
+}
+@media (max-width: 600px) {
+    .bt-left .form-row { grid-template-columns: repeat(3, 1fr) !important; }
+}
+@media (max-width: 400px) {
+    .bt-left .form-row { grid-template-columns: repeat(2, 1fr) !important; }
+}
 
 /* ── Historic OI — inherits --pf-* theme vars from .sw-wrap ─────── */
 

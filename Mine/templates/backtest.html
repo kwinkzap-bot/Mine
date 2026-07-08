@@ -16,7 +16,7 @@
         <div>
             <h1>Backtest Strategy</h1>
         </div>
-        <div style="display:flex;align-items:center;gap:10px;">
+        <div class="bt-header-controls">
             <span id="liveFlagBadge" class="bt-live-flag" style="display:none;" title="These params are currently running as a live algo"><span class="dot"></span>LIVE</span>
             <select id="strategySelect" style="height:32px;padding:0 30px 0 12px;font-size:13px;font-weight:600;color:var(--oip-text);border:1px solid var(--oip-border);border-radius:6px;background:var(--oip-bg);cursor:pointer;outline:none;appearance:none;background-image:url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236b7280%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C%2Fpolyline%3E%3C%2Fsvg%3E');background-repeat:no-repeat;background-position:right 10px center;transition:all .2s;">
                 <option value="rtp">RTP (Railway Track)</option>
@@ -99,9 +99,9 @@
                     <label for="rtpAdxThresh">ADX Threshold</label>
                     <input type="number" id="rtpAdxThresh" value="25" min="5" max="50" step="1">
                 </div>
-                <div class="form-group" style="display:flex;align-items:center;padding-top:22px;gap:8px;">
-                    <input type="checkbox" id="rtpUseAdx" style="width:16px;height:16px;accent-color:#2962ff;cursor:pointer;flex-shrink:0;">
-                    <label for="rtpUseAdx" style="font-size:13px;font-weight:600;color:#555;cursor:pointer;margin:0;text-transform:uppercase;letter-spacing:.4px;">ADX Filter</label>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="rtpUseAdx">
+                    <label for="rtpUseAdx">ADX Filter</label>
                 </div>
             </div>
 
@@ -117,7 +117,7 @@
                 </div>
                 <div class="form-group">
                     <label>Total Investment</label>
-                    <div id="rtpInvestmentDisplay" style="height:42px;padding:0 14px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:14px;font-weight:700;color:#1a237e;background:#f5f7ff;display:flex;align-items:center;letter-spacing:0.3px;">₹50,000</div>
+                    <div id="rtpInvestmentDisplay" class="investment-display">₹50,000</div>
                 </div>
             </div>
 
@@ -149,7 +149,7 @@
                 </div>
                 <div class="form-group">
                     <label>Total Investment</label>
-                    <div id="vwapInvestmentDisplay" style="height:42px;padding:0 14px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:14px;font-weight:700;color:#1a237e;background:#f5f7ff;display:flex;align-items:center;letter-spacing:0.3px;">₹50,000</div>
+                    <div id="vwapInvestmentDisplay" class="investment-display">₹50,000</div>
                 </div>
             </div>
 
@@ -197,7 +197,7 @@
                 </div>
                 <div class="form-group">
                     <label>Total Investment</label>
-                    <div id="scInvestmentDisplay" style="height:42px;padding:0 14px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:14px;font-weight:700;color:#1a237e;background:#f5f7ff;display:flex;align-items:center;letter-spacing:0.3px;">₹50,000</div>
+                    <div id="scInvestmentDisplay" class="investment-display">₹50,000</div>
                 </div>
             </div>
 
