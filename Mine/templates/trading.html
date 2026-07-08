@@ -2,8 +2,8 @@
 {% block title %}Trading Terminal{% endblock %}
 {% block head %}
 {{ super() }}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/panel-system.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/trading.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/panel-system.css') }}?v={{ sv('css/panel-system.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/trading.css') }}?v={{ sv('css/trading.css') }}">
 {% endblock %}
 
 {% block content %}

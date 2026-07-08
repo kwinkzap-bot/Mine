@@ -2,7 +2,7 @@
 {% block title %}Open Interest{% endblock %}
 {% block head %}
 {{ super() }}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/open_interest_chart.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/open_interest_chart.css') }}?v={{ sv('css/open_interest_chart.css') }}">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 {% endblock %}
 {% block content %}

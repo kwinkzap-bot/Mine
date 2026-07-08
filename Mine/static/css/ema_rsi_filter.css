@@ -178,6 +178,7 @@ select.date-picker.tf-picker option {
 .results-scroll {
     max-height: 420px;
     overflow-y: auto;
+    overflow-x: auto;
     background: white;
 }
 

@@ -2,8 +2,8 @@
 {% block title %}Options Chart Viewer{% endblock %}
 {% block head %}
 {{ super() }}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/options_chart.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/components/tradingview-chart.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/options_chart.css') }}?v={{ sv('css/options_chart.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/tradingview-chart.css') }}?v={{ sv('css/components/tradingview-chart.css') }}">
 {% endblock %}
 {% block content %}
 <div class="form-container" id="options-chart-app">

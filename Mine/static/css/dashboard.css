@@ -452,7 +452,7 @@
 .period-tab.active { background: var(--oip-accent); color: #fff; border-color: var(--oip-accent); }
 .period-chart-wrap { position: relative; height: 210px; }
 
-.trades-table-container { margin-top: 0; border-radius: 0; overflow: hidden; border: none; background: var(--oip-card-bg); }
+.trades-table-container { margin-top: 0; border-radius: 0; overflow: hidden; overflow-x: auto; border: none; background: var(--oip-card-bg); }
 .trades-table-container h3 { padding: 8px 12px 0; margin: 0; color: var(--oip-text); font-size: 12px; font-weight: 700; }
 .trades-table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .trades-table th { background: var(--oip-header-bg); color: var(--oip-metric-lbl); font-weight: 700; padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--oip-border); text-transform: uppercase; font-size: 9px; letter-spacing: .6px; position: sticky; top: 0; z-index: 10; cursor: pointer; transition: background .15s; }
@@ -522,6 +522,28 @@
 }
 
 /* ── Historic OI — inherits --pf-* theme vars from .sw-wrap ─────── */
+
+/* page fills the viewport below the nav chrome and the grid takes the
+   remaining height, scrolling internally — same pattern as .ac-page on
+   /contracts (.ac-table-wrap) */
+.hoi-page {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 60px);
+}
+body.embed-mode .hoi-page { height: 100vh; }
+#hoi-panel-NIFTY {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+#hoi-panel-NIFTY .sw-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    /* border-collapse drops sticky cell borders while scrolling — redraw it */
+    box-shadow: 0 1px 0 var(--pf-border);
+}
 
 /* semantic colours — theme-aware via --pf-pos / --pf-neg */
 .hoi-ce   { color: var(--pf-neg) !important; }
@@ -664,7 +686,7 @@ body.ocean-theme .fii-wrap {
 .fii-distr .fii-grid-title { background: var(--fii-distr-bg); color: var(--fii-distr-text); border-color: var(--fii-distr-border); }
 
 /* table wrap — mirrors .hoi-table-wrap */
-.fii-table-wrap { border: 1px solid var(--fii-border); border-radius: 0 0 8px 8px; overflow: hidden; box-shadow: var(--fii-shadow); }
+.fii-table-wrap { border: 1px solid var(--fii-border); border-radius: 0 0 8px 8px; overflow: hidden; overflow-x: auto; box-shadow: var(--fii-shadow); }
 .fii-accum .fii-table-wrap { border-color: var(--fii-accum-border); }
 .fii-distr .fii-table-wrap { border-color: var(--fii-distr-border); }
 
@@ -913,8 +935,8 @@ body.ocean-theme .sw-wrap {
 
 /* ── Table — exact portfolio grid style ──────────────────────── */
 .sw-table-wrap {
-    overflow-x: auto; border: 1px solid var(--pf-border);
-    border-radius: 8px; overflow: hidden; box-shadow: var(--pf-shadow);
+    border: 1px solid var(--pf-border);
+    border-radius: 8px; overflow: hidden; overflow-x: auto; box-shadow: var(--pf-shadow);
 }
 .sw-table { width: 100%; border-collapse: collapse; background: var(--pf-surface); font-size: 12px; }
 .sw-table thead th {

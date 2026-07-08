@@ -264,6 +264,7 @@ body.ocean-theme {
 .results-scroll {
     max-height: 375px;
     overflow-y: auto;
+    overflow-x: auto;
     border: none;
     border-radius: 0;
     background: var(--scan-bg);

@@ -2,8 +2,8 @@
 {% block title %}CPR Filter - Stock Scanner{% endblock %}
 {% block head %}
 {{ super() }}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/cpr_filter.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/ema_rsi_filter.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/cpr_filter.css') }}?v={{ sv('css/cpr_filter.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ema_rsi_filter.css') }}?v={{ sv('css/ema_rsi_filter.css') }}">
 {% endblock %}
 {% block content %}
 <!-- Premium Unified Scanner Header Utility Row -->

@@ -2,7 +2,7 @@
 {% block title %}Active Contracts{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/active_contracts.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/active_contracts.css') }}?v={{ sv('css/active_contracts.css') }}">
 {% endblock %}
 
 {% block content %}

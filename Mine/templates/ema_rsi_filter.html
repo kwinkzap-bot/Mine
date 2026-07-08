@@ -2,7 +2,7 @@
 {% block title %}EMA/RSI 208 Filter - Stock Scanner{% endblock %}
 {% block head %}
 {{ super() }}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/ema_rsi_filter.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ema_rsi_filter.css') }}?v={{ sv('css/ema_rsi_filter.css') }}">
 {% endblock %}
 {% block content %}
 <div id="ema-status-bar" class="ema-status-bar">

@@ -1566,6 +1566,7 @@ body.ocean-theme .sm-gl-overlay {
 /* scrollable table */
 .sm-modal-table-wrap {
     overflow-y: auto;
+    overflow-x: auto;
     flex: 1;
 }
 .sm-modal-table {

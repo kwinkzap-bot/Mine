@@ -2,10 +2,10 @@
 {% block title %}Historic OI{% endblock %}
 {% block head %}
 {{ super() }}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ sv('css/dashboard.css') }}">
 {% endblock %}
 {% block content %}
-  <div class="sw-wrap">
+  <div class="sw-wrap hoi-page">
 
     <!-- Topbar: two primary actions -->
     <div class="sw-topbar">

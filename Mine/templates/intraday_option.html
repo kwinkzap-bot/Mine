@@ -2,8 +2,8 @@
 {% block title %}Intraday Option Trading{% endblock %}
 {% block head %}
 {{ super() }}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/intraday_option.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/components/tradingview-chart.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/intraday_option.css') }}?v={{ sv('css/intraday_option.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/components/tradingview-chart.css') }}?v={{ sv('css/components/tradingview-chart.css') }}">
 <script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
 <script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}"></script>
 {% endblock %}

@@ -2,8 +2,8 @@
 {% block title %}Contracts{% endblock %}
 {% block head %}
 {{ super() }}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/active_contracts.css') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/active_contracts.css') }}?v={{ sv('css/active_contracts.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ sv('css/dashboard.css') }}">
 {% endblock %}
 {% block content %}
 <div class="ac-page" style="min-height:unset;">
