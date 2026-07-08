@@ -107,6 +107,11 @@
         <div class="ag-card-hdr">
             <span class="ag-card-title">Active Trade</span>
             <div class="ag-card-hdr-actions">
+                <select class="ag-strike-mode" id="rtpStrikeMode" title="Strike selection logic"
+                        onchange="_algoSetStrikeMode('rtp', this)">
+                    <option value="premium">Prem ₹300–350</option>
+                    <option value="delta">Delta 0.90</option>
+                </select>
                 <button class="ag-btn ag-btn-strikes" id="rtpStrikesBtn"
                         onclick="rtpFetchDeltaStrikes(this)">Δ Strikes</button>
                 <button class="ag-btn ag-btn-exit" id="rtpExitBtn"
@@ -200,6 +205,11 @@
         <div class="ag-card-hdr">
             <span class="ag-card-title">Active Trade</span>
             <div class="ag-card-hdr-actions">
+                <select class="ag-strike-mode" id="rtp30sStrikeMode" title="Strike selection logic"
+                        onchange="_algoSetStrikeMode('rtp30s', this)">
+                    <option value="premium">Prem ₹300–350</option>
+                    <option value="delta">Delta 0.90</option>
+                </select>
                 <button class="ag-btn ag-btn-strikes" id="rtp30sStrikesBtn"
                         onclick="rtp30sFetchDeltaStrikes(this)">Δ Strikes</button>
                 <button class="ag-btn ag-btn-exit" id="rtp30sExitBtn"
@@ -293,6 +303,11 @@
         <div class="ag-card-hdr">
             <span class="ag-card-title">Active Trade</span>
             <div class="ag-card-hdr-actions">
+                <select class="ag-strike-mode" id="rtp3mStrikeMode" title="Strike selection logic"
+                        onchange="_algoSetStrikeMode('rtp3m', this)">
+                    <option value="premium">Prem ₹300–350</option>
+                    <option value="delta">Delta 0.90</option>
+                </select>
                 <button class="ag-btn ag-btn-strikes" id="rtp3mStrikesBtn"
                         onclick="rtp3mFetchDeltaStrikes(this)">Δ Strikes</button>
                 <button class="ag-btn ag-btn-exit" id="rtp3mExitBtn"
@@ -386,6 +401,11 @@
         <div class="ag-card-hdr">
             <span class="ag-card-title">Active Trade</span>
             <div class="ag-card-hdr-actions">
+                <select class="ag-strike-mode" id="rtp5mStrikeMode" title="Strike selection logic"
+                        onchange="_algoSetStrikeMode('rtp5m', this)">
+                    <option value="premium">Prem ₹300–350</option>
+                    <option value="delta">Delta 0.90</option>
+                </select>
                 <button class="ag-btn ag-btn-strikes" id="rtp5mStrikesBtn"
                         onclick="rtp5mFetchDeltaStrikes(this)">Δ Strikes</button>
                 <button class="ag-btn ag-btn-exit" id="rtp5mExitBtn"
@@ -479,6 +499,11 @@
         <div class="ag-card-hdr">
             <span class="ag-card-title">Active Trade</span>
             <div class="ag-card-hdr-actions">
+                <select class="ag-strike-mode" id="scStrikeMode" title="Strike selection logic"
+                        onchange="_algoSetStrikeMode('sc', this)">
+                    <option value="premium">Prem ₹300–350</option>
+                    <option value="delta">Delta 0.90</option>
+                </select>
                 <button class="ag-btn ag-btn-strikes" id="scStrikesBtn"
                         onclick="scFetchDeltaStrikes(this)">Δ Strikes</button>
                 <button class="ag-btn ag-btn-exit" id="scExitBtn"

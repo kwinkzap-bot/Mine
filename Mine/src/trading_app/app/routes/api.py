@@ -6559,6 +6559,51 @@ def algo_sc_delta_strikes() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ── Strike-selection mode (shared by all live algos) ─────────────────────────
+# 'premium' (default): strike priced inside ₹300–350, nearest ₹300.
+# 'delta':             classic ±0.90-delta strike with the ₹500 premium cap.
+
+_ALGO_STRIKE_MODE_VARS = {
+    'rtp':    'RTP_1M_STRIKE_MODE',
+    'rtp30s': 'RTP_30S_STRIKE_MODE',
+    'rtp3m':  'RTP_3M_STRIKE_MODE',
+    'rtp5m':  'RTP_5M_STRIKE_MODE',
+    'sc':     'SC_STRIKE_MODE',
+}
+
+
+@api_bp.route('/algo/<algo_key>/strike-mode', methods=['GET', 'POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_strike_mode(algo_key: str) -> EndpointResponse:
+    """Get or set the strike-selection mode for one live algo."""
+    var = _ALGO_STRIKE_MODE_VARS.get(algo_key)
+    if not var:
+        return jsonify({'success': False, 'error': f'Unknown algo: {algo_key}'}), 404
+    try:
+        from trading_app.app.utils.user_env import UserEnvManager
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        if request.method == 'POST':
+            data = request.get_json(silent=True) or {}
+            mode = str(data.get('mode', '')).strip().lower()
+            if mode not in ('delta', 'premium'):
+                return jsonify({'success': False,
+                                'error': "mode must be 'delta' or 'premium'"}), 400
+            if not UserEnvManager.save_user_var(username, var, mode):
+                return jsonify({'success': False, 'error': 'Failed to save setting'}), 500
+            return jsonify({'success': True, 'mode': mode})
+
+        mode = (UserEnvManager.get_user_var(username, var) or 'premium').strip().lower()
+        if mode != 'delta':
+            mode = 'premium'
+        return jsonify({'success': True, 'mode': mode})
+    except Exception as e:
+        logger.error(f'[algo/strike-mode] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/algo/sc/start', methods=['POST'])
 @csrf.exempt
 @limiter.exempt

@@ -300,6 +300,53 @@ function _activeRenderHistory(trades) {
 function algoLoad() {
     const hash = location.hash.replace('#', '');
     algoSwitch(_ALGO_TABS.includes(hash) ? hash : 'active');
+    _algoLoadStrikeModes();
+}
+
+// ── Strike-selection mode (dropdown next to the Δ Strikes button) ─────────────
+// 'premium' (default): strike priced inside ₹300–350, nearest ₹300.
+// 'delta':             classic ±0.90-delta strike with the ₹500 premium cap.
+
+const _ALGO_STRIKE_MODE_SELECTS = {
+    rtp:    'rtpStrikeMode',
+    rtp30s: 'rtp30sStrikeMode',
+    rtp3m:  'rtp3mStrikeMode',
+    rtp5m:  'rtp5mStrikeMode',
+    sc:     'scStrikeMode',
+};
+
+function _algoLoadStrikeModes() {
+    Object.entries(_ALGO_STRIKE_MODE_SELECTS).forEach(([algo, id]) => {
+        const sel = document.getElementById(id);
+        if (!sel) return;
+        fetch(`/api/algo/${algo}/strike-mode`)
+            .then(r => r.json())
+            .then(d => { if (d.success && d.mode) sel.value = d.mode; })
+            .catch(() => {});
+    });
+}
+
+function _algoSetStrikeMode(algo, sel) {
+    const mode = sel.value;
+    sel.disabled = true;
+    fetch(`/api/algo/${algo}/strike-mode`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ mode }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            sel.disabled = false;
+            if (!d.success) {
+                alert('Failed to save strike mode: ' + (d.error || 'Unknown error'));
+                _algoLoadStrikeModes();   // revert to server value
+            }
+        })
+        .catch(e => {
+            sel.disabled = false;
+            alert('Request failed: ' + e);
+            _algoLoadStrikeModes();
+        });
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────

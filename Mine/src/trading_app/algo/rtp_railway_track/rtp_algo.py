@@ -36,6 +36,9 @@ _DIR = os.path.dirname(__file__)
 _SINGLE_LOT_QTY = 65     # NIFTY single lot — used for Opt P&L display
 _DELTA_TARGET   = 0.90
 _MAX_PREMIUM    = 500.0  # cap on option premium — if the ±0.90Δ strike costs more, shift to the strike priced nearest below this
+# 'premium' strike mode (default): pick the strike priced inside ₹300–350, nearest ₹300
+_PREM_TARGET    = 300.0
+_PREM_BAND_HIGH = 350.0
 _STRIKE_STEP    = 50.0
 _SLOPE_BARS     = 8
 _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
@@ -779,6 +782,87 @@ class RTPAlgo:
         )
         return best_strike, inst
 
+    def _select_premium_strike(
+        self,
+        opt_type: str,
+        spot: float,
+        provider: Any,
+        chain_deltas: Optional[Dict] = None,
+    ) -> Tuple[float, Optional[Dict]]:
+        """Return the strike whose premium sits inside the ₹300–350 band, nearest
+        ₹300. If no strike prices inside the band, fall back to the strike whose
+        premium is nearest ₹300 overall.
+        """
+        atm = round(spot / _STRIKE_STEP) * _STRIKE_STEP
+
+        if self._expiry is None:
+            self.log.error("Expiry not set — cannot select strike")
+            return atm, None
+
+        t = _time_to_expiry_years(self._expiry)
+        if chain_deltas is None:
+            chain_deltas = self._fetch_fyers_chain_deltas(provider, spot, t)
+        if not chain_deltas:
+            self.log.error("Fyers option chain empty — cannot select premium strike")
+            return atm, None
+
+        in_band = None   # (|ltp-300|, strike, delta, symbol, ltp)
+        overall = None
+        for (strike, ot), entry in chain_deltas.items():
+            if ot != opt_type.upper():
+                continue
+            ltp = entry.get('ltp')
+            if ltp is None or ltp <= 0 or not entry.get('symbol'):
+                continue
+            cand = (abs(ltp - _PREM_TARGET), float(strike),
+                    entry.get('delta'), entry.get('symbol', ''), ltp)
+            if overall is None or cand[0] < overall[0]:
+                overall = cand
+            if _PREM_TARGET <= ltp <= _PREM_BAND_HIGH and \
+                    (in_band is None or cand[0] < in_band[0]):
+                in_band = cand
+
+        best = in_band or overall
+        if best is None:
+            self.log.error(f"No {opt_type} strike with a valid premium in chain")
+            return atm, None
+
+        _, best_strike, best_delta, best_symbol, best_ltp = best
+        inst: Dict = {
+            'instrument_token': best_symbol,
+            'tradingsymbol':    '',
+            'name':             'NIFTY',
+            'expiry':           self._expiry,
+            'strike':           int(best_strike),
+            'instrument_type':  opt_type.upper(),
+        }
+        self.log.info(
+            f"Premium strike: {opt_type} {int(best_strike)} ltp={best_ltp} "
+            f"delta={best_delta:+.4f} "
+            f"(band ₹{_PREM_TARGET:.0f}–{_PREM_BAND_HIGH:.0f}"
+            f"{'' if in_band else ' — no strike in band, nearest ₹300 used'})"
+        )
+        return best_strike, inst
+
+    def _strike_mode(self) -> str:
+        """Per-user strike selection mode from <BROKER_TAG>_STRIKE_MODE:
+        'premium' (default) → strike priced inside ₹300–350, nearest ₹300;
+        'delta' → classic ±0.90-delta strike with the ₹500 premium cap."""
+        mode = self._uvar(f'{self.cfg.broker_tag}_STRIKE_MODE', 'premium').lower()
+        return 'delta' if mode == 'delta' else 'premium'
+
+    def _select_strike(
+        self,
+        opt_type: str,
+        spot: float,
+        provider: Any,
+        chain_deltas: Optional[Dict] = None,
+    ) -> Tuple[float, Optional[Dict]]:
+        """Dispatch strike selection according to the user's strike-mode setting."""
+        if self._strike_mode() == 'delta':
+            return self._select_delta_strike(opt_type, spot, provider, chain_deltas)
+        return self._select_premium_strike(opt_type, spot, provider, chain_deltas)
+
     # ── Broker management ─────────────────────────────────────────────────────
 
     def _get_active_brokers(self) -> List[Tuple[int, str, Any]]:
@@ -944,10 +1028,11 @@ class RTPAlgo:
             'success': True,
             'spot':    round(spot, 2),
             'expiry':  str(self._expiry),
+            'mode':    self._strike_mode(),
         }
 
         for opt_type in ('CE', 'PE'):
-            strike, inst = self._select_delta_strike(opt_type, spot, provider, chain_deltas)
+            strike, inst = self._select_strike(opt_type, spot, provider, chain_deltas)
             key = (int(strike), opt_type)
             entry     = chain_deltas.get(key) or {}
             result[opt_type] = {
@@ -965,10 +1050,13 @@ class RTPAlgo:
         opt_type = 'CE' if direction == 'BUY' else 'PE'
         t = _time_to_expiry_years(self._expiry) if self._expiry else 0.01
         chain_deltas = self._fetch_fyers_chain_deltas(provider, spot, t)
-        strike, inst = self._select_delta_strike(opt_type, spot, provider, chain_deltas)
+        strike_mode  = self._strike_mode()
+        strike, inst = self._select_strike(opt_type, spot, provider, chain_deltas)
 
         if inst is None:
-            self.log.error(f"No delta strike found for {opt_type} near spot={spot}")
+            self.log.error(
+                f"No strike found for {opt_type} near spot={spot} (mode={strike_mode})"
+            )
             return
 
         sl_level  = round(spot - self.cfg.sl_points,  2) if direction == 'BUY' else round(spot + self.cfg.sl_points,  2)
@@ -1029,11 +1117,12 @@ class RTPAlgo:
             'expiry':          str(self._expiry),
             'broker_entries':  broker_entries,
             'opt_entry_price': opt_entry_price,
+            'strike_mode':     strike_mode,
         }
         self._save_state(state)
         self.log.info(
             f"ENTERED {direction}: spot={spot} {int(strike)}{opt_type}"
-            f" opt_ltp={opt_entry_price}"
+            f" opt_ltp={opt_entry_price} mode={strike_mode}"
             f" sl={sl_level} tgt={tgt_level} expiry={self._expiry}"
             f" brokers={len(broker_entries)}"
         )

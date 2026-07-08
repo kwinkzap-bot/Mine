@@ -1974,3 +1974,17 @@ body.ocean-theme .sm-gl-overlay {
     transition: opacity .15s, background .15s;
 }
 .ag-hist-delall-btn:hover { opacity: 1; background: rgba(220, 38, 38, 0.12); }
+
+/* ── Strike-mode dropdown (card header, next to Δ Strikes) ────── */
+.ag-strike-mode {
+    background: var(--ag-accent-dim);
+    color: var(--ag-text-2);
+    border: 1px solid var(--ag-border);
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 4px 6px;
+    cursor: pointer;
+    max-width: 130px;
+}
+.ag-strike-mode:focus { outline: 2px solid var(--ag-accent, #2563eb); outline-offset: 1px; }
