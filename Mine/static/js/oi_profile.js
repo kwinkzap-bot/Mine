@@ -1855,8 +1855,8 @@ function oipDrawMondayBox(candles) {
         const weekStart = first.time;
         const weekEnd   = weekStart + 7 * 86400;
         const times = candles.filter(c => c.time >= weekStart && c.time < weekEnd).map(c => c.time);
-        // Solid black border lines, zero background opacity.
-        if (times.length) oipMondayBoxes.push(_oipDrawCandleBox(oipOIChart, hi, lo, times, '#000000', 0, 1));
+        // Solid border lines, zero background opacity.
+        if (times.length) oipMondayBoxes.push(_oipDrawCandleBox(oipOIChart, hi, lo, times, '#34ed0b', 0, 1));
     });
     if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
 }

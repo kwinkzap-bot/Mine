@@ -673,7 +673,10 @@ var box[] mon_boxes   = array.new_box()
 is_monday           = dayofweek == dayofweek.monday
 is_first_monday_bar = ta.change(time("D")) != 0 and is_monday
 
-if show_monday_box
+// Only visible on 1-hour and below timeframes
+is_1h_or_below = timeframe.isintraday and (timeframe.isseconds or timeframe.multiplier <= 60)
+
+if show_monday_box and is_1h_or_below
     if is_first_monday_bar
         mon_high    := high
         mon_low     := low

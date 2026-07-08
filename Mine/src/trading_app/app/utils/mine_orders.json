@@ -53260,5 +53260,437 @@
     ],
     "id": "b99ddbb5-61d1-469f-8e67-39b226f01877",
     "created_at": 1783415562958
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24250,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783488120342,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074725667421216768"
+          },
+          "price": 0,
+          "response": {
+            "order_id": {
+              "order_id": "2074725667421216768"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "2f4534ae-6dea-4678-9e22-bb5cfce727fc",
+    "created_at": 1783488120351
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24250,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 140.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783490556998,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074735887488835585"
+          },
+          "price": 140.0,
+          "response": {
+            "order_id": {
+              "order_id": "2074735887488835585"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "2ee1906a-e112-45a2-bc8e-15dff7786dd5",
+    "created_at": 1783490557010
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24250,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 135.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783490744610,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074736674419957760"
+          },
+          "price": 135.0,
+          "response": {
+            "order_id": {
+              "order_id": "2074736674419957760"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "b3eb8c98-755b-483f-948d-6161460141c4",
+    "created_at": 1783490744617
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24250,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 134.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783491152959,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074738387143024640"
+          },
+          "price": 134.0,
+          "response": {
+            "order_id": {
+              "order_id": "2074738387143024640"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "28e8327d-c187-41f2-9bc2-1d8b0c3d86a3",
+    "created_at": 1783491152967
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24250,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 130.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783491255727,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074738817981931521"
+          },
+          "price": 130.0,
+          "response": {
+            "order_id": {
+              "order_id": "2074738817981931521"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "6bc5c896-f611-4415-850d-62f986722b60",
+    "created_at": 1783491255736
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24250,
+    "option_type": "CE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 131.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783491452354,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074739642875699200"
+          },
+          "price": 131.0,
+          "response": {
+            "order_id": {
+              "order_id": "2074739642875699200"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "00e991d7-88ac-444d-88bf-bc0bf272da09",
+    "created_at": 1783491452364
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24550,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 131.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783496315967,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074760042238107648"
+          },
+          "price": 131.0,
+          "response": {
+            "order_id": {
+              "order_id": "2074760042238107648"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "e04d66cc-9902-41bf-837d-b9de3009ad5e",
+    "created_at": 1783496315986
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24550,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 131.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783496352259,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074760194675892224"
+          },
+          "price": 131.0,
+          "response": {
+            "order_id": {
+              "order_id": "2074760194675892224"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "9a2a00f3-f889-4811-8ffc-7ff781a1f4f2",
+    "created_at": 1783496352269
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "MARKET",
+    "type": "MARKET",
+    "instrument": "NFO",
+    "price": 0.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783503413275,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074789810622881792"
+          },
+          "price": 0,
+          "response": {
+            "order_id": {
+              "order_id": "2074789810622881792"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "418fcff1-ace5-4c8f-bd7c-d78ea57d6dc2",
+    "created_at": 1783503413291
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 208.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783503471976,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074790056904024064"
+          },
+          "price": 208.0,
+          "response": {
+            "order_id": {
+              "order_id": "2074790056904024064"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "b44aefd0-5a70-4610-b6b6-b8ed260bed8d",
+    "created_at": 1783503471982
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 200.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783503526512,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074790285149659137"
+          },
+          "price": 200.0,
+          "response": {
+            "order_id": {
+              "order_id": "2074790285149659137"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "d002ba92-c39f-4fe8-9b2c-d4cec948a413",
+    "created_at": 1783503526596
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 23900,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 195.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1783503790696,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": {
+            "order_id": "2074791393674846208"
+          },
+          "price": 195.0,
+          "response": {
+            "order_id": {
+              "order_id": "2074791393674846208"
+            }
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "319e0da7-80d9-4a84-9f68-eaa2a56f4d3e",
+    "created_at": 1783503790702
   }
 ]
