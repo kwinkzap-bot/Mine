@@ -11,6 +11,10 @@ class IntrinsicOrderManager:
     def start_monitoring(broker_type, instance_id, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, sec_id, kite_opt_sym, username, session_data):
         stop_event = threading.Event()
         key = f"{username}_{broker_type}_{instance_id}_{symbol}_{strike}_{option_type}"
+        old_event = _active_monitors.pop(key, None)
+        if old_event:
+            old_event.set()
+            logger.info(f"[Intrinsic Monitor] Replaced existing monitor for key: {key}")
         _active_monitors[key] = stop_event
         thread = threading.Thread(
             target=IntrinsicOrderManager._monitor_trade,
@@ -29,6 +33,19 @@ class IntrinsicOrderManager:
                 ev.set()
         logger.info(f"[Intrinsic Monitor] Stopped {len(keys)} monitor(s) for user '{username}'")
 
+    @classmethod
+    def stop_for_position(cls, username, symbol, strike, option_type):
+        """Stop monitors for one strike (e.g. after a manual SELL closes the position)."""
+        prefix = f"{username}_"
+        suffix = f"_{symbol}_{strike}_{option_type}"
+        keys = [k for k in list(_active_monitors.keys()) if k.startswith(prefix) and k.endswith(suffix)]
+        for k in keys:
+            ev = _active_monitors.pop(k, None)
+            if ev:
+                ev.set()
+        if keys:
+            logger.info(f"[Intrinsic Monitor] Stopped {len(keys)} monitor(s) for {username} {symbol} {strike} {option_type}")
+
     @staticmethod
     def _monitor_trade(broker_type, instance_id, symbol, strike, option_type, entry_price, sl_orders, lot_size, order_lots, sec_id, kite_opt_sym, username, session_data, stop_event, key):
         from trading_app.service.provider_logic import get_kite, get_data_provider
@@ -40,7 +57,8 @@ class IntrinsicOrderManager:
         data_provider = get_data_provider(user=username)
         if not data_provider:
             logger.error("[Intrinsic Monitor] Data provider not available")
-            _active_monitors.pop(key, None)
+            if _active_monitors.get(key) is stop_event:
+                _active_monitors.pop(key, None)
             return
         # KiteConnect exposes set_access_token; the Fyers adapter does not — used to
         # gate the Kite-only proxy re-apply on connection errors below.
@@ -84,7 +102,8 @@ class IntrinsicOrderManager:
         service = get_service()
         if not service:
             logger.error("[Intrinsic Monitor] Failed to initialize broker service")
-            _active_monitors.pop(key, None)
+            if _active_monitors.get(key) is stop_event:
+                _active_monitors.pop(key, None)
             return
 
         try:
@@ -152,7 +171,10 @@ class IntrinsicOrderManager:
                     else:
                         time.sleep(5)
         finally:
-            _active_monitors.pop(key, None)
+            # Only deregister if the registry still points at THIS monitor —
+            # a replacement monitor may have re-registered the same key.
+            if _active_monitors.get(key) is stop_event:
+                _active_monitors.pop(key, None)
             if stop_event.is_set():
                 logger.info(f"[Intrinsic Monitor] Stopped by external signal for key: {key}")
             else:

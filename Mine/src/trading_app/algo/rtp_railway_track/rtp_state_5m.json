@@ -3,8 +3,8 @@
   "buy_needs_reset": false,
   "sell_needs_reset": false,
   "last_exit": {
-    "reason": "TARGET",
-    "spot": 24114.85,
-    "time": "2026-07-08T13:48:17.240000"
+    "reason": "SL",
+    "spot": 24072.2,
+    "time": "2026-07-09T13:36:03.388328"
   }
 }

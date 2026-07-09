@@ -35,6 +35,20 @@ RSI_CROSSOVER = 51.0
 # EMA "touch" = current candle's LOW <= EMA <= HIGH (actual wick cross)
 # No % tolerance — strict candle range only
 
+# EMA Narrow scanner: all these EMAs must sit inside a tight % band of price
+# on EVERY timeframe of the selected group (monthly/weekly/daily combos)
+NARROW_EMA_PERIODS = [20, 50, 100, 200]
+NARROW_DEFAULT_THRESHOLD_PCT = 1.5
+
+NARROW_GROUPS = {
+    "mwd": ["monthly", "weekly", "daily"],
+    "mw":  ["monthly", "weekly"],
+    "wd":  ["weekly", "daily"],
+}
+# Daily-bar history needed for a stable EMA(200) on each resampled timeframe
+NARROW_FETCH_DAYS = {"daily": 900, "weekly": 2500, "monthly": 7000}
+NARROW_RESAMPLE   = {"daily": None, "weekly": "W", "monthly": "M"}
+
 
 def _calc_ema(prices: List[float], period: int) -> List[float]:
     """Exponential Moving Average (EMA) — strictly matches TradingView's standard EMA indicator.
@@ -125,6 +139,7 @@ class EmaRsiFilterService:
         "monthly":  {"interval": "day",      "period": 48,  "fetch_days": 1800, "resample": "M"},
     }
 
+
     def __init__(self, kite_instance=None):
         from trading_app.service.provider_logic import get_data_provider
         self.kite = kite_instance or get_data_provider()
@@ -213,18 +228,20 @@ class EmaRsiFilterService:
         if self._fo_stocks is not None:
             return self._fo_stocks
         try:
-            nfo = self.kite.instruments("NFO")
-            fo_set = {
-                inst["name"]
-                for inst in nfo
-                if inst.get("instrument_type") == "FUT"
-                and inst.get("name")
-                and inst["name"] not in self.INDEX_SYMBOLS
-            }
-            self._fo_stocks = sorted(fo_set)
+            from trading_app.filters.stock_list_store import get_fo_stocks
+            self._fo_stocks = get_fo_stocks(self.kite)
             return self._fo_stocks
         except Exception as e:
             logger.error(f"FO stocks load failed: {e}")
+            return []
+
+    def _get_equity_stocks(self) -> List[str]:
+        """All NSE equity stocks (file-cached list) — used by the EMA Narrow scanner."""
+        try:
+            from trading_app.filters.stock_list_store import get_equity_stocks
+            return get_equity_stocks(self.kite)
+        except Exception as e:
+            logger.error(f"Equity stocks load failed: {e}")
             return []
 
     # ------------------------------------------------------------------
@@ -282,6 +299,170 @@ class EmaRsiFilterService:
                 "EMA+RSI" if ema_touched and rsi_crossed_above
                 else ("EMA Touch" if ema_touched else "RSI > 51")
             ) if matched else "—",
+        }
+
+    def _analyse_ema_narrow(self, symbol: str, current_price: float, df: Optional[pd.DataFrame],
+                            resample: Optional[str] = None,
+                            threshold_pct: float = NARROW_DEFAULT_THRESHOLD_PCT) -> Optional[Dict]:
+        """Check whether EMA(20/50/100/200) are all bunched within threshold_pct of price."""
+        if df is None or len(df) < 20:
+            return None
+
+        if resample == 'W':
+            df = _weekly_resample(df)
+        elif resample == 'M':
+            df = _monthly_resample(df)
+
+        closes = df["close"].tolist()
+        max_period = max(NARROW_EMA_PERIODS)
+        if len(closes) < max_period:
+            return None
+
+        emas: Dict[int, float] = {}
+        for p in NARROW_EMA_PERIODS:
+            val = _calc_ema(closes, p)[-1]
+            if val != val:  # nan check
+                return None
+            emas[p] = float(val)
+
+        last_close = float(closes[-1])
+        if last_close <= 0:
+            return None
+
+        ema_high = max(emas.values())
+        ema_low  = min(emas.values())
+        spread_pct = round((ema_high - ema_low) / last_close * 100, 2)
+        matched = bool(spread_pct <= threshold_pct)
+        price_inside = bool(ema_low <= last_close <= ema_high)
+
+        return {
+            "symbol":        symbol,
+            "current_price": float(current_price),
+            "close":         round(last_close, 2),
+            "ema20":         round(emas[20], 2),
+            "ema50":         round(emas[50], 2),
+            "ema100":        round(emas[100], 2),
+            "ema200":        round(emas[200], 2),
+            "spread_pct":    spread_pct,
+            "price_inside":  price_inside,
+            "matched":       matched,
+        }
+
+    def run_ema_narrow_filter(self, root_date: Optional[datetime] = None, group: str = "mwd",
+                              threshold_pct: float = NARROW_DEFAULT_THRESHOLD_PCT,
+                              progress_cb=None) -> Dict:
+        """Scan ALL NSE equity stocks for EMA(20/50/100/200) compression on EVERY
+        timeframe of the selected group ('mwd' = Month+Week+Day, 'mw', 'wd').
+
+        Timeframes are checked cheapest-first (daily → weekly → monthly); the long
+        history needed by higher timeframes is only fetched for stocks that are
+        still narrow on the lower ones, which keeps the scan fast.
+        progress_cb(done, total) is invoked as stocks complete."""
+        group_tfs = NARROW_GROUPS.get(group, NARROW_GROUPS["mwd"])
+        gate_order = list(reversed(group_tfs))  # lowest timeframe first (cheapest fetch)
+
+        stocks = self._get_equity_stocks()
+        if not stocks:
+            logger.warning("EMA Narrow filter: no equity stocks found")
+            return {"results": [], "nearest": []}
+
+        logger.info(f"EMA Narrow filter: scanning {len(stocks)} equity stocks for "
+                    f"{'+'.join(group_tfs)} (threshold {threshold_pct}%)...")
+
+        nse_symbols = [f"NSE:{s}" for s in stocks]
+        price_map: Dict[str, float] = {}
+        batch_size = 500
+        for i in range(0, len(nse_symbols), batch_size):
+            batch = nse_symbols[i: i + batch_size]
+            try:
+                quotes = self.kite.quote(batch)
+                for sym, data in quotes.items():
+                    plain = sym.replace("NSE:", "")
+                    price_map[plain] = float(data.get("last_price", 0))
+            except Exception as e:
+                logger.warning(f"Batch quote failed: {e}")
+
+        results: List[Dict] = []
+        all_results: List[Dict] = []
+
+        def process_stock(symbol: str):
+            price = price_map.get(symbol, 0.0)
+
+            # Gate cheapest-first: only fetch the deep history a higher timeframe
+            # needs when the stock is still narrow on every lower timeframe.
+            tf_res: Dict[str, Dict] = {}
+            for tf in gate_order:
+                df = self._fetch_hist(symbol, days=NARROW_FETCH_DAYS[tf],
+                                      interval="day", end_date=root_date)
+                r = self._analyse_ema_narrow(symbol, price, df, NARROW_RESAMPLE[tf], threshold_pct)
+                if r is None:
+                    # Not enough history for EMA(200) on this timeframe — can't verify, skip stock
+                    return symbol, None
+                tf_res[tf] = r
+                if not r["matched"]:
+                    break  # failed this gate — no point fetching longer history
+
+            lowest = tf_res[gate_order[0]]
+            spreads = {tf: tf_res[tf]["spread_pct"] for tf in tf_res}
+            combined = {
+                "symbol":          symbol,
+                "current_price":   float(price),
+                "close":           lowest["close"],
+                "spread_daily":    spreads.get("daily"),
+                "spread_weekly":   spreads.get("weekly"),
+                "spread_monthly":  spreads.get("monthly"),
+                "max_spread_pct":  round(max(spreads.values()), 2),
+                "price_inside":    lowest["price_inside"],
+                "matched":         bool(len(tf_res) == len(group_tfs)
+                                        and all(r["matched"] for r in tf_res.values())),
+                "tfs":             tf_res,
+            }
+            return symbol, combined
+
+        workers_count = self.MAX_WORKERS
+        if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+            workers_count = 5
+
+        done_count = 0
+        total = len(stocks)
+        if progress_cb:
+            try:
+                progress_cb(0, total)
+            except Exception:
+                pass
+
+        with ThreadPoolExecutor(max_workers=workers_count) as executor:
+            futures = {executor.submit(process_stock, s): s for s in stocks}
+            for future in as_completed(futures):
+                try:
+                    sym, res = future.result(timeout=300)
+                    if res:
+                        all_results.append(res)
+                        if res.get("matched"):
+                            results.append(res)
+                except Exception as e:
+                    logger.warning(f"EMA Narrow processing error ({e.__class__.__name__}): {e}")
+                finally:
+                    done_count += 1
+                    if progress_cb and (done_count % 10 == 0 or done_count == total):
+                        try:
+                            progress_cb(done_count, total)
+                        except Exception:
+                            pass
+
+        # Tightest compression (worst timeframe) first
+        results.sort(key=lambda r: r.get("max_spread_pct", 999))
+
+        nearest_stocks = sorted(
+            [r for r in all_results if not r.get("matched")],
+            key=lambda r: r.get("max_spread_pct", 999)
+        )[:10]
+
+        logger.info(f"EMA Narrow filter → {'+'.join(group_tfs)}: {len(results)} matches")
+
+        return {
+            "results": results,
+            "nearest": nearest_stocks,
         }
 
     # ------------------------------------------------------------------

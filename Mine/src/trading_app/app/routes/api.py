@@ -2233,6 +2233,125 @@ def get_ema_rsi_filter_results() -> EndpointResponse:
         return jsonify({'success': False, 'error': f'EMA/RSI filter error: {str(e)}'}), 500
 
 
+# EMA Narrow scans take minutes, so they run as background jobs: the endpoint
+# returns immediately with 'running' + progress and the frontend polls until done.
+_ema_narrow_jobs: dict = {}
+_ema_narrow_jobs_lock = threading.Lock()
+
+
+@api_bp.route('/ema-narrow-filter', methods=['GET'])
+@limiter.exempt
+def get_ema_narrow_filter_results() -> EndpointResponse:
+    """Scan ALL NSE equity stocks where EMA 20/50/100/200 are compressed within a
+    tight % band on every timeframe of the selected group (mwd / mw / wd).
+
+    Long-running: the first call starts a background scan and returns
+    {'status': 'running', 'progress': {...}}; poll the same URL until
+    {'status': 'done'} arrives with results. Finished scans are cached for
+    6 hours; pass refresh=1 to force a fresh scan."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    current_kite = get_data_provider()
+    if not current_kite:
+        return jsonify({'success': False, 'error': 'Data Provider initialization failed.'}), 401
+
+    date_str = request.args.get('date')
+    group    = request.args.get('group', 'mwd')  # mwd = Month/Week/Day, mw, wd
+    if group not in ('mwd', 'mw', 'wd'):
+        group = 'mwd'
+    try:
+        threshold = float(request.args.get('threshold', 1.5))
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Invalid threshold. Use a number (percent).'}), 400
+    threshold = max(0.1, min(threshold, 10.0))
+    force_refresh = request.args.get('refresh') == '1'
+
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    from trading_app.app.utils.cache import cpr_filter_cache  # reuse same cache backend
+    cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
+    job_key    = f"{cache_date}:{group}:{threshold}"
+    cache_key  = f"ema_narrow_v3:{job_key}"
+
+    with _ema_narrow_jobs_lock:
+        job = _ema_narrow_jobs.get(job_key)
+
+        # A scan for this exact key is already running — never start a duplicate
+        if job and job['status'] == 'running':
+            return jsonify({
+                'success':    True,
+                'status':     'running',
+                'progress':   job.get('progress', {}),
+                'started_at': job.get('started_at'),
+            })
+
+        # Previous run failed — report it once, then allow a retry
+        if job and job['status'] == 'error':
+            _ema_narrow_jobs.pop(job_key, None)
+            return jsonify({'success': False, 'status': 'error', 'error': job.get('error', 'Scan failed')}), 500
+
+        if not force_refresh:
+            cached = cpr_filter_cache.get(cache_key)
+            if cached is not None:
+                return jsonify(cached)
+            if job and job['status'] == 'done' and job.get('result'):
+                return jsonify(job['result'])
+
+        # Start a new background scan
+        job = {
+            'status':     'running',
+            'progress':   {'done': 0, 'total': 0},
+            'started_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        _ema_narrow_jobs[job_key] = job
+
+    def _run_scan(kite_ref, job_ref):
+        try:
+            from trading_app.filters.ema_rsi_filter import EmaRsiFilterService
+            svc = EmaRsiFilterService(kite_instance=kite_ref)
+
+            def on_progress(done, total):
+                job_ref['progress'] = {'done': done, 'total': total}
+
+            result = svc.run_ema_narrow_filter(root_date=target_date, group=group,
+                                               threshold_pct=threshold,
+                                               progress_cb=on_progress)
+            payload = {
+                'success':      True,
+                'status':       'done',
+                'results':      result.get('results', []),
+                'nearest':      result.get('nearest', []),
+                'threshold':    threshold,
+                'group':        group,
+                'date':         cache_date,
+                'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            cpr_filter_cache.set(cache_key, payload, timeout=6 * 3600)
+            job_ref['result'] = payload
+            job_ref['status'] = 'done'
+        except Exception as e:
+            logger.error(f"EMA Narrow scan error: {type(e).__name__}: {e}", exc_info=True)
+            job_ref['error'] = str(e)
+            job_ref['status'] = 'error'
+
+    threading.Thread(target=_run_scan, args=(current_kite, job),
+                     name=f"ema-narrow-{job_key}", daemon=True).start()
+
+    return jsonify({
+        'success':    True,
+        'status':     'running',
+        'progress':   job['progress'],
+        'started_at': job['started_at'],
+    })
+
+
 @api_bp.route('/notify-whatsapp', methods=['POST'])
 @csrf.exempt
 def notify_whatsapp() -> EndpointResponse:
@@ -4931,6 +5050,18 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
     """
     from trading_app.app.utils.user_env import UserEnvManager
 
+    # Auto-exit (target = entry+10 monitor) is opt-in: manual orders from the OI Profile
+    # screen must never be exited by the app unless the user enables INTRINSIC_AUTO_EXIT.
+    _auto_exit_enabled = UserEnvManager.get_user_var(
+        username, 'INTRINSIC_AUTO_EXIT', 'false'
+    ).strip().lower() in ('true', '1', 'yes')
+
+    # A manual SELL closes the position — kill any running auto-exit monitors for this
+    # strike so an orphaned monitor can't fire another SELL later.
+    if action == 'SELL' and strategy == 'intrinsic':
+        from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
+        IntrinsicOrderManager.stop_for_position(username, symbol, strike, option_type)
+
     targets = []
     for i in range(1, 21):
         b_type = UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '').strip().lower()
@@ -5065,7 +5196,7 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                                         sl_order_ids = [sl_res.get('order_id')]
                                         result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_price, 'sl_success': True})
 
-                            if strategy == 'intrinsic':
+                            if strategy == 'intrinsic' and _auto_exit_enabled:
                                 from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
                                 IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry_price, sl_order_ids, lot_size, order_lots, None, option_symbol, username, session_data)
                     except Exception as e: logger.error(f"[SL] Kite Err: {e}")
@@ -5113,7 +5244,7 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                                         sl_order_ids = [sl_res.get('order_id')]
                                         result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_price, 'sl_success': True})
 
-                            if strategy == 'intrinsic':
+                            if strategy == 'intrinsic' and _auto_exit_enabled:
                                 from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
                                 IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry_price, sl_order_ids, lot_size, order_lots, None, k_symbol, username, session_data)
                     except Exception as e: logger.error(f"[SL] Kotak Err: {e}")
@@ -5164,7 +5295,7 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                                     sl_order_ids = [sl_res.get('order_id')]
                                     result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
 
-                            if strategy == 'intrinsic':
+                            if strategy == 'intrinsic' and _auto_exit_enabled:
                                 from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
                                 IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry, sl_order_ids, lot_size, order_lots, _sec_id, kite_opt_sym, username, session_data)
                     except Exception as e: logger.error(f"[SL] Dhan Err: {e}")
@@ -5215,7 +5346,7 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                                     sl_order_ids = [sl_res.get('order_id')]
                                     result.update({'sl_order_id': sl_res.get('order_id'), 'sl_trigger_price': sl_p, 'sl_success': True})
 
-                            if strategy == 'intrinsic':
+                            if strategy == 'intrinsic' and _auto_exit_enabled:
                                 from trading_app.app.intraday_option.intrinsic_order_manager import IntrinsicOrderManager
                                 IntrinsicOrderManager.start_monitoring(broker, _active_instance, symbol, strike, option_type, entry, sl_order_ids, lot_size, order_lots, None, kite_opt_sym, username, session_data)
                     except Exception as e: logger.error(f"[SL] Fyers Err: {e}")
