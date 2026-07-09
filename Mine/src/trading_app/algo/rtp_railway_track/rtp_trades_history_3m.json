@@ -1,1 +1,31 @@
-[]
+[
+  {
+    "date": "2026-07-09",
+    "direction": "BUY",
+    "entry_spot": 24104.25,
+    "exit_spot": 24074.05,
+    "pnl_pts": -30.2,
+    "reason": "SL",
+    "entry_time": "2026-07-09T10:42:03.724900",
+    "exit_time": "2026-07-09T10:44:26.031336",
+    "strike": 23850,
+    "option_type": "CE",
+    "lot_size": 65,
+    "opt_entry_price": 331.15,
+    "opt_exit_price": 294.65,
+    "opt_pnl_pts": -36.5,
+    "opt_pnl_inr": -2372.5,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2075085551266357248'}",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2671423850CE",
+        "lots": 5,
+        "quantity": 325
+      }
+    ]
+  }
+]
