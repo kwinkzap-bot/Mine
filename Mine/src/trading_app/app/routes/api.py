@@ -48,6 +48,16 @@ _RTP30S_HISTORY_PATH = os.path.normpath(
 _RTP30S_ALL_HISTORY_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_all_history_30s.json')
 )
+# RTP 2m variant (same package, _2m-suffixed state/history files)
+_RTP2M_STATE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_state_2m.json')
+)
+_RTP2M_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_history_2m.json')
+)
+_RTP2M_ALL_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_trades_all_history_2m.json')
+)
 # RTP 3m variant (same package, _3m-suffixed state/history files)
 _RTP3M_STATE_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'rtp_railway_track', 'rtp_state_3m.json')
@@ -2283,13 +2293,17 @@ def get_ema_narrow_filter_results() -> EndpointResponse:
     with _ema_narrow_jobs_lock:
         job = _ema_narrow_jobs.get(job_key)
 
-        # A scan for this exact key is already running — never start a duplicate
+        # A scan for this exact key is already running — never start a duplicate.
+        # Include the partial results gathered so far, so the UI fills up live.
         if job and job['status'] == 'running':
+            partial = job.get('partial') or {}
             return jsonify({
                 'success':    True,
                 'status':     'running',
                 'progress':   job.get('progress', {}),
                 'started_at': job.get('started_at'),
+                'results':    partial.get('results', []),
+                'nearest':    [],
             })
 
         # Previous run failed — report it once, then allow a retry
@@ -2317,8 +2331,10 @@ def get_ema_narrow_filter_results() -> EndpointResponse:
             from trading_app.filters.ema_rsi_filter import EmaRsiFilterService
             svc = EmaRsiFilterService(kite_instance=kite_ref)
 
-            def on_progress(done, total):
+            def on_progress(done, total, partial=None):
                 job_ref['progress'] = {'done': done, 'total': total}
+                if partial is not None:
+                    job_ref['partial'] = partial
 
             result = svc.run_ema_narrow_filter(root_date=target_date, group=group,
                                                threshold_pct=threshold,
@@ -2349,6 +2365,8 @@ def get_ema_narrow_filter_results() -> EndpointResponse:
         'status':     'running',
         'progress':   job['progress'],
         'started_at': job['started_at'],
+        'results':    [],
+        'nearest':    [],
     })
 
 
@@ -2733,6 +2751,11 @@ def run_rtp_backtest_api():
         tgt_points     = float(data['tgt_points'])    if data.get('tgt_points')    else None
         trail_points   = float(data['trail_points'])  if data.get('trail_points')  else None
         exit_on        = data.get('exit_on', 'value')
+        confirm_bars       = int(data.get('confirm_bars', 0) or 0)
+        strict_pattern     = bool(data.get('strict_pattern', False))
+        min_rail_gap_atr   = float(data.get('min_rail_gap_atr', 0) or 0)
+        max_trades_per_day = int(data['max_trades_per_day']) if data.get('max_trades_per_day') else None
+        max_consec_sl      = int(data['max_consec_sl'])      if data.get('max_consec_sl')      else None
 
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
@@ -2774,6 +2797,7 @@ def run_rtp_backtest_api():
         from trading_app.Backtest.rtp_backtest_engine import RTPBacktestEngine
 
         interval_minutes_map = {
+            '30second': 0.5,
             'minute': 1, '2minute': 2, '3minute': 3,
             '5minute': 5, '10minute': 10, '15minute': 15,
             '30minute': 30, '60minute': 60,
@@ -2791,6 +2815,11 @@ def run_rtp_backtest_api():
             tgt_points=tgt_points,
             trail_points=trail_points,
             exit_on=exit_on,
+            confirm_bars=confirm_bars,
+            strict_pattern=strict_pattern,
+            min_rail_gap_atr=min_rail_gap_atr,
+            max_trades_per_day=max_trades_per_day,
+            max_consec_sl=max_consec_sl,
         )
         results = engine.run()
         trades  = results.get('trades', [])
@@ -2828,6 +2857,13 @@ def run_rtp_backtest_api():
                 'tgt_points':    results['tgt_points'],
                 'trail_points':  results.get('trail_points'),
                 'exit_on':       results.get('exit_on', 'value'),
+                'confirm_bars':        results.get('confirm_bars', 0),
+                'strict_pattern':      results.get('strict_pattern', False),
+                'min_rail_gap_atr':    results.get('min_rail_gap_atr', 0),
+                'max_trades_per_day':  results.get('max_trades_per_day'),
+                'max_consec_sl':       results.get('max_consec_sl'),
+                'skipped_unconfirmed': results.get('skipped_unconfirmed', 0),
+                'skipped_circuit':     results.get('skipped_circuit', 0),
             }
         })
 
@@ -3458,7 +3494,8 @@ def run_rtp_optimise():
         # v3: grids now use native per-timeframe candles (was 1-min resampled).
         # v4: leaderboard excludes combos with a negative Net P&L (₹, net of
         # brokerage). Bump the key to invalidate stale cache entries.
-        cache_key = f"{symbol}_multiTF_v4"
+        # v5: grid gained confirm_bars and min_rail_gap_atr dimensions.
+        cache_key = f"{symbol}_multiTF_v5"
 
         # ── Serve from cache unless caller asked to recalculate ──────────────
         if not recalculate:
@@ -3517,7 +3554,15 @@ def run_rtp_optimise():
                     nonlocal combos_tested
                     if df_tf is None or df_tf.empty:
                         return
-                    tf_results = optimise_rtp(df_tf, interval=interval_str, min_trades=15)
+
+                    def _progress(done, total):
+                        with _rtp_opt_tasks_lock:
+                            task = _rtp_opt_tasks.get(task_id)
+                            if task is not None and task.get('status') == 'running':
+                                task['progress'] = f"{tf_label} · {done}/{total}"
+
+                    tf_results = optimise_rtp(df_tf, interval=interval_str, min_trades=15,
+                                              progress_cb=_progress)
                     combos_tested += len(tf_results)
                     for r in tf_results:
                         r['timeframe_min'] = tf_min      # numeric (0.5 for 30s)
@@ -3646,7 +3691,7 @@ def run_rtp_optimise_status(task_id):
     if not task:
         return jsonify({'success': False, 'error': 'Task not found'}), 404
     if task['status'] == 'running':
-        return jsonify({'success': True, 'status': 'running'})
+        return jsonify({'success': True, 'status': 'running', 'progress': task.get('progress')})
     if task['status'] == 'error':
         return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
     # complete
@@ -6346,6 +6391,193 @@ def algo_rtp3m_start() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ── EMA RTP 2m live algo (same RTP logic, 2-minute candles) ──────────────────
+
+@api_bp.route('/algo/rtp2m/status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp2m_status() -> EndpointResponse:
+    """Return current RTP 2m active trade + live NIFTY spot and P&L."""
+    try:
+        try:
+            with open(_RTP2M_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {'active_trade': None, 'buy_needs_reset': False, 'sell_needs_reset': False}
+
+        trade = state.get('active_trade')
+        if not trade:
+            return jsonify({'success': True, 'active': False, 'state': state, 'live': None})
+
+        # Fetch live NIFTY spot for P&L calculation
+        live = None
+        try:
+            provider = get_data_provider()
+            if provider:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+                if spot:
+                    direction  = trade.get('direction', 'BUY')
+                    entry_spot = float(trade.get('entry_spot', 0))
+                    pnl_pts    = spot - entry_spot if direction == 'BUY' else entry_spot - spot
+                    pnl_pts    = round(pnl_pts, 2)
+                    broker_entries = trade.get('broker_entries', [])
+                    pnl_inr_total  = round(
+                        sum(pnl_pts * 0.90 * float(e.get('quantity', 75)) for e in broker_entries), 2
+                    )
+                    live = {'spot': spot, 'pnl_pts': pnl_pts, 'pnl_inr_total': pnl_inr_total}
+                    live.update(_algo_option_live(trade, provider))
+        except Exception as _e:
+            logger.warning(f'[rtp2m/status] live fetch failed: {_e}')
+
+        return jsonify({'success': True, 'active': True, 'state': state, 'live': live})
+    except Exception as e:
+        logger.error(f'[rtp2m/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp2m/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp2m_history() -> EndpointResponse:
+    """Return all completed RTP 2m trades from rtp_trades_all_history_2m.json (latest-first)."""
+    try:
+        try:
+            with open(_RTP2M_ALL_HISTORY_PATH, 'r') as _f:
+                all_trades = json.load(_f)
+            if not isinstance(all_trades, list):
+                all_trades = []
+        except Exception:
+            all_trades = []
+
+        # Strip broker_entries to keep payload lean
+        trades = [
+            {k: v for k, v in t.items() if k != 'broker_entries'}
+            for t in all_trades
+        ]
+        return jsonify({'success': True, 'trades': trades, 'count': len(trades)})
+    except Exception as e:
+        logger.error(f'[rtp2m/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp2m/history', methods=['DELETE'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp2m_history_delete() -> EndpointResponse:
+    """Delete a trade record by entry_time from both daily and all-time 2m history files."""
+    try:
+        data       = request.get_json(silent=True) or {}
+        entry_time = data.get('entry_time')
+        delete_all = bool(data.get('all'))
+        if not entry_time and not delete_all:
+            return jsonify({'success': False, 'error': 'entry_time or all:true required'}), 400
+
+        for path in [_RTP2M_HISTORY_PATH, _RTP2M_ALL_HISTORY_PATH]:
+            try:
+                with open(path, 'r') as _f:
+                    records = json.load(_f)
+                if isinstance(records, list):
+                    records = [] if delete_all else \
+                        [r for r in records if r.get('entry_time') != entry_time]
+                    with open(path, 'w') as _f:
+                        json.dump(records, _f, indent=2, default=str)
+            except Exception:
+                pass
+
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f'[rtp2m/history/delete] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp2m/exit', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp2m_force_exit() -> EndpointResponse:
+    """Manually close the active RTP 2m trade on all brokers."""
+    try:
+        try:
+            with open(_RTP2M_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {}
+
+        if not state.get('active_trade'):
+            return jsonify({'success': False, 'error': 'No active trade to exit'}), 400
+
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        # Prefer the running instance so cached broker services are reused
+        algo = get_instance(username, '2m')
+        if algo is None:
+            algo = RTPAlgo(username=username, variant='2m')
+
+        provider = get_data_provider()
+        spot = 0.0
+        if provider:
+            try:
+                ltp_data = provider.ltp([_NIFTY_FYERS_IDX])
+                spot = float(ltp_data.get(_NIFTY_FYERS_IDX, {}).get('last_price', 0) or 0)
+            except Exception:
+                pass
+
+        algo._exit_trade('MANUAL', spot)
+        return jsonify({'success': True, 'exit_spot': spot})
+    except Exception as e:
+        logger.error(f'[rtp2m/exit] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp2m/delta-strikes', methods=['GET'])
+@require_user_auth
+def algo_rtp2m_delta_strikes() -> EndpointResponse:
+    """Return the CE and PE strikes closest to ±0.90 delta at the current NIFTY spot."""
+    try:
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        provider = get_data_provider()
+        if not provider:
+            return jsonify({'success': False, 'error': 'Data provider unavailable'}), 503
+
+        # Prefer the running instance (has instruments already cached)
+        algo = get_instance(username, '2m') or RTPAlgo(username=username, variant='2m')
+        result = algo.get_delta_strikes(provider)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f'[rtp2m/delta-strikes] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/rtp2m/start', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_rtp2m_start() -> EndpointResponse:
+    """Start (or restart) the RTP 2m monitoring thread."""
+    try:
+        from trading_app.algo.rtp_railway_track.rtp_algo import RTPAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        existing = get_instance(username, '2m')
+        if existing and existing.is_running():
+            return jsonify({'success': False, 'error': 'Algo already running'}), 409
+
+        algo = RTPAlgo(username=username, variant='2m')
+        algo.start()
+        return jsonify({'success': True, 'message': 'RTP 2m algo started'})
+    except Exception as e:
+        logger.error(f'[rtp2m/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+
+
 # ── EMA RTP 5m live algo (same RTP logic, 5-minute candles) ──────────────────
 
 @api_bp.route('/algo/rtp5m/status', methods=['GET'])
@@ -6697,6 +6929,7 @@ def algo_sc_delta_strikes() -> EndpointResponse:
 _ALGO_STRIKE_MODE_VARS = {
     'rtp':    'RTP_1M_STRIKE_MODE',
     'rtp30s': 'RTP_30S_STRIKE_MODE',
+    'rtp2m':  'RTP_2M_STRIKE_MODE',
     'rtp3m':  'RTP_3M_STRIKE_MODE',
     'rtp5m':  'RTP_5M_STRIKE_MODE',
     'sc':     'SC_STRIKE_MODE',
@@ -6719,16 +6952,16 @@ def algo_strike_mode(algo_key: str) -> EndpointResponse:
         if request.method == 'POST':
             data = request.get_json(silent=True) or {}
             mode = str(data.get('mode', '')).strip().lower()
-            if mode not in ('delta', 'premium'):
+            if mode not in ('delta', 'premium', 'premium250'):
                 return jsonify({'success': False,
-                                'error': "mode must be 'delta' or 'premium'"}), 400
+                                'error': "mode must be 'delta', 'premium' or 'premium250'"}), 400
             if not UserEnvManager.save_user_var(username, var, mode):
                 return jsonify({'success': False, 'error': 'Failed to save setting'}), 500
             return jsonify({'success': True, 'mode': mode})
 
-        mode = (UserEnvManager.get_user_var(username, var) or 'premium').strip().lower()
-        if mode != 'delta':
-            mode = 'premium'
+        mode = (UserEnvManager.get_user_var(username, var) or 'premium250').strip().lower()
+        if mode not in ('delta', 'premium', 'premium250'):
+            mode = 'premium250'
         return jsonify({'success': True, 'mode': mode})
     except Exception as e:
         logger.error(f'[algo/strike-mode] {e}', exc_info=True)
@@ -6763,7 +6996,8 @@ def algo_sc_start() -> EndpointResponse:
 @require_user_auth
 def algo_sc_settings() -> EndpointResponse:
     """Read or update the editable 2nd-candle params (persisted in sc_state.json)."""
-    from trading_app.algo.second_candle.second_candle_algo import normalise_params
+    from trading_app.algo.second_candle.second_candle_algo import (
+        normalise_params, _atomic_write_json)
     try:
         try:
             with open(_SC_STATE_PATH, 'r') as _f:
@@ -6780,8 +7014,9 @@ def algo_sc_settings() -> EndpointResponse:
         params = normalise_params({**(state.get('params') or {}), **data})
         state['params'] = params
         state.setdefault('active_trade', None)
-        with open(_SC_STATE_PATH, 'w') as _f:
-            json.dump(state, _f, indent=2, default=str)
+        # Atomic write: a torn write here would let the algo's _load_state() fall
+        # back to a default (traded_today=False) and take a second trade.
+        _atomic_write_json(_SC_STATE_PATH, state)
         return jsonify({'success': True, 'params': params})
     except Exception as e:
         logger.error(f'[sc/settings] {e}', exc_info=True)
@@ -6822,6 +7057,11 @@ def algo_live_configs() -> EndpointResponse:
                         'tgt_points': v.tgt_points,
                         'use_adx':    v.use_adx,
                         'adx_thresh': v.adx_thresh,
+                        # Entry-reduction filters (mirrored in the live loop, so
+                        # live signals match a backtest with the same values).
+                        'strict_pattern':   getattr(v, 'strict_pattern', False),
+                        'min_rail_gap_atr': getattr(v, 'min_rail_gap_atr', 0.0),
+                        'confirm_bars':     getattr(v, 'confirm_bars', 0),
                     })
         except Exception as _e:
             logger.warning(f'[live-configs] rtp: {_e}')

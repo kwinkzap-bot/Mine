@@ -105,6 +105,41 @@
                 </div>
             </div>
 
+            <!-- RTP entry-reduction filters -->
+            <div id="rtpFilterRow" class="form-row" style="display:none" data-rtp-row>
+                <div class="form-group">
+                    <label for="rtpConfirmBars">Confirm Candle</label>
+                    <select id="rtpConfirmBars" title="After a signal candle, only enter once a later candle breaks its high (BUY) / low (SELL) within N bars. Filters out entries where momentum dies at the rail.">
+                        <option value="0">Off</option>
+                        <option value="1">1 bar</option>
+                        <option value="2">2 bars</option>
+                        <option value="3">3 bars</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="rtpRailGap">Min Rail Gap (&times;ATR)</label>
+                    <input type="number" id="rtpRailGap" placeholder="Off" min="0" step="0.05"
+                           title="Skip signals when |EMA20−EMA50| < X × ATR14 — i.e. when the rails are braided together in a flat market (whipsaw regime). Try 0.2."
+                           style="font-style:italic;" oninput="this.style.fontStyle=this.value?'normal':'italic'">
+                </div>
+                <div class="form-group">
+                    <label for="rtpMaxTrades">Max Trades/Day</label>
+                    <input type="number" id="rtpMaxTrades" placeholder="Off" min="1" step="1"
+                           title="Daily circuit breaker: stop taking new trades after this many trades in a day."
+                           style="font-style:italic;" oninput="this.style.fontStyle=this.value?'normal':'italic'">
+                </div>
+                <div class="form-group">
+                    <label for="rtpMaxConsecSL">Max SL Streak/Day</label>
+                    <input type="number" id="rtpMaxConsecSL" placeholder="Off" min="1" step="1"
+                           title="Daily circuit breaker: stop taking new trades after this many consecutive stop-loss exits in a day (a winner resets the streak)."
+                           style="font-style:italic;" oninput="this.style.fontStyle=this.value?'normal':'italic'">
+                </div>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="rtpStrictPattern">
+                    <label for="rtpStrictPattern" title="Only big-body directional signal candles (body ≥ 50% of range, strong close). Drops doji and weak hammer/engulfing entries.">Strict Candle</label>
+                </div>
+            </div>
+
             <!-- RTP position sizing -->
             <div id="rtpLotRow" class="form-row" style="display:none">
                 <div class="form-group">
@@ -465,6 +500,8 @@
                             <button class="period-tab active" data-period="monthly">Monthly</button>
                             <button class="period-tab" data-period="weekly">Weekly</button>
                             <button class="period-tab" data-period="daily">Daily</button>
+                            <button class="period-tab" data-period="quarterly">3 Months</button>
+                            <button class="period-tab" data-period="halfyearly">6 Months</button>
                             <button class="period-tab" data-period="yearly">Yearly</button>
                         </div>
                     </div>

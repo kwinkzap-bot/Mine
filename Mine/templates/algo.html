@@ -14,8 +14,9 @@
     <!-- ── Tab bar ────────────────────────────────────────────── -->
     <div class="ag-tab-bar">
         <button class="ag-tab active" id="algo-tab-active"           onclick="algoSwitch('active')">Active Trade</button>
-        <button class="ag-tab"        id="algo-tab-rtp"              onclick="algoSwitch('rtp')">EMA RTP 1m</button>
         <button class="ag-tab"        id="algo-tab-rtp30s"          onclick="algoSwitch('rtp30s')">EMA RTP 30s</button>
+        <button class="ag-tab"        id="algo-tab-rtp"              onclick="algoSwitch('rtp')">EMA RTP 1m</button>
+        <button class="ag-tab"        id="algo-tab-rtp2m"           onclick="algoSwitch('rtp2m')">EMA RTP 2m</button>
         <button class="ag-tab"        id="algo-tab-rtp3m"           onclick="algoSwitch('rtp3m')">EMA RTP 3m</button>
         <button class="ag-tab"        id="algo-tab-rtp5m"           onclick="algoSwitch('rtp5m')">EMA RTP 5m</button>
         <button class="ag-tab"        id="algo-tab-sc"              onclick="algoSwitch('sc')">2nd 30s Candle</button>
@@ -109,6 +110,7 @@
             <div class="ag-card-hdr-actions">
                 <select class="ag-strike-mode" id="rtpStrikeMode" title="Strike selection logic"
                         onchange="_algoSetStrikeMode('rtp', this)">
+                    <option value="premium250" selected>Prem ≈₹250</option>
                     <option value="premium">Prem ₹300–350</option>
                     <option value="delta">Delta 0.90</option>
                 </select>
@@ -207,6 +209,7 @@
             <div class="ag-card-hdr-actions">
                 <select class="ag-strike-mode" id="rtp30sStrikeMode" title="Strike selection logic"
                         onchange="_algoSetStrikeMode('rtp30s', this)">
+                    <option value="premium250" selected>Prem ≈₹250</option>
                     <option value="premium">Prem ₹300–350</option>
                     <option value="delta">Delta 0.90</option>
                 </select>
@@ -274,6 +277,105 @@
     </div><!-- #algo-rtp30s-panel -->
 
     <!-- ════════════════════════════════════════════════════════ -->
+    <!-- EMA RTP 2m panel (same logic, 2-minute candles)         -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-rtp2m-panel">
+
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <div class="ag-header">
+        <span class="ag-title">EMA RTP 2m — Railway Track</span>
+        <button class="ag-info-btn" id="rtp2mLogicBtn" onclick="rtp2mShowLogic()"
+                title="View strategy logic, entry &amp; exit rules" aria-label="Strategy logic">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>Logic</span>
+        </button>
+        <span id="rtp2mBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="rtp2mBadgeText">No Trade</span>
+        </span>
+        <span class="ag-last-upd" id="rtp2mLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <!-- ── Active Trade card ───────────────────────────────────── -->
+    <div class="ag-card" id="rtp2mActiveCard">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Active Trade</span>
+            <div class="ag-card-hdr-actions">
+                <select class="ag-strike-mode" id="rtp2mStrikeMode" title="Strike selection logic"
+                        onchange="_algoSetStrikeMode('rtp2m', this)">
+                    <option value="premium250" selected>Prem ≈₹250</option>
+                    <option value="premium">Prem ₹300–350</option>
+                    <option value="delta">Delta 0.90</option>
+                </select>
+                <button class="ag-btn ag-btn-strikes" id="rtp2mStrikesBtn"
+                        onclick="rtp2mFetchDeltaStrikes(this)">Δ Strikes</button>
+                <button class="ag-btn ag-btn-exit" id="rtp2mExitBtn"
+                        onclick="rtp2mExitNow(this)" disabled>Force Exit</button>
+            </div>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="rtp2mActiveGrid">
+                <div class="ag-empty">No active trade</div>
+            </div>
+            <!-- Delta strike result panel — shown after button click -->
+            <div id="rtp2mStrikesResult" style="display:none"></div>
+        </div>
+    </div>
+
+    <!-- ── Performance dashboard (from executed-trade JSON) ────── -->
+    <div class="ag-card" id="rtp2mDashCard" style="display:none">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Live Performance</span>
+            <span id="rtp2mDashNet" style="margin-left:auto;font-size:12px;font-weight:800"></span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="rtp2mDashStats"></div>
+
+            <!-- Equity curve -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">Equity Curve</span>
+                    <span id="rtp2mEquityMeta" class="rtp-chart-meta"></span>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="rtp2mEquityChart"></canvas></div>
+            </div>
+
+            <!-- P&L breakdown -->
+            <div class="rtp-chart-block">
+                <div class="rtp-chart-hdr">
+                    <span class="rtp-chart-title">P&amp;L Breakdown</span>
+                    <div class="rtp-period-tabs" id="rtp2mPeriodTabs">
+                        <button class="rtp-period-tab active" data-period="monthly" onclick="rtp2mSetPeriod('monthly')">Monthly</button>
+                        <button class="rtp-period-tab"        data-period="weekly"  onclick="rtp2mSetPeriod('weekly')">Weekly</button>
+                        <button class="rtp-period-tab"        data-period="daily"   onclick="rtp2mSetPeriod('daily')">Daily</button>
+                        <button class="rtp-period-tab"        data-period="yearly"  onclick="rtp2mSetPeriod('yearly')">Yearly</button>
+                    </div>
+                </div>
+                <div class="rtp-chart-wrap"><canvas id="rtp2mBreakdownChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Executed Trade History ──────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Executed Trade History</span>
+            <span id="rtp2mHistCount" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+            <button class="ag-hist-delall-btn" onclick="_rtp2mDeleteAllTrades()" title="Delete ALL trade history records">&#128465; Delete All</button>
+        </div>
+        <div id="rtp2mHistBody">
+            <div class="ag-empty">No completed trades</div>
+        </div>
+    </div>
+
+    </div><!-- #algo-rtp2m-panel -->
+
+    <!-- ════════════════════════════════════════════════════════ -->
     <!-- EMA RTP 3m panel (same logic, 3-minute candles)         -->
     <!-- ════════════════════════════════════════════════════════ -->
     <div class="ag-panel" id="algo-rtp3m-panel">
@@ -305,6 +407,7 @@
             <div class="ag-card-hdr-actions">
                 <select class="ag-strike-mode" id="rtp3mStrikeMode" title="Strike selection logic"
                         onchange="_algoSetStrikeMode('rtp3m', this)">
+                    <option value="premium250" selected>Prem ≈₹250</option>
                     <option value="premium">Prem ₹300–350</option>
                     <option value="delta">Delta 0.90</option>
                 </select>
@@ -403,6 +506,7 @@
             <div class="ag-card-hdr-actions">
                 <select class="ag-strike-mode" id="rtp5mStrikeMode" title="Strike selection logic"
                         onchange="_algoSetStrikeMode('rtp5m', this)">
+                    <option value="premium250" selected>Prem ≈₹250</option>
                     <option value="premium">Prem ₹300–350</option>
                     <option value="delta">Delta 0.90</option>
                 </select>
@@ -501,6 +605,7 @@
             <div class="ag-card-hdr-actions">
                 <select class="ag-strike-mode" id="scStrikeMode" title="Strike selection logic"
                         onchange="_algoSetStrikeMode('sc', this)">
+                    <option value="premium250" selected>Prem ≈₹250</option>
                     <option value="premium">Prem ₹300–350</option>
                     <option value="delta">Delta 0.90</option>
                 </select>

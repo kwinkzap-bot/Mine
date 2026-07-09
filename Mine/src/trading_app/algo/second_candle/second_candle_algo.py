@@ -35,11 +35,26 @@ _STATE_FILE       = os.path.join(os.path.dirname(__file__), 'sc_state.json')
 _HISTORY_FILE     = os.path.join(os.path.dirname(__file__), 'sc_trades_history.json')
 _ALL_HISTORY_FILE = os.path.join(os.path.dirname(__file__), 'sc_trades_all_history.json')
 
+
+def _atomic_write_json(path: str, obj: Any) -> None:
+    """Write JSON via a temp file + os.replace so a concurrent reader never sees
+    a half-written file. Non-atomic writes let _load_state() hit a JSON parse
+    error and fall back to a fresh default (traded_today=False), which silently
+    unblocks the one-trade-per-day guard and causes a phantom re-entry."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, 'w') as f:
+        json.dump(obj, f, indent=2, default=str)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
 _SINGLE_LOT_QTY = 65     # NIFTY single lot — used for Opt P&L display
 _DELTA_TARGET   = 0.90
 _MAX_PREMIUM    = 500.0  # cap on option premium — if the ±0.90Δ strike costs more, shift to the strike priced nearest below this
-# 'premium' strike mode (default): pick the strike priced inside ₹300–350, nearest ₹300
+# 'premium' strike mode: pick the strike priced inside ₹300–350, nearest ₹300
 _PREM_TARGET    = 300.0
+# 'premium250' strike mode (default): strike whose premium is nearest ₹250
+_PREM250_TARGET = 250.0
 _PREM_BAND_HIGH = 350.0
 _STRIKE_STEP    = 50.0
 _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
@@ -175,26 +190,51 @@ class SecondCandleAlgo:
         }
 
     def _load_state(self) -> Dict[str, Any]:
-        try:
-            with open(_STATE_FILE, 'r') as f:
-                state = json.load(f)
-            if not isinstance(state, dict):
+        # Retry once on a read/parse error before giving up: a transient partial
+        # read (mid-write) must NOT silently become a fresh default state, which
+        # would reset traded_today=False and unblock a second entry for the day.
+        for attempt in range(2):
+            try:
+                with open(_STATE_FILE, 'r') as f:
+                    state = json.load(f)
+                if not isinstance(state, dict):
+                    return self._default_state()
+                state.setdefault('active_trade', None)
+                state.setdefault('traded_today', False)
+                state.setdefault('trade_date', date.today().isoformat())
+                state['params'] = normalise_params(state.get('params'))
+                return state
+            except FileNotFoundError:
                 return self._default_state()
-            state.setdefault('active_trade', None)
-            state.setdefault('traded_today', False)
-            state.setdefault('trade_date', date.today().isoformat())
-            state['params'] = normalise_params(state.get('params'))
-            return state
-        except Exception:
-            return self._default_state()
+            except Exception as e:
+                if attempt == 0:
+                    time.sleep(0.05)
+                    continue
+                logger.error(f"[SC] State read failed ({e}) — using default")
+                return self._default_state()
 
     def _save_state(self, state: Dict[str, Any]) -> None:
         with self._state_lock:
             try:
-                with open(_STATE_FILE, 'w') as f:
-                    json.dump(state, f, indent=2, default=str)
+                _atomic_write_json(_STATE_FILE, state)
             except Exception as e:
                 logger.error(f"[SC] State save failed: {e}")
+
+    def _has_traded_today(self) -> bool:
+        """Durable one-trade-per-day check, independent of the mutable
+        traded_today flag in sc_state.json. Reads today's rotated history file
+        (a separate file), so it still blocks re-entry even if the state flag
+        was lost to a mid-day restart or a partial state write."""
+        try:
+            with open(_HISTORY_FILE, 'r') as f:
+                history = json.load(f)
+            if isinstance(history, list):
+                today = date.today().isoformat()
+                return any(isinstance(r, dict) and r.get('date') == today
+                           for r in history)
+        except Exception:
+            pass
+        return False
 
     def _params(self) -> Dict[str, Any]:
         return normalise_params(self._load_state().get('params'))
@@ -250,8 +290,7 @@ class SecondCandleAlgo:
             }
             history.insert(0, record)  # latest-first
 
-            with open(_HISTORY_FILE, 'w') as f:
-                json.dump(history, f, indent=2, default=str)
+            _atomic_write_json(_HISTORY_FILE, history)
 
             # Append to permanent all-time history (no day rotation)
             try:
@@ -263,8 +302,7 @@ class SecondCandleAlgo:
                 except Exception:
                     all_history = []
                 all_history.insert(0, record)
-                with open(_ALL_HISTORY_FILE, 'w') as f:
-                    json.dump(all_history, f, indent=2, default=str)
+                _atomic_write_json(_ALL_HISTORY_FILE, all_history)
             except Exception as _ae:
                 logger.error(f"[SC] All-history append failed: {_ae}")
         except Exception as e:
@@ -711,10 +749,13 @@ class SecondCandleAlgo:
         spot: float,
         provider: Any,
         chain_deltas: Optional[Dict] = None,
+        target: float = _PREM_TARGET,
+        band_high: Optional[float] = _PREM_BAND_HIGH,
     ) -> Tuple[float, Optional[Dict]]:
-        """Return the strike whose premium sits inside the ₹300–350 band, nearest
-        ₹300. If no strike prices inside the band, fall back to the strike whose
-        premium is nearest ₹300 overall.
+        """Return the strike priced nearest `target`. When `band_high` is set,
+        prefer strikes inside the [target, band_high] band (nearest target);
+        fall back to the overall nearest-target strike otherwise. band_high=None
+        means pure nearest-target (the 'premium250' mode).
         """
         atm = round(spot / _STRIKE_STEP) * _STRIKE_STEP
 
@@ -729,7 +770,7 @@ class SecondCandleAlgo:
             logger.error("[SC] Fyers option chain empty — cannot select premium strike")
             return atm, None
 
-        in_band = None   # (|ltp-300|, strike, delta, symbol, ltp)
+        in_band = None   # (|ltp-target|, strike, delta, symbol, ltp)
         overall = None
         for (strike, ot), entry in chain_deltas.items():
             if ot != opt_type.upper():
@@ -737,11 +778,11 @@ class SecondCandleAlgo:
             ltp = entry.get('ltp')
             if ltp is None or ltp <= 0 or not entry.get('symbol'):
                 continue
-            cand = (abs(ltp - _PREM_TARGET), float(strike),
+            cand = (abs(ltp - target), float(strike),
                     entry.get('delta'), entry.get('symbol', ''), ltp)
             if overall is None or cand[0] < overall[0]:
                 overall = cand
-            if _PREM_TARGET <= ltp <= _PREM_BAND_HIGH and \
+            if band_high is not None and target <= ltp <= band_high and \
                     (in_band is None or cand[0] < in_band[0]):
                 in_band = cand
 
@@ -759,20 +800,22 @@ class SecondCandleAlgo:
             'strike':           int(best_strike),
             'instrument_type':  opt_type.upper(),
         }
+        band_txt = (f"band ₹{target:.0f}–{band_high:.0f}"
+                    f"{'' if in_band else f' — no strike in band, nearest ₹{target:.0f} used'}"
+                    if band_high is not None else f"nearest ₹{target:.0f}")
         logger.info(
             f"[SC] Premium strike: {opt_type} {int(best_strike)} ltp={best_ltp} "
-            f"delta={best_delta:+.4f} "
-            f"(band ₹{_PREM_TARGET:.0f}–{_PREM_BAND_HIGH:.0f}"
-            f"{'' if in_band else ' — no strike in band, nearest ₹300 used'})"
+            f"delta={best_delta:+.4f} ({band_txt})"
         )
         return best_strike, inst
 
     def _strike_mode(self) -> str:
         """Per-user strike selection mode from SC_STRIKE_MODE:
-        'premium' (default) → strike priced inside ₹300–350, nearest ₹300;
+        'premium250' (default) → strike whose premium is nearest ₹250;
+        'premium' → strike priced inside ₹300–350, nearest ₹300;
         'delta' → classic ±0.90-delta strike with the ₹500 premium cap."""
-        mode = self._uvar('SC_STRIKE_MODE', 'premium').lower()
-        return 'delta' if mode == 'delta' else 'premium'
+        mode = self._uvar('SC_STRIKE_MODE', 'premium250').lower()
+        return mode if mode in ('delta', 'premium', 'premium250') else 'premium250'
 
     def _select_strike(
         self,
@@ -782,9 +825,13 @@ class SecondCandleAlgo:
         chain_deltas: Optional[Dict] = None,
     ) -> Tuple[float, Optional[Dict]]:
         """Dispatch strike selection according to the user's strike-mode setting."""
-        if self._strike_mode() == 'delta':
+        mode = self._strike_mode()
+        if mode == 'delta':
             return self._select_delta_strike(opt_type, spot, provider, chain_deltas)
-        return self._select_premium_strike(opt_type, spot, provider, chain_deltas)
+        if mode == 'premium':
+            return self._select_premium_strike(opt_type, spot, provider, chain_deltas)
+        return self._select_premium_strike(opt_type, spot, provider, chain_deltas,
+                                           target=_PREM250_TARGET, band_high=None)
 
     # ── Broker management ─────────────────────────────────────────────────────
 
@@ -1298,8 +1345,20 @@ class SecondCandleAlgo:
                         time.sleep(5)
                         continue
 
-                    # ── One trade per day: stop scanning once we've traded
-                    if state.get('traded_today'):
+                    # ── One trade per day: stop scanning once we've traded.
+                    # The traded_today flag lives in the mutable state file; back
+                    # it with the durable per-day history so a state reset or a
+                    # mid-day restart can never unblock a phantom second entry
+                    # (which re-used the morning range and exited the same second).
+                    if state.get('traded_today') or self._has_traded_today():
+                        if not state.get('traded_today'):
+                            logger.warning(
+                                "[SC] traded_today was False but today's history "
+                                "already has a trade — repairing flag, blocking re-entry"
+                            )
+                            state['traded_today'] = True
+                            state['trade_date']   = date.today().isoformat()
+                            self._save_state(state)
                         time.sleep(5)
                         continue
 

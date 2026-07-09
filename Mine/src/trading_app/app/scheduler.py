@@ -190,6 +190,38 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
+        # RTP 2m (same logic, 2-minute candles): start at 9:15 AM weekdays
+        self.scheduler.add_job(
+            self._start_rtp2m_monitoring,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=9,
+                minute=15,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='rtp2m_algo_start',
+            name='RTP 2m Railway Track Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
+        # Watchdog: restart the RTP 2m thread if it crashes mid-day
+        self.scheduler.add_job(
+            self._watchdog_rtp2m,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/5',
+                second=30,
+                timezone='Asia/Kolkata',
+            ),
+            id='rtp2m_algo_watchdog',
+            name='RTP 2m Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
         # RTP 3m (same logic, 3-minute candles): start at 9:15 AM weekdays
         self.scheduler.add_job(
             self._start_rtp3m_monitoring,
@@ -442,6 +474,14 @@ class MarketScheduler:
     def _watchdog_rtp30s(self) -> None:
         """Every 5 minutes during market hours: restart RTP 30s thread if it crashed."""
         self._ensure_rtp_running(source='Watchdog', variant='30s')
+
+    def _start_rtp2m_monitoring(self) -> None:
+        """9:15 AM weekdays: start RTP 2m Railway Track algo monitoring thread."""
+        self._ensure_rtp_running(source='Scheduler', variant='2m')
+
+    def _watchdog_rtp2m(self) -> None:
+        """Every 5 minutes during market hours: restart RTP 2m thread if it crashed."""
+        self._ensure_rtp_running(source='Watchdog', variant='2m')
 
     def _start_rtp3m_monitoring(self) -> None:
         """9:15 AM weekdays: start RTP 3m Railway Track algo monitoring thread."""

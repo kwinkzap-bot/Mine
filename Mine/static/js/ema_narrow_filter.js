@@ -104,8 +104,17 @@ async function loadEmaNarrowData(forceRefresh = false, isPoll = false) {
         const response = await fetchJson(url);
 
         if (response && response.status === 'running') {
-            // Scan still in progress — show progress and poll again shortly
-            renderNarrowProgress(response.progress);
+            // Scan in progress — render whatever has been found so far and keep
+            // the loader row below the last record, then poll again shortly
+            const partial = response.results || [];
+            if (partial.length > 0) {
+                renderNarrowTable(partial);
+                const countEl = document.getElementById('emaNarrowCount');
+                if (countEl) countEl.textContent = `(${partial.length} so far…)`;
+                appendNarrowLoaderRow(response.progress);
+            } else {
+                renderNarrowProgress(response.progress);
+            }
             _narrowPollTimer = setTimeout(() => loadEmaNarrowData(false, true), NARROW_POLL_MS);
         } else if (response && (response.success || response.results)) {
             const results = response.results || [];
@@ -130,23 +139,38 @@ async function loadEmaNarrowData(forceRefresh = false, isPoll = false) {
     }
 }
 
+function _narrowProgressDetail(progress) {
+    if (progress && progress.total > 0) {
+        const pct = Math.round(progress.done / progress.total * 100);
+        return `${progress.done} / ${progress.total} stocks scanned (${pct}%)`;
+    }
+    return 'Starting scan...';
+}
+
+function _narrowLoaderRowHtml(progress) {
+    return `
+        <td colspan="8" style="text-align: center; padding: 18px; color: var(--scan-th-text); font-weight: 500; background: var(--scan-bg);">
+            <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid var(--scan-th-text); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
+            🧲 Scanning all NSE equity stocks for EMA compression — ${_narrowProgressDetail(progress)}
+        </td>
+    `;
+}
+
+// Loader shown when there are no matches yet — replaces the table body
 function renderNarrowProgress(progress) {
     const tbody = document.getElementById('emaNarrowBody');
     if (!tbody) return;
+    tbody.innerHTML = `<tr>${_narrowLoaderRowHtml(progress)}</tr>`;
+}
 
-    let detail = 'Starting scan...';
-    if (progress && progress.total > 0) {
-        const pct = Math.round(progress.done / progress.total * 100);
-        detail = `${progress.done} / ${progress.total} stocks scanned (${pct}%)`;
-    }
-    tbody.innerHTML = `
-        <tr>
-            <td colspan="8" style="text-align: center; padding: 24px; color: var(--scan-th-text); font-weight: 500; background: var(--scan-bg);">
-                <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid var(--scan-th-text); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
-                🧲 Scanning all NSE equity stocks for EMA compression — ${detail}
-            </td>
-        </tr>
-    `;
+// Loader appended BELOW the last partial-result record while the scan runs
+function appendNarrowLoaderRow(progress) {
+    const tbody = document.getElementById('emaNarrowBody');
+    if (!tbody) return;
+    const row = document.createElement('tr');
+    row.id = 'emaNarrowLoaderRow';
+    row.innerHTML = _narrowLoaderRowHtml(progress);
+    tbody.appendChild(row);
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
@@ -249,7 +273,8 @@ function sortNarrowTable(tableId, colStr) {
     const tbody = table.querySelector('tbody');
     if (!tbody) return;
 
-    const rows   = Array.from(tbody.querySelectorAll('tr'));
+    const rows   = Array.from(tbody.querySelectorAll('tr'))
+        .filter(r => r.id !== 'emaNarrowLoaderRow'); // keep loader pinned at bottom
     const header = table.querySelector(`th[data-col="${colStr}"]`);
     if (!header) return;
 
@@ -273,6 +298,8 @@ function sortNarrowTable(tableId, colStr) {
     });
 
     rows.forEach(r => tbody.appendChild(r));
+    const loader = document.getElementById('emaNarrowLoaderRow');
+    if (loader) tbody.appendChild(loader);
 }
 
 // ─── Badge ────────────────────────────────────────────────────────────────────

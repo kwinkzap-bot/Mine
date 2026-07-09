@@ -7,10 +7,11 @@ Exits when NIFTY spot crosses the SL / Target (per-variant) from entry spot.
 Multiple re-entries allowed per day. Auto-started at 9:15 AM by the scheduler.
 
 Timeframe variants share this identical logic (see RTP_VARIANTS):
-  '1m'  — 1-minute candles,  SL 30 / Target 90, ADX off
-  '30s' — 30-second candles, SL 25 / Target 75, ADX off
-  '3m'  — 3-minute candles,  SL 30 / Target 90, ADX on @ 25
-  '5m'  — 5-minute candles,  SL 30 / Target 90, ADX off
+  '1m'  — 1-minute candles,  SL 30 / Target 90, ADX off, confirm candle 2 bars
+  '30s' — 30-second candles, SL 10 / Target 30, ADX on @ 25, rail gap ≥ 0.2×ATR
+  '2m'  — 2-minute candles,  SL 30 / Target 90, ADX off, confirm candle 2 bars
+  '3m'  — 3-minute candles,  SL 25 / Target 75, ADX off, confirm candle 2 bars
+  '5m'  — 5-minute candles,  SL 30 / Target 90, ADX off, confirm candle 2 bars, rail gap ≥ 0.2×ATR
 
 Per-user env vars (VAR is 'RTP_1M' for 1m, 'RTP_30S' for 30s, etc.):
   EMA_RTP_1M_ACTIVE / EMA_RTP_30S_ACTIVE = true
@@ -36,9 +37,11 @@ _DIR = os.path.dirname(__file__)
 _SINGLE_LOT_QTY = 65     # NIFTY single lot — used for Opt P&L display
 _DELTA_TARGET   = 0.90
 _MAX_PREMIUM    = 500.0  # cap on option premium — if the ±0.90Δ strike costs more, shift to the strike priced nearest below this
-# 'premium' strike mode (default): pick the strike priced inside ₹300–350, nearest ₹300
+# 'premium' strike mode: pick the strike priced inside ₹300–350, nearest ₹300
 _PREM_TARGET    = 300.0
 _PREM_BAND_HIGH = 350.0
+# 'premium250' strike mode (default): strike whose premium is nearest ₹250
+_PREM250_TARGET = 250.0
 _STRIKE_STEP    = 50.0
 _SLOPE_BARS     = 8
 _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
@@ -47,7 +50,7 @@ _LOOKBACK_DAYS  = 5    # Calendar days to look back for warmup candles (covers w
 # Coarser intervals produce far fewer bars/day (5m: ~75 vs 1m: ~375), so they need a
 # longer lookback to clear the 200-bar warmup gate even across holiday weekends and
 # to converge EMAs close to the backtest's long history.
-_LOOKBACK_DAYS_BY_INTERVAL = {'30second': 5, 'minute': 5, '3minute': 9, '5minute': 14}
+_LOOKBACK_DAYS_BY_INTERVAL = {'30second': 5, 'minute': 5, '2minute': 7, '3minute': 9, '5minute': 14}
 _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute of data gap)
 _FALLBACK_IV    = 0.15  # assumed annual IV when ATM IV cannot be computed (NIFTY typical range 13–18%)
 _RECONCILE_SECS = 25   # how often to reconcile active_trade against real broker positions
@@ -56,7 +59,7 @@ _RECONCILE_SECS = 25   # how often to reconcile active_trade against real broker
 # completed once open_time + duration <= now. Flooring "now" to the minute (the
 # old cutoff) is equivalent for 1-min bars but treats in-progress 3m/5m bars as
 # completed, firing live signals on partial candles the backtest never sees.
-_INTERVAL_SECS = {'30second': 30, 'minute': 60, '3minute': 180, '5minute': 300}
+_INTERVAL_SECS = {'30second': 30, 'minute': 60, '2minute': 120, '3minute': 180, '5minute': 300}
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,14 @@ class RTPVariant:
     broker_tag:       str    # BROKER_{i}_<tag>_ACTIVE / _LOTS
     log_prefix:       str
     thread_name:      str
+    # Entry-reduction filters (column-level in the engine, so live signals and
+    # backtest signals stay identical when these match the dashboard settings).
+    strict_pattern:   bool  = False
+    min_rail_gap_atr: float = 0.0
+    # Confirmation-candle entry: after a signal candle, only enter once a later
+    # completed candle breaks its high (BUY) / low (SELL) within N bars.
+    # 0 = off (enter right away, next-bar semantics — the original behaviour).
+    confirm_bars:     int   = 0
 
 
 RTP_VARIANTS: Dict[str, RTPVariant] = {
@@ -89,6 +100,7 @@ RTP_VARIANTS: Dict[str, RTPVariant] = {
         tgt_points=90.0,
         use_adx=False,
         adx_thresh=25.0,
+        confirm_bars=2,
         state_file=os.path.join(_DIR, 'rtp_state.json'),
         history_file=os.path.join(_DIR, 'rtp_trades_history.json'),
         all_history_file=os.path.join(_DIR, 'rtp_trades_all_history.json'),
@@ -100,10 +112,11 @@ RTP_VARIANTS: Dict[str, RTPVariant] = {
     '30s': RTPVariant(
         key='30s',
         interval='30second',
-        sl_points=25.0,
-        tgt_points=75.0,
-        use_adx=False,
-        adx_thresh=20.0,
+        sl_points=10.0,
+        tgt_points=30.0,
+        use_adx=True,
+        adx_thresh=25.0,
+        min_rail_gap_atr=0.2,
         state_file=os.path.join(_DIR, 'rtp_state_30s.json'),
         history_file=os.path.join(_DIR, 'rtp_trades_history_30s.json'),
         all_history_file=os.path.join(_DIR, 'rtp_trades_all_history_30s.json'),
@@ -112,13 +125,30 @@ RTP_VARIANTS: Dict[str, RTPVariant] = {
         log_prefix='RTP30s',
         thread_name='rtp-algo-monitor-30s',
     ),
+    '2m': RTPVariant(
+        key='2m',
+        interval='2minute',
+        sl_points=30.0,
+        tgt_points=90.0,
+        use_adx=False,
+        adx_thresh=25.0,
+        confirm_bars=2,
+        state_file=os.path.join(_DIR, 'rtp_state_2m.json'),
+        history_file=os.path.join(_DIR, 'rtp_trades_history_2m.json'),
+        all_history_file=os.path.join(_DIR, 'rtp_trades_all_history_2m.json'),
+        env_active='EMA_RTP_2M_ACTIVE',
+        broker_tag='RTP_2M',
+        log_prefix='RTP2m',
+        thread_name='rtp-algo-monitor-2m',
+    ),
     '3m': RTPVariant(
         key='3m',
         interval='3minute',
-        sl_points=30.0,
-        tgt_points=90.0,
-        use_adx=True,
+        sl_points=25.0,
+        tgt_points=75.0,
+        use_adx=False,
         adx_thresh=25.0,
+        confirm_bars=2,
         state_file=os.path.join(_DIR, 'rtp_state_3m.json'),
         history_file=os.path.join(_DIR, 'rtp_trades_history_3m.json'),
         all_history_file=os.path.join(_DIR, 'rtp_trades_all_history_3m.json'),
@@ -134,6 +164,8 @@ RTP_VARIANTS: Dict[str, RTPVariant] = {
         tgt_points=90.0,
         use_adx=False,
         adx_thresh=25.0,
+        confirm_bars=2,
+        min_rail_gap_atr=0.2,
         state_file=os.path.join(_DIR, 'rtp_state_5m.json'),
         history_file=os.path.join(_DIR, 'rtp_trades_history_5m.json'),
         all_history_file=os.path.join(_DIR, 'rtp_trades_all_history_5m.json'),
@@ -214,7 +246,10 @@ class RTPAlgo:
         # (a bar completing at :30 must be acted on immediately), else per minute.
         self._check_secs = min(self._bar_secs, 60)
         # Engine session/EOD rules are interval-aware — must match the live bars.
-        self._engine_interval_min = max(1, self._bar_secs // 60)
+        # Sub-minute bars use a fractional value (0.5 for 30s), same as the
+        # backtest's interval map, so session/EOD cutoffs line up exactly.
+        self._engine_interval_min = self._bar_secs / 60 if self._bar_secs < 60 \
+            else self._bar_secs // 60
         self._lookback_days = _LOOKBACK_DAYS_BY_INTERVAL.get(self.cfg.interval, _LOOKBACK_DAYS)
         # Last bar consumed by _replay_today_needs_reset — the monitor loop starts
         # _check_rtp_signal from the bar after it (no gap, no double-processing).
@@ -434,6 +469,8 @@ class RTPAlgo:
                 adx_thresh=self.cfg.adx_thresh,
                 sl_points=self.cfg.sl_points,
                 tgt_points=self.cfg.tgt_points,
+                strict_pattern=self.cfg.strict_pattern,
+                min_rail_gap_atr=self.cfg.min_rail_gap_atr,
             )
             processed = engine.df
             if len(processed) < 2:
@@ -469,6 +506,14 @@ class RTPAlgo:
             signal: Optional[str] = None
             signal_bar_close: Optional[float] = None
 
+            # Confirmation-candle state (persisted so it survives restarts).
+            # Mirrors the engine's pending-signal machine: a signal only arms a
+            # pending entry; the trade fires when a later completed bar breaks
+            # the signal candle's high (BUY) / low (SELL) within confirm_bars.
+            confirm_n = int(getattr(self.cfg, 'confirm_bars', 0) or 0)
+            pending: Optional[Dict[str, Any]] = \
+                (state.get('pending_signal') or None) if confirm_n else None
+
             for _, row in to_check.iterrows():
                 bar_dt = row['datetime']
 
@@ -480,6 +525,41 @@ class RTPAlgo:
                 if buy_needs_reset  and row['low']  > max(row['ema9'], row['ema20']):
                     buy_needs_reset  = False
                     self.log.debug(f"buy_needs_reset cleared at {bar_dt}")
+
+                # Resolve a pending confirmation entry BEFORE the signal check —
+                # same per-bar order as the engine's run() loop.
+                if pending is not None:
+                    _sig_dt    = pd.Timestamp(pending['signal_bar_dt'])
+                    _expiry_dt = _sig_dt + confirm_n * self._bar_td
+                    if bar_dt > _expiry_dt or not row.get('session_ok', False):
+                        self.log.info(
+                            f"Pending {pending['direction']} (level {pending['level']}) "
+                            f"expired unconfirmed at {bar_dt}"
+                        )
+                        pending = None
+                    else:
+                        _lvl    = float(pending['level'])
+                        _filled = None
+                        if pending['direction'] == 'BUY':
+                            if row['open'] >= _lvl:
+                                _filled = float(row['open'])   # gapped past the level
+                            elif row['high'] >= _lvl:
+                                _filled = _lvl                 # broke intrabar
+                        else:
+                            if row['open'] <= _lvl:
+                                _filled = float(row['open'])
+                            elif row['low'] <= _lvl:
+                                _filled = _lvl
+                        if _filled is not None:
+                            signal           = pending['direction']
+                            signal_bar_close = _filled   # entry/SL/TGT reference
+                            new_last_bar_dt  = bar_dt
+                            self.log.info(
+                                f"✓ Pending {signal} confirmed at {bar_dt}: "
+                                f"level {_lvl} broken, entry ref {_filled}"
+                            )
+                            pending = None
+                            break
 
                 if not row.get('session_ok', False):
                     continue  # skip signal check; reset updates above still run
@@ -503,21 +583,34 @@ class RTPAlgo:
                     f"sell_nr={sell_needs_reset} → sell={sell_signal}"
                 )
 
-                if buy_signal:
-                    buy_needs_reset  = True
+                if buy_signal or sell_signal:
+                    _dir = 'BUY' if buy_signal else 'SELL'
+                    if buy_signal:
+                        buy_needs_reset  = True
+                    else:
+                        sell_needs_reset = True
+                    if confirm_n:
+                        # Arm (or replace) the pending entry — latest pullback wins,
+                        # exactly like the engine. Keep scanning: the break may
+                        # already be in this batch of bars.
+                        pending = {
+                            'direction':     _dir,
+                            'level':         float(row['high'] if buy_signal else row['low']),
+                            'signal_bar_dt': bar_dt.isoformat(),
+                        }
+                        self.log.info(
+                            f"Signal {_dir} at {bar_dt} armed pending entry — "
+                            f"needs break of {pending['level']} within {confirm_n} bar(s)"
+                        )
+                        continue
                     new_last_bar_dt  = bar_dt
-                    signal           = 'BUY'
-                    signal_bar_close = float(row['close'])
-                    break
-                if sell_signal:
-                    sell_needs_reset = True
-                    new_last_bar_dt  = bar_dt
-                    signal           = 'SELL'
+                    signal           = _dir
                     signal_bar_close = float(row['close'])
                     break
 
             state['buy_needs_reset']  = buy_needs_reset
             state['sell_needs_reset'] = sell_needs_reset
+            state['pending_signal']   = pending if confirm_n else None
 
             if signal:
                 self.log.info(
@@ -788,10 +881,13 @@ class RTPAlgo:
         spot: float,
         provider: Any,
         chain_deltas: Optional[Dict] = None,
+        target: float = _PREM_TARGET,
+        band_high: Optional[float] = _PREM_BAND_HIGH,
     ) -> Tuple[float, Optional[Dict]]:
-        """Return the strike whose premium sits inside the ₹300–350 band, nearest
-        ₹300. If no strike prices inside the band, fall back to the strike whose
-        premium is nearest ₹300 overall.
+        """Return the strike priced nearest `target`. When `band_high` is set,
+        prefer strikes inside the [target, band_high] band (nearest target);
+        fall back to the overall nearest-target strike otherwise. band_high=None
+        means pure nearest-target (the 'premium250' mode).
         """
         atm = round(spot / _STRIKE_STEP) * _STRIKE_STEP
 
@@ -806,7 +902,7 @@ class RTPAlgo:
             self.log.error("Fyers option chain empty — cannot select premium strike")
             return atm, None
 
-        in_band = None   # (|ltp-300|, strike, delta, symbol, ltp)
+        in_band = None   # (|ltp-target|, strike, delta, symbol, ltp)
         overall = None
         for (strike, ot), entry in chain_deltas.items():
             if ot != opt_type.upper():
@@ -814,11 +910,11 @@ class RTPAlgo:
             ltp = entry.get('ltp')
             if ltp is None or ltp <= 0 or not entry.get('symbol'):
                 continue
-            cand = (abs(ltp - _PREM_TARGET), float(strike),
+            cand = (abs(ltp - target), float(strike),
                     entry.get('delta'), entry.get('symbol', ''), ltp)
             if overall is None or cand[0] < overall[0]:
                 overall = cand
-            if _PREM_TARGET <= ltp <= _PREM_BAND_HIGH and \
+            if band_high is not None and target <= ltp <= band_high and \
                     (in_band is None or cand[0] < in_band[0]):
                 in_band = cand
 
@@ -836,20 +932,22 @@ class RTPAlgo:
             'strike':           int(best_strike),
             'instrument_type':  opt_type.upper(),
         }
+        band_txt = (f"band ₹{target:.0f}–{band_high:.0f}"
+                    f"{'' if in_band else f' — no strike in band, nearest ₹{target:.0f} used'}"
+                    if band_high is not None else f"nearest ₹{target:.0f}")
         self.log.info(
             f"Premium strike: {opt_type} {int(best_strike)} ltp={best_ltp} "
-            f"delta={best_delta:+.4f} "
-            f"(band ₹{_PREM_TARGET:.0f}–{_PREM_BAND_HIGH:.0f}"
-            f"{'' if in_band else ' — no strike in band, nearest ₹300 used'})"
+            f"delta={best_delta:+.4f} ({band_txt})"
         )
         return best_strike, inst
 
     def _strike_mode(self) -> str:
         """Per-user strike selection mode from <BROKER_TAG>_STRIKE_MODE:
-        'premium' (default) → strike priced inside ₹300–350, nearest ₹300;
+        'premium250' (default) → strike whose premium is nearest ₹250;
+        'premium' → strike priced inside ₹300–350, nearest ₹300;
         'delta' → classic ±0.90-delta strike with the ₹500 premium cap."""
-        mode = self._uvar(f'{self.cfg.broker_tag}_STRIKE_MODE', 'premium').lower()
-        return 'delta' if mode == 'delta' else 'premium'
+        mode = self._uvar(f'{self.cfg.broker_tag}_STRIKE_MODE', 'premium250').lower()
+        return mode if mode in ('delta', 'premium', 'premium250') else 'premium250'
 
     def _select_strike(
         self,
@@ -859,9 +957,13 @@ class RTPAlgo:
         chain_deltas: Optional[Dict] = None,
     ) -> Tuple[float, Optional[Dict]]:
         """Dispatch strike selection according to the user's strike-mode setting."""
-        if self._strike_mode() == 'delta':
+        mode = self._strike_mode()
+        if mode == 'delta':
             return self._select_delta_strike(opt_type, spot, provider, chain_deltas)
-        return self._select_premium_strike(opt_type, spot, provider, chain_deltas)
+        if mode == 'premium':
+            return self._select_premium_strike(opt_type, spot, provider, chain_deltas)
+        return self._select_premium_strike(opt_type, spot, provider, chain_deltas,
+                                           target=_PREM250_TARGET, band_high=None)
 
     # ── Broker management ─────────────────────────────────────────────────────
 
@@ -1334,6 +1436,8 @@ class RTPAlgo:
                 adx_thresh=self.cfg.adx_thresh,
                 sl_points=self.cfg.sl_points,
                 tgt_points=self.cfg.tgt_points,
+                strict_pattern=self.cfg.strict_pattern,
+                min_rail_gap_atr=self.cfg.min_rail_gap_atr,
             )
             processed = engine.df
 

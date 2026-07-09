@@ -34,7 +34,10 @@ document.addEventListener('DOMContentLoaded', function() {
             Number(v.sl_points)  === Number(cfg.sl_points) &&
             Number(v.tgt_points) === Number(cfg.tgt_points) &&
             !!v.use_adx === !!cfg.use_adx &&
-            (!v.use_adx || Number(v.adx_thresh) === Number(cfg.adx_thresh)));
+            (!v.use_adx || Number(v.adx_thresh) === Number(cfg.adx_thresh)) &&
+            Number(v.confirm_bars || 0)     === Number(cfg.confirm_bars || 0) &&
+            Number(v.min_rail_gap_atr || 0) === Number(cfg.min_rail_gap_atr || 0) &&
+            !!v.strict_pattern === !!cfg.strict_pattern);
     }
     function _isScComboLive(cfg) {
         const v = _liveConfigs.sc;
@@ -58,6 +61,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 tgt_points: parseFloat(document.getElementById('rtpTarget')?.value || 90),
                 use_adx:    document.getElementById('rtpUseAdx')?.checked ?? false,
                 adx_thresh: parseFloat(document.getElementById('rtpAdxThresh')?.value || 25),
+                confirm_bars:     parseInt(document.getElementById('rtpConfirmBars')?.value || '0'),
+                min_rail_gap_atr: parseFloat(document.getElementById('rtpRailGap')?.value || 0) || 0,
+                strict_pattern:   document.getElementById('rtpStrictPattern')?.checked ?? false,
             });
         } else if (strat === 'second_candle') {
             live = _isScComboLive({
@@ -87,7 +93,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     refreshLiveConfigs();
     ['strategySelect', 'interval', 'rtpEntryMode', 'rtpSL', 'rtpTarget', 'rtpUseAdx',
-     'rtpAdxThresh', 'scCandleIndex', 'scRrRatio', 'scDirection'].forEach(id => {
+     'rtpAdxThresh', 'rtpConfirmBars', 'rtpRailGap', 'rtpStrictPattern',
+     'scCandleIndex', 'scRrRatio', 'scDirection'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', updateLiveFlagBadge);
     });
 
@@ -212,6 +219,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // 2.5 Strategy Selection Logic
     const strategySelect = document.getElementById('strategySelect');
     const rtpParamsRow   = document.getElementById('rtpParamsRow');
+    const rtpFilterRow   = document.getElementById('rtpFilterRow');
     const rtpLotRow      = document.getElementById('rtpLotRow');
     const vwapLotRow     = document.getElementById('vwapLotRow');
 
@@ -230,6 +238,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Reset all rows
         if (rtpParamsRow)   rtpParamsRow.style.display   = 'none';
+        if (rtpFilterRow)   rtpFilterRow.style.display   = 'none';
         if (rtpLotRow)      rtpLotRow.style.display      = 'none';
         const smParamsRow   = document.getElementById('swingMomentumParamsRow');
         const vwapParamsRow = document.getElementById('vwapParamsRow');
@@ -268,6 +277,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (val === 'rtp') {
             if (rtpParamsRow) rtpParamsRow.style.display = 'grid';
+            if (rtpFilterRow) rtpFilterRow.style.display = 'grid';
             if (rtpLotRow)    rtpLotRow.style.display    = 'grid';
             if (intervalSelect) intervalSelect.value = 'minute';
             if (startDateInput) startDateInput.value = '2017-01-01';
@@ -410,6 +420,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (tgtVal)   payload.tgt_points   = parseFloat(tgtVal);
                 if (trailVal) payload.trail_points = parseFloat(trailVal);
                 payload.exit_on = document.getElementById('rtpExitOn')?.value || 'value';
+                payload.confirm_bars   = parseInt(document.getElementById('rtpConfirmBars')?.value || '0');
+                payload.strict_pattern = document.getElementById('rtpStrictPattern')?.checked ?? false;
+                const railVal  = document.getElementById('rtpRailGap')?.value;
+                const maxTrVal = document.getElementById('rtpMaxTrades')?.value;
+                const maxSlVal = document.getElementById('rtpMaxConsecSL')?.value;
+                if (railVal)  payload.min_rail_gap_atr   = parseFloat(railVal);
+                if (maxTrVal) payload.max_trades_per_day = parseInt(maxTrVal);
+                if (maxSlVal) payload.max_consec_sl      = parseInt(maxSlVal);
             }
 
             const response = await fetch(endpoint, {
@@ -536,12 +554,19 @@ document.addEventListener('DOMContentLoaded', function() {
             const netSubEl = document.getElementById('statNetRsSub');
             if (netSubEl) netSubEl.textContent = 'brok: ₹' + totalBrokerage.toLocaleString('en-IN');
 
-            // Subtitle with SL / Target / Trail
+            // Subtitle with SL / Target / Trail + active entry filters
             if (summary.sl_points != null && summary.tgt_points != null) {
                 const subtitle = document.getElementById('btSubtitle');
                 if (subtitle) {
                     let info = `SL: ${summary.sl_points} pts  ·  Target: ${summary.tgt_points} pts`;
                     if (summary.trail_points) info += `  ·  Trail: ${summary.trail_points} pts`;
+                    if (summary.confirm_bars) info += `  ·  Confirm: ${summary.confirm_bars} bar${summary.confirm_bars > 1 ? 's' : ''}`;
+                    if (summary.min_rail_gap_atr) info += `  ·  Rail gap ≥${summary.min_rail_gap_atr}×ATR`;
+                    if (summary.strict_pattern) info += '  ·  Strict candle';
+                    if (summary.max_trades_per_day) info += `  ·  Max ${summary.max_trades_per_day}/day`;
+                    if (summary.max_consec_sl) info += `  ·  Max SL streak ${summary.max_consec_sl}`;
+                    const skipped = (summary.skipped_unconfirmed || 0) + (summary.skipped_circuit || 0);
+                    if (skipped > 0) info += `  ·  ${skipped} signals filtered out`;
                     subtitle.textContent = info;
                 }
             }
@@ -751,6 +776,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if      (period === 'daily')   key = d.toISOString().slice(0, 10);
             else if (period === 'weekly')  key = getWeekKey(d);
             else if (period === 'monthly') key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+            else if (period === 'quarterly')  key = `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
+            else if (period === 'halfyearly') key = `${d.getFullYear()}-H${d.getMonth() < 6 ? 1 : 2}`;
             else                           key = `${d.getFullYear()}`;
             if (!groups[key]) groups[key] = { pnl: 0, wins: 0, losses: 0 };
             groups[key].pnl += (t.pnl || 0);
@@ -815,6 +842,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             if (period === 'weekly')  return 'W ' + k.slice(5);
             if (period === 'daily')   return k.slice(5);   // MM-DD
+            if (period === 'quarterly' || period === 'halfyearly') {
+                const [y, p] = k.split('-');               // 2026-Q3 → "Q3 '26"
+                return `${p} '${y.slice(2)}`;
+            }
             return k;
         });
 
@@ -1084,6 +1115,8 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: 'SL',            key: 'sl_points',     fmt: r => r.sl_points },
         { label: 'Target',        key: 'tgt_points',    fmt: r => r.tgt_points },
         { label: 'ADX',           key: 'adx_thresh',    fmt: r => r.use_adx ? `≥${r.adx_thresh}` : 'Off' },
+        { label: 'Confirm',       key: 'confirm_bars',  fmt: r => r.confirm_bars ? `${r.confirm_bars}b` : 'Off' },
+        { label: 'Rail Gap',      key: 'min_rail_gap_atr', fmt: r => r.min_rail_gap_atr ? `≥${r.min_rail_gap_atr}×ATR` : 'Off' },
         { label: 'Trades',        key: 'total_trades',  fmt: r => r.total_trades },
         { label: 'Win%',          key: 'win_rate',      fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
         { label: 'Net P&L (pts)', key: 'net_pnl',       fmt: r => `<span class="${r.net_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.net_pnl >= 0 ? '+' : '') + r.net_pnl.toFixed(1)} pts</span>` },
@@ -1285,16 +1318,20 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function _pollRtpOptimise(taskId, activeBtn, origText, startMs, myRun) {
-        const MAX_WAIT_MS = 10 * 60 * 1000; // 10 min hard stop
+        const MAX_WAIT_MS = 30 * 60 * 1000; // hard stop (multi-TF sweep can run long)
+        let lastProgress = '';
 
         function tick() {
             if (myRun !== _rtpOptRun) return; // cancelled / superseded — stop polling
 
             const elapsed = Math.round((Date.now() - startMs) / 1000);
-            if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s…`;
+            if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s${lastProgress ? ' · ' + lastProgress : ''}…`;
 
             if (Date.now() - startMs > MAX_WAIT_MS) {
-                window.showNotification('Optimisation timed out — try a shorter date range', 'error');
+                window.showNotification(
+                    'Optimisation is taking unusually long — it keeps running on the server. ' +
+                    'Click "Find Best Params" again later to load the finished result from cache.',
+                    'warning');
                 if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
                 return;
             }
@@ -1304,6 +1341,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(data => {
                     if (myRun !== _rtpOptRun) return; // superseded while awaiting response
                     if (data.status === 'running') {
+                        if (data.progress) lastProgress = data.progress;
                         setTimeout(tick, 2000);
                         return;
                     }
@@ -1345,6 +1383,21 @@ document.addEventListener('DOMContentLoaded', function() {
         const exitOn  = document.getElementById('rtpExitOn');
         if (trailSL) { trailSL.value = ''; trailSL.style.fontStyle = 'italic'; }
         if (exitOn)  exitOn.value = 'value';
+        // Swept filters → apply from the grid row; non-swept filters → reset,
+        // so a follow-up backtest reproduces the grid row exactly.
+        const confirmSel = document.getElementById('rtpConfirmBars');
+        const railGap    = document.getElementById('rtpRailGap');
+        if (confirmSel) confirmSel.value = String(r.confirm_bars || 0);
+        if (railGap) {
+            railGap.value = r.min_rail_gap_atr ? r.min_rail_gap_atr : '';
+            railGap.style.fontStyle = railGap.value ? 'normal' : 'italic';
+        }
+        const strictChk  = document.getElementById('rtpStrictPattern');
+        const maxTrades  = document.getElementById('rtpMaxTrades');
+        const maxSlStrk  = document.getElementById('rtpMaxConsecSL');
+        if (strictChk) strictChk.checked = false;
+        if (maxTrades) { maxTrades.value = ''; maxTrades.style.fontStyle = 'italic'; }
+        if (maxSlStrk) { maxSlStrk.value = ''; maxSlStrk.style.fontStyle = 'italic'; }
         // Winning timeframe → main interval dropdown, so a follow-up single
         // backtest reproduces the optimised run.
         if (intervalSel && r.interval) intervalSel.value = r.interval;

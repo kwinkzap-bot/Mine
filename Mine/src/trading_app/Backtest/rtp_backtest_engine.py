@@ -31,6 +31,7 @@ class RTPBacktestEngine:
     """
 
     _AUTO_LEVELS = {
+        0.5: (10.0, 20.0),
         1: (10.0, 20.0),
         2: (15.0, 30.0),
         3: (20.0, 40.0),
@@ -50,6 +51,11 @@ class RTPBacktestEngine:
         tgt_points: Optional[float] = None,
         trail_points: Optional[float] = None,
         exit_on: str = 'value',
+        confirm_bars: int = 0,
+        strict_pattern: bool = False,
+        min_rail_gap_atr: float = 0.0,
+        max_trades_per_day: Optional[int] = None,
+        max_consec_sl: Optional[int] = None,
     ):
         self.df = df.copy()
         self.entry_mode = entry_mode
@@ -58,6 +64,19 @@ class RTPBacktestEngine:
         self.use_adx = use_adx
         self.adx_len = adx_len
         self.adx_thresh = adx_thresh
+        # Entry-reduction filters (all default off → behaviour identical to before):
+        #   confirm_bars      — after a signal candle, only enter once a later candle
+        #                       breaks its high (BUY) / low (SELL) within N bars.
+        #   strict_pattern    — signal candle must be a big-body directional candle
+        #                       (no doji / weak hammer-engulfing entries).
+        #   min_rail_gap_atr  — |EMA20−EMA50| must be >= X × ATR14 (skips flat,
+        #                       braided-rail chop where touches whipsaw into SL).
+        #   max_trades_per_day / max_consec_sl — daily circuit breaker.
+        self.confirm_bars = max(0, int(confirm_bars or 0))
+        self.strict_pattern = bool(strict_pattern)
+        self.min_rail_gap_atr = float(min_rail_gap_atr or 0.0)
+        self.max_trades_per_day = max_trades_per_day
+        self.max_consec_sl = max_consec_sl
         # Exit evaluation mode:
         #   'value' — SL/Target hit when the candle's high/low pierces the level
         #             (intrabar fill at the level). This is the original behaviour.
@@ -161,6 +180,14 @@ class RTPBacktestEngine:
         gap_change = (gap - gap.shift(5)).abs()
         df['parallel'] = (gap_change <= atr14 * 0.5).fillna(False)
 
+        # ── Rail spread filter: rails must be SEPARATED, not braided together.
+        # The parallel check alone passes when both EMAs are flat and glued to
+        # price — the whipsaw regime where every touch stops out.
+        if self.min_rail_gap_atr > 0:
+            df['rail_ok'] = (gap >= atr14 * self.min_rail_gap_atr).fillna(False)
+        else:
+            df['rail_ok'] = pd.Series(True, index=df.index)
+
         # ── ADX trend filter
         _, _, adx_vals = self._adx(df, self.adx_len)
         df['adx'] = adx_vals
@@ -171,11 +198,11 @@ class RTPBacktestEngine:
 
         # ── Railway track
         if self.entry_mode == 'RTP(50)':
-            df['rway_up'] = df['ema20_up']   & df['ema50_up']   & df['trending']
-            df['rway_dn'] = df['ema20_down'] & df['ema50_down'] & df['trending']
+            df['rway_up'] = df['ema20_up']   & df['ema50_up']   & df['trending'] & df['rail_ok']
+            df['rway_dn'] = df['ema20_down'] & df['ema50_down'] & df['trending'] & df['rail_ok']
         else:
-            df['rway_up'] = df['ema20_up']   & df['ema50_up']   & df['parallel'] & df['trending']
-            df['rway_dn'] = df['ema20_down'] & df['ema50_down'] & df['parallel'] & df['trending']
+            df['rway_up'] = df['ema20_up']   & df['ema50_up']   & df['parallel'] & df['trending'] & df['rail_ok']
+            df['rway_dn'] = df['ema20_down'] & df['ema50_down'] & df['parallel'] & df['trending'] & df['rail_ok']
 
         # ── EMA stack
         if self.entry_mode == 'RTP(50)':
@@ -224,8 +251,17 @@ class RTPBacktestEngine:
         is_doji = (rng > 0) & (body <= rng * 0.1)
 
         if self.entry_mode == 'RTP(50)':
-            df['buy_pat']  = ((df['close'] > df['open']) | is_doji).fillna(False)
-            df['sell_pat'] = ((df['close'] < df['open']) | is_doji).fillna(False)
+            if self.strict_pattern:
+                df['buy_pat']  = (df['close'] > df['open']).fillna(False)
+                df['sell_pat'] = (df['close'] < df['open']).fillna(False)
+            else:
+                df['buy_pat']  = ((df['close'] > df['open']) | is_doji).fillna(False)
+                df['sell_pat'] = ((df['close'] < df['open']) | is_doji).fillna(False)
+        elif self.strict_pattern:
+            # Strict: only big-body directional candles with a strong close —
+            # no doji entries, no weak hammers/engulfings without body quality.
+            df['buy_pat']  = is_buy_cdl.fillna(False)
+            df['sell_pat'] = is_sell_cdl.fillna(False)
         else:
             df['buy_pat']  = ((is_doji & df['rway_up']) | \
                              ((df['close'] > df['open']) & (is_hammer | is_bull_eng | is_buy_cdl))).fillna(False)
@@ -282,6 +318,99 @@ class RTPBacktestEngine:
         sell_needs_reset = False
         buy_needs_reset  = False
 
+        # Confirmation-candle state: after a signal, wait for a later bar to
+        # break the signal candle's high (BUY) / low (SELL) before entering.
+        pending = None  # (direction, break_level, expiry_idx)
+        skipped_unconfirmed = 0
+        skipped_circuit     = 0
+
+        # Daily circuit breaker state: date -> [trades_taken, consecutive_sl]
+        day_state: Dict[Any, List[int]] = {}
+
+        def day_blocked(d) -> bool:
+            st = day_state.get(d)
+            if st is None:
+                return False
+            if self.max_trades_per_day and st[0] >= self.max_trades_per_day:
+                return True
+            if self.max_consec_sl and st[1] >= self.max_consec_sl:
+                return True
+            return False
+
+        def scan_exit(start_idx, entry_price, direction, entry_date):
+            """Scan bars from start_idx for SL / Target / trailing SL / EOD.
+            Returns (exit_price, exit_time, exit_reason, exit_idx)."""
+            trail      = self.trail_points
+            best_price = entry_price          # peak high (BUY) or trough low (SELL)
+            current_sl = (entry_price - self.sl_points) if direction == 'BUY' \
+                         else (entry_price + self.sl_points)
+
+            for j in range(start_idx, n):
+                # Force-close on the last bar that completes by ~3:28 PM, or on
+                # the next day as a safety net. A bar opening at minute M spans
+                # M..M+interval, so waiting for a bar stamped >= :28 on 3m/5m
+                # grids (last bars 15:27 / 15:25) skipped to the NEXT DAY and
+                # held overnight — the live algo hard-squares-off at 3:28.
+                eod_cutoff = (hour[j] == 15 and minute[j] + self.interval_minutes > 28) \
+                             or hour[j] > 15
+                if date_list[j] != entry_date or eod_cutoff:
+                    return cl[j], dt_list[j], 'EOD', j
+
+                # In 'close' mode the SL/Target levels are tested against the bar
+                # close only (and filled at the close); in 'value' mode they are
+                # tested against the bar high/low (and filled at the level).
+                test_hi = cl[j] if close_exit else h[j]
+                test_lo = cl[j] if close_exit else l[j]
+
+                if direction == 'BUY':
+                    if trail and test_hi > best_price:
+                        best_price = test_hi
+                        steps = int((best_price - entry_price) / trail)
+                        new_sl = (entry_price - self.sl_points) + steps * trail
+                        current_sl = max(current_sl, new_sl)
+
+                    if test_lo <= current_sl:
+                        return (cl[j] if close_exit else current_sl), dt_list[j], \
+                               ('TRAIL_SL' if trail else 'SL'), j
+                    if test_hi >= entry_price + self.tgt_points:
+                        return (cl[j] if close_exit else entry_price + self.tgt_points), \
+                               dt_list[j], 'TARGET', j
+                else:
+                    if trail and test_lo < best_price:
+                        best_price = test_lo
+                        steps = int((entry_price - best_price) / trail)
+                        new_sl = (entry_price + self.sl_points) - steps * trail
+                        current_sl = min(current_sl, new_sl)
+
+                    if test_hi >= current_sl:
+                        return (cl[j] if close_exit else current_sl), dt_list[j], \
+                               ('TRAIL_SL' if trail else 'SL'), j
+                    if test_lo <= entry_price - self.tgt_points:
+                        return (cl[j] if close_exit else entry_price - self.tgt_points), \
+                               dt_list[j], 'TARGET', j
+
+            return cl[-1], dt_list[-1], 'EOD', n - 1
+
+        def record_trade(entry_time, entry_price, entry_date, direction,
+                         exit_price, exit_time, exit_reason):
+            pnl = (exit_price - entry_price) if direction == 'BUY' \
+                  else (entry_price - exit_price)
+            trades.append({
+                'entry_time':  entry_time,
+                'entry_price': round(entry_price, 2),
+                'direction':   direction,
+                'exit_time':   exit_time,
+                'exit_price':  round(exit_price, 2),
+                'exit_reason': exit_reason,
+                'pnl':         round(pnl, 2),
+            })
+            st = day_state.setdefault(entry_date, [0, 0])
+            st[0] += 1
+            if pnl < 0 and exit_reason in ('SL', 'TRAIL_SL'):
+                st[1] += 1
+            elif pnl > 0:
+                st[1] = 0
+
         i = 200  # Skip warmup: EMA50 needs ~200 bars to converge on 1-min data
         while i < n:
             # Reset candle check (mirrors Pine var bool logic)
@@ -300,6 +429,37 @@ class RTPBacktestEngine:
                 else:
                     if l[i] > max(ema9[i], ema20[i]):
                         buy_needs_reset = False
+
+            # Resolve a pending confirmation-candle signal first
+            if pending is not None:
+                p_dir, p_level, p_expiry = pending
+                if i > p_expiry or not session_ok[i]:
+                    pending = None
+                    skipped_unconfirmed += 1
+                elif day_blocked(date_list[i]):
+                    pending = None
+                    skipped_circuit += 1
+                else:
+                    filled = None
+                    if p_dir == 'BUY':
+                        if o[i] >= p_level:
+                            filled = o[i]        # gapped past the level → fill at open
+                        elif h[i] >= p_level:
+                            filled = p_level     # broke intrabar → fill at the level
+                    else:
+                        if o[i] <= p_level:
+                            filled = o[i]
+                        elif l[i] <= p_level:
+                            filled = p_level
+                    if filled is not None:
+                        pending = None
+                        entry_date = date_list[i]
+                        exit_price, exit_time, exit_reason, exit_idx = \
+                            scan_exit(i, filled, p_dir, entry_date)
+                        record_trade(dt_list[i], filled, entry_date, p_dir,
+                                     exit_price, exit_time, exit_reason)
+                        i = exit_idx + 1
+                        continue
 
             # Signal check
             buy_signal = bool(
@@ -320,6 +480,24 @@ class RTPBacktestEngine:
                 i += 1
                 continue
 
+            direction = 'BUY' if buy_signal else 'SELL'
+
+            # Daily circuit breaker: max trades/day or SL-streak reached →
+            # skip the signal (the reset latch above still arms, so at most
+            # one skip is counted per pullback).
+            if day_blocked(date_list[i]):
+                skipped_circuit += 1
+                i += 1
+                continue
+
+            # Confirmation-candle mode: don't enter yet — wait for a later bar
+            # to break the signal candle's high (BUY) / low (SELL).
+            if self.confirm_bars > 0:
+                level   = h[i] if buy_signal else l[i]
+                pending = (direction, level, i + self.confirm_bars)
+                i += 1
+                continue
+
             # Entry fills at next bar open (process_orders_on_close=false)
             if i + 1 >= n:
                 i += 1
@@ -328,114 +506,43 @@ class RTPBacktestEngine:
             entry_price = o[i + 1]
             entry_time  = dt_list[i + 1]
             entry_date  = date_list[i + 1]
-            direction   = 'BUY' if buy_signal else 'SELL'
 
-            # Scan forward for SL / Target
-            exit_price  = None
-            exit_time   = None
-            exit_reason = None
-            exit_idx    = i + 1
-
-            # Trailing SL state
-            trail        = self.trail_points
-            best_price   = entry_price          # peak high (BUY) or trough low (SELL)
-            current_sl   = (entry_price - self.sl_points) if direction == 'BUY' \
-                           else (entry_price + self.sl_points)
-
-            for j in range(i + 1, n):
-                # Force-close on the last bar that completes by ~3:28 PM, or on
-                # the next day as a safety net. A bar opening at minute M spans
-                # M..M+interval, so waiting for a bar stamped >= :28 on 3m/5m
-                # grids (last bars 15:27 / 15:25) skipped to the NEXT DAY and
-                # held overnight — the live algo hard-squares-off at 3:28.
-                eod_cutoff = (hour[j] == 15 and minute[j] + self.interval_minutes > 28) \
-                             or hour[j] > 15
-                if date_list[j] != entry_date or eod_cutoff:
-                    exit_price  = cl[j]
-                    exit_time   = dt_list[j]
-                    exit_reason = 'EOD'
-                    exit_idx    = j
-                    break
-
-                # In 'close' mode the SL/Target levels are tested against the bar
-                # close only (and filled at the close); in 'value' mode they are
-                # tested against the bar high/low (and filled at the level).
-                test_hi = cl[j] if close_exit else h[j]
-                test_lo = cl[j] if close_exit else l[j]
-
-                if direction == 'BUY':
-                    # Update trailing SL
-                    if trail and test_hi > best_price:
-                        best_price = test_hi
-                        steps = int((best_price - entry_price) / trail)
-                        new_sl = (entry_price - self.sl_points) + steps * trail
-                        current_sl = max(current_sl, new_sl)
-
-                    if test_lo <= current_sl:
-                        exit_price  = cl[j] if close_exit else current_sl
-                        exit_time   = dt_list[j]
-                        exit_reason = 'TRAIL_SL' if trail else 'SL'
-                        exit_idx    = j
-                        break
-                    if test_hi >= entry_price + self.tgt_points:
-                        exit_price  = cl[j] if close_exit else entry_price + self.tgt_points
-                        exit_time   = dt_list[j]
-                        exit_reason = 'TARGET'
-                        exit_idx    = j
-                        break
-                else:
-                    # Update trailing SL
-                    if trail and test_lo < best_price:
-                        best_price = test_lo
-                        steps = int((entry_price - best_price) / trail)
-                        new_sl = (entry_price + self.sl_points) - steps * trail
-                        current_sl = min(current_sl, new_sl)
-
-                    if test_hi >= current_sl:
-                        exit_price  = cl[j] if close_exit else current_sl
-                        exit_time   = dt_list[j]
-                        exit_reason = 'TRAIL_SL' if trail else 'SL'
-                        exit_idx    = j
-                        break
-                    if test_lo <= entry_price - self.tgt_points:
-                        exit_price  = cl[j] if close_exit else entry_price - self.tgt_points
-                        exit_time   = dt_list[j]
-                        exit_reason = 'TARGET'
-                        exit_idx    = j
-                        break
-
-            if exit_price is None:
-                exit_price  = cl[-1]
-                exit_time   = dt_list[-1]
-                exit_reason = 'EOD'
-                exit_idx    = n - 1
-
-            pnl = (exit_price - entry_price) if direction == 'BUY' else (entry_price - exit_price)
-
-            trades.append({
-                'entry_time':  entry_time,
-                'entry_price': round(entry_price, 2),
-                'direction':   direction,
-                'exit_time':   exit_time,
-                'exit_price':  round(exit_price, 2),
-                'exit_reason': exit_reason,
-                'pnl':         round(pnl, 2),
-            })
+            exit_price, exit_time, exit_reason, exit_idx = \
+                scan_exit(i + 1, entry_price, direction, entry_date)
+            record_trade(entry_time, entry_price, entry_date, direction,
+                         exit_price, exit_time, exit_reason)
 
             # Jump to bar after exit so trades don't overlap
             i = exit_idx + 1
 
-        return self._summarise(trades)
+        return self._summarise(trades, skipped_unconfirmed, skipped_circuit)
 
     # ── Summary ─────────────────────────────────────────────────────────────────
 
-    def _summarise(self, trades: List[Dict]) -> Dict[str, Any]:
+    def _summarise(self, trades: List[Dict],
+                   skipped_unconfirmed: int = 0,
+                   skipped_circuit: int = 0) -> Dict[str, Any]:
+        filter_info = {
+            'confirm_bars':        self.confirm_bars,
+            'strict_pattern':      self.strict_pattern,
+            'min_rail_gap_atr':    self.min_rail_gap_atr,
+            'max_trades_per_day':  self.max_trades_per_day,
+            'max_consec_sl':       self.max_consec_sl,
+            'skipped_unconfirmed': skipped_unconfirmed,
+            'skipped_circuit':     skipped_circuit,
+        }
         if not trades:
             print("No trades generated.")
             return {
-                'total_trades': 0, 'entry_mode': self.entry_mode,
+                'total_trades': 0, 'wins': 0, 'losses': 0, 'win_rate': 0.0,
+                'net_pnl': 0.0, 'avg_win': 0.0, 'avg_loss': 0.0,
+                'profit_factor': 0.0, 'max_drawdown': 0.0,
+                'max_dd_start': None, 'max_dd_end': None,
+                'target_hits': 0, 'sl_hits': 0, 'trail_sl_hits': 0, 'eod_exits': 0,
+                'entry_mode': self.entry_mode, 'exit_on': self.exit_on,
                 'sl_points': self.sl_points, 'tgt_points': self.tgt_points,
-                'trades': [],
+                'trail_points': self.trail_points,
+                'trades': [], **filter_info,
             }
 
         df_t = pd.DataFrame(trades)
@@ -483,6 +590,7 @@ class RTPBacktestEngine:
             'entry_mode':    self.entry_mode,
             'exit_on':       self.exit_on,
             'trades':        trades,
+            **filter_info,
         }
 
 
@@ -490,19 +598,26 @@ class RTPBacktestEngine:
 
 import math as _math
 
-# Grid searched during optimisation
+# Grid searched during optimisation.
+# SL/TGT pairs trimmed to the 7 that actually reach the per-timeframe
+# leaderboards (the dropped (10,20)/(15,45)/(20,40) held 3 of 50 slots in the
+# v4 cache) — the grid gained confirm/rail-gap dimensions, so dead pairs are
+# pure sweep time.
 _ENTRY_MODES    = ['RTP(20 & 9)', 'RTP(50)']
 _SL_TGT_PAIRS   = [
-    (10, 20), (10, 30),
-    (15, 30), (15, 45),
-    (20, 40), (20, 60),
+    (10, 30),
+    (15, 30),
+    (20, 60),
     (25, 50), (25, 75),
     (30, 60), (30, 90),
 ]
 _ADX_THRESHOLDS = [20, 25, 30]
 _USE_ADX_FLAGS  = [True, False]
+_CONFIRM_BARS   = [0, 2]      # 0 = enter at next open; 2 = need break of signal bar hi/lo within 2 bars
+_RAIL_GAPS_ATR  = [0.0, 0.2]  # 0 = off; 0.2 = |EMA20−EMA50| >= 0.2×ATR14 (skip braided rails)
 
 _INTERVAL_MAP = {
+    '30second': 0.5,
     'minute': 1, '2minute': 2, '3minute': 3, '4minute': 4,
     '5minute': 5, '10minute': 10, '15minute': 15,
     '30minute': 30, '60minute': 60,
@@ -522,53 +637,93 @@ def optimise_rtp(
     df: 'pd.DataFrame',
     interval: str = '5minute',
     min_trades: int = 15,
+    progress_cb=None,
 ) -> List[Dict[str, Any]]:
     """
     Sweep all parameter combinations on a pre-fetched DataFrame.
     Returns results sorted best-first (highest _opt_score).
+
+    Indicator preparation (EMAs/ADX/patterns) only depends on the signal-side
+    params (mode, ADX, rail gap), so the engine is built once per signal combo
+    and reused across every SL/TGT/confirm variation — _prepare() on multi-year
+    minute data is far more expensive than a run() pass.
+
+    progress_cb(done, total) is invoked after every combo (for status display).
     """
     interval_minutes = _INTERVAL_MAP.get(interval, 1)
     results: List[Dict[str, Any]] = []
 
-    for mode in _ENTRY_MODES:
+    signal_combos = [
+        (mode, use_adx, adx_thresh, rail_gap)
+        for mode in _ENTRY_MODES
+        for use_adx in _USE_ADX_FLAGS
+        for adx_thresh in (_ADX_THRESHOLDS if use_adx else [25.0])
+        for rail_gap in _RAIL_GAPS_ATR
+    ]
+    runs_per_signal = len(_SL_TGT_PAIRS) * len(_CONFIRM_BARS)
+    total = len(signal_combos) * runs_per_signal
+    done = 0
+
+    for mode, use_adx, adx_thresh, rail_gap in signal_combos:
+        try:
+            engine = RTPBacktestEngine(
+                df=df,   # ctor copies
+                entry_mode=mode,
+                interval_minutes=interval_minutes,
+                use_adx=use_adx,
+                adx_thresh=adx_thresh,
+                sl_points=_SL_TGT_PAIRS[0][0],
+                tgt_points=_SL_TGT_PAIRS[0][1],
+                min_rail_gap_atr=rail_gap,
+            )
+        except Exception as exc:
+            logger.debug("Optimise prepare failed: %s use_adx=%s ADX=%s rail_gap=%s — %s",
+                         mode, use_adx, adx_thresh, rail_gap, exc)
+            done += runs_per_signal
+            if progress_cb:
+                progress_cb(done, total)
+            continue
+
         for sl, tgt in _SL_TGT_PAIRS:
-            for use_adx in _USE_ADX_FLAGS:
-                for adx_thresh in (_ADX_THRESHOLDS if use_adx else [25.0]):
-                    try:
-                        engine = RTPBacktestEngine(
-                            df=df.copy(),
-                            entry_mode=mode,
-                            interval_minutes=interval_minutes,
-                            use_adx=use_adx,
-                            adx_thresh=adx_thresh,
-                            sl_points=sl,
-                            tgt_points=tgt,
-                        )
-                        r = engine.run()
-                        if r['total_trades'] < min_trades:
-                            continue
-                        results.append({
-                            'entry_mode':    mode,
-                            'sl_points':     sl,
-                            'tgt_points':    tgt,
-                            'use_adx':       use_adx,
-                            'adx_thresh':    adx_thresh if use_adx else None,
-                            'total_trades':  r['total_trades'],
-                            'wins':          r['wins'],
-                            'losses':        r['losses'],
-                            'win_rate':      r['win_rate'],
-                            'net_pnl':       round(r['net_pnl'], 2),
-                            'profit_factor': r['profit_factor'],
-                            'max_drawdown':  round(r['max_drawdown'], 2),
-                            'avg_win':       r.get('avg_win', 0),
-                            'avg_loss':      r.get('avg_loss', 0),
-                            'score':         round(_opt_score(r), 2),
-                        })
-                    except Exception as exc:
-                        logger.debug(
-                            "Optimise skip: %s SL=%s TGT=%s ADX=%s use_adx=%s — %s",
-                            mode, sl, tgt, adx_thresh, use_adx, exc,
-                        )
+            for confirm_bars in _CONFIRM_BARS:
+                done += 1
+                try:
+                    # run() only reads these — safe to mutate between passes
+                    engine.sl_points    = float(sl)
+                    engine.tgt_points   = float(tgt)
+                    engine.confirm_bars = confirm_bars
+                    r = engine.run()
+                    if r['total_trades'] < min_trades:
+                        continue
+                    results.append({
+                        'entry_mode':       mode,
+                        'sl_points':        sl,
+                        'tgt_points':       tgt,
+                        'use_adx':          use_adx,
+                        'adx_thresh':       adx_thresh if use_adx else None,
+                        'confirm_bars':     confirm_bars,
+                        'min_rail_gap_atr': rail_gap,
+                        'total_trades':     r['total_trades'],
+                        'wins':             r['wins'],
+                        'losses':           r['losses'],
+                        'win_rate':         r['win_rate'],
+                        'net_pnl':          round(r['net_pnl'], 2),
+                        'profit_factor':    r['profit_factor'],
+                        'max_drawdown':     round(r['max_drawdown'], 2),
+                        'avg_win':          r.get('avg_win', 0),
+                        'avg_loss':         r.get('avg_loss', 0),
+                        'score':            round(_opt_score(r), 2),
+                    })
+                except Exception as exc:
+                    logger.debug(
+                        "Optimise skip: %s SL=%s TGT=%s ADX=%s use_adx=%s "
+                        "confirm=%s rail_gap=%s — %s",
+                        mode, sl, tgt, adx_thresh, use_adx,
+                        confirm_bars, rail_gap, exc,
+                    )
+                finally:
+                    if progress_cb:
+                        progress_cb(done, total)
 
     results.sort(key=lambda x: x['score'], reverse=True)
     return results
@@ -598,6 +753,7 @@ def fetch_and_run(
         to_date = datetime.today().strftime('%Y-%m-%d')
 
     interval_minutes_map = {
+        '30second': 0.5,
         'minute': 1, '2minute': 2, '3minute': 3,
         '5minute': 5, '10minute': 10, '15minute': 15,
         '30minute': 30, '60minute': 60,

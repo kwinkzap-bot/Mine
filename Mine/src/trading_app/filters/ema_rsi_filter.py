@@ -357,7 +357,11 @@ class EmaRsiFilterService:
         Timeframes are checked cheapest-first (daily → weekly → monthly); the long
         history needed by higher timeframes is only fetched for stocks that are
         still narrow on the lower ones, which keeps the scan fast.
-        progress_cb(done, total) is invoked as stocks complete."""
+
+        Stocks are processed in batches of 100; after each batch
+        progress_cb(done, total, partial) is invoked, where partial is a
+        snapshot {'results': [...], 'nearest': [...]} of everything found so
+        far — so callers can show results incrementally while the scan runs."""
         group_tfs = NARROW_GROUPS.get(group, NARROW_GROUPS["mwd"])
         gate_order = list(reversed(group_tfs))  # lowest timeframe first (cheapest fetch)
 
@@ -425,38 +429,47 @@ class EmaRsiFilterService:
 
         done_count = 0
         total = len(stocks)
-        if progress_cb:
-            try:
-                progress_cb(0, total)
-            except Exception:
-                pass
+        batch_size = 100
 
-        with ThreadPoolExecutor(max_workers=workers_count) as executor:
-            futures = {executor.submit(process_stock, s): s for s in stocks}
-            for future in as_completed(futures):
+        def _snapshot() -> Dict:
+            """Sorted copy of everything found so far (tightest compression first)."""
+            return {
+                "results": sorted(results, key=lambda r: r.get("max_spread_pct", 999)),
+                "nearest": sorted(
+                    [r for r in all_results if not r.get("matched")],
+                    key=lambda r: r.get("max_spread_pct", 999)
+                )[:10],
+            }
+
+        def _report():
+            if progress_cb:
                 try:
-                    sym, res = future.result(timeout=300)
-                    if res:
-                        all_results.append(res)
-                        if res.get("matched"):
-                            results.append(res)
-                except Exception as e:
-                    logger.warning(f"EMA Narrow processing error ({e.__class__.__name__}): {e}")
-                finally:
-                    done_count += 1
-                    if progress_cb and (done_count % 10 == 0 or done_count == total):
-                        try:
-                            progress_cb(done_count, total)
-                        except Exception:
-                            pass
+                    progress_cb(done_count, total, _snapshot())
+                except Exception:
+                    pass
 
-        # Tightest compression (worst timeframe) first
-        results.sort(key=lambda r: r.get("max_spread_pct", 999))
+        _report()
 
-        nearest_stocks = sorted(
-            [r for r in all_results if not r.get("matched")],
-            key=lambda r: r.get("max_spread_pct", 999)
-        )[:10]
+        # Process in batches of 100 so partial results stream to the UI
+        for i in range(0, total, batch_size):
+            chunk = stocks[i: i + batch_size]
+            with ThreadPoolExecutor(max_workers=workers_count) as executor:
+                futures = {executor.submit(process_stock, s): s for s in chunk}
+                for future in as_completed(futures):
+                    try:
+                        sym, res = future.result(timeout=300)
+                        if res:
+                            all_results.append(res)
+                            if res.get("matched"):
+                                results.append(res)
+                    except Exception as e:
+                        logger.warning(f"EMA Narrow processing error ({e.__class__.__name__}): {e}")
+            done_count = min(i + batch_size, total)
+            _report()
+
+        final = _snapshot()
+        results = final["results"]
+        nearest_stocks = final["nearest"]
 
         logger.info(f"EMA Narrow filter → {'+'.join(group_tfs)}: {len(results)} matches")
 
