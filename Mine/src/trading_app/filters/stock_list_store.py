@@ -27,6 +27,9 @@ FO_LIST_FILE     = os.path.join(_CACHE_DIR, "nse_fo_stocks.json")
 
 STOCK_LIST_MAX_AGE_DAYS = 3
 
+# Bump when the extraction rules change so already-saved lists regenerate
+STOCK_LIST_VERSION = 3
+
 _store_lock = threading.Lock()
 
 INDEX_SYMBOLS = {
@@ -47,6 +50,9 @@ def _read_file(path: str) -> Optional[dict]:
             data = json.load(f)
         if not isinstance(data.get("symbols"), list) or not data["symbols"]:
             return None
+        if data.get("version") != STOCK_LIST_VERSION:
+            logger.info(f"Stock list {os.path.basename(path)} is an old version — regenerating")
+            return None
         return data
     except Exception as e:
         logger.warning(f"Stock list read failed ({path}): {e}")
@@ -66,6 +72,7 @@ def _write_file(path: str, symbols: List[str], source: str):
         os.makedirs(_CACHE_DIR, exist_ok=True)
         payload = {
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "version":      STOCK_LIST_VERSION,
             "source":       source,
             "count":        len(symbols),
             "symbols":      symbols,
@@ -81,8 +88,23 @@ def _write_file(path: str, symbols: List[str], source: str):
 
 # ── Provider fetchers ─────────────────────────────────────────────────────────
 
+# Substrings (in tradingsymbol or instrument name) that mark fund instruments:
+# ETFs (NIFTYBEES, SILVERETF, MON100...), liquid funds (LIQUIDCASE, LIQUIDBEES,
+# ABSLLIQUID...), mutual-fund schemes and fund-of-funds.
+_FUND_KEYWORDS = ("BEES", "ETF", "LIQUID", "MUTUAL FUND", "EXCHANGE TRADED FUND", "FOF")
+
+
+def _is_fund(symbol: str, name: str) -> bool:
+    """True for non-company fund instruments: ETFs, liquid funds, mutual funds."""
+    s = symbol.upper()
+    n = (name or "").upper()
+    return any(kw in s or kw in n for kw in _FUND_KEYWORDS)
+
+
 def _fetch_equity_symbols(kite) -> List[str]:
-    """All NSE equity-series stocks as plain symbols (e.g. 'RELIANCE')."""
+    """All NSE equity-series stocks as plain symbols (e.g. 'RELIANCE').
+    Excludes fund instruments (ETFs, liquid funds, mutual funds) — the scanners
+    should only see operating companies."""
     instruments = kite.instruments("NSE")
     symbols = set()
     for inst in instruments:
@@ -96,6 +118,8 @@ def _fetch_equity_symbols(kite) -> List[str]:
         elif "-" in ts:                 # skip BE/BZ/SM etc. series
             continue
         if ts in INDEX_SYMBOLS or " " in ts:
+            continue
+        if _is_fund(ts, inst.get("name") or ""):
             continue
         symbols.add(ts)
     return sorted(symbols)

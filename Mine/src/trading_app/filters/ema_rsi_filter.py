@@ -35,19 +35,31 @@ RSI_CROSSOVER = 51.0
 # EMA "touch" = current candle's LOW <= EMA <= HIGH (actual wick cross)
 # No % tolerance — strict candle range only
 
-# EMA Narrow scanner: all these EMAs must sit inside a tight % band of price
-# on EVERY timeframe of the selected group (monthly/weekly/daily combos)
-NARROW_EMA_PERIODS = [20, 50, 100, 200]
-NARROW_DEFAULT_THRESHOLD_PCT = 1.5
+# EMA Narrow scanner: all EMAs of the selected set must sit inside a tight
+# % band of price on EVERY timeframe of the selected group
+NARROW_EMA_SETS = {
+    "20_50_100_200": [20, 50, 100, 200],
+    "20_50_100":     [20, 50, 100],
+}
+NARROW_DEFAULT_EMA_SET = "20_50_100"
+NARROW_DEFAULT_THRESHOLD_PCT = 3.0
 
 NARROW_GROUPS = {
     "mwd": ["monthly", "weekly", "daily"],
     "mw":  ["monthly", "weekly"],
     "wd":  ["weekly", "daily"],
+    "d":   ["daily"],
+    "w":   ["weekly"],
+    "m":   ["monthly"],
 }
-# Daily-bar history needed for a stable EMA(200) on each resampled timeframe
-NARROW_FETCH_DAYS = {"daily": 900, "weekly": 2500, "monthly": 7000}
-NARROW_RESAMPLE   = {"daily": None, "weekly": "W", "monthly": "M"}
+# Daily-bar history needed for a stable longest-EMA on each resampled timeframe,
+# keyed by the largest period of the selected EMA set
+NARROW_FETCH_DAYS = {
+    "daily":   {100: 500,  200: 900},
+    "weekly":  {100: 1400, 200: 2500},
+    "monthly": {100: 3700, 200: 7000},
+}
+NARROW_RESAMPLE = {"daily": None, "weekly": "W", "monthly": "M"}
 
 
 def _calc_ema(prices: List[float], period: int) -> List[float]:
@@ -168,6 +180,20 @@ class EmaRsiFilterService:
 
     def _fetch_hist(self, symbol: str, days: int, interval: str = "day",
                     end_date: Optional[datetime] = None) -> Optional[pd.DataFrame]:
+        # Daily candles go through the per-stock disk store: full download once,
+        # then only incremental tail fetches — much faster repeat scans.
+        if interval == "day":
+            try:
+                from trading_app.filters.candle_store import get_daily_history
+                token = self._get_token(symbol)
+                if token:
+                    df = get_daily_history(self.kite, token, symbol, days, end_date)
+                    if df is not None and not df.empty:
+                        return df
+                    return None
+            except Exception as e:
+                logger.warning(f"Candle store failed for {symbol}, falling back to direct fetch: {e}")
+
         end   = end_date if end_date else datetime.now()
         start = end - timedelta(days=days)
         cache_key = f"{symbol}_{start.date()}_{end.date()}_{interval}_{days}"
@@ -283,7 +309,7 @@ class EmaRsiFilterService:
         rsi_valid    = (last_rsi == last_rsi and prev_rsi == prev_rsi)
         rsi_crossed_above = bool(rsi_valid and prev_rsi <= RSI_CROSSOVER and last_rsi > RSI_CROSSOVER)
 
-        matched = bool(ema_touched or rsi_crossed_above)
+        matched = bool(ema_touched and rsi_crossed_above)
 
         return {
             "symbol":        symbol,
@@ -295,16 +321,16 @@ class EmaRsiFilterService:
             "ema_touched":   ema_touched,
             "rsi_in_range":  rsi_crossed_above,
             "matched":       matched,
-            "trigger": (
-                "EMA+RSI" if ema_touched and rsi_crossed_above
-                else ("EMA Touch" if ema_touched else "RSI > 51")
-            ) if matched else "—",
+            "trigger":       "EMA+RSI" if matched else "—",
         }
 
     def _analyse_ema_narrow(self, symbol: str, current_price: float, df: Optional[pd.DataFrame],
                             resample: Optional[str] = None,
-                            threshold_pct: float = NARROW_DEFAULT_THRESHOLD_PCT) -> Optional[Dict]:
-        """Check whether EMA(20/50/100/200) are all bunched within threshold_pct of price."""
+                            threshold_pct: float = NARROW_DEFAULT_THRESHOLD_PCT,
+                            periods: Optional[List[int]] = None) -> Optional[Dict]:
+        """Check whether all EMAs of the set are bunched within threshold_pct of price."""
+        if periods is None:
+            periods = NARROW_EMA_SETS[NARROW_DEFAULT_EMA_SET]
         if df is None or len(df) < 20:
             return None
 
@@ -314,12 +340,11 @@ class EmaRsiFilterService:
             df = _monthly_resample(df)
 
         closes = df["close"].tolist()
-        max_period = max(NARROW_EMA_PERIODS)
-        if len(closes) < max_period:
+        if len(closes) < max(periods):
             return None
 
         emas: Dict[int, float] = {}
-        for p in NARROW_EMA_PERIODS:
+        for p in periods:
             val = _calc_ema(closes, p)[-1]
             if val != val:  # nan check
                 return None
@@ -339,20 +364,22 @@ class EmaRsiFilterService:
             "symbol":        symbol,
             "current_price": float(current_price),
             "close":         round(last_close, 2),
-            "ema20":         round(emas[20], 2),
-            "ema50":         round(emas[50], 2),
-            "ema100":        round(emas[100], 2),
-            "ema200":        round(emas[200], 2),
+            "ema20":         round(emas[20], 2) if 20 in emas else None,
+            "ema50":         round(emas[50], 2) if 50 in emas else None,
+            "ema100":        round(emas[100], 2) if 100 in emas else None,
+            "ema200":        round(emas[200], 2) if 200 in emas else None,
             "spread_pct":    spread_pct,
             "price_inside":  price_inside,
             "matched":       matched,
         }
 
-    def run_ema_narrow_filter(self, root_date: Optional[datetime] = None, group: str = "mwd",
+    def run_ema_narrow_filter(self, root_date: Optional[datetime] = None, group: str = "wd",
                               threshold_pct: float = NARROW_DEFAULT_THRESHOLD_PCT,
+                              ema_set: str = NARROW_DEFAULT_EMA_SET,
                               progress_cb=None) -> Dict:
-        """Scan ALL NSE equity stocks for EMA(20/50/100/200) compression on EVERY
-        timeframe of the selected group ('mwd' = Month+Week+Day, 'mw', 'wd').
+        """Scan ALL NSE equity stocks where every EMA of the selected set
+        ('20_50_100_200' or '20_50_100') is compressed on EVERY timeframe of the
+        selected group ('mwd' = Month+Week+Day, 'mw', 'wd', or single d/w/m).
 
         Timeframes are checked cheapest-first (daily → weekly → monthly); the long
         history needed by higher timeframes is only fetched for stocks that are
@@ -362,8 +389,10 @@ class EmaRsiFilterService:
         progress_cb(done, total, partial) is invoked, where partial is a
         snapshot {'results': [...], 'nearest': [...]} of everything found so
         far — so callers can show results incrementally while the scan runs."""
-        group_tfs = NARROW_GROUPS.get(group, NARROW_GROUPS["mwd"])
+        group_tfs = NARROW_GROUPS.get(group, NARROW_GROUPS["wd"])
         gate_order = list(reversed(group_tfs))  # lowest timeframe first (cheapest fetch)
+        periods = NARROW_EMA_SETS.get(ema_set, NARROW_EMA_SETS[NARROW_DEFAULT_EMA_SET])
+        max_period = max(periods)  # sizes how much history each timeframe needs
 
         stocks = self._get_equity_stocks()
         if not stocks:
@@ -371,7 +400,7 @@ class EmaRsiFilterService:
             return {"results": [], "nearest": []}
 
         logger.info(f"EMA Narrow filter: scanning {len(stocks)} equity stocks for "
-                    f"{'+'.join(group_tfs)} (threshold {threshold_pct}%)...")
+                    f"{'+'.join(group_tfs)} EMAs {periods} (threshold {threshold_pct}%)...")
 
         nse_symbols = [f"NSE:{s}" for s in stocks]
         price_map: Dict[str, float] = {}
@@ -396,9 +425,10 @@ class EmaRsiFilterService:
             # needs when the stock is still narrow on every lower timeframe.
             tf_res: Dict[str, Dict] = {}
             for tf in gate_order:
-                df = self._fetch_hist(symbol, days=NARROW_FETCH_DAYS[tf],
+                df = self._fetch_hist(symbol, days=NARROW_FETCH_DAYS[tf][max_period],
                                       interval="day", end_date=root_date)
-                r = self._analyse_ema_narrow(symbol, price, df, NARROW_RESAMPLE[tf], threshold_pct)
+                r = self._analyse_ema_narrow(symbol, price, df, NARROW_RESAMPLE[tf],
+                                             threshold_pct, periods)
                 if r is None:
                     # Not enough history for EMA(200) on this timeframe — can't verify, skip stock
                     return symbol, None

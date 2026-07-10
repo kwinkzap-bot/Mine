@@ -777,6 +777,49 @@ body.ocean-theme .sm-gl-overlay {
     background: rgba(124, 58, 237, 0.08);
     border-color: rgba(124, 58, 237, 0.25);
 }
+.ag-reason-badge.range-reclaim {
+    color: #0891b2;
+    background: rgba(8, 145, 178, 0.08);
+    border-color: rgba(8, 145, 178, 0.25);
+}
+
+/* ── Live / Paper mode chips ──────────────────────────────────── */
+.ag-mode-chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid;
+    white-space: nowrap;
+}
+.ag-mode-chip.live {
+    color: var(--ag-pos);
+    background: rgba(22, 163, 74, 0.08);
+    border-color: rgba(22, 163, 74, 0.25);
+}
+.ag-mode-chip.paper {
+    color: #d97706;
+    background: rgba(217, 119, 6, 0.08);
+    border-color: rgba(217, 119, 6, 0.28);
+}
+
+/* Small "PAPER" flag on the tab-bar button itself */
+.ag-tab-mode-flag {
+    display: inline-block;
+    margin-left: 5px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    vertical-align: middle;
+    color: #d97706;
+    background: rgba(217, 119, 6, 0.12);
+    border: 1px solid rgba(217, 119, 6, 0.3);
+}
 
 /* ── Card header action buttons ───────────────────────────────── */
 .ag-card-hdr-actions {

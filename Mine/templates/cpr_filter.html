@@ -53,16 +53,23 @@
     <div id="ema-narrow-header-controls" class="header-controls-container"
         style="display: none; gap: 8px; align-items: center;">
         <select id="emaNarrowGroup" class="date-picker tf-picker" title="Timeframes that must ALL be narrow">
-            <option value="mwd" selected>Month / Week / Day</option>
+            <option value="wd" selected>Week / Day</option>
+            <option value="mwd">Month / Week / Day</option>
             <option value="mw">Month / Week</option>
-            <option value="wd">Week / Day</option>
+            <option value="d">Day</option>
+            <option value="w">Week</option>
+            <option value="m">Month</option>
+        </select>
+        <select id="emaNarrowEmaSet" class="date-picker tf-picker" title="Which EMAs must be near each other">
+            <option value="20_50_100" selected>EMA 20/50/100</option>
+            <option value="20_50_100_200">EMA 20/50/100/200</option>
         </select>
         <select id="emaNarrowThreshold" class="date-picker tf-picker" title="Max EMA spread (% of price)">
             <option value="0.5">Spread ≤ 0.5%</option>
             <option value="1">Spread ≤ 1%</option>
-            <option value="1.5" selected>Spread ≤ 1.5%</option>
+            <option value="1.5">Spread ≤ 1.5%</option>
             <option value="2">Spread ≤ 2%</option>
-            <option value="3">Spread ≤ 3%</option>
+            <option value="3" selected>Spread ≤ 3%</option>
         </select>
         <input type="date" id="emaNarrowDateFilter" class="date-picker" title="Select analysis date">
         <button id="ema-narrow-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
@@ -237,13 +244,13 @@
 <!-- EMA Narrow Section -->
 <div id="ema-narrow-scanner-content" style="display: none;">
     <div class="ema-section-label">
-        <span class="ema-tf-badge daily-badge" id="narrow-tf-badge">📅 Month / Week / Day</span>
-        <span class="ema-section-title">EMA Narrow — EMA 20 / 50 / 100 / 200 compressed on ALL selected
-            timeframes</span>
+        <span class="ema-tf-badge weekly-badge" id="narrow-tf-badge">📅 Week / Day</span>
+        <span class="ema-section-title" id="ema-narrow-section-title">EMA Narrow — EMA 20 / 50 / 100
+            compressed on ALL selected timeframes</span>
     </div>
     <div class="results-row">
         <div id="emaNarrowResults" class="results results-hidden results-block">
-            <h3>🧲 EMA Narrow (each timeframe spread ≤ <span id="emaNarrowThresholdLabel">1.5%</span>)
+            <h3><span class="h3-title-text">🧲 EMA Narrow (each timeframe spread ≤ <span id="emaNarrowThresholdLabel">3%</span>)</span>
                 <span id="emaNarrowCount">(0)</span></h3>
             <div class="results-scroll">
                 <table id="emaNarrowTable">

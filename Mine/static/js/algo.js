@@ -25,8 +25,12 @@ let _scStatusTimer     = null;
 let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;
 let _scLastActiveFlag  = false;
+let _intrinsicStatusTimer    = null;
+let _intrinsicHistoryTimer   = null;
+let _intrinsicLastEntryTime  = null;
+let _intrinsicLastActiveFlag = false;
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'rtp', 'rtp30s', 'rtp2m', 'rtp3m', 'rtp5m', 'sc', 'swing-momentum'];
+const _ALGO_TABS = ['active', 'rtp', 'rtp30s', 'rtp2m', 'rtp3m', 'rtp5m', 'sc', 'intrinsic', 'swing-momentum'];
 
 // Round-trip brokerage charged per lot (1 lot = 65 qty). The performance
 // dashboards express ₹ P&L on a single-lot basis (opt_pnl_pts × lot_size), so
@@ -69,13 +73,21 @@ function _algoNetInr(t) {
 // ── Active Trade tab (all live option algos consolidated) ─────────────────────
 // Each source shares the same status shape: { active, state.active_trade, live }.
 const _ACTIVE_SOURCES = [
-    { label: 'EMA RTP 1m',     url: '/api/algo/rtp/status',    histUrl: '/api/algo/rtp/history'    },
-    { label: 'EMA RTP 30s',    url: '/api/algo/rtp30s/status', histUrl: '/api/algo/rtp30s/history' },
-    { label: 'EMA RTP 2m',     url: '/api/algo/rtp2m/status',  histUrl: '/api/algo/rtp2m/history'  },
-    { label: 'EMA RTP 3m',     url: '/api/algo/rtp3m/status',  histUrl: '/api/algo/rtp3m/history'  },
-    { label: 'EMA RTP 5m',     url: '/api/algo/rtp5m/status',  histUrl: '/api/algo/rtp5m/history'  },
-    { label: '2nd 30s Candle', url: '/api/algo/sc/status',     histUrl: '/api/algo/sc/history'     },
+    { label: 'EMA RTP 1m',     url: '/api/algo/rtp/status',    histUrl: '/api/algo/rtp/history',    mode: 'live'  },
+    { label: 'EMA RTP 30s',    url: '/api/algo/rtp30s/status', histUrl: '/api/algo/rtp30s/history', mode: 'live'  },
+    { label: 'EMA RTP 2m',     url: '/api/algo/rtp2m/status',  histUrl: '/api/algo/rtp2m/history',  mode: 'live'  },
+    { label: 'EMA RTP 3m',     url: '/api/algo/rtp3m/status',  histUrl: '/api/algo/rtp3m/history',  mode: 'live'  },
+    { label: 'EMA RTP 5m',     url: '/api/algo/rtp5m/status',  histUrl: '/api/algo/rtp5m/history',  mode: 'live'  },
+    { label: '2nd 30s Candle', url: '/api/algo/sc/status',     histUrl: '/api/algo/sc/history',     mode: 'live'  },
+    { label: 'Intrinsic Range', url: '/api/algo/intrinsic-range/status', histUrl: '/api/algo/intrinsic-range/history', mode: 'paper' },
 ];
+
+// Small "Live"/"Paper" pill shown per-row in the consolidated Active tab.
+function _algoModeChip(mode) {
+    const m = (mode || 'live').toLowerCase();
+    const label = m === 'paper' ? 'Paper' : 'Live';
+    return `<span class="ag-mode-chip ${m}">${label}</span>`;
+}
 
 // Local YYYY-MM-DD (matches the `date` field the algos write in IST).
 function _activeTodayStr() {
@@ -103,7 +115,7 @@ function _activeFetchAll(btn) {
         const rows = [];
         statuses.forEach(({ src, data }) => {
             const trade = data && data.active && data.state ? data.state.active_trade : null;
-            if (trade) rows.push({ label: src.label, trade, live: data.live || null });
+            if (trade) rows.push({ label: src.label, mode: src.mode, trade, live: data.live || null });
         });
 
         // Completed trades from every algo, today only, newest exit first.
@@ -112,7 +124,7 @@ function _activeFetchAll(btn) {
         histories.forEach(({ src, trades }) => {
             trades.forEach(t => {
                 const d = t.date || (t.entry_time ? String(t.entry_time).slice(0, 10) : '');
-                if (d === today) todayTrades.push({ label: src.label, ...t });
+                if (d === today) todayTrades.push({ label: src.label, mode: src.mode, ...t });
             });
         });
         todayTrades.sort((a, b) =>
@@ -155,6 +167,7 @@ function _activeRender(rows) {
     <thead>
         <tr>
             <th class="ag-hist-th">Logic Type</th>
+            <th class="ag-hist-th">Mode</th>
             <th class="ag-hist-th">Direction</th>
             <th class="ag-hist-th">Option</th>
             <th class="ag-hist-th">Entry Spot</th>
@@ -168,7 +181,7 @@ function _activeRender(rows) {
         </tr>
     </thead>
     <tbody>
-    ${rows.map(({ label, trade, live }) => {
+    ${rows.map(({ label, mode, trade, live }) => {
         const dirCls   = trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg';
         const spotStr  = live ? '₹' + _num(live.spot) : '…';
         const optEntry = live && live.opt_entry_price != null
@@ -179,6 +192,7 @@ function _activeRender(rows) {
         const optPnlStr = optPnlInr != null ? _rtpFmtInr(optPnlInr) : '…';
         return `<tr>
             <td class="ag-hist-td" style="font-weight:700">${label}</td>
+            <td class="ag-hist-td">${_algoModeChip(mode)}</td>
             <td class="ag-hist-td ${dirCls}" style="font-weight:700">${trade.direction ?? '—'}</td>
             <td class="ag-hist-td">${(trade.option_type ?? '') + ' ' + (trade.strike ?? '—')}</td>
             <td class="ag-hist-td">₹${_num(trade.entry_spot)}</td>
@@ -267,6 +281,7 @@ function _activeRenderHistory(trades) {
     <thead>
         <tr>
             <th class="ag-hist-th">Logic Type</th>
+            <th class="ag-hist-th">Mode</th>
             <th class="ag-hist-th">Direction</th>
             <th class="ag-hist-th">Option</th>
             <th class="ag-hist-th">Entry Time</th>
@@ -286,6 +301,7 @@ function _activeRenderHistory(trades) {
         const pnlCls  = _rtpPnlCls(optPts);
         return `<tr>
             <td class="ag-hist-td" style="font-weight:700">${t.label}</td>
+            <td class="ag-hist-td">${_algoModeChip(t.mode)}</td>
             <td class="ag-hist-td ${dirCls}" style="font-weight:700">${t.direction ?? '—'}</td>
             <td class="ag-hist-td">${(t.option_type ?? '') + ' ' + (t.strike ?? '—')}</td>
             <td class="ag-hist-td">${t.entry_time ? _fmtTimeOnly(t.entry_time) : '—'}</td>
@@ -376,6 +392,8 @@ function algoSwitch(tab) {
     clearTimeout(_rtp5mHistoryTimer);
     clearTimeout(_scStatusTimer);
     clearTimeout(_scHistoryTimer);
+    clearTimeout(_intrinsicStatusTimer);
+    clearTimeout(_intrinsicHistoryTimer);
     clearTimeout(_activeTimer);
     if (tab === 'active') {
         _activeFetchAll();
@@ -398,6 +416,9 @@ function algoSwitch(tab) {
         scLoadSettings();
         _scFetchStatus();
         _scFetchHistory();
+    } else if (tab === 'intrinsic') {
+        _intrinsicFetchStatus();
+        _intrinsicFetchHistory();
     } else if (tab === 'swing-momentum') {
         _smLiveFetchConfigs();
     }
@@ -856,10 +877,11 @@ function _rtpPnlCls(val) {
 
 function _rtpFmtReason(reason) {
     const map = {
-        TARGET: '<span class="ag-reason-badge target">TARGET</span>',
-        SL:     '<span class="ag-reason-badge sl">SL</span>',
-        EOD:    '<span class="ag-reason-badge eod">EOD</span>',
-        MANUAL: '<span class="ag-reason-badge manual">MANUAL</span>',
+        TARGET:        '<span class="ag-reason-badge target">TARGET</span>',
+        SL:            '<span class="ag-reason-badge sl">SL</span>',
+        EOD:           '<span class="ag-reason-badge eod">EOD</span>',
+        MANUAL:        '<span class="ag-reason-badge manual">MANUAL</span>',
+        RANGE_RECLAIM: '<span class="ag-reason-badge range-reclaim">RANGE RECLAIM</span>',
     };
     return map[reason] || reason || '—';
 }
@@ -1502,10 +1524,11 @@ function _rtp30sPnlCls(val) {
 
 function _rtp30sFmtReason(reason) {
     const map = {
-        TARGET: '<span class="ag-reason-badge target">TARGET</span>',
-        SL:     '<span class="ag-reason-badge sl">SL</span>',
-        EOD:    '<span class="ag-reason-badge eod">EOD</span>',
-        MANUAL: '<span class="ag-reason-badge manual">MANUAL</span>',
+        TARGET:        '<span class="ag-reason-badge target">TARGET</span>',
+        SL:            '<span class="ag-reason-badge sl">SL</span>',
+        EOD:           '<span class="ag-reason-badge eod">EOD</span>',
+        MANUAL:        '<span class="ag-reason-badge manual">MANUAL</span>',
+        RANGE_RECLAIM: '<span class="ag-reason-badge range-reclaim">RANGE RECLAIM</span>',
     };
     return map[reason] || reason || '—';
 }
@@ -2149,10 +2172,11 @@ function _rtp3mPnlCls(val) {
 
 function _rtp3mFmtReason(reason) {
     const map = {
-        TARGET: '<span class="ag-reason-badge target">TARGET</span>',
-        SL:     '<span class="ag-reason-badge sl">SL</span>',
-        EOD:    '<span class="ag-reason-badge eod">EOD</span>',
-        MANUAL: '<span class="ag-reason-badge manual">MANUAL</span>',
+        TARGET:        '<span class="ag-reason-badge target">TARGET</span>',
+        SL:            '<span class="ag-reason-badge sl">SL</span>',
+        EOD:           '<span class="ag-reason-badge eod">EOD</span>',
+        MANUAL:        '<span class="ag-reason-badge manual">MANUAL</span>',
+        RANGE_RECLAIM: '<span class="ag-reason-badge range-reclaim">RANGE RECLAIM</span>',
     };
     return map[reason] || reason || '—';
 }
@@ -2796,10 +2820,11 @@ function _rtp2mPnlCls(val) {
 
 function _rtp2mFmtReason(reason) {
     const map = {
-        TARGET: '<span class="ag-reason-badge target">TARGET</span>',
-        SL:     '<span class="ag-reason-badge sl">SL</span>',
-        EOD:    '<span class="ag-reason-badge eod">EOD</span>',
-        MANUAL: '<span class="ag-reason-badge manual">MANUAL</span>',
+        TARGET:        '<span class="ag-reason-badge target">TARGET</span>',
+        SL:            '<span class="ag-reason-badge sl">SL</span>',
+        EOD:           '<span class="ag-reason-badge eod">EOD</span>',
+        MANUAL:        '<span class="ag-reason-badge manual">MANUAL</span>',
+        RANGE_RECLAIM: '<span class="ag-reason-badge range-reclaim">RANGE RECLAIM</span>',
     };
     return map[reason] || reason || '—';
 }
@@ -3443,10 +3468,11 @@ function _rtp5mPnlCls(val) {
 
 function _rtp5mFmtReason(reason) {
     const map = {
-        TARGET: '<span class="ag-reason-badge target">TARGET</span>',
-        SL:     '<span class="ag-reason-badge sl">SL</span>',
-        EOD:    '<span class="ag-reason-badge eod">EOD</span>',
-        MANUAL: '<span class="ag-reason-badge manual">MANUAL</span>',
+        TARGET:        '<span class="ag-reason-badge target">TARGET</span>',
+        SL:            '<span class="ag-reason-badge sl">SL</span>',
+        EOD:           '<span class="ag-reason-badge eod">EOD</span>',
+        MANUAL:        '<span class="ag-reason-badge manual">MANUAL</span>',
+        RANGE_RECLAIM: '<span class="ag-reason-badge range-reclaim">RANGE RECLAIM</span>',
     };
     return map[reason] || reason || '—';
 }
@@ -4236,6 +4262,283 @@ function scFetchDeltaStrikes(btn) {
             panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ Request failed: ${e}</span>`;
             panel.style.display = 'block';
         });
+}
+
+// ── Intrinsic ATM Range Breakout (PAPER TRADE) ─────────────────────────────────
+
+function _intrinsicFetchStatus() {
+    fetch('/api/algo/intrinsic-range/status')
+        .then(r => r.json())
+        .then(data => {
+            _intrinsicRenderStatus(data);
+            const newEntryTime = data.state && data.state.active_trade
+                ? data.state.active_trade.entry_time : null;
+            const newActive = !!data.active;
+            const tradeChanged = newEntryTime !== _intrinsicLastEntryTime ||
+                                 newActive !== _intrinsicLastActiveFlag;
+            _intrinsicLastEntryTime  = newEntryTime;
+            _intrinsicLastActiveFlag = newActive;
+            if (tradeChanged) {
+                clearTimeout(_intrinsicHistoryTimer);
+                _intrinsicFetchHistory();
+            }
+            clearTimeout(_intrinsicStatusTimer);
+            _intrinsicStatusTimer = setTimeout(_intrinsicFetchStatus, newActive ? 5000 : 30000);
+        })
+        .catch(() => {
+            clearTimeout(_intrinsicStatusTimer);
+            _intrinsicStatusTimer = setTimeout(_intrinsicFetchStatus, 30000);
+        });
+}
+
+function _intrinsicRenderStatus(data) {
+    const state  = data.state || {};
+    const setup  = state.daily_setup;
+    const trade  = state.active_trade;
+    const live   = data.live || null;
+    const active = !!data.active;
+
+    // Badge
+    const badge = document.getElementById('intrinsicBadge');
+    badge.className = 'ag-badge ' + (active ? 'active' : 'inactive');
+    document.getElementById('intrinsicBadgeText').textContent =
+        active ? (trade.direction + ' ' + trade.option_type) : 'No Trade';
+
+    document.getElementById('intrinsicLastUpd').textContent =
+        new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Today's Range Setup card
+    const setupGrid = document.getElementById('intrinsicSetupGrid');
+    if (!setup) {
+        setupGrid.innerHTML = '<div class="ag-empty">Setup not computed yet — waiting for the daily setup step (after 9:16 AM)</div>';
+    } else {
+        const setupTiles = [
+            { label: 'Prev Close Spot', value: '₹' + _num(setup.prev_close_spot) },
+            { label: 'ATM Strike',      value: setup.atm_strike },
+            { label: 'CE Prev Close',   value: '₹' + _num(setup.ce_prev_close) },
+            { label: 'PE Prev Close',   value: '₹' + _num(setup.pe_prev_close) },
+            { label: 'Common ATM',      value: '₹' + _num(setup.common_atm) },
+            { label: 'Range Lower',     value: '₹' + _num(setup.lower_bound), cls: 'ag-neg' },
+            { label: 'Range Upper',     value: '₹' + _num(setup.upper_bound), cls: 'ag-pos' },
+            { label: 'Total Range',     value: _num(setup.total_range) + ' pts' },
+        ];
+        setupGrid.innerHTML = setupTiles.map(t =>
+            `<div class="ag-stat">
+                <span class="ag-stat-label">${t.label}</span>
+                <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+            </div>`
+        ).join('');
+    }
+
+    // Active trade grid
+    const grid = document.getElementById('intrinsicActiveGrid');
+    if (!active || !trade) {
+        grid.innerHTML = '<div class="ag-empty">No active trade</div>';
+        return;
+    }
+
+    const spotStr = live ? '₹' + _num(live.spot) : '…';
+
+    const tiles = [
+        { label: 'Direction',    value: trade.direction,
+          cls: trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg' },
+        { label: 'Option',       value: trade.option_type + ' ' + trade.strike },
+        { label: 'Entry Spot',   value: '₹' + _num(trade.entry_spot) },
+        { label: 'Live Spot',    value: spotStr },
+        { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
+        { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
+        ..._algoOptTiles(trade, live),
+        { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
+    ];
+
+    grid.innerHTML = tiles.map(t =>
+        `<div class="ag-stat">
+            <span class="ag-stat-label">${t.label}</span>
+            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+        </div>`
+    ).join('');
+}
+
+// ── Intrinsic Range history ─────────────────────────────────────────────────────
+
+function _intrinsicFetchHistory() {
+    fetch('/api/algo/intrinsic-range/history')
+        .then(r => r.json())
+        .then(data => {
+            _intrinsicRenderHistory(data.trades || []);
+            clearTimeout(_intrinsicHistoryTimer);
+            _intrinsicHistoryTimer = setTimeout(_intrinsicFetchHistory, 30000);
+        })
+        .catch(() => {
+            clearTimeout(_intrinsicHistoryTimer);
+            _intrinsicHistoryTimer = setTimeout(_intrinsicFetchHistory, 30000);
+        });
+}
+
+function _intrinsicRenderHistory(trades) {
+    const countEl = document.getElementById('intrinsicHistCount');
+    const body    = document.getElementById('intrinsicHistBody');
+
+    if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
+
+    if (!trades.length) {
+        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
+        return;
+    }
+
+    function _fmtOpt(val) {
+        if (val == null) return '—';
+        return '₹' + Number(val).toFixed(2);
+    }
+    function _fmtPts(val, suffix) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
+    }
+    function _fmtInr(val) {
+        if (val == null) return '—';
+        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
+    }
+
+    body.innerHTML = `
+<div class="ag-hist-scroll">
+<table class="ag-hist-table">
+    <thead>
+        <tr>
+            <th class="ag-hist-th">Date</th>
+            <th class="ag-hist-th">Entry Time</th>
+            <th class="ag-hist-th">Exit Time</th>
+            <th class="ag-hist-th">Strike</th>
+            <th class="ag-hist-th">Premium Entry</th>
+            <th class="ag-hist-th">Premium Exit</th>
+            <th class="ag-hist-th">Entry Spot</th>
+            <th class="ag-hist-th">Exit Spot</th>
+            <th class="ag-hist-th">Spot Pts</th>
+            <th class="ag-hist-th">Premium Pts</th>
+            <th class="ag-hist-th">Premium P&amp;L</th>
+            <th class="ag-hist-th">Reason</th>
+            <th class="ag-hist-th"></th>
+        </tr>
+    </thead>
+    <tbody>
+    ${trades.map(t => {
+        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const premPts   = t.premium_pnl_pts;
+        const pPnlCls   = (premPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
+        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
+        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
+        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
+        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
+        return `<tr>
+            <td class="ag-hist-td">${dateStr}</td>
+            <td class="ag-hist-td">${entryTime}</td>
+            <td class="ag-hist-td">${exitTime}</td>
+            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.entry_premium)}</td>
+            <td class="ag-hist-td">${_fmtOpt(t.exit_premium)}</td>
+            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
+            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
+            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
+            <td class="ag-hist-td ${premPts != null ? pPnlCls : ''}" style="font-weight:700">${premPts != null ? (premPts >= 0 ? '+' : '') + premPts.toFixed(2) : '—'}</td>
+            <td class="ag-hist-td ${t.premium_pnl_inr != null ? pPnlCls : ''}" style="font-weight:700">${_fmtInr(t.premium_pnl_inr)}</td>
+            <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
+            <td class="ag-hist-td ag-hist-td-del">
+                <button class="ag-hist-del-btn" onclick="_intrinsicDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
+            </td>
+        </tr>`;
+    }).join('')}
+    </tbody>
+</table>
+</div>`;
+}
+
+function _intrinsicDeleteAllTrades() {
+    if (!confirm('Delete ALL Intrinsic Range paper-trade history records? This clears the entire Executed Trade History and cannot be undone.')) return;
+    fetch('/api/algo/intrinsic-range/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ all: true }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_intrinsicHistoryTimer);
+            _intrinsicFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
+function _intrinsicDeleteTrade(entryTime) {
+    if (!confirm('Delete this trade record? This cannot be undone.')) return;
+    fetch('/api/algo/intrinsic-range/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ entry_time: entryTime }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_intrinsicHistoryTimer);
+            _intrinsicFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
+// ── Intrinsic Range Strategy Logic popup ───────────────────────────────────────
+
+function intrinsicShowLogic() {
+    document.getElementById('intrinsicLogicModal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'intrinsicLogicModal';
+    modal.className = 'sm-modal-overlay';
+    modal.innerHTML = `
+<div class="sm-modal-box rtp-logic-modal">
+
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><polyline points="4 15 9 9 13 13 20 5"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">Intrinsic ATM Range Breakout</span>
+            <span class="sm-modal-subtitle">Paper trade — how it enters &amp; exits</span>
+        </div>
+        <button class="sm-modal-close" onclick="document.getElementById('intrinsicLogicModal').remove()" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+
+    <div class="rtp-logic-body">
+
+        <div class="rtp-tf"><span class="rtp-tf-lbl">Mode</span><span class="rtp-tf-val">Paper trade only</span><span class="rtp-tf-sub">no broker orders — simulated fills off live LTP</span></div>
+
+        <p class="rtp-idea">Every morning, find the strike where <b>CE and PE premiums (previous close) are closest</b> — the "common ATM". Average those two premiums, round to the nearest strike step, and use it as a <b>symmetric range</b> around that ATM strike — yesterday's intrinsic-value / expected-move zone.</p>
+
+        <div class="rtp-blk-lbl entry">Entry — breakout confirmed 3 ways</div>
+        <div class="rtp-duo">
+            <div class="rtp-duo-card buy">
+                <div class="rtp-duo-hd">▲ BUY (CE)</div>
+                <div class="rtp-duo-row">Spot closes <b>above upper bound</b></div>
+                <div class="rtp-duo-row">Lower-strike CE premium &ge; total range</div>
+            </div>
+            <div class="rtp-duo-card sell">
+                <div class="rtp-duo-hd">▼ SELL (PE)</div>
+                <div class="rtp-duo-row">Spot closes <b>below lower bound</b></div>
+                <div class="rtp-duo-row">Upper-strike PE premium &ge; total range</div>
+            </div>
+        </div>
+        <div class="rtp-mode-note">Both directions also require the live common-ATM premium <b>and</b> India VIX to be expanding vs. the day's opening reading — separates a real trend day from range-bound noise. Trade buys the current-spot ATM option in the breakout direction.</div>
+
+        <div class="rtp-blk-lbl exit">Exit — whichever hits first</div>
+        <div class="rtp-chips">
+            <div class="rtp-chip"><span class="rtp-chip-ic tgt">◎</span><div><b>Target</b><span>default: day's range/2</span></div></div>
+            <div class="rtp-chip"><span class="rtp-chip-ic sl">✕</span><div><b>Stop Loss</b><span>default: day's range/4</span></div></div>
+            <div class="rtp-chip"><span class="rtp-chip-ic eod">↩</span><div><b>Range Reclaim</b><span>spot re-enters the range</span></div></div>
+            <div class="rtp-chip rtp-chip-wide"><span class="rtp-chip-ic eod">⏱</span><div><b>EOD 3:20 PM</b><span>force exit · no overnight hold</span></div></div>
+        </div>
+    </div>
+</div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

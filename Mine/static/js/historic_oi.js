@@ -93,8 +93,18 @@ function _hoiRenderPrediction(d) {
     const icon = d.prediction === 'BULLISH' ? '▲' : d.prediction === 'BEARISH' ? '▼' : '◆';
     const mv   = d.expected_move_pct;
     const mvTxt = (mv > 0 ? '+' : '') + mv.toFixed(2) + '%';
-    const reasons = (d.reasons || []).map(r => `
-        <div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;border-top:1px dashed var(--pf-border)">
+
+    // Crisp default view — one compact chip per signal (dot + short label + value)
+    const chips = (d.reasons || []).map(r => {
+        const short = r.name.split('(')[0].trim();
+        const c = r.bullish ? 'var(--pf-pos)' : 'var(--pf-neg)';
+        return `<span class="hoi-sig-chip"><span style="color:${c};font-size:9px">●</span>${short}
+                  <b style="color:var(--pf-text-1);font-variant-numeric:tabular-nums">${r.value}</b></span>`;
+    }).join('');
+
+    // Full breakdown — revealed on info-icon hover
+    const rows = (d.reasons || []).map(r => `
+        <div style="display:flex;gap:8px;align-items:baseline;padding:3px 0;">
           <span style="color:${r.bullish ? 'var(--pf-pos)' : 'var(--pf-neg)'};font-size:10px">●</span>
           <span style="font-size:11.5px;color:var(--pf-text-1);font-weight:600;white-space:nowrap">${r.name}: ${r.value}</span>
           <span style="font-size:11px;color:var(--pf-text-2)">${r.bucket} — ${r.why}.
@@ -102,22 +112,29 @@ function _hoiRenderPrediction(d) {
             of similar days closed higher next session
             (avg ${r.avg_ret_pct > 0 ? '+' : ''}${r.avg_ret_pct}%, n=${r.n})</span>
         </div>`).join('');
+    const popup = `
+      <div style="font-size:11px;font-weight:700;color:var(--pf-text-2);margin-bottom:6px">
+        Signal breakdown · up-probability <b style="color:${col}">${d.prob_up_pct}%</b> vs 5-yr base rate ${d.base_rate_pct}%
+      </div>
+      ${rows}
+      <div style="font-size:10px;color:var(--pf-text-3);margin-top:8px;border-top:1px solid var(--pf-border-sub);padding-top:6px">
+        model hit-rate ${d.backtest_hit_pct != null ? d.backtest_hit_pct + '%' : '—'} over ${d.sample_days.toLocaleString('en-IN')} days (${d.from_date} → ${d.to_date}).
+        Statistical tendencies from this grid's own 5-year history (in-sample) — not financial advice.
+      </div>`;
+
     el.innerHTML = `
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <span style="font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--pf-text-3)">NEXT SESSION OUTLOOK · ${d.next_session}</span>
         <span style="font-size:15px;font-weight:800;color:${col}">${icon} ${d.prediction}</span>
         <span style="font-size:11.5px;color:var(--pf-text-2)">
-          up-probability <b style="color:${col}">${d.prob_up_pct}%</b>
-          vs 5-yr base rate ${d.base_rate_pct}% · expected move <b style="color:${col}">${mvTxt}</b>
+          <b style="color:${col}">${d.prob_up_pct}%</b> up · move <b style="color:${col}">${mvTxt}</b>
         </span>
-        <span style="margin-left:auto;font-size:10.5px;color:var(--pf-text-3)">
-          model hit-rate ${d.backtest_hit_pct != null ? d.backtest_hit_pct + '%' : '—'} over ${d.sample_days.toLocaleString('en-IN')} days (${d.from_date} → ${d.to_date})
+        <span class="hoi-info-wrap" style="margin-left:auto">
+          <span class="hoi-info-btn" tabindex="0" aria-label="Show full signal breakdown">i</span>
+          <div class="hoi-info-pop">${popup}</div>
         </span>
       </div>
-      ${reasons}
-      <div style="font-size:10px;color:var(--pf-text-3);margin-top:5px">
-        Statistical tendencies from this grid's own 5-year history (in-sample) — not financial advice.
-      </div>`;
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${chips}</div>`;
 }
 
 function loadHoiPrediction() {

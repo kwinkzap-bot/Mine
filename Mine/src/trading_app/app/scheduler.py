@@ -318,6 +318,38 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
+        # Intrinsic ATM Range Breakout algo (paper trade): start at 9:15 AM weekdays
+        self.scheduler.add_job(
+            self._start_intrinsic_range_monitoring,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=9,
+                minute=15,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='intrinsic_range_algo_start',
+            name='Intrinsic Range Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
+        # Watchdog: restart the Intrinsic Range thread if it crashes mid-day
+        self.scheduler.add_job(
+            self._watchdog_intrinsic_range,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/5',
+                second=30,
+                timezone='Asia/Kolkata',
+            ),
+            id='intrinsic_range_algo_watchdog',
+            name='Intrinsic Range Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
         self.scheduler.start()
         jobs = {j.id: str(j.next_run_time) for j in self.scheduler.get_jobs()}
         logger.info(f"Market scheduler started — jobs registered: {list(jobs.keys())}")
@@ -535,6 +567,44 @@ class MarketScheduler:
         """Every 5 minutes during market hours: restart 2nd-candle thread if it crashed."""
         self._ensure_sc_running(source='Watchdog')
 
+    # ── Intrinsic ATM Range Breakout algo management (paper trade) ────────────
+
+    def _ensure_intrinsic_range_running(self, source: str = '') -> None:
+        """Start the Intrinsic Range monitoring thread if it is not already running.
+        Mirrors _ensure_sc_running: starts during market hours regardless of
+        EMA_INTRINSIC_RANGE_ACTIVE — the kill-switch lives inside the loop and
+        gates paper entries only. All executions here are simulated (paper trade);
+        no broker orders are placed.
+        """
+        try:
+            if not self.is_trading_day():
+                return
+            now = datetime.now()
+            h, m = now.hour, now.minute
+            in_window = (h > 9 or (h == 9 and m >= 15)) and (h < 15 or (h == 15 and m <= 27))
+            if not in_window:
+                return
+            from trading_app.algo.intrinsic_range.intrinsic_range_algo import IntrinsicRangeAlgo, get_instance
+            username = self._rtp_username()
+            existing = get_instance(username)
+            if existing and existing.is_running():
+                return  # Already alive
+            if existing:
+                logger.warning(f"[IntrinsicRange {source}] Monitoring thread dead — restarting")
+            else:
+                logger.info(f"[IntrinsicRange {source}] Starting monitoring thread for user={username}")
+            IntrinsicRangeAlgo(username=username).start()
+        except Exception as e:
+            logger.error(f"[IntrinsicRange {source}] _ensure_intrinsic_range_running failed: {e}", exc_info=True)
+
+    def _start_intrinsic_range_monitoring(self) -> None:
+        """9:15 AM weekdays: start Intrinsic Range algo monitoring thread."""
+        self._ensure_intrinsic_range_running(source='Scheduler')
+
+    def _watchdog_intrinsic_range(self) -> None:
+        """Every 5 minutes during market hours: restart Intrinsic Range thread if it crashed."""
+        self._ensure_intrinsic_range_running(source='Watchdog')
+
     def _run_historic_oi_record_task(self):
         """8:00 PM IST: fetch and persist daily OI snapshot for all symbols."""
         try:
@@ -650,6 +720,7 @@ def init_scheduler(app):
         market_scheduler._ensure_rtp_running(source='Startup', variant='3m')
         market_scheduler._ensure_rtp_running(source='Startup', variant='5m')
         market_scheduler._ensure_sc_running(source='Startup')
+        market_scheduler._ensure_intrinsic_range_running(source='Startup')
         # Historic OI self-heal: backfill any recent trading day whose 8 PM
         # record was missed while this process was down. Runs off-thread so a
         # slow NSE bhavcopy fetch never blocks app startup.

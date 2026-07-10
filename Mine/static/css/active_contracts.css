@@ -454,7 +454,6 @@ body.forest-theme .ac-table thead th {
     border: 1px solid var(--ac-border);
     border-radius: 8px;
     padding: 12px 14px;
-    margin-bottom: 12px;
 }
 
 .ac-ana-head {

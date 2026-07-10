@@ -224,15 +224,7 @@ function renderTable(type, results) {
             ? 'rsi-in-range' : 'rsi-neutral';
         const emaClass = stock.ema_touched ? 'ema-close' : '';
 
-        let triggerHtml = '';
-        const t = (stock.trigger || '').toLowerCase();
-        if (t.includes('ema') && t.includes('rsi')) {
-            triggerHtml = `<span class="trigger-both">⚡ EMA+RSI</span>`;
-        } else if (t.includes('ema')) {
-            triggerHtml = `<span class="trigger-ema">📉 EMA Touch</span>`;
-        } else {
-            triggerHtml = `<span class="trigger-rsi">🔥 RSI > 51</span>`;
-        }
+        const triggerHtml = `<span class="trigger-both">⚡ EMA+RSI</span>`;
 
         const row = document.createElement('tr');
         row.innerHTML = `

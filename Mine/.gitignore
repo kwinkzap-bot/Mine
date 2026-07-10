@@ -12,3 +12,7 @@ htmlcov/
 
 # Backtest results
 backtest_results.json
+
+# Local market-data stores (downloaded candles / symbol lists)
+src/trading_app/data/
+src/trading_app/.cache/

@@ -314,6 +314,21 @@
 .opt-table tbody tr:hover td { background: var(--oip-header-bg); }
 .opt-table .opt-best td { background: rgba(34,197,94,.07); }
 .opt-table .opt-best td:first-child { border-left: 3px solid #22c55e; }
+/* Freeze the trailing "Use" column so it stays visible while the wide grid
+   scrolls horizontally, instead of being scrolled off to the right. */
+.opt-table th:last-child,
+.opt-table td:last-child {
+    position: sticky;
+    right: 0;
+    z-index: 2;
+    background: var(--oip-card-bg, #fff);
+    box-shadow: -6px 0 6px -6px rgba(0,0,0,.2);
+}
+.opt-table th:last-child { z-index: 3; background: var(--oip-header-bg); }
+.opt-table tbody tr:hover td:last-child { background: var(--oip-header-bg); }
+.opt-table .opt-best td:last-child {
+    background: linear-gradient(rgba(34,197,94,.07), rgba(34,197,94,.07)), var(--oip-card-bg, #fff);
+}
 /* LIVE badge — param combo already running as a live algo */
 .opt-live-badge {
     display: inline-block; padding: 1px 7px; border-radius: 9px;
@@ -583,6 +598,32 @@ body.embed-mode .hoi-page { height: 100vh; }
 }
 .hoi-refresh-btn:hover:not(:disabled) { color: var(--pf-accent); border-color: var(--pf-accent); background: rgba(37,99,235,0.06); }
 .hoi-refresh-btn:disabled { opacity: .6; cursor: default; }
+
+/* ── HOI prediction panel — crisp chips + info-icon popup ───────────── */
+.hoi-sig-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px; border: 1px solid var(--pf-border); border-radius: 999px;
+    font-size: 11px; color: var(--pf-text-2); white-space: nowrap;
+}
+.hoi-info-wrap { position: relative; display: inline-flex; }
+.hoi-info-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 1px solid var(--pf-border); background: transparent;
+    color: var(--pf-text-3); font: italic 700 11px/1 Georgia, serif;
+    cursor: help; user-select: none;
+}
+.hoi-info-btn:hover { color: var(--pf-accent); border-color: var(--pf-accent); }
+.hoi-info-pop {
+    position: absolute; right: 0; top: calc(100% + 6px);
+    width: min(600px, 82vw);
+    background: var(--pf-surface); border: 1px solid var(--pf-border);
+    border-radius: 8px; padding: 12px 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    z-index: 50; display: none;
+}
+.hoi-info-wrap:hover .hoi-info-pop,
+.hoi-info-btn:focus + .hoi-info-pop { display: block; }
 
 /* ── HOI datepicker ────────────────────────────────────────────── */
 .hoi-date-wrap {

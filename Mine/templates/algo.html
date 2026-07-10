@@ -20,6 +20,7 @@
         <button class="ag-tab"        id="algo-tab-rtp3m"           onclick="algoSwitch('rtp3m')">EMA RTP 3m</button>
         <button class="ag-tab"        id="algo-tab-rtp5m"           onclick="algoSwitch('rtp5m')">EMA RTP 5m</button>
         <button class="ag-tab"        id="algo-tab-sc"              onclick="algoSwitch('sc')">2nd 30s Candle</button>
+        <button class="ag-tab"        id="algo-tab-intrinsic"       onclick="algoSwitch('intrinsic')">Intrinsic Range</button>
         <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
 
@@ -704,6 +705,74 @@
     </div>
 
     </div><!-- #algo-sc-panel -->
+
+    <!-- ════════════════════════════════════════════════════════ -->
+    <!-- Intrinsic ATM Range Breakout panel (PAPER TRADE)        -->
+    <!-- ════════════════════════════════════════════════════════ -->
+    <div class="ag-panel" id="algo-intrinsic-panel">
+
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <div class="ag-header">
+        <span class="ag-title">Intrinsic ATM Range Breakout</span>
+        <span class="ag-mode-chip paper">PAPER TRADE</span>
+        <button class="ag-info-btn" id="intrinsicLogicBtn" onclick="intrinsicShowLogic()"
+                title="View strategy logic, entry &amp; exit rules" aria-label="Strategy logic">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>Logic</span>
+        </button>
+        <span id="intrinsicBadge" class="ag-badge inactive">
+            <span class="ag-badge-dot"></span>
+            <span id="intrinsicBadgeText">No Trade</span>
+        </span>
+        <span class="ag-last-upd" id="intrinsicLastUpd" style="margin-left:auto"></span>
+    </div>
+
+    <!-- ── Today's Range Setup ──────────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Today's Range Setup</span>
+            <span class="ag-card-hdr-actions" style="margin-left:auto">
+                <button class="ag-btn ag-btn-strikes" id="intrinsicRefreshBtn"
+                        onclick="_intrinsicFetchStatus()">↻ Refresh</button>
+            </span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="intrinsicSetupGrid">
+                <div class="ag-empty">Setup not computed yet — waiting for the daily setup step (after 9:16 AM)</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Active Trade card (simulated fills — no broker orders) ─ -->
+    <div class="ag-card" id="intrinsicActiveCard">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Active Trade (Simulated)</span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="intrinsicActiveGrid">
+                <div class="ag-empty">No active trade</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Executed Trade History ──────────────────────────────── -->
+    <div class="ag-card">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Executed Trade History (Paper)</span>
+            <span id="intrinsicHistCount" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+            <button class="ag-hist-delall-btn" onclick="_intrinsicDeleteAllTrades()" title="Delete ALL trade history records">&#128465; Delete All</button>
+        </div>
+        <div id="intrinsicHistBody">
+            <div class="ag-empty">No completed trades</div>
+        </div>
+    </div>
+
+    </div><!-- #algo-intrinsic-panel -->
 
     <!-- ════════════════════════════════════════════════════════ -->
     <!-- Swing Momentum panel                                     -->

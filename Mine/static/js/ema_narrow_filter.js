@@ -44,6 +44,16 @@ function initEmaNarrowOnce() {
         thPicker.addEventListener('change', () => { _narrowLastAt = 0; loadEmaNarrowData(); });
     }
 
+    const emaSetPicker = document.getElementById('emaNarrowEmaSet');
+    if (emaSetPicker) {
+        emaSetPicker.addEventListener('change', () => {
+            _narrowLastAt = 0;
+            updateNarrowSectionTitle(emaSetPicker.value);
+            loadEmaNarrowData();
+        });
+        updateNarrowSectionTitle(emaSetPicker.value);
+    }
+
     const btn = document.getElementById('ema-narrow-refresh-btn');
     if (btn) {
         // Manual refresh forces a fresh scan (bypasses the 6h server cache)
@@ -76,14 +86,15 @@ async function loadEmaNarrowData(forceRefresh = false, isPoll = false) {
     const btn = document.getElementById('ema-narrow-refresh-btn');
     if (btn) btn.disabled = true;
 
-    const group     = document.getElementById('emaNarrowGroup')?.value || 'mwd';
-    const threshold = document.getElementById('emaNarrowThreshold')?.value || '1.5';
+    const group     = document.getElementById('emaNarrowGroup')?.value || 'wd';
+    const threshold = document.getElementById('emaNarrowThreshold')?.value || '3';
+    const emaSet    = document.getElementById('emaNarrowEmaSet')?.value || '20_50_100';
     const date      = document.getElementById('emaNarrowDateFilter')?.value || '';
 
     const thLabel = document.getElementById('emaNarrowThresholdLabel');
     if (thLabel) thLabel.textContent = `${threshold}%`;
 
-    let url = `/api/ema-narrow-filter?group=${group}&threshold=${threshold}`;
+    let url = `/api/ema-narrow-filter?group=${group}&threshold=${threshold}&emas=${emaSet}`;
     if (date) url += `&date=${date}`;
     if (forceRefresh) url += `&refresh=1`;
 
@@ -177,8 +188,10 @@ function appendNarrowLoaderRow(progress) {
 function _narrowEmaTitle(stock, tf) {
     const d = stock.tfs?.[tf];
     if (!d) return '';
-    const f = v => v != null ? Number(v).toFixed(2) : '—';
-    return `EMA20 ${f(d.ema20)} | EMA50 ${f(d.ema50)} | EMA100 ${f(d.ema100)} | EMA200 ${f(d.ema200)}`;
+    return [20, 50, 100, 200]
+        .filter(p => d[`ema${p}`] != null)
+        .map(p => `EMA${p} ${Number(d[`ema${p}`]).toFixed(2)}`)
+        .join(' | ');
 }
 
 function _narrowSpreadCell(stock, tf, key) {
@@ -193,9 +206,11 @@ function _narrowRow(stock, withZone) {
     const fmt = v => v != null ? Number(v).toFixed(2) : '—';
 
     const maxSpread = stock.max_spread_pct != null ? `${Number(stock.max_spread_pct).toFixed(2)}%` : '—';
+    const anchorTf = stock.tfs?.daily || stock.tfs?.weekly || stock.tfs?.monthly || {};
+    const anchorEma = anchorTf.ema200 ?? anchorTf.ema100 ?? 0;
     const zone = stock.price_inside
         ? '<span class="trigger-both">🎯 Inside</span>'
-        : (stock.close > (stock.tfs?.daily?.ema200 ?? stock.tfs?.weekly?.ema200 ?? 0)
+        : (stock.close > anchorEma
             ? '<span class="trigger-ema">⬆ Above</span>'
             : '<span class="trigger-rsi">⬇ Below</span>');
 
@@ -302,6 +317,14 @@ function sortNarrowTable(tableId, colStr) {
     if (loader) tbody.appendChild(loader);
 }
 
+// ─── Section title (EMA set) ─────────────────────────────────────────────────
+function updateNarrowSectionTitle(emaSet) {
+    const el = document.getElementById('ema-narrow-section-title');
+    if (!el) return;
+    const label = emaSet === '20_50_100' ? 'EMA 20 / 50 / 100' : 'EMA 20 / 50 / 100 / 200';
+    el.textContent = `EMA Narrow — ${label} compressed on ALL selected timeframes`;
+}
+
 // ─── Badge ────────────────────────────────────────────────────────────────────
 function updateNarrowBadge(group) {
     const badge = document.getElementById('narrow-tf-badge');
@@ -310,8 +333,11 @@ function updateNarrowBadge(group) {
         'mwd': { text: '📅 Month / Week / Day', cls: 'monthly-badge' },
         'mw':  { text: '📅 Month / Week',       cls: 'monthly-badge' },
         'wd':  { text: '📅 Week / Day',         cls: 'weekly-badge' },
+        'd':   { text: '📆 Day',                cls: 'daily-badge' },
+        'w':   { text: '📅 Week',               cls: 'weekly-badge' },
+        'm':   { text: '📅 Month',              cls: 'monthly-badge' },
     };
-    const cfg = map[group] || map['mwd'];
+    const cfg = map[group] || map['wd'];
     badge.textContent = cfg.text;
     badge.className = `ema-tf-badge ${cfg.cls}`;
 }
