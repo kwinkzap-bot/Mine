@@ -53,9 +53,16 @@ NARROW_GROUPS = {
     "m":   ["monthly"],
 }
 # Daily-bar history needed for a stable longest-EMA on each resampled timeframe,
-# keyed by the largest period of the selected EMA set
+# keyed by the largest period of the selected EMA set.
+# daily[100] is deliberately trimmed to ~350 days (vs. the 900+/1400+ used
+# elsewhere) so it fits inside Fyers' single 364-day chunk cap — every equity
+# stock hits this tier on the default combo, so keeping it to 1 API chunk
+# instead of 2 roughly halves the dominant cost of a full-universe scan.
+# Trade-off: ~240 trading days of warm-up (2.4x the period) converges the
+# EMA to within ~5% of its asymptotic value, vs <1% with the deeper 900-day
+# window — an accepted trade for scan speed on this specific tier only.
 NARROW_FETCH_DAYS = {
-    "daily":   {100: 500,  200: 900},
+    "daily":   {100: 350,  200: 900},
     "weekly":  {100: 1400, 200: 2500},
     "monthly": {100: 3700, 200: 7000},
 }

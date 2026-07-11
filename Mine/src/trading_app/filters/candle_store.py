@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "stocks")
 
-REFRESH_TTL_SEC = 600        # min gap between provider hits for the same stock
+REFRESH_TTL_SEC = 6 * 3600   # min gap between provider hits for the same stock
 _MAX_DAYS_PER_REQ = 1960     # provider limit per historical_data call
 
 _mem: Dict[str, Dict] = {}   # symbol -> {"df", "earliest", "updated_at"}
@@ -142,27 +142,39 @@ def get_daily_history(kite, token, symbol: str, days: int,
 
         changed = False
 
-        # 1. Need deeper history than ever fetched -> extend the head
-        if entry is None or pd.Timestamp(start) < entry["earliest"] - pd.Timedelta(days=3):
+        # 1. Need deeper history than ever fetched -> extend the head.
+        # Fetch ONLY the missing older slice [start, entry.earliest] and merge
+        # it with what's already stored — never re-download the recent range
+        # that's already on file (that used to double- or triple-fetch the
+        # same months whenever a stock passed multiple timeframe gates).
+        if entry is None:
             fetched = _fetch_range(kite, token, symbol, start, now)
-            if fetched is None and entry is None:
+            if fetched is None:
                 return None
+            entry = {"df": fetched, "earliest": pd.Timestamp(start), "updated_at": now}
+            changed = True
+        elif pd.Timestamp(start) < entry["earliest"] - pd.Timedelta(days=3):
+            gap_end = min(entry["earliest"] + pd.Timedelta(days=3), pd.Timestamp(now))
+            fetched = _fetch_range(kite, token, symbol, pd.Timestamp(start), gap_end)
             if fetched is not None:
-                entry = {
-                    "df":         _merge(entry["df"] if entry else None, fetched),
-                    "earliest":   pd.Timestamp(start),
-                    "updated_at": now,
-                }
-                changed = True
+                entry["df"] = _merge(entry["df"], fetched)
+            entry["earliest"]   = pd.Timestamp(start)
+            entry["updated_at"] = now
+            changed = True
 
-        # 2. Tail refresh: only the candles since the last stored bar
+        # 2. Tail refresh: only the candles since the last stored bar.
+        # This scanner works off daily/weekly/monthly closes, not intraday
+        # ticks — there's no need to chase today's still-forming candle every
+        # few minutes. Only check when a full trading day is actually missing
+        # (last stored bar is older than today), and even then at most once
+        # per REFRESH_TTL_SEC so repeated same-day scans stay purely local.
+        # The nightly prewarm job is what keeps the store genuinely fresh.
         elif not entry["df"].empty:
             last_bar = entry["df"].index[-1]
             age_sec  = (now - entry["updated_at"]).total_seconds()
             need_tail = (
-                end.date() >= last_bar.date()
+                last_bar.date() < end.date()
                 and age_sec > REFRESH_TTL_SEC
-                and (last_bar.date() < end.date() or now.hour < 16)  # new day, or intraday partial candle
             )
             if need_tail:
                 fetched = _fetch_range(kite, token, symbol,
@@ -181,4 +193,7 @@ def get_daily_history(kite, token, symbol: str, days: int,
             _save_disk(symbol, entry)
 
         df = entry["df"]
-        return df[(df.index >= pd.Timestamp(start)) & (df.index < pd.Timestamp(end) + pd.Timedelta(days=1))]
+        # Include every bar ON the end date (whatever intraday time it's stamped
+        # with), but nothing after it — no look-ahead on historical scans.
+        end_excl = pd.Timestamp(end.date()) + pd.Timedelta(days=1)
+        return df[(df.index >= pd.Timestamp(start)) & (df.index < end_excl)]

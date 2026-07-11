@@ -127,6 +127,27 @@ class MarketScheduler:
             misfire_grace_time=300,
         )
 
+        # End of market hours (close is 3:40 PM): refresh the EMA Narrow
+        # scanner's local candle store for every equity stock. Staggered 5
+        # minutes after the FII sector task so both don't compete for the
+        # same rate-limited broker API at once. First run can take a while
+        # (full history download); every run after that is a same-day tail
+        # refresh (seconds), so the scanner runs from local files all day.
+        self.scheduler.add_job(
+            self._run_ema_narrow_prewarm_task,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=16,
+                minute=5,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='ema_narrow_prewarm',
+            name='EMA Narrow Candle Store Prewarm',
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
         self.scheduler.add_job(
             self._start_rtp_monitoring,
             CronTrigger(
@@ -446,6 +467,32 @@ class MarketScheduler:
                 logger.warning("[FIISector Scheduler] No data returned — skipping save")
         except Exception as e:
             logger.error(f"[FIISector Scheduler] Error: {e}", exc_info=True)
+
+    def _run_ema_narrow_prewarm_task(self):
+        """~4:05 PM IST (after market close): refresh the local daily-candle
+        store for every NSE equity stock so the EMA Narrow scanner's next-day
+        scans run from local files instead of the live broker API."""
+        try:
+            if not self.is_trading_day():
+                return
+            logger.info("[EMA Narrow Prewarm] Starting end-of-day candle store refresh...")
+            from trading_app.service.provider_logic import get_data_provider
+            provider = get_data_provider(user=self._rtp_username())
+            if not provider:
+                logger.warning("[EMA Narrow Prewarm] No data provider available — skipping")
+                return
+            from trading_app.filters.ema_narrow_prewarm import prime_equity_store
+
+            def _log_progress(done, total):
+                logger.info(f"[EMA Narrow Prewarm] {done}/{total} stocks refreshed...")
+
+            stats = prime_equity_store(provider, progress_cb=_log_progress)
+            logger.info(
+                f"[EMA Narrow Prewarm] Done — {stats['done']}/{stats['total']} stocks "
+                f"({stats['failed']} failed) in {stats['elapsed_sec']:.0f}s"
+            )
+        except Exception as e:
+            logger.error(f"[EMA Narrow Prewarm] Unexpected error: {e}", exc_info=True)
 
     # ── RTP algo management ───────────────────────────────────────────────────
 

@@ -704,11 +704,12 @@ class FyersDataServiceAdapter:
             all_candles = []
             import random
             for c_from, c_to in chunks:
-                _rate_limiter.wait()
-                
                 response = {}
                 logger.info(f"[FyersAdapter] Fetching history for {instrument_token} ({c_from} to {c_to}, resolution={f_res})")
 
+                # Single wait per attempt (covers the first try and every retry) —
+                # previously an extra wait() fired here too, silently halving
+                # real throughput to ~4 req/s against the configured 8 req/s cap.
                 for attempt in range(5):
                     _rate_limiter.wait(priority=1)
                     
