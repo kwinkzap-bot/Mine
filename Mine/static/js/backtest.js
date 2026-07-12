@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     let allSymbols = [];
     let selectedSymbol = 'NIFTY';
+    let lotSizeBySymbol = {};   // populated from /api/backtest/symbols' lot_sizes
 
     // Tracks the in-flight RTP optimise so a new/changed run cancels the old one.
     // Declared up top so cancelRtpOptimise() is safe to call during init.
@@ -112,7 +113,7 @@ document.addEventListener('DOMContentLoaded', function() {
     async function fetchSymbols() {
         // Fallback common symbols in case API is slow
         allSymbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'SENSEX', 'SBIN', 'RELIANCE', 'HDFCBANK'];
-        
+
         try {
             const response = await fetch('/api/backtest/symbols');
             const data = await response.json();
@@ -120,7 +121,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Combine indices and symbols, removing duplicates
                 const fetched = [...data.indices, ...data.symbols];
                 allSymbols = Array.from(new Set([...allSymbols, ...fetched]));
+                if (data.lot_sizes) lotSizeBySymbol = data.lot_sizes;
                 console.log('Loaded symbols:', allSymbols.length);
+                // The page loads with NIFTY pre-selected before this fetch
+                // resolves — re-apply now that real lot sizes are in.
+                applyLotValueForSymbol(selectedSymbol);
             } else {
                 if (window.showNotification) window.showNotification('Error loading symbols: ' + data.error, 'error');
             }
@@ -134,11 +139,14 @@ document.addEventListener('DOMContentLoaded', function() {
     // 2. Searchable Dropdown Logic
     function renderDropdown(filterText = '') {
         const filter = (filterText || '').toUpperCase();
+        // Show every matching symbol (not just the first 15) — the list
+        // itself scrolls (#symbolList has max-height + overflow-y in CSS),
+        // same as the Open Interest page's symbol dropdown.
         const matches = allSymbols.filter(s => {
             if (!filter) return true;
             return s.includes(filter);
-        }).slice(0, 15);
-        
+        });
+
         if (matches.length > 0) {
             symbolList.innerHTML = matches.map(s => `<li class="symbol-item">${s}</li>`).join('');
             symbolList.classList.add('show');
@@ -194,14 +202,16 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Lot value (₹/pt) per symbol; defaults to NIFTY's value for anything else.
-    const LOT_VALUE_BY_SYMBOL = { NIFTY: 65, BANKNIFTY: 30, SENSEX: 20 };
+    // Lot value (₹/pt) per symbol — the exchange's actual lot size for that
+    // symbol's nearest F&O contract, fetched from /api/backtest/symbols
+    // (see fetchSymbols above). Falls back to NIFTY's lot size (65) for a
+    // symbol not yet loaded / not in the F&O universe.
     function lotValueForSymbol(symbol) {
-        return LOT_VALUE_BY_SYMBOL[(symbol || '').toUpperCase()] || 65;
+        return lotSizeBySymbol[(symbol || '').toUpperCase()] || 65;
     }
     function applyLotValueForSymbol(symbol) {
         const lotValue = lotValueForSymbol(symbol);
-        ['rtpLotValue', 'vwapLotValue', 'scLotValue'].forEach(function(id) {
+        ['rtpLotValue', 'vwapLotValue', 'scLotValue', 'expiryLotValue'].forEach(function(id) {
             const el = document.getElementById(id);
             if (el) el.value = lotValue;
         });
@@ -246,6 +256,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const scParamsRow   = document.getElementById('secondCandleParamsRow');
         const scLotRow      = document.getElementById('secondCandleLotRow');
         const scOptPanel    = document.getElementById('secondCandleOptimisePanel');
+        const expParamsRow  = document.getElementById('expiryBreakoutParamsRow');
+        const expLotRow     = document.getElementById('expiryBreakoutLotRow');
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (vwapParamsRow) vwapParamsRow.style.display = 'none';
         if (vwapLotRow)    vwapLotRow.style.display    = 'none';
@@ -253,16 +265,20 @@ document.addEventListener('DOMContentLoaded', function() {
         if (scParamsRow)   scParamsRow.style.display   = 'none';
         if (scLotRow)      scLotRow.style.display      = 'none';
         if (scOptPanel)    scOptPanel.style.display    = 'none';
+        if (expParamsRow)  expParamsRow.style.display  = 'none';
+        if (expLotRow)     expLotRow.style.display     = 'none';
         // Restore symbol/interval visibility (they are hidden for swing_momentum)
         const symFg = document.getElementById('mainSymbolFg');
         const intFg = document.getElementById('mainIntervalFg');
         if (symFg) symFg.style.display = '';
         if (intFg) intFg.style.display = '';
 
-        const optBtn      = document.getElementById('runOptimiseBtn');
-        const smGoLiveBtn = document.getElementById('smGoLiveBtn');
-        if (optBtn)      optBtn.style.display      = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle') ? '' : 'none';
-        if (smGoLiveBtn) smGoLiveBtn.style.display = (val === 'swing_momentum') ? '' : 'none';
+        const optBtn         = document.getElementById('runOptimiseBtn');
+        const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
+        const expLevelsBtn   = document.getElementById('expiryLevelsBtn');
+        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle') ? '' : 'none';
+        if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
+        if (expLevelsBtn) expLevelsBtn.style.display = (val === 'expiry_breakout') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
         const rtpOptPanel = document.getElementById('rtpOptimisePanel');
@@ -298,6 +314,15 @@ document.addEventListener('DOMContentLoaded', function() {
             if (intervalSelect) intervalSelect.value = '30second';
             if (startDateInput) startDateInput.value = '2017-01-01';
             updateScInvestment();
+
+        } else if (val === 'expiry_breakout') {
+            if (expParamsRow) expParamsRow.style.display = 'grid';
+            if (expLotRow)    expLotRow.style.display    = 'grid';
+            // Fully rule-based (daily expiry High/Low + hourly scan, fixed
+            // internally) — the Timeframe dropdown doesn't apply here.
+            if (intFg) intFg.style.display = 'none';
+            if (startDateInput) startDateInput.value = '2017-01-01';
+            updateExpiryInvestment();
 
         } else if (val === 'swing_momentum') {
             if (smParamsRow) smParamsRow.style.display = 'grid';
@@ -337,6 +362,85 @@ document.addEventListener('DOMContentLoaded', function() {
         const el = document.getElementById('scInvestmentDisplay');
         if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
     };
+
+    // Monthly Expiry Breakout investment display
+    window.updateExpiryInvestment = function() {
+        const lots  = Math.max(1, parseInt(document.getElementById('expiryLots')?.value || 1));
+        const total = lots * 50000;
+        const el = document.getElementById('expiryInvestmentDisplay');
+        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+    };
+
+    // ── Monthly Expiry Levels popup ─────────────────────────────────────
+    (function() {
+        const btn      = document.getElementById('expiryLevelsBtn');
+        const modal     = document.getElementById('expiryLevelsModal');
+        const closeBtn  = document.getElementById('expiryLevelsCloseBtn');
+        const tbody     = document.getElementById('expiryLevelsTableBody');
+        const metaEl    = document.getElementById('expiryLevelsMeta');
+        if (!btn || !modal) return;
+
+        function closeModal() { modal.style.display = 'none'; }
+        closeBtn?.addEventListener('click', closeModal);
+        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && modal.style.display !== 'none') closeModal();
+        });
+
+        btn.addEventListener('click', async function() {
+            const symbol = symbolSearch.value.toUpperCase();
+            if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
+
+            const payload = {
+                symbol,
+                start_date: document.getElementById('startDate').value,
+                end_date:   document.getElementById('endDate').value,
+            };
+
+            btn.disabled = true;
+            const origText = btn.textContent;
+            btn.textContent = '⏳ Loading…';
+
+            try {
+                const resp = await fetch('/api/backtest/expiry-breakout/levels', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    window.showNotification(data.error || 'Failed to fetch expiry levels', 'error');
+                    return;
+                }
+
+                const levels = data.levels || [];
+                if (metaEl) {
+                    metaEl.textContent = `${symbol} · ${levels.length} month${levels.length === 1 ? '' : 's'}`;
+                }
+                if (tbody) {
+                    // Latest expiry on top.
+                    const latestFirst = [...levels].reverse();
+                    tbody.innerHTML = latestFirst.length === 0
+                        ? '<tr><td colspan="5" style="text-align:center;padding:16px;">No expiry days found in this range</td></tr>'
+                        : latestFirst.map((lv, i) => `
+                            <tr>
+                                <td>${i + 1}</td>
+                                <td>${lv.expiry_date}</td>
+                                <td class="pnl-positive">${lv.high.toFixed(2)}</td>
+                                <td class="pnl-negative">${lv.low.toFixed(2)}</td>
+                                <td>${(lv.high - lv.low).toFixed(2)}</td>
+                            </tr>`).join('');
+                }
+                modal.style.display = 'flex';
+            } catch (err) {
+                console.error('Expiry levels error:', err);
+                window.showNotification('Failed to fetch expiry levels', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = origText;
+            }
+        });
+    })();
 
     // 3. Run Backtest
     runBtn.addEventListener('click', async function() {
@@ -395,6 +499,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 const dir = document.getElementById('scDirection')?.value || 'both';
                 payload.enable_long  = dir !== 'short';
                 payload.enable_short = dir !== 'long';
+            }
+
+            // Monthly Expiry Breakout — expiry day auto-detected; Direction,
+            // SL:Target, and MA Touch Timeframe are tunable
+            if (strat === 'expiry_breakout') {
+                endpoint = '/api/backtest/expiry-breakout';
+                payload.direction    = document.getElementById('expiryDirection')?.value || 'both';
+                payload.rr_ratio     = parseFloat(document.getElementById('expiryRrRatio')?.value || 3);
+                payload.ma_timeframe = document.getElementById('expiryMaTimeframe')?.value || 'both';
             }
 
             // Swing Momentum: different endpoint + payload
@@ -474,9 +587,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const isSM   = strategySelect && strategySelect.value === 'swing_momentum';
         const isVwap = strategySelect && strategySelect.value === 'vwap';
         const isSc   = strategySelect && strategySelect.value === 'second_candle';
-        // 2nd-candle reuses the VWAP-style ₹ cards, reading its own lot inputs
-        const moneyLotsId    = isSc ? 'scLots'     : 'vwapLots';
-        const moneyLotValId  = isSc ? 'scLotValue' : 'vwapLotValue';
+        const isExp  = strategySelect && strategySelect.value === 'expiry_breakout';
+        // 2nd-candle / expiry-breakout reuse the VWAP-style ₹ cards, each
+        // reading its own lot inputs.
+        const moneyLotsId    = isSc ? 'scLots'     : isExp ? 'expiryLots'      : 'vwapLots';
+        const moneyLotValId  = isSc ? 'scLotValue' : isExp ? 'expiryLotValue'  : 'vwapLotValue';
 
         if (isSM) {
             lastData.is_swing_momentum = true;
@@ -570,7 +685,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     subtitle.textContent = info;
                 }
             }
-        } else if ((isVwap || isSc) && rtpRow) {
+        } else if ((isVwap || isSc || isExp) && rtpRow) {
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -608,13 +723,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Equity curve + period breakdown
-        const lots2     = (isVwap || isSc)
+        const lots2     = (isVwap || isSc || isExp)
             ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 1))
             : Math.max(1, parseInt(document.getElementById('rtpLots')?.value       || 1));
-        const lotValue2 = (isVwap || isSc)
+        const lotValue2 = (isVwap || isSc || isExp)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
-        const isMoney     = isRtp || isVwap || isSc;
+        const isMoney     = isRtp || isVwap || isSc || isExp;
         const investment2 = lots2 * 50000;
         renderEquityCurve(data.trades, isMoney, lots2, lotValue2, investment2);
 

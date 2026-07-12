@@ -2419,40 +2419,66 @@ def notify_whatsapp() -> EndpointResponse:
 @csrf.exempt
 @require_user_auth
 def get_backtest_symbols():
-    """Fetch all unique future stocks and indices for backtesting."""
+    """Fetch all unique future stocks and indices for backtesting, along
+    with each symbol's current lot size (so the Backtest UI can update the
+    lot-size field automatically when the symbol changes)."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
     try:
         import json
         import os
-        
+        from datetime import date as _date
+
         # Path to cached NFO instruments
         cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cache', 'nfo_instruments.json')
-        
+
         if not os.path.exists(cache_path):
             return jsonify({'success': False, 'error': 'NFO instruments cache not found. Please login to refresh.'}), 404
-            
+
         with open(cache_path, 'r') as f:
             instruments = json.load(f)
-            
-        # Filter unique names for futures
-        futures = set()
-        indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']
-        
+
+        # Filter unique names for futures, and for each name pick the lot
+        # size of its NEAREST expiry >= today (lot sizes get periodically
+        # revised by the exchange — older/expired contracts still sitting
+        # in the cache can carry a stale value, so a straight "any entry"
+        # pick is unreliable; nearest-upcoming-expiry reflects what's
+        # actually tradable right now). Falls back to the latest available
+        # expiry if every cached contract for that name has already expired.
+        today_str = _date.today().isoformat()
+        by_name = {}   # name -> list of (expiry_str, lot_size)
         for inst in instruments:
-            if inst.get('instrument_type') == 'FUT':
-                name = inst.get('name')
-                if name:
-                    futures.add(name)
-        
+            if inst.get('instrument_type') != 'FUT':
+                continue
+            name = inst.get('name')
+            expiry = inst.get('expiry')
+            lot_size = inst.get('lot_size')
+            if not name or not lot_size:
+                continue
+            by_name.setdefault(name, []).append((expiry or '', lot_size))
+
+        lot_sizes = {}
+        for name, rows in by_name.items():
+            rows.sort(key=lambda r: r[0])
+            upcoming = [r for r in rows if r[0] >= today_str]
+            lot_sizes[name] = (upcoming[0] if upcoming else rows[-1])[1]
+
         # Combine and sort
-        all_symbols = sorted(list(futures))
-        
+        all_symbols = sorted(by_name.keys())
+        indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']
+        # Known index lot sizes not present in the NFO (equity F&O) cache —
+        # SENSEX trades on BSE/BFO, not NFO, so it never appears above.
+        for idx, fallback_lot in (('NIFTY', 65), ('BANKNIFTY', 30),
+                                  ('FINNIFTY', 60), ('MIDCPNIFTY', 120),
+                                  ('SENSEX', 20)):
+            lot_sizes.setdefault(idx, fallback_lot)
+
         return jsonify({
             'success': True,
             'symbols': all_symbols,
-            'indices': indices
+            'indices': indices,
+            'lot_sizes': lot_sizes,
         })
     except Exception as e:
         logger.error(f"Error fetching backtest symbols: {e}")
@@ -3382,6 +3408,186 @@ def run_second_candle_optimise_status(task_id):
     if task['status'] == 'error':
         return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
     return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
+
+
+@api_bp.route('/backtest/expiry-breakout', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_expiry_breakout_backtest_api():
+    """Run the Monthly Expiry Breakout backtest.
+
+    Rule: take the High/Low of each monthly F&O expiry day's daily candle.
+    The expiry day is auto-detected (last Thursday through Aug-2025, last
+    Tuesday from Sep-2025 onward, per NSE's actual expiry-day change),
+    snapped back to the latest trading day if that calendar day is a
+    weekend/holiday. Whichever side breaks FIRST wins the one trade for
+    that cycle (direction: 'both'|'long'|'short', default 'both'). The
+    entry candle must satisfy the SAME touch-then-close pattern at TWO
+    levels simultaneously:
+      1. Expiry level — the candle's High/Low range must TOUCH the
+         expiry-day High (Long) / Low (Short), i.e. a genuine touch, not
+         a clean gap-through, AND its close must clear that level.
+      2. Moving averages (ma_timeframe: '1hour'|'1day'|'both', default
+         'both' — the union of both SMA sets) — the candle must TOUCH at
+         least one selected SMA 20/50/100/200 AND its close must CLEAR
+         every selected SMA in the trade's direction (all above for
+         Long, all below for Short).
+    Exit on whichever comes first: SL at the expiry-day High/Low, TARGET
+    at entry ± rr_ratio × risk (rr_ratio default 3.0, i.e. 1:3), or
+    force-exit before the next month's expiry day arrives.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        direction      = str(data.get('direction', 'both')).lower()
+        enable_long    = direction != 'short'
+        enable_short   = direction != 'long'
+        rr_ratio       = float(data.get('rr_ratio', 3.0) or 3.0)
+        ma_timeframe   = str(data.get('ma_timeframe', 'both')).lower()
+
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+        kite_indices = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105,
+            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+        }
+        if hasattr(current_kite, 'fyers'):
+            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+        else:
+            instrument_token = kite_indices.get(symbol, symbol)
+
+        # Daily candle → expiry-day High/Low anchor; 60-minute candle → entry/exit scan.
+        daily_candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval='day',
+            use_cache=False,
+        )
+        if not daily_candles:
+            return jsonify({'success': False, 'error': 'No daily data found for the given range'}), 404
+
+        hourly_candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval='60minute',
+            use_cache=False,
+        )
+        if not hourly_candles:
+            return jsonify({'success': False, 'error': 'No 60-minute data found for the given range'}), 404
+
+        import pandas as pd
+        from trading_app.Backtest.expiry_breakout_engine import ExpiryBreakoutEngine
+
+        engine = ExpiryBreakoutEngine(
+            daily_df=pd.DataFrame(daily_candles),
+            hourly_df=pd.DataFrame(hourly_candles),
+            enable_long=enable_long,
+            enable_short=enable_short,
+            rr_ratio=rr_ratio,
+            ma_timeframe=ma_timeframe,
+        )
+        trades, summary = engine.run()
+
+        logger.info('[ExpiryBreakout BT] %d daily / %d hourly bars → %d trades',
+                    len(daily_candles), len(hourly_candles), len(trades))
+
+        return jsonify({
+            'success': True,
+            'trades':  trades,
+            '_debug': {
+                'daily_bars':  len(daily_candles),
+                'hourly_bars': len(hourly_candles),
+                'first_daily': str(daily_candles[0].get('date', '?')),
+                'last_daily':  str(daily_candles[-1].get('date', '?')),
+            },
+            'summary': summary,
+        })
+
+    except Exception as e:
+        logger.error(f"Error in Expiry Breakout backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/expiry-breakout/levels', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_expiry_breakout_levels_api():
+    """Preview the monthly expiry High/Low levels the Expiry Breakout engine
+    would anchor on for the given range — daily data only, no hourly fetch
+    or trade simulation, so this responds fast for the "Expiry Levels"
+    popup button. Expiry day is auto-detected (see ExpiryBreakoutEngine)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+        kite_indices = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105,
+            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+        }
+        if hasattr(current_kite, 'fyers'):
+            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+        else:
+            instrument_token = kite_indices.get(symbol, symbol)
+
+        daily_candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval='day',
+            use_cache=False,
+        )
+        if not daily_candles:
+            return jsonify({'success': False, 'error': 'No daily data found for the given range'}), 404
+
+        import pandas as pd
+        from trading_app.Backtest.expiry_breakout_engine import ExpiryBreakoutEngine
+
+        engine = ExpiryBreakoutEngine(daily_df=pd.DataFrame(daily_candles))
+        levels = engine.expiry_levels()
+
+        return jsonify({'success': True, 'levels': levels})
+
+    except Exception as e:
+        logger.error(f"Error in Expiry Breakout levels API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @api_bp.route('/backtest/vwap/optimise', methods=['POST'], strict_slashes=False)

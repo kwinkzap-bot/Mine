@@ -8,14 +8,29 @@ ATM" — average those two premiums and round to the nearest strike step. That
 rounded value becomes a symmetric range around the ATM strike (the previous
 day's "intrinsic value zone" / expected-move band).
 
-A breakout is only traded once THREE things line up (mirrors the manual
+The range is anchored to the SYNTHETIC previous close, not the spot candle:
+ref = atm_strike + (CE_prev - PE_prev). Options settle against the future, so
+the CE/PE premium skew at the ATM strike locates where the future closed.
+Each range boundary then gets an intrinsic value against that reference:
+  ce_lower_intrinsic = ref - lower_bound   (lower CE holds prev close above this)
+  pe_upper_intrinsic = upper_bound - ref   (upper PE holds prev close below this)
+
+A breakout is only traded once FOUR things line up (mirrors the manual
 read: raw level break isn't enough, it needs volatility-expansion confirmation):
   1. Spot trades outside the range (below lower_bound or above upper_bound).
   2. The option on the broken side already prices in intrinsic value >= the
      day's total range (the premium math "catches up" to the breakout).
-  3. Both India VIX and the live common-ATM premium (recomputed at the
+  3. The option on the OPPOSITE side trades below its own intrinsic value —
+     the "oncoming vehicle gives way": an up-move is only clean when the
+     upper PE surrenders the premium that would pull price back to prev close
+     (and vice versa for the lower CE on a down-move).
+  4. Both India VIX and the live common-ATM premium (recomputed at the
      current ATM strike) are expanding vs. the day's opening reading — this
      is what separates a real trend day from range-bound noise.
+
+An outer ring (atm_strike ± total_range, area = 2x total_range) is computed
+for the dashboard as the trend-day confirmation level: the broken-side option
+touching the outer area value marks a full range-expansion day.
 
 Direction follows whichever side's premium is expanding (that's where option
 sellers are getting squeezed), not the side that's collapsing.
@@ -350,15 +365,30 @@ class IntrinsicRangeAlgo:
                 self.log.warning("Could not resolve previous-close ATM strike — no CE/PE premium data")
                 return None
 
+            # ATM definition: CE/PE prev-close premiums within half a strike
+            # step of each other. Wider than that means the true ATM sits at a
+            # strike we didn't scan — trade the day anyway but flag it.
+            if best['diff'] >= _STRIKE_STEP / 2:
+                self.log.warning(
+                    f"ATM CE/PE prev-close diff {best['diff']:.2f} >= {_STRIKE_STEP / 2:.0f} "
+                    f"at strike {int(best['strike'])} — synthetic close may be off"
+                )
+
+            atm_strike = best['strike']
+            # Synthetic previous close: the CE/PE skew at the ATM strike locates
+            # the future's close (options settle on the future, not spot).
+            synthetic_prev_close = round(atm_strike + (best['ce_prev'] - best['pe_prev']), 2)
+
             common_atm = round((best['ce_prev'] + best['pe_prev']) / 2, 2)
             range_half = max(_STRIKE_STEP, round(common_atm / _STRIKE_STEP) * _STRIKE_STEP)
-            atm_strike = best['strike']
             lower_bound = atm_strike - range_half
             upper_bound = atm_strike + range_half
+            total_range = 2 * range_half
 
             setup = {
                 'date':           today.isoformat(),
                 'prev_close_spot': prev_close_spot,
+                'synthetic_prev_close': synthetic_prev_close,
                 'atm_strike':      atm_strike,
                 'ce_prev_close':   best['ce_prev'],
                 'pe_prev_close':   best['pe_prev'],
@@ -366,12 +396,23 @@ class IntrinsicRangeAlgo:
                 'range_half':      range_half,
                 'lower_bound':     lower_bound,
                 'upper_bound':     upper_bound,
-                'total_range':     2 * range_half,
+                'total_range':     total_range,
+                # Intrinsic value each boundary option must hold to keep the
+                # market pinned to the synthetic previous close.
+                'ce_lower_intrinsic': round(synthetic_prev_close - lower_bound, 2),
+                'pe_upper_intrinsic': round(upper_bound - synthetic_prev_close, 2),
+                # Outer ring: full range-expansion / trend-day confirmation.
+                'outer_lower':       atm_strike - total_range,
+                'outer_upper':       atm_strike + total_range,
+                'outer_total_range': 2 * total_range,
             }
             self.log.info(
-                f"Daily setup: prev_close_spot={prev_close_spot} atm={int(atm_strike)} "
-                f"common_atm={common_atm} range=[{int(lower_bound)}, {int(upper_bound)}] "
-                f"(total {int(setup['total_range'])})"
+                f"Daily setup: synth_close={synthetic_prev_close} (spot {prev_close_spot}) "
+                f"atm={int(atm_strike)} common_atm={common_atm} "
+                f"range=[{int(lower_bound)}, {int(upper_bound)}] (total {int(total_range)}) "
+                f"intrinsics CE{int(lower_bound)}={setup['ce_lower_intrinsic']} "
+                f"PE{int(upper_bound)}={setup['pe_upper_intrinsic']} "
+                f"outer=[{int(setup['outer_lower'])}, {int(setup['outer_upper'])}]"
             )
             return setup
         except Exception as e:
@@ -424,14 +465,24 @@ class IntrinsicRangeAlgo:
         if buy_needs_reset and spot <= setup['upper_bound']:
             buy_needs_reset = False
 
+        # Opposite side must surrender its intrinsic value ("the oncoming
+        # vehicle gives way"): while it still prices in a return to the
+        # synthetic previous close, the breakout isn't clean.
+        ce_lower_intrinsic = float(setup.get('ce_lower_intrinsic', 0) or 0)
+        pe_upper_intrinsic = float(setup.get('pe_upper_intrinsic', 0) or 0)
+        ce_gave_way = ce_lower is not None and ce_lower < ce_lower_intrinsic
+        pe_gave_way = pe_upper is not None and pe_upper < pe_upper_intrinsic
+
         signal: Optional[str] = None
         if (spot < setup['lower_bound'] and pe_upper is not None
-                and pe_upper >= setup['total_range'] and expansion_ok and vix_ok
+                and pe_upper >= setup['total_range'] and ce_gave_way
+                and expansion_ok and vix_ok
                 and not sell_needs_reset):
             signal = 'SELL'
             sell_needs_reset = True
         elif (spot > setup['upper_bound'] and ce_lower is not None
-                and ce_lower >= setup['total_range'] and expansion_ok and vix_ok
+                and ce_lower >= setup['total_range'] and pe_gave_way
+                and expansion_ok and vix_ok
                 and not buy_needs_reset):
             signal = 'BUY'
             buy_needs_reset = True
@@ -443,7 +494,8 @@ class IntrinsicRangeAlgo:
             self.log.info(
                 f"✓ Signal={signal} spot={spot} live_common_atm={live_common_atm} "
                 f"(baseline {setup['common_atm']}) vix={vix} (open {state.get('day_open_vix')}) "
-                f"pe_upper={pe_upper} ce_lower={ce_lower}"
+                f"pe_upper={pe_upper} (intrinsic {pe_upper_intrinsic}) "
+                f"ce_lower={ce_lower} (intrinsic {ce_lower_intrinsic})"
             )
         return signal, spot
 
@@ -538,7 +590,8 @@ class IntrinsicRangeAlgo:
 
                 state = self._load_state()
                 today_str = date.today().isoformat()
-                if state.get('date') != today_str or not state.get('daily_setup'):
+                stale_schema = bool(state.get('daily_setup')) and 'ce_lower_intrinsic' not in state['daily_setup']
+                if state.get('date') != today_str or not state.get('daily_setup') or stale_schema:
                     setup = self._compute_daily_setup(provider)
                     if not setup:
                         time.sleep(15)

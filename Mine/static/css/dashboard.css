@@ -351,6 +351,55 @@
     0%, 100% { opacity: 1; }
     50%      { opacity: .35; }
 }
+
+/* ── Lightweight modal (Monthly Expiry Levels popup) ────────────────── */
+.bt-modal-overlay {
+    position: fixed; inset: 0;
+    /* main.css's .navigation-bar sits at z-index:9999999 (its backdrop-filter
+       forces a stacking context) and is a DOM sibling of this modal, not an
+       ancestor — a lower z-index here lets the nav bar paint over the top of
+       the modal, hiding its header. Must clear the highest z-index used
+       anywhere in the app (checked: 9999999 is the max). */
+    z-index: 100000000;
+    background: rgba(0,0,0,.42);
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+}
+.bt-modal-box {
+    background: var(--oip-card-bg, #fff);
+    border: 1px solid var(--oip-border);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.16), 0 2px 8px rgba(0,0,0,.08);
+    width: 100%; max-width: 500px; max-height: 82vh;
+    display: flex; flex-direction: column; overflow: hidden;
+}
+.bt-modal-hdr {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px; border-bottom: 1px solid var(--oip-border);
+    flex: 0 0 auto;
+}
+.bt-modal-hdr-text { flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.bt-modal-title { font-size: 13px; font-weight: 700; color: var(--oip-text); }
+.bt-modal-subtitle { font-size: 10px; color: var(--oip-metric-lbl); }
+.bt-modal-close {
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 1px solid var(--oip-border); background: none;
+    color: var(--oip-metric-lbl); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; transition: all .12s;
+}
+.bt-modal-close:hover { background: var(--oip-header-bg); color: var(--oip-text); }
+/* flex:1 1 auto + min-height:0 is required for a flex-column child to be
+   internally scrollable — without min-height:0 a flex item won't shrink
+   below its content's natural size, so a long table (100+ monthly rows)
+   would just inflate the whole box instead of scrolling inside it. */
+.bt-modal-body {
+    flex: 1 1 auto; min-height: 0;
+    padding: 0; overflow-y: auto;
+}
+/* Long expiry-level lists (100+ monthly rows for a multi-year range) keep
+   their column headers visible while scrolling. */
+.bt-modal-body .opt-table th { position: sticky; top: 0; z-index: 2; }
 .opt-use-btn, .btn-opt-use {
     padding: 2px 8px; font-size: 9px; font-weight: 700;
     background: var(--oip-accent); color: #fff;
