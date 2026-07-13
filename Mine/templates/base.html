@@ -90,7 +90,7 @@
         {% if not request.args.get('embed') %}
         <div class="navigation-bar">
             <!-- <a href="/" class="nav-link home-link" title="Home">🏠</a> -->
-            <a href="/dashboard" class="nav-link {% if request.path in ['/dashboard', '/replay'] %}active{% endif %}">📊
+            <a href="/dashboard" class="nav-link {% if request.path in ['/dashboard', '/replay', '/trading'] %}active{% endif %}">📊
                 Dashboard</a>
             <a href="/trend-detection"
                 class="nav-link {% if request.path == '/trend-detection' %}active{% endif %}">📈
@@ -104,12 +104,11 @@
                 Options Chart</a>
             <a href="/intraday-option" class="nav-link {% if request.path == '/intraday-option' %}active{% endif %}">💹
                 Intraday Option</a> -->
-            <a href="/open-interest" class="nav-link {% if request.path == '/open-interest' %}active{% endif %}">📊
-                OI</a>
             <a href="/oi-profile" class="nav-link {% if request.path == '/oi-profile' %}active{% endif %}">📉 OI
                 Profile</a>
+            <a href="/scanners" class="nav-link {% if request.path == '/scanners' %}active{% endif %}">🔍
+                Scanners</a>
             <a href="/algo" class="nav-link {% if request.path == '/algo' %}active{% endif %}">⚡ Algo</a>
-            <a href="/trading" class="nav-link {% if request.path == '/trading' %}active{% endif %}">📟 Trading</a>
             <div class="login-dropdown">
                 {% if pwa_enabled %}
                 <button id="pwa-install-btn" title="Install as App" style="display:none">⬇️</button>

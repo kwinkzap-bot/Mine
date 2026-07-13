@@ -3,6 +3,9 @@
 {% block title %}Trend Detection - Stock Scanner{% endblock %}
 
 {% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/active_contracts.css') }}?v={{ sv('css/active_contracts.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ sv('css/dashboard.css') }}">
 <style>
     :root {
         --td-bg:      #090e17;
@@ -11,10 +14,6 @@
         --td-text:    #f8fafc;
         --td-muted:   #94a3b8;
         --td-accent:  #3b82f6;
-        --td-up:      #10b981;
-        --td-down:    #f43f5e;
-        --td-warn:    #f59e0b;
-        --td-neutral: #64748b;
     }
 
     .td-page.light-theme {
@@ -55,7 +54,6 @@
 
     .td-page {
         background: var(--td-bg);
-        min-height: calc(100vh - 60px);
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
         color: var(--td-text);
         font-size: 12px;
@@ -87,18 +85,6 @@
         gap: 6px;
     }
 
-    .td-ctrl-title .td-mode-pill {
-        font-size: 9px;
-        font-weight: 700;
-        padding: 1px 6px;
-        border-radius: 3px;
-        background: rgba(59,130,246,0.12);
-        color: var(--td-accent);
-        border: 1px solid rgba(59,130,246,0.2);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-
     .td-ctrl-inputs {
         display: flex;
         gap: 8px;
@@ -112,15 +98,7 @@
         gap: 2px;
     }
 
-    .td-ctrl-label {
-        font-size: 9px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--td-muted);
-    }
-
-    .td-select, .td-date-input {
+    .td-select {
         background: var(--td-bg);
         border: 1px solid var(--td-border);
         border-radius: 4px;
@@ -134,17 +112,7 @@
         font-family: inherit;
     }
 
-    .td-select:focus, .td-date-input:focus { border-color: var(--td-accent); }
-
-    /* ── Grid Layout ──────────────────────────────────────────── */
-    .td-grid-2 {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
-        margin-bottom: 10px;
-    }
-
-    @media (max-width: 680px) { .td-grid-2 { grid-template-columns: 1fr; } }
+    .td-select:focus { border-color: var(--td-accent); }
 
     /* ── Card ─────────────────────────────────────────────────── */
     .td-card {
@@ -180,215 +148,11 @@
         letter-spacing: 0.02em;
     }
 
-    /* ── Row ──────────────────────────────────────────────────── */
-    .td-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 4px 8px;
-        background: rgba(255,255,255,0.015);
-        border: 1px solid rgba(255,255,255,0.03);
-        border-radius: 4px;
-        height: 30px;
-        margin-bottom: 5px;
-    }
-
-    .td-row:last-child { margin-bottom: 0; }
-
-    .td-row:hover {
-        background: rgba(255,255,255,0.04);
-        border-color: rgba(255,255,255,0.06);
-    }
-
-    .td-page.light-theme .td-row,
-    .td-page.cream-theme .td-row,
-    .td-page.ocean-theme .td-row {
-        background: rgba(0,0,0,0.015);
-        border: 1px solid rgba(0,0,0,0.03);
-    }
-
-    .td-page.light-theme .td-row:hover,
-    .td-page.cream-theme .td-row:hover,
-    .td-page.ocean-theme .td-row:hover {
-        background: rgba(0,0,0,0.04);
-        border-color: rgba(0,0,0,0.06);
-    }
-
-    .td-row-label {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 11px;
-        font-weight: 700;
-        color: var(--td-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.02em;
-        min-width: 70px;
-    }
-
-    .td-row-data {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .td-row-val {
-        font-size: 12px;
-        font-weight: 700;
-        color: var(--td-text);
-        font-variant-numeric: tabular-nums;
-    }
-
-    .td-row-hint {
-        font-size: 10px;
-        color: var(--td-muted);
-        font-weight: 600;
-        min-width: 64px;
-        text-align: right;
-    }
-
-    /* ── Regime Badge ─────────────────────────────────────────── */
-    .td-regime-wrap {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 10px;
-        padding: 8px 10px;
-        border-radius: 6px;
-    }
-
-    .td-regime-wrap.trend-up   { background: rgba(16,185,129,0.1);  border: 1px solid rgba(16,185,129,0.25); }
-    .td-regime-wrap.trend-down { background: rgba(244,63,94,0.1);   border: 1px solid rgba(244,63,94,0.25); }
-    .td-regime-wrap.sideways   { background: rgba(245,158,11,0.1);  border: 1px solid rgba(245,158,11,0.25); }
-
-    .td-regime-arrow { font-size: 20px; line-height: 1; }
-    .td-regime-name  { font-size: 13px; font-weight: 800; letter-spacing: 0.03em; }
-    .td-regime-wrap.trend-up   .td-regime-name { color: var(--td-up); }
-    .td-regime-wrap.trend-down .td-regime-name { color: var(--td-down); }
-    .td-regime-wrap.sideways   .td-regime-name { color: var(--td-warn); }
-
-    .td-regime-conf {
-        font-size: 10px;
-        color: var(--td-muted);
-        margin-left: auto;
-    }
-
-    /* ── Signal bar ───────────────────────────────────────────── */
-    .td-bar-track {
-        flex: 1;
-        height: 5px;
-        background: rgba(255,255,255,0.05);
-        border-radius: 3px;
-        overflow: hidden;
-        margin: 0 8px;
-    }
-
-    .td-page.light-theme .td-bar-track,
-    .td-page.cream-theme .td-bar-track,
-    .td-page.ocean-theme .td-bar-track { background: rgba(0,0,0,0.06); }
-
-    .td-bar-fill {
-        height: 100%;
-        border-radius: 3px;
-        transition: width 0.45s ease;
-        min-width: 2px;
-    }
-
-    .td-bar-fill.bull    { background: var(--td-up); }
-    .td-bar-fill.bear    { background: var(--td-down); }
-    .td-bar-fill.neutral { background: var(--td-warn); }
-
-    /* ── VIX range bar ────────────────────────────────────────── */
-    .td-vix-track {
-        flex: 1;
-        height: 5px;
-        background: rgba(255,255,255,0.05);
-        border-radius: 3px;
-        position: relative;
-        overflow: visible;
-        margin: 0 6px;
-        min-width: 60px;
-    }
-
-    .td-page.light-theme .td-vix-track,
-    .td-page.cream-theme .td-vix-track,
-    .td-page.ocean-theme .td-vix-track { background: rgba(0,0,0,0.06); }
-
-    .td-vix-fill {
-        position: absolute; left: 0; top: 0; height: 100%;
-        background: linear-gradient(90deg, var(--td-up), var(--td-warn), var(--td-down));
-        border-radius: 3px;
-        pointer-events: none;
-    }
-
-    .td-vix-marker {
-        position: absolute; top: 50%;
-        transform: translate(-50%, -50%);
-        width: 8px; height: 8px;
-        background: #fff;
-        border: 2px solid var(--td-accent);
-        border-radius: 50%;
-        z-index: 2;
-        transition: left 0.45s ease;
-    }
-
-    /* ── Status badges (reuse markets style) ──────────────────── */
-    .td-status-badge {
-        font-size: 9px;
-        font-weight: 800;
-        padding: 2px 6px;
-        border-radius: 3px;
-        text-align: center;
-        min-width: 56px;
-        text-transform: uppercase;
-        letter-spacing: 0.02em;
-    }
-
-    .td-status-badge.up {
-        background: rgba(16,185,129,0.12);
-        color: var(--td-up);
-        border: 1px solid rgba(16,185,129,0.2);
-    }
-
-    .td-status-badge.down {
-        background: rgba(244,63,94,0.12);
-        color: var(--td-down);
-        border: 1px solid rgba(244,63,94,0.2);
-    }
-
-    .td-status-badge.neutral {
-        background: rgba(245,158,11,0.12);
-        color: var(--td-warn);
-        border: 1px solid rgba(245,158,11,0.2);
-    }
-
-    /* ── Error & Loading ──────────────────────────────────────── */
-    .td-error {
-        background: rgba(244,63,94,0.1);
-        border: 1px solid var(--td-down);
-        border-radius: 6px;
-        color: var(--td-down);
-        padding: 8px 12px;
-        margin-bottom: 10px;
-        font-size: 12px;
-    }
-
-    .td-loading {
-        display: flex; align-items: center; justify-content: center;
-        gap: 10px; padding: 30px;
-    }
-
-    .td-spinner {
-        width: 18px; height: 18px;
-        border: 2px solid var(--td-border);
-        border-top-color: var(--td-accent);
-        border-radius: 50%;
-        animation: td-spin 0.7s linear infinite;
-    }
-
-    @keyframes td-spin { to { transform: rotate(360deg); } }
-
-    .td-loading-text { color: var(--td-muted); font-size: 12px; }
+    /* .ac-page (from active_contracts.css) is borrowed here only for its --ac-*
+       theme variables. Its own height:calc(100vh - 60px) is meant for the
+       standalone Contracts page (table fills the rest of the viewport) — it
+       must not apply here, where .ac-page just wraps a small analysis block. */
+    .td-page .ac-page { height: auto; }
 </style>
 {% endblock %}
 
@@ -399,7 +163,6 @@
     <div class="td-controls">
         <div class="td-ctrl-title">
             📈 Trend Detection
-            <span class="td-mode-pill" id="tdModePill">—</span>
         </div>
         <div class="td-ctrl-inputs">
             <div class="td-ctrl-group">
@@ -412,79 +175,31 @@
                     <option value="NIFTYNXT50">NIFTYNXT50</option>
                 </select>
             </div>
-            <div class="td-ctrl-group">
-                <select id="tdLookback" class="td-select">
-                    <option value="10">10 days</option>
-                    <option value="15">15 days</option>
-                    <option value="20" selected>20 days</option>
-                    <option value="30">30 days</option>
-                    <option value="45">45 days</option>
-                </select>
-            </div>
-            <div class="td-ctrl-group">
-                <input type="date" id="tdDate" class="td-date-input" />
-            </div>
         </div>
     </div>
 
-    <!-- Error -->
-    <div class="td-error" id="tdError" style="display:none;"></div>
-
-    <!-- Results -->
-    <div id="tdResults" style="display:none;">
-
-        <!-- Row 1: Regime + Projection -->
-        <div class="td-grid-2">
-
-            <!-- Regime card -->
-            <div class="td-card">
-                <div class="td-card-hdr">
-                    <h2>Regime</h2>
-                    <div class="td-card-hdr-meta" id="tdMetaAtr"></div>
-                </div>
-                <div class="td-regime-wrap" id="tdRegimeWrap">
-                    <div class="td-regime-arrow" id="tdRegimeArrow"></div>
-                    <div class="td-regime-name"  id="tdRegimeName"></div>
-                    <div class="td-regime-conf"  id="tdRegimeConf"></div>
-                </div>
-                <div id="tdIndRows"></div>
-            </div>
-
-            <!-- Projection card -->
-            <div class="td-card">
-                <div class="td-card-hdr">
-                    <h2>Next-Day Range</h2>
-                    <div class="td-card-hdr-meta" id="tdProjMeta"></div>
-                </div>
-                <div id="tdProjRows"></div>
-            </div>
-
+    <!-- Market Direction (mirrors the Contracts route's analysis block) -->
+    <div class="td-card" style="margin-bottom:10px;">
+        <div class="td-card-hdr">
+            <h2>Market Direction</h2>
+            <div class="td-card-hdr-meta" id="tdMdMeta"></div>
         </div>
-
-        <!-- Signal breakdown -->
-        <div class="td-card" style="margin-bottom:10px;">
-            <div class="td-card-hdr">
-                <h2>Signal Breakdown</h2>
-                <div class="td-card-hdr-meta" id="tdSigMeta"></div>
-            </div>
-            <div id="tdBarsContainer"></div>
+        <div class="ac-page">
+            <div class="ac-analysis hidden" id="tdMarketDirection"></div>
         </div>
-
-        <!-- VIX & OI (indices only) -->
-        <div class="td-card" id="tdVixSection" style="display:none; margin-bottom:10px;">
-            <div class="td-card-hdr">
-                <h2>India VIX &amp; OI Context</h2>
-                <div class="td-card-hdr-meta" id="tdVixMeta"></div>
-            </div>
-            <div id="tdVixOiRows"></div>
-        </div>
-
     </div>
 
-    <!-- Loading -->
-    <div class="td-loading" id="tdLoading" style="display:none;">
-        <div class="td-spinner"></div>
-        <span class="td-loading-text">Analysing market regime…</span>
+    <!-- Next Session Outlook (same 5-year NIFTY model as the Historic OI route) -->
+    <div class="td-card">
+        <div class="td-card-hdr">
+            <h2>Next Session Outlook</h2>
+            <div class="td-card-hdr-meta">NIFTY · 5-yr model</div>
+        </div>
+        <div class="sw-wrap" style="padding:0;">
+            <div id="tdHoiPredict" class="ac-analysis" style="border:1px solid var(--pf-border);border-radius:8px;background:var(--pf-surface)">
+                <span style="font-size:11px;color:var(--pf-text-3)">Running 5-year analysis…</span>
+            </div>
+        </div>
     </div>
 
 </div>

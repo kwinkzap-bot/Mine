@@ -120,7 +120,7 @@ select.date-picker.tf-picker option {
 .results-row {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 16px;
+    gap: 5px;
     margin-top: 4px;
 }
 

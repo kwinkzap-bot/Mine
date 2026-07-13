@@ -22,7 +22,7 @@
         { key: 'portfolio',  title: 'Portfolio',       icon: '💼', url: '/portfolio',       w: 560, h: 400 },
         { key: 'orders',     title: 'Orders',          icon: '🧾', url: '/orders',          w: 560, h: 400 },
         { key: 'backtest',   title: 'Backtest',        icon: '🧪', url: '/backtest',        w: 720, h: 480 },
-        { key: 'scanners',   title: 'Scanners',        icon: '🔍', url: '/cpr-filter',      w: 700, h: 460 },
+        { key: 'scanners',   title: 'Scanners',        icon: '🔍', url: '/scanners',        w: 700, h: 460 },
         { key: 'trend',      title: 'Trend Detection', icon: '🧭', url: '/trend-detection', w: 700, h: 460 },
         { key: 'algo',       title: 'Algo',            icon: '⚡', url: '/algo',            w: 640, h: 440 },
     ];

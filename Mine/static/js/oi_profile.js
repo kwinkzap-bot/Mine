@@ -253,6 +253,38 @@ document.addEventListener('DOMContentLoaded', () => {
     // VWAP/CVWAP/PVWAP series are created with stale (default) visibility. Re-sync now.
     oipSyncVwapVisibility();
 
+    // OI Bar popup — lazy-loads the Open Interest page inside an iframe
+    (() => {
+        const btn = document.getElementById('oipOIBarBtn');
+        const modal = document.getElementById('oipOIBarModal');
+        const closeBtn = document.getElementById('oipOIBarModalClose');
+        const frame = document.getElementById('oipOIBarFrame');
+        if (!btn || !modal) return;
+
+        // .container uses content-visibility:auto, which — like transform/filter —
+        // creates a containing block for position:fixed descendants. That made the
+        // "fixed" overlay scroll with the page instead of pinning to the viewport.
+        // Move it to be a direct child of <body> so it's fixed relative to the viewport.
+        document.body.appendChild(modal);
+
+        const open = () => {
+            modal.classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
+            if (frame && !frame.src) frame.src = frame.dataset.src;
+        };
+        const close = () => {
+            modal.classList.add('hidden');
+            document.body.style.overflow = '';
+        };
+
+        btn.addEventListener('click', open);
+        closeBtn?.addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !modal.classList.contains('hidden')) close();
+        });
+    })();
+
 
 
     // Dropdown Logic

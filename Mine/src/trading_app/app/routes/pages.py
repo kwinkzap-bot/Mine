@@ -1,5 +1,5 @@
 """Page routes for rendering templates."""
-from flask import Blueprint, render_template, session, redirect, url_for, jsonify, send_from_directory, current_app
+from flask import Blueprint, render_template, session, redirect, url_for, jsonify, send_from_directory, current_app, request
 from functools import wraps
 import os
 from trading_app.app.utils.user_auth import require_user_auth
@@ -64,6 +64,13 @@ def debug_status():
 @login_required
 def cpr_filter():
     """CPR filter page."""
+    return render_template('cpr_filter.html')
+
+@pages_bp.route('/scanners')
+@require_user_auth
+@login_required
+def scanners():
+    """Scanners page — same CPR-based filter view, under its own dedicated route."""
     return render_template('cpr_filter.html')
 
 @pages_bp.route('/options-chart')
@@ -174,6 +181,8 @@ def algo():
 @login_required
 def trading():
     """Trading terminal — Zerodha-style customizable, resizable floating panels."""
+    if not request.args.get('embed'):
+        return redirect(url_for('pages.dashboard') + '#trading')
     return render_template('trading.html')
 
 

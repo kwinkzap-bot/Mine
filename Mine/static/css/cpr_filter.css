@@ -196,7 +196,7 @@ body.ocean-theme {
 .results-row {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
-    gap: 16px;
+    gap: 5px;
     margin-top: 8px;
 }
 

@@ -3,9 +3,9 @@
   "buy_needs_reset": false,
   "sell_needs_reset": false,
   "last_exit": {
-    "reason": "SL",
-    "spot": 24193.1,
-    "time": "2026-07-10T14:58:44.679091"
+    "reason": "TARGET",
+    "spot": 24152.15,
+    "time": "2026-07-13T10:29:33.764542"
   },
   "pending_signal": null
 }

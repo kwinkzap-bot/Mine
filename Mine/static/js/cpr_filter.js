@@ -15,8 +15,8 @@ const cprElems = {};
 // Cached sort header references per table (avoids full querySelectorAll on every sort click)
 const _lastSortedTh = {};
 
-// Debounce timer for date picker
-let _dateDebounceTid = null;
+// Debounce timer for date picker (unused now — only fed the disabled loadCPRData change listener)
+// let _dateDebounceTid = null;
 
 const CPR_MIN_REQUEST_GAP_MS = 60 * 1000; // hard throttle: 1 request/minute
 const CPR_AUTO_REFRESH_MS = 15 * 60 * 1000; // auto refresh every 15 minutes
@@ -40,15 +40,18 @@ window.addEventListener('load', function () {
     const schedulerMarketOpen = scheduler && typeof scheduler.isMarketOpen === 'function' && scheduler.isMarketOpen();
 
     // Initialize date picker with today's date
+    // NOTE: cprElems.datePicker itself is still used (loadHighIVData / loadExpiryHlBreakoutData
+    // read its .value), only the change listener below is dead since it exclusively
+    // triggered the now-disabled loadCPRData.
     if (cprElems.datePicker) {
         const today = new Date().toISOString().split('T')[0];
         cprElems.datePicker.value = today;
 
         // Debounced change listener — avoids concurrent requests on rapid keyboard navigation
-        cprElems.datePicker.addEventListener('change', () => {
-            clearTimeout(_dateDebounceTid);
-            _dateDebounceTid = setTimeout(() => loadCPRData(true), 300);
-        });
+        // cprElems.datePicker.addEventListener('change', () => {
+        //     clearTimeout(_dateDebounceTid);
+        //     _dateDebounceTid = setTimeout(() => loadCPRData(true), 300);
+        // });
     }
 
     // Initialize Refresh Button
@@ -319,6 +322,11 @@ function showGridLoadingState() {
  * Fetches CPR data from the backend API using fetchJson utility.
  */
 async function loadCPRData(refresh = false) {
+    // Disabled: /api/cpr-filter only fed the Camarilla / D-RSI reversal tables,
+    // which are commented out above and no longer rendered on this page.
+    return;
+
+    /*
     const now = Date.now();
     if (cprRequestInFlight) {
         return;
@@ -422,6 +430,7 @@ async function loadCPRData(refresh = false) {
             cprElems.refreshBtn.disabled = false;
         }
     }
+    */
 }
 
 window.addEventListener('beforeunload', function () {

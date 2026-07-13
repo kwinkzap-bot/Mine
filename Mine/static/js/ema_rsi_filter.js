@@ -83,6 +83,11 @@ window.addEventListener('beforeunload', () => {
 
 // ─── Data Fetch ───────────────────────────────────────────────────────────────
 async function loadEmaData() {
+    // Disabled: /api/ema-rsi-filter is fired eagerly on page load regardless of
+    // which scanner tab is active, so it was running with nothing on screen to show it.
+    return;
+
+    /*
     const now = Date.now();
     if (_emaInFlight) return;
     if (now - _emaLastAt < EMA_MIN_GAP_MS) return;
@@ -190,6 +195,7 @@ async function loadEmaData() {
         _emaInFlight = false;
         if (btn) btn.disabled = false;
     }
+    */
 }
 
 

@@ -215,6 +215,19 @@
                             <span>OFF</span></label>
                     </div>
 
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- OI Bar button -->
+                    <button id="oipOIBarBtn" class="oip-btn" type="button" title="Open Interest Bar">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="20" x2="12" y2="10"/>
+                            <line x1="18" y1="20" x2="18" y2="4"/>
+                            <line x1="6" y1="20" x2="6" y2="16"/>
+                        </svg>
+                        OI Bar
+                    </button>
+
                 </div>
             </div>
 
@@ -283,6 +296,19 @@
             <div id="oipCandleChart"></div>
             <canvas id="oipOICanvas"></canvas>
             <div id="oipTooltip" class="oip-tooltip hidden"></div>
+        </div>
+    </div>
+
+    <!-- OI Bar popup modal -->
+    <div id="oipOIBarModal" class="oip-modal-overlay hidden">
+        <div class="oip-modal-box">
+            <div class="oip-modal-hdr">
+                <span class="oip-modal-title">Open Interest</span>
+                <button id="oipOIBarModalClose" class="oip-modal-close" type="button" title="Close">&times;</button>
+            </div>
+            <div class="oip-modal-body">
+                <iframe id="oipOIBarFrame" class="oip-modal-iframe" data-src="/open-interest?embed=1" title="Open Interest"></iframe>
+            </div>
         </div>
     </div>
 

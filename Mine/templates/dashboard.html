@@ -20,10 +20,10 @@
     <button class="dash-tab" id="dash-tab-replay"      onclick="dashSwitch('replay')">🕒 Replay</button>
     <button class="dash-tab" id="dash-tab-fii-sector"  onclick="dashSwitch('fii-sector')">🏢 FII Sector</button>
     <button class="dash-tab" id="dash-tab-swing-trade" onclick="dashSwitch('swing-trade')">📉 Swing Trade</button>
+    <button class="dash-tab" id="dash-tab-trading"     onclick="dashSwitch('trading')">⚡ Trading</button>
     <button class="dash-tab" id="dash-tab-orders"      onclick="dashSwitch('orders')">📋 Orders</button>
     <button class="dash-tab" id="dash-tab-portfolio"   onclick="dashSwitch('portfolio')">💼 Portfolio</button>
     <button class="dash-tab" id="dash-tab-markets"     onclick="dashSwitch('markets')">🏢 Markets</button>
-    <button class="dash-tab" id="dash-tab-scanners"    onclick="dashSwitch('scanners')">🔍 Scanners</button>
 </div>
 
 <!-- ── Backtest panel ─────────────────────────────────────────── -->
@@ -567,10 +567,10 @@
 
 <!-- ── Contracts panel ─────────────────────────────────────────── -->
 <!-- ── Embedded pages: Orders / Portfolio / Markets / Scanners ──── -->
+<div class="dash-panel" id="dash-trading-panel"><iframe class="dash-iframe" id="dash-trading-frame" data-src="/trading?embed=1" title="Trading"></iframe></div>
 <div class="dash-panel" id="dash-orders-panel"><iframe class="dash-iframe" id="dash-orders-frame" data-src="/orders?embed=1" title="Orders"></iframe></div>
 <div class="dash-panel" id="dash-portfolio-panel"><iframe class="dash-iframe" id="dash-portfolio-frame" data-src="/portfolio?embed=1" title="Portfolio"></iframe></div>
 <div class="dash-panel" id="dash-markets-panel"><iframe class="dash-iframe" id="dash-markets-frame" data-src="/markets?embed=1" title="Markets"></iframe></div>
-<div class="dash-panel" id="dash-scanners-panel"><iframe class="dash-iframe" id="dash-scanners-frame" data-src="/cpr-filter?embed=1" title="Scanners"></iframe></div>
 
 {% endblock %}
 
@@ -581,9 +581,9 @@
 window.oipReplayMode = true;
 
 // ── Tab switching ──────────────────────────────────────────────
-const _DASH_TABS = ['pcr', 'replay', 'fii-sector', 'swing-trade', 'orders', 'portfolio', 'markets', 'scanners'];
+const _DASH_TABS = ['pcr', 'replay', 'fii-sector', 'swing-trade', 'trading', 'orders', 'portfolio', 'markets'];
 
-const _IFRAME_TABS = ['orders', 'portfolio', 'markets', 'scanners'];
+const _IFRAME_TABS = ['trading', 'orders', 'portfolio', 'markets'];
 
 function dashSwitch(tab, pushState) {
     _DASH_TABS.forEach(t => {
