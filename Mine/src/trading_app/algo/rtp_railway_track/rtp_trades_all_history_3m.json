@@ -1,5 +1,63 @@
 [
   {
+    "date": "2026-07-13",
+    "direction": "BUY",
+    "entry_spot": 24212.3,
+    "exit_spot": 24201.1,
+    "pnl_pts": -11.2,
+    "reason": "EOD",
+    "entry_time": "2026-07-13T14:15:01.351484",
+    "exit_time": "2026-07-13T15:28:01.508293",
+    "strike": 24000,
+    "option_type": "CE",
+    "lot_size": 65,
+    "opt_entry_price": 236.4,
+    "opt_exit_price": 235.0,
+    "opt_pnl_pts": -1.4,
+    "opt_pnl_inr": -91.0,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2076588697754984448'}",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2671424000CE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
+    "date": "2026-07-13",
+    "direction": "BUY",
+    "entry_spot": 24147.25,
+    "exit_spot": 24227.4,
+    "pnl_pts": 80.15,
+    "reason": "TARGET",
+    "entry_time": "2026-07-13T11:36:05.024674",
+    "exit_time": "2026-07-13T12:51:36.680473",
+    "strike": 23900,
+    "option_type": "CE",
+    "lot_size": 65,
+    "opt_entry_price": 252.45,
+    "opt_exit_price": 334.2,
+    "opt_pnl_pts": 81.75,
+    "opt_pnl_inr": 5313.75,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2076548692324048896'}",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY2671423900CE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
     "date": "2026-07-10",
     "direction": "BUY",
     "entry_spot": 24196.9,

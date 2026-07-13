@@ -83,6 +83,15 @@ def filter_expiry_hl_breakout(cpr_service: "CPRFilterService", root_date: Option
 
     timeframe = timeframe if timeframe in ('60minute', 'day') else '60minute'
 
+    # Today's intraday cache entries go stale as new hourly candles form;
+    # clear them so the scan sees the latest finished candle, not whatever
+    # was cached earlier in the day (e.g. the first 1-hour candle at 9:15).
+    if root_date.date() == datetime.now().date():
+        with cpr_service._cache_lock:
+            keys_to_del = [k for k in cpr_service._historical_data_cache.keys() if str(root_date.date()) in k]
+            for k in keys_to_del:
+                del cpr_service._historical_data_cache[k]
+
     buy_signals: List[Dict] = []
     sell_signals: List[Dict] = []
     start_time = time.time()

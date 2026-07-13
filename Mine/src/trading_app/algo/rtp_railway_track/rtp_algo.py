@@ -1617,6 +1617,11 @@ class RTPAlgo:
         last_exit_candle_dt:     Optional[pd.Timestamp]  = None
         tracked_trade_entry_time: Optional[str]          = None
         last_reconcile_ts:       float                   = 0.0
+        # Consecutive "flat" readings for the current trade. A single flat
+        # reading can be a transient broker API lag right after a fresh fill
+        # (positions() not yet updated) rather than a real close, so we only
+        # act once flat is observed on two consecutive reconcile cycles.
+        flat_streak:             int                     = 0
 
         while not self._stop_event.is_set():
             try:
@@ -1659,6 +1664,7 @@ class RTPAlgo:
                         # Grace period: give the broker fill time to appear before
                         # the first reconciliation so we don't false-flag a fresh trade.
                         last_reconcile_ts        = time.time()
+                        flat_streak              = 0
 
                     spot = self._get_nifty_spot(provider)
                     if spot:
@@ -1800,14 +1806,26 @@ class RTPAlgo:
                         last_reconcile_ts = time.time()
                         _rs = self._load_state()
                         _rt = _rs.get('active_trade')
-                        if _rt and self._is_position_flat(_rt) is True:
-                            self.log.warning(
-                                "Broker position flat — trade closed outside the algo."
-                                " Clearing active_trade (no square-off)."
-                            )
-                            _spot_now = self._get_nifty_spot(provider) or 0.0
-                            self._exit_trade('BROKER_CLOSED', _spot_now, square_off=False)
-                            last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor(self._bar_td)
+                        if _rt:
+                            if self._is_position_flat(_rt) is True:
+                                flat_streak += 1
+                                if flat_streak >= 2:
+                                    self.log.warning(
+                                        "Broker position flat on 2 consecutive checks —"
+                                        " trade closed outside the algo. Clearing"
+                                        " active_trade (no square-off)."
+                                    )
+                                    _spot_now = self._get_nifty_spot(provider) or 0.0
+                                    self._exit_trade('BROKER_CLOSED', _spot_now, square_off=False)
+                                    last_checked_bar_dt = pd.Timestamp.now(tz='Asia/Kolkata').floor(self._bar_td)
+                                else:
+                                    self.log.info(
+                                        "Broker position reads flat (streak=%d) —"
+                                        " confirming on next reconcile before closing.",
+                                        flat_streak,
+                                    )
+                            else:
+                                flat_streak = 0
 
                 else:
                     # ── Runtime kill-switch — only blocks new signal entries
