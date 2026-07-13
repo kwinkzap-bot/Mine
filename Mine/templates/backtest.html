@@ -249,23 +249,37 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="expiryRrRatio">SL : Target</label>
-                    <select id="expiryRrRatio">
-                        <option value="1">1 : 1</option>
-                        <option value="1.5">1 : 1.5</option>
-                        <option value="2">1 : 2</option>
-                        <option value="2.5">1 : 2.5</option>
-                        <option value="3" selected>1 : 3</option>
-                        <option value="4">1 : 4</option>
-                        <option value="5">1 : 5</option>
+                    <label for="expirySlPct">Stop Loss %</label>
+                    <select id="expirySlPct">
+                        <option value="0.25">0.25%</option>
+                        <option value="0.5">0.5%</option>
+                        <option value="0.75">0.75%</option>
+                        <option value="1" selected>1%</option>
+                        <option value="1.5">1.5%</option>
+                        <option value="2">2%</option>
+                        <option value="2.5">2.5%</option>
+                        <option value="3">3%</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="expiryMaTimeframe">MA Touch Timeframe</label>
+                    <label for="expiryTargetPct">Target %</label>
+                    <select id="expiryTargetPct">
+                        <option value="1">1%</option>
+                        <option value="1.5">1.5%</option>
+                        <option value="2">2%</option>
+                        <option value="2.5">2.5%</option>
+                        <option value="3" selected>3%</option>
+                        <option value="4">4%</option>
+                        <option value="5">5%</option>
+                        <option value="7.5">7.5%</option>
+                        <option value="10">10%</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="expiryMaTimeframe">EMA Touch Timeframe</label>
                     <select id="expiryMaTimeframe">
-                        <option value="1hour">1 Hour</option>
+                        <option value="1hour" selected>1 Hour</option>
                         <option value="1day">1 Day</option>
-                        <option value="both" selected>1 Hour &amp; 1 Day</option>
                     </select>
                 </div>
                 <div class="form-group" style="grid-column: 1 / -1;">
@@ -273,18 +287,22 @@
                     <div style="padding:8px 12px;border:1.5px solid #e0e0e0;border-radius:8px;
                                 background:#f5f7ff;color:#1a237e;font-size:12px;font-weight:500;
                                 line-height:1.5;">
-                        Whichever side breaks first wins the cycle. The entry candle must
-                        <b>touch, then close beyond</b> — the same pattern at two levels at
-                        once: (1) the monthly expiry day's <b>High</b> for Long / <b>Low</b> for
-                        Short (a genuine touch, not a clean gap-through), and (2) <b>every</b>
-                        selected <b>SMA 20/50/100/200</b> on the <b>MA Touch Timeframe</b> — the
-                        candle must touch at least one of them and close beyond all of them
-                        (above for Long, below for Short) — a pullback that tests support/
-                        resistance then closes back through the whole stack. SL is the
-                        <b>opposite expiry level</b> (Low for Long, High for Short); Target sits
-                        <b>SL : Target</b> risk-multiples beyond entry. Either exit, or a
-                        force-close <b>before the next month's expiry day</b>, whichever comes
-                        first. Expiry day is <b>auto-detected</b> (last Thursday through
+                        Whichever side satisfies the signal first wins the cycle. The SIGNAL
+                        candle must <b>touch, then close beyond</b> — the same pattern at two
+                        levels at once: (1) the monthly expiry day's <b>High</b> for Long /
+                        <b>Low</b> for Short (a genuine touch, not a clean gap-through), and
+                        (2) <b>every</b> selected <b>EMA 20/50/100/200</b> on the
+                        <b>EMA Touch Timeframe</b> — the candle must touch at least one of them
+                        and close beyond all of them (above for Long, below for Short) — a
+                        pullback that tests support/resistance then closes back through the
+                        whole stack. The actual entry is filled at the
+                        <b>open of the next candle</b> after the signal (not the signal
+                        candle's own close). SL and Target are each an independent
+                        <b>percentage of the entry price</b> — SL below/above entry by
+                        <b>Stop Loss %</b>, Target above/below entry by <b>Target %</b>
+                        (mirrored for Short). Either exit, or a force-close <b>before the next
+                        month's expiry day</b>, whichever comes first. Expiry day is
+                        <b>auto-detected</b> (last Thursday through
                         Aug-2025, last Tuesday from Sep-2025 onward); a holiday snaps back to
                         the previous trading day.
                     </div>

@@ -1,49 +1,56 @@
 """
 Monthly Expiry Breakout Backtest Engine.
 
-Rule (one trade per monthly-expiry cycle, long and/or short):
+Rule (any number of trades per monthly-expiry cycle, long and/or short):
   1. Take the High and Low of each monthly F&O expiry day's DAILY candle —
      this is the SL reference for both sides (Low for Long, High for
      Short); it is not itself configurable.
-  2. Starting the next trading session, scan 1-hour candles for the FIRST
-     breakout (whichever side triggers first). The SAME touch-then-close
-     pattern is required at TWO separate levels — the expiry-day High/Low
-     itself, and the moving averages:
+  2. Starting the next trading session, scan 1-hour candles for SIGNAL
+     candles (whichever side triggers first, at any point in the cycle)
+     that satisfy BOTH of the following simultaneously:
        a) EXPIRY LEVEL — the candle's High/Low range must straddle the
           expiry-day High (Long) / Low (Short), i.e. a genuine touch, not
           just a clean gap-through, AND its CLOSE must clear that level
           (above the High for Long, below the Low for Short).
-       b) MOVING AVERAGES (ma_timeframe: '1hour' | '1day' | 'both',
-          default 'both' — the union of both sets, 8 MAs):
-            TOUCH — the candle's range must straddle AT LEAST ONE
-                    selected SMA 20/50/100/200 (a pullback that tested
-                    an MA as support/resistance).
-            ALIGN — the candle's CLOSE must clear EVERY selected MA, in
-                    the trade's direction (all above for Long, all below
-                    for Short) — confirming the candle closed back
-                    through the whole MA stack after the touch.
-     ALL of (a) and (b) must hold simultaneously on the same candle:
+       b) EMA (ma_timeframe: '1hour' | '1day', default '1hour' — exactly
+          one timeframe's 4 EMAs, never a combined set):
+            TOUCH — the candle's range must straddle AT LEAST ONE of
+                    that timeframe's EMA 20/50/100/200 (a pullback that
+                    tested an EMA as support/resistance).
+            ALIGN — the candle's CLOSE must clear EVERY one of that
+                    timeframe's 4 EMAs, in the trade's direction (all
+                    above for Long, all below for Short).
+     Whichever side satisfies (a) and (b) first wins that entry:
        - BUY  (Long):  touches + closes above the expiry High, AND
-         touches >= 1 selected MA, AND closes above all of them. Fill at
-         the breakout candle's close. Target = entry + rr_ratio × risk,
-         risk = entry − expiry Low.
+         touches >= 1 selected EMA, AND closes above all 4 of them.
        - SELL (Short): touches + closes below the expiry Low, AND
-         touches >= 1 selected MA, AND closes below all of them (the
-         exact mirror). Fill at the breakout candle's close. Target =
-         entry − rr_ratio × risk, risk = expiry High − entry.
-     The Daily SMAs use the most recently COMPLETED daily candle (i.e.
+         touches >= 1 selected EMA, AND closes below all 4 of them (the
+         exact mirror).
+     The ACTUAL ENTRY is filled at the OPEN of the NEXT hourly candle
+     after the signal candle (not the signal candle's own close) — if the
+     signal candle is the last bar available in the cycle's window, there
+     is no next candle to fill on and that signal is dropped. Once a
+     position exits (SL/TARGET), scanning for a fresh signal resumes on
+     the very next bar — so a single cycle can contain multiple trades,
+     one after another, back to back, with no cap on how many.
+     The Daily EMAs use the most recently COMPLETED daily candle (i.e.
      yesterday's close) — today's daily candle is still forming intraday,
-     so using it directly would be look-ahead bias. The Hourly SMAs use
+     so using it directly would be look-ahead bias. The Hourly EMAs use
      the candle being evaluated itself (same convention as this engine's
      other same-timeframe checks). Until 200 bars of history exist on the
-     selected timeframe(s) the SMA(200) is undefined and no entry can
+     selected timeframe(s) the EMA(200) is undefined and no entry can
      trigger — this is the same natural warmup gate used elsewhere in
      this app.
-  3. Exit on whichever comes first (SL checked before Target within a bar):
-       - Long:  LOW drops to/through the expiry-day Low   → 'LOW_BREACH'
-                HIGH rises to/through the target level     → 'TARGET'
-       - Short: HIGH rises to/through the expiry-day High → 'HIGH_BREACH'
-                LOW drops to/through the target level      → 'TARGET'
+  3. SL and Target are both a PERCENTAGE of the entry price (sl_pct /
+     target_pct, independent dropdowns — not tied to the expiry level or
+     to each other):
+       - Long:  sl_level = entry × (1 − sl_pct/100), tp_level = entry × (1 + target_pct/100)
+       - Short: sl_level = entry × (1 + sl_pct/100), tp_level = entry × (1 − target_pct/100)
+     Exit on whichever comes first (SL checked before Target within a bar):
+       - Long:  LOW drops to/through sl_level   → 'SL'
+                HIGH rises to/through tp_level  → 'TARGET'
+       - Short: HIGH rises to/through sl_level  → 'SL'
+                LOW drops to/through tp_level   → 'TARGET'
        - the next month's expiry day arrives — force-closed at the close
          of the last hourly candle on the trading day immediately before
          that next expiry day begins                      → 'EXPIRY'
@@ -51,8 +58,8 @@ Rule (one trade per monthly-expiry cycle, long and/or short):
      (i.e. this is the last cycle in the requested range), an open
      position is closed at the last available hourly candle → 'DATA_END'.
   Long and Short can each be toggled off (enable_long / enable_short) to
-  run one-sided. rr_ratio (default 3.0, i.e. 1:3) sets how far the target
-  sits beyond the risk defined by the expiry-day SL level.
+  run one-sided. sl_pct (default 1.0) and target_pct (default 3.0) set
+  the SL / Target distance from the entry price, each as a percentage.
 
 Monthly expiry-day detection: there is no historical NSE expiry/holiday
 calendar in this app, so the expiry day is auto-detected as the last
@@ -93,9 +100,9 @@ def _expiry_weekday_for(last_of_month: date) -> int:
     return weekday
 
 
-# Moving-average filter: the entry candle must TOUCH at least one SMA of
-# these lengths AND its close must clear EVERY one of them, on the
-# selected timeframe(s).
+# EMA filter: the signal candle must TOUCH at least one EMA of these
+# lengths AND its close must clear EVERY one of them, on the single
+# selected timeframe ('1hour' or '1day' — never combined).
 _MA_PERIODS = [20, 50, 100, 200]
 
 
@@ -103,26 +110,27 @@ class ExpiryBreakoutEngine:
 
     def __init__(self, daily_df: pd.DataFrame, hourly_df: pd.DataFrame = None,
                 enable_long: bool = True, enable_short: bool = True,
-                rr_ratio: float = 3.0, ma_timeframe: str = 'both'):
+                sl_pct: float = 1.0, target_pct: float = 3.0, ma_timeframe: str = '1hour'):
         self.daily_df  = daily_df.copy()
         self.hourly_df = (hourly_df.copy() if hourly_df is not None
                           else pd.DataFrame(columns=['date', 'open', 'high', 'low', 'close']))
         self.enable_long  = bool(enable_long)
         self.enable_short = bool(enable_short)
-        # Target = entry ± rr_ratio × risk, where risk is the distance from
-        # entry to the expiry-day stop level (Low for Long, High for Short)
-        # — the SL itself is not configurable, only how far the target sits
-        # beyond it.
-        self.rr_ratio = float(rr_ratio or 3.0)
-        # Which MA columns the entry candle must touch >= 1 of, AND clear
-        # (close beyond) ALL of, in the direction of the trade.
-        self.ma_timeframe = ma_timeframe if ma_timeframe in ('1hour', '1day', 'both') else 'both'
-        if self.ma_timeframe == '1hour':
-            self._ma_cols = [f'h_sma{n}' for n in _MA_PERIODS]
-        elif self.ma_timeframe == '1day':
-            self._ma_cols = [f'd_sma{n}' for n in _MA_PERIODS]
+        # SL and Target are both a percentage of the entry price, set
+        # independently (not tied to the expiry level or to each other):
+        #   Long:  sl_level = entry × (1 − sl_pct/100), tp_level = entry × (1 + target_pct/100)
+        #   Short: sl_level = entry × (1 + sl_pct/100), tp_level = entry × (1 − target_pct/100)
+        self.sl_pct     = float(sl_pct or 1.0)
+        self.target_pct = float(target_pct or 3.0)
+        # Which EMA columns the signal candle must touch >= 1 of, AND
+        # clear (close beyond) ALL of, in the direction of the trade.
+        # Only one timeframe at a time (no combined "both" option) —
+        # default 1 Hour.
+        self.ma_timeframe = ma_timeframe if ma_timeframe in ('1hour', '1day') else '1hour'
+        if self.ma_timeframe == '1day':
+            self._ma_cols = [f'd_ema{n}' for n in _MA_PERIODS]
         else:
-            self._ma_cols = [f'h_sma{n}' for n in _MA_PERIODS] + [f'd_sma{n}' for n in _MA_PERIODS]
+            self._ma_cols = [f'h_ema{n}' for n in _MA_PERIODS]
         self._prepare()
 
     # ── Data prep ────────────────────────────────────────────────────────────
@@ -152,15 +160,16 @@ class ExpiryBreakoutEngine:
         self.daily_df['day'] = self.daily_df['datetime'].dt.date
         self.hourly_df['day'] = self.hourly_df['datetime'].dt.date
 
-        # Daily-timeframe SMAs, lagged by one day: today's daily candle is
+        # Daily-timeframe EMAs, lagged by one day: today's daily candle is
         # still forming intraday, so an entry taken today must reference
         # the most recently COMPLETED daily close (yesterday's) — using
         # today's own still-forming daily bar would be look-ahead bias.
-        d_ma_cols = [f'd_sma{n}' for n in _MA_PERIODS]
+        d_ma_cols = [f'd_ema{n}' for n in _MA_PERIODS]
         for n, col in zip(_MA_PERIODS, d_ma_cols):
-            self.daily_df[col] = self.daily_df['close'].rolling(n).mean().shift(1)
+            self.daily_df[col] = (self.daily_df['close']
+                                   .ewm(span=n, adjust=False, min_periods=n).mean().shift(1))
 
-        # Carry those lagged daily SMAs onto every hourly bar of the same
+        # Carry those lagged daily EMAs onto every hourly bar of the same
         # calendar day ('day' is a unique key in daily_df, so this is a
         # plain lookup — no row duplication).
         if not self.hourly_df.empty:
@@ -171,10 +180,11 @@ class ExpiryBreakoutEngine:
             for col in d_ma_cols:
                 self.hourly_df[col] = pd.Series(dtype=float)
 
-        # Hourly-timeframe SMAs, same-bar (no lag) — the candle being
+        # Hourly-timeframe EMAs, same-bar (no lag) — the candle being
         # evaluated for a breakout is itself the completed hourly close.
         for n in _MA_PERIODS:
-            self.hourly_df[f'h_sma{n}'] = self.hourly_df['close'].rolling(n).mean()
+            self.hourly_df[f'h_ema{n}'] = (self.hourly_df['close']
+                                            .ewm(span=n, adjust=False, min_periods=n).mean())
 
     # ── Monthly expiry-day detection ────────────────────────────────────────
 
@@ -261,64 +271,75 @@ class ExpiryBreakoutEngine:
             if window.empty:
                 continue
 
+            window = window.reset_index(drop=True)
+
             entry       = None
-            exit_row    = None
-            exit_reason = None
-            exit_price  = None
-            for _, c in window.iterrows():
+            pending_dir = None   # signal fired, awaiting fill at the next candle's open
+            for pos in range(len(window)):
+                c = window.iloc[pos]
                 if entry is None:
+                    if pending_dir is not None:
+                        # Fill on THIS candle's open — the bar right after the signal.
+                        entry_price = float(c['open'])
+                        if pending_dir == 'Long':
+                            entry = {'entry_time': c['datetime'], 'entry_price': entry_price,
+                                     'direction': 'Long',
+                                     'sl_level': entry_price * (1 - self.sl_pct / 100),
+                                     'tp_level': entry_price * (1 + self.target_pct / 100)}
+                        else:
+                            entry = {'entry_time': c['datetime'], 'entry_price': entry_price,
+                                     'direction': 'Short',
+                                     'sl_level': entry_price * (1 + self.sl_pct / 100),
+                                     'tp_level': entry_price * (1 - self.target_pct / 100)}
+                        pending_dir = None
+                        continue
                     if (self.enable_long
                             and _touches_and_clears_level(c, exp_high, above=True)
                             and _touches_any_ma(c, self._ma_cols)
                             and _clears_all_mas(c, self._ma_cols, above=True)):
-                        entry_price = float(c['close'])
-                        risk        = entry_price - exp_low
-                        entry = {'entry_time': c['datetime'], 'entry_price': entry_price,
-                                 'direction': 'Long', 'sl_level': exp_low,
-                                 'tp_level': entry_price + self.rr_ratio * risk}
+                        pending_dir = 'Long'
                     elif (self.enable_short
                             and _touches_and_clears_level(c, exp_low, above=False)
                             and _touches_any_ma(c, self._ma_cols)
                             and _clears_all_mas(c, self._ma_cols, above=False)):
-                        entry_price = float(c['close'])
-                        risk        = exp_high - entry_price
-                        entry = {'entry_time': c['datetime'], 'entry_price': entry_price,
-                                 'direction': 'Short', 'sl_level': exp_high,
-                                 'tp_level': entry_price - self.rr_ratio * risk}
+                        pending_dir = 'Short'
                     continue
                 # In position — SL checked before Target within the same bar
-                # (conservative), skipping the entry bar via the `continue` above.
+                # (conservative), skipping the fill bar via the `continue` above.
+                # On exit, reset to `None` so scanning for a fresh signal
+                # resumes on the very next bar — a cycle can hold any number
+                # of back-to-back trades, not just one.
+                sl_level = entry['sl_level']
                 tp_level = entry['tp_level']
+                exit_reason = exit_price = None
                 if entry['direction'] == 'Long':
-                    if c['low'] <= exp_low:
-                        exit_row, exit_reason, exit_price = c, 'LOW_BREACH', exp_low
-                        break
-                    if c['high'] >= tp_level:
-                        exit_row, exit_reason, exit_price = c, 'TARGET', tp_level
-                        break
+                    if c['low'] <= sl_level:
+                        exit_reason, exit_price = 'SL', sl_level
+                    elif c['high'] >= tp_level:
+                        exit_reason, exit_price = 'TARGET', tp_level
                 else:
-                    if c['high'] >= exp_high:
-                        exit_row, exit_reason, exit_price = c, 'HIGH_BREACH', exp_high
-                        break
-                    if c['low'] <= tp_level:
-                        exit_row, exit_reason, exit_price = c, 'TARGET', tp_level
-                        break
+                    if c['high'] >= sl_level:
+                        exit_reason, exit_price = 'SL', sl_level
+                    elif c['low'] <= tp_level:
+                        exit_reason, exit_price = 'TARGET', tp_level
+                if exit_reason is not None:
+                    trades.append(_make_trade(
+                        entry, expiry_day, next_expiry_day, exp_high, exp_low,
+                        c['datetime'], exit_price, exit_reason,
+                    ))
+                    entry = None
 
-            if entry is None:
-                continue   # no breakout this cycle
-
-            if exit_row is None:
-                # Never hit the stop level within the window — force-close
-                # at the last hourly candle (the trading day right before
-                # the next expiry, or the end of the fetched data).
+            if entry is not None:
+                # Still in position when the cycle's window runs out —
+                # force-close at the last hourly candle (the trading day
+                # right before the next expiry, or the end of the data).
                 exit_row    = window.iloc[-1]
                 exit_reason = 'EXPIRY' if next_expiry_day is not None else 'DATA_END'
                 exit_price  = float(exit_row['close'])
-
-            trades.append(_make_trade(
-                entry, expiry_day, next_expiry_day, exp_high, exp_low,
-                exit_row['datetime'], exit_price, exit_reason,
-            ))
+                trades.append(_make_trade(
+                    entry, expiry_day, next_expiry_day, exp_high, exp_low,
+                    exit_row['datetime'], exit_price, exit_reason,
+                ))
 
         return trades, _summarise(trades)
 
@@ -336,17 +357,17 @@ def _touches_and_clears_level(c, level: float, above: bool) -> bool:
 
 
 def _touches_any_ma(c, ma_cols) -> bool:
-    """True if the candle's High/Low range straddles (low <= MA <= high)
-    at least one of the given MA columns. A NaN MA (SMA200 warmup not yet
-    complete) never satisfies the comparison, so this naturally requires
-    enough history before any entry can trigger."""
+    """True if the candle's High/Low range straddles (low <= EMA <= high)
+    at least one of the given EMA columns. A NaN EMA (EMA200 warmup not
+    yet complete) never satisfies the comparison, so this naturally
+    requires enough history before any entry can trigger."""
     lo, hi = c['low'], c['high']
     return any(lo <= c[col] <= hi for col in ma_cols)
 
 
 def _clears_all_mas(c, ma_cols, above: bool) -> bool:
-    """True only if the candle's CLOSE clears every MA in ma_cols — above
-    all of them (Long) or below all of them (Short). A NaN MA (SMA200
+    """True only if the candle's CLOSE clears every EMA in ma_cols — above
+    all of them (Long) or below all of them (Short). A NaN EMA (EMA200
     warmup not yet complete) never satisfies the comparison, so this
     naturally blocks entries until enough history exists."""
     close = c['close']
@@ -385,7 +406,7 @@ def _summarise(trades):
             'win_rate': 0.0, 'total_pnl': 0.0,
             'avg_win': 0.0, 'avg_loss': 0.0,
             'profit_factor': 0.0, 'max_drawdown': 0.0,
-            'low_breach_exits': 0, 'high_breach_exits': 0, 'target_exits': 0, 'expiry_exits': 0, 'data_end_exits': 0,
+            'sl_exits': 0, 'target_exits': 0, 'expiry_exits': 0, 'data_end_exits': 0,
         }
 
     wins   = [t for t in trades if t['result'] == 'WIN']
@@ -418,8 +439,7 @@ def _summarise(trades):
         'avg_loss':      round(avg_loss, 2),
         'profit_factor': round(pf, 2),
         'max_drawdown':  round(max_dd, 2),
-        'low_breach_exits':  sum(1 for t in trades if t['exit_reason'] == 'LOW_BREACH'),
-        'high_breach_exits': sum(1 for t in trades if t['exit_reason'] == 'HIGH_BREACH'),
+        'sl_exits':          sum(1 for t in trades if t['exit_reason'] == 'SL'),
         'target_exits':      sum(1 for t in trades if t['exit_reason'] == 'TARGET'),
         'expiry_exits':      sum(1 for t in trades if t['exit_reason'] == 'EXPIRY'),
         'data_end_exits':    sum(1 for t in trades if t['exit_reason'] == 'DATA_END'),

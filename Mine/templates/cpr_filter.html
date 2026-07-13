@@ -11,7 +11,7 @@
     <!-- Left side: Segmented tab buttons -->
     <div class="scanner-tabs">
         <button class="scanner-tab-btn active" data-tab="cpr" onclick="switchScannerTab('cpr')">
-            <span class="tab-icon">🔍</span> CPR & Camarilla Reversal
+            <span class="tab-icon">🔍</span> IV & Expiry High/Low
         </button>
         <button class="scanner-tab-btn" data-tab="ema" onclick="switchScannerTab('ema')">
             <span class="tab-icon">📊</span> EMA & RSI Touch
@@ -25,11 +25,18 @@
     <div id="cpr-header-controls" class="header-controls-container"
         style="display: flex; gap: 8px; align-items: center;">
         <input type="date" id="cprDateFilter" class="date-picker">
-        <button id="cprRefreshBtn" class="refresh-btn" title="Refresh CPR & D-RSI Scanners">
+        <button id="cprRefreshBtn" class="refresh-btn" title="Refresh CPR & D-RSI Scanners" style="display: none;">
             <span class="refresh-icon">🔄</span> CPR Refresh
         </button>
         <button id="highIvRefreshBtn" class="refresh-btn" title="Refresh High IV Scanner">
             <span class="refresh-icon">🔥</span> High IV Scan
+        </button>
+        <select id="expiryHlTimeframe" class="date-picker tf-picker" title="Timeframe for Expiry High/Low breakout">
+            <option value="60minute" selected>1 Hour</option>
+            <option value="day">1 Day</option>
+        </select>
+        <button id="expiryHlRefreshBtn" class="refresh-btn" title="Refresh Expiry High/Low Breakout Scanner">
+            <span class="refresh-icon">📐</span> Expiry H/L Scan
         </button>
     </div>
 
@@ -102,6 +109,43 @@
         </div>
     </div>
     <div class="results-row">
+        <div id="expiryHlBuyResults" class="results results-hidden results-block">
+            <h3>🟢 Expiry High/Low Breakout — BUY <span id="expiryHlBuyCount">(0)</span></h3>
+            <div class="results-scroll">
+                <table id="expiryHlBuyTable">
+                    <thead>
+                        <tr>
+                            <th data-column-index="0">Symbol</th>
+                            <th data-column-index="1">Price</th>
+                            <th data-column-index="2">Expiry High</th>
+                            <th data-column-index="3">Expiry Low</th>
+                            <th data-column-index="4">Expiry Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="expiryHlBuyBody"></tbody>
+                </table>
+            </div>
+        </div>
+        <div id="expiryHlSellResults" class="results results-hidden results-block">
+            <h3>🔴 Expiry High/Low Breakout — SELL <span id="expiryHlSellCount">(0)</span></h3>
+            <div class="results-scroll">
+                <table id="expiryHlSellTable">
+                    <thead>
+                        <tr>
+                            <th data-column-index="0">Symbol</th>
+                            <th data-column-index="1">Price</th>
+                            <th data-column-index="2">Expiry High</th>
+                            <th data-column-index="3">Expiry Low</th>
+                            <th data-column-index="4">Expiry Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="expiryHlSellBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <!-- Camarilla Monthly S3/R3 Reversal Scanner — commented out
+    <div class="results-row">
         <div id="camarillaCprReversalBullishResults" class="results results-hidden results-block">
             <h3>🟢 Camarilla Monthly S3 Reversal (Bullish) <span id="camarillaCprReversalBullishCount">(0)</span></h3>
             <div class="results-scroll">
@@ -139,6 +183,8 @@
             </div>
         </div>
     </div>
+    -->
+    <!-- D-RSI Reversal Scanner — commented out
     <div class="results-row">
         <div id="drsiReversalBullishResults" class="results results-hidden results-block">
             <h3>🟢 D-RSI Reversal Bullish (Flip-UP) <span id="drsiReversalBullishCount">(0)</span></h3>
@@ -177,6 +223,7 @@
             </div>
         </div>
     </div>
+    -->
 </div>
 
 <!-- EMA & RSI Touch Section -->

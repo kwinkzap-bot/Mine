@@ -76,6 +76,14 @@ window.CONSTANTS = {
         DRSI_REVERSAL_BEARISH_BODY: 'drsiReversalBearishBody',
         DRSI_REVERSAL_BEARISH_COUNT: 'drsiReversalBearishCount',
         DRSI_REVERSAL_BEARISH_TABLE: 'drsiReversalBearishTable',
+        EXPIRY_HL_BUY_RESULTS: 'expiryHlBuyResults',
+        EXPIRY_HL_BUY_BODY: 'expiryHlBuyBody',
+        EXPIRY_HL_BUY_COUNT: 'expiryHlBuyCount',
+        EXPIRY_HL_BUY_TABLE: 'expiryHlBuyTable',
+        EXPIRY_HL_SELL_RESULTS: 'expiryHlSellResults',
+        EXPIRY_HL_SELL_BODY: 'expiryHlSellBody',
+        EXPIRY_HL_SELL_COUNT: 'expiryHlSellCount',
+        EXPIRY_HL_SELL_TABLE: 'expiryHlSellTable',
 
         // Strategy elements
         STRATEGY_FORM: 'strategyForm',

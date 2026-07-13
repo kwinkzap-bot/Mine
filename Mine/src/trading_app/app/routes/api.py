@@ -2101,6 +2101,79 @@ def get_cpr_high_iv_results() -> EndpointResponse:
         return jsonify({'success': False, 'error': f'High IV filter error: {str(e)}'}), 500
 
 
+@api_bp.route('/cpr-filter/expiry-hl-breakout', methods=['GET'])
+@limiter.exempt
+def get_expiry_hl_breakout_results() -> EndpointResponse:
+    """Scan F&O stocks for a monthly-expiry-cycle High/Low breakout on the
+    selected timeframe (60minute default, or day)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    current_kite = get_data_provider()
+    if not current_kite:
+        return jsonify({'success': False, 'error': 'Data Provider initialization failed.'}), 401
+
+    date_str = request.args.get('date')
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    timeframe = request.args.get('timeframe', '60minute')
+    if timeframe not in ('60minute', 'day'):
+        timeframe = '60minute'
+
+    from trading_app.app.utils.cache import cpr_filter_cache
+    cache_user = session.get('username', 'anonymous')
+    cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
+    cache_key = f"cpr_filter_expiry_hl:{cache_user}:{cache_date}:{timeframe}"
+
+    refresh = request.args.get('refresh', 'false').lower() == 'true'
+    if not refresh:
+        cached_response = cpr_filter_cache.get(cache_key)
+        if cached_response is not None:
+            return jsonify(cached_response)
+    else:
+        cpr_filter_cache.delete(cache_key)
+
+    try:
+        if not hasattr(current_kite, 'access_token') or not current_kite.access_token:
+            logger.warning("Expiry H/L breakout request: KiteConnect instance has no access token")
+            return jsonify({
+                'success': False,
+                'error': 'No valid access token on KiteConnect instance. Please login again.',
+                'auth_error': True
+            }), 401
+
+        from trading_app.filters.expiry_hl_scanner import filter_expiry_hl_breakout
+        cpr_service = _get_cpr_service(current_kite)
+        results = filter_expiry_hl_breakout(cpr_service, root_date=target_date, timeframe=timeframe)
+
+        payload = {
+            'success': True,
+            'buy': results.get('buy', []),
+            'sell': results.get('sell', []),
+            'timeframe': timeframe,
+            'date': target_date.strftime('%Y-%m-%d') if target_date else datetime.now().strftime('%Y-%m-%d')
+        }
+
+        cpr_filter_cache.set(cache_key, payload, timeout=120)  # cache for 2 minutes
+        return jsonify(payload)
+    except Exception as e:
+        logger.error(f"Error in Expiry H/L breakout scanner: {type(e).__name__}: {e}", exc_info=True)
+        error_str = str(e).lower()
+        if 'access_token' in error_str or 'unauthorized' in error_str or 'invalid' in error_str:
+            return jsonify({
+                'success': False,
+                'error': 'Authentication failed. Please login again.',
+                'auth_error': True
+            }), 401
+        return jsonify({'success': False, 'error': f'Expiry H/L breakout error: {str(e)}'}), 500
+
+
 # ====================== TREND DETECTION ======================
 
 _TREND_INDEX_SYMBOLS = {'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX', 'NIFTYNXT50'}
@@ -3422,18 +3495,21 @@ def run_expiry_breakout_backtest_api():
     snapped back to the latest trading day if that calendar day is a
     weekend/holiday. Whichever side breaks FIRST wins the one trade for
     that cycle (direction: 'both'|'long'|'short', default 'both'). The
-    entry candle must satisfy the SAME touch-then-close pattern at TWO
+    SIGNAL candle must satisfy the SAME touch-then-close pattern at TWO
     levels simultaneously:
       1. Expiry level — the candle's High/Low range must TOUCH the
          expiry-day High (Long) / Low (Short), i.e. a genuine touch, not
          a clean gap-through, AND its close must clear that level.
-      2. Moving averages (ma_timeframe: '1hour'|'1day'|'both', default
-         'both' — the union of both SMA sets) — the candle must TOUCH at
-         least one selected SMA 20/50/100/200 AND its close must CLEAR
-         every selected SMA in the trade's direction (all above for
-         Long, all below for Short).
-    Exit on whichever comes first: SL at the expiry-day High/Low, TARGET
-    at entry ± rr_ratio × risk (rr_ratio default 3.0, i.e. 1:3), or
+      2. EMA (ma_timeframe: '1hour'|'1day', default '1hour' — exactly one
+         timeframe's 4 EMAs, never combined) — the candle must TOUCH at
+         least one of that timeframe's EMA 20/50/100/200 AND its close
+         must CLEAR EVERY one of them in the trade's direction (all
+         above for Long, all below for Short).
+    The actual entry is FILLED AT THE OPEN of the next hourly candle after
+    the signal candle (not the signal candle's own close). Exit on
+    whichever comes first: SL at entry × (1 ∓ sl_pct/100), TARGET at
+    entry × (1 ± target_pct/100) — sl_pct (default 1.0) and target_pct
+    (default 3.0) are independent percentages of the entry price — or
     force-exit before the next month's expiry day arrives.
     """
     auth_error = check_auth()
@@ -3447,8 +3523,9 @@ def run_expiry_breakout_backtest_api():
         direction      = str(data.get('direction', 'both')).lower()
         enable_long    = direction != 'short'
         enable_short   = direction != 'long'
-        rr_ratio       = float(data.get('rr_ratio', 3.0) or 3.0)
-        ma_timeframe   = str(data.get('ma_timeframe', 'both')).lower()
+        sl_pct         = float(data.get('sl_pct', 1.0) or 1.0)
+        target_pct     = float(data.get('target_pct', 3.0) or 3.0)
+        ma_timeframe   = str(data.get('ma_timeframe', '1hour')).lower()
 
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
@@ -3502,7 +3579,8 @@ def run_expiry_breakout_backtest_api():
             hourly_df=pd.DataFrame(hourly_candles),
             enable_long=enable_long,
             enable_short=enable_short,
-            rr_ratio=rr_ratio,
+            sl_pct=sl_pct,
+            target_pct=target_pct,
             ma_timeframe=ma_timeframe,
         )
         trades, summary = engine.run()

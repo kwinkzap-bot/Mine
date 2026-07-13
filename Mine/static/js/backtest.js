@@ -502,12 +502,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             // Monthly Expiry Breakout — expiry day auto-detected; Direction,
-            // SL:Target, and MA Touch Timeframe are tunable
+            // Stop Loss %, Target %, and MA Touch Timeframe are tunable
             if (strat === 'expiry_breakout') {
                 endpoint = '/api/backtest/expiry-breakout';
                 payload.direction    = document.getElementById('expiryDirection')?.value || 'both';
-                payload.rr_ratio     = parseFloat(document.getElementById('expiryRrRatio')?.value || 3);
-                payload.ma_timeframe = document.getElementById('expiryMaTimeframe')?.value || 'both';
+                payload.sl_pct       = parseFloat(document.getElementById('expirySlPct')?.value || 1);
+                payload.target_pct   = parseFloat(document.getElementById('expiryTargetPct')?.value || 3);
+                payload.ma_timeframe = document.getElementById('expiryMaTimeframe')?.value || '1hour';
             }
 
             // Swing Momentum: different endpoint + payload

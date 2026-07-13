@@ -32,6 +32,8 @@ window.addEventListener('load', function () {
     cprElems.highIvResults = document.getElementById('highIvResults');
     cprElems.highIvCount = document.getElementById('highIvCount');
     cprElems.controls    = document.getElementById('controls');
+    cprElems.expiryHlTimeframe  = document.getElementById('expiryHlTimeframe');
+    cprElems.expiryHlRefreshBtn = document.getElementById('expiryHlRefreshBtn');
 
     const scheduler = window.CPRFilterScheduler;
     const schedulerActive = scheduler && typeof scheduler.isActive === 'function' && scheduler.isActive();
@@ -64,6 +66,19 @@ window.addEventListener('load', function () {
         });
     }
 
+    // Initialize Expiry High/Low Breakout timeframe + refresh
+    if (cprElems.expiryHlRefreshBtn) {
+        cprElems.expiryHlRefreshBtn.addEventListener('click', () => {
+            const timeframe = cprElems.expiryHlTimeframe ? cprElems.expiryHlTimeframe.value : '60minute';
+            loadExpiryHlBreakoutData(timeframe, true);
+        });
+    }
+    if (cprElems.expiryHlTimeframe) {
+        cprElems.expiryHlTimeframe.addEventListener('change', () => {
+            loadExpiryHlBreakoutData(cprElems.expiryHlTimeframe.value, true);
+        });
+    }
+
     // Avoid double-triggering the API when the scheduler is already running during market hours
     if (schedulerActive && schedulerMarketOpen) {
         if (cprElems.statusBar) cprElems.statusBar.textContent = '⏳ Scheduler active - waiting for next run...';
@@ -72,6 +87,7 @@ window.addEventListener('load', function () {
         loadCPRData(false);
         const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : null;
         loadHighIVData(selectedDate, false);
+        loadExpiryHlBreakoutData(cprElems.expiryHlTimeframe ? cprElems.expiryHlTimeframe.value : '60minute', false);
     }
 
     // Set interval for controlled refresh - only if scheduler is not already running
@@ -93,12 +109,15 @@ window.addEventListener('load', function () {
     // Event delegation for sort — one listener per table, survives innerHTML re-renders
     const sortableTableIds = [
         'highIvTable',
-        CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE,
-        CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE,
-        CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_TABLE,
-        CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_TABLE,
-        CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_TABLE,
-        CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_TABLE,
+        CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_TABLE,
+        CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_TABLE,
+        // Camarilla / D-RSI reversal tables — commented out
+        // CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE,
+        // CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE,
+        // CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_TABLE,
+        // CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_TABLE,
+        // CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_TABLE,
+        // CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_TABLE,
     ];
     sortableTableIds.forEach(tableId => {
         const table = document.getElementById(tableId);
@@ -187,14 +206,93 @@ async function loadHighIVData(selectedDate, refresh = false) {
 }
 
 /**
+ * Fetches the Expiry High/Low breakout scan (BUY/SELL) for the selected timeframe.
+ */
+async function loadExpiryHlBreakoutData(timeframe, refresh = false) {
+    timeframe = timeframe === 'day' ? 'day' : '60minute';
+
+    const buyBody  = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_BODY);
+    const buyDiv   = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_RESULTS);
+    const buyCount = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_COUNT);
+    const sellBody  = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_BODY);
+    const sellDiv   = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_RESULTS);
+    const sellCount = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_COUNT);
+
+    if (!buyBody || !sellBody) return;
+
+    const refreshBtn = cprElems.expiryHlRefreshBtn;
+    if (refreshBtn) {
+        refreshBtn.classList.add('loading');
+        refreshBtn.disabled = true;
+    }
+
+    const loadingRow = `
+        <tr>
+            <td colspan="5" style="text-align: center; padding: 24px; color: var(--scan-th-text); font-weight: 500; background: var(--scan-bg);">
+                <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid var(--scan-th-text); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
+                Scanning Expiry High/Low breakouts (${timeframe === 'day' ? '1 Day' : '1 Hour'})...
+            </td>
+        </tr>
+    `;
+    if (buyDiv) buyDiv.classList.remove('results-hidden');
+    if (sellDiv) sellDiv.classList.remove('results-hidden');
+    if (buyCount) buyCount.textContent = '(...)';
+    if (sellCount) sellCount.textContent = '(...)';
+    buyBody.innerHTML = loadingRow;
+    sellBody.innerHTML = loadingRow;
+
+    try {
+        const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : null;
+        let url = `/api/cpr-filter/expiry-hl-breakout?timeframe=${timeframe}`;
+        if (selectedDate) url += `&date=${selectedDate}`;
+        if (refresh) url += '&refresh=true';
+
+        const response = await fetchJson(url);
+        if (response && response.success) {
+            displayResults('expiryHlBuy', response.buy || []);
+            displayResults('expiryHlSell', response.sell || []);
+        } else {
+            const errorRow = `
+                <tr>
+                    <td colspan="5" style="text-align: center; padding: 20px; color: #dc2626; font-weight: 500;">
+                        ❌ Failed to load Expiry High/Low breakout data.
+                    </td>
+                </tr>
+            `;
+            buyBody.innerHTML = errorRow;
+            sellBody.innerHTML = errorRow;
+            if (buyCount) buyCount.textContent = '(0)';
+            if (sellCount) sellCount.textContent = '(0)';
+        }
+    } catch (error) {
+        console.error('Error fetching Expiry High/Low breakout data:', error);
+        const errorRow = `
+            <tr>
+                <td colspan="5" style="text-align: center; padding: 20px; color: #dc2626; font-weight: 500;">
+                    ❌ Error: ${error.message}
+                </td>
+            </tr>
+        `;
+        buyBody.innerHTML = errorRow;
+        sellBody.innerHTML = errorRow;
+    } finally {
+        if (refreshBtn) {
+            refreshBtn.classList.remove('loading');
+            refreshBtn.disabled = false;
+        }
+    }
+}
+
+/**
  * Sets all result tables to a beautiful loading/scanning state.
  */
 function showGridLoadingState() {
     const types = [
-        { id: 'camarillaCprReversalBullish', cols: 6, label: 'Camarilla Monthly S3 inside Monthly CPR Reversals (Bullish)' },
-        { id: 'camarillaCprReversalBearish', cols: 6, label: 'Camarilla Monthly R3 inside Monthly CPR Reversals (Bearish)' },
-        { id: 'drsiReversalBullish', cols: 6, label: 'Delta-RSI bullish crossovers' },
-        { id: 'drsiReversalBearish', cols: 6, label: 'Delta-RSI bearish crossovers' }
+        // Camarilla / D-RSI reversal scanners — commented out
+        // { id: 'camarillaCprReversalBullish', cols: 6, label: 'Camarilla Monthly S3 inside Monthly CPR Reversals (Bullish)' },
+        // { id: 'camarillaCprReversalBearish', cols: 6, label: 'Camarilla Monthly R3 inside Monthly CPR Reversals (Bearish)' },
+        // { id: 'drsiReversalBullish', cols: 6, label: 'Delta-RSI bullish crossovers' },
+        // { id: 'drsiReversalBearish', cols: 6, label: 'Delta-RSI bearish crossovers' }
     ];
 
     types.forEach(t => {
@@ -272,41 +370,41 @@ async function loadCPRData(refresh = false) {
         console.log('CPR Filter API Response:', response);
 
         if (response && response.success) {
-            // Process the API response
-            const drsiFilter = response.drsi_filter || {};
-            const drsiReversalBullishResults = drsiFilter.reversal_bullish || [];
-            const drsiReversalBearishResults = drsiFilter.reversal_bearish || [];
+            // Camarilla / D-RSI reversal processing & display — commented out
+            // const drsiFilter = response.drsi_filter || {};
+            // const drsiReversalBullishResults = drsiFilter.reversal_bullish || [];
+            // const drsiReversalBearishResults = drsiFilter.reversal_bearish || [];
 
-            const camarillaCprReversal = response.camarilla_cpr_reversal || {};
-            const camarillaCprReversalBullishResults = camarillaCprReversal.bullish || [];
-            const camarillaCprReversalBearishResults = camarillaCprReversal.bearish || [];
+            // const camarillaCprReversal = response.camarilla_cpr_reversal || {};
+            // const camarillaCprReversalBullishResults = camarillaCprReversal.bullish || [];
+            // const camarillaCprReversalBearishResults = camarillaCprReversal.bearish || [];
 
-            const drsiReversalBullishCount = drsiReversalBullishResults.length;
-            const drsiReversalBearishCount = drsiReversalBearishResults.length;
-            const camarillaCprReversalBullishCount = camarillaCprReversalBullishResults.length;
-            const camarillaCprReversalBearishCount = camarillaCprReversalBearishResults.length;
+            // const drsiReversalBullishCount = drsiReversalBullishResults.length;
+            // const drsiReversalBearishCount = drsiReversalBearishResults.length;
+            // const camarillaCprReversalBullishCount = camarillaCprReversalBullishResults.length;
+            // const camarillaCprReversalBearishCount = camarillaCprReversalBearishResults.length;
 
-            console.log(`Data loaded - Camarilla Bull: ${camarillaCprReversalBullishCount}, Camarilla Bear: ${camarillaCprReversalBearishCount}, D-RSI Rev Bull: ${drsiReversalBullishCount}, D-RSI Rev Bear: ${drsiReversalBearishCount}`);
+            // console.log(`Data loaded - Camarilla Bull: ${camarillaCprReversalBullishCount}, Camarilla Bear: ${camarillaCprReversalBearishCount}, D-RSI Rev Bull: ${drsiReversalBullishCount}, D-RSI Rev Bear: ${drsiReversalBearishCount}`);
 
-            displayResults('camarillaCprReversalBullish', camarillaCprReversalBullishResults);
-            displayResults('camarillaCprReversalBearish', camarillaCprReversalBearishResults);
-            displayResults('drsiReversalBullish', drsiReversalBullishResults);
-            displayResults('drsiReversalBearish', drsiReversalBearishResults);
+            // displayResults('camarillaCprReversalBullish', camarillaCprReversalBullishResults);
+            // displayResults('camarillaCprReversalBearish', camarillaCprReversalBearishResults);
+            // displayResults('drsiReversalBullish', drsiReversalBullishResults);
+            // displayResults('drsiReversalBearish', drsiReversalBearishResults);
 
-            updateStats(drsiReversalBullishCount, drsiReversalBearishCount);
+            // updateStats(drsiReversalBullishCount, drsiReversalBearishCount);
 
             // Hide the controls section if we have data to show results
             if (cprElems.controls) cprElems.controls.classList.add('results-hidden');
 
-            // Batch show/hide result sections
+            // Batch show/hide result sections — Camarilla / D-RSI entries commented out
             toggleResultSections({
-                [CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_RESULTS]:        drsiReversalBullishCount,
-                [CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_RESULTS]:        drsiReversalBearishCount,
-                [CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_RESULTS]: camarillaCprReversalBullishCount,
-                [CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_RESULTS]: camarillaCprReversalBearishCount,
+                // [CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_RESULTS]:        drsiReversalBullishCount,
+                // [CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_RESULTS]:        drsiReversalBearishCount,
+                // [CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_RESULTS]: camarillaCprReversalBullishCount,
+                // [CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_RESULTS]: camarillaCprReversalBearishCount,
             });
             if (statusBar) {
-                statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()} | S3 Rev↑: ${camarillaCprReversalBullishCount}, R3 Rev↓: ${camarillaCprReversalBearishCount} | D-RSI Flip↑: ${drsiReversalBullishCount}, D-RSI Flip↓: ${drsiReversalBearishCount}`;
+                statusBar.textContent = `✅ Last update: ${new Date().toLocaleTimeString()}`;
             }
         } else if (response && !response.needs_login) {
             // Only show error if it's not a session expiration handled by fetchJson
@@ -416,6 +514,19 @@ function _buildRowHTML(stock, config) {
         </tr>`;
     }
 
+    if (config.isExpiryHl) {
+        const expHigh = Number(stock.expiry_high || 0);
+        const expLow  = Number(stock.expiry_low || 0);
+        const color   = config.isBuy ? '#10b981' : '#ef4444';
+        return `<tr>
+            <td>${symbolCell}</td>
+            <td style="font-weight:bold;color:${color};">${stock.current_price.toFixed(2)}</td>
+            <td>${expHigh.toFixed(2)}</td>
+            <td>${expLow.toFixed(2)}</td>
+            <td>${stock.expiry_date || ''}</td>
+        </tr>`;
+    }
+
     return '';
 }
 
@@ -451,7 +562,9 @@ function displayResults(type, results) {
         drsiReversalBearish: { isDrsi: true },
         highIv: { isHighIv: true },
         camarillaCprReversalBullish: { isCamarilla: true, isBullish: true },
-        camarillaCprReversalBearish: { isCamarilla: true, isBullish: false }
+        camarillaCprReversalBearish: { isCamarilla: true, isBullish: false },
+        expiryHlBuy: { isExpiryHl: true, isBuy: true },
+        expiryHlSell: { isExpiryHl: true, isBuy: false }
     };
     const config = tableConfig[type] || {};
 
@@ -520,7 +633,8 @@ function sortTable(tableId, columnIndexStr) {
     const isSmallOrCamarillaTable = tableId === CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE || tableId === CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE ||
         tableId === CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_TABLE || tableId === CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_TABLE ||
         tableId === CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_TABLE || tableId === CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_TABLE;
-    const numericMaxCol = isSmallOrCamarillaTable ? 5 : 7; // indices 1..5 for small/Camarilla tables, 1..7 for large ones
+    const isExpiryHlTable = tableId === CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_TABLE || tableId === CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_TABLE;
+    const numericMaxCol = isExpiryHlTable ? 3 : (isSmallOrCamarillaTable ? 5 : 7); // indices 1..3 for Expiry H/L (col 4 is a date string), 1..5 for small/Camarilla, 1..7 for large ones
 
     // Sort rows
     rows.sort((a, b) => {
