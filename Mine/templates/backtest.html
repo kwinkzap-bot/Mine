@@ -27,7 +27,6 @@
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
             <button id="runOptimiseBtn" class="btn-optimise" style="display:none;">⚡ Find Best Params</button>
-            <button id="expiryLevelsBtn" class="btn-optimise" style="display:none;">📋 Expiry Levels</button>
             <button id="smGoLiveBtn" class="btn-sm-golive-main" style="display:none;">🚀 Go Live</button>
         </div>
     </div>
@@ -46,11 +45,11 @@
                         <ul id="symbolList"></ul>
                     </div>
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="startDateFg">
                     <label for="startDate">Start Date</label>
                     <input type="date" id="startDate">
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="endDateFg">
                     <label for="endDate">End Date</label>
                     <input type="date" id="endDate">
                 </div>
@@ -238,90 +237,36 @@
                 </div>
             </div>
 
-            <!-- Monthly Expiry Breakout params — Direction + SL:Target are tunable -->
+            <!-- Monthly Expiry Breakout — pure filter, no symbol/SL/Target/
+                 Direction/Lots. Scans every F&O stock's candles on the
+                 selected timeframe over the selected date range for a
+                 touch-then-close-beyond-expiry-High (BUY) / Low (SELL),
+                 the same rule as the live Expiry H/L scanner
+                 (/api/cpr-filter/expiry-hl-breakout). -->
             <div id="expiryBreakoutParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
-                    <label for="expiryDirection">Direction</label>
-                    <select id="expiryDirection">
-                        <option value="both" selected>Long &amp; Short</option>
-                        <option value="long">Long only</option>
-                        <option value="short">Short only</option>
+                    <label for="expiryTimeframe">Timeframe</label>
+                    <select id="expiryTimeframe">
+                        <option value="60minute" selected>1 Hour</option>
+                        <option value="day">1 Day</option>
                     </select>
                 </div>
-                <div class="form-group">
-                    <label for="expirySlPct">Stop Loss %</label>
-                    <select id="expirySlPct">
-                        <option value="0.25">0.25%</option>
-                        <option value="0.5">0.5%</option>
-                        <option value="0.75">0.75%</option>
-                        <option value="1" selected>1%</option>
-                        <option value="1.5">1.5%</option>
-                        <option value="2">2%</option>
-                        <option value="2.5">2.5%</option>
-                        <option value="3">3%</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="expiryTargetPct">Target %</label>
-                    <select id="expiryTargetPct">
-                        <option value="1">1%</option>
-                        <option value="1.5">1.5%</option>
-                        <option value="2">2%</option>
-                        <option value="2.5">2.5%</option>
-                        <option value="3" selected>3%</option>
-                        <option value="4">4%</option>
-                        <option value="5">5%</option>
-                        <option value="7.5">7.5%</option>
-                        <option value="10">10%</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="expiryMaTimeframe">EMA Touch Timeframe</label>
-                    <select id="expiryMaTimeframe">
-                        <option value="1hour" selected>1 Hour</option>
-                        <option value="1day">1 Day</option>
-                    </select>
-                </div>
-                <div class="form-group" style="grid-column: 1 / -1;">
+                <div class="form-group" style="grid-column: span 3;">
                     <label>Rule</label>
                     <div style="padding:8px 12px;border:1.5px solid #e0e0e0;border-radius:8px;
                                 background:#f5f7ff;color:#1a237e;font-size:12px;font-weight:500;
                                 line-height:1.5;">
-                        Whichever side satisfies the signal first wins the cycle. The SIGNAL
-                        candle must <b>touch, then close beyond</b> — the same pattern at two
-                        levels at once: (1) the monthly expiry day's <b>High</b> for Long /
-                        <b>Low</b> for Short (a genuine touch, not a clean gap-through), and
-                        (2) <b>every</b> selected <b>EMA 20/50/100/200</b> on the
-                        <b>EMA Touch Timeframe</b> — the candle must touch at least one of them
-                        and close beyond all of them (above for Long, below for Short) — a
-                        pullback that tests support/resistance then closes back through the
-                        whole stack. The actual entry is filled at the
-                        <b>open of the next candle</b> after the signal (not the signal
-                        candle's own close). SL and Target are each an independent
-                        <b>percentage of the entry price</b> — SL below/above entry by
-                        <b>Stop Loss %</b>, Target above/below entry by <b>Target %</b>
-                        (mirrored for Short). Either exit, or a force-close <b>before the next
-                        month's expiry day</b>, whichever comes first. Expiry day is
-                        <b>auto-detected</b> (last Thursday through
-                        Aug-2025, last Tuesday from Sep-2025 onward); a holiday snaps back to
-                        the previous trading day.
+                        Filters <b>every F&amp;O stock</b> — no symbol selection needed. Scans
+                        candles on the selected <b>Timeframe</b>, over <b>Start Date</b> →
+                        <b>End Date</b>, and lists every candle that <b>touched, then closed
+                        beyond</b> that stock's current monthly-expiry-cycle <b>High</b> (BUY) or
+                        <b>Low</b> (SELL) — a genuine touch (the candle's range straddles the
+                        level), not a clean gap-through. Same rule as the live
+                        <b>Expiry H/L Breakout</b> scanner, applied here across the whole date
+                        range instead of just the latest candle. Expiry day is
+                        <b>auto-detected</b> (last Thursday through Aug-2025, last Tuesday from
+                        Sep-2025 onward); a holiday snaps back to the previous trading day.
                     </div>
-                </div>
-            </div>
-
-            <!-- Monthly Expiry Breakout position sizing -->
-            <div id="expiryBreakoutLotRow" class="form-row" style="display:none">
-                <div class="form-group">
-                    <label for="expiryLots">Lots</label>
-                    <input type="number" id="expiryLots" value="1" min="1" max="50" step="1" oninput="updateExpiryInvestment()">
-                </div>
-                <div class="form-group">
-                    <label for="expiryLotValue">Lot Value (₹/pt)</label>
-                    <input type="number" id="expiryLotValue" value="65" min="1" step="1" oninput="updateExpiryInvestment()">
-                </div>
-                <div class="form-group">
-                    <label>Total Investment</label>
-                    <div id="expiryInvestmentDisplay" class="investment-display">₹50,000</div>
                 </div>
             </div>
 
@@ -624,36 +569,40 @@
 
             </div><!-- /resultsArea -->
 
+            <!-- Monthly Expiry Breakout — scan results (BUY/SELL signal lists
+                 across every F&O stock), shown instead of resultsArea. -->
+            <div id="expiryScanResultsArea" style="display:none;">
+                <div style="margin-bottom:16px;">
+                    <h4 style="margin:0 0 8px;">🟢 Expiry High/Low Breakout — BUY <span id="expiryScanBuyCount">(0)</span></h4>
+                    <div class="opt-table-wrap">
+                        <table class="opt-table" id="expiryScanBuyTable">
+                            <thead><tr>
+                                <th>Symbol</th><th>Time</th><th>Price</th>
+                                <th>Expiry High</th><th>Expiry Low</th>
+                            </tr></thead>
+                            <tbody id="expiryScanBuyBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div>
+                    <h4 style="margin:0 0 8px;">🔴 Expiry High/Low Breakout — SELL <span id="expiryScanSellCount">(0)</span></h4>
+                    <div class="opt-table-wrap">
+                        <table class="opt-table" id="expiryScanSellTable">
+                            <thead><tr>
+                                <th>Symbol</th><th>Time</th><th>Price</th>
+                                <th>Expiry High</th><th>Expiry Low</th>
+                            </tr></thead>
+                            <tbody id="expiryScanSellBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div><!-- /expiryScanResultsArea -->
+
         </div><!-- /bt-right -->
 
     </div><!-- /bt-layout -->
 
 </div><!-- /backtest-container -->
-
-<!-- Monthly Expiry Levels popup -->
-<div id="expiryLevelsModal" class="bt-modal-overlay" style="display:none">
-    <div class="bt-modal-box">
-        <div class="bt-modal-hdr">
-            <div class="bt-modal-hdr-text">
-                <span class="bt-modal-title">Monthly Expiry Levels</span>
-                <span class="bt-modal-subtitle" id="expiryLevelsMeta"></span>
-            </div>
-            <button class="bt-modal-close" id="expiryLevelsCloseBtn" aria-label="Close">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-        </div>
-        <div class="bt-modal-body">
-            <div class="opt-table-wrap">
-                <table class="opt-table">
-                    <thead><tr>
-                        <th>#</th><th>Expiry Date</th><th>High</th><th>Low</th><th>Range</th>
-                    </tr></thead>
-                    <tbody id="expiryLevelsTableBody"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</div>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/backtest.js') }}?v={{ sv('js/backtest.js') }}"></script>

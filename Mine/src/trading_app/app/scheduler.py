@@ -148,6 +148,27 @@ class MarketScheduler:
             misfire_grace_time=3600,
         )
 
+        # Expiry High/Low Breakout scan — every hour on the hour during market
+        # hours. The 60-minute candle grid starts at 9:15, so its first three
+        # candles close at 10:15/11:15/12:15; minute=16 gives the broker a
+        # short buffer to finalize the candle before we fetch it. Each run
+        # persists its own notification row (see notification_service.py) so
+        # every hour's scan results are kept distinct, not overwritten.
+        self.scheduler.add_job(
+            self._run_expiry_hl_notification_task,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='10-15',
+                minute=16,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='expiry_hl_breakout_notification',
+            name='Expiry High/Low Breakout Hourly Notification',
+            replace_existing=True,
+            misfire_grace_time=300,
+        )
+
         self.scheduler.add_job(
             self._start_rtp_monitoring,
             CronTrigger(
@@ -493,6 +514,55 @@ class MarketScheduler:
             )
         except Exception as e:
             logger.error(f"[EMA Narrow Prewarm] Unexpected error: {e}", exc_info=True)
+
+    def _run_expiry_hl_notification_task(self):
+        """Runs every hour during market hours: scans all F&O stocks for an
+        Expiry High/Low breakout on the 60-minute candle and stores the
+        result as a notification (see notification_service.py) so the
+        frontend bell shows a fresh entry every hour, even when no stock
+        breaks out."""
+        try:
+            if not self.is_trading_day():
+                return
+            logger.info("[Expiry H/L Notify] Running hourly Expiry H/L breakout scan...")
+
+            from trading_app.service.provider_logic import get_data_provider
+            provider = get_data_provider(user=self._rtp_username())
+            if not provider:
+                logger.warning("[Expiry H/L Notify] No data provider available — skipping")
+                return
+
+            from trading_app.filters.cpr_filter import CPRFilterService
+            from trading_app.filters.expiry_hl_scanner import filter_expiry_hl_breakout
+            from trading_app.service.notification_service import create_notification
+
+            cpr_service = CPRFilterService(kite_instance=provider)
+            results = filter_expiry_hl_breakout(cpr_service, timeframe='60minute')
+            buy_signals = results.get('buy', [])
+            sell_signals = results.get('sell', [])
+
+            now = datetime.now()
+            time_label = now.strftime('%H:%M')
+            total = len(buy_signals) + len(sell_signals)
+            summary = (
+                f"{len(buy_signals)} BUY, {len(sell_signals)} SELL"
+                if total else "No breakouts this hour"
+            )
+            create_notification(
+                category='expiry_hl_breakout',
+                title=f"Expiry H/L Breakout — {time_label}",
+                summary=summary,
+                data={
+                    'timeframe': '60minute',
+                    'date': now.strftime('%Y-%m-%d'),
+                    'time': time_label,
+                    'buy': buy_signals,
+                    'sell': sell_signals,
+                },
+            )
+            logger.info(f"[Expiry H/L Notify] Saved notification — {summary}")
+        except Exception as e:
+            logger.error(f"[Expiry H/L Notify] Unexpected error: {e}", exc_info=True)
 
     # ── RTP algo management ───────────────────────────────────────────────────
 

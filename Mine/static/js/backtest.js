@@ -211,7 +211,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     function applyLotValueForSymbol(symbol) {
         const lotValue = lotValueForSymbol(symbol);
-        ['rtpLotValue', 'vwapLotValue', 'scLotValue', 'expiryLotValue'].forEach(function(id) {
+        ['rtpLotValue', 'vwapLotValue', 'scLotValue'].forEach(function(id) {
             const el = document.getElementById(id);
             if (el) el.value = lotValue;
         });
@@ -257,7 +257,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const scLotRow      = document.getElementById('secondCandleLotRow');
         const scOptPanel    = document.getElementById('secondCandleOptimisePanel');
         const expParamsRow  = document.getElementById('expiryBreakoutParamsRow');
-        const expLotRow     = document.getElementById('expiryBreakoutLotRow');
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (vwapParamsRow) vwapParamsRow.style.display = 'none';
         if (vwapLotRow)    vwapLotRow.style.display    = 'none';
@@ -266,19 +265,20 @@ document.addEventListener('DOMContentLoaded', function() {
         if (scLotRow)      scLotRow.style.display      = 'none';
         if (scOptPanel)    scOptPanel.style.display    = 'none';
         if (expParamsRow)  expParamsRow.style.display  = 'none';
-        if (expLotRow)     expLotRow.style.display     = 'none';
-        // Restore symbol/interval visibility (they are hidden for swing_momentum)
-        const symFg = document.getElementById('mainSymbolFg');
-        const intFg = document.getElementById('mainIntervalFg');
+        // Restore symbol/date/interval visibility (hidden for some strategies)
+        const symFg      = document.getElementById('mainSymbolFg');
+        const intFg      = document.getElementById('mainIntervalFg');
+        const startDateFg = document.getElementById('startDateFg');
+        const endDateFg   = document.getElementById('endDateFg');
         if (symFg) symFg.style.display = '';
         if (intFg) intFg.style.display = '';
+        if (startDateFg) startDateFg.style.display = '';
+        if (endDateFg)   endDateFg.style.display   = '';
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        const expLevelsBtn   = document.getElementById('expiryLevelsBtn');
         if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
-        if (expLevelsBtn) expLevelsBtn.style.display = (val === 'expiry_breakout') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
         const rtpOptPanel = document.getElementById('rtpOptimisePanel');
@@ -289,6 +289,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (mainInputsRow) {
             mainInputsRow.classList.remove('form-row-5','form-row-6','form-row-7');
             mainInputsRow.classList.add('form-row-4');
+            mainInputsRow.style.display = '';
         }
 
         if (val === 'rtp') {
@@ -317,12 +318,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
         } else if (val === 'expiry_breakout') {
             if (expParamsRow) expParamsRow.style.display = 'grid';
-            if (expLotRow)    expLotRow.style.display    = 'grid';
-            // Fully rule-based (daily expiry High/Low + hourly scan, fixed
-            // internally) — the Timeframe dropdown doesn't apply here.
+            // Pure filter — no symbol picking: scans every F&O stock over
+            // the selected Start/End Date range and Timeframe.
+            if (symFg) symFg.style.display = 'none';
             if (intFg) intFg.style.display = 'none';
-            if (startDateInput) startDateInput.value = '2017-01-01';
-            updateExpiryInvestment();
+            const endDateInput = document.getElementById('endDate');
+            if (startDateInput) startDateInput.value = `${today.getFullYear()}-01-01`;
+            if (endDateInput)   endDateInput.value   = today.toISOString().slice(0, 10);
 
         } else if (val === 'swing_momentum') {
             if (smParamsRow) smParamsRow.style.display = 'grid';
@@ -363,88 +365,13 @@ document.addEventListener('DOMContentLoaded', function() {
         if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
     };
 
-    // Monthly Expiry Breakout investment display
-    window.updateExpiryInvestment = function() {
-        const lots  = Math.max(1, parseInt(document.getElementById('expiryLots')?.value || 1));
-        const total = lots * 50000;
-        const el = document.getElementById('expiryInvestmentDisplay');
-        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
-    };
-
-    // ── Monthly Expiry Levels popup ─────────────────────────────────────
-    (function() {
-        const btn      = document.getElementById('expiryLevelsBtn');
-        const modal     = document.getElementById('expiryLevelsModal');
-        const closeBtn  = document.getElementById('expiryLevelsCloseBtn');
-        const tbody     = document.getElementById('expiryLevelsTableBody');
-        const metaEl    = document.getElementById('expiryLevelsMeta');
-        if (!btn || !modal) return;
-
-        function closeModal() { modal.style.display = 'none'; }
-        closeBtn?.addEventListener('click', closeModal);
-        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
-        document.addEventListener('keydown', e => {
-            if (e.key === 'Escape' && modal.style.display !== 'none') closeModal();
-        });
-
-        btn.addEventListener('click', async function() {
-            const symbol = symbolSearch.value.toUpperCase();
-            if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
-
-            const payload = {
-                symbol,
-                start_date: document.getElementById('startDate').value,
-                end_date:   document.getElementById('endDate').value,
-            };
-
-            btn.disabled = true;
-            const origText = btn.textContent;
-            btn.textContent = '⏳ Loading…';
-
-            try {
-                const resp = await fetch('/api/backtest/expiry-breakout/levels', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                });
-                const data = await resp.json();
-                if (!data.success) {
-                    window.showNotification(data.error || 'Failed to fetch expiry levels', 'error');
-                    return;
-                }
-
-                const levels = data.levels || [];
-                if (metaEl) {
-                    metaEl.textContent = `${symbol} · ${levels.length} month${levels.length === 1 ? '' : 's'}`;
-                }
-                if (tbody) {
-                    // Latest expiry on top.
-                    const latestFirst = [...levels].reverse();
-                    tbody.innerHTML = latestFirst.length === 0
-                        ? '<tr><td colspan="5" style="text-align:center;padding:16px;">No expiry days found in this range</td></tr>'
-                        : latestFirst.map((lv, i) => `
-                            <tr>
-                                <td>${i + 1}</td>
-                                <td>${lv.expiry_date}</td>
-                                <td class="pnl-positive">${lv.high.toFixed(2)}</td>
-                                <td class="pnl-negative">${lv.low.toFixed(2)}</td>
-                                <td>${(lv.high - lv.low).toFixed(2)}</td>
-                            </tr>`).join('');
-                }
-                modal.style.display = 'flex';
-            } catch (err) {
-                console.error('Expiry levels error:', err);
-                window.showNotification('Failed to fetch expiry levels', 'error');
-            } finally {
-                btn.disabled = false;
-                btn.textContent = origText;
-            }
-        });
-    })();
-
     // 3. Run Backtest
     runBtn.addEventListener('click', async function() {
         const _strat = strategySelect ? strategySelect.value : 'rtp';
+        if (_strat === 'expiry_breakout') {
+            await runExpiryScan();
+            return;
+        }
         const symbol = symbolSearch.value.toUpperCase();
         if (_strat !== 'swing_momentum' && !symbol) {
             window.showNotification('Please select a symbol', 'warning');
@@ -499,16 +426,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 const dir = document.getElementById('scDirection')?.value || 'both';
                 payload.enable_long  = dir !== 'short';
                 payload.enable_short = dir !== 'long';
-            }
-
-            // Monthly Expiry Breakout — expiry day auto-detected; Direction,
-            // Stop Loss %, Target %, and MA Touch Timeframe are tunable
-            if (strat === 'expiry_breakout') {
-                endpoint = '/api/backtest/expiry-breakout';
-                payload.direction    = document.getElementById('expiryDirection')?.value || 'both';
-                payload.sl_pct       = parseFloat(document.getElementById('expirySlPct')?.value || 1);
-                payload.target_pct   = parseFloat(document.getElementById('expiryTargetPct')?.value || 3);
-                payload.ma_timeframe = document.getElementById('expiryMaTimeframe')?.value || '1hour';
             }
 
             // Swing Momentum: different endpoint + payload
@@ -571,6 +488,116 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // ── Monthly Expiry Breakout — FILTER mode ───────────────────────────
+    // No symbol/dates/SL/Target: scans every F&O stock's 1-hour candles
+    // from Jan 1 (this year) to today for a touch-then-close-beyond the
+    // stock's current monthly-expiry High/Low — same rule as the live
+    // Expiry H/L scanner (/api/cpr-filter/expiry-hl-breakout), applied
+    // across the whole range instead of just the latest candle.
+    async function runExpiryScan() {
+        const expiryResultsArea = document.getElementById('expiryScanResultsArea');
+        const btPlaceholder     = document.getElementById('btRightPlaceholder');
+
+        loading.style.display = 'flex';
+        resultsArea.style.display = 'none';
+        if (expiryResultsArea) expiryResultsArea.style.display = 'none';
+        if (btPlaceholder)     btPlaceholder.style.display     = 'none';
+
+        const payload = {
+            start_date: document.getElementById('startDate')?.value,
+            end_date:   document.getElementById('endDate')?.value,
+            timeframe:  document.getElementById('expiryTimeframe')?.value || '60minute',
+        };
+
+        try {
+            const response = await fetch('/api/backtest/expiry-breakout/scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                renderExpiryScanResults(data);
+            } else {
+                window.showNotification(data.error || 'Scan failed', 'error');
+            }
+        } catch (error) {
+            console.error('Expiry breakout scan error:', error);
+            window.showNotification('An error occurred during the scan', 'error');
+        } finally {
+            loading.style.display = 'none';
+            if (!expiryResultsArea || expiryResultsArea.style.display !== 'block') {
+                if (btPlaceholder) btPlaceholder.style.display = '';
+            }
+        }
+    }
+
+    function renderExpiryScanResults(data) {
+        const buy  = data.buy  || [];
+        const sell = data.sell || [];
+
+        // Grouped by Expiry Date (latest cycle first), each group's own
+        // signals kept in the order the backend already sorted them
+        // (latest signal first). Group headers are click-to-collapse.
+        function renderRows(rows) {
+            if (rows.length === 0) {
+                return '<tr><td colspan="5" style="text-align:center;padding:16px;">No signals in this range</td></tr>';
+            }
+            const groups = new Map();
+            for (const r of rows) {
+                if (!groups.has(r.expiry_date)) groups.set(r.expiry_date, []);
+                groups.get(r.expiry_date).push(r);
+            }
+            const sortedGroups = [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+
+            return sortedGroups.map(([expiryDate, groupRows], gi) => {
+                const groupId = `eg-${gi}`;
+                const header = `
+                    <tr class="expiry-group-hdr" data-group="${groupId}" onclick="window.toggleExpiryGroup(this)"
+                        style="cursor:pointer;background:rgba(26,35,126,0.06);font-weight:600;">
+                        <td colspan="5">
+                            <span class="expiry-group-chev">▾</span>
+                            Expiry ${expiryDate}
+                            <span style="font-weight:400;opacity:.7;">(${groupRows.length})</span>
+                        </td>
+                    </tr>`;
+                const body = groupRows.map(r => `
+                    <tr data-group-body="${groupId}">
+                        <td><a href="https://in.tradingview.com/chart/?symbol=NSE:${r.symbol}" target="_blank" rel="noopener noreferrer" class="expiry-symbol-link">${r.symbol}</a></td>
+                        <td>${(r.time || '').replace('T', ' ').slice(0, 16)}</td>
+                        <td>${Number(r.price).toFixed(2)}</td>
+                        <td class="pnl-positive">${Number(r.expiry_high).toFixed(2)}</td>
+                        <td class="pnl-negative">${Number(r.expiry_low).toFixed(2)}</td>
+                    </tr>`).join('');
+                return header + body;
+            }).join('');
+        }
+
+        const buyBody  = document.getElementById('expiryScanBuyBody');
+        const sellBody = document.getElementById('expiryScanSellBody');
+        const buyCount  = document.getElementById('expiryScanBuyCount');
+        const sellCount = document.getElementById('expiryScanSellCount');
+        if (buyBody)  buyBody.innerHTML  = renderRows(buy);
+        if (sellBody) sellBody.innerHTML = renderRows(sell);
+        if (buyCount)  buyCount.textContent  = `(${buy.length})`;
+        if (sellCount) sellCount.textContent = `(${sell.length})`;
+
+        const expiryResultsArea = document.getElementById('expiryScanResultsArea');
+        if (expiryResultsArea) expiryResultsArea.style.display = 'block';
+    }
+
+    // Collapse/expand one Expiry Date group in the scan results tables.
+    window.toggleExpiryGroup = function(headerRow) {
+        const groupId = headerRow.dataset.group;
+        const rows = headerRow.parentElement.querySelectorAll(`tr[data-group-body="${groupId}"]`);
+        if (!rows.length) return;
+        const willHide = rows[0].style.display !== 'none';
+        rows.forEach(r => { r.style.display = willHide ? 'none' : ''; });
+        const chev = headerRow.querySelector('.expiry-group-chev');
+        if (chev) chev.textContent = willHide ? '▸' : '▾';
+    };
+
     // Brokerage per round-trip trade (entry + exit) for NIFTY, by lot count
     function calcBrokeragePerTrade(lots) {
         const lookup = { 1: 103, 2: 158, 3: 213, 4: 268, 5: 330 };
@@ -588,11 +615,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const isSM   = strategySelect && strategySelect.value === 'swing_momentum';
         const isVwap = strategySelect && strategySelect.value === 'vwap';
         const isSc   = strategySelect && strategySelect.value === 'second_candle';
-        const isExp  = strategySelect && strategySelect.value === 'expiry_breakout';
-        // 2nd-candle / expiry-breakout reuse the VWAP-style ₹ cards, each
-        // reading its own lot inputs.
-        const moneyLotsId    = isSc ? 'scLots'     : isExp ? 'expiryLots'      : 'vwapLots';
-        const moneyLotValId  = isSc ? 'scLotValue' : isExp ? 'expiryLotValue'  : 'vwapLotValue';
+        // 2nd-candle reuses the VWAP-style ₹ cards, each reading its own lot inputs.
+        const moneyLotsId    = isSc ? 'scLots'     : 'vwapLots';
+        const moneyLotValId  = isSc ? 'scLotValue' : 'vwapLotValue';
 
         if (isSM) {
             lastData.is_swing_momentum = true;
@@ -686,7 +711,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     subtitle.textContent = info;
                 }
             }
-        } else if ((isVwap || isSc || isExp) && rtpRow) {
+        } else if ((isVwap || isSc) && rtpRow) {
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -724,13 +749,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Equity curve + period breakdown
-        const lots2     = (isVwap || isSc || isExp)
+        const lots2     = (isVwap || isSc)
             ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 1))
             : Math.max(1, parseInt(document.getElementById('rtpLots')?.value       || 1));
-        const lotValue2 = (isVwap || isSc || isExp)
+        const lotValue2 = (isVwap || isSc)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
-        const isMoney     = isRtp || isVwap || isSc || isExp;
+        const isMoney     = isRtp || isVwap || isSc;
         const investment2 = lots2 * 50000;
         renderEquityCurve(data.trades, isMoney, lots2, lotValue2, investment2);
 

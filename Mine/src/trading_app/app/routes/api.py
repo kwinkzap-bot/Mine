@@ -2174,6 +2174,63 @@ def get_expiry_hl_breakout_results() -> EndpointResponse:
         return jsonify({'success': False, 'error': f'Expiry H/L breakout error: {str(e)}'}), 500
 
 
+# ====================== NOTIFICATIONS ======================
+
+@api_bp.route('/notifications', methods=['GET'])
+@limiter.exempt
+def list_notifications_route() -> EndpointResponse:
+    """Latest notifications for the bell dropdown (no full payload)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        from trading_app.service.notification_service import list_notifications, unread_count
+        limit = request.args.get('limit', 50, type=int)
+        return jsonify({
+            'success': True,
+            'notifications': list_notifications(limit=limit),
+            'unread_count': unread_count(),
+        })
+    except Exception as e:
+        logger.error(f"Error listing notifications: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/notifications/<int:notification_id>', methods=['GET'])
+@limiter.exempt
+def get_notification_route(notification_id: int) -> EndpointResponse:
+    """Full notification payload for the detail popup."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        from trading_app.service.notification_service import get_notification
+        notification = get_notification(notification_id)
+        if notification is None:
+            return jsonify({'success': False, 'error': 'Notification not found'}), 404
+        return jsonify({'success': True, 'notification': notification})
+    except Exception as e:
+        logger.error(f"Error fetching notification {notification_id}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/notifications/<int:notification_id>/read', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+def mark_notification_read_route(notification_id: int) -> EndpointResponse:
+    """Mark a notification as read (called when its detail popup is opened)."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        from trading_app.service.notification_service import mark_read
+        mark_read(notification_id)
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Error marking notification {notification_id} read: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ====================== EMA/RSI 208 FILTER ======================
 
 @api_bp.route('/ema-rsi-filter', methods=['GET'])
@@ -3571,6 +3628,70 @@ def run_expiry_breakout_levels_api():
 
     except Exception as e:
         logger.error(f"Error in Expiry Breakout levels API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/expiry-breakout/scan', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_expiry_breakout_scan_api():
+    """Monthly Expiry Breakout — FILTER mode. Not a single-symbol backtest:
+    scans every F&O stock (same universe as the live Expiry H/L scanner,
+    /api/cpr-filter/expiry-hl-breakout) for every hourly candle in
+    [start_date, end_date] that touched-then-closed beyond that stock's
+    current monthly-expiry-cycle High (BUY) or Low (SELL). No SL/Target/
+    Direction/Lots — this is the same touch-then-close condition the live
+    scanner checks on just the latest candle, applied here across the
+    whole range. Defaults to Jan 1 of the current year through today.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json(silent=True) or {}
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        timeframe      = str(data.get('timeframe', '60minute')).lower()
+
+        now = datetime.now()
+        start_date = (datetime.strptime(start_date_str, '%Y-%m-%d') if start_date_str
+                      else datetime(now.year, 1, 1))
+        end_date   = (datetime.strptime(end_date_str, '%Y-%m-%d') if end_date_str
+                      else now)
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+        if not hasattr(current_kite, 'access_token') or not current_kite.access_token:
+            return jsonify({
+                'success': False,
+                'error': 'No valid access token on KiteConnect instance. Please login again.',
+                'auth_error': True,
+            }), 401
+
+        from trading_app.filters.expiry_hl_scanner import filter_expiry_hl_breakout_range
+        cpr_service = _get_cpr_service(current_kite)
+        results = filter_expiry_hl_breakout_range(
+            cpr_service, start_date=start_date, end_date=end_date, timeframe=timeframe)
+
+        return jsonify({
+            'success':    True,
+            'buy':        results.get('buy', []),
+            'sell':       results.get('sell', []),
+            'timeframe':  timeframe,
+            'start_date': start_date.strftime('%Y-%m-%d'),
+            'end_date':   end_date.strftime('%Y-%m-%d'),
+        })
+
+    except Exception as e:
+        logger.error(f"Error in Expiry Breakout scan API: {e}", exc_info=True)
+        error_str = str(e).lower()
+        if 'access_token' in error_str or 'unauthorized' in error_str or 'invalid' in error_str:
+            return jsonify({
+                'success': False,
+                'error': 'Authentication failed. Please login again.',
+                'auth_error': True,
+            }), 401
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

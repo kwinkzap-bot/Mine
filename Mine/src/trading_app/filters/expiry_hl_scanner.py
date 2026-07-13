@@ -69,6 +69,79 @@ def get_expiry_hl_signal(cpr_service: "CPRFilterService", symbol: str, root_date
     }
 
 
+def get_expiry_hl_signals_in_range(cpr_service: "CPRFilterService", symbol: str,
+                                    start_date: datetime, end_date: datetime,
+                                    timeframe: str = '60minute') -> List[Dict]:
+    """Returns every BUY/SELL expiry High/Low touch-then-close signal for a
+    single stock across [start_date, end_date] — the Monthly Expiry
+    Breakout filter's per-symbol scan. Reuses ExpiryBreakoutEngine's cycle
+    detection and touch-then-close helper; unlike the single-symbol
+    backtest this ignores EMAs/SL/Target and just lists every raw signal
+    hit on the expiry level itself."""
+    lookback_days = (end_date - start_date).days + 60   # extra room to anchor the prior cycle's expiry
+    daily_data = cpr_service.get_hist_data(symbol, days=lookback_days, interval='day', end_date=end_date)
+    if daily_data is None or len(daily_data) < 20:
+        return []
+
+    hourly_days = (end_date - start_date).days + 3
+    interval = 'day' if timeframe == 'day' else '60minute'
+    hourly_data = (daily_data if timeframe == 'day'
+                   else cpr_service.get_hist_data(symbol, days=hourly_days, interval=interval, end_date=end_date))
+    if hourly_data is None or hourly_data.empty:
+        return []
+
+    from trading_app.Backtest.expiry_breakout_engine import ExpiryBreakoutEngine
+    engine = ExpiryBreakoutEngine(daily_df=daily_data, hourly_df=hourly_data)
+    start_iso = start_date.date().isoformat()
+    signals = []
+    for sig in engine.scan_hl_signals():
+        if sig['time'][:10] < start_iso:
+            continue
+        sig['symbol'] = symbol
+        signals.append(sig)
+    return signals
+
+
+def filter_expiry_hl_breakout_range(cpr_service: "CPRFilterService", start_date: datetime, end_date: datetime,
+                                     timeframe: str = '60minute') -> Dict:
+    """Scans all F&O stocks for every expiry High/Low breakout signal
+    across [start_date, end_date] on the selected timeframe. Returns
+    {'buy': [...], 'sell': [...]}, each entry one signal occurrence
+    (a stock can appear many times)."""
+    stocks = cpr_service.get_fo_stocks()
+    timeframe = timeframe if timeframe in ('60minute', 'day') else '60minute'
+
+    buy_signals: List[Dict] = []
+    sell_signals: List[Dict] = []
+    start_time = time.time()
+
+    workers_count = cpr_service.MAX_WORKERS
+    if cpr_service.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+        workers_count = 15
+
+    with ThreadPoolExecutor(max_workers=workers_count) as executor:
+        futures = {
+            executor.submit(get_expiry_hl_signals_in_range, cpr_service, symbol, start_date, end_date, timeframe): symbol
+            for symbol in stocks
+        }
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                for sig in future.result(timeout=60):
+                    (buy_signals if sig['direction'] == 'BUY' else sell_signals).append(sig)
+            except Exception as e:
+                logger.error(f"Expiry H/L breakout range scan failed for {symbol}: {e}")
+
+    logger.info(
+        f"Expiry H/L breakout range scan ({timeframe}, {start_date.date()}..{end_date.date()}) complete: "
+        f"{len(buy_signals)} BUY, {len(sell_signals)} SELL in {time.time() - start_time:.1f}s"
+    )
+    return {
+        'buy':  sorted(buy_signals, key=lambda x: x['time'], reverse=True),
+        'sell': sorted(sell_signals, key=lambda x: x['time'], reverse=True),
+    }
+
+
 def filter_expiry_hl_breakout(cpr_service: "CPRFilterService", root_date: Optional[datetime] = None,
                                timeframe: str = '60minute') -> Dict:
     """Scans all F&O stocks for a monthly-expiry-cycle High/Low breakout on

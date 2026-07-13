@@ -314,6 +314,8 @@
 .opt-table tbody tr:hover td { background: var(--oip-header-bg); }
 .opt-table .opt-best td { background: rgba(34,197,94,.07); }
 .opt-table .opt-best td:first-child { border-left: 3px solid #22c55e; }
+.expiry-symbol-link { color: var(--oip-accent, #2962ff); text-decoration: none; font-weight: 700; }
+.expiry-symbol-link:hover { text-decoration: underline; }
 /* Freeze the trailing "Use" column so it stays visible while the wide grid
    scrolls horizontally, instead of being scrolled off to the right. */
 .opt-table th:last-child,

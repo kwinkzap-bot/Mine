@@ -20,6 +20,7 @@
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
     {% endif %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/notifications.css') }}?v={{ sv('css/notifications.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/notification_center.css') }}?v={{ sv('css/notification_center.css') }}">
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
         rel="stylesheet">
@@ -114,6 +115,18 @@
                 <button id="pwa-install-btn" title="Install as App" style="display:none">⬇️</button>
                 {% endif %}
                 <button id="global-theme-btn" title="Toggle Theme">☀️</button>
+                <div id="notifBellWrapper" style="position: relative;">
+                    <button id="notifBellBtn" title="Notifications">
+                        🔔
+                        <span id="notifBadge" class="notif-badge" style="display:none;">0</span>
+                    </button>
+                    <div class="notif-dropdown" id="notifDropdown">
+                        <div class="notif-dropdown-header">Notifications</div>
+                        <div class="notif-dropdown-list" id="notifDropdownList">
+                            <div class="notif-empty">Loading...</div>
+                        </div>
+                    </div>
+                </div>
                 <button class="nav-link-login" id="loginToggle">🔑</button>
                 <!-- {% if session.username %}
                 <a href="/auth/user-logout" class="nav-link-logout" id="logoutButton" title="Logout">⏻</a>
@@ -141,10 +154,20 @@
             {% block content %}{% endblock %}
         </main>
     </div>
+    <div class="notif-modal-overlay" id="notifModalOverlay">
+        <div class="notif-modal">
+            <div class="notif-modal-header">
+                <h3 id="notifModalTitle">Notification</h3>
+                <button class="notif-modal-close" id="notifModalClose">&times;</button>
+            </div>
+            <div class="notif-modal-body" id="notifModalBody"></div>
+        </div>
+    </div>
     <!-- Constants must be loaded first -->
     <script src="{{ url_for('static', filename='js/constants.js') }}"></script>
     <script src="{{ url_for('static', filename='js/common.js') }}"></script>
     <script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/notification_center.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script src="{{ url_for('static', filename='js/cpr_filter_scheduler.js') }}"></script>
     {% if not request.args.get('embed') %}

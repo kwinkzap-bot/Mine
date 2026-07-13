@@ -225,6 +225,51 @@ class ExpiryBreakoutEngine:
 
         return sorted(expiries)
 
+    def scan_hl_signals(self):
+        """All historical touch-then-close-beyond-expiry-High/Low events
+        across every monthly cycle in the data — the same BUY/SELL
+        condition the live Expiry H/L scanner
+        (filters/expiry_hl_scanner.py) checks on just the latest candle,
+        applied here to EVERY hourly candle in the range. No EMA filter,
+        no SL/Target, no trade simulation, no one-per-cycle limit — just
+        every signal hit, used by the Monthly Expiry Breakout filter."""
+        expiries = self._monthly_expiry_days()
+        if not expiries or self.hourly_df.empty:
+            return []
+        daily_by_day = self.daily_df.set_index('day')
+        hdf = self.hourly_df
+        signals = []
+
+        for i, expiry_day in enumerate(expiries):
+            row = daily_by_day.loc[expiry_day]
+            if isinstance(row, pd.DataFrame):   # duplicate-day guard
+                row = row.iloc[-1]
+            exp_high = float(row['high'])
+            exp_low  = float(row['low'])
+
+            next_expiry_day = expiries[i + 1] if i + 1 < len(expiries) else None
+            window = hdf[hdf['day'] > expiry_day]
+            if next_expiry_day is not None:
+                window = window[window['day'] < next_expiry_day]
+
+            for _, c in window.iterrows():
+                if _touches_and_clears_level(c, exp_high, above=True):
+                    direction = 'BUY'
+                elif _touches_and_clears_level(c, exp_low, above=False):
+                    direction = 'SELL'
+                else:
+                    continue
+                signals.append({
+                    'time':        c['datetime'].isoformat(),
+                    'direction':   direction,
+                    'price':       round(float(c['close']), 2),
+                    'expiry_high': round(exp_high, 2),
+                    'expiry_low':  round(exp_low, 2),
+                    'expiry_date': expiry_day.isoformat(),
+                })
+
+        return signals
+
     def expiry_levels(self):
         """List of {expiry_date, high, low} for every detected monthly
         expiry day — used by the "Expiry Levels" preview (no hourly data
