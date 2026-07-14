@@ -157,7 +157,7 @@ const oipElems = {
     hdrCeChg: null, hdrPeOI: null,
     hdrPeChg: null, hdrTrend: null, hdrAtm: null, brokerSelect: null,
     showPremium: null, showSignals: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
-    strikeMode: null, ceStrikeDropdown: null, peStrikeDropdown: null,
+    strikeMode: null, ceStrikeDropdown: null, peStrikeDropdown: null, premExtra: null,
     showEma9: null, showEma20: null, showEma50: null, showEma100: null, showEma200: null,
     exitAll: null,
     slPrice: null, slCEBtn: null, slPEBtn: null
@@ -208,6 +208,7 @@ function oipInitElems() {
     oipElems.customStrikeCheck = document.getElementById('oipCustomStrikeCheck');
     oipElems.customStrikeDropdown = document.getElementById('oipCustomStrikeDropdown');
     oipElems.strikeMode = document.getElementById('oipStrikeMode');
+    oipElems.premExtra = document.getElementById('oipPremExtraDropdown');
     oipElems.ceStrikeDropdown = document.getElementById('oipCEStrikeDropdown');
     oipElems.peStrikeDropdown = document.getElementById('oipPEStrikeDropdown');
     oipElems.targetDistance = document.getElementById('oipTargetDistance');
@@ -455,6 +456,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // In Prem. Str. mode the dropdowns are auto-populated; disable manual edits
         if (oipElems.ceStrikeDropdown) oipElems.ceStrikeDropdown.disabled = isAtm;
         if (oipElems.peStrikeDropdown) oipElems.peStrikeDropdown.disabled = isAtm;
+        // Extra strike-diff widen dropdown: only relevant in Prem. Str. mode
+        if (oipElems.premExtra) oipElems.premExtra.style.display = isAtm ? '' : 'none';
 
         if (!isAtm) {
             oipClearPremStrikeLines();
@@ -476,6 +479,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     oipElems.customStrikeDropdown?.addEventListener('change', () => {
         if (oipElems.strikeMode?.value === 'custom') oipLoadCandles(true, true);
+    });
+
+    oipElems.premExtra?.addEventListener('change', () => {
+        if (oipElems.strikeMode?.value === 'atm') oipFetchAndApplyPremiumStrikes();
     });
 
     oipElems.ceStrikeDropdown?.addEventListener('change', () => {
@@ -2140,8 +2147,9 @@ async function oipSelectSymbol(s) {
  */
 async function oipFetchAndApplyPremiumStrikes(resetZoom = true) {
     try {
-        const step = oipStrikeStep || 50;
-        const res  = await fetch(`/api/oi-profile/premium-strikes?symbol=${oipSymbol}&step=${step}`);
+        const step  = oipStrikeStep || 50;
+        const extra = parseInt(oipElems.premExtra?.value, 10) || 0;
+        const res   = await fetch(`/api/oi-profile/premium-strikes?symbol=${oipSymbol}&step=${step}&extra=${extra}`);
         const data = await res.json();
         if (!data.success) {
             console.warn('[OIP] Premium strikes:', data.error);

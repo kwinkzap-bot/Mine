@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}OI Profile – NIFTY{% endblock %}
+{% block title %}OI Profile{% endblock %}
 
 {% block head %}
 {{ super() }}
@@ -355,6 +355,15 @@
                             <option value="atm" selected>Prem. Str.</option>
                             <option value="custom">Custom</option>
                             <option value="ce_pe">CE &amp; PE</option>
+                        </select>
+                        <!-- Extra strike-diff widen: visible for mode=atm only -->
+                        <select id="oipPremExtraDropdown" class="oip-select oip-select--xs" title="Extra strike diff (x100)">
+                            <option value="0" selected>0</option>
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
                         </select>
                         <!-- Shared strike: visible for mode=custom -->
                         <select id="oipCustomStrikeDropdown" class="oip-select oip-select--xs"></select>

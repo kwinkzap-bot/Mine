@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Trend Detection - Stock Scanner{% endblock %}
+{% block title %}Trend{% endblock %}
 
 {% block head %}
 {{ super() }}
@@ -178,19 +178,8 @@
         </div>
     </div>
 
-    <!-- Market Direction (mirrors the Contracts route's analysis block) -->
-    <div class="td-card" style="margin-bottom:10px;">
-        <div class="td-card-hdr">
-            <h2>Market Direction</h2>
-            <div class="td-card-hdr-meta" id="tdMdMeta"></div>
-        </div>
-        <div class="ac-page">
-            <div class="ac-analysis hidden" id="tdMarketDirection"></div>
-        </div>
-    </div>
-
     <!-- Next Session Outlook (same 5-year NIFTY model as the Historic OI route) -->
-    <div class="td-card">
+    <div class="td-card" style="margin-bottom:10px;">
         <div class="td-card-hdr">
             <h2>Next Session Outlook</h2>
             <div class="td-card-hdr-meta">NIFTY · 5-yr model</div>
@@ -199,6 +188,17 @@
             <div id="tdHoiPredict" class="ac-analysis" style="border:1px solid var(--pf-border);border-radius:8px;background:var(--pf-surface)">
                 <span style="font-size:11px;color:var(--pf-text-3)">Running 5-year analysis…</span>
             </div>
+        </div>
+    </div>
+
+    <!-- Market Direction (mirrors the Contracts route's analysis block) -->
+    <div class="td-card" style="margin-bottom:10px;">
+        <div class="td-card-hdr">
+            <h2>Market Direction</h2>
+            <div class="td-card-hdr-meta" id="tdMdMeta"></div>
+        </div>
+        <div class="ac-page">
+            <div class="ac-analysis hidden" id="tdMarketDirection"></div>
         </div>
     </div>
 

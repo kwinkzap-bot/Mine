@@ -4322,6 +4322,21 @@ function _intrinsicRenderStatus(data) {
             { label: 'Range Upper',     value: '₹' + _num(setup.upper_bound), cls: 'ag-pos' },
             { label: 'Total Range',     value: _num(setup.total_range) + ' pts' },
         ];
+        // Gap-day wide range + boundary-option day-low reclaim levels
+        const ar = state.active_range;
+        if (ar && ar.range_mult > 1) {
+            setupTiles.push({
+                label: 'Active Range (gap ' + (ar.gap_side || '?') + ')',
+                value: _num(ar.lower_bound) + '–' + _num(ar.upper_bound),
+                cls: 'ag-warn',
+            });
+        }
+        if (state.low_reclaim_level != null) {
+            setupTiles.push({ label: 'Low Reclaim Lvl',  value: '₹' + _num(state.low_reclaim_level),  cls: 'ag-pos' });
+        }
+        if (state.high_reclaim_level != null) {
+            setupTiles.push({ label: 'High Reclaim Lvl', value: '₹' + _num(state.high_reclaim_level), cls: 'ag-neg' });
+        }
         setupGrid.innerHTML = setupTiles.map(t =>
             `<div class="ag-stat">
                 <span class="ag-stat-label">${t.label}</span>
@@ -4342,6 +4357,7 @@ function _intrinsicRenderStatus(data) {
     const tiles = [
         { label: 'Direction',    value: trade.direction,
           cls: trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg' },
+        { label: 'Entry Kind',   value: trade.entry_kind || 'BREAKOUT' },
         { label: 'Option',       value: trade.option_type + ' ' + trade.strike },
         { label: 'Entry Spot',   value: '₹' + _num(trade.entry_spot) },
         { label: 'Live Spot',    value: spotStr },

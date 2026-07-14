@@ -8141,6 +8141,19 @@ def oi_profile_candles() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(exc)}), 500
 
 
+def _tiered_strike_diff(premium: float) -> int:
+    """Escalating strike-diff ladder (100 -> 200 -> 300 -> ...) for gap-day premiums.
+
+    A fixed step (e.g. 50) under-shoots on a gap day: a 240-premium option
+    rounds to only 200 away, but the strike needs to sit at least as far out
+    as its own premium. Ladder in multiples of 100, so the picked strike
+    distance always covers the premium that produced it.
+    """
+    if not premium or premium <= 0:
+        return 100
+    return int(math.ceil(premium / 100.0) * 100)
+
+
 @api_bp.route('/oi-profile/premium-strikes', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -8161,6 +8174,10 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         symbol   = request.args.get('symbol', 'NIFTY').upper()
         step     = request.args.get('step', 50, type=int) or 50
         max_diff = request.args.get('max_diff', 25, type=float)
+        # Manual extra widen: dropdown value N adds N*100 to the total
+        # strike_diff, split evenly across both legs (50 per leg per step).
+        extra    = request.args.get('extra', 0, type=int) or 0
+        extra_leg = max(0, extra) * 50
 
         kite = get_kite(instance=1)
         _data_provider = get_data_provider()
@@ -8314,11 +8331,13 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         # ── 5. Compute CE/PE strikes ───────────────────────────────────
         ce_val   = base_ce_close or 0
         pe_val   = base_pe_close or 0
-        # Round outward from the base strike (CE down, PE up) so the selected
-        # strikes sit at least the premium distance away — nearest-rounding would
-        # otherwise pull a strike back inward (e.g. 24021.15 -> 24000 instead of 24050).
-        ce_strike = int(math.floor((base_strike - ce_val) / step) * step)
-        pe_strike = int(math.ceil((base_strike + pe_val) / step) * step)
+        # Strike distance from base is the tiered ladder value covering the
+        # premium (200 -> 300 -> 400 -> ...), not a plain round to `step` —
+        # a fixed step under-shoots on gap days when the premium itself is
+        # already bigger than that step (see _tiered_strike_diff). `extra_leg`
+        # is the manual widen from the UI dropdown, split evenly per leg.
+        ce_strike = int(base_strike - _tiered_strike_diff(ce_val) - extra_leg)
+        pe_strike = int(base_strike + _tiered_strike_diff(pe_val) + extra_leg)
 
         logger.info(
             f'[PremStrikes] {symbol}: idx_close={idx_close:.2f}, ATM={atm}, '

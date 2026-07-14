@@ -35,6 +35,28 @@ touching the outer area value marks a full range-expansion day.
 Direction follows whichever side's premium is expanding (that's where option
 sellers are getting squeezed), not the side that's collapsing.
 
+Gap-day handling (13-Jul-2026 case study, youtube izLl5ccWKE0):
+  * If the day OPENS outside the primary range, the ACTIVE trading range
+    widens ring by ring until the open sits inside it (case study: open below
+    24100 → trade the 24000 CE / 24400 PE ring, total range 400, intrinsics
+    206 / 194 against the 24206 synthetic close). All breakout checks then
+    run against the active range, not the primary one.
+  * The active boundary options' intraday premium LOW is the "demand place".
+    lower_strike + CE_day_low is the low-reclaim level (24000 + 81 = 24081 in
+    the case study). Spot SUSTAINING above it means the day's low has lost
+    its probability of being cut — sell-on-rise must be abandoned there.
+    Mirror level for the upper PE: upper_strike - PE_day_low.
+  * RECLAIM entry (gap days only): on a gap-down day, when spot sustains
+    above the low-reclaim level AND the opposite-side upper PE fails to hold
+    the active total range (24400 PE < 400 → the lower CE regains the power
+    to go back ITM), that is a BUY. SL = the reclaim level itself (back below
+    it, the buying effect is gone). Mirror for gap-up SELL. VIX / premium
+    expansion filters do NOT apply to reclaim entries: a rising VIX means
+    option sellers are in danger — on a covering rally it fuels the up-move,
+    so direction must come from structure, not from the VIX sign.
+  * Discipline: entries only before the morning cutoff and a max number of
+    trades per day — one strategy, one disciplined trade, then stop.
+
 This module is PAPER-TRADE ONLY. `self.mode` is scaffolded for a future
 'live' path (real broker orders via the same _place_order-style hook used by
 rtp_algo.py), but only 'paper' is implemented — 'live' currently logs a
@@ -47,11 +69,15 @@ Per-user env vars:
   INTRINSIC_RANGE_LOTS            = 1             (paper lot count)
   INTRINSIC_RANGE_SL_POINTS       = ''            (default: day's range_half / 2)
   INTRINSIC_RANGE_TGT_POINTS      = ''            (default: day's range_half)
-  INTRINSIC_RANGE_EXPANSION_MULT  = 1.3           (live common-ATM premium must be >= 1.3x the day's baseline)
-  INTRINSIC_RANGE_VIX_RISE_PCT    = 5.0           (India VIX must be >= +5% vs the day's opening reading)
+  INTRINSIC_RANGE_EXPANSION_MULT  = 1.3           (live common-ATM premium must be >= 1.3x the day's baseline; breakout entries only)
+  INTRINSIC_RANGE_VIX_RISE_PCT    = 5.0           (India VIX must be >= +5% vs the day's opening reading; breakout entries only)
+  INTRINSIC_RANGE_ENTRY_CUTOFF    = 10:00         (no new entries at/after this time — "one trade within 10 AM")
+  INTRINSIC_RANGE_MAX_TRADES_PER_DAY = 1          (disciplined one-trade-per-day default)
+  INTRINSIC_RANGE_SUSTAIN_POLLS   = 8             (consecutive 15s polls a level must hold to count as "sustained", ~2 min)
 """
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -66,6 +92,19 @@ _STRIKE_STEP = 50.0
 _NIFTY_FYERS = 'NSE:NIFTY50-INDEX'
 _VIX_FYERS   = 'NSE:INDIAVIX-INDEX'
 _DEFAULT_LOT_SIZE = 75
+
+
+def _tiered_strike_diff(premium: float) -> float:
+    """Escalating strike-diff ladder (100 -> 200 -> 300 -> ...) for gap-day premiums.
+
+    A fixed step (50) under-shoots on a gap day: a 240-premium common-ATM
+    rounds to only 200 of range-half, but the range needs to cover at least
+    as much as the premium that produced it. Ladder in multiples of 100,
+    so the picked distance always covers the premium.
+    """
+    if not premium or premium <= 0:
+        return _STRIKE_STEP
+    return math.ceil(premium / 100.0) * 100.0
 
 _STATE_FILE       = os.path.join(_DIR, 'intrinsic_range_state.json')
 _HISTORY_FILE     = os.path.join(_DIR, 'intrinsic_range_trades_history.json')
@@ -127,6 +166,11 @@ class IntrinsicRangeAlgo:
         except Exception:
             return {
                 'date': None, 'daily_setup': None, 'day_open_vix': None,
+                'day_open_spot': None, 'active_range': None,
+                'ce_boundary_day_low': None, 'pe_boundary_day_low': None,
+                'low_reclaim_level': None, 'high_reclaim_level': None,
+                'above_low_reclaim_polls': 0, 'below_high_reclaim_polls': 0,
+                'buy_reclaim_done': False, 'sell_reclaim_done': False,
                 'buy_needs_reset': False, 'sell_needs_reset': False,
                 'active_trade': None,
             }
@@ -170,6 +214,7 @@ class IntrinsicRangeAlgo:
                 'date':            today,
                 'mode':            trade.get('mode', 'paper'),
                 'direction':       direction,
+                'entry_kind':      trade.get('entry_kind', 'BREAKOUT'),
                 'entry_spot':      entry_spot,
                 'exit_spot':       exit_spot,
                 'pnl_pts':         pnl_pts,
@@ -380,12 +425,13 @@ class IntrinsicRangeAlgo:
             synthetic_prev_close = round(atm_strike + (best['ce_prev'] - best['pe_prev']), 2)
 
             common_atm = round((best['ce_prev'] + best['pe_prev']) / 2, 2)
-            range_half = max(_STRIKE_STEP, round(common_atm / _STRIKE_STEP) * _STRIKE_STEP)
+            range_half = _tiered_strike_diff(common_atm)
             lower_bound = atm_strike - range_half
             upper_bound = atm_strike + range_half
             total_range = 2 * range_half
 
             setup = {
+                'schema':         4,
                 'date':           today.isoformat(),
                 'prev_close_spot': prev_close_spot,
                 'synthetic_prev_close': synthetic_prev_close,
@@ -419,89 +465,264 @@ class IntrinsicRangeAlgo:
             self.log.error(f"Daily setup computation failed: {e}", exc_info=True)
             return None
 
-    # ── Signal detection ─────────────────────────────────────────────────────
+    # ── Active range & per-poll tracking ─────────────────────────────────────
 
-    def _check_signal(
-        self, provider: Any, setup: Dict[str, Any], state: Dict[str, Any],
-    ) -> Tuple[Optional[str], Optional[float]]:
-        """Mutates state (needs-reset flags, day_open_vix) in place. Returns (signal, spot)."""
+    def _select_active_range(self, setup: Dict[str, Any], open_spot: float, provider: Any) -> Dict[str, Any]:
+        """Widen the primary ring until the day's open sits inside it, then
+        widen further, 100 points of total range at a time, until each
+        boundary option's own live opening premium fits within that width.
+
+        13-Jul case study: open below the 24100 lower bound → the tradeable
+        ring becomes 24000 CE / 24400 PE (total range 400), with each boundary
+        option's intrinsic value recomputed against the synthetic prev close
+        (206 / 194 vs 24206).
+
+        Premium check: the range width picked at setup time is sized off
+        YESTERDAY's close premium (see _tiered_strike_diff); if a boundary
+        option's own live opening premium today already exceeds that width
+        (e.g. 24100 CE / 24300 PE, 200-wide, but the CE opens at 240), the
+        range under-priced today's move — bump the total range by 100
+        (200 -> 300 -> 24050/24350, then 300 -> 400 if still exceeded, ...)
+        and recheck against the new boundary strikes.
+        """
+        synth = float(setup['synthetic_prev_close'])
+        atm   = float(setup['atm_strike'])
+        half  = float(setup['range_half'])
+
+        # 1) Ring-by-ring until today's open sits inside it (gap-day case).
+        mult = 1
+        while mult < 4 and not (atm - mult * half <= open_spot <= atm + mult * half):
+            mult += 1
+        total_range = 2 * mult * half
+        gap_side: Optional[str] = 'down' if (mult > 1 and open_spot < atm) else ('up' if mult > 1 else None)
+
+        # 2) 100-point ladder until each boundary's own live Open premium no
+        #    longer exceeds the range width it sits in.
+        for _ in range(6):
+            lower = atm - total_range / 2
+            upper = atm + total_range / 2
+            chain = self._get_live_chain(provider)
+            ce_open = (chain.get((int(lower), 'CE')) or {}).get('ltp')
+            pe_open = (chain.get((int(upper), 'PE')) or {}).get('ltp')
+            if (ce_open is not None and ce_open > total_range) or \
+               (pe_open is not None and pe_open > total_range):
+                self.log.info(
+                    f"Active range [{int(lower)}, {int(upper)}] (total {int(total_range)}) "
+                    f"under-priced by boundary premium (CE={ce_open}, PE={pe_open}) — widening to "
+                    f"{int(total_range) + 100}"
+                )
+                total_range += 100
+                continue
+            break
+
+        lower = atm - total_range / 2
+        upper = atm + total_range / 2
+        return {
+            'lower_bound':        lower,
+            'upper_bound':        upper,
+            'total_range':        total_range,
+            'ce_lower_intrinsic': round(synth - lower, 2),
+            'pe_upper_intrinsic': round(upper - synth, 2),
+            'range_mult':         mult,
+            'gap_side':           gap_side,
+        }
+
+    def _update_tracking(self, provider: Any, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Per-poll market context. Mutates state: day open spot/VIX capture,
+        active-range selection, boundary-option day lows ("the low is the
+        demand place"), reclaim levels and their sustain counters."""
+        setup = state['daily_setup']
         spot = self._get_nifty_spot(provider)
         if spot is None:
-            return None, None
+            return None
 
-        chain = self._get_live_chain(provider)
-        if not chain:
-            return None, spot
+        if state.get('day_open_spot') is None:
+            state['day_open_spot'] = spot
 
         vix = self._get_vix(provider)
         if state.get('day_open_vix') is None and vix is not None:
             state['day_open_vix'] = vix
 
-        live_atm = round(spot / _STRIKE_STEP) * _STRIKE_STEP
-        ce_live = (chain.get((int(live_atm), 'CE')) or {}).get('ltp')
-        pe_live = (chain.get((int(live_atm), 'PE')) or {}).get('ltp')
-        live_common_atm = (ce_live + pe_live) / 2 if ce_live and pe_live else None
+        if not state.get('active_range'):
+            state['active_range'] = self._select_active_range(setup, state['day_open_spot'], provider)
+            rng0 = state['active_range']
+            self.log.info(
+                f"Active range: [{int(rng0['lower_bound'])}, {int(rng0['upper_bound'])}] "
+                f"mult=x{rng0['range_mult']} gap_side={rng0['gap_side']} "
+                f"intrinsics CE={rng0['ce_lower_intrinsic']} PE={rng0['pe_upper_intrinsic']} "
+                f"(open {state['day_open_spot']})"
+            )
+        rng = state['active_range']
 
-        pe_upper = (chain.get((int(setup['upper_bound']), 'PE')) or {}).get('ltp')
-        ce_lower = (chain.get((int(setup['lower_bound']), 'CE')) or {}).get('ltp')
+        chain = self._get_live_chain(provider)
+        ce_lower = (chain.get((int(rng['lower_bound']), 'CE')) or {}).get('ltp') if chain else None
+        pe_upper = (chain.get((int(rng['upper_bound']), 'PE')) or {}).get('ltp') if chain else None
+
+        if ce_lower is not None:
+            prev = state.get('ce_boundary_day_low')
+            state['ce_boundary_day_low'] = ce_lower if prev is None else min(prev, ce_lower)
+        if pe_upper is not None:
+            prev = state.get('pe_boundary_day_low')
+            state['pe_boundary_day_low'] = pe_upper if prev is None else min(prev, pe_upper)
+
+        # Reclaim levels: strike ± the boundary option's day-low premium
+        # (24000 + 81 = 24081 in the case study). Above the low-reclaim level
+        # the day's low loses its probability of being cut; mirror for highs.
+        ce_low = state.get('ce_boundary_day_low')
+        pe_low = state.get('pe_boundary_day_low')
+        state['low_reclaim_level']  = round(rng['lower_bound'] + ce_low, 2) if ce_low is not None else None
+        state['high_reclaim_level'] = round(rng['upper_bound'] - pe_low, 2) if pe_low is not None else None
+
+        sustain_polls = max(1, int(self._uvar('INTRINSIC_RANGE_SUSTAIN_POLLS', '8') or '8'))
+        if state['low_reclaim_level'] is not None and spot > state['low_reclaim_level']:
+            state['above_low_reclaim_polls'] = int(state.get('above_low_reclaim_polls') or 0) + 1
+        else:
+            state['above_low_reclaim_polls'] = 0
+        if state['high_reclaim_level'] is not None and spot < state['high_reclaim_level']:
+            state['below_high_reclaim_polls'] = int(state.get('below_high_reclaim_polls') or 0) + 1
+        else:
+            state['below_high_reclaim_polls'] = 0
+
+        live_common_atm = None
+        if chain:
+            live_atm = round(spot / _STRIKE_STEP) * _STRIKE_STEP
+            ce_live = (chain.get((int(live_atm), 'CE')) or {}).get('ltp')
+            pe_live = (chain.get((int(live_atm), 'PE')) or {}).get('ltp')
+            live_common_atm = (ce_live + pe_live) / 2 if ce_live and pe_live else None
+
+        return {
+            'spot':                 spot,
+            'vix':                  vix,
+            'chain_ok':             bool(chain),
+            'rng':                  rng,
+            'ce_lower':             ce_lower,
+            'pe_upper':             pe_upper,
+            'live_common_atm':      live_common_atm,
+            'sustained_above_low':  int(state.get('above_low_reclaim_polls') or 0) >= sustain_polls,
+            'sustained_below_high': int(state.get('below_high_reclaim_polls') or 0) >= sustain_polls,
+        }
+
+    # ── Signal detection ─────────────────────────────────────────────────────
+
+    def _check_signal(
+        self, ctx: Dict[str, Any], state: Dict[str, Any],
+    ) -> Tuple[Optional[str], str, Optional[float]]:
+        """Mutates state (needs-reset / reclaim-done flags) in place.
+        Returns (signal, entry_kind, sl_level_override)."""
+        setup = state['daily_setup']
+        rng   = ctx['rng']
+        spot  = ctx['spot']
+        if not ctx['chain_ok']:
+            return None, 'BREAKOUT', None
 
         expansion_mult = float(self._uvar('INTRINSIC_RANGE_EXPANSION_MULT', '1.3') or '1.3')
         vix_rise_pct   = float(self._uvar('INTRINSIC_RANGE_VIX_RISE_PCT', '5.0') or '5.0')
 
         expansion_ok = (
-            live_common_atm is not None and setup['common_atm'] > 0
-            and (live_common_atm / setup['common_atm']) >= expansion_mult
+            ctx['live_common_atm'] is not None and setup['common_atm'] > 0
+            and (ctx['live_common_atm'] / setup['common_atm']) >= expansion_mult
         )
         vix_ok = (
-            vix is not None and state.get('day_open_vix')
-            and vix >= state['day_open_vix'] * (1 + vix_rise_pct / 100.0)
+            ctx['vix'] is not None and state.get('day_open_vix')
+            and ctx['vix'] >= state['day_open_vix'] * (1 + vix_rise_pct / 100.0)
         )
 
         buy_needs_reset  = bool(state.get('buy_needs_reset', False))
         sell_needs_reset = bool(state.get('sell_needs_reset', False))
 
-        if sell_needs_reset and spot >= setup['lower_bound']:
+        if sell_needs_reset and spot >= rng['lower_bound']:
             sell_needs_reset = False
-        if buy_needs_reset and spot <= setup['upper_bound']:
+        if buy_needs_reset and spot <= rng['upper_bound']:
             buy_needs_reset = False
 
         # Opposite side must surrender its intrinsic value ("the oncoming
         # vehicle gives way"): while it still prices in a return to the
         # synthetic previous close, the breakout isn't clean.
-        ce_lower_intrinsic = float(setup.get('ce_lower_intrinsic', 0) or 0)
-        pe_upper_intrinsic = float(setup.get('pe_upper_intrinsic', 0) or 0)
-        ce_gave_way = ce_lower is not None and ce_lower < ce_lower_intrinsic
-        pe_gave_way = pe_upper is not None and pe_upper < pe_upper_intrinsic
+        ce_lower_intrinsic = float(rng.get('ce_lower_intrinsic', 0) or 0)
+        pe_upper_intrinsic = float(rng.get('pe_upper_intrinsic', 0) or 0)
+        ce_gave_way = ctx['ce_lower'] is not None and ctx['ce_lower'] < ce_lower_intrinsic
+        pe_gave_way = ctx['pe_upper'] is not None and ctx['pe_upper'] < pe_upper_intrinsic
 
         signal: Optional[str] = None
-        if (spot < setup['lower_bound'] and pe_upper is not None
-                and pe_upper >= setup['total_range'] and ce_gave_way
+        entry_kind = 'BREAKOUT'
+        sl_override: Optional[float] = None
+
+        if (spot < rng['lower_bound'] and ctx['pe_upper'] is not None
+                and ctx['pe_upper'] >= rng['total_range'] and ce_gave_way
                 and expansion_ok and vix_ok
                 and not sell_needs_reset):
             signal = 'SELL'
             sell_needs_reset = True
-        elif (spot > setup['upper_bound'] and ce_lower is not None
-                and ce_lower >= setup['total_range'] and pe_gave_way
+        elif (spot > rng['upper_bound'] and ctx['ce_lower'] is not None
+                and ctx['ce_lower'] >= rng['total_range'] and pe_gave_way
                 and expansion_ok and vix_ok
                 and not buy_needs_reset):
             signal = 'BUY'
             buy_needs_reset = True
+        # Reclaim entries (gap days only). Gap-down: spot sustained above the
+        # low-reclaim level while the opposite upper PE fails to hold the full
+        # active range (24400 PE < 400 → 24000 CE regains the power to go back
+        # ITM → appreciation). No VIX/expansion gate — on a covering rally a
+        # rising VIX is seller panic fueling the move, not a short signal.
+        elif (rng.get('gap_side') == 'down' and ctx['sustained_above_low']
+                and ctx['pe_upper'] is not None and ctx['pe_upper'] < rng['total_range']
+                and not state.get('buy_reclaim_done')):
+            signal, entry_kind = 'BUY', 'RECLAIM'
+            sl_override = state.get('low_reclaim_level')
+            state['buy_reclaim_done'] = True
+        elif (rng.get('gap_side') == 'up' and ctx['sustained_below_high']
+                and ctx['ce_lower'] is not None and ctx['ce_lower'] < rng['total_range']
+                and not state.get('sell_reclaim_done')):
+            signal, entry_kind = 'SELL', 'RECLAIM'
+            sl_override = state.get('high_reclaim_level')
+            state['sell_reclaim_done'] = True
 
         state['buy_needs_reset']  = buy_needs_reset
         state['sell_needs_reset'] = sell_needs_reset
 
         if signal:
             self.log.info(
-                f"✓ Signal={signal} spot={spot} live_common_atm={live_common_atm} "
-                f"(baseline {setup['common_atm']}) vix={vix} (open {state.get('day_open_vix')}) "
-                f"pe_upper={pe_upper} (intrinsic {pe_upper_intrinsic}) "
-                f"ce_lower={ce_lower} (intrinsic {ce_lower_intrinsic})"
+                f"✓ Signal={signal} kind={entry_kind} spot={spot} "
+                f"range=[{int(rng['lower_bound'])}, {int(rng['upper_bound'])}] gap={rng.get('gap_side')} "
+                f"live_common_atm={ctx['live_common_atm']} (baseline {setup['common_atm']}) "
+                f"vix={ctx['vix']} (open {state.get('day_open_vix')}) "
+                f"pe_upper={ctx['pe_upper']} (intrinsic {pe_upper_intrinsic}) "
+                f"ce_lower={ctx['ce_lower']} (intrinsic {ce_lower_intrinsic}) "
+                f"low_reclaim={state.get('low_reclaim_level')} high_reclaim={state.get('high_reclaim_level')}"
             )
-        return signal, spot
+        return signal, entry_kind, sl_override
+
+    # ── Entry discipline ─────────────────────────────────────────────────────
+
+    def _trades_today(self) -> int:
+        try:
+            with open(_HISTORY_FILE, 'r') as f:
+                history = json.load(f)
+            if not isinstance(history, list):
+                return 0
+            today = date.today().isoformat()
+            return sum(1 for t in history if isinstance(t, dict) and t.get('date') == today)
+        except Exception:
+            return 0
+
+    def _entries_allowed(self) -> bool:
+        """One strategy, one disciplined trade, formed within the morning cutoff."""
+        now = datetime.now()
+        cutoff = self._uvar('INTRINSIC_RANGE_ENTRY_CUTOFF', '10:00') or '10:00'
+        try:
+            ch, cm = (int(x) for x in cutoff.split(':')[:2])
+        except Exception:
+            ch, cm = 10, 0
+        if (now.hour, now.minute) >= (ch, cm):
+            return False
+        max_trades = max(1, int(self._uvar('INTRINSIC_RANGE_MAX_TRADES_PER_DAY', '1') or '1'))
+        return self._trades_today() < max_trades
 
     # ── Trade lifecycle (paper) ──────────────────────────────────────────────
 
-    def _enter_paper_trade(self, direction: str, spot: float, provider: Any) -> None:
+    def _enter_paper_trade(self, direction: str, spot: float, provider: Any,
+                           entry_kind: str = 'BREAKOUT',
+                           sl_level_override: Optional[float] = None) -> None:
         opt_type = 'CE' if direction == 'BUY' else 'PE'
         atm_strike = round(spot / _STRIKE_STEP) * _STRIKE_STEP
         inst = self._find_option(self._instruments, atm_strike, opt_type, self._expiry)
@@ -516,7 +737,12 @@ class IntrinsicRangeAlgo:
         range_half = float(setup.get('range_half', _STRIKE_STEP))
         sl_points  = float(self._uvar('INTRINSIC_RANGE_SL_POINTS', '') or (range_half / 2))
         tgt_points = float(self._uvar('INTRINSIC_RANGE_TGT_POINTS', '') or range_half)
-        sl_level  = round(spot - sl_points, 2)  if direction == 'BUY' else round(spot + sl_points, 2)
+        # Reclaim trades stop at the reclaim level itself: back below it the
+        # buying (or above it the selling) effect is gone.
+        if sl_level_override is not None:
+            sl_level = round(float(sl_level_override), 2)
+        else:
+            sl_level = round(spot - sl_points, 2) if direction == 'BUY' else round(spot + sl_points, 2)
         tgt_level = round(spot + tgt_points, 2) if direction == 'BUY' else round(spot - tgt_points, 2)
 
         lots = max(1, int(self._uvar('INTRINSIC_RANGE_LOTS', '1') or '1'))
@@ -526,6 +752,7 @@ class IntrinsicRangeAlgo:
         state['active_trade'] = {
             'mode':           self._mode(),
             'direction':      direction,
+            'entry_kind':     entry_kind,
             'entry_spot':     spot,
             'entry_time':     datetime.now().isoformat(),
             'sl_level':       sl_level,
@@ -542,7 +769,7 @@ class IntrinsicRangeAlgo:
         }
         self._save_state(state)
         self.log.info(
-            f"[PAPER] ENTERED {direction}: spot={spot} {int(atm_strike)}{opt_type} "
+            f"[PAPER] ENTERED {direction} ({entry_kind}): spot={spot} {int(atm_strike)}{opt_type} "
             f"premium={entry_premium} sl={sl_level} tgt={tgt_level} qty={qty}"
         )
 
@@ -590,41 +817,73 @@ class IntrinsicRangeAlgo:
 
                 state = self._load_state()
                 today_str = date.today().isoformat()
-                stale_schema = bool(state.get('daily_setup')) and 'ce_lower_intrinsic' not in state['daily_setup']
+                stale_schema = bool(state.get('daily_setup')) and state['daily_setup'].get('schema') != 4
                 if state.get('date') != today_str or not state.get('daily_setup') or stale_schema:
                     setup = self._compute_daily_setup(provider)
                     if not setup:
                         time.sleep(15)
                         continue
-                    state['date']             = today_str
-                    state['daily_setup']      = setup
-                    state['day_open_vix']     = None
-                    state['buy_needs_reset']  = False
-                    state['sell_needs_reset'] = False
+                    state['date']                     = today_str
+                    state['daily_setup']              = setup
+                    state['day_open_vix']             = None
+                    state['day_open_spot']            = None
+                    state['active_range']             = None
+                    state['ce_boundary_day_low']      = None
+                    state['pe_boundary_day_low']      = None
+                    state['low_reclaim_level']        = None
+                    state['high_reclaim_level']       = None
+                    state['above_low_reclaim_polls']  = 0
+                    state['below_high_reclaim_polls'] = 0
+                    state['buy_reclaim_done']         = False
+                    state['sell_reclaim_done']        = False
+                    state['buy_needs_reset']          = False
+                    state['sell_needs_reset']         = False
                     self._save_state(state)
 
                 self._daily_setup = state['daily_setup']
 
+                ctx = self._update_tracking(provider, state)
+                if ctx is None:
+                    self._save_state(state)
+                    time.sleep(self._poll_secs)
+                    continue
+
                 trade = state.get('active_trade')
                 if trade:
-                    spot = self._get_nifty_spot(provider)
-                    if spot is not None:
-                        direction = trade['direction']
-                        hit_sl  = spot <= trade['sl_level']  if direction == 'BUY' else spot >= trade['sl_level']
-                        hit_tgt = spot >= trade['target_level'] if direction == 'BUY' else spot <= trade['target_level']
-                        in_range = self._daily_setup['lower_bound'] <= spot <= self._daily_setup['upper_bound']
-                        if hit_sl:
-                            self._exit_paper_trade('SL', spot, provider)
-                        elif hit_tgt:
-                            self._exit_paper_trade('TARGET', spot, provider)
-                        elif in_range:
-                            self._exit_paper_trade('RANGE_RECLAIM', spot, provider)
+                    # Persist tracking before exit handling: _exit_paper_trade
+                    # reloads state from disk, so an unsaved in-memory copy
+                    # here would clobber the exit.
+                    self._save_state(state)
+                    spot = ctx['spot']
+                    rng  = ctx['rng']
+                    direction  = trade['direction']
+                    entry_kind = trade.get('entry_kind', 'BREAKOUT')
+                    hit_sl  = spot <= trade['sl_level']  if direction == 'BUY' else spot >= trade['sl_level']
+                    hit_tgt = spot >= trade['target_level'] if direction == 'BUY' else spot <= trade['target_level']
+                    # A reclaim trade lives inside the range by design — only
+                    # breakout trades exit on returning into the range.
+                    in_range = (entry_kind == 'BREAKOUT'
+                                and rng['lower_bound'] <= spot <= rng['upper_bound'])
+                    if hit_sl:
+                        self._exit_paper_trade('SL', spot, provider)
+                    elif hit_tgt:
+                        self._exit_paper_trade('TARGET', spot, provider)
+                    elif in_range:
+                        self._exit_paper_trade('RANGE_RECLAIM', spot, provider)
                 else:
                     active_enabled = self._uvar('EMA_INTRINSIC_RANGE_ACTIVE', 'false').lower() == 'true'
-                    signal, _spot = self._check_signal(provider, self._daily_setup, state)
+                    signal, entry_kind, sl_override = self._check_signal(ctx, state)
                     self._save_state(state)
-                    if active_enabled and signal and _spot is not None:
-                        self._enter_paper_trade(signal, _spot, provider)
+                    if active_enabled and signal:
+                        if self._entries_allowed():
+                            self._enter_paper_trade(signal, ctx['spot'], provider,
+                                                    entry_kind=entry_kind,
+                                                    sl_level_override=sl_override)
+                        else:
+                            self.log.info(
+                                f"Signal {signal} ({entry_kind}) skipped — entry cutoff passed "
+                                f"or max trades/day reached"
+                            )
             except Exception as e:
                 self.log.error(f"Monitor loop error: {e}", exc_info=True)
 
