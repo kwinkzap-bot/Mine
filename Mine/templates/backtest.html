@@ -569,32 +569,19 @@
 
             </div><!-- /resultsArea -->
 
-            <!-- Monthly Expiry Breakout — scan results (BUY/SELL signal lists
-                 across every F&O stock), shown instead of resultsArea. -->
+            <!-- Monthly Expiry Breakout — scan results: one grid of every F&O
+                 signal, grouped by candle date/time with BUY and SELL split
+                 inside each group. Shown instead of resultsArea. -->
             <div id="expiryScanResultsArea" style="display:none;">
-                <div style="margin-bottom:16px;">
-                    <h4 style="margin:0 0 8px;">🟢 Expiry High/Low Breakout — BUY <span id="expiryScanBuyCount">(0)</span></h4>
-                    <div class="opt-table-wrap">
-                        <table class="opt-table" id="expiryScanBuyTable">
-                            <thead><tr>
-                                <th>Symbol</th><th>Time</th><th>Price</th>
-                                <th>Expiry High</th><th>Expiry Low</th>
-                            </tr></thead>
-                            <tbody id="expiryScanBuyBody"></tbody>
-                        </table>
-                    </div>
-                </div>
-                <div>
-                    <h4 style="margin:0 0 8px;">🔴 Expiry High/Low Breakout — SELL <span id="expiryScanSellCount">(0)</span></h4>
-                    <div class="opt-table-wrap">
-                        <table class="opt-table" id="expiryScanSellTable">
-                            <thead><tr>
-                                <th>Symbol</th><th>Time</th><th>Price</th>
-                                <th>Expiry High</th><th>Expiry Low</th>
-                            </tr></thead>
-                            <tbody id="expiryScanSellBody"></tbody>
-                        </table>
-                    </div>
+                <h4 style="margin:0 0 8px;">📅 Expiry High/Low Breakout <span id="expiryScanCount">(0)</span></h4>
+                <div class="opt-table-wrap">
+                    <table class="opt-table" id="expiryScanTable">
+                        <thead><tr>
+                            <th>Symbol</th><th>Expiry</th><th>Price</th>
+                            <th>Expiry High</th><th>Expiry Low</th>
+                        </tr></thead>
+                        <tbody id="expiryScanBody"></tbody>
+                    </table>
                 </div>
             </div><!-- /expiryScanResultsArea -->
 

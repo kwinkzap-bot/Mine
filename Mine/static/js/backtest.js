@@ -102,6 +102,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initialize dates (default to Jan 1st 2017)
     const today = new Date();
 
+    // Today in the browser's own timezone. toISOString() is UTC, which in IST
+    // reads back as yesterday between 00:00 and 05:30.
+    function localToday() {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    }
+
     document.getElementById('endDate').value = today.toISOString().split('T')[0];
     document.getElementById('startDate').value = '2017-01-01';
 
@@ -322,9 +329,11 @@ document.addEventListener('DOMContentLoaded', function() {
             // the selected Start/End Date range and Timeframe.
             if (symFg) symFg.style.display = 'none';
             if (intFg) intFg.style.display = 'none';
+            // Defaults to today only — the range is still editable, and a
+            // wider one lists every past signal in it.
             const endDateInput = document.getElementById('endDate');
-            if (startDateInput) startDateInput.value = `${today.getFullYear()}-01-01`;
-            if (endDateInput)   endDateInput.value   = today.toISOString().slice(0, 10);
+            if (startDateInput) startDateInput.value = localToday();
+            if (endDateInput)   endDateInput.value   = localToday();
 
         } else if (val === 'swing_momentum') {
             if (smParamsRow) smParamsRow.style.display = 'grid';
@@ -536,58 +545,76 @@ document.addEventListener('DOMContentLoaded', function() {
     function renderExpiryScanResults(data) {
         const buy  = data.buy  || [];
         const sell = data.sell || [];
+        const all  = [...buy, ...sell];
 
-        // Grouped by Expiry Date (latest cycle first), each group's own
-        // signals kept in the order the backend already sorted them
-        // (latest signal first). Group headers are click-to-collapse.
+        // One grid of every signal, grouped by candle timestamp (date + time,
+        // latest first) so all the stocks that broke out on the same candle sit
+        // together, with BUY and SELL split inside each group. On the 'day'
+        // timeframe the candle time is midnight, so the header shows the date
+        // alone. Group headers are click-to-collapse.
         function renderRows(rows) {
             if (rows.length === 0) {
                 return '<tr><td colspan="5" style="text-align:center;padding:16px;">No signals in this range</td></tr>';
             }
             const groups = new Map();
             for (const r of rows) {
-                if (!groups.has(r.expiry_date)) groups.set(r.expiry_date, []);
-                groups.get(r.expiry_date).push(r);
+                const key = (r.time || '').replace('T', ' ').slice(0, 16);
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(r);
             }
             const sortedGroups = [...groups.entries()].sort((a, b) => b[0].localeCompare(a[0]));
 
-            return sortedGroups.map(([expiryDate, groupRows], gi) => {
+            const signalRow = (r, groupId) => `
+                <tr data-group-body="${groupId}">
+                    <td><a href="https://in.tradingview.com/chart/?symbol=NSE:${r.symbol}" target="_blank" rel="noopener noreferrer" class="expiry-symbol-link">${r.symbol}</a></td>
+                    <td>${r.expiry_date || ''}</td>
+                    <td>${Number(r.price).toFixed(2)}</td>
+                    <td class="pnl-positive">${Number(r.expiry_high).toFixed(2)}</td>
+                    <td class="pnl-negative">${Number(r.expiry_low).toFixed(2)}</td>
+                </tr>`;
+
+            const sideBlock = (sideRows, groupId, label) => {
+                if (!sideRows.length) return '';
+                const subHeader = `
+                    <tr data-group-body="${groupId}" class="expiry-side-hdr">
+                        <td colspan="5" style="padding-left:22px;font-weight:600;font-size:.92em;opacity:.85;">
+                            ${label} <span style="font-weight:400;opacity:.7;">(${sideRows.length})</span>
+                        </td>
+                    </tr>`;
+                return subHeader + sideRows.map(r => signalRow(r, groupId)).join('');
+            };
+
+            return sortedGroups.map(([candleTime, groupRows], gi) => {
                 const groupId = `eg-${gi}`;
+                const label = candleTime.endsWith(' 00:00') ? candleTime.slice(0, 10) : candleTime;
+                const bySymbol = (a, b) => a.symbol.localeCompare(b.symbol);
+                const groupBuy  = groupRows.filter(r => r.direction === 'BUY').sort(bySymbol);
+                const groupSell = groupRows.filter(r => r.direction === 'SELL').sort(bySymbol);
                 const header = `
                     <tr class="expiry-group-hdr" data-group="${groupId}" onclick="window.toggleExpiryGroup(this)"
                         style="cursor:pointer;background:rgba(26,35,126,0.06);font-weight:600;">
                         <td colspan="5">
                             <span class="expiry-group-chev">▾</span>
-                            Expiry ${expiryDate}
+                            ${label}
                             <span style="font-weight:400;opacity:.7;">(${groupRows.length})</span>
                         </td>
                     </tr>`;
-                const body = groupRows.map(r => `
-                    <tr data-group-body="${groupId}">
-                        <td><a href="https://in.tradingview.com/chart/?symbol=NSE:${r.symbol}" target="_blank" rel="noopener noreferrer" class="expiry-symbol-link">${r.symbol}</a></td>
-                        <td>${(r.time || '').replace('T', ' ').slice(0, 16)}</td>
-                        <td>${Number(r.price).toFixed(2)}</td>
-                        <td class="pnl-positive">${Number(r.expiry_high).toFixed(2)}</td>
-                        <td class="pnl-negative">${Number(r.expiry_low).toFixed(2)}</td>
-                    </tr>`).join('');
-                return header + body;
+                return header
+                     + sideBlock(groupBuy,  groupId, '🟢 BUY')
+                     + sideBlock(groupSell, groupId, '🔴 SELL');
             }).join('');
         }
 
-        const buyBody  = document.getElementById('expiryScanBuyBody');
-        const sellBody = document.getElementById('expiryScanSellBody');
-        const buyCount  = document.getElementById('expiryScanBuyCount');
-        const sellCount = document.getElementById('expiryScanSellCount');
-        if (buyBody)  buyBody.innerHTML  = renderRows(buy);
-        if (sellBody) sellBody.innerHTML = renderRows(sell);
-        if (buyCount)  buyCount.textContent  = `(${buy.length})`;
-        if (sellCount) sellCount.textContent = `(${sell.length})`;
+        const body  = document.getElementById('expiryScanBody');
+        const count = document.getElementById('expiryScanCount');
+        if (body)  body.innerHTML   = renderRows(all);
+        if (count) count.textContent = `(${all.length} — ${buy.length} BUY, ${sell.length} SELL)`;
 
         const expiryResultsArea = document.getElementById('expiryScanResultsArea');
         if (expiryResultsArea) expiryResultsArea.style.display = 'block';
     }
 
-    // Collapse/expand one Expiry Date group in the scan results tables.
+    // Collapse/expand one candle-timestamp group in the scan results grid.
     window.toggleExpiryGroup = function(headerRow) {
         const groupId = headerRow.dataset.group;
         const rows = headerRow.parentElement.querySelectorAll(`tr[data-group-body="${groupId}"]`);
