@@ -33,12 +33,12 @@
     "range_mult": 2,
     "gap_side": "down"
   },
-  "ce_boundary_day_low": 92.7,
+  "ce_boundary_day_low": 29.0,
   "pe_boundary_day_low": 265.0,
-  "low_reclaim_level": 24092.7,
+  "low_reclaim_level": 24029.0,
   "high_reclaim_level": 24135.0,
-  "above_low_reclaim_polls": 164,
-  "below_high_reclaim_polls": 0,
+  "above_low_reclaim_polls": 68,
+  "below_high_reclaim_polls": 577,
   "buy_reclaim_done": true,
   "sell_reclaim_done": false
 }

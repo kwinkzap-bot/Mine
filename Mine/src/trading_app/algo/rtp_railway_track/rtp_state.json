@@ -1,35 +1,11 @@
 {
-  "active_trade": {
-    "direction": "BUY",
-    "entry_spot": 24108.1,
-    "entry_time": "2026-07-14T10:50:03.684266",
-    "sl_level": 24078.1,
-    "target_level": 24198.1,
-    "strike": 23850,
-    "option_type": "CE",
-    "lot_size": 65,
-    "expiry": "2026-07-14",
-    "broker_entries": [
-      {
-        "broker_idx": 1,
-        "broker_type": "zerodha",
-        "order_id": "{'order_id': '2076899501771513856'}",
-        "entry_success": true,
-        "tradingsymbol": "",
-        "fyers_sym": "NSE:NIFTY2671423850CE",
-        "lots": 1,
-        "quantity": 65
-      }
-    ],
-    "opt_entry_price": 266.65,
-    "strike_mode": "premium250"
-  },
-  "buy_needs_reset": true,
+  "active_trade": null,
+  "buy_needs_reset": false,
   "sell_needs_reset": false,
   "last_exit": {
     "reason": "SL",
-    "spot": 24105.45,
-    "time": "2026-07-14T10:33:19.557001"
+    "spot": 24074.9,
+    "time": "2026-07-14T15:07:12.361701"
   },
   "pending_signal": null
 }
