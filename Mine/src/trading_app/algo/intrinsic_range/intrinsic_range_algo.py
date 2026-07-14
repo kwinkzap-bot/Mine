@@ -57,6 +57,25 @@ Gap-day handling (13-Jul-2026 case study, youtube izLl5ccWKE0):
   * Discipline: entries only before the morning cutoff and a max number of
     trades per day — one strategy, one disciplined trade, then stop.
 
+14-Jul-2026 case study (youtube xZVOxO7zhPA) refinements:
+  * Wide range (dashboard analytic): atm ± round_to_strike(2 x RAW
+    common_atm) — case study: common 80 → 2x80=160 → 150 → 24050 CE /
+    24350 PE, intrinsics 156 / 144 vs the 24206 synthetic close, total 300.
+    Whichever boundary option holds the wide total range keeps the other
+    one OTM. (The ACTIVE trading range is sized separately — see
+    _select_active_range's tiered ladder + live-premium widening.)
+  * Seller panic band: atm ± raw common_atm (24120–24280). Inside it the
+    market "has no decision-making power"; it must sustain above the call-
+    seller panic line or below the put-seller panic line to pick a side.
+  * Straddle band (market control area): atm ± combined premium (2x raw
+    common, 24040–24360) — the long/short straddle breakevens. A close inside
+    pays the short straddle; a range-expansion day needs a sustained move
+    outside. Both bands are computed for the dashboard.
+  * First-candle momentum rule: when the first 5-minute candle is a big
+    momentum candle (range >= INTRINSIC_RANGE_FC_BIG_FRAC x the day's total
+    range), a range breakout "won't come quickly" while spot stays inside
+    that candle's high–low — breakout entries are blocked there.
+
 This module is PAPER-TRADE ONLY. `self.mode` is scaffolded for a future
 'live' path (real broker orders via the same _place_order-style hook used by
 rtp_algo.py), but only 'paper' is implemented — 'live' currently logs a
@@ -74,6 +93,7 @@ Per-user env vars:
   INTRINSIC_RANGE_ENTRY_CUTOFF    = 10:00         (no new entries at/after this time — "one trade within 10 AM")
   INTRINSIC_RANGE_MAX_TRADES_PER_DAY = 1          (disciplined one-trade-per-day default)
   INTRINSIC_RANGE_SUSTAIN_POLLS   = 8             (consecutive 15s polls a level must hold to count as "sustained", ~2 min)
+  INTRINSIC_RANGE_FC_BIG_FRAC     = 0.5           (first 5m candle counts as "big momentum" at >= this fraction of the day's total range)
 """
 import json
 import logging
@@ -172,6 +192,7 @@ class IntrinsicRangeAlgo:
                 'above_low_reclaim_polls': 0, 'below_high_reclaim_polls': 0,
                 'buy_reclaim_done': False, 'sell_reclaim_done': False,
                 'buy_needs_reset': False, 'sell_needs_reset': False,
+                'fc_high': None, 'fc_low': None, 'fc_is_big': False, 'fc_done': False,
                 'active_trade': None,
             }
 
@@ -429,9 +450,16 @@ class IntrinsicRangeAlgo:
             lower_bound = atm_strike - range_half
             upper_bound = atm_strike + range_half
             total_range = 2 * range_half
+            # 14-Jul refinements: combined premium = CE + PE at the ATM.
+            # Wide range rounds the doubled RAW common to the strike step
+            # (2x80=160 → 150 → 24050 CE / 24350 PE in the case study).
+            combined_premium = round(best['ce_prev'] + best['pe_prev'], 2)
+            wide_half = max(_STRIKE_STEP, round((2 * common_atm) / _STRIKE_STEP) * _STRIKE_STEP)
+            wide_lower = atm_strike - wide_half
+            wide_upper = atm_strike + wide_half
 
             setup = {
-                'schema':         4,
+                'schema':         5,
                 'date':           today.isoformat(),
                 'prev_close_spot': prev_close_spot,
                 'synthetic_prev_close': synthetic_prev_close,
@@ -451,6 +479,22 @@ class IntrinsicRangeAlgo:
                 'outer_lower':       atm_strike - total_range,
                 'outer_upper':       atm_strike + total_range,
                 'outer_total_range': 2 * total_range,
+                # Seller panic band: atm ± raw common premium. Inside it the
+                # market "has no decision-making power".
+                'panic_lower':       round(atm_strike - common_atm, 2),
+                'panic_upper':       round(atm_strike + common_atm, 2),
+                # Straddle band (market control area): atm ± combined premium
+                # — the long/short straddle breakevens. Close inside pays the
+                # short straddle; range expansion needs a sustained move out.
+                'straddle_lower':    round(atm_strike - combined_premium, 2),
+                'straddle_upper':    round(atm_strike + combined_premium, 2),
+                # Wide range per the 14-Jul video: whichever boundary option
+                # holds the wide total range keeps the other one OTM.
+                'wide_lower':        wide_lower,
+                'wide_upper':        wide_upper,
+                'wide_total_range':  2 * wide_half,
+                'ce_wide_intrinsic': round(synthetic_prev_close - wide_lower, 2),
+                'pe_wide_intrinsic': round(wide_upper - synthetic_prev_close, 2),
             }
             self.log.info(
                 f"Daily setup: synth_close={synthetic_prev_close} (spot {prev_close_spot}) "
@@ -527,10 +571,27 @@ class IntrinsicRangeAlgo:
             'gap_side':           gap_side,
         }
 
+    def _fetch_first_candle(self, provider: Any) -> Optional[Tuple[float, float]]:
+        """(high, low) of today's first 5-minute spot candle."""
+        try:
+            today = date.today().isoformat()
+            candles = provider.historical_data(
+                instrument_token=_NIFTY_FYERS, from_date=today, to_date=today,
+                interval='5minute', use_cache=False,
+            )
+            if not candles:
+                return None
+            c0 = candles[0]
+            return float(c0['high']), float(c0['low'])
+        except Exception as e:
+            self.log.warning(f"First-candle fetch failed: {e}")
+            return None
+
     def _update_tracking(self, provider: Any, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Per-poll market context. Mutates state: day open spot/VIX capture,
         active-range selection, boundary-option day lows ("the low is the
-        demand place"), reclaim levels and their sustain counters."""
+        demand place"), reclaim levels and their sustain counters, and the
+        first-5m-candle momentum flag."""
         setup = state['daily_setup']
         spot = self._get_nifty_spot(provider)
         if spot is None:
@@ -542,6 +603,28 @@ class IntrinsicRangeAlgo:
         vix = self._get_vix(provider)
         if state.get('day_open_vix') is None and vix is not None:
             state['day_open_vix'] = vix
+
+        # First-candle momentum rule (14-Jul video): a big first 5m candle
+        # means no quick range breakout while spot stays inside its high–low.
+        if not state.get('fc_done'):
+            now = datetime.now()
+            if (now.hour, now.minute) >= (9, 21):
+                fc = self._fetch_first_candle(provider)
+                if fc is not None:
+                    fc_high, fc_low = fc
+                    fc_frac = float(self._uvar('INTRINSIC_RANGE_FC_BIG_FRAC', '0.5') or '0.5')
+                    total = float(setup.get('total_range') or 0)
+                    state['fc_high']   = fc_high
+                    state['fc_low']    = fc_low
+                    state['fc_is_big'] = bool(total > 0 and (fc_high - fc_low) >= fc_frac * total)
+                    state['fc_done']   = True
+                    self.log.info(
+                        f"First 5m candle: [{fc_low}, {fc_high}] range={round(fc_high - fc_low, 2)} "
+                        f"big={state['fc_is_big']} (threshold {fc_frac} x total_range {total})"
+                    )
+                elif (now.hour, now.minute) >= (9, 35):
+                    state['fc_done'] = True
+                    self.log.warning("First 5m candle unavailable by 9:35 — momentum rule disabled today")
 
         if not state.get('active_range'):
             state['active_range'] = self._select_active_range(setup, state['day_open_spot'], provider)
@@ -590,6 +673,12 @@ class IntrinsicRangeAlgo:
             pe_live = (chain.get((int(live_atm), 'PE')) or {}).get('ltp')
             live_common_atm = (ce_live + pe_live) / 2 if ce_live and pe_live else None
 
+        inside_big_fc = bool(
+            state.get('fc_is_big')
+            and state.get('fc_low') is not None and state.get('fc_high') is not None
+            and state['fc_low'] <= spot <= state['fc_high']
+        )
+
         return {
             'spot':                 spot,
             'vix':                  vix,
@@ -600,6 +689,7 @@ class IntrinsicRangeAlgo:
             'live_common_atm':      live_common_atm,
             'sustained_above_low':  int(state.get('above_low_reclaim_polls') or 0) >= sustain_polls,
             'sustained_below_high': int(state.get('below_high_reclaim_polls') or 0) >= sustain_polls,
+            'inside_big_fc':        inside_big_fc,
         }
 
     # ── Signal detection ─────────────────────────────────────────────────────
@@ -647,16 +737,23 @@ class IntrinsicRangeAlgo:
         entry_kind = 'BREAKOUT'
         sl_override: Optional[float] = None
 
+        # 14-Jul rule: after a big-momentum first 5m candle, a range breakout
+        # "won't come quickly" while spot stays inside that candle — block
+        # breakout entries there (reclaim entries are unaffected).
+        inside_big_fc = bool(ctx.get('inside_big_fc'))
+
         if (spot < rng['lower_bound'] and ctx['pe_upper'] is not None
                 and ctx['pe_upper'] >= rng['total_range'] and ce_gave_way
                 and expansion_ok and vix_ok
-                and not sell_needs_reset):
+                and not sell_needs_reset
+                and not inside_big_fc):
             signal = 'SELL'
             sell_needs_reset = True
         elif (spot > rng['upper_bound'] and ctx['ce_lower'] is not None
                 and ctx['ce_lower'] >= rng['total_range'] and pe_gave_way
                 and expansion_ok and vix_ok
-                and not buy_needs_reset):
+                and not buy_needs_reset
+                and not inside_big_fc):
             signal = 'BUY'
             buy_needs_reset = True
         # Reclaim entries (gap days only). Gap-down: spot sustained above the
@@ -817,7 +914,7 @@ class IntrinsicRangeAlgo:
 
                 state = self._load_state()
                 today_str = date.today().isoformat()
-                stale_schema = bool(state.get('daily_setup')) and state['daily_setup'].get('schema') != 4
+                stale_schema = bool(state.get('daily_setup')) and state['daily_setup'].get('schema') != 5
                 if state.get('date') != today_str or not state.get('daily_setup') or stale_schema:
                     setup = self._compute_daily_setup(provider)
                     if not setup:
@@ -838,6 +935,10 @@ class IntrinsicRangeAlgo:
                     state['sell_reclaim_done']        = False
                     state['buy_needs_reset']          = False
                     state['sell_needs_reset']         = False
+                    state['fc_high']                  = None
+                    state['fc_low']                   = None
+                    state['fc_is_big']                = False
+                    state['fc_done']                  = False
                     self._save_state(state)
 
                 self._daily_setup = state['daily_setup']

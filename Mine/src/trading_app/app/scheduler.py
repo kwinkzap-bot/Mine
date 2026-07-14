@@ -517,10 +517,12 @@ class MarketScheduler:
 
     def _run_expiry_hl_notification_task(self):
         """Runs every hour during market hours: scans all F&O stocks for an
-        Expiry High/Low breakout on the 60-minute candle and stores the
-        result as a notification (see notification_service.py) so the
-        frontend bell shows a fresh entry every hour, even when no stock
-        breaks out."""
+        Expiry High/Low breakout on the 60-minute candle — same rule as
+        the Monthly Expiry Breakout filter (touch-then-close-beyond the
+        expiry level, close beyond every EMA 20/50/100/200, and touching
+        at least one of them) — and stores the result as a notification
+        (see notification_service.py) so the frontend bell shows a fresh
+        entry every hour, even when no stock breaks out."""
         try:
             if not self.is_trading_day():
                 return

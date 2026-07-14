@@ -4337,6 +4337,27 @@ function _intrinsicRenderStatus(data) {
         if (state.high_reclaim_level != null) {
             setupTiles.push({ label: 'High Reclaim Lvl', value: '₹' + _num(state.high_reclaim_level), cls: 'ag-neg' });
         }
+        // 14-Jul video levels: seller panic band, straddle band (control
+        // area) and the wide range with its boundary intrinsics.
+        if (setup.panic_lower != null) {
+            setupTiles.push({ label: 'Seller Panic Band', value: _num(setup.panic_lower) + '–' + _num(setup.panic_upper) });
+        }
+        if (setup.straddle_lower != null) {
+            setupTiles.push({ label: 'Straddle Band', value: _num(setup.straddle_lower) + '–' + _num(setup.straddle_upper) });
+        }
+        if (setup.wide_lower != null) {
+            setupTiles.push({
+                label: 'Wide Range (CE ' + _num(setup.ce_wide_intrinsic) + ' / PE ' + _num(setup.pe_wide_intrinsic) + ')',
+                value: _num(setup.wide_lower) + '–' + _num(setup.wide_upper),
+            });
+        }
+        if (state.fc_high != null && state.fc_low != null) {
+            setupTiles.push({
+                label: 'First 5m Candle' + (state.fc_is_big ? ' (BIG)' : ''),
+                value: _num(state.fc_low) + '–' + _num(state.fc_high),
+                cls: state.fc_is_big ? 'ag-warn' : '',
+            });
+        }
         setupGrid.innerHTML = setupTiles.map(t =>
             `<div class="ag-stat">
                 <span class="ag-stat-label">${t.label}</span>

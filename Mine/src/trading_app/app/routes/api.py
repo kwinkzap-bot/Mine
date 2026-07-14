@@ -2105,7 +2105,10 @@ def get_cpr_high_iv_results() -> EndpointResponse:
 @limiter.exempt
 def get_expiry_hl_breakout_results() -> EndpointResponse:
     """Scan F&O stocks for a monthly-expiry-cycle High/Low breakout on the
-    selected timeframe (60minute default, or day)."""
+    selected timeframe (60minute default, or day) — same rule as the
+    Monthly Expiry Breakout filter (touch-then-close-beyond the expiry
+    level, close beyond every EMA 20/50/100/200, and touching at least
+    one of them)."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -3637,12 +3640,16 @@ def run_expiry_breakout_levels_api():
 def run_expiry_breakout_scan_api():
     """Monthly Expiry Breakout — FILTER mode. Not a single-symbol backtest:
     scans every F&O stock (same universe as the live Expiry H/L scanner,
-    /api/cpr-filter/expiry-hl-breakout) for every hourly candle in
-    [start_date, end_date] that touched-then-closed beyond that stock's
-    current monthly-expiry-cycle High (BUY) or Low (SELL). No SL/Target/
-    Direction/Lots — this is the same touch-then-close condition the live
-    scanner checks on just the latest candle, applied here across the
-    whole range. Defaults to Jan 1 of the current year through today.
+    /api/cpr-filter/expiry-hl-breakout) for every candle on the selected
+    timeframe in [start_date, end_date] that touched-then-closed beyond
+    that stock's current monthly-expiry-cycle High (BUY) or Low (SELL)
+    AND whose close also clears every EMA 20/50/100/200 on the same
+    timeframe (above all for BUY, below all for SELL). ema_touch
+    additionally gates on whether the candle touched those EMAs:
+    'touch' (default) requires touching at least one; 'not_touch'
+    requires touching none; 'both' applies no touch condition. No
+    SL/Target/Direction/Lots — defaults to Jan 1 of the current year
+    through today.
     """
     auth_error = check_auth()
     if auth_error:
@@ -3652,6 +3659,7 @@ def run_expiry_breakout_scan_api():
         start_date_str = data.get('start_date')
         end_date_str   = data.get('end_date')
         timeframe      = str(data.get('timeframe', '60minute')).lower()
+        ema_touch      = str(data.get('ema_touch', 'touch')).lower()
 
         now = datetime.now()
         start_date = (datetime.strptime(start_date_str, '%Y-%m-%d') if start_date_str
@@ -3672,7 +3680,8 @@ def run_expiry_breakout_scan_api():
         from trading_app.filters.expiry_hl_scanner import filter_expiry_hl_breakout_range
         cpr_service = _get_cpr_service(current_kite)
         results = filter_expiry_hl_breakout_range(
-            cpr_service, start_date=start_date, end_date=end_date, timeframe=timeframe)
+            cpr_service, start_date=start_date, end_date=end_date,
+            timeframe=timeframe, ema_touch=ema_touch)
 
         return jsonify({
             'success':    True,

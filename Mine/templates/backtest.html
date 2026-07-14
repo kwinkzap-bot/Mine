@@ -251,21 +251,29 @@
                         <option value="day">1 Day</option>
                     </select>
                 </div>
-                <div class="form-group" style="grid-column: span 3;">
+                <div class="form-group">
+                    <label for="expiryEmaTouch">EMA Filter</label>
+                    <select id="expiryEmaTouch">
+                        <option value="touch" selected>Touch EMA</option>
+                        <option value="not_touch">Not touch</option>
+                        <option value="both">Touch &amp; Not touch</option>
+                    </select>
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
                     <label>Rule</label>
-                    <div style="padding:8px 12px;border:1.5px solid #e0e0e0;border-radius:8px;
-                                background:#f5f7ff;color:#1a237e;font-size:12px;font-weight:500;
-                                line-height:1.5;">
+                    <div class="rule-box">
                         Filters <b>every F&amp;O stock</b> — no symbol selection needed. Scans
                         candles on the selected <b>Timeframe</b>, over <b>Start Date</b> →
                         <b>End Date</b>, and lists every candle that <b>touched, then closed
                         beyond</b> that stock's current monthly-expiry-cycle <b>High</b> (BUY) or
                         <b>Low</b> (SELL) — a genuine touch (the candle's range straddles the
-                        level), not a clean gap-through. Same rule as the live
-                        <b>Expiry H/L Breakout</b> scanner, applied here across the whole date
-                        range instead of just the latest candle. Expiry day is
-                        <b>auto-detected</b> (last Thursday through Aug-2025, last Tuesday from
-                        Sep-2025 onward); a holiday snaps back to the previous trading day.
+                        level), not a clean gap-through — <b>AND</b> whose close also
+                        <b>clears every EMA 20/50/100/200</b> on the same Timeframe (above all
+                        for BUY, below all for SELL). <b>EMA Filter</b> additionally requires the
+                        candle to have <b>touched at least one</b> of those EMAs, <b>touched
+                        none</b> of them, or (<b>Touch &amp; Not touch</b>) either way. Expiry
+                        day is <b>auto-detected</b> (last Thursday through Aug-2025, last Tuesday
+                        from Sep-2025 onward); a holiday snaps back to the previous trading day.
                     </div>
                 </div>
             </div>
@@ -572,8 +580,11 @@
             <!-- Monthly Expiry Breakout — scan results: one grid of every F&O
                  signal, grouped by candle date/time with BUY and SELL split
                  inside each group. Shown instead of resultsArea. -->
-            <div id="expiryScanResultsArea" style="display:none;">
-                <h4 style="margin:0 0 8px;">📅 Expiry High/Low Breakout <span id="expiryScanCount">(0)</span></h4>
+            <div id="expiryScanResultsArea" class="opt-panel" style="display:none;">
+                <div class="opt-header">
+                    <h4>📅 Expiry High/Low Breakout</h4>
+                    <small id="expiryScanCount">(0)</small>
+                </div>
                 <div class="opt-table-wrap">
                     <table class="opt-table" id="expiryScanTable">
                         <thead><tr>

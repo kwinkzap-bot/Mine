@@ -263,13 +263,14 @@
 .equity-chart-wrap  { position: relative; height: 280px; }
 
 /* ── Optimise panel ─────────────────────────────────── */
-#rtpOptimisePanel {
+#rtpOptimisePanel, .opt-panel {
     margin-top: 8px;
     background: var(--oip-card-bg);
     border: 1px solid var(--oip-border);
     border-radius: 6px;
     overflow: hidden;
 }
+.opt-panel + .opt-panel { margin-top: 12px; }
 .opt-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 7px 12px;
@@ -316,6 +317,27 @@
 .opt-table .opt-best td:first-child { border-left: 3px solid #22c55e; }
 .expiry-symbol-link { color: var(--oip-accent, #2962ff); text-decoration: none; font-weight: 700; }
 .expiry-symbol-link:hover { text-decoration: underline; }
+.rule-box {
+    padding: 8px 12px; border: 1px solid var(--oip-border); border-radius: 8px;
+    background: var(--oip-header-bg); color: var(--oip-text);
+    font-size: 12px; font-weight: 500; line-height: 1.5;
+}
+.rule-box b { color: var(--oip-accent); }
+.expiry-group-hdr td {
+    cursor: pointer; user-select: none;
+    background: var(--oip-header-bg) !important;
+    font-weight: 700; color: var(--oip-text);
+}
+.expiry-group-count { font-weight: 400; color: var(--oip-metric-lbl); margin-left: 4px; }
+.expiry-side-hdr td {
+    padding-left: 22px; font-weight: 600; font-size: .92em;
+    color: var(--oip-metric-lbl); background: transparent !important;
+}
+.expiry-group-chev {
+    display: inline-block; width: 12px; margin-right: 5px;
+    font-size: 9px; color: var(--oip-metric-lbl);
+    text-align: center; vertical-align: middle;
+}
 /* Freeze the trailing "Use" column so it stays visible while the wide grid
    scrolls horizontally, instead of being scrolled off to the right. */
 .opt-table th:last-child,

@@ -516,6 +516,7 @@ document.addEventListener('DOMContentLoaded', function() {
             start_date: document.getElementById('startDate')?.value,
             end_date:   document.getElementById('endDate')?.value,
             timeframe:  document.getElementById('expiryTimeframe')?.value || '60minute',
+            ema_touch:  document.getElementById('expiryEmaTouch')?.value || 'touch',
         };
 
         try {
@@ -577,8 +578,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (!sideRows.length) return '';
                 const subHeader = `
                     <tr data-group-body="${groupId}" class="expiry-side-hdr">
-                        <td colspan="5" style="padding-left:22px;font-weight:600;font-size:.92em;opacity:.85;">
-                            ${label} <span style="font-weight:400;opacity:.7;">(${sideRows.length})</span>
+                        <td colspan="5">
+                            ${label} <span class="expiry-group-count">(${sideRows.length})</span>
                         </td>
                     </tr>`;
                 return subHeader + sideRows.map(r => signalRow(r, groupId)).join('');
@@ -591,12 +592,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 const groupBuy  = groupRows.filter(r => r.direction === 'BUY').sort(bySymbol);
                 const groupSell = groupRows.filter(r => r.direction === 'SELL').sort(bySymbol);
                 const header = `
-                    <tr class="expiry-group-hdr" data-group="${groupId}" onclick="window.toggleExpiryGroup(this)"
-                        style="cursor:pointer;background:rgba(26,35,126,0.06);font-weight:600;">
+                    <tr class="expiry-group-hdr" data-group="${groupId}" onclick="window.toggleExpiryGroup(this)">
                         <td colspan="5">
                             <span class="expiry-group-chev">▾</span>
                             ${label}
-                            <span style="font-weight:400;opacity:.7;">(${groupRows.length})</span>
+                            <span class="expiry-group-count">(${groupRows.length})</span>
                         </td>
                     </tr>`;
                 return header

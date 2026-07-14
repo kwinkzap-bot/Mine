@@ -110,7 +110,8 @@ class ExpiryBreakoutEngine:
 
     def __init__(self, daily_df: pd.DataFrame, hourly_df: pd.DataFrame = None,
                 enable_long: bool = True, enable_short: bool = True,
-                sl_pct: float = 1.0, target_pct: float = 3.0, ma_timeframe: str = '1hour'):
+                sl_pct: float = 1.0, target_pct: float = 3.0, ma_timeframe: str = '1hour',
+                ema_touch: str = 'touch'):
         self.daily_df  = daily_df.copy()
         self.hourly_df = (hourly_df.copy() if hourly_df is not None
                           else pd.DataFrame(columns=['date', 'open', 'high', 'low', 'close']))
@@ -131,6 +132,11 @@ class ExpiryBreakoutEngine:
             self._ma_cols = [f'd_ema{n}' for n in _MA_PERIODS]
         else:
             self._ma_cols = [f'h_ema{n}' for n in _MA_PERIODS]
+        # scan_hl_signals() EMA gate: 'touch' (default) requires the candle
+        # to touch >= 1 selected EMA; 'not_touch' requires it to touch NONE
+        # of them; 'both' applies no EMA condition at all (every
+        # touch-and-clear-level signal, regardless of EMA touch status).
+        self.ema_touch = ema_touch if ema_touch in ('touch', 'not_touch', 'both') else 'touch'
         self._prepare()
 
     # ── Data prep ────────────────────────────────────────────────────────────
@@ -227,11 +233,17 @@ class ExpiryBreakoutEngine:
 
     def scan_hl_signals(self):
         """All historical touch-then-close-beyond-expiry-High/Low events
-        across every monthly cycle in the data — the same BUY/SELL
-        condition the live Expiry H/L scanner
-        (filters/expiry_hl_scanner.py) checks on just the latest candle,
-        applied here to EVERY hourly candle in the range. No EMA filter,
-        no SL/Target, no trade simulation, no one-per-cycle limit — just
+        across every monthly cycle in the data. The candle's CLOSE must
+        ALSO clear EVERY selected EMA 20/50/100/200 in the trade's
+        direction — above all of them for BUY, below all of them for
+        SELL (unconditional, regardless of ema_touch). ema_touch
+        ADDITIONALLY gates on whether the candle touched those EMAs:
+        'touch' (default) requires touching at least one of them (a
+        pullback that tested an EMA as support/resistance before closing
+        through); 'not_touch' requires touching NONE of them (closed
+        beyond the whole stack without ever testing it); 'both' applies
+        no touch condition, only the close-beyond-all-EMA requirement.
+        No SL/Target, no trade simulation, no one-per-cycle limit — just
         every signal hit, used by the Monthly Expiry Breakout filter."""
         expiries = self._monthly_expiry_days()
         if not expiries or self.hourly_df.empty:
@@ -253,9 +265,23 @@ class ExpiryBreakoutEngine:
                 window = window[window['day'] < next_expiry_day]
 
             for _, c in window.iterrows():
-                if _touches_and_clears_level(c, exp_high, above=True):
+                # Warmup gate: every selected EMA must exist — the
+                # close-beyond-all-EMA requirement needs real values, and
+                # (for 'not_touch') a NaN EMA would wrongly pass as
+                # "never touched".
+                if any(pd.isna(c[col]) for col in self._ma_cols):
+                    continue
+                if self.ema_touch != 'both':
+                    touched = _touches_any_ma(c, self._ma_cols)
+                    if self.ema_touch == 'touch' and not touched:
+                        continue
+                    if self.ema_touch == 'not_touch' and touched:
+                        continue
+                if (_touches_and_clears_level(c, exp_high, above=True)
+                        and _clears_all_mas(c, self._ma_cols, above=True)):
                     direction = 'BUY'
-                elif _touches_and_clears_level(c, exp_low, above=False):
+                elif (_touches_and_clears_level(c, exp_low, above=False)
+                        and _clears_all_mas(c, self._ma_cols, above=False)):
                     direction = 'SELL'
                 else:
                     continue
