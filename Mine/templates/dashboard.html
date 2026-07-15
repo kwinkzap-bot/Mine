@@ -10,6 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ sv('css/dashboard.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/finance.css') }}?v={{ sv('css/finance.css') }}">
 {% endblock %}
 
 {% block content %}
@@ -24,6 +25,21 @@
     <button class="dash-tab" id="dash-tab-orders"      onclick="dashSwitch('orders')">📋 Orders</button>
     <button class="dash-tab" id="dash-tab-portfolio"   onclick="dashSwitch('portfolio')">💼 Portfolio</button>
     <button class="dash-tab" id="dash-tab-markets"     onclick="dashSwitch('markets')">🏢 Markets</button>
+    <button class="dash-tab" id="dash-tab-finance"     onclick="dashSwitch('finance')">💰 Finance</button>
+</div>
+
+<!-- ── Finance panel (Google Sheet: 'Mine') ───────────────────────── -->
+<div class="dash-panel" id="dash-finance-panel">
+  <div class="fin-wrap">
+    <div class="fin-topbar">
+      <span class="fin-title">💰 Finance</span>
+      <span class="fin-updated" id="finUpdated"></span>
+      <button class="fin-refresh-btn" id="finRefreshBtn" onclick="financeLoad(true)">⟳ Refresh</button>
+    </div>
+    <div id="finBody">
+      <div class="fin-msg">Select the Finance tab to load data.</div>
+    </div>
+  </div>
 </div>
 
 <!-- ── Backtest panel ─────────────────────────────────────────── -->
@@ -581,7 +597,7 @@
 window.oipReplayMode = true;
 
 // ── Tab switching ──────────────────────────────────────────────
-const _DASH_TABS = ['pcr', 'replay', 'fii-sector', 'swing-trade', 'trading', 'orders', 'portfolio', 'markets'];
+const _DASH_TABS = ['pcr', 'replay', 'fii-sector', 'swing-trade', 'trading', 'orders', 'portfolio', 'markets', 'finance'];
 
 const _IFRAME_TABS = ['trading', 'orders', 'portfolio', 'markets'];
 
@@ -606,6 +622,9 @@ function dashSwitch(tab, pushState) {
     }
     if (tab === 'swing-trade') {
         if (!window._swLoaded) swLoadStocks();
+    }
+    if (tab === 'finance') {
+        if (!window._finLoaded) financeLoad();
     }
     if (_IFRAME_TABS.includes(tab)) {
         const f = document.getElementById('dash-' + tab + '-frame');
@@ -1626,4 +1645,5 @@ function _fiiBuildGrid(title, rows, kind, maxNI, maxAuc) {
 <script src="{{ url_for('static', filename='js/oi_replay.js') }}?v={{ sv('js/oi_replay.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pcr.js') }}?v={{ sv('js/pcr.js') }}"></script>
 <script src="{{ url_for('static', filename='js/vega.js') }}?v={{ sv('js/vega.js') }}"></script>
+<script src="{{ url_for('static', filename='js/finance.js') }}?v={{ sv('js/finance.js') }}"></script>
 {% endblock %}

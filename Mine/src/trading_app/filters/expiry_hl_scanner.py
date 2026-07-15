@@ -24,10 +24,47 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, TYPE_CHECKING
 
+import pandas as pd
+
+from trading_app.app.utils.helpers import MARKET_CLOSE_HOUR, MARKET_CLOSE_MINUTE
+
 if TYPE_CHECKING:
     from trading_app.filters.cpr_filter import CPRFilterService
 
 logger = logging.getLogger(__name__)
+
+_IST = 'Asia/Kolkata'   # ExpiryBreakoutEngine normalises every candle to this
+
+
+def _candle_close_time(start: pd.Timestamp, timeframe: str) -> pd.Timestamp:
+    """When the candle STARTING at `start` actually closes. Broker candles are
+    stamped with their START, and the session's last candle is cut short by the
+    3:30pm close — the 15:15 hourly bar is only 15 minutes long, and a daily
+    bar closes at 3:30pm on its own date."""
+    session_close = start.replace(hour=MARKET_CLOSE_HOUR, minute=MARKET_CLOSE_MINUTE,
+                                  second=0, microsecond=0)
+    if timeframe == 'day':
+        return session_close
+    return min(start + timedelta(minutes=60), session_close)
+
+
+def _last_finished_candle_iso(candle_df: pd.DataFrame, timeframe: str) -> Optional[str]:
+    """ISO time of the newest candle that has actually CLOSED, or None if the
+    data holds no closed candle yet.
+
+    Intraday, the newest bar is still forming: its high/low/close keep moving
+    until the hour is up, so judging it means judging a partial candle that can
+    gain or lose the signal before it closes. The backtest never sees this
+    (historical bars are all complete), which is why the live scan disagreed
+    with it. Anchoring on the newest CLOSED bar puts both on the same footing.
+    """
+    if candle_df is None or candle_df.empty:
+        return None
+    now = pd.Timestamp.now(tz=_IST)
+    for ts in reversed(candle_df['datetime'].tolist()):
+        if now >= _candle_close_time(ts, timeframe):
+            return ts.isoformat()
+    return None
 
 
 def get_expiry_hl_signal(cpr_service: "CPRFilterService", symbol: str, root_date: datetime,
@@ -59,10 +96,18 @@ def get_expiry_hl_signal(cpr_service: "CPRFilterService", symbol: str, root_date
     if not signals:
         return None
 
-    last_candle_time = engine.hourly_df['datetime'].iloc[-1].isoformat()
-    last_signal = signals[-1]
+    # Judge the newest CLOSED candle, never the one still forming — see
+    # _last_finished_candle_iso(). Signals on a still-forming candle are
+    # dropped rather than reported early: they only count once it closes.
+    last_candle_time = _last_finished_candle_iso(engine.hourly_df, timeframe)
+    if last_candle_time is None:
+        return None
+    closed_signals = [s for s in signals if s['time'] <= last_candle_time]
+    if not closed_signals:
+        return None
+    last_signal = closed_signals[-1]
     if last_signal['time'] != last_candle_time:
-        return None   # most recent candle itself isn't a qualifying signal
+        return None   # newest closed candle itself isn't a qualifying signal
 
     return {
         'symbol': symbol,
@@ -112,10 +157,16 @@ def get_expiry_hl_signals_in_range(cpr_service: "CPRFilterService", symbol: str,
     engine = ExpiryBreakoutEngine(daily_df=daily_data, hourly_df=hourly_data,
                                    ma_timeframe=ma_timeframe, ema_touch=ema_touch)
     start_iso = start_date.date().isoformat()
+    # Same finished-candle rule the live scan uses, so a scan run during market
+    # hours reports exactly what the live scanner does. After the close every
+    # candle in range is closed already and this drops nothing.
+    last_finished = _last_finished_candle_iso(engine.hourly_df, timeframe)
     signals = []
     for sig in engine.scan_hl_signals():
         if sig['time'][:10] < start_iso:
             continue
+        if last_finished is None or sig['time'] > last_finished:
+            continue   # candle still forming
         sig['symbol'] = symbol
         signals.append(sig)
     return signals

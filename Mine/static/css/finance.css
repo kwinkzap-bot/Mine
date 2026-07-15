@@ -1,0 +1,486 @@
+/* ================================================================
+   Finance tab — reads the hand-maintained 'Mine' Google Sheet.
+
+   Everything is built from the app's --oip-* theme tokens, so the tab
+   speaks each theme's own language (light/cream/ocean/dark/forest) and
+   any theme added later is picked up for free. The series colour is the
+   theme's accent; the peak bar is a stronger step of that same hue,
+   computed in finance.js against the surface's luminance.
+
+   Status hexes (good/critical) are fixed and never themed — a status
+   colour must not drift into looking like a series colour.
+   ================================================================ */
+
+.fin-wrap {
+    /* Series follows the theme. One hue; emphasis is a step of it. */
+    --fin-series-1: var(--oip-accent, #2a78d6);
+    --fin-good: #0ca30c;
+    --fin-warning: #fab219;
+    --fin-critical: #d03b3b;
+
+    /* Accent washes — tint from the theme rather than a fixed blue. */
+    --fin-tint-6: color-mix(in srgb, var(--oip-accent, #2a78d6) 6%, transparent);
+    --fin-tint-10: color-mix(in srgb, var(--oip-accent, #2a78d6) 10%, transparent);
+    --fin-tint-30: color-mix(in srgb, var(--oip-accent, #2a78d6) 30%, transparent);
+
+    --fin-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.03);
+    --fin-shadow-lift: 0 2px 6px rgba(0, 0, 0, 0.07), 0 1px 2px rgba(0, 0, 0, 0.04);
+
+    /* Tells the browser to paint native UI (select popups, scrollbars,
+       focus rings) for this surface. Without it a dark-styled <select>
+       renders its option list with the system's LIGHT popup while the
+       options inherit our near-white text — white on white. */
+    color-scheme: light;
+
+    padding: 14px;
+    background:
+        radial-gradient(1200px 340px at 12% -10%, var(--fin-tint-6), transparent 70%),
+        var(--oip-bg, #f8fafc);
+    min-height: calc(100vh - 46px);
+    color: var(--oip-text, #0f172a);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Dark surfaces need a deeper shadow to read at all. */
+body.dark-theme .fin-wrap,
+body.forest-theme .fin-wrap {
+    --fin-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --fin-shadow-lift: 0 3px 10px rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+}
+
+/* ── Top bar ──────────────────────────────────────────────────── */
+.fin-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+.fin-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.fin-updated {
+    font-size: 10px;
+    color: var(--oip-metric-lbl, #64748b);
+    font-variant-numeric: tabular-nums;
+}
+.fin-refresh-btn {
+    margin-left: auto;
+    padding: 5px 13px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--oip-text, #0f172a);
+    background: var(--oip-card-bg, #fff);
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 7px;
+    cursor: pointer;
+    box-shadow: var(--fin-shadow);
+    transition: border-color 0.16s ease, color 0.16s ease,
+                box-shadow 0.16s ease, transform 0.16s ease;
+}
+.fin-refresh-btn:hover {
+    border-color: var(--fin-series-1);
+    color: var(--fin-series-1);
+    box-shadow: var(--fin-shadow-lift);
+}
+.fin-refresh-btn:active { transform: translateY(1px); }
+.fin-refresh-btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+
+/* ── KPI tiles ────────────────────────────────────────────────── */
+.fin-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+    gap: 6px;
+    margin-bottom: 12px;
+}
+.fin-kpi {
+    position: relative;
+    background: var(--oip-card-bg, #fff);
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 7px;
+    padding: 7px 9px;
+    box-shadow: var(--fin-shadow);
+    overflow: hidden;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease,
+                transform 0.16s ease;
+}
+/* Hairline of the theme accent along the top edge. */
+.fin-kpi::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--fin-tint-30), transparent);
+    opacity: 0;
+    transition: opacity 0.16s ease;
+}
+.fin-kpi:hover {
+    border-color: var(--fin-tint-30);
+    box-shadow: var(--fin-shadow-lift);
+    transform: translateY(-1px);
+}
+.fin-kpi:hover::before { opacity: 1; }
+
+.fin-kpi-label {
+    font-size: 8px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--oip-metric-lbl, #64748b);
+    margin-bottom: 2px;
+    /* Labels like "TT Amt in Line Monthly" must not silently truncate —
+       the card grows a second line instead. */
+    line-height: 1.25;
+}
+.fin-kpi-value {
+    font-size: 14px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+}
+.fin-kpi-sub {
+    font-size: 8px;
+    color: var(--oip-metric-lbl, #64748b);
+    margin-top: 1px;
+    font-variant-numeric: tabular-nums;
+}
+.fin-kpi-value.is-neg { color: var(--fin-critical); }
+.fin-kpi-value.is-pos { color: var(--fin-good); }
+
+/* status pill — always icon + word, never colour alone */
+.fin-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 9px;
+    font-weight: 700;
+}
+.fin-pill.ok   { background: rgba(12, 163, 12, 0.14); color: var(--fin-good); }
+.fin-pill.bad  { background: rgba(208, 59, 59, 0.14); color: var(--fin-critical); }
+.fin-pill.warn { background: rgba(250, 178, 25, 0.18); color: #8a6100; }
+body.dark-theme .fin-pill.warn,
+body.forest-theme .fin-pill.warn { color: var(--fin-warning); }
+
+/* ── Pending accordions ───────────────────────────────────────── */
+.fin-accs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.fin-acc {
+    background: var(--oip-card-bg, #fff);
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 8px;
+    box-shadow: var(--fin-shadow);
+    overflow: hidden;
+}
+.fin-acc-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 8px 11px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    border-bottom: 1px solid transparent;
+}
+.fin-acc[open] .fin-acc-head { border-bottom-color: var(--oip-border, #e2e8f0); }
+.fin-acc-head::-webkit-details-marker { display: none; }
+/* Own disclosure triangle, so it inherits ink and rotates on open. */
+.fin-acc-head::before {
+    content: '';
+    width: 0; height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3.5px solid transparent;
+    border-bottom: 3.5px solid transparent;
+    color: var(--oip-metric-lbl, #64748b);
+    transition: transform 0.16s ease;
+    flex: none;
+    align-self: center;
+}
+.fin-acc[open] .fin-acc-head::before { transform: rotate(90deg); }
+.fin-acc-head:hover { background: var(--fin-tint-6); }
+.fin-acc-title {
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+.fin-acc-meta {
+    font-size: 10px;
+    color: var(--oip-metric-lbl, #64748b);
+    font-variant-numeric: tabular-nums;
+    margin-left: auto;
+}
+/* Shorter than the main tables — these are a glance, not a workspace. */
+.fin-table-wrap--acc {
+    max-height: 230px;
+    border: none;
+    border-radius: 0;
+}
+.fin-msg--sm { padding: 14px; font-size: 11px; }
+
+/* Says what the accordion's filter is leaving out, so a shrinking list
+   never reads as "nothing left to collect". */
+.fin-acc-foot {
+    padding: 6px 11px;
+    font-size: 9.5px;
+    line-height: 1.45;
+    color: var(--oip-metric-lbl, #64748b);
+    background: var(--oip-header-bg, #f8fafc);
+    border-top: 1px solid var(--oip-border, #e2e8f0);
+}
+
+/* 'late' tag beside an elapsed end date — the red row tint alone would be
+   colour carrying meaning on its own. */
+.fin-late {
+    font-size: 8.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fin-critical);
+    margin-left: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fin-acc-head::before { transition: none; }
+}
+
+/* ── Sub-tabs (pills) ─────────────────────────────────────────── */
+.fin-subtabs {
+    display: flex;
+    gap: 3px;
+    margin-bottom: 12px;
+    padding: 3px;
+    background: var(--oip-header-bg, #f1f5f9);
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 9px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.fin-subtabs::-webkit-scrollbar { display: none; }
+.fin-subtab {
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--oip-metric-lbl, #64748b);
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.16s ease, color 0.16s ease;
+}
+.fin-subtab:hover {
+    color: var(--oip-text, #0f172a);
+    background: var(--fin-tint-6);
+}
+.fin-subtab.active {
+    color: var(--fin-series-1);
+    background: var(--oip-card-bg, #fff);
+    box-shadow: var(--fin-shadow);
+}
+
+/* ── Cards & charts ───────────────────────────────────────────── */
+.fin-card {
+    background: var(--oip-card-bg, #fff);
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 10px;
+    padding: 13px;
+    margin-bottom: 12px;
+    box-shadow: var(--fin-shadow);
+}
+.fin-card-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 11px;
+}
+.fin-card-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+.fin-card-sub {
+    font-size: 10px;
+    color: var(--oip-metric-lbl, #64748b);
+}
+.fin-chart-box { position: relative; height: 220px; }
+.fin-chart-box.tall { height: 260px; }
+
+/* ── Tables ───────────────────────────────────────────────────── */
+.fin-table-wrap {
+    overflow-x: auto;
+    max-height: 460px;
+    overflow-y: auto;
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 8px;
+}
+.fin-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+}
+.fin-table th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--oip-header-bg, #f8fafc);
+    color: var(--oip-metric-lbl, #64748b);
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    text-align: left;
+    padding: 8px;
+    border-bottom: 1px solid var(--oip-border, #e2e8f0);
+    white-space: nowrap;
+}
+.fin-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--oip-grid, rgba(0, 0, 0, 0.06));
+    white-space: nowrap;
+}
+.fin-table tbody tr { transition: background 0.1s ease; }
+.fin-table tbody tr:nth-child(even) { background: var(--fin-tint-6); }
+.fin-table tbody tr:hover { background: var(--fin-tint-10); }
+.fin-table tbody tr:last-child td { border-bottom: none; }
+
+/* Flat variant: no zebra, so a row's colour only ever means something. */
+.fin-table--flat tbody tr:nth-child(even) { background: transparent; }
+
+/* Past its end date. A translucent wash of the fixed status red, so it
+   composites correctly on every theme surface rather than assuming white.
+   Declared after the zebra/hover rules — equal specificity, so source
+   order is what makes it win. */
+.fin-table tbody tr.is-overdue { background: rgba(208, 59, 59, 0.09); }
+.fin-table tbody tr.is-overdue:hover { background: rgba(208, 59, 59, 0.16); }
+body.dark-theme .fin-table tbody tr.is-overdue,
+body.forest-theme .fin-table tbody tr.is-overdue {
+    background: rgba(208, 59, 59, 0.22);
+}
+body.dark-theme .fin-table tbody tr.is-overdue:hover,
+body.forest-theme .fin-table tbody tr.is-overdue:hover {
+    background: rgba(208, 59, 59, 0.30);
+}
+.fin-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.fin-table .neg { color: var(--fin-critical); font-weight: 600; }
+.fin-table .name { font-weight: 600; }
+
+.fin-filter-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 9px;
+    flex-wrap: wrap;
+}
+.fin-input {
+    padding: 5px 9px;
+    font-size: 11px;
+    color: var(--oip-text, #0f172a);
+    background: var(--oip-bg, #fff);
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 6px;
+    min-width: 170px;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.fin-input::placeholder { color: var(--oip-metric-lbl, #94a3b8); }
+.fin-input:focus {
+    outline: none;
+    border-color: var(--fin-series-1);
+    box-shadow: 0 0 0 3px var(--fin-tint-10);
+}
+.fin-select {
+    padding: 5px 26px 5px 9px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--oip-text, #0f172a);
+    background-color: var(--oip-bg, #fff);
+    /* Chevron drawn inline so it inherits ink instead of the OS blue. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2364748b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 9px center;
+    border: 1px solid var(--oip-border, #e2e8f0);
+    border-radius: 6px;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+/* Belt and braces alongside color-scheme: on platforms where the option
+   list IS styleable, pin both ends so the text can never inherit our
+   near-white ink onto a system-white popup. */
+.fin-select option {
+    background-color: var(--oip-card-bg, #fff);
+    color: var(--oip-text, #0f172a);
+}
+.fin-select:hover { border-color: var(--fin-tint-30); }
+.fin-select:focus {
+    outline: none;
+    border-color: var(--fin-series-1);
+    box-shadow: 0 0 0 3px var(--fin-tint-10);
+}
+
+.fin-count {
+    font-size: 10px;
+    color: var(--oip-metric-lbl, #64748b);
+    font-variant-numeric: tabular-nums;
+    margin-left: auto;
+}
+
+/* ── States ───────────────────────────────────────────────────── */
+.fin-msg {
+    padding: 26px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--oip-metric-lbl, #64748b);
+}
+.fin-error {
+    padding: 14px;
+    border-radius: 9px;
+    border: 1px solid var(--fin-critical);
+    background: rgba(208, 59, 59, 0.07);
+    font-size: 12px;
+    line-height: 1.55;
+}
+.fin-error h4 {
+    margin: 0 0 6px;
+    font-size: 12.5px;
+    color: var(--fin-critical);
+}
+.fin-error code {
+    background: var(--oip-header-bg, #f1f5f9);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+
+.fin-note {
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--oip-metric-lbl, #64748b);
+    background: var(--oip-header-bg, #f8fafc);
+    border-left: 2px solid var(--fin-warning);
+    padding: 8px 11px;
+    border-radius: 0 6px 6px 0;
+    margin-top: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fin-kpi, .fin-refresh-btn, .fin-subtab, .fin-table tbody tr {
+        transition: none;
+    }
+    .fin-kpi:hover { transform: none; }
+}

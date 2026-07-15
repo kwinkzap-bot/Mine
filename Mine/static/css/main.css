@@ -491,10 +491,6 @@ tr {
     transition: background-color 0.2s ease;
 }
 
-tr:nth-child(even) {
-    background-color: #fafbfc;
-}
-
 td {
     color: #333;
 }

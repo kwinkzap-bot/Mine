@@ -10868,6 +10868,36 @@ def sm_live_rankings(config_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ── Finance (Google Sheet) ────────────────────────────────────────────────────
+
+@api_bp.route('/finance/summary', methods=['GET'])
+@require_user_auth
+def get_finance_summary():
+    """Finance dashboard payload, read from the 'Mine' Google Sheet.
+
+    Gated on user auth only — this data has nothing to do with the broker
+    session, so check_auth() (which needs a live Zerodha/Fyers provider)
+    would wrongly lock the tab out whenever the market login is stale.
+    """
+    try:
+        from trading_app.service.finance_service import FinanceService, FinanceConfigError
+        force = request.args.get('force', '').lower() in ('1', 'true', 'yes')
+        resp = jsonify(FinanceService.get_dashboard(force=force))
+        # The sheet is hand-edited during the day and the URL never changes,
+        # so a cached response would quietly serve a stale ledger — including
+        # to the Refresh button. Freshness is managed server-side by the
+        # service's own short TTL instead.
+        resp.headers['Cache-Control'] = 'no-store, max-age=0'
+        return resp
+    except FinanceConfigError as e:
+        # Setup problem (missing key / sheet id / tab) — actionable by the user.
+        logger.warning(f'Finance config error: {e}')
+        return jsonify({'success': False, 'error': str(e), 'config_error': True}), 503
+    except Exception as e:
+        logger.error(f'Finance summary error: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ── Error handlers ────────────────────────────────────────────────────────────
 
 @api_bp.errorhandler(404)
