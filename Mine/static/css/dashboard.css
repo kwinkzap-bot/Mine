@@ -292,8 +292,6 @@
     font-size: 9px; font-weight: 600; color: var(--oip-metric-lbl);
     text-transform: uppercase; letter-spacing: .4px;
 }
-.opt-table th.opt-sort { cursor: pointer; user-select: none; position: relative; padding-right: 20px; }
-.opt-table th.opt-sort:hover { color: var(--oip-text); }
 /* Expand / collapse sections */
 .collapsible-h { cursor: pointer; user-select: none; }
 .collapse-chev {
@@ -313,8 +311,13 @@
 .opt-table td { padding: 5px 8px; border-bottom: 1px solid var(--oip-border); color: var(--oip-text); white-space: nowrap; }
 .opt-table tr:last-child td { border-bottom: none; }
 .opt-table tbody tr:hover td { background: var(--oip-header-bg); }
-.opt-table .opt-best td { background: rgba(34,197,94,.07); }
-.opt-table .opt-best td:first-child { border-left: 3px solid #22c55e; }
+/* .opt-table itself now styles only the Expiry Scan table (grouped/collapsible
+   rows — doesn't fit DataGrid's flat-row model, so it kept its own markup).
+   RTP / Candle-Breakout / VWAP / SM / Trade History all moved to the shared
+   grid (.dg-table); their best-row highlight and sticky Use column live here,
+   scoped to .opt-table-wrap so they never leak onto Expiry Scan's table. */
+.opt-table-wrap .dg-table tbody tr.opt-best .dg-td { background: rgba(34,197,94,.07); }
+.opt-table-wrap .dg-table tbody tr.opt-best .dg-td:first-child { border-left: 3px solid #22c55e; }
 .expiry-symbol-link { color: var(--oip-accent, #2962ff); text-decoration: none; font-weight: 700; }
 .expiry-symbol-link:hover { text-decoration: underline; }
 .rule-box {
@@ -339,18 +342,20 @@
     text-align: center; vertical-align: middle;
 }
 /* Freeze the trailing "Use" column so it stays visible while the wide grid
-   scrolls horizontally, instead of being scrolled off to the right. */
-.opt-table th:last-child,
-.opt-table td:last-child {
+   scrolls horizontally, instead of being scrolled off to the right. Scoped to
+   .opt-table-wrap .dg-table (RTP / Candle-Breakout / VWAP / SM) — Expiry
+   Scan's table has no Use column and shouldn't freeze anything. */
+.opt-table-wrap .dg-table .dg-th:last-child,
+.opt-table-wrap .dg-table .dg-td:last-child {
     position: sticky;
     right: 0;
     z-index: 2;
     background: var(--oip-card-bg, #fff);
     box-shadow: -6px 0 6px -6px rgba(0,0,0,.2);
 }
-.opt-table th:last-child { z-index: 3; background: var(--oip-header-bg); }
-.opt-table tbody tr:hover td:last-child { background: var(--oip-header-bg); }
-.opt-table .opt-best td:last-child {
+.opt-table-wrap .dg-table .dg-th:last-child { z-index: 3; background: var(--oip-header-bg); }
+.opt-table-wrap .dg-table tbody tr:hover .dg-td:last-child { background: var(--oip-header-bg); }
+.opt-table-wrap .dg-table tbody tr.opt-best .dg-td:last-child {
     background: linear-gradient(rgba(34,197,94,.07), rgba(34,197,94,.07)), var(--oip-card-bg, #fff);
 }
 /* LIVE badge — param combo already running as a live algo */
@@ -540,21 +545,19 @@
 .period-tab.active { background: var(--oip-accent); color: #fff; border-color: var(--oip-accent); }
 .period-chart-wrap { position: relative; height: 210px; }
 
+/* Trade History is now the shared grid (.dg-table); .trades-table-container
+   is just its scroll/card frame. BUY/SELL used to get a fixed badge-buy/
+   badge-sell chip — replaced with the grid's own dg-badge--pos/neg, which
+   theme rather than staying two fixed colours. */
 .trades-table-container { margin-top: 0; border-radius: 0; overflow: hidden; overflow-x: auto; border: none; background: var(--oip-card-bg); }
 .trades-table-container h3 { padding: 8px 12px 0; margin: 0; color: var(--oip-text); font-size: 12px; font-weight: 700; }
-.trades-table { width: 100%; border-collapse: separate; border-spacing: 0; }
-.trades-table th { background: var(--oip-header-bg); color: var(--oip-metric-lbl); font-weight: 700; padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--oip-border); text-transform: uppercase; font-size: 9px; letter-spacing: .6px; position: sticky; top: 0; z-index: 10; cursor: pointer; transition: background .15s; }
-.trades-table th:hover { background: var(--oip-bg); }
-.trades-table th.sort-asc::after  { content: " ▲"; color: var(--oip-accent); margin-left: 3px; font-size: 7px; }
-.trades-table th.sort-desc::after { content: " ▼"; color: var(--oip-accent); margin-left: 3px; font-size: 7px; }
-.trades-table td { padding: 6px 10px; border-bottom: 1px solid var(--oip-border); font-size: 11px; color: var(--oip-text); font-weight: 500; }
-.trades-table tr:last-child td { border-bottom: none; }
-.trades-table tbody tr:hover td { background: var(--oip-header-bg); }
 .pnl-positive { color: #22c55e !important; font-weight: 700 !important; }
 .pnl-negative { color: #ef4444 !important; font-weight: 700 !important; }
-.badge      { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }
-.badge-buy  { background: rgba(34,197,94,.12);  color: #16a34a; }
-.badge-sell { background: rgba(239,68,68,.12);  color: #dc2626; }
+/* Swing Momentum's Trade History variant tints each row by BUY/SELL side —
+   same wash strength as the fixed-colour badges it replaces, on the cell
+   since the grid paints hover/zebra there too. */
+.trades-table-container .dg-table tbody tr.sm-trade-buy .dg-td { background: rgba(34,197,94,.04); }
+.trades-table-container .dg-table tbody tr.sm-trade-sell .dg-td { background: rgba(239,68,68,.04); }
 
 .search-select-container { position: relative; }
 #symbolList { position: absolute; top: calc(100% + 3px); left: 0; right: 0; background: var(--oip-card-bg); border: 1px solid var(--oip-border); border-radius: 6px; max-height: 200px; overflow-y: auto; z-index: 1000; list-style: none; padding: 2px 0; margin: 0; display: none; box-shadow: 0 6px 18px rgba(0,0,0,.1); }
@@ -620,14 +623,20 @@
     height: calc(100vh - 60px);
 }
 body.embed-mode .hoi-page { height: 100vh; }
+/* The grid is the shared component (.dg-table). Sticky headers bind to the
+   nearest scroll container, and DataGrid wraps its table in .dg-scroll — so
+   that wrapper must be the vertical scroller here, not the panel itself,
+   or the header would ride out of view with the outer scroll. */
 #hoi-panel-NIFTY {
     flex: 1 1 auto;
     min-height: 0;
-    overflow-y: auto;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
-#hoi-panel-NIFTY .sw-table thead th {
-    position: sticky;
-    top: 0;
+#hoi-panel-NIFTY > div { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+#hoi-panel-NIFTY .dg-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+#hoi-panel-NIFTY .dg-table .dg-th {
     z-index: 5;
     /* border-collapse drops sticky cell borders while scrolling — redraw it */
     box-shadow: 0 1px 0 var(--pf-border);

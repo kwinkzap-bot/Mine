@@ -12,7 +12,6 @@
 let _narrowInFlight = false;
 let _narrowLastAt = 0;
 let _narrowInitDone = false;
-let _narrowSortDir = {};
 let _narrowPollTimer = null;
 
 const NARROW_MIN_GAP_MS  = 60 * 1000; // hard throttle: 1 req/min (user actions)
@@ -60,12 +59,7 @@ function initEmaNarrowOnce() {
         btn.addEventListener('click', () => { _narrowLastAt = 0; loadEmaNarrowData(true); });
     }
 
-    const tbl = document.getElementById('emaNarrowTable');
-    if (tbl) {
-        tbl.querySelectorAll('th[data-col]').forEach(th => {
-            th.addEventListener('click', () => sortNarrowTable('emaNarrowTable', th.dataset.col));
-        });
-    }
+    // Click-to-sort is wired by DataGrid.mountSortable itself, on first render.
 
     loadEmaNarrowData();
 }
@@ -115,22 +109,25 @@ async function loadEmaNarrowData(forceRefresh = false, isPoll = false) {
         const response = await fetchJson(url);
 
         if (response && response.status === 'running') {
-            // Scan in progress — render whatever has been found so far and keep
-            // the loader row below the last record, then poll again shortly
+            // Scan in progress — render whatever has been found so far, show
+            // the progress line below the grid (its own slot now, not a table
+            // row), then poll again shortly.
             const partial = response.results || [];
             if (partial.length > 0) {
                 renderNarrowTable(partial);
                 const countEl = document.getElementById('emaNarrowCount');
                 if (countEl) countEl.textContent = `(${partial.length} so far…)`;
-                appendNarrowLoaderRow(response.progress);
             } else {
-                renderNarrowProgress(response.progress);
+                const grid = document.getElementById('emaNarrowGrid');
+                if (grid) grid.innerHTML = '';
             }
+            renderNarrowProgress(response.progress);
             _narrowPollTimer = setTimeout(() => loadEmaNarrowData(false, true), NARROW_POLL_MS);
         } else if (response && (response.success || response.results)) {
             const results = response.results || [];
             const nearest = response.nearest || [];
 
+            clearNarrowProgress();
             renderNarrowTable(results);
             renderNarrowNearest(nearest, results.length === 0);
 
@@ -158,30 +155,21 @@ function _narrowProgressDetail(progress) {
     return 'Starting scan...';
 }
 
-function _narrowLoaderRowHtml(progress) {
-    return `
-        <td colspan="8" style="text-align: center; padding: 18px; color: var(--scan-th-text); font-weight: 500; background: var(--scan-bg);">
-            <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid var(--scan-th-text); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
-            🧲 Scanning all NSE equity stocks for EMA compression — ${_narrowProgressDetail(progress)}
-        </td>
-    `;
-}
-
-// Loader shown when there are no matches yet — replaces the table body
+// Progress lives in its own slot (#emaNarrowLoader) beside the grid now,
+// rather than as a fake <tr> spliced into — and pinned at the bottom of —
+// the row list on every sort. DataGrid.mountSortable owns the row list
+// exclusively; this never touches it.
 function renderNarrowProgress(progress) {
-    const tbody = document.getElementById('emaNarrowBody');
-    if (!tbody) return;
-    tbody.innerHTML = `<tr>${_narrowLoaderRowHtml(progress)}</tr>`;
+    const el = document.getElementById('emaNarrowLoader');
+    if (!el) return;
+    el.innerHTML = `<div class="cpr-grid-status">
+        <span class="cpr-grid-spinner"></span>
+        🧲 Scanning all NSE equity stocks for EMA compression — ${DataGrid.escape(_narrowProgressDetail(progress))}
+    </div>`;
 }
-
-// Loader appended BELOW the last partial-result record while the scan runs
-function appendNarrowLoaderRow(progress) {
-    const tbody = document.getElementById('emaNarrowBody');
-    if (!tbody) return;
-    const row = document.createElement('tr');
-    row.id = 'emaNarrowLoaderRow';
-    row.innerHTML = _narrowLoaderRowHtml(progress);
-    tbody.appendChild(row);
+function clearNarrowProgress() {
+    const el = document.getElementById('emaNarrowLoader');
+    if (el) el.innerHTML = '';
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
@@ -194,56 +182,70 @@ function _narrowEmaTitle(stock, tf) {
         .join(' | ');
 }
 
-function _narrowSpreadCell(stock, tf, key) {
-    const v = stock[key];
-    if (v == null) return '<td>—</td>';
-    return `<td class="dist-pct" title="${_narrowEmaTitle(stock, tf)}">${Number(v).toFixed(2)}%</td>`;
-}
-
-function _narrowRow(stock, withZone) {
-    const tvUrl   = `https://in.tradingview.com/chart/?symbol=NSE:${stock.symbol}`;
-    const symCell = `<a href="${tvUrl}" target="_blank" rel="noopener noreferrer" class="symbol-link">${stock.symbol}</a>`;
-    const fmt = v => v != null ? Number(v).toFixed(2) : '—';
-
-    const maxSpread = stock.max_spread_pct != null ? `${Number(stock.max_spread_pct).toFixed(2)}%` : '—';
+function _narrowZoneLabel(stock) {
     const anchorTf = stock.tfs?.daily || stock.tfs?.weekly || stock.tfs?.monthly || {};
     const anchorEma = anchorTf.ema200 ?? anchorTf.ema100 ?? 0;
-    const zone = stock.price_inside
-        ? '<span class="trigger-both">🎯 Inside</span>'
-        : (stock.close > anchorEma
-            ? '<span class="trigger-ema">⬆ Above</span>'
-            : '<span class="trigger-rsi">⬇ Below</span>');
+    if (stock.price_inside) return 'Inside';
+    return stock.close > anchorEma ? 'Above' : 'Below';
+}
+function _narrowZoneHtml(stock) {
+    const label = _narrowZoneLabel(stock);
+    if (label === 'Inside') return '<span class="trigger-both">🎯 Inside</span>';
+    return label === 'Above'
+        ? '<span class="trigger-ema">⬆ Above</span>'
+        : '<span class="trigger-rsi">⬇ Below</span>';
+}
 
-    const row = document.createElement('tr');
-    row.innerHTML = `
-        <td>${symCell}</td>
-        <td>${fmt(stock.current_price)}</td>
-        <td>${fmt(stock.close)}</td>
-        ${_narrowSpreadCell(stock, 'daily',   'spread_daily')}
-        ${_narrowSpreadCell(stock, 'weekly',  'spread_weekly')}
-        ${_narrowSpreadCell(stock, 'monthly', 'spread_monthly')}
-        <td class="dist-pct">${maxSpread}</td>
-        ${withZone ? `<td>${zone}</td>` : ''}
-    `;
-    return row;
+// A spread column reads {daily,weekly,monthly}, with the underlying per-EMA
+// breakdown as its hover title — same shape, three timeframes.
+function _narrowSpreadColumn(tf, key, label) {
+    return {
+        key, label, sortable: true, align: 'right',
+        render: (v, row) => v == null ? '—' :
+            `<span class="dist-pct" title="${DataGrid.escape(_narrowEmaTitle(row, tf))}">` +
+            `${Number(v).toFixed(2)}%</span>`,
+    };
+}
+
+function _narrowColumns(withZone) {
+    const cols = [
+        { key: 'symbol', label: 'Symbol', sortable: true, strong: true,
+          render: (symbol) => `<a href="https://in.tradingview.com/chart/?symbol=NSE:` +
+              `${encodeURIComponent(symbol)}" target="_blank" rel="noopener noreferrer" ` +
+              `class="symbol-link">${DataGrid.escape(symbol)}</a>` },
+        { key: 'current_price', label: 'Price', sortable: true, align: 'right',
+          format: v => v != null ? Number(v).toFixed(2) : '—' },
+        { key: 'close', label: 'Close', sortable: true, align: 'right',
+          format: v => v != null ? Number(v).toFixed(2) : '—' },
+        _narrowSpreadColumn('daily', 'spread_daily', 'Day Spread %'),
+        _narrowSpreadColumn('weekly', 'spread_weekly', 'Week Spread %'),
+        _narrowSpreadColumn('monthly', 'spread_monthly', 'Month Spread %'),
+        { key: 'max_spread_pct', label: 'Max Spread %', sortable: true, align: 'right',
+          cellClass: 'dist-pct', format: v => v != null ? Number(v).toFixed(2) + '%' : '—' },
+    ];
+    if (withZone) {
+        cols.push({ label: 'Price Zone', sortable: true, sortValue: _narrowZoneLabel,
+            render: (_, row) => _narrowZoneHtml(row) });
+    }
+    return cols;
 }
 
 function renderNarrowTable(results) {
-    const tbody     = document.getElementById('emaNarrowBody');
+    const grid      = document.getElementById('emaNarrowGrid');
     const container = document.getElementById('emaNarrowResults');
     const countEl   = document.getElementById('emaNarrowCount');
-    if (!tbody || !container || !countEl) return;
+    if (!grid || !container || !countEl) return;
 
-    tbody.innerHTML = '';
     countEl.textContent = `(${results.length})`;
 
     if (results.length === 0) {
+        grid.innerHTML = '';
         container.classList.add('results-hidden');
         return;
     }
 
     container.classList.remove('results-hidden');
-    results.forEach(stock => tbody.appendChild(_narrowRow(stock, true)));
+    DataGrid.mountSortable(grid, { rows: results, columns: _narrowColumns(true), empty: 'No matches.' });
 }
 
 function renderNarrowNearest(nearest, show) {
@@ -256,65 +258,23 @@ function renderNarrowNearest(nearest, show) {
     }
 
     section.classList.remove('ema-hidden');
-    const tbody   = document.getElementById('emaNarrowNearestBody');
+    const grid    = document.getElementById('emaNarrowNearestGrid');
     const countEl = section.querySelector('.nearest-count');
-    if (!tbody) return;
+    if (!grid) return;
 
-    tbody.innerHTML = '';
     if (countEl) countEl.textContent = `(top ${nearest.length})`;
-    nearest.forEach(stock => tbody.appendChild(_narrowRow(stock, false)));
+    DataGrid.mountSortable(grid, { rows: nearest, columns: _narrowColumns(false), empty: 'No matches.' });
 }
 
 function renderNarrowError(msg) {
-    const tbody = document.getElementById('emaNarrowBody');
-    if (tbody) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="8" style="text-align: center; padding: 20px; color: #dc2626; font-weight: 500; background: var(--scan-bg);">
-                    ❌ Failed to load EMA Narrow data: ${msg}
-                </td>
-            </tr>
-        `;
+    clearNarrowProgress();
+    const grid = document.getElementById('emaNarrowGrid');
+    if (grid) {
+        grid.innerHTML = `<div class="cpr-grid-status cpr-grid-status--error">` +
+            `❌ Failed to load EMA Narrow data: ${DataGrid.escape(msg)}</div>`;
     }
     const countEl = document.getElementById('emaNarrowCount');
     if (countEl) countEl.textContent = '(0)';
-}
-
-// ─── Sort ─────────────────────────────────────────────────────────────────────
-function sortNarrowTable(tableId, colStr) {
-    const col   = parseInt(colStr, 10);
-    const table = document.getElementById(tableId);
-    if (!table) return;
-    const tbody = table.querySelector('tbody');
-    if (!tbody) return;
-
-    const rows   = Array.from(tbody.querySelectorAll('tr'))
-        .filter(r => r.id !== 'emaNarrowLoaderRow'); // keep loader pinned at bottom
-    const header = table.querySelector(`th[data-col="${colStr}"]`);
-    if (!header) return;
-
-    if (!_narrowSortDir[tableId]) _narrowSortDir[tableId] = { col: -1, dir: 'asc' };
-    const state = _narrowSortDir[tableId];
-    const dir   = (state.col === col && state.dir === 'asc') ? 'desc' : 'asc';
-    _narrowSortDir[tableId] = { col, dir };
-
-    table.querySelectorAll('th').forEach(th => th.classList.remove('sort-asc', 'sort-desc'));
-    header.classList.add(dir === 'asc' ? 'sort-asc' : 'sort-desc');
-
-    rows.sort((a, b) => {
-        const aText = (a.cells[col]?.textContent || '').replace(/[₹%,]/g, '').trim();
-        const bText = (b.cells[col]?.textContent || '').replace(/[₹%,]/g, '').trim();
-        const aNum  = parseFloat(aText);
-        const bNum  = parseFloat(bText);
-        if (!isNaN(aNum) && !isNaN(bNum) && col >= 1 && col <= 6) {
-            return dir === 'asc' ? aNum - bNum : bNum - aNum;
-        }
-        return dir === 'asc' ? aText.localeCompare(bText) : bText.localeCompare(aText);
-    });
-
-    rows.forEach(r => tbody.appendChild(r));
-    const loader = document.getElementById('emaNarrowLoaderRow');
-    if (loader) tbody.appendChild(loader);
 }
 
 // ─── Section title (EMA set) ─────────────────────────────────────────────────

@@ -177,57 +177,39 @@ body.forest-theme .fin-pill.warn { color: var(--fin-warning); }
     gap: 8px;
     margin-bottom: 12px;
 }
-.fin-acc {
-    background: var(--oip-card-bg, #fff);
-    border: 1px solid var(--oip-border, #e2e8f0);
-    border-radius: 8px;
-    box-shadow: var(--fin-shadow);
-    overflow: hidden;
-}
-.fin-acc-head {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    padding: 8px 11px;
+/* The two Pending cards wear the shared grid shell — .dg-card, .dg-card-hdr
+   and a DataGrid body, from components/data-grid.css. Nothing about that look
+   is duplicated here; these rules only restate what <details> and the overdue
+   row need on top of it. */
+.fin-accs .dg-card-hdr {
     cursor: pointer;
     list-style: none;
     user-select: none;
-    border-bottom: 1px solid transparent;
 }
-.fin-acc[open] .fin-acc-head { border-bottom-color: var(--oip-border, #e2e8f0); }
-.fin-acc-head::-webkit-details-marker { display: none; }
+.fin-accs .dg-card-hdr::-webkit-details-marker { display: none; }
 /* Own disclosure triangle, so it inherits ink and rotates on open. */
-.fin-acc-head::before {
+.fin-accs .dg-card-hdr::before {
     content: '';
     width: 0; height: 0;
     border-left: 4px solid currentColor;
     border-top: 3.5px solid transparent;
     border-bottom: 3.5px solid transparent;
-    color: var(--oip-metric-lbl, #64748b);
+    color: var(--dg-text-3);
     transition: transform 0.16s ease;
     flex: none;
     align-self: center;
 }
-.fin-acc[open] .fin-acc-head::before { transform: rotate(90deg); }
-.fin-acc-head:hover { background: var(--fin-tint-6); }
-.fin-acc-title {
-    font-size: 11.5px;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-}
+.fin-accs details[open] .dg-card-hdr::before { transform: rotate(90deg); }
+.fin-accs .dg-card-hdr:hover { background: var(--dg-row-hover); }
 .fin-acc-meta {
     font-size: 10px;
-    color: var(--oip-metric-lbl, #64748b);
+    color: var(--dg-text-3);
     font-variant-numeric: tabular-nums;
     margin-left: auto;
 }
+.fin-acc-body { padding: 10px 12px; }
 /* Shorter than the main tables — these are a glance, not a workspace. */
-.fin-table-wrap--acc {
-    max-height: 230px;
-    border: none;
-    border-radius: 0;
-}
-.fin-msg--sm { padding: 14px; font-size: 11px; }
+.fin-accs .dg-scroll { max-height: 230px; overflow-y: auto; }
 
 /* Says what the accordion's filter is leaving out, so a shrinking list
    never reads as "nothing left to collect". */
@@ -317,7 +299,11 @@ body.forest-theme .fin-pill.warn { color: var(--fin-warning); }
 .fin-chart-box { position: relative; height: 220px; }
 .fin-chart-box.tall { height: 260px; }
 
-/* ── Tables ───────────────────────────────────────────────────── */
+/* ── Tables ─────────────────────────────────────────────────────
+   The finance grids are the shared component (.dg-table, components/
+   data-grid.css). Everything here is the finance-only layer on top of it:
+   the scroll frame, this tab's denser zebra, and the overdue row wash. The
+   grid structure itself is NOT restated. */
 .fin-table-wrap {
     overflow-x: auto;
     max-height: 460px;
@@ -325,59 +311,34 @@ body.forest-theme .fin-pill.warn { color: var(--fin-warning); }
     border: 1px solid var(--oip-border, #e2e8f0);
     border-radius: 8px;
 }
-.fin-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 11px;
-}
-.fin-table th {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: var(--oip-header-bg, #f8fafc);
-    color: var(--oip-metric-lbl, #64748b);
-    font-size: 9px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    text-align: left;
-    padding: 8px;
-    border-bottom: 1px solid var(--oip-border, #e2e8f0);
-    white-space: nowrap;
-}
-.fin-table td {
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--oip-grid, rgba(0, 0, 0, 0.06));
-    white-space: nowrap;
-}
-.fin-table tbody tr { transition: background 0.1s ease; }
-.fin-table tbody tr:nth-child(even) { background: var(--fin-tint-6); }
-.fin-table tbody tr:hover { background: var(--fin-tint-10); }
-.fin-table tbody tr:last-child td { border-bottom: none; }
-
-/* Flat variant: no zebra, so a row's colour only ever means something. */
-.fin-table--flat tbody tr:nth-child(even) { background: transparent; }
+/* Zebra + hover. The grid paints hover on the cell (.dg-table tbody tr:hover
+   .dg-td), so both the stripe and the finance hover have to be set on .dg-td
+   too, at matching specificity, or the component rule wins. */
+.fin-table-wrap .dg-table tbody tr:nth-child(even) .dg-td { background: var(--fin-tint-6); }
+.fin-table-wrap .dg-table tbody tr:hover .dg-td { background: var(--fin-tint-10); }
 
 /* Past its end date. A translucent wash of the fixed status red, so it
    composites correctly on every theme surface rather than assuming white.
-   Declared after the zebra/hover rules — equal specificity, so source
-   order is what makes it win. */
-.fin-table tbody tr.is-overdue { background: rgba(208, 59, 59, 0.09); }
-.fin-table tbody tr.is-overdue:hover { background: rgba(208, 59, 59, 0.16); }
-body.dark-theme .fin-table tbody tr.is-overdue,
-body.forest-theme .fin-table tbody tr.is-overdue {
+   Same mechanism for both the Pending accordions (.fin-accs) and the
+   sub-tab tables (.fin-table-wrap): the tint lives on the cell, and is
+   declared after the zebra rule so equal specificity resolves by source order.
+   The Monthly sub-table has no zebra, so there its wash is the only row tint. */
+.fin-accs tbody tr.is-overdue .dg-td,
+.fin-table-wrap .dg-table tbody tr.is-overdue .dg-td { background: rgba(208, 59, 59, 0.09); }
+.fin-accs tbody tr.is-overdue:hover .dg-td,
+.fin-table-wrap .dg-table tbody tr.is-overdue:hover .dg-td { background: rgba(208, 59, 59, 0.16); }
+body.dark-theme .fin-accs tbody tr.is-overdue .dg-td,
+body.forest-theme .fin-accs tbody tr.is-overdue .dg-td,
+body.dark-theme .fin-table-wrap .dg-table tbody tr.is-overdue .dg-td,
+body.forest-theme .fin-table-wrap .dg-table tbody tr.is-overdue .dg-td {
     background: rgba(208, 59, 59, 0.22);
 }
-body.dark-theme .fin-table tbody tr.is-overdue:hover,
-body.forest-theme .fin-table tbody tr.is-overdue:hover {
+body.dark-theme .fin-accs tbody tr.is-overdue:hover .dg-td,
+body.forest-theme .fin-accs tbody tr.is-overdue:hover .dg-td,
+body.dark-theme .fin-table-wrap .dg-table tbody tr.is-overdue:hover .dg-td,
+body.forest-theme .fin-table-wrap .dg-table tbody tr.is-overdue:hover .dg-td {
     background: rgba(208, 59, 59, 0.30);
 }
-.fin-table .num {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-}
-.fin-table .neg { color: var(--fin-critical); font-weight: 600; }
-.fin-table .name { font-weight: 600; }
 
 .fin-filter-row {
     display: flex;
@@ -479,7 +440,7 @@ body.forest-theme .fin-table tbody tr.is-overdue:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .fin-kpi, .fin-refresh-btn, .fin-subtab, .fin-table tbody tr {
+    .fin-kpi, .fin-refresh-btn, .fin-subtab, .fin-table-wrap .dg-table tbody tr {
         transition: none;
     }
     .fin-kpi:hover { transform: none; }

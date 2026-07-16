@@ -40,29 +40,12 @@
       <span style="font-size:11px;color:var(--pf-text-3)">Running 5-year analysis…</span>
     </div>
 
-    <!-- NIFTY grid -->
+    <!-- NIFTY grid — shared grid (DataGrid, rendered by _hoiRenderAll in
+         static/js/historic_oi.js) -->
     <div class="sw-table-wrap" id="hoi-panel-NIFTY">
-      <table class="sw-table">
-        <thead>
-          <tr>
-            <th class="sw-th-l">Date</th>
-            <th class="sw-th-c">Day</th>
-            <th>CHNG OPT OI</th>
-            <th>PCR</th>
-            <th>FII Chng Fut OI</th>
-            <th>FII Fut</th>
-            <th>Open</th>
-            <th>High</th>
-            <th>Low</th>
-            <th>Close</th>
-            <th class="sw-th-c">Move</th>
-            <th class="sw-th-c"></th>
-          </tr>
-        </thead>
-        <tbody id="hoiTbody-NIFTY">
-          <tr><td colspan="12" class="sw-empty">Loading…</td></tr>
-        </tbody>
-      </table>
+      <div id="hoiGrid-NIFTY">
+        <div class="dg-empty">Loading…</div>
+      </div>
     </div>
 
   </div>

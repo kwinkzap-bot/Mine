@@ -3,17 +3,12 @@
  * Handles fetching, displaying, and sorting CPR filter data.
  */
 
-// Global state to track sort direction for each table
-let sortDirection = {};
 let cprRefreshIntervalId = null;
 let cprRequestInFlight = false;
 let cprLastRequestAt = 0;
 
 // Cached DOM references (populated on DOMContentLoaded)
 const cprElems = {};
-
-// Cached sort header references per table (avoids full querySelectorAll on every sort click)
-const _lastSortedTh = {};
 
 // Debounce timer for date picker (unused now — only fed the disabled loadCPRData change listener)
 // let _dateDebounceTid = null;
@@ -28,7 +23,6 @@ window.addEventListener('load', function () {
     cprElems.datePicker  = document.getElementById('cprDateFilter');
     cprElems.refreshBtn  = document.getElementById('cprRefreshBtn');
     cprElems.highIvRefreshBtn = document.getElementById('highIvRefreshBtn');
-    cprElems.highIvBody  = document.getElementById('highIvBody');
     cprElems.highIvResults = document.getElementById('highIvResults');
     cprElems.highIvCount = document.getElementById('highIvCount');
     cprElems.controls    = document.getElementById('controls');
@@ -109,39 +103,30 @@ window.addEventListener('load', function () {
         }, CPR_AUTO_REFRESH_MS);
     }
 
-    // Event delegation for sort — one listener per table, survives innerHTML re-renders
-    const sortableTableIds = [
-        'highIvTable',
-        CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_TABLE,
-        CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_TABLE,
-        // Camarilla / D-RSI reversal tables — commented out
-        // CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE,
-        // CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE,
-        // CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_TABLE,
-        // CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_TABLE,
-        // CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_TABLE,
-        // CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_TABLE,
-    ];
-    sortableTableIds.forEach(tableId => {
-        const table = document.getElementById(tableId);
-        if (table) {
-            table.addEventListener('click', e => {
-                const th = e.target.closest('th[data-column-index]');
-                if (th) sortTable(tableId, th.dataset.columnIndex);
-            });
-        }
-    });
+    // Click-to-sort is owned by DataGrid.mountSortable now — see displayResults().
 });
+
+// A grid container (a plain <div>, not a <table>) shows its own loading /
+// error state directly — no fake colspan <tr> needed once the table itself
+// is built by DataGrid.
+function _gridLoadingHtml(label) {
+    return `<div class="cpr-grid-status">
+        <span class="cpr-grid-spinner"></span>${DataGrid.escape(label)}
+    </div>`;
+}
+function _gridErrorHtml(label) {
+    return `<div class="cpr-grid-status cpr-grid-status--error">❌ ${DataGrid.escape(label)}</div>`;
+}
 
 /**
  * Fetches High IV Percentile data from the backend API separately.
  */
 async function loadHighIVData(selectedDate, refresh = false) {
-    const highIvBody = cprElems.highIvBody || document.getElementById('highIvBody');
+    const highIvGrid = document.getElementById('highIvGrid');
     const highIvResultsDiv = cprElems.highIvResults || document.getElementById('highIvResults');
     const highIvCountSpan = cprElems.highIvCount || document.getElementById('highIvCount');
 
-    if (!highIvBody || !highIvResultsDiv || !highIvCountSpan) {
+    if (!highIvGrid || !highIvResultsDiv || !highIvCountSpan) {
         return;
     }
 
@@ -154,14 +139,8 @@ async function loadHighIVData(selectedDate, refresh = false) {
     // Show High IV block and set loading indicator
     highIvResultsDiv.classList.remove('results-hidden');
     highIvCountSpan.textContent = '...';
-    highIvBody.innerHTML = `
-        <tr>
-            <td colspan="9" style="text-align: center; padding: 24px; color: var(--scan-th-text); font-weight: 500; background: var(--scan-bg);">
-                <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid var(--scan-th-text); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
-                ⚡ Scanning option chains and computing 1-year Historical Volatility percentile rankings...
-            </td>
-        </tr>
-    `;
+    highIvGrid.innerHTML = _gridLoadingHtml(
+        '⚡ Scanning option chains and computing 1-year Historical Volatility percentile rankings...');
 
     try {
         let url = '/api/cpr-filter/high-iv';
@@ -181,24 +160,12 @@ async function loadHighIVData(selectedDate, refresh = false) {
             const highIvStocks = response.high_iv_stocks || [];
             displayResults('highIv', highIvStocks);
         } else {
-            highIvBody.innerHTML = `
-                <tr>
-                    <td colspan="9" style="text-align: center; padding: 20px; color: #dc2626; font-weight: 500;">
-                        ❌ Failed to load High IV percentile data.
-                    </td>
-                </tr>
-            `;
+            highIvGrid.innerHTML = _gridErrorHtml('Failed to load High IV percentile data.');
             highIvCountSpan.textContent = '(0)';
         }
     } catch (error) {
         console.error('Error fetching High IV data:', error);
-        highIvBody.innerHTML = `
-            <tr>
-                <td colspan="9" style="text-align: center; padding: 20px; color: #dc2626; font-weight: 500;">
-                    ❌ Error: ${error.message}
-                </td>
-            </tr>
-        `;
+        highIvGrid.innerHTML = _gridErrorHtml('Error: ' + error.message);
         highIvCountSpan.textContent = '(0)';
     } finally {
         if (highIvRefreshBtn) {
@@ -214,14 +181,14 @@ async function loadHighIVData(selectedDate, refresh = false) {
 async function loadExpiryHlBreakoutData(timeframe, refresh = false) {
     timeframe = timeframe === 'day' ? 'day' : '60minute';
 
-    const buyBody  = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_BODY);
+    const buyGrid  = document.getElementById('expiryHlBuyGrid');
     const buyDiv   = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_RESULTS);
     const buyCount = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_COUNT);
-    const sellBody  = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_BODY);
+    const sellGrid  = document.getElementById('expiryHlSellGrid');
     const sellDiv   = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_RESULTS);
     const sellCount = document.getElementById(CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_COUNT);
 
-    if (!buyBody || !sellBody) return;
+    if (!buyGrid || !sellGrid) return;
 
     const refreshBtn = cprElems.expiryHlRefreshBtn;
     if (refreshBtn) {
@@ -229,20 +196,14 @@ async function loadExpiryHlBreakoutData(timeframe, refresh = false) {
         refreshBtn.disabled = true;
     }
 
-    const loadingRow = `
-        <tr>
-            <td colspan="5" style="text-align: center; padding: 24px; color: var(--scan-th-text); font-weight: 500; background: var(--scan-bg);">
-                <div style="display: inline-block; width: 14px; height: 14px; border: 2px solid var(--scan-th-text); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
-                Scanning Expiry High/Low breakouts (${timeframe === 'day' ? '1 Day' : '1 Hour'})...
-            </td>
-        </tr>
-    `;
+    const loadingHtml = _gridLoadingHtml(
+        `Scanning Expiry High/Low breakouts (${timeframe === 'day' ? '1 Day' : '1 Hour'})...`);
     if (buyDiv) buyDiv.classList.remove('results-hidden');
     if (sellDiv) sellDiv.classList.remove('results-hidden');
     if (buyCount) buyCount.textContent = '(...)';
     if (sellCount) sellCount.textContent = '(...)';
-    buyBody.innerHTML = loadingRow;
-    sellBody.innerHTML = loadingRow;
+    buyGrid.innerHTML = loadingHtml;
+    sellGrid.innerHTML = loadingHtml;
 
     try {
         const selectedDate = cprElems.datePicker ? cprElems.datePicker.value : null;
@@ -255,29 +216,17 @@ async function loadExpiryHlBreakoutData(timeframe, refresh = false) {
             displayResults('expiryHlBuy', response.buy || []);
             displayResults('expiryHlSell', response.sell || []);
         } else {
-            const errorRow = `
-                <tr>
-                    <td colspan="5" style="text-align: center; padding: 20px; color: #dc2626; font-weight: 500;">
-                        ❌ Failed to load Expiry High/Low breakout data.
-                    </td>
-                </tr>
-            `;
-            buyBody.innerHTML = errorRow;
-            sellBody.innerHTML = errorRow;
+            const errorHtml = _gridErrorHtml('Failed to load Expiry High/Low breakout data.');
+            buyGrid.innerHTML = errorHtml;
+            sellGrid.innerHTML = errorHtml;
             if (buyCount) buyCount.textContent = '(0)';
             if (sellCount) sellCount.textContent = '(0)';
         }
     } catch (error) {
         console.error('Error fetching Expiry High/Low breakout data:', error);
-        const errorRow = `
-            <tr>
-                <td colspan="5" style="text-align: center; padding: 20px; color: #dc2626; font-weight: 500;">
-                    ❌ Error: ${error.message}
-                </td>
-            </tr>
-        `;
-        buyBody.innerHTML = errorRow;
-        sellBody.innerHTML = errorRow;
+        const errorHtml = _gridErrorHtml('Error: ' + error.message);
+        buyGrid.innerHTML = errorHtml;
+        sellGrid.innerHTML = errorHtml;
     } finally {
         if (refreshBtn) {
             refreshBtn.classList.remove('loading');
@@ -451,134 +400,94 @@ function toggleResultSections(counts) {
     });
 }
 
-/**
- * Builds the inner HTML string for a single result row.
- */
-function _buildRowHTML(stock, config) {
-    const tradingViewUrl = `https://in.tradingview.com/chart/?symbol=NSE:${stock.symbol}`;
-    const symbolCell = `<a href="${tradingViewUrl}" target="_blank" rel="noopener noreferrer" class="symbol-link">${stock.symbol}</a>`;
-
-    if (config.isHighIv) {
-        const ivPercentile = Number(stock.iv_percentile || 0);
-        const ivClass = ivPercentile >= 90 ? 'iv-very-high' : 'iv-high';
-        const atmIv = Number(stock.atm_iv || 0);
-        const dayChangePct = Number(stock.day_change_pct || 0);
-        const volume = stock.volume || 0;
-        const oiChangePct = Number(stock.oi_change_pct || 0);
-        const pcr = Number(stock.pcr || 0);
-        const maxPain = Number(stock.max_pain || 0);
-
-        const fmtVol = (v) => {
-            if (v >= 10000000) return (v / 10000000).toFixed(1) + 'Cr';
-            if (v >= 100000)   return (v / 100000).toFixed(1) + 'L';
-            if (v >= 1000)     return (v / 1000).toFixed(1) + 'K';
-            return v.toString();
-        };
-
-        const oiClass      = oiChangePct > 0 ? 'gap-up' : (oiChangePct < 0 ? 'gap-down' : '');
-        const dayChgClass  = dayChangePct > 0 ? 'gap-up' : (dayChangePct < 0 ? 'gap-down' : '');
-        const pcrClass     = pcr > 1 ? 'gap-up' : (pcr < 0.7 ? 'gap-down' : '');
-
-        return `<tr>
-            <td>${symbolCell}</td>
-            <td>${stock.current_price.toFixed(2)}</td>
-            <td class="${ivClass}">${ivPercentile.toFixed(1)}%</td>
-            <td>${atmIv.toFixed(1)}%</td>
-            <td class="${dayChgClass}">${dayChangePct.toFixed(2)}%</td>
-            <td>${fmtVol(volume)}</td>
-            <td class="${oiClass}">${oiChangePct.toFixed(1)}%</td>
-            <td class="${pcrClass}">${pcr.toFixed(2)}</td>
-            <td>${maxPain.toFixed(0)}</td>
-        </tr>`;
-    }
-
-    if (config.isDrsi) {
-        const rsi     = Number(stock.rsi || 0);
-        const drsi    = Number(stock.drsi || 0);
-        const signal  = Number(stock.signal || 0);
-        const trigger = stock.trigger || '';
-        return `<tr>
-            <td>${symbolCell}</td>
-            <td>${stock.current_price.toFixed(2)}</td>
-            <td>${rsi.toFixed(1)}</td>
-            <td>${drsi.toFixed(4)}</td>
-            <td>${signal.toFixed(4)}</td>
-            <td><span style="color:#e11d48;font-weight:700;">${trigger}</span></td>
-        </tr>`;
-    }
-
-    if (config.isCamarilla) {
-        const levelVal  = config.isBullish ? Number(stock.monthly_cam_s3 || 0) : Number(stock.monthly_cam_r3 || 0);
-        const monthlyTc = Number(stock.monthly_tc || 0);
-        const monthlyBc = Number(stock.monthly_bc || 0);
-        const monthlyPp = Number(stock.monthly_pp || 0);
-        const color     = config.isBullish ? '#10b981' : '#ef4444';
-        return `<tr>
-            <td>${symbolCell}</td>
-            <td>${stock.current_price.toFixed(2)}</td>
-            <td style="font-weight:bold;color:${color};">${levelVal.toFixed(2)}</td>
-            <td>${monthlyTc.toFixed(2)}</td>
-            <td>${monthlyBc.toFixed(2)}</td>
-            <td>${monthlyPp.toFixed(2)}</td>
-        </tr>`;
-    }
-
-    if (config.isExpiryHl) {
-        const expHigh = Number(stock.expiry_high || 0);
-        const expLow  = Number(stock.expiry_low || 0);
-        const color   = config.isBuy ? '#10b981' : '#ef4444';
-        return `<tr>
-            <td>${symbolCell}</td>
-            <td style="font-weight:bold;color:${color};">${stock.current_price.toFixed(2)}</td>
-            <td>${expHigh.toFixed(2)}</td>
-            <td>${expLow.toFixed(2)}</td>
-            <td>${stock.expiry_date || ''}</td>
-        </tr>`;
-    }
-
-    return '';
+// Symbol column — a TradingView link, shared by every scanner grid on this page.
+function _fmtVol(v) {
+    v = Number(v || 0);
+    if (v >= 10000000) return (v / 10000000).toFixed(1) + 'Cr';
+    if (v >= 100000)   return (v / 100000).toFixed(1) + 'L';
+    if (v >= 1000)     return (v / 1000).toFixed(1) + 'K';
+    return v.toString();
 }
+function _symbolColumn() {
+    return {
+        key: 'symbol', label: 'Symbol', sortable: true, strong: true,
+        render: (symbol) => `<a href="https://in.tradingview.com/chart/?symbol=NSE:` +
+            `${encodeURIComponent(symbol)}" target="_blank" rel="noopener noreferrer" ` +
+            `class="symbol-link">${DataGrid.escape(symbol)}</a>`,
+    };
+}
+// gap-up/gap-down are this page's own theme-aware up/down colours (kept as
+// page CSS, not the grid's dg-pos/dg-neg, so nothing here drifts from the
+// rest of the scanner's palette).
+const _upDownClass = (v) => Number(v || 0) > 0 ? 'gap-up' : Number(v || 0) < 0 ? 'gap-down' : '';
+
+// ── Per-table column configs ────────────────────────────────────────
+const _SCANNER_COLUMNS = {
+    highIv: () => [
+        _symbolColumn(),
+        { key: 'current_price', label: 'Price', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) },
+        { key: 'iv_percentile', label: 'IV Pctl %', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(1) + '%',
+          cellClass: v => Number(v || 0) >= 90 ? 'iv-very-high' : 'iv-high' },
+        { key: 'atm_iv', label: 'ATM IV %', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(1) + '%' },
+        { key: 'day_change_pct', label: 'Day Chg %', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) + '%', cellClass: _upDownClass },
+        { key: 'volume', label: 'Volume', sortable: true, align: 'right', format: _fmtVol },
+        { key: 'oi_change_pct', label: 'OI% Chg', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(1) + '%', cellClass: _upDownClass },
+        { key: 'pcr', label: 'PCR', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2),
+          cellClass: v => Number(v || 0) > 1 ? 'gap-up' : Number(v || 0) < 0.7 ? 'gap-down' : '' },
+        { key: 'max_pain', label: 'Max Pain', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(0) },
+    ],
+    // Expiry High/Low breakout — Buy and Sell are the same shape; only the
+    // Price column's tone differs (every row in Buy reads as up, Sell as down).
+    expiryHl: (isBuy) => [
+        _symbolColumn(),
+        { key: 'current_price', label: 'Price', sortable: true, align: 'right', strong: true,
+          format: v => Number(v || 0).toFixed(2), tone: isBuy ? 'pos' : 'neg' },
+        { key: 'expiry_high', label: 'Expiry High', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) },
+        { key: 'expiry_low', label: 'Expiry Low', sortable: true, align: 'right',
+          format: v => Number(v || 0).toFixed(2) },
+        { key: 'expiry_date', label: 'Expiry Date', sortable: true },
+    ],
+};
 
 /**
- * Populates the results table with data.
- * @param {string} type - The table type identifier.
+ * Populates a scanner grid with data.
+ * @param {string} type - The grid type identifier ('highIv', 'expiryHlBuy', 'expiryHlSell').
  * @param {Array<Object>} results - The list of stock objects.
  */
 function displayResults(type, results) {
-    const tbody = document.getElementById(`${type}Body`);
+    const grid = document.getElementById(`${type}Grid`);
     const container = document.getElementById(`${type}Results`);
     const countSpan = document.getElementById(`${type}Count`);
 
-    if (!tbody || !container || !countSpan) return;
+    if (!grid || !container || !countSpan) return;
 
-    if (!results || !Array.isArray(results)) {
+    if (!Array.isArray(results)) {
         console.error(`Invalid results for type '${type}':`, results);
-        tbody.innerHTML = '';
-        container.classList.add('results-hidden');
-        countSpan.textContent = '(0)';
-        return;
+        results = [];
     }
 
     if (results.length === 0) {
-        tbody.innerHTML = '';
+        grid.innerHTML = '';
         container.classList.add('results-hidden');
         countSpan.textContent = '(0)';
         return;
     }
 
-    const tableConfig = {
-        drsiReversalBullish: { isDrsi: true },
-        drsiReversalBearish: { isDrsi: true },
-        highIv: { isHighIv: true },
-        camarillaCprReversalBullish: { isCamarilla: true, isBullish: true },
-        camarillaCprReversalBearish: { isCamarilla: true, isBullish: false },
-        expiryHlBuy: { isExpiryHl: true, isBuy: true },
-        expiryHlSell: { isExpiryHl: true, isBuy: false }
-    };
-    const config = tableConfig[type] || {};
+    const columns = type === 'highIv' ? _SCANNER_COLUMNS.highIv()
+        : type === 'expiryHlBuy'  ? _SCANNER_COLUMNS.expiryHl(true)
+        : type === 'expiryHlSell' ? _SCANNER_COLUMNS.expiryHl(false)
+        : null;
+    if (!columns) return;
 
-    // Build all rows as a single HTML string — one DOM mutation instead of N
-    tbody.innerHTML = results.map(stock => _buildRowHTML(stock, config)).join('');
+    DataGrid.mountSortable(grid, { rows: results, columns, empty: 'No matches.' });
 
     container.classList.remove('results-hidden');
     countSpan.textContent = `(${results.length})`;
@@ -594,77 +503,6 @@ function updateStats(drsiReversalBullishCount = 0, drsiReversalBearishCount = 0)
     if (drsiRevBearishCountEl) drsiRevBearishCountEl.textContent = `(${drsiReversalBearishCount})`;
 }
 
-/**
- * Sorts a table by a given column index.
- * @param {string} tableId - The ID of the table.
- * @param {string} columnIndexStr - The string column index from data-column-index.
- */
-function sortTable(tableId, columnIndexStr) {
-    const columnIndex = parseInt(columnIndexStr);
-    const table = document.getElementById(tableId);
-
-    if (!table) {
-        console.error(`Table with id '${tableId}' not found`);
-        return;
-    }
-
-    const tbody = table.querySelector('tbody');
-
-    if (!tbody) {
-        console.error(`Tbody not found in table '${tableId}'`);
-        return;
-    }
-    const rows = Array.from(tbody.querySelectorAll('tr'));
-    const header = table.querySelector(`th[data-column-index="${columnIndexStr}"]`);
-    if (!header) return;
-
-    // Initialize or update sort direction state
-    if (!sortDirection[tableId]) {
-        sortDirection[tableId] = { index: -1, direction: 'none' };
-    }
-
-    // Determine sort direction and update state
-    const currentDirection = sortDirection[tableId].index === columnIndex ? sortDirection[tableId].direction : 'none';
-    const newDirection = currentDirection === 'asc' ? 'desc' : (currentDirection === 'desc' ? 'asc' : 'asc');
-
-    sortDirection[tableId] = { index: columnIndex, direction: newDirection };
-
-    // Update header classes for visual feedback — only touch the previously sorted th
-    const prevTh = _lastSortedTh[tableId];
-    if (prevTh && prevTh !== header) prevTh.classList.remove('sort-asc', 'sort-desc');
-    header.classList.remove('sort-asc', 'sort-desc');
-    header.classList.add(newDirection === 'asc' ? 'sort-asc' : 'sort-desc');
-    _lastSortedTh[tableId] = header;
-
-    const isAsc = newDirection === 'asc';
-
-    // Determine numeric column range based on table type (small/Camarilla tables have fewer columns)
-    const isSmallOrCamarillaTable = tableId === CONSTANTS.DOM_IDS.DRSI_BULLISH_TABLE || tableId === CONSTANTS.DOM_IDS.DRSI_BEARISH_TABLE ||
-        tableId === CONSTANTS.DOM_IDS.DRSI_REVERSAL_BULLISH_TABLE || tableId === CONSTANTS.DOM_IDS.DRSI_REVERSAL_BEARISH_TABLE ||
-        tableId === CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BULLISH_TABLE || tableId === CONSTANTS.DOM_IDS.CAMARILLA_CPR_REVERSAL_BEARISH_TABLE;
-    const isExpiryHlTable = tableId === CONSTANTS.DOM_IDS.EXPIRY_HL_BUY_TABLE || tableId === CONSTANTS.DOM_IDS.EXPIRY_HL_SELL_TABLE;
-    const numericMaxCol = isExpiryHlTable ? 3 : (isSmallOrCamarillaTable ? 5 : 7); // indices 1..3 for Expiry H/L (col 4 is a date string), 1..5 for small/Camarilla, 1..7 for large ones
-
-    // Sort rows
-    rows.sort((a, b) => {
-        // Remove currency symbols, commas, and % for numeric comparison
-        const aCell = a.cells[columnIndex].textContent.replace(/[₹%,]/g, '').trim();
-        const bCell = b.cells[columnIndex].textContent.replace(/[₹%,]/g, '').trim();
-
-        const aNum = parseFloat(aCell);
-        const bNum = parseFloat(bCell);
-
-        // Check if both are numbers (for price and percentage columns)
-        const maxNumericIndex = numericMaxCol;
-        if (!isNaN(aNum) && !isNaN(bNum) && columnIndex >= 1 && columnIndex <= maxNumericIndex) {
-            return isAsc ? aNum - bNum : bNum - aNum;
-        } else {
-            // String comparison (for Symbol and Status columns)
-            return isAsc ? aCell.localeCompare(bCell) : bCell.localeCompare(aCell);
-        }
-    });
-
-    // Re-append sorted rows to the tbody
-    rows.forEach(row => tbody.appendChild(row));
-}
+// Click-to-sort is DataGrid.mountSortable's job now (see displayResults()) —
+// the bespoke column-index/text-scraping sorter that used to live here is gone.
 

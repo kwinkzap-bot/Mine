@@ -10,6 +10,11 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ sv('css/dashboard.css') }}">
+<!-- Finance's Pending cards reuse the Algo page's card/grid shell (.ag-card,
+     .ag-hist-table) rather than cloning its look into finance.css. Every rule
+     in algo.css is class-scoped, and its --ag-* tokens live on .algo-page, so
+     nothing applies until an element opts in by carrying that class. -->
+<link rel="stylesheet" href="{{ url_for('static', filename='css/algo.css') }}?v={{ sv('css/algo.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/finance.css') }}?v={{ sv('css/finance.css') }}">
 {% endblock %}
 

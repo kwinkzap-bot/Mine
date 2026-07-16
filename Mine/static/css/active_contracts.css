@@ -240,6 +240,21 @@ body.embed-mode .ac-page {
     box-shadow: var(--ac-shadow);
 }
 
+/* /contracts now renders the shared grid (DataGrid) into #acGrid. Sticky
+   headers bind to the nearest scroll container, and the grid wraps its table
+   in .dg-scroll — so that wrapper must be the vertical scroller, not
+   .ac-table-wrap, or the header would ride out of view. */
+.ac-table-wrap #acGrid { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.ac-table-wrap .dg-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.ac-table-wrap .dg-table .dg-th { z-index: 5; }
+/* Volume-rank top-6 tint — on the row; grid cells are transparent so it
+   shows through, and the grid's cell-level hover paints over it, same as
+   the old tr-level hover did. */
+.ac-table-wrap .dg-table tbody tr.ac-top-row { background: var(--ac-accent-dim); }
+/* The accented LAST header must survive the component's own th colour
+   (which carries !important to beat main.css's global th rules). */
+.ac-table-wrap .dg-table .dg-th.ac-th-last { color: var(--ac-accent) !important; }
+
 /* ── Table ───────────────────────────────────────────────────── */
 .ac-table {
     width: 100%;

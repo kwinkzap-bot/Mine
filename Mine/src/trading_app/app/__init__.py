@@ -120,6 +120,16 @@ def create_app(config=None):
     def inject_pwa():
         return {'pwa_enabled': os.getenv('PWA_ENABLED', 'false').lower() == 'true'}
 
+    # Re-read a template when its file changes. Flask ties this to app.debug by
+    # default, and we run with debug=False, so Jinja would otherwise compile each
+    # template once at startup and serve that copy for the life of the process —
+    # an edit to base.html silently does nothing until a full restart, with no
+    # error to say why. Note this is NOT covered by sv() below: static files are
+    # read from disk per request and cache-bust correctly, so a template edit
+    # looks like it landed (script ?v= updates) while the HTML stays frozen.
+    # Costs one stat() per render.
+    app.config['TEMPLATES_AUTO_RELOAD'] = True
+
     # Auto cache-busting: sv('js/foo.js') returns the file's mtime so browsers
     # always load the latest version without manual version bumps in templates.
     @app.context_processor

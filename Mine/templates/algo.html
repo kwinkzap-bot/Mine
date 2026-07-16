@@ -66,14 +66,17 @@
         </div>
     </div>
 
-    <!-- ── Executed trades today (all algos, completed) ────────── -->
-    <div class="ag-card">
-        <div class="ag-card-hdr">
-            <span class="ag-card-title">Executed Trades — Today</span>
-            <span id="activeHistCount" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+    <!-- ── Executed trades today (all algos, completed) ──────────
+         Reference implementation of the shared grid — see
+         static/css/components/data-grid.css. Body is rendered by
+         DataGrid in _activeRenderHistory(). -->
+    <div class="dg-card">
+        <div class="dg-card-hdr">
+            <span class="dg-card-title">Executed Trades — Today</span>
+            <span class="dg-card-meta" id="activeHistCount"></span>
         </div>
         <div id="activeHistBody">
-            <div class="ag-empty">No trades executed today</div>
+            <div class="dg-empty">No trades executed today</div>
         </div>
     </div>
 
@@ -714,7 +717,7 @@
     <!-- ── Header ──────────────────────────────────────────────── -->
     <div class="ag-header">
         <span class="ag-title">Intrinsic ATM Range Breakout</span>
-        <span class="ag-mode-chip paper">PAPER TRADE</span>
+        <span class="dg-badge dg-badge--warn">PAPER TRADE</span>
         <button class="ag-info-btn" id="intrinsicLogicBtn" onclick="intrinsicShowLogic()"
                 title="View strategy logic, entry &amp; exit rules" aria-label="Strategy logic">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"

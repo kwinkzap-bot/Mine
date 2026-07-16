@@ -89,56 +89,75 @@ async function renderOrdersGrid() {
 
     orders.sort((a, b) => b.created_at - a.created_at);
 
-    const tbody = document.getElementById('ordersTableBody');
+    const grid  = document.getElementById('ordersGrid');
     const empty = document.getElementById('ordersEmpty');
-    if (!tbody) return;
+    if (!grid) return;
 
     if (!orders.length) {
-        tbody.innerHTML = '';
+        grid.innerHTML = '';
         if (empty) empty.classList.remove('hidden');
         return;
     }
     if (empty) empty.classList.add('hidden');
 
-    tbody.innerHTML = orders.map(o => {
-        const isPending = o.status === 'PENDING' || o.status === 'EXECUTING';
-        const instrument = `${o.symbol} ${o.strike} ${o.option_type}`;
-        const dateLabel = _historyMode ? `<span class="ord-date">${_formatDate(o.created_at)}</span> ` : '';
-        const priceCell = isPending
-            ? `<input type="number" class="ord-price-input" value="${o.price || 0}" step="1" min="0">`
-            : `<span class="ord-price-val">₹${Number(o.price || 0).toFixed(2)}</span>`;
-        const modeBadge = o.mode === 'mine'
-            ? `<span class="ord-src-badge ord-src-mine" title="Mine mode">M</span>`
-            : `<span class="ord-src-badge ord-src-broker" title="Broker mode">B</span>`;
-        const actions = isPending ? `
-            <button class="ord-btn save-price" title="Update price">${_SVG.save}</button>
-            <button class="ord-btn cancel-order" title="Cancel order">${_SVG.cancel}</button>
-        ` : `
-            <button class="ord-btn delete-order" title="Remove">${_SVG.trash}</button>
-        `;
-        return `
-        <tr class="ord-row ord-action-${o.action.toLowerCase()}" data-id="${o.id}" data-mode="${o.mode || 'broker'}">
-            <td class="ord-td ord-td-time">${dateLabel}${_formatTime(o.created_at)}${modeBadge}</td>
-            <td class="ord-td"><span class="ord-type ord-type-${(o.type || 'market').toLowerCase()}">${o.type || 'MARKET'}</span></td>
-            <td class="ord-td ord-td-inst">${instrument}</td>
-            <td class="ord-td"><span class="ord-action ord-action-badge-${o.action.toLowerCase()}">${o.action}</span></td>
-            <td class="ord-td ord-td-price">${priceCell}</td>
-            <td class="ord-td"><span class="ord-status ord-status-${o.status.toLowerCase()}">${o.status}</span></td>
-            <td class="ord-td ord-td-actions">${actions}</td>
-        </tr>`;
-    }).join('');
+    const esc = DataGrid.escape;
+    // Status → shared badge tone. Pending work is amber, a fill is green, a
+    // cancel/reject is red; anything unrecognised stays neutral.
+    const statusTone = s => ({
+        PENDING: 'warn', EXECUTING: 'warn', EXECUTED: 'pos',
+        CANCELLED: 'neg', REJECTED: 'neg',
+    })[s] || 'neutral';
+
+    grid.innerHTML = DataGrid.render({
+        rows: orders,
+        // Left border keys the row to its side; data-* are the click-delegation
+        // hooks _attachGridListeners reads.
+        rowClass: o => 'ord-row ord-action-' + o.action.toLowerCase(),
+        rowAttrs: o => `data-id="${esc(o.id)}" data-mode="${esc(o.mode || 'broker')}"`,
+        // render is called (value, row); these columns have no key, so they
+        // read the order off the second arg.
+        columns: [
+            { label: 'Time', cellClass: 'ord-td-time', render: (_, o) => {
+                const date = _historyMode
+                    ? `<span class="ord-date">${esc(_formatDate(o.created_at))}</span> ` : '';
+                const mode = o.mode === 'mine'
+                    ? '<span class="ord-src-badge ord-src-mine" title="Mine mode">M</span>'
+                    : '<span class="ord-src-badge ord-src-broker" title="Broker mode">B</span>';
+                return date + esc(_formatTime(o.created_at)) + mode;
+            } },
+            { label: 'Type', render: (_, o) => DataGrid.badge(o.type || 'MARKET',
+                (o.type || 'MARKET').toUpperCase() === 'LIMIT' ? 'special' : 'neutral') },
+            { label: 'Instrument', cellClass: 'ord-td-inst',
+              render: (_, o) => esc(`${o.symbol} ${o.strike} ${o.option_type}`) },
+            { label: 'Action', render: (_, o) => DataGrid.badge(o.action,
+                o.action === 'BUY' ? 'pos' : 'neg') },
+            { label: 'Price', cellClass: 'ord-td-price', render: (_, o) =>
+                (o.status === 'PENDING' || o.status === 'EXECUTING')
+                    ? `<input type="number" class="ord-price-input" value="${esc(o.price || 0)}" step="1" min="0">`
+                    : `<span class="ord-price-val">₹${Number(o.price || 0).toFixed(2)}</span>` },
+            { label: 'Status', render: (_, o) => DataGrid.badge(o.status, statusTone(o.status)) },
+            { label: '', cellClass: 'ord-td-actions', render: (_, o) =>
+                (o.status === 'PENDING' || o.status === 'EXECUTING')
+                    ? `<button class="ord-btn save-price" title="Update price">${_SVG.save}</button>` +
+                      `<button class="ord-btn cancel-order" title="Cancel order">${_SVG.cancel}</button>`
+                    : `<button class="ord-btn delete-order" title="Remove">${_SVG.trash}</button>` },
+        ],
+    });
 
     _attachGridListeners();
 }
 
 function _attachGridListeners() {
-    const tbody = document.getElementById('ordersTableBody');
-    if (!tbody) return;
+    const grid = document.getElementById('ordersGrid');
+    if (!grid) return;
 
-    const fresh = tbody.cloneNode(true);
-    tbody.parentNode.replaceChild(fresh, tbody);
+    // Re-render replaces #ordersGrid's innerHTML, not the node, so its listener
+    // survives — bind once. cloneNode-swapping the freshly built table would
+    // just strip the handler we are adding.
+    if (grid.dataset.wired) return;
+    grid.dataset.wired = '1';
 
-    fresh.addEventListener('click', async (e) => {
+    grid.addEventListener('click', async (e) => {
         const row = e.target.closest('tr.ord-row');
         if (!row) return;
         const id = row.dataset.id;

@@ -209,14 +209,6 @@ function _finByEndDate(a, b) {
     return da - db;
 }
 
-/** "Missing EMI / Total EMI" the way the sheet reads it, e.g. -28/100, 0/18. */
-function _finEmiRatio(r) {
-    const me = r.missing_emi, te = r.total_emi;
-    if (me == null && te == null) return '—';
-    const n = v => v == null ? '—' : String(v);
-    return `${n(me)}/${n(te)}`;
-}
-
 function _finPendingHtml(d) {
     const trackAll = (d.track_loans || []).filter(r => r.is_completed === false);
     // Owner's rule: only rows whose Missing EMI has a non-zero first value.
@@ -233,47 +225,51 @@ function _finPendingHtml(d) {
     const hidden = trackAll.length - track.length;
     const hiddenAmt = sumRming(trackAll) - sumRming(track);
 
-    const rowHtml = (r, withType) => {
-        const pastEnd = _finIsPastEnd(r.end_date);
-        return `<tr class="${pastEnd ? 'is-overdue' : ''}">
-          <td class="name">${_finEsc(r.name)}</td>
-          ${withType ? `<td class="num">${_finEsc(_finEmiRatio(r))}</td><td>${_finEsc(r.loan_type)}</td>` : ''}
-          <td>${_finEsc(r.end_date)}${pastEnd ? ' <span class="fin-late">late</span>' : ''}</td>
-          ${_finNumCell(r.remaining_amt)}
-          ${_finNumCell(r.collected)}
-          ${_finNumCell(r.total_collection_amt)}
-        </tr>`;
-    };
+    // Money owed reads as a loss when it has gone negative, which is what the
+    // grid's `neg` tone already means — no finance-specific cell class needed.
+    // _finFmt's 2nd parameter is its dash fallback, so it must not be passed by
+    // reference: the grid calls format(value, row) and the row would become it.
+    const amount = { format: v => _finFmt(v), tone: v => (v != null && v < 0) ? 'neg' : '' };
 
-    const table = (rows, withType, emptyMsg) => rows.length ? `
-      <div class="fin-table-wrap fin-table-wrap--acc"><table class="fin-table fin-table--flat">
-        <thead><tr>
-          <th>Name</th>${withType ? '<th class="num">Missing EMI</th><th>Type</th>' : ''}<th>End</th>
-          <th class="num">Rming Amt to colt</th>
-          <th class="num">Collected</th><th class="num">To Collect</th>
-        </tr></thead>
-        <tbody>${rows.map(r => rowHtml(r, withType)).join('')}</tbody>
-      </table></div>` : `<div class="fin-msg fin-msg--sm">${emptyMsg}</div>`;
+    const table = (rows, withType, emptyMsg) => DataGrid.render({
+        rows,
+        empty: emptyMsg,
+        rowClass: r => _finIsPastEnd(r.end_date) ? 'is-overdue' : '',
+        columns: [
+            { key: 'name', label: 'Name', strong: true },
+            ...(withType ? [
+                { key: 'missing_emi', label: 'Miss EMI' },
+                { key: 'loan_type',   label: 'Type' },
+            ] : []),
+            { key: 'remaining_amt',         label: 'Rming Amt to colt', ...amount },
+            { key: 'collected',             label: 'Collected',         ...amount },
+            { key: 'total_collection_amt',  label: 'To Collect',        ...amount },
+            { key: 'end_date', label: 'End',
+              render: (v, r) => DataGrid.escape(v ?? '—') +
+                  (_finIsPastEnd(r.end_date) ? ' <span class="fin-late">late</span>' : '') },
+        ],
+    });
 
-    // <details open> — native accordion, expanded by default, keyboard
-    // accessible and open-by-default without any JS.
+    // The shared .dg-card shell, but as <details> so the native accordion
+    // survives: expanded by default, keyboard accessible, no JS.
     return `<div class="fin-accs">
-      <details class="fin-acc" open>
-        <summary class="fin-acc-head">
-          <span class="fin-acc-title">Daily / Weekly Loans — Pending</span>
+      <details class="dg-card" open>
+        <summary class="dg-card-hdr">
+          <span class="dg-card-title">Daily / Weekly Loans — Pending</span>
           <span class="fin-acc-meta">${track.length} loans · ${_finFmt(sumRming(track))} to collect</span>
         </summary>
-        ${table(track, true, 'Nothing pending with a non-zero Missing EMI.')}
-        ${hidden ? `<div class="fin-acc-foot">Missing EMI 0 or blank hides
-          ${hidden} more in-progress loan${hidden === 1 ? '' : 's'}
-          holding ${_finFmt(hiddenAmt)} still to collect.</div>` : ''}
+        <div class="fin-acc-body">
+          ${table(track, true, 'Nothing pending — every daily/weekly loan is marked completed.')}
+        </div>
       </details>
-      <details class="fin-acc" open>
-        <summary class="fin-acc-head">
-          <span class="fin-acc-title">Monthly Loans — Pending</span>
+      <details class="dg-card" open>
+        <summary class="dg-card-hdr">
+          <span class="dg-card-title">Monthly Loans — Pending</span>
           <span class="fin-acc-meta">${monthly.length} overdue · ${_finFmt(sumRming(monthly))} to collect</span>
         </summary>
-        ${table(monthly, false, 'Nothing overdue — no in-progress monthly loan is past its end date.')}
+        <div class="fin-acc-body">
+          ${table(monthly, false, 'Nothing overdue — no in-progress monthly loan is past its end date.')}
+        </div>
       </details>
     </div>`;
 }
@@ -512,7 +508,7 @@ function _finStatusPill(st) {
     const label = st === 'completed' ? '✓ Completed'
                 : st === 'unknown' ? '? Unknown'
                 : '● In-progress';
-    return `<span class="fin-pill ${st === 'completed' ? 'ok' : 'warn'}">${label}</span>`;
+    return DataGrid.badge(label, st === 'completed' ? 'pos' : 'warn');
 }
 
 /** Defaults to In-progress: the open book is what needs attention. */
@@ -526,9 +522,9 @@ function _finStatusSelect(id) {
 
 /**
  * Wire name + optional type + status over whichever loan table is rendered.
- * Only one sub-tab is in the DOM at a time, so '.fin-table tbody tr' is
- * unambiguous. Runs once immediately — the status default is In-progress, so
- * the rows and the count must start filtered rather than showing everything.
+ * Scoped to '#finSubBody .dg-table' so it never touches the Pending accordions.
+ * Runs once immediately — the status default is In-progress, so the rows and
+ * the count must start filtered rather than showing everything.
  */
 function _finWireFilters({ nameId, typeId, statusId, countId }) {
     const name = document.getElementById(nameId);
@@ -542,7 +538,11 @@ function _finWireFilters({ nameId, typeId, statusId, countId }) {
         const t = type ? type.value : 'all';
         const s = status.value;
         let shown = 0;
-        document.querySelectorAll('.fin-table tbody tr').forEach(tr => {
+        // Scope to the sub-tab body only. The Pending accordions above it are
+        // now .dg-table too, so a bare '.dg-table tbody tr' would also grab (and
+        // hide) their rows — the old '.fin-table' selector was safe purely
+        // because the accordions never used that class.
+        document.querySelectorAll('#finSubBody .dg-table tbody tr').forEach(tr => {
             const hit = (!q || (tr.dataset.name || '').includes(q))
                      && (t === 'all' || tr.dataset.type === t)
                      && (s === 'both' || tr.dataset.status === s);
@@ -557,10 +557,22 @@ function _finWireFilters({ nameId, typeId, statusId, countId }) {
     apply();
 }
 
-function _finNumCell(v) {
-    const neg = v != null && v < 0;
-    return `<td class="num ${neg ? 'neg' : ''}">${_finFmt(v)}</td>`;
-}
+// A rupee column. Money owed reads as a loss once negative, which is what the
+// grid's `neg` tone already means. `format: v => _finFmt(v)` and not
+// `format: _finFmt` — the grid calls format(value, row) and _finFmt's 2nd
+// parameter is its dash fallback, so a bare reference makes the row that dash.
+const _FIN_AMOUNT = {
+    align: 'right',
+    format: v => _finFmt(v),
+    tone: v => (v != null && v < 0) ? 'neg' : '',
+};
+
+// Name / type / status hooks the filter reads. Values are escaped because they
+// go straight into an attribute.
+const _finRowAttrs = (r, withType) =>
+    `data-name="${_finEsc((r.name || '').toLowerCase())}"` +
+    (withType ? ` data-type="${_finEsc((r.loan_type || '').toLowerCase())}"` : '') +
+    ` data-status="${_finLoanStatus(r)}"`;
 
 function _finRenderTrack(box, rows) {
     box.innerHTML = `<div class="fin-card">
@@ -575,37 +587,34 @@ function _finRenderTrack(box, rows) {
         ${_finStatusSelect('finTrackStatus')}
         <span class="fin-count" id="finTrackCount"></span>
       </div>
-      <div class="fin-table-wrap"><table class="fin-table">
-        <thead><tr>
-          <th>Name</th><th class="num">Missing EMI</th>
-          <th class="num">Rming Amt to colt</th>
-          <th>Status</th><th>Type</th>
-          <th class="num">Given Amt</th><th class="num">To Collect</th>
-          <th class="num">Collected</th><th class="num">Missing</th>
-          <th>Given</th><th>Start</th><th>End</th>
-          <th>Rate</th>
-        </tr></thead>
-        <tbody>${rows.map(r => {
-            const st = _finLoanStatus(r);
-            return `
-          <tr data-name="${_finEsc((r.name || '').toLowerCase())}"
-              data-type="${_finEsc((r.loan_type || '').toLowerCase())}"
-              data-status="${st}">
-            <td class="name">${_finEsc(r.name)}</td>
-            <td class="num" title="Missing EMI / Total EMI, as recorded in the sheet">${r.missing_emi ?? '—'} / ${r.total_emi ?? '—'}</td>
-            ${_finNumCell(r.remaining_amt)}
-            <td>${_finStatusPill(st)}</td>
-            <td>${_finEsc(r.loan_type)}</td>
-            <td>${_finEsc(r.given_date)}</td>
-            <td>${_finEsc(r.start_date)}</td>
-            <td>${_finEsc(r.end_date)}</td>
-            ${_finNumCell(r.given_amt)}
-            ${_finNumCell(r.total_collection_amt)}
-            ${_finNumCell(r.collected)}
-            ${_finNumCell(r.missing_amt)}
-            <td>${_finEsc(r.percentage)}</td>
-          </tr>`; }).join('')}</tbody>
-      </table></div>
+      <div class="fin-table-wrap">${DataGrid.render({
+          rows,
+          empty: 'No loans in this book.',
+          rowAttrs: r => _finRowAttrs(r, true),
+          // Column order follows the Monthly table's convention — the dates a
+          // loan runs between, then the money against it. The old markup listed
+          // the money headers first while the cells emitted the dates first, so
+          // "Given Amt"/"To Collect"/"Collected" were printing dates and
+          // "Given"/"Start"/"End" were printing rupees. Declaring the header and
+          // its cell together is what makes that class of bug unrepresentable.
+          columns: [
+              { key: 'name', label: 'Name', strong: true },
+              { label: 'Missing EMI', align: 'right',
+                render: (_, r) => `<span title="Missing EMI / Total EMI, as recorded in the sheet">` +
+                    `${DataGrid.escape(r.missing_emi ?? '—')} / ${DataGrid.escape(r.total_emi ?? '—')}</span>` },
+              { key: 'remaining_amt', label: 'Rming Amt to colt', ..._FIN_AMOUNT },
+              { label: 'Status', render: (_, r) => _finStatusPill(_finLoanStatus(r)) },
+              { key: 'loan_type',  label: 'Type' },
+              { key: 'given_date', label: 'Given' },
+              { key: 'start_date', label: 'Start' },
+              { key: 'end_date',   label: 'End' },
+              { key: 'given_amt',            label: 'Given Amt',  ..._FIN_AMOUNT },
+              { key: 'total_collection_amt', label: 'To Collect', ..._FIN_AMOUNT },
+              { key: 'collected',            label: 'Collected',  ..._FIN_AMOUNT },
+              { key: 'missing_amt',          label: 'Missing',    ..._FIN_AMOUNT },
+              { key: 'percentage', label: 'Rate' },
+          ],
+      })}</div>
     </div>`;
     _finWireFilters({
         nameId: 'finTrackFilter',
@@ -624,36 +633,29 @@ function _finRenderMonthly(box, rows) {
         ${_finStatusSelect('finMonStatus')}
         <span class="fin-count" id="finMonCount"></span>
       </div>
-      <div class="fin-table-wrap"><table class="fin-table fin-table--flat">
-        <thead><tr>
-          <th>Name</th><th class="num">Rming Amt to colt</th><th>Status</th>
-          <th>Contact</th><th>Given</th><th>End</th>
-          <th class="num">Given Amt</th><th class="num">To Collect</th>
-          <th class="num">Collected</th><th class="num">Missing</th>
-          <th class="num">Inst Amt</th><th>Rate</th>
-        </tr></thead>
-        <tbody>${rows.map(r => {
-            const st = _finLoanStatus(r);
-            // Zebra is off on this table (fin-table--flat) so the red wash is
-            // the only thing tinting a row, and can't be misread as striping.
-            const pastEnd = _finIsPastEnd(r.end_date);
-            return `
-          <tr data-name="${_finEsc((r.name || '').toLowerCase())}" data-status="${st}"
-              class="${pastEnd ? 'is-overdue' : ''}"${pastEnd ? ' title="End date has passed"' : ''}>
-            <td class="name">${_finEsc(r.name)}</td>
-            ${_finNumCell(r.remaining_amt)}
-            <td>${_finStatusPill(st)}</td>
-            <td>${_finEsc(r.contact)}</td>
-            <td>${_finEsc(r.given_date)}</td>
-            <td>${_finEsc(r.end_date)}</td>
-            ${_finNumCell(r.given_amt)}
-            ${_finNumCell(r.total_collection_amt)}
-            ${_finNumCell(r.collected)}
-            ${_finNumCell(r.missing_amt)}
-            ${_finNumCell(r.inst_amt)}
-            <td>${_finEsc(r.percentage)}</td>
-          </tr>`; }).join('')}</tbody>
-      </table></div>
+      <div class="fin-table-wrap">${DataGrid.render({
+          rows,
+          empty: 'No monthly loans.',
+          // The grid has no zebra, so the red wash is the only thing tinting a
+          // row and can never be misread as striping.
+          rowClass: r => _finIsPastEnd(r.end_date) ? 'is-overdue' : '',
+          rowAttrs: r => _finRowAttrs(r, false) +
+              (_finIsPastEnd(r.end_date) ? ' title="End date has passed"' : ''),
+          columns: [
+              { key: 'name', label: 'Name', strong: true },
+              { key: 'remaining_amt', label: 'Rming Amt to colt', ..._FIN_AMOUNT },
+              { label: 'Status', render: (_, r) => _finStatusPill(_finLoanStatus(r)) },
+              { key: 'contact',    label: 'Contact' },
+              { key: 'given_date', label: 'Given' },
+              { key: 'end_date',   label: 'End' },
+              { key: 'given_amt',            label: 'Given Amt',  ..._FIN_AMOUNT },
+              { key: 'total_collection_amt', label: 'To Collect', ..._FIN_AMOUNT },
+              { key: 'collected',            label: 'Collected',  ..._FIN_AMOUNT },
+              { key: 'missing_amt',          label: 'Missing',    ..._FIN_AMOUNT },
+              { key: 'inst_amt',             label: 'Inst Amt',   ..._FIN_AMOUNT },
+              { key: 'percentage', label: 'Rate' },
+          ],
+      })}</div>
     </div>`;
     _finWireFilters({
         nameId: 'finMonFilter',
@@ -698,10 +700,7 @@ function _finRenderWithdraw(box, rows) {
         </select>
         <span class="fin-count" id="finWdCount"></span>
       </div>
-      <div class="fin-table-wrap"><table class="fin-table">
-        <thead><tr><th>Date</th><th class="num">Amount</th><th>Reason</th></tr></thead>
-        <tbody id="finWdBody"></tbody>
-      </table></div>
+      <div class="fin-table-wrap" id="finWdTable"></div>
     </div>`;
 
     // Re-rendered rather than show/hidden: sorting has to reorder the rows,
@@ -725,12 +724,19 @@ function _finRenderWithdraw(box, rows) {
             return dir === 'newest' ? db - da : da - db;
         });
 
-        document.getElementById('finWdBody').innerHTML = list.map(r => `
-          <tr>
-            <td>${_finEsc(r.date)}</td>
-            ${_finNumCell(r.amount)}
-            <td>${_finEsc(r.reason) || '<span style="opacity:.45">—</span>'}</td>
-          </tr>`).join('');
+        // Whole grid, not just the rows: sorting reorders them, and the header
+        // is cheap to reprint alongside.
+        document.getElementById('finWdTable').innerHTML = DataGrid.render({
+            rows: list,
+            empty: 'No withdrawals match this filter.',
+            columns: [
+                { key: 'date', label: 'Date' },
+                { key: 'amount', label: 'Amount', ..._FIN_AMOUNT },
+                { key: 'reason', label: 'Reason',
+                  render: v => (v && String(v).trim())
+                      ? DataGrid.escape(v) : '<span style="opacity:.45">—</span>' },
+            ],
+        });
 
         const total = list.reduce((a, r) => a + (r.amount || 0), 0);
         document.getElementById('finWdCount').textContent =

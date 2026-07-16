@@ -21,6 +21,20 @@
     {% endif %}
     <link rel="stylesheet" href="{{ url_for('static', filename='css/notifications.css') }}?v={{ sv('css/notifications.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/notification_center.css') }}?v={{ sv('css/notification_center.css') }}">
+    <!-- Shared grid design — must precede page stylesheets so a page can
+         still override a --dg-* token for its own surface. -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/components/data-grid.css') }}?v={{ sv('css/components/data-grid.css') }}">
+    {# DataGrid loads here, in <head>, and deliberately without `defer`. Several
+       pages put their page script inside the content block and call into it
+       inline (algo.html ends with `<script>algoLoad();</script>`), which runs
+       while <main> is parsing — before the script tags at the end of <body>,
+       and before any deferred script would fire. Anything those pages depend on
+       must already be defined, so this has to block. It is a small,
+       dependency-free IIFE; keep it that way.
+
+       Note this is a Jinja comment, not an HTML one: Jinja parses tags inside
+       <!-- --> normally, so naming a block tag there would open a real block. #}
+    <script src="{{ url_for('static', filename='js/components/data-grid.js') }}?v={{ sv('js/components/data-grid.js') }}"></script>
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
         rel="stylesheet">

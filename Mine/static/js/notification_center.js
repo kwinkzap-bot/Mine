@@ -71,26 +71,19 @@
 
     function renderSignalTable(title, signals) {
         if (!signals || !signals.length) return '';
-        const dirClass = signals[0].direction === 'SELL' ? 'notif-dir-sell' : 'notif-dir-buy';
-        const rows = signals.map(s => `
-            <tr>
-                <td>${escapeHtml(s.symbol)}</td>
-                <td class="${s.direction === 'SELL' ? 'notif-dir-sell' : 'notif-dir-buy'}">${escapeHtml(s.direction)}</td>
-                <td>${s.current_price ?? ''}</td>
-                <td>${s.expiry_high ?? ''}</td>
-                <td>${s.expiry_low ?? ''}</td>
-                <td>${escapeHtml(s.expiry_date || '')}</td>
-            </tr>
-        `).join('');
-        return `
-            <div class="notif-modal-section-title">${escapeHtml(title)} (${signals.length})</div>
-            <table class="notif-data-table">
-                <thead>
-                    <tr><th>Symbol</th><th>Dir</th><th>Price</th><th>Exp High</th><th>Exp Low</th><th>Expiry</th></tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>
-        `;
+        const grid = DataGrid.render({
+            rows: signals,
+            columns: [
+                { key: 'symbol', label: 'Symbol', strong: true },
+                { key: 'direction', label: 'Dir',
+                  tone: d => d === 'SELL' ? 'neg' : 'pos' },
+                { key: 'current_price', label: 'Price', align: 'right' },
+                { key: 'expiry_high', label: 'Exp High', align: 'right' },
+                { key: 'expiry_low',  label: 'Exp Low',  align: 'right' },
+                { key: 'expiry_date', label: 'Expiry' },
+            ],
+        });
+        return `<div class="notif-modal-section-title">${escapeHtml(title)} (${signals.length})</div>${grid}`;
     }
 
     async function openDetail(id) {

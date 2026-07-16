@@ -82,12 +82,6 @@ const _ACTIVE_SOURCES = [
     { label: 'Intrinsic Range', url: '/api/algo/intrinsic-range/status', histUrl: '/api/algo/intrinsic-range/history', mode: 'paper' },
 ];
 
-// Small "Live"/"Paper" pill shown per-row in the consolidated Active tab.
-function _algoModeChip(mode) {
-    const m = (mode || 'live').toLowerCase();
-    const label = m === 'paper' ? 'Paper' : 'Live';
-    return `<span class="ag-mode-chip ${m}">${label}</span>`;
-}
 
 // Local YYYY-MM-DD (matches the `date` field the algos write in IST).
 function _activeTodayStr() {
@@ -156,58 +150,45 @@ function _activeRender(rows) {
         ? `${rows.length} active trade${rows.length > 1 ? 's' : ''}`
         : 'No active trades';
 
-    if (!rows.length) {
-        body.innerHTML = '<div class="ag-empty">No active trades</div>';
-        return;
-    }
+    // Rows here are {label, mode, trade, live} rather than flat trades, so the
+    // columns read through `row` instead of a key. '…' means the live poll has
+    // not answered yet — distinct from '—', which the grid uses for "no value".
+    const openPnl = r => _activeOpenPnlInr(r.trade, r.live);
 
-    body.innerHTML = `
-<div class="ag-hist-scroll">
-<table class="ag-hist-table">
-    <thead>
-        <tr>
-            <th class="ag-hist-th">Logic Type</th>
-            <th class="ag-hist-th">Mode</th>
-            <th class="ag-hist-th">Direction</th>
-            <th class="ag-hist-th">Option</th>
-            <th class="ag-hist-th">Entry Spot</th>
-            <th class="ag-hist-th">Live Spot</th>
-            <th class="ag-hist-th">SL Level</th>
-            <th class="ag-hist-th">Target</th>
-            <th class="ag-hist-th">Opt Entry ₹</th>
-            <th class="ag-hist-th">Opt LTP ₹</th>
-            <th class="ag-hist-th">Opt P&amp;L (₹)</th>
-            <th class="ag-hist-th">Entry Time</th>
-        </tr>
-    </thead>
-    <tbody>
-    ${rows.map(({ label, mode, trade, live }) => {
-        const dirCls   = trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg';
-        const spotStr  = live ? '₹' + _num(live.spot) : '…';
-        const optEntry = live && live.opt_entry_price != null
-            ? live.opt_entry_price : trade.opt_entry_price;
-        const optCur   = live ? live.opt_current_price : null;
-        // Long option position → P&L = (LTP − entry premium) × lot size.
-        const optPnlInr = _activeOpenPnlInr(trade, live);
-        const optPnlStr = optPnlInr != null ? _rtpFmtInr(optPnlInr) : '…';
-        return `<tr>
-            <td class="ag-hist-td" style="font-weight:700">${label}</td>
-            <td class="ag-hist-td">${_algoModeChip(mode)}</td>
-            <td class="ag-hist-td ${dirCls}" style="font-weight:700">${trade.direction ?? '—'}</td>
-            <td class="ag-hist-td">${(trade.option_type ?? '') + ' ' + (trade.strike ?? '—')}</td>
-            <td class="ag-hist-td">₹${_num(trade.entry_spot)}</td>
-            <td class="ag-hist-td">${spotStr}</td>
-            <td class="ag-hist-td ag-warn">₹${_num(trade.sl_level)}</td>
-            <td class="ag-hist-td ag-pos">₹${_num(trade.target_level)}</td>
-            <td class="ag-hist-td">${optEntry != null ? '₹' + _num(optEntry) : '—'}</td>
-            <td class="ag-hist-td">${optCur != null ? '₹' + _num(optCur) : '…'}</td>
-            <td class="ag-hist-td ${_rtpPnlCls(optPnlInr)}" style="font-weight:700">${optPnlStr}</td>
-            <td class="ag-hist-td">${trade.entry_time ? _fmtTime(trade.entry_time) : '—'}</td>
-        </tr>`;
-    }).join('')}
-    </tbody>
-</table>
-</div>`;
+    body.innerHTML = DataGrid.render({
+        rows,
+        empty: 'No active trades',
+        columns: [
+            { label: 'Logic Type', strong: true, format: (_, r) => r.label },
+            { label: 'Mode',
+              format: (_, r) => (r.mode || 'live').toLowerCase() === 'paper' ? 'Paper' : 'Live',
+              badge:  (_, r) => (r.mode || 'live').toLowerCase() === 'paper' ? 'warn' : 'pos' },
+            { label: 'Direction', strong: true,
+              format: (_, r) => r.trade.direction ?? '—',
+              tone:   (_, r) => r.trade.direction === 'BUY' ? 'pos' : 'neg' },
+            { label: 'Option',
+              format: (_, r) => `${r.trade.option_type ?? ''} ${r.trade.strike ?? '—'}`.trim() },
+            { label: 'Entry Spot', format: (_, r) => '₹' + _num(r.trade.entry_spot) },
+            { label: 'Live Spot',  format: (_, r) => r.live ? '₹' + _num(r.live.spot) : '…' },
+            { label: 'SL Level', tone: 'warn', format: (_, r) => '₹' + _num(r.trade.sl_level) },
+            { label: 'Target',   tone: 'pos',  format: (_, r) => '₹' + _num(r.trade.target_level) },
+            { label: 'Opt Entry ₹', format: (_, r) => {
+                const v = r.live && r.live.opt_entry_price != null
+                    ? r.live.opt_entry_price : r.trade.opt_entry_price;
+                return v != null ? '₹' + _num(v) : '—';
+            } },
+            { label: 'Opt LTP ₹', format: (_, r) => {
+                const v = r.live ? r.live.opt_current_price : null;
+                return v != null ? '₹' + _num(v) : '…';
+            } },
+            // Long option position → P&L = (LTP − entry premium) × lot size.
+            { label: 'Opt P&L (₹)', strong: true,
+              format: (_, r) => { const v = openPnl(r); return v == null ? '…' : DataGrid.inr(v); },
+              tone:   (_, r) => DataGrid.sign(openPnl(r)) },
+            { label: 'Entry Time',
+              format: (_, r) => r.trade.entry_time ? _fmtTime(r.trade.entry_time) : '—' },
+        ],
+    });
 }
 
 // ── Today's total P&L summary (realised from executed + unrealised from open) ──
@@ -259,6 +240,9 @@ function _activeRenderPnl(rows, todayTrades) {
 }
 
 // ── Today's executed (completed) trades across all live algos ─────────────────
+// Reference implementation of the shared grid — see DataGrid in
+// static/js/components/data-grid.js. Columns declare meaning; the component
+// owns the markup.
 function _activeRenderHistory(trades) {
     const countEl = document.getElementById('activeHistCount');
     const body    = document.getElementById('activeHistBody');
@@ -267,55 +251,114 @@ function _activeRenderHistory(trades) {
     if (countEl) countEl.textContent = trades.length
         ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
-    if (!trades.length) {
-        body.innerHTML = '<div class="ag-empty">No trades executed today</div>';
-        return;
-    }
+    // Points are stored on newer trades; older rows only carry the two prices.
+    const optPts = t => t.opt_pnl_pts ?? (
+        t.opt_exit_price != null && t.opt_entry_price != null
+            ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
 
-    const fmtOpt = v => v == null ? '—' : '₹' + Number(v).toFixed(2);
-    const fmtInr = v => v == null ? '—' : (v >= 0 ? '+₹' : '-₹') + Math.abs(Number(v)).toFixed(0);
+    body.innerHTML = DataGrid.render({
+        rows:  trades,
+        empty: 'No trades executed today',
+        columns: [
+            { key: 'label',     label: 'Logic Type', strong: true },
+            { key: 'mode',      label: 'Mode',
+              format: m => (m || 'live').toLowerCase() === 'paper' ? 'Paper' : 'Live',
+              badge:  m => (m || 'live').toLowerCase() === 'paper' ? 'warn' : 'pos' },
+            { key: 'direction', label: 'Direction', strong: true,
+              tone: d => d === 'BUY' ? 'pos' : 'neg' },
+            { label: 'Option',
+              format: (_, t) => `${t.option_type ?? ''} ${t.strike ?? '—'}`.trim() },
+            { key: 'entry_time', label: 'Entry Time',
+              format: v => v ? _fmtTimeOnly(v) : '—' },
+            { key: 'exit_time',  label: 'Exit Time',
+              format: v => v ? _fmtTimeOnly(v) : '—' },
+            { key: 'opt_entry_price', label: 'Opt Entry', format: DataGrid.rupees },
+            { key: 'opt_exit_price',  label: 'Opt Exit',  format: DataGrid.rupees },
+            { label: 'Opt Pts', strong: true,
+              format: (_, t) => DataGrid.points(optPts(t)),
+              tone:   (_, t) => DataGrid.sign(optPts(t)) },
+            { key: 'opt_pnl_inr', label: 'Opt P&L (₹)', strong: true,
+              format: DataGrid.inr, tone: DataGrid.sign },
+            { key: 'reason', label: 'Reason',
+              format: r => (r || '').replace(/_/g, ' '),
+              badge:  r => _ALGO_REASON_TONE[r] || 'neutral' },
+        ],
+    });
+}
 
-    body.innerHTML = `
-<div class="ag-hist-scroll">
-<table class="ag-hist-table">
-    <thead>
-        <tr>
-            <th class="ag-hist-th">Logic Type</th>
-            <th class="ag-hist-th">Mode</th>
-            <th class="ag-hist-th">Direction</th>
-            <th class="ag-hist-th">Option</th>
-            <th class="ag-hist-th">Entry Time</th>
-            <th class="ag-hist-th">Exit Time</th>
-            <th class="ag-hist-th">Opt Entry</th>
-            <th class="ag-hist-th">Opt Exit</th>
-            <th class="ag-hist-th">Opt Pts</th>
-            <th class="ag-hist-th">Opt P&amp;L (₹)</th>
-            <th class="ag-hist-th">Reason</th>
-        </tr>
-    </thead>
-    <tbody>
-    ${trades.map(t => {
-        const dirCls  = t.direction === 'BUY' ? 'ag-pos' : 'ag-neg';
-        const optPts  = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
-                            ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
-        const pnlCls  = _rtpPnlCls(optPts);
-        return `<tr>
-            <td class="ag-hist-td" style="font-weight:700">${t.label}</td>
-            <td class="ag-hist-td">${_algoModeChip(t.mode)}</td>
-            <td class="ag-hist-td ${dirCls}" style="font-weight:700">${t.direction ?? '—'}</td>
-            <td class="ag-hist-td">${(t.option_type ?? '') + ' ' + (t.strike ?? '—')}</td>
-            <td class="ag-hist-td">${t.entry_time ? _fmtTimeOnly(t.entry_time) : '—'}</td>
-            <td class="ag-hist-td">${t.exit_time ? _fmtTimeOnly(t.exit_time) : '—'}</td>
-            <td class="ag-hist-td">${fmtOpt(t.opt_entry_price)}</td>
-            <td class="ag-hist-td">${fmtOpt(t.opt_exit_price)}</td>
-            <td class="ag-hist-td ${optPts != null ? pnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
-            <td class="ag-hist-td ${t.opt_pnl_inr != null ? pnlCls : ''}" style="font-weight:700">${fmtInr(t.opt_pnl_inr)}</td>
-            <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
-        </tr>`;
-    }).join('')}
-    </tbody>
-</table>
-</div>`;
+// Exit reasons → grid badge tones. TARGET reads as a win, SL as a loss;
+// EOD is a non-event, so it stays neutral rather than colouring the row.
+const _ALGO_REASON_TONE = {
+    TARGET:        'pos',
+    SL:            'neg',
+    EOD:           'neutral',
+    MANUAL:        'special',
+    RANGE_RECLAIM: 'info',
+};
+
+// ── Executed-trade history grid — shared by every algo tab ────────────────────
+// The seven tabs (RTP 30s/1m/2m/3m/5m, 2nd Candle, Intrinsic Range) each carried
+// a byte-identical copy of this table. They differed in exactly two things, so
+// those are the parameters: which delete handler the row button calls, and —
+// for Intrinsic Range — that it books a premium against spot rather than an
+// option price, which changes the wording and the field names but not the grid.
+const _ALGO_HIST_SHAPES = {
+    option: {
+        entry: 'opt_entry_price', exit: 'opt_exit_price',
+        pts: 'opt_pnl_pts', inr: 'opt_pnl_inr',
+        labels: { entry: 'Opt Entry', exit: 'Opt Exit', spotEntry: 'N Entry',
+                  spotExit: 'N Exit', spotPts: 'N Pts', pts: 'Opt Pts', inr: 'Opt P&L' },
+    },
+    premium: {
+        entry: 'entry_premium', exit: 'exit_premium',
+        pts: 'premium_pnl_pts', inr: 'premium_pnl_inr',
+        labels: { entry: 'Premium Entry', exit: 'Premium Exit', spotEntry: 'Entry Spot',
+                  spotExit: 'Exit Spot', spotPts: 'Spot Pts', pts: 'Premium Pts', inr: 'Premium P&L' },
+    },
+};
+
+function _algoHistoryGrid(trades, { onDelete, shape = 'option' } = {}) {
+    const f = _ALGO_HIST_SHAPES[shape];
+    const L = f.labels;
+
+    // Newer option trades store points; older rows only carry the two prices.
+    // Premium trades always store theirs, so there is nothing to fall back to.
+    const pts = t => t[f.pts] ?? (
+        shape === 'option' && t[f.exit] != null && t[f.entry] != null
+            ? +(t[f.exit] - t[f.entry]).toFixed(2) : null);
+
+    return DataGrid.render({
+        rows: trades,
+        empty: 'No completed trades',
+        columns: [
+            { label: 'Date',
+              format: (_, t) => t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—') },
+            { key: 'entry_time', label: 'Entry Time', format: v => v ? _fmtTimeOnly(v) : '—' },
+            { key: 'exit_time',  label: 'Exit Time',  format: v => v ? _fmtTimeOnly(v) : '—' },
+            { label: 'Strike',
+              format: (_, t) => `${t.strike ?? '—'} ${t.option_type ?? ''}`.trim() },
+            { key: f.entry, label: L.entry, format: DataGrid.rupees },
+            { key: f.exit,  label: L.exit,  format: DataGrid.rupees },
+            { key: 'entry_spot', label: L.spotEntry, format: v => '₹' + _num(v) },
+            { key: 'exit_spot',  label: L.spotExit,  format: v => '₹' + _num(v) },
+            { key: 'pnl_pts', label: L.spotPts, strong: true,
+              format: v => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(1) + ' pts',
+              // Matches the original `(pnl_pts || 0) >= 0` — a missing value
+              // shows a dash but still reads as non-negative.
+              tone: v => (v || 0) >= 0 ? 'pos' : 'neg' },
+            { label: L.pts, strong: true,
+              format: (_, t) => DataGrid.points(pts(t)),
+              tone:   (_, t) => DataGrid.sign(pts(t)) },
+            { key: f.inr, label: L.inr, strong: true,
+              format: DataGrid.inr, tone: DataGrid.sign },
+            { key: 'reason', label: 'Reason',
+              format: r => (r || '').replace(/_/g, ' '),
+              badge:  r => _ALGO_REASON_TONE[r] || 'neutral' },
+            { label: '', cellClass: 'ag-hist-td-del',
+              render: (_, t) => `<button class="ag-hist-del-btn" title="Delete record"` +
+                  ` onclick="${onDelete}('${(t.entry_time || '').replace(/"/g, '&quot;')}')">&#128465;</button>` },
+        ],
+    });
 }
 
 function algoLoad() {
@@ -527,77 +570,7 @@ function _rtpRenderHistory(trades) {
 
     if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
-    if (!trades.length) {
-        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
-        return;
-    }
-
-    function _fmtOpt(val) {
-        if (val == null) return '—';
-        return '₹' + Number(val).toFixed(2);
-    }
-    function _fmtPts(val, suffix) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
-    }
-    function _fmtInr(val) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
-    }
-
-    body.innerHTML = `
-<div class="ag-hist-scroll">
-<table class="ag-hist-table">
-    <thead>
-        <tr>
-            <th class="ag-hist-th">Date</th>
-            <th class="ag-hist-th">Entry Time</th>
-            <th class="ag-hist-th">Exit Time</th>
-            <th class="ag-hist-th">Strike</th>
-            <th class="ag-hist-th">Opt Entry</th>
-            <th class="ag-hist-th">Opt Exit</th>
-            <th class="ag-hist-th">N Entry</th>
-            <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N Pts</th>
-            <th class="ag-hist-th">Opt Pts</th>
-            <th class="ag-hist-th">Opt P&amp;L</th>
-            <th class="ag-hist-th">Reason</th>
-            <th class="ag-hist-th"></th>
-        </tr>
-    </thead>
-    <tbody>
-    ${trades.map(t => {
-        const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
-        const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
-        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
-                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
-        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
-        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
-        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
-        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
-        return `<tr>
-            <td class="ag-hist-td">${dateStr}</td>
-            <td class="ag-hist-td">${entryTime}</td>
-            <td class="ag-hist-td">${exitTime}</td>
-            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
-            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
-            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
-            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
-            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
-            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
-            <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
-            <td class="ag-hist-td ag-hist-td-del">
-                <button class="ag-hist-del-btn" onclick="_rtpDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
-            </td>
-        </tr>`;
-    }).join('')}
-    </tbody>
-</table>
-</div>`;
+    body.innerHTML = _algoHistoryGrid(trades, { onDelete: '_rtpDeleteTrade' });
 }
 
 // ── RTP live performance dashboard (cards + charts from history JSON) ──────────
@@ -875,16 +848,6 @@ function _rtpPnlCls(val) {
     return val >= 0 ? 'ag-pos' : 'ag-neg';
 }
 
-function _rtpFmtReason(reason) {
-    const map = {
-        TARGET:        '<span class="ag-reason-badge target">TARGET</span>',
-        SL:            '<span class="ag-reason-badge sl">SL</span>',
-        EOD:           '<span class="ag-reason-badge eod">EOD</span>',
-        MANUAL:        '<span class="ag-reason-badge manual">MANUAL</span>',
-        RANGE_RECLAIM: '<span class="ag-reason-badge range-reclaim">RANGE RECLAIM</span>',
-    };
-    return map[reason] || reason || '—';
-}
 
 // ── RTP Delete History Record ─────────────────────────────────────────────────
 
@@ -1174,77 +1137,7 @@ function _rtp30sRenderHistory(trades) {
 
     if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
-    if (!trades.length) {
-        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
-        return;
-    }
-
-    function _fmtOpt(val) {
-        if (val == null) return '—';
-        return '₹' + Number(val).toFixed(2);
-    }
-    function _fmtPts(val, suffix) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
-    }
-    function _fmtInr(val) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
-    }
-
-    body.innerHTML = `
-<div class="ag-hist-scroll">
-<table class="ag-hist-table">
-    <thead>
-        <tr>
-            <th class="ag-hist-th">Date</th>
-            <th class="ag-hist-th">Entry Time</th>
-            <th class="ag-hist-th">Exit Time</th>
-            <th class="ag-hist-th">Strike</th>
-            <th class="ag-hist-th">Opt Entry</th>
-            <th class="ag-hist-th">Opt Exit</th>
-            <th class="ag-hist-th">N Entry</th>
-            <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N Pts</th>
-            <th class="ag-hist-th">Opt Pts</th>
-            <th class="ag-hist-th">Opt P&amp;L</th>
-            <th class="ag-hist-th">Reason</th>
-            <th class="ag-hist-th"></th>
-        </tr>
-    </thead>
-    <tbody>
-    ${trades.map(t => {
-        const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
-        const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
-        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
-                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
-        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
-        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
-        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
-        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
-        return `<tr>
-            <td class="ag-hist-td">${dateStr}</td>
-            <td class="ag-hist-td">${entryTime}</td>
-            <td class="ag-hist-td">${exitTime}</td>
-            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
-            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
-            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
-            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
-            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
-            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
-            <td class="ag-hist-td">${_rtp30sFmtReason(t.reason)}</td>
-            <td class="ag-hist-td ag-hist-td-del">
-                <button class="ag-hist-del-btn" onclick="_rtp30sDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
-            </td>
-        </tr>`;
-    }).join('')}
-    </tbody>
-</table>
-</div>`;
+    body.innerHTML = _algoHistoryGrid(trades, { onDelete: '_rtp30sDeleteTrade' });
 }
 
 // ── RTP live performance dashboard (cards + charts from history JSON) ──────────
@@ -1522,16 +1415,6 @@ function _rtp30sPnlCls(val) {
     return val >= 0 ? 'ag-pos' : 'ag-neg';
 }
 
-function _rtp30sFmtReason(reason) {
-    const map = {
-        TARGET:        '<span class="ag-reason-badge target">TARGET</span>',
-        SL:            '<span class="ag-reason-badge sl">SL</span>',
-        EOD:           '<span class="ag-reason-badge eod">EOD</span>',
-        MANUAL:        '<span class="ag-reason-badge manual">MANUAL</span>',
-        RANGE_RECLAIM: '<span class="ag-reason-badge range-reclaim">RANGE RECLAIM</span>',
-    };
-    return map[reason] || reason || '—';
-}
 
 // ── RTP Delete History Record ─────────────────────────────────────────────────
 
@@ -1822,77 +1705,7 @@ function _rtp3mRenderHistory(trades) {
 
     if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
-    if (!trades.length) {
-        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
-        return;
-    }
-
-    function _fmtOpt(val) {
-        if (val == null) return '—';
-        return '₹' + Number(val).toFixed(2);
-    }
-    function _fmtPts(val, suffix) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
-    }
-    function _fmtInr(val) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
-    }
-
-    body.innerHTML = `
-<div class="ag-hist-scroll">
-<table class="ag-hist-table">
-    <thead>
-        <tr>
-            <th class="ag-hist-th">Date</th>
-            <th class="ag-hist-th">Entry Time</th>
-            <th class="ag-hist-th">Exit Time</th>
-            <th class="ag-hist-th">Strike</th>
-            <th class="ag-hist-th">Opt Entry</th>
-            <th class="ag-hist-th">Opt Exit</th>
-            <th class="ag-hist-th">N Entry</th>
-            <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N Pts</th>
-            <th class="ag-hist-th">Opt Pts</th>
-            <th class="ag-hist-th">Opt P&amp;L</th>
-            <th class="ag-hist-th">Reason</th>
-            <th class="ag-hist-th"></th>
-        </tr>
-    </thead>
-    <tbody>
-    ${trades.map(t => {
-        const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
-        const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
-        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
-                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
-        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
-        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
-        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
-        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
-        return `<tr>
-            <td class="ag-hist-td">${dateStr}</td>
-            <td class="ag-hist-td">${entryTime}</td>
-            <td class="ag-hist-td">${exitTime}</td>
-            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
-            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
-            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
-            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
-            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
-            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
-            <td class="ag-hist-td">${_rtp3mFmtReason(t.reason)}</td>
-            <td class="ag-hist-td ag-hist-td-del">
-                <button class="ag-hist-del-btn" onclick="_rtp3mDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
-            </td>
-        </tr>`;
-    }).join('')}
-    </tbody>
-</table>
-</div>`;
+    body.innerHTML = _algoHistoryGrid(trades, { onDelete: '_rtp3mDeleteTrade' });
 }
 
 // ── RTP live performance dashboard (cards + charts from history JSON) ──────────
@@ -2170,16 +1983,6 @@ function _rtp3mPnlCls(val) {
     return val >= 0 ? 'ag-pos' : 'ag-neg';
 }
 
-function _rtp3mFmtReason(reason) {
-    const map = {
-        TARGET:        '<span class="ag-reason-badge target">TARGET</span>',
-        SL:            '<span class="ag-reason-badge sl">SL</span>',
-        EOD:           '<span class="ag-reason-badge eod">EOD</span>',
-        MANUAL:        '<span class="ag-reason-badge manual">MANUAL</span>',
-        RANGE_RECLAIM: '<span class="ag-reason-badge range-reclaim">RANGE RECLAIM</span>',
-    };
-    return map[reason] || reason || '—';
-}
 
 // ── RTP Delete History Record ─────────────────────────────────────────────────
 
@@ -2470,77 +2273,7 @@ function _rtp2mRenderHistory(trades) {
 
     if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
-    if (!trades.length) {
-        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
-        return;
-    }
-
-    function _fmtOpt(val) {
-        if (val == null) return '—';
-        return '₹' + Number(val).toFixed(2);
-    }
-    function _fmtPts(val, suffix) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
-    }
-    function _fmtInr(val) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
-    }
-
-    body.innerHTML = `
-<div class="ag-hist-scroll">
-<table class="ag-hist-table">
-    <thead>
-        <tr>
-            <th class="ag-hist-th">Date</th>
-            <th class="ag-hist-th">Entry Time</th>
-            <th class="ag-hist-th">Exit Time</th>
-            <th class="ag-hist-th">Strike</th>
-            <th class="ag-hist-th">Opt Entry</th>
-            <th class="ag-hist-th">Opt Exit</th>
-            <th class="ag-hist-th">N Entry</th>
-            <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N Pts</th>
-            <th class="ag-hist-th">Opt Pts</th>
-            <th class="ag-hist-th">Opt P&amp;L</th>
-            <th class="ag-hist-th">Reason</th>
-            <th class="ag-hist-th"></th>
-        </tr>
-    </thead>
-    <tbody>
-    ${trades.map(t => {
-        const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
-        const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
-        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
-                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
-        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
-        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
-        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
-        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
-        return `<tr>
-            <td class="ag-hist-td">${dateStr}</td>
-            <td class="ag-hist-td">${entryTime}</td>
-            <td class="ag-hist-td">${exitTime}</td>
-            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
-            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
-            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
-            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
-            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
-            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
-            <td class="ag-hist-td">${_rtp2mFmtReason(t.reason)}</td>
-            <td class="ag-hist-td ag-hist-td-del">
-                <button class="ag-hist-del-btn" onclick="_rtp2mDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
-            </td>
-        </tr>`;
-    }).join('')}
-    </tbody>
-</table>
-</div>`;
+    body.innerHTML = _algoHistoryGrid(trades, { onDelete: '_rtp2mDeleteTrade' });
 }
 
 // ── RTP live performance dashboard (cards + charts from history JSON) ──────────
@@ -2818,16 +2551,6 @@ function _rtp2mPnlCls(val) {
     return val >= 0 ? 'ag-pos' : 'ag-neg';
 }
 
-function _rtp2mFmtReason(reason) {
-    const map = {
-        TARGET:        '<span class="ag-reason-badge target">TARGET</span>',
-        SL:            '<span class="ag-reason-badge sl">SL</span>',
-        EOD:           '<span class="ag-reason-badge eod">EOD</span>',
-        MANUAL:        '<span class="ag-reason-badge manual">MANUAL</span>',
-        RANGE_RECLAIM: '<span class="ag-reason-badge range-reclaim">RANGE RECLAIM</span>',
-    };
-    return map[reason] || reason || '—';
-}
 
 // ── RTP Delete History Record ─────────────────────────────────────────────────
 
@@ -3118,77 +2841,7 @@ function _rtp5mRenderHistory(trades) {
 
     if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
-    if (!trades.length) {
-        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
-        return;
-    }
-
-    function _fmtOpt(val) {
-        if (val == null) return '—';
-        return '₹' + Number(val).toFixed(2);
-    }
-    function _fmtPts(val, suffix) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
-    }
-    function _fmtInr(val) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
-    }
-
-    body.innerHTML = `
-<div class="ag-hist-scroll">
-<table class="ag-hist-table">
-    <thead>
-        <tr>
-            <th class="ag-hist-th">Date</th>
-            <th class="ag-hist-th">Entry Time</th>
-            <th class="ag-hist-th">Exit Time</th>
-            <th class="ag-hist-th">Strike</th>
-            <th class="ag-hist-th">Opt Entry</th>
-            <th class="ag-hist-th">Opt Exit</th>
-            <th class="ag-hist-th">N Entry</th>
-            <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N Pts</th>
-            <th class="ag-hist-th">Opt Pts</th>
-            <th class="ag-hist-th">Opt P&amp;L</th>
-            <th class="ag-hist-th">Reason</th>
-            <th class="ag-hist-th"></th>
-        </tr>
-    </thead>
-    <tbody>
-    ${trades.map(t => {
-        const dir       = t.direction === 'BUY' ? 'CE BUY' : 'PE BUY';
-        const dirCls    = t.direction === 'BUY' ? 'ce' : 'pe';
-        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
-                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
-        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
-        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
-        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
-        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
-        return `<tr>
-            <td class="ag-hist-td">${dateStr}</td>
-            <td class="ag-hist-td">${entryTime}</td>
-            <td class="ag-hist-td">${exitTime}</td>
-            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
-            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
-            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
-            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
-            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
-            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
-            <td class="ag-hist-td">${_rtp5mFmtReason(t.reason)}</td>
-            <td class="ag-hist-td ag-hist-td-del">
-                <button class="ag-hist-del-btn" onclick="_rtp5mDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
-            </td>
-        </tr>`;
-    }).join('')}
-    </tbody>
-</table>
-</div>`;
+    body.innerHTML = _algoHistoryGrid(trades, { onDelete: '_rtp5mDeleteTrade' });
 }
 
 // ── RTP live performance dashboard (cards + charts from history JSON) ──────────
@@ -3466,16 +3119,6 @@ function _rtp5mPnlCls(val) {
     return val >= 0 ? 'ag-pos' : 'ag-neg';
 }
 
-function _rtp5mFmtReason(reason) {
-    const map = {
-        TARGET:        '<span class="ag-reason-badge target">TARGET</span>',
-        SL:            '<span class="ag-reason-badge sl">SL</span>',
-        EOD:           '<span class="ag-reason-badge eod">EOD</span>',
-        MANUAL:        '<span class="ag-reason-badge manual">MANUAL</span>',
-        RANGE_RECLAIM: '<span class="ag-reason-badge range-reclaim">RANGE RECLAIM</span>',
-    };
-    return map[reason] || reason || '—';
-}
 
 // ── RTP Delete History Record ─────────────────────────────────────────────────
 
@@ -3809,79 +3452,12 @@ function _scRenderHistory(trades) {
     const countEl = document.getElementById('scHistCount');
     const body    = document.getElementById('scHistBody');
 
+    // Performance dashboard (cards + charts) built from the same JSON
     _scRenderDashboard(trades);
 
     if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
-    if (!trades.length) {
-        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
-        return;
-    }
-
-    function _fmtOpt(val) {
-        if (val == null) return '—';
-        return '₹' + Number(val).toFixed(2);
-    }
-    function _fmtPts(val, suffix) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
-    }
-    function _fmtInr(val) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
-    }
-
-    body.innerHTML = `
-<div class="ag-hist-scroll">
-<table class="ag-hist-table">
-    <thead>
-        <tr>
-            <th class="ag-hist-th">Date</th>
-            <th class="ag-hist-th">Entry Time</th>
-            <th class="ag-hist-th">Exit Time</th>
-            <th class="ag-hist-th">Strike</th>
-            <th class="ag-hist-th">Opt Entry</th>
-            <th class="ag-hist-th">Opt Exit</th>
-            <th class="ag-hist-th">N Entry</th>
-            <th class="ag-hist-th">N Exit</th>
-            <th class="ag-hist-th">N Pts</th>
-            <th class="ag-hist-th">Opt Pts</th>
-            <th class="ag-hist-th">Opt P&amp;L</th>
-            <th class="ag-hist-th">Reason</th>
-            <th class="ag-hist-th"></th>
-        </tr>
-    </thead>
-    <tbody>
-    ${trades.map(t => {
-        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const optPts    = t.opt_pnl_pts ?? (t.opt_exit_price != null && t.opt_entry_price != null
-                              ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
-        const oPnlCls   = (optPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
-        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
-        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
-        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
-        return `<tr>
-            <td class="ag-hist-td">${dateStr}</td>
-            <td class="ag-hist-td">${entryTime}</td>
-            <td class="ag-hist-td">${exitTime}</td>
-            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_entry_price)}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.opt_exit_price)}</td>
-            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
-            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
-            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
-            <td class="ag-hist-td ${optPts != null ? oPnlCls : ''}" style="font-weight:700">${optPts != null ? (optPts >= 0 ? '+' : '') + optPts.toFixed(2) : '—'}</td>
-            <td class="ag-hist-td ${t.opt_pnl_inr != null ? oPnlCls : ''}" style="font-weight:700">${_fmtInr(t.opt_pnl_inr)}</td>
-            <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
-            <td class="ag-hist-td ag-hist-td-del">
-                <button class="ag-hist-del-btn" onclick="_scDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
-            </td>
-        </tr>`;
-    }).join('')}
-    </tbody>
-</table>
-</div>`;
+    body.innerHTML = _algoHistoryGrid(trades, { onDelete: '_scDeleteTrade' });
 }
 
 // ── SC dashboard (cards + charts) ─────────────────────────────────────────────
@@ -4418,74 +3994,7 @@ function _intrinsicRenderHistory(trades) {
 
     if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
-    if (!trades.length) {
-        body.innerHTML = '<div class="ag-empty">No completed trades</div>';
-        return;
-    }
-
-    function _fmtOpt(val) {
-        if (val == null) return '—';
-        return '₹' + Number(val).toFixed(2);
-    }
-    function _fmtPts(val, suffix) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+' : '') + Number(val).toFixed(1) + (suffix || '');
-    }
-    function _fmtInr(val) {
-        if (val == null) return '—';
-        return (val >= 0 ? '+₹' : '-₹') + Math.abs(Number(val)).toFixed(0);
-    }
-
-    body.innerHTML = `
-<div class="ag-hist-scroll">
-<table class="ag-hist-table">
-    <thead>
-        <tr>
-            <th class="ag-hist-th">Date</th>
-            <th class="ag-hist-th">Entry Time</th>
-            <th class="ag-hist-th">Exit Time</th>
-            <th class="ag-hist-th">Strike</th>
-            <th class="ag-hist-th">Premium Entry</th>
-            <th class="ag-hist-th">Premium Exit</th>
-            <th class="ag-hist-th">Entry Spot</th>
-            <th class="ag-hist-th">Exit Spot</th>
-            <th class="ag-hist-th">Spot Pts</th>
-            <th class="ag-hist-th">Premium Pts</th>
-            <th class="ag-hist-th">Premium P&amp;L</th>
-            <th class="ag-hist-th">Reason</th>
-            <th class="ag-hist-th"></th>
-        </tr>
-    </thead>
-    <tbody>
-    ${trades.map(t => {
-        const nPnlCls   = (t.pnl_pts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const premPts   = t.premium_pnl_pts;
-        const pPnlCls   = (premPts || 0) >= 0 ? 'ag-pos' : 'ag-neg';
-        const dateStr   = t.date || (t.entry_time ? t.entry_time.slice(0, 10) : '—');
-        const entryTime = t.entry_time ? _fmtTimeOnly(t.entry_time) : '—';
-        const exitTime  = t.exit_time  ? _fmtTimeOnly(t.exit_time)  : '—';
-        const entryKey  = (t.entry_time || '').replace(/"/g, '&quot;');
-        return `<tr>
-            <td class="ag-hist-td">${dateStr}</td>
-            <td class="ag-hist-td">${entryTime}</td>
-            <td class="ag-hist-td">${exitTime}</td>
-            <td class="ag-hist-td">${t.strike ?? '—'} ${t.option_type ?? ''}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.entry_premium)}</td>
-            <td class="ag-hist-td">${_fmtOpt(t.exit_premium)}</td>
-            <td class="ag-hist-td">₹${_num(t.entry_spot)}</td>
-            <td class="ag-hist-td">₹${_num(t.exit_spot)}</td>
-            <td class="ag-hist-td ${nPnlCls}" style="font-weight:700">${_fmtPts(t.pnl_pts, ' pts')}</td>
-            <td class="ag-hist-td ${premPts != null ? pPnlCls : ''}" style="font-weight:700">${premPts != null ? (premPts >= 0 ? '+' : '') + premPts.toFixed(2) : '—'}</td>
-            <td class="ag-hist-td ${t.premium_pnl_inr != null ? pPnlCls : ''}" style="font-weight:700">${_fmtInr(t.premium_pnl_inr)}</td>
-            <td class="ag-hist-td">${_rtpFmtReason(t.reason)}</td>
-            <td class="ag-hist-td ag-hist-td-del">
-                <button class="ag-hist-del-btn" onclick="_intrinsicDeleteTrade('${entryKey}')" title="Delete record">&#128465;</button>
-            </td>
-        </tr>`;
-    }).join('')}
-    </tbody>
-</table>
-</div>`;
+    body.innerHTML = _algoHistoryGrid(trades, { onDelete: '_intrinsicDeleteTrade', shape: 'premium' });
 }
 
 function _intrinsicDeleteAllTrades() {

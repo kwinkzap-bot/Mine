@@ -17708,14 +17708,27 @@
   {
     "date": "2026-07-14",
     "symbol": "NIFTY",
-    "ce_oi": 79592435,
-    "pe_oi": 68371745,
+    "ce_oi": 79473550,
+    "pe_oi": 68238300,
     "open": 24068.0,
     "high": 24157.1,
     "low": 24023.7,
     "close": 24052.05,
-    "idx_fut_oi": null,
-    "fii_fut_oi": null,
-    "FII_Index_futures": 0
+    "idx_fut_oi": 18750225,
+    "fii_fut_oi": -265465,
+    "FII_Index_futures": -1736.24
+  },
+  {
+    "date": "2026-07-15",
+    "symbol": "NIFTY",
+    "ce_oi": 118694875,
+    "pe_oi": 92102790,
+    "open": 24085.85,
+    "high": 24220.35,
+    "low": 24010.55,
+    "close": 24078.5,
+    "idx_fut_oi": 18687435,
+    "fii_fut_oi": -262712,
+    "FII_Index_futures": 440.74
   }
 ]

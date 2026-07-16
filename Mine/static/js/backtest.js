@@ -83,9 +83,10 @@ document.addEventListener('DOMContentLoaded', function() {
             const data = await resp.json();
             if (data && data.success) {
                 _liveConfigs = { rtp: data.rtp || [], sc: data.second_candle || null };
-                // Re-badge anything already rendered
-                Object.keys(_optGroupsByTf).forEach(tf => _renderTfBody(tf));
-                Object.keys(_scOptGroupsByTf).forEach(tf => _renderScTfBody(tf));
+                // Re-badge anything already rendered — same rows/sort, but the
+                // Live column's isLive() check re-reads the fresh _liveConfigs.
+                Object.values(_optGroupsByTf).forEach(st => DataGrid.refresh(st.gridEl));
+                Object.values(_scOptGroupsByTf).forEach(st => DataGrid.refresh(st.gridEl));
                 updateLiveFlagBadge();
             }
         } catch (e) {
@@ -633,7 +634,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     let lastData = null;
-    let sortConfig = { key: 'exit_time', direction: 'desc' };
 
     function displayResults(data) {
         lastData = data;
@@ -1118,89 +1118,44 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
+    const TRADES_COLS = [
+        { key: 'entry_time', label: 'Entry Time', sortable: true,
+          // Dates sort chronologically, not lexically — same fix DataGrid's
+          // numeric-aware compare already gives every other date column.
+          sortValue: t => new Date(t.entry_time).getTime(),
+          format: v => formatDate(v) },
+        { label: 'Type', sortable: true,
+          sortValue: t => t.direction || t.type || '-',
+          render: (_, t) => {
+              const dir = t.direction || t.type || '-';
+              const isLong = dir === 'BUY' || dir === 'Long' || dir === 'long';
+              return DataGrid.badge(dir, isLong ? 'pos' : 'neg');
+          } },
+        { key: 'entry_price', label: 'Entry Price', sortable: true,
+          format: v => (v || 0).toFixed(2) },
+        { key: 'exit_time', label: 'Exit Time', sortable: true,
+          sortValue: t => new Date(t.exit_time).getTime(),
+          format: v => formatDate(v) },
+        { key: 'exit_price', label: 'Exit Price', sortable: true,
+          format: v => (v || 0).toFixed(2) },
+        { label: 'Result', sortable: true,
+          sortValue: t => t.exit_reason || t.result || '-',
+          format: (_, t) => t.exit_reason || t.result || '-' },
+        { key: 'pnl', label: 'P&L', sortable: true, strong: true,
+          format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
+    ];
+
     function renderTable() {
         if (!lastData || !lastData.trades) return;
         if (lastData.is_swing_momentum) { _renderSmTable(lastData.trades); return; }
-        // Restore the intraday header if swing momentum rewrote the thead
-        // (its headers have no data-sort). Only rebuild when actually mutated
-        // so normal runs keep their existing sort listeners.
-        const thead = document.querySelector('.trades-table thead tr');
-        if (thead && !thead.querySelector('th[data-sort]')) {
-            thead.innerHTML = `
-                <th data-sort="entry_time">Entry Time</th>
-                <th data-sort="type">Type</th>
-                <th data-sort="entry_price">Entry Price</th>
-                <th data-sort="exit_time">Exit Time</th>
-                <th data-sort="exit_price">Exit Price</th>
-                <th data-sort="result">Result</th>
-                <th data-sort="pnl">P&amp;L</th>`;
-            attachSortListeners();
-        }
-        const trades = [...lastData.trades];
-        const tbody = document.getElementById('tradesBody');
-        
-        // Sort trades based on config
-        trades.sort((a, b) => {
-            let valA = a[sortConfig.key];
-            let valB = b[sortConfig.key];
-            
-            // Handle dates
-            if (sortConfig.key.includes('time')) {
-                valA = new Date(valA).getTime();
-                valB = new Date(valB).getTime();
-            }
-            
-            if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
-            if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
-            return 0;
-        });
 
-        if (trades.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding: 20px;">No trades generated</td></tr>';
-        } else {
-            tbody.innerHTML = trades.map(t => {
-                const dir    = t.direction || t.type || '-';
-                const result = t.exit_reason || t.result || '-';
-                const isLong = dir === 'BUY' || dir === 'Long' || dir === 'long';
-                return `
-                <tr>
-                    <td>${formatDate(t.entry_time)}</td>
-                    <td><span class="badge ${isLong ? 'badge-buy' : 'badge-sell'}">${dir}</span></td>
-                    <td>${(t.entry_price||0).toFixed(2)}</td>
-                    <td>${formatDate(t.exit_time)}</td>
-                    <td>${(t.exit_price||0).toFixed(2)}</td>
-                    <td>${result}</td>
-                    <td class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(t.pnl||0).toFixed(2)}</td>
-                </tr>`;
-            }).join('');
-        }
-
-        // Update header indicators
-        document.querySelectorAll('.trades-table th').forEach(th => {
-            th.classList.remove('sort-asc', 'sort-desc');
-            if (th.dataset.sort === sortConfig.key) {
-                th.classList.add(sortConfig.direction === 'asc' ? 'sort-asc' : 'sort-desc');
-            }
+        DataGrid.mountSortable('tradesGrid', {
+            rows: lastData.trades,
+            columns: TRADES_COLS,
+            empty: 'No trades generated',
+            defaultSort: { key: 'exit_time', dir: 'desc' },
         });
     }
-
-    // Add sort listeners to headers (re-callable after the thead is rebuilt)
-    function attachSortListeners() {
-        document.querySelectorAll('.trades-table th[data-sort]').forEach(th => {
-            th.style.cursor = 'pointer';
-            th.addEventListener('click', () => {
-                const key = th.dataset.sort;
-                if (sortConfig.key === key) {
-                    sortConfig.direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
-                } else {
-                    sortConfig.key = key;
-                    sortConfig.direction = 'desc'; // Default to newest/highest first
-                }
-                renderTable();
-            });
-        });
-    }
-    attachSortListeners();
 
     function formatDate(dateStr) {
         if (!dateStr) return '--';
@@ -1257,6 +1212,104 @@ document.addEventListener('DOMContentLoaded', function() {
         if (chev) chev.textContent = collapse ? '▸' : '▾';
     }
 
+    // ── Shared per-timeframe optimiser grid ────────────────────────────
+    // The RTP and Candle Breakout optimisers each produce a best-combos grid
+    // per timeframe, with the same shape: an old-style column list of
+    // {label, key, fmt(r)}, a "Use this row" button, and the best row
+    // highlighted while sorted by ₹ P&L descending (the default). This is
+    // that grid, built once from DataGrid.mountSortable, so both call it
+    // instead of carrying their own copy of the sort/highlight/click-wiring.
+    //
+    // `legacyCols`: the existing OPT_COLS / SC_OPT_COLS shape — kept as-is
+    // rather than rewritten as DataGrid columns, since each cell's fmt(r)
+    // already reads whatever fields (including derived ₹ ones) it needs.
+    // `spec`: { idPrefix, isLive(row), derivedSort: {key: row=>comparable},
+    //           applyFn(row), stateStore } — stateStore is the caller's own
+    //           `_optGroupsByTf`-shaped object, kept alive so any other code
+    //           reading it afterwards (there is none today, but the shape
+    //           mirrors the pre-DataGrid version) still finds `.displayed`.
+    function _mapLegacyOptColumns(legacyCols, spec) {
+        return legacyCols.map((c, idx) => {
+            if (c.label === '#') {
+                return { label: '#', render: (_, r, i) => i + 1 };
+            }
+            if (c.label === 'Live') {
+                return { label: 'Live', render: (_, r) => spec.isLive(r) ? LIVE_BADGE_HTML : '<span class="opt-live-off">—</span>' };
+            }
+            if (c.label === '') {
+                // The "Use this row" button. `i` is this row's position in the
+                // CURRENTLY DISPLAYED (sorted) order, which is exactly what the
+                // container's onSorted keeps in stateStore[tf].displayed — so
+                // the click handler can look the row back up by that same index.
+                return { label: '', cellClass: 'opt-td-use',
+                    render: (_, r, i) => `<button class="btn-opt-use" data-idx="${i}">Use</button>` };
+            }
+            const col = { key: c.key, label: c.label, sortable: !!c.key,
+                render: (_, r) => c.fmt(r) };
+            if (spec.derivedSort && spec.derivedSort[c.key]) col.sortValue = spec.derivedSort[c.key];
+            return col;
+        });
+    }
+
+    function _renderOptTfGrids(container, groups, legacyCols, spec) {
+        Object.keys(spec.stateStore).forEach(k => delete spec.stateStore[k]);
+        if (!container) return;
+
+        container.innerHTML = groups.map((g, gi) => `
+            <div class="opt-tf-block">
+                <div class="opt-tf-title" data-collapse=".opt-table-wrap">${g.tf_label}
+                    <span>best ${(g.results || []).length} of ${g.total}</span>
+                </div>
+                <div class="opt-table-wrap collapsed-hide">
+                    <div id="${spec.idPrefix}-${gi}"></div>
+                </div>
+            </div>`).join('') || '<div class="opt-tf-title">No timeframe produced enough trades.</div>';
+
+        const columns = _mapLegacyOptColumns(legacyCols, spec);
+
+        groups.forEach((g, gi) => {
+            const grid = document.getElementById(`${spec.idPrefix}-${gi}`);
+            if (!grid) return;
+            // gridEl lets refreshLiveConfigs() repaint the "Live" badge column
+            // later without re-fetching or re-sorting — DataGrid.refresh() just
+            // re-runs the same render with whatever _liveConfigs holds now.
+            const tfState = { displayed: (g.results || []).slice(), sortState: null, gridEl: grid };
+            spec.stateStore[g.tf_label] = tfState;
+
+            DataGrid.mountSortable(grid, {
+                rows: g.results || [],
+                columns,
+                empty: 'No combos passed the filter.',
+                defaultSort: { key: 'net_pnl_inr', dir: 'desc' },
+                // Highlight the leading row only while it's genuinely the
+                // ₹-P&L leader — i.e. still sorted net_pnl_inr desc, matching
+                // the pre-DataGrid `highlightBest` behaviour.
+                rowClass: (row, i) => {
+                    const st = tfState.sortState;
+                    const isLeader = st && st.key === 'net_pnl_inr' && st.dir === 'desc';
+                    return (i === 0 && isLeader) ? 'opt-best' : '';
+                },
+                onSorted: (rows, sortState) => {
+                    tfState.displayed = rows;
+                    tfState.sortState = sortState;
+                },
+            });
+
+            // "Use" buttons: one delegated listener per grid, survives re-render.
+            if (!grid.dataset.optUseWired) {
+                grid.dataset.optUseWired = '1';
+                grid.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.btn-opt-use');
+                    if (!btn) return;
+                    const idx = parseInt(btn.dataset.idx, 10);
+                    spec.applyFn(tfState.displayed[idx]);
+                });
+            }
+        });
+
+        initCollapsibles(container);
+    }
+
     // ── Optimise helpers ─────────────────────────────────────────────
     // Position sizing for the optimise grid's ₹ columns, read from the RTP
     // lot inputs (same defaults as the result cards: 1 lot × 75 qty).
@@ -1295,60 +1348,10 @@ document.addEventListener('DOMContentLoaded', function() {
         { label: '',              key: null,            fmt: () => '' },   // Use button (handled below)
     ];
 
-    // Per-timeframe render state, keyed by tf_label: { rows, key, dir, displayed }.
+    // Per-timeframe render state, keyed by tf_label — {displayed, sortState}.
+    // Kept for applyOptResult's benefit via _renderOptTfGrids; nothing here
+    // does its own sorting or row-building any more.
     let _optGroupsByTf = {};
-
-    function _optSortRows(rows, key, dir) {
-        const { lots, lotValue } = _optMoney();   // for the derived ₹ columns
-        const sorted = rows.slice();
-        sorted.sort((a, b) => {
-            let va, vb;
-            if (key === 'win_rate') {   // stored as counts, compare the ratio
-                va = a.total_trades ? a.wins / a.total_trades : 0;
-                vb = b.total_trades ? b.wins / b.total_trades : 0;
-            } else if (key === 'net_pnl_inr') {   // derived: ₹ net of brokerage
-                va = _optNetRs(a, lots, lotValue); vb = _optNetRs(b, lots, lotValue);
-            } else if (key === 'brokerage_inr') { // derived: ₹ brokerage
-                va = _optBrokerage(a, lots); vb = _optBrokerage(b, lots);
-            } else {
-                va = a[key]; vb = b[key];
-            }
-            if (va == null) va = -Infinity;
-            if (vb == null) vb = -Infinity;
-            if (typeof va === 'string' || typeof vb === 'string') {
-                return dir === 'asc'
-                    ? String(va).localeCompare(String(vb))
-                    : String(vb).localeCompare(String(va));
-            }
-            return dir === 'asc' ? va - vb : vb - va;
-        });
-        return sorted;
-    }
-
-    function _renderTfBody(tf) {
-        const st = _optGroupsByTf[tf];
-        if (!st) return;
-        const table = document.querySelector(`#rtpOptGrids table[data-tf="${CSS.escape(tf)}"]`);
-        if (!table) return;
-        const tbody = table.querySelector('tbody');
-        // Rows are sorted by the active column (default: Net P&L ₹, high→low).
-        const rows = st.key ? _optSortRows(st.rows, st.key, st.dir) : st.rows;
-        st.displayed = rows;
-        // Highlight the top row only while it's the leader (Net P&L ₹ descending).
-        const highlightBest = st.key === 'net_pnl_inr' && st.dir === 'desc';
-        tbody.innerHTML = rows.map((r, i) => `
-            <tr class="${(i === 0 && highlightBest) ? 'opt-best' : ''}">
-                ${OPT_COLS.map(c => `<td>${
-                    c.label === '' ? `<button class="btn-opt-use" data-tf="${tf}" data-idx="${i}">Use</button>` : c.fmt(r, i)
-                }</td>`).join('')}
-            </tr>`).join('');
-        tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const st2 = _optGroupsByTf[btn.dataset.tf];
-                applyOptResult(st2.displayed[parseInt(btn.dataset.idx)]);
-            });
-        });
-    }
 
     function renderOptResults(data) {
         const panel     = document.getElementById('rtpOptimisePanel');
@@ -1364,56 +1367,20 @@ document.addEventListener('DOMContentLoaded', function() {
             metaEl.textContent = meta;
         }
 
-        const groups = data.timeframes || [];
-        _optGroupsByTf = {};
-
-        if (container) {
-            container.innerHTML = groups.map(g => `
-                <div class="opt-tf-block">
-                    <div class="opt-tf-title" data-collapse=".opt-table-wrap">${g.tf_label}
-                        <span>best ${(g.results || []).length} of ${g.total}</span>
-                    </div>
-                    <div class="opt-table-wrap collapsed-hide">
-                        <table class="opt-table" data-tf="${g.tf_label}">
-                            <thead><tr>${OPT_COLS.map(c =>
-                                `<th ${c.key ? `class="opt-sort" data-key="${c.key}"` : ''}>${c.label}</th>`
-                            ).join('')}</tr></thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-                </div>`).join('') || '<div class="opt-tf-title">No timeframe produced enough trades.</div>';
-
-            groups.forEach(g => {
-                // Default sort: Net P&L (₹) column, value high → low.
-                _optGroupsByTf[g.tf_label] = {
-                    rows: (g.results || []).slice(), key: 'net_pnl_inr', dir: 'desc',
-                    displayed: (g.results || []).slice(),
-                };
-                _renderTfBody(g.tf_label);
-                // Reflect the default sort on the Net P&L (₹) header.
-                const th = document.querySelector(
-                    `#rtpOptGrids table[data-tf="${CSS.escape(g.tf_label)}"] th.opt-sort[data-key="net_pnl_inr"]`
-                );
-                if (th) th.classList.add('sort-desc');
-            });
-
-            // Column-header sorting, scoped to each grid.
-            container.querySelectorAll('th.opt-sort').forEach(th => {
-                th.addEventListener('click', () => {
-                    const tf  = th.closest('table').dataset.tf;
-                    const key = th.dataset.key;
-                    const st  = _optGroupsByTf[tf];
-                    if (!st) return;
-                    if (st.key === key) st.dir = st.dir === 'asc' ? 'desc' : 'asc';
-                    else { st.key = key; st.dir = 'desc'; }
-                    _renderTfBody(tf);
-                    th.closest('thead').querySelectorAll('th').forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
-                    th.classList.add(st.dir === 'asc' ? 'sort-asc' : 'sort-desc');
-                });
-            });
-
-            initCollapsibles(container);   // wire the per-timeframe collapse toggles
-        }
+        _renderOptTfGrids(container, data.timeframes || [], OPT_COLS, {
+            idPrefix: 'rtpOptGrid',
+            isLive: _isRtpComboLive,
+            applyFn: applyOptResult,
+            stateStore: _optGroupsByTf,
+            derivedSort: {
+                // Stored as counts, not a ratio — sort by the ratio.
+                win_rate: r => r.total_trades ? r.wins / r.total_trades : 0,
+                // Derived ₹ columns depend on the current lot-size inputs, so
+                // they read them fresh on every compare rather than once.
+                net_pnl_inr: r => { const { lots, lotValue } = _optMoney(); return _optNetRs(r, lots, lotValue); },
+                brokerage_inr: r => { const { lots } = _optMoney(); return _optBrokerage(r, lots); },
+            },
+        });
 
         if (panel) panel.style.display = '';
         if (recalcBtn) recalcBtn.style.display = '';
@@ -1578,9 +1545,52 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // ── VWAP Optimise ─────────────────────────────────────────────────
+    // A single (non-per-timeframe) sortable results grid — VWAP and SM each
+    // have one. Same # / best-row-highlight / Use-button shape as the
+    // per-timeframe grids in _renderOptTfGrids, just without the grouping.
+    function _mountSingleOptGrid(gridId, rows, legacyCols, defaultSortKey, applyFn, derivedSort) {
+        const grid = document.getElementById(gridId);
+        if (!grid) return;
+        const columns = _mapLegacyOptColumns(legacyCols, { isLive: () => false, derivedSort: derivedSort || {} })
+            // Neither VWAP nor SM has a live-algo concept — drop the column
+            // rather than render one that's permanently off.
+            .filter(c => c.label !== 'Live');
+        let displayed = rows.slice();
+        let sortState = null;
+        DataGrid.mountSortable(grid, {
+            rows, columns, empty: 'No combos passed the filter.',
+            defaultSort: { key: defaultSortKey, dir: 'desc' },
+            rowClass: (row, i) => {
+                const isLeader = sortState && sortState.key === defaultSortKey && sortState.dir === 'desc';
+                return (i === 0 && isLeader) ? 'opt-best' : '';
+            },
+            onSorted: (r, st) => { displayed = r; sortState = st; },
+        });
+        if (!grid.dataset.optUseWired) {
+            grid.dataset.optUseWired = '1';
+            grid.addEventListener('click', (e) => {
+                const btn = e.target.closest('.btn-opt-use');
+                if (!btn) return;
+                applyFn(displayed[parseInt(btn.dataset.idx, 10)]);
+            });
+        }
+    }
+
+    const VWAP_OPT_COLS = [
+        { label: '#',             key: null,            fmt: (r, i) => i + 1 },
+        { label: 'Min Gap',       key: 'min_gap',        fmt: r => r.min_gap },
+        { label: 'SL',            key: 'sl_points',      fmt: r => r.sl_points },
+        { label: 'Target',        key: 'tp_points',      fmt: r => r.tp_points },
+        { label: 'Trades',        key: 'total_trades',   fmt: r => r.total_trades },
+        { label: 'Win%',          key: 'win_rate',       fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
+        { label: 'Net P&L (pts)', key: 'total_pnl',      fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1)} pts</span>` },
+        { label: 'Prof. Factor',  key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD',        key: 'max_drawdown',   fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: '',              key: null,            fmt: () => '' },
+    ];
+
     function renderVwapOptResults(data) {
         const panel     = document.getElementById('vwapOptimisePanel');
-        const tbody     = document.getElementById('vwapOptTableBody');
         const metaEl    = document.getElementById('vwapOptMeta');
         const recalcBtn = document.getElementById('vwapRecalcOptBtn');
 
@@ -1590,30 +1600,8 @@ document.addEventListener('DOMContentLoaded', function() {
             metaEl.textContent = meta;
         }
 
-        if (tbody) {
-            tbody.innerHTML = (data.results || []).map((r, i) => {
-                const pnlFmt = (r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1) + ' pts';
-                const ddFmt  = r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—';
-                const wr     = r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0';
-                return `
-                <tr class="${i === 0 ? 'opt-best' : ''}">
-                    <td>${i + 1}</td>
-                    <td>${r.min_gap}</td>
-                    <td>${r.sl_points}</td>
-                    <td>${r.tp_points}</td>
-                    <td>${r.total_trades}</td>
-                    <td>${wr}%</td>
-                    <td class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${pnlFmt}</td>
-                    <td>${(r.profit_factor || 0).toFixed(2)}</td>
-                    <td class="pnl-negative">${ddFmt}</td>
-                    <td><button class="btn-opt-use" data-idx="${i}">Use</button></td>
-                </tr>`;
-            }).join('');
-
-            tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
-                btn.addEventListener('click', () => applyVwapOptResult(data.results[parseInt(btn.dataset.idx)]));
-            });
-        }
+        _mountSingleOptGrid('vwapOptGrid', data.results || [], VWAP_OPT_COLS, 'total_pnl', applyVwapOptResult,
+            { win_rate: r => r.total_trades ? r.wins / r.total_trades : 0 });
 
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
@@ -1703,55 +1691,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let _scOptGroupsByTf = {};
 
-    function _scOptSortRows(rows, key, dir) {
-        const { lots, lotValue } = _scOptMoney();   // for the derived ₹ columns
-        const sorted = rows.slice();
-        sorted.sort((a, b) => {
-            let va, vb;
-            if (key === 'win_rate') {   // stored as counts, compare the ratio
-                va = a.total_trades ? a.wins / a.total_trades : 0;
-                vb = b.total_trades ? b.wins / b.total_trades : 0;
-            } else if (key === 'net_pnl_inr') {   // derived: ₹ net of brokerage
-                va = _scOptNetRs(a, lots, lotValue); vb = _scOptNetRs(b, lots, lotValue);
-            } else if (key === 'brokerage_inr') { // derived: ₹ brokerage
-                va = _scOptBrokerage(a, lots); vb = _scOptBrokerage(b, lots);
-            } else {
-                va = a[key]; vb = b[key];
-            }
-            if (va == null) va = -Infinity;
-            if (vb == null) vb = -Infinity;
-            if (typeof va === 'string' || typeof vb === 'string') {
-                return dir === 'asc' ? String(va).localeCompare(String(vb))
-                                     : String(vb).localeCompare(String(va));
-            }
-            return dir === 'asc' ? va - vb : vb - va;
-        });
-        return sorted;
-    }
-
-    function _renderScTfBody(tf) {
-        const st = _scOptGroupsByTf[tf];
-        if (!st) return;
-        const table = document.querySelector(`#scOptGrids table[data-tf="${CSS.escape(tf)}"]`);
-        if (!table) return;
-        const tbody = table.querySelector('tbody');
-        const rows  = st.key ? _scOptSortRows(st.rows, st.key, st.dir) : st.rows;
-        st.displayed = rows;
-        const highlightBest = st.key === 'net_pnl_inr' && st.dir === 'desc';
-        tbody.innerHTML = rows.map((r, i) => `
-            <tr class="${(i === 0 && highlightBest) ? 'opt-best' : ''}">
-                ${SC_OPT_COLS.map(c => `<td>${
-                    c.label === '' ? `<button class="btn-opt-use" data-tf="${tf}" data-idx="${i}">Use</button>` : c.fmt(r, i)
-                }</td>`).join('')}
-            </tr>`).join('');
-        tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const st2 = _scOptGroupsByTf[btn.dataset.tf];
-                applyScOptResult(st2.displayed[parseInt(btn.dataset.idx)]);
-            });
-        });
-    }
-
     function renderScOptResults(data) {
         const panel     = document.getElementById('secondCandleOptimisePanel');
         const container = document.getElementById('scOptGrids');
@@ -1766,54 +1705,17 @@ document.addEventListener('DOMContentLoaded', function() {
             metaEl.textContent = meta;
         }
 
-        const groups = data.timeframes || [];
-        _scOptGroupsByTf = {};
-
-        if (container) {
-            container.innerHTML = groups.map(g => `
-                <div class="opt-tf-block">
-                    <div class="opt-tf-title" data-collapse=".opt-table-wrap">${g.tf_label}
-                        <span>best ${(g.results || []).length} of ${g.total}</span>
-                    </div>
-                    <div class="opt-table-wrap collapsed-hide">
-                        <table class="opt-table" data-tf="${g.tf_label}">
-                            <thead><tr>${SC_OPT_COLS.map(c =>
-                                `<th ${c.key ? `class="opt-sort" data-key="${c.key}"` : ''}>${c.label}</th>`
-                            ).join('')}</tr></thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-                </div>`).join('') || '<div class="opt-tf-title">No timeframe produced enough trades.</div>';
-
-            groups.forEach(g => {
-                // Default sort: Net P&L (₹) column, value high → low (like RTP).
-                _scOptGroupsByTf[g.tf_label] = {
-                    rows: (g.results || []).slice(), key: 'net_pnl_inr', dir: 'desc',
-                    displayed: (g.results || []).slice(),
-                };
-                _renderScTfBody(g.tf_label);
-                const th = document.querySelector(
-                    `#scOptGrids table[data-tf="${CSS.escape(g.tf_label)}"] th.opt-sort[data-key="net_pnl_inr"]`
-                );
-                if (th) th.classList.add('sort-desc');
-            });
-
-            container.querySelectorAll('th.opt-sort').forEach(th => {
-                th.addEventListener('click', () => {
-                    const tf  = th.closest('table').dataset.tf;
-                    const key = th.dataset.key;
-                    const st  = _scOptGroupsByTf[tf];
-                    if (!st) return;
-                    if (st.key === key) st.dir = st.dir === 'asc' ? 'desc' : 'asc';
-                    else { st.key = key; st.dir = 'desc'; }
-                    _renderScTfBody(tf);
-                    th.closest('thead').querySelectorAll('th').forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
-                    th.classList.add(st.dir === 'asc' ? 'sort-asc' : 'sort-desc');
-                });
-            });
-
-            initCollapsibles(container);
-        }
+        _renderOptTfGrids(container, data.timeframes || [], SC_OPT_COLS, {
+            idPrefix: 'scOptGrid',
+            isLive: _isScComboLive,
+            applyFn: applyScOptResult,
+            stateStore: _scOptGroupsByTf,
+            derivedSort: {
+                win_rate: r => r.total_trades ? r.wins / r.total_trades : 0,
+                net_pnl_inr: r => { const { lots, lotValue } = _scOptMoney(); return _scOptNetRs(r, lots, lotValue); },
+                brokerage_inr: r => { const { lots } = _scOptMoney(); return _scOptBrokerage(r, lots); },
+            },
+        });
 
         if (panel)     panel.style.display     = '';
         if (recalcBtn) recalcBtn.style.display = '';
@@ -2033,21 +1935,31 @@ document.addEventListener('DOMContentLoaded', function() {
         setTimeout(tick, 2000); // first check after 2s
     }
 
+    const _SM_IDX_SHORT = {
+        'NIFTY 500': 'Nifty 500', 'NIFTY 200': 'Nifty 200',
+        'NIFTY SMALLCAP 250': 'SC 250', 'NIFTY SMALLCAP 500': 'SC 500',
+        'NIFTY MICROCAP 250': 'MC 250', 'NIFTY LARGEMIDCAP 250': 'LMC 250',
+        'NIFTY MIDSMALLCAP 400': 'MSC 400',
+    };
+    const SM_OPT_COLS = [
+        { label: '#',          key: null,           fmt: (r, i) => i + 1 },
+        { label: 'Index',      key: 'index',         fmt: r => `<span style="white-space:nowrap">${_SM_IDX_SHORT[r.index] || r.index}</span>` },
+        { label: 'Top N',      key: 'top_n',         fmt: r => r.top_n },
+        { label: 'Exit Rank',  key: 'exit_rank',     fmt: r => r.exit_rank },
+        { label: 'Return %',   key: 'total_return_pct', fmt: r => `<span class="${r.total_return_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.total_return_pct >= 0 ? '+' : '') + r.total_return_pct.toFixed(1)}%</span>` },
+        { label: 'CAGR %',     key: 'cagr_pct',      fmt: r => `<span class="${r.cagr_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.cagr_pct >= 0 ? '+' : '') + r.cagr_pct.toFixed(1)}%</span>` },
+        { label: 'Max DD %',   key: 'max_drawdown_pct', fmt: r => `<span class="pnl-negative">${r.max_drawdown_pct.toFixed(1)}%</span>` },
+        { label: 'Score',      key: 'score',         fmt: r => r.score.toFixed(2) },
+        { label: '',           key: null,            fmt: () => '' },
+    ];
+
     function _renderSmOptResults(data) {
         const panel     = document.getElementById('smOptimisePanel');
-        const tbody     = document.getElementById('smOptTableBody');
         const metaEl    = document.getElementById('smOptMeta');
         const recalcBtn = document.getElementById('smRecalcOptBtn');
         const rtpPanel  = document.getElementById('rtpOptimisePanel');
 
         if (rtpPanel) rtpPanel.style.display = 'none';
-
-        const _smIdxShort = {
-            'NIFTY 500': 'Nifty 500', 'NIFTY 200': 'Nifty 200',
-            'NIFTY SMALLCAP 250': 'SC 250', 'NIFTY SMALLCAP 500': 'SC 500',
-            'NIFTY MICROCAP 250': 'MC 250', 'NIFTY LARGEMIDCAP 250': 'LMC 250',
-            'NIFTY MIDSMALLCAP 400': 'MSC 400', 'NIFTY MIDSMALLCAP 400': 'MSC 400',
-        };
 
         if (metaEl) {
             const freqLabel = (data.rebalance_freq || 'monthly');
@@ -2057,32 +1969,10 @@ document.addEventListener('DOMContentLoaded', function() {
             metaEl.textContent = meta;
         }
 
-        if (tbody) {
-            tbody.innerHTML = (data.results || []).map((r, i) => {
-                const retFmt  = (r.total_return_pct >= 0 ? '+' : '') + r.total_return_pct.toFixed(1) + '%';
-                const cagrFmt = (r.cagr_pct >= 0 ? '+' : '') + r.cagr_pct.toFixed(1) + '%';
-                const mddFmt  = r.max_drawdown_pct.toFixed(1) + '%';
-                const idxLbl  = _smIdxShort[r.index] || r.index;
-                return `
-                <tr class="${i === 0 ? 'opt-best' : ''}">
-                    <td>${i + 1}</td>
-                    <td style="white-space:nowrap">${idxLbl}</td>
-                    <td>${r.top_n}</td>
-                    <td>${r.exit_rank}</td>
-                    <td class="${r.total_return_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}">${retFmt}</td>
-                    <td class="${r.cagr_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}">${cagrFmt}</td>
-                    <td class="pnl-negative">${mddFmt}</td>
-                    <td>${r.score.toFixed(2)}</td>
-                    <td><button class="btn-opt-use" data-idx="${i}">Use</button></td>
-                </tr>`;
-            }).join('');
-
-            tbody.querySelectorAll('.btn-opt-use').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    _applySmOptResult(data.results[parseInt(btn.dataset.idx)]);
-                });
-            });
-        }
+        // 'score' is the server's own composite ranking metric — sorting by it
+        // descending reproduces the original "row 0 is the best combo" default,
+        // since the server already returns results in that order.
+        _mountSingleOptGrid('smOptGrid', data.results || [], SM_OPT_COLS, 'score', _applySmOptResult);
 
         if (panel) panel.style.display = '';
         if (recalcBtn) recalcBtn.style.display = '';
@@ -2434,45 +2324,29 @@ document.addEventListener('DOMContentLoaded', function() {
         section.style.display = '';
     }
 
+    const _fmtSmRs = v => '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const SM_TRADES_COLS = [
+        { key: 'date', label: 'Date', sortable: true, format: v => v || '—' },
+        { key: 'symbol', label: 'Symbol', sortable: true, strong: true, format: v => v || '—' },
+        { key: 'action', label: 'Action', sortable: true,
+          render: (v) => DataGrid.badge(v, v === 'BUY' ? 'pos' : 'neg') },
+        { key: 'qty', label: 'Qty', sortable: true, format: v => v ?? 0 },
+        { key: 'price', label: 'Price', sortable: true, format: v => _fmtSmRs(v || 0) },
+        { key: 'investment', label: '₹ Value', sortable: true, format: v => _fmtSmRs(v || 0) },
+        { key: 'reason', label: 'Reason', sortable: true, format: v => v || '—' },
+        { key: 'rank', label: 'Rank', sortable: true, format: v => v != null ? v : '—' },
+        { key: 'pnl', label: 'P&L', sortable: true, strong: true, tone: DataGrid.sign,
+          format: v => v != null ? (v >= 0 ? '+' : '') + _fmtSmRs(v) : '—' },
+    ];
+
     function _renderSmTable(trades) {
-        const thead = document.querySelector('.trades-table thead tr');
-        const tbody = document.getElementById('tradesBody');
-        if (thead) {
-            thead.innerHTML = `
-                <th>Date</th>
-                <th>Symbol</th>
-                <th>Action</th>
-                <th>Qty</th>
-                <th>Price</th>
-                <th>₹ Value</th>
-                <th>Reason</th>
-                <th>Rank</th>
-                <th>P&amp;L</th>`;
-        }
-        if (!tbody) return;
-        if (!trades || !trades.length) {
-            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:20px;">No trades generated</td></tr>';
-            return;
-        }
-        const fmtRs = v => '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        tbody.innerHTML = [...trades].map(t => {
-            const isBuy  = t.action === 'BUY';
-            const rowBg  = isBuy ? 'background:rgba(34,197,94,0.04)' : 'background:rgba(239,68,68,0.04)';
-            const pnlHtml = t.pnl != null
-                ? `<span class="${t.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${t.pnl >= 0 ? '+' : ''}${fmtRs(t.pnl)}</span>`
-                : '—';
-            return `
-                <tr style="${rowBg}">
-                    <td>${t.date || '—'}</td>
-                    <td style="font-weight:600">${t.symbol || '—'}</td>
-                    <td><span class="badge ${isBuy ? 'badge-buy' : 'badge-sell'}">${t.action}</span></td>
-                    <td>${t.qty ?? 0}</td>
-                    <td>${fmtRs(t.price || 0)}</td>
-                    <td>${fmtRs(t.investment || 0)}</td>
-                    <td>${t.reason || '—'}</td>
-                    <td>${t.rank != null ? t.rank : '—'}</td>
-                    <td>${pnlHtml}</td>
-                </tr>`;
-        }).join('');
+        DataGrid.mountSortable('tradesGrid', {
+            rows: trades || [],
+            columns: SM_TRADES_COLS,
+            empty: 'No trades generated',
+            // BUY/SELL tint: a translucent wash of the same tone as the Action
+            // badge, so a long list reads by side at a glance.
+            rowClass: t => t.action === 'BUY' ? 'sm-trade-buy' : 'sm-trade-sell',
+        });
     }
 });

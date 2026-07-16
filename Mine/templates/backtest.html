@@ -344,23 +344,9 @@
                     </div>
                     <small id="smOptMeta"></small>
                 </div>
+                <!-- Shared grid (DataGrid.mountSortable, static/js/backtest.js) -->
                 <div class="opt-table-wrap">
-                    <table class="opt-table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Index</th>
-                                <th>Top N</th>
-                                <th>Exit Rank</th>
-                                <th>Return %</th>
-                                <th>CAGR %</th>
-                                <th>Max DD %</th>
-                                <th>Score</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="smOptTableBody"></tbody>
-                    </table>
+                    <div id="smOptGrid"></div>
                 </div>
             </div>
 
@@ -373,24 +359,9 @@
                     </div>
                     <small id="vwapOptMeta"></small>
                 </div>
+                <!-- Shared grid (DataGrid.mountSortable, static/js/backtest.js) -->
                 <div class="opt-table-wrap">
-                    <table class="opt-table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Min Gap</th>
-                                <th>SL</th>
-                                <th>Target</th>
-                                <th>Trades</th>
-                                <th>Win%</th>
-                                <th>Net P&amp;L (pts)</th>
-                                <th>Prof. Factor</th>
-                                <th>Max DD</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="vwapOptTableBody"></tbody>
-                    </table>
+                    <div id="vwapOptGrid"></div>
                 </div>
             </div>
 
@@ -557,21 +528,12 @@
                     <div class="bt-trades-header" data-collapse=".trades-table-container">
                         <h3>Trade History</h3>
                     </div>
+                    <!-- Shared grid (DataGrid.mountSortable, static/js/backtest.js).
+                         renderTable() and _renderSmTable() each mount their own
+                         column set here — a plain <div> means neither has to
+                         rewrite the other's <thead> when the strategy switches. -->
                     <div class="trades-table-container" style="margin-top:0;">
-                        <table class="trades-table">
-                            <thead>
-                                <tr>
-                                    <th data-sort="entry_time">Entry Time</th>
-                                    <th data-sort="type">Type</th>
-                                    <th data-sort="entry_price">Entry Price</th>
-                                    <th data-sort="exit_time">Exit Time</th>
-                                    <th data-sort="exit_price">Exit Price</th>
-                                    <th data-sort="result">Result</th>
-                                    <th data-sort="pnl">P&amp;L</th>
-                                </tr>
-                            </thead>
-                            <tbody id="tradesBody"></tbody>
-                        </table>
+                        <div id="tradesGrid"></div>
                     </div>
                 </div>
 

@@ -1,7 +1,7 @@
 {
   "active_trade": null,
   "buy_needs_reset": false,
-  "sell_needs_reset": false,
+  "sell_needs_reset": true,
   "last_exit": {
     "reason": "SL",
     "spot": 24178.9,

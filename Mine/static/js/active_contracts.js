@@ -218,8 +218,9 @@
         const total = contracts.length;
         $('acStatTotal').textContent = total ? total.toLocaleString('en-IN') + ' contracts' : '';
 
+        const grid = $('acGrid');
         if (!total) {
-            $('acTableBody').innerHTML = '';
+            if (grid) grid.innerHTML = '';
             $('acEmpty').classList.remove('hidden');
             return;
         }
@@ -239,45 +240,68 @@
         const topCeStrike = ceRows.length ? Math.max(...ceRows.map(c => c.strike)) : null;
         const topPeStrike = peRows.length ? Math.min(...peRows.map(c => c.strike)) : null;
 
-        const rows = contracts.map((c, idx) => {
-            const chgClass  = c.change  > 0 ? 'ac-pos' : c.change  < 0 ? 'ac-neg' : '';
-            const pctClass  = c.pct_change > 0 ? 'ac-pos' : c.pct_change < 0 ? 'ac-neg' : '';
-            const chgSign   = c.change > 0 ? '+' : '';
-            const pctSign   = c.pct_change > 0 ? '+' : '';
-            const strikeTxt = c.strike != null ? fmtNum(c.strike, 2) : '—';
-            const expiryTxt = fmtDate(c.expiry);
-            const optTxt    = c.option_type || '—';
-            const isTop     = idx < 6;
-            const topClass  = isTop ? 'ac-top-row' : '';
+        // Top-6 CE/PE flags — used by both the Strike and High columns.
+        const topFlags = (c, idx) => {
+            const isTop = idx < 6;
+            return {
+                isTopCe: isTop && c.option_type === 'CE' && c.strike === topCeStrike,
+                isTopPe: isTop && c.option_type === 'PE' && c.strike === topPeStrike,
+                isStraddle: isTop && c.strike != null && straddleStrikes.has(c.strike),
+            };
+        };
 
-            const isTopCe    = isTop && optTxt === 'CE' && c.strike === topCeStrike;
-            const isTopPe    = isTop && optTxt === 'PE' && c.strike === topPeStrike;
-            const strikeClass = isTopCe ? 'ac-strike-ce' : isTopPe ? 'ac-strike-pe' : '';
-            const highClass   = (isTopCe || isTopPe) ? 'ac-high ac-high-bold' : 'ac-high';
-            const isStraddle  = isTop && c.strike != null && straddleStrikes.has(c.strike);
-            const strikeInner = isStraddle
-                ? `<span class="ac-straddle-box ${strikeClass}">${strikeTxt}</span>`
-                : `<span class="${strikeClass}">${strikeTxt}</span>`;
-
-            return `<tr class="${topClass}">
-<td class="ac-info-cell"><span class="ac-info-icon" title="${esc(c.symbol)}">ℹ</span></td>
-<td class="ac-inst-type">${esc(c.instrument_type)}</td>
-<td class="ac-expiry-col">${expiryTxt}</td>
-<td>${optTxt !== '—' ? '<span class="ac-type-badge ' + optTxt.toLowerCase() + '">' + optTxt + '</span>' : '<span class="ac-dash">—</span>'}</td>
-<td class="col-r ac-strike">${strikeInner}</td>
-<td class="col-r ac-num">${fmtNum(c.open, 2)}</td>
-<td class="col-r ac-num ${highClass}">${fmtNum(c.high, 2)}</td>
-<td class="col-r ac-num ac-low">${fmtNum(c.low, 2)}</td>
-<td class="col-r ac-num">${fmtNum(c.close, 2)}</td>
-<td class="col-r ac-num">${fmtNum(c.prev_close, 2)}</td>
-<td class="col-r ac-last">${fmtNum(c.last, 2)}</td>
-<td class="col-r ac-num ${chgClass}">${c.change !== 0 ? chgSign + fmtNum(Math.abs(c.change), 2) : '—'}</td>
-<td class="col-r ac-num ${pctClass}">${c.pct_change !== 0 ? pctSign + fmtNum(Math.abs(c.pct_change), 2) + '%' : '—'}</td>
-<td class="col-r ac-volume">${fmtVol(c.volume)}</td>
-</tr>`;
+        // Shared grid (DataGrid). NOT sortable: the server returns rows
+        // volume-ranked and the whole top-6/straddle read is positional —
+        // reordering would highlight the wrong rows.
+        grid.innerHTML = DataGrid.render({
+            rows: contracts,
+            rowClass: (c, idx) => idx < 6 ? 'ac-top-row' : '',
+            columns: [
+                { label: '', thClass: 'ac-th-info', cellClass: 'ac-info-cell',
+                  render: (_, c) => `<span class="ac-info-icon" title="${esc(c.symbol)}">ℹ</span>` },
+                { key: 'instrument_type', label: 'Instrument Type', cellClass: 'ac-inst-type' },
+                { key: 'expiry', label: 'Expiry Date', cellClass: 'ac-expiry-col',
+                  format: v => fmtDate(v) },
+                { key: 'option_type', label: 'Option',
+                  render: v => v
+                      ? `<span class="ac-type-badge ${v.toLowerCase()}">${esc(v)}</span>`
+                      : '<span class="ac-dash">—</span>' },
+                { label: 'Strike', align: 'right', cellClass: 'ac-strike',
+                  render: (_, c, idx) => {
+                      const f = topFlags(c, idx);
+                      const strikeTxt = c.strike != null ? fmtNum(c.strike, 2) : '—';
+                      const strikeClass = f.isTopCe ? 'ac-strike-ce' : f.isTopPe ? 'ac-strike-pe' : '';
+                      return f.isStraddle
+                          ? `<span class="ac-straddle-box ${strikeClass}">${strikeTxt}</span>`
+                          : `<span class="${strikeClass}">${strikeTxt}</span>`;
+                  } },
+                { key: 'open', label: 'Open', align: 'right', cellClass: 'ac-num',
+                  format: v => fmtNum(v, 2) },
+                { key: 'high', label: 'High', align: 'right',
+                  cellClass: (_, c, idx) => {
+                      const f = topFlags(c, idx);
+                      return 'ac-num ' + ((f.isTopCe || f.isTopPe) ? 'ac-high ac-high-bold' : 'ac-high');
+                  },
+                  format: v => fmtNum(v, 2) },
+                { key: 'low', label: 'Low', align: 'right', cellClass: 'ac-num ac-low',
+                  format: v => fmtNum(v, 2) },
+                { key: 'close', label: 'Close', align: 'right', cellClass: 'ac-num',
+                  format: v => fmtNum(v, 2) },
+                { key: 'prev_close', label: 'Prev. Close', align: 'right', cellClass: 'ac-num',
+                  format: v => fmtNum(v, 2) },
+                { key: 'last', label: 'Last', align: 'right',
+                  thClass: 'ac-th-last', cellClass: 'ac-last',
+                  format: v => fmtNum(v, 2) },
+                { key: 'change', label: 'Chng', align: 'right',
+                  cellClass: v => 'ac-num ' + (v > 0 ? 'ac-pos' : v < 0 ? 'ac-neg' : ''),
+                  format: v => v !== 0 ? (v > 0 ? '+' : '') + fmtNum(Math.abs(v), 2) : '—' },
+                { key: 'pct_change', label: '%Chng', align: 'right',
+                  cellClass: v => 'ac-num ' + (v > 0 ? 'ac-pos' : v < 0 ? 'ac-neg' : ''),
+                  format: v => v !== 0 ? (v > 0 ? '+' : '') + fmtNum(Math.abs(v), 2) + '%' : '—' },
+                { key: 'volume', label: 'Volume (Contracts)', align: 'right',
+                  cellClass: 'ac-volume', format: v => fmtVol(v) },
+            ],
         });
-
-        $('acTableBody').innerHTML = rows.join('');
     }
 
     // ── Helpers ────────────────────────────────────────────────────

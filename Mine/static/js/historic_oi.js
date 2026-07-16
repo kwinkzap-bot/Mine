@@ -11,71 +11,85 @@ function _hoiChngCls(v) {
     return v > 0 ? 'hoi-up' : v < 0 ? 'hoi-down' : 'hoi-flat';
 }
 
+// Shared grid (DataGrid). Deliberately NOT sortable: "FII Chng Fut OI" is a
+// day-over-day delta computed against the NEXT array row (the list arrives
+// newest-first), so reordering rows would silently change its values.
 function _hoiRenderAll(records) {
 
     _HOI_SYMBOLS.forEach(sym => {
-        const tbody = document.getElementById('hoiTbody-' + sym);
+        const grid = document.getElementById('hoiGrid-' + sym);
+        if (!grid) return;
         const rows = (records || []).filter(r => r.symbol === sym);
         if (rows.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="12" class="sw-empty">No records for ${sym}. Click ⏺ Record to capture today's OI.</td></tr>`;
+            grid.innerHTML = `<div class="dg-empty">No records for ${sym}. Click ⏺ Record to capture today's OI.</div>`;
             return;
         }
         const _today = new Date().toLocaleDateString('sv'); // YYYY-MM-DD in local time
-        tbody.innerHTML = rows.map((r, idx) => {
-            const cv   = Number(r.chng_ce_oi), pv = Number(r.chng_pe_oi);
-            const ceOI = Number(r.ce_oi), peOI = Number(r.pe_oi);
-            const diff = peOI - ceOI;
-            const pcr  = ceOI > 0 ? (peOI / ceOI).toFixed(2) : '—';
-            const pcrCls = ceOI > 0
-                ? (peOI / ceOI >= 1 ? 'hoi-up' : 'hoi-down')
-                : 'hoi-flat';
-            const cSign = cv > 0 ? '+' : '', pSign = pv > 0 ? '+' : '';
-            const diffArrow = diff > 0 ? '↑ ' : diff < 0 ? '↓ ' : '';
-            const diffCls   = diff > 0 ? 'hoi-up' : diff < 0 ? 'hoi-down' : 'hoi-flat';
-            const o = Number(r.open || 0), h = Number(r.high || 0),
-                  l = Number(r.low  || 0), c = Number(r.close || 0);
-            const hasOHLC  = c > 0;
-            const moveUp   = c >= o;
-            const moveCls  = !hasOHLC ? 'hoi-flat' : moveUp ? 'hoi-up' : 'hoi-down';
-            const moveText = !hasOHLC ? '—' : moveUp ? '▲' : '▼';
-            const fmtP = n => hasOHLC && n ? n.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
-            const refreshBtn = `<button class="hoi-refresh-btn" title="Refresh this row from all sources (OI, OHLC, Fut OI, FII)" onclick="refreshHistoricOI('${r.date}','${r.symbol}',this)">&#x21bb;</button>`;
-            const delBtn = r.date === _today
-                ? `<button class="hoi-del-btn" title="Delete" onclick="deleteHistoricOI('${r.date}','${r.symbol}')">&#x2715;</button>`
-                : '';
-            const delCell = `${refreshBtn}${delBtn}`;
-            const _DAY = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-            const _day = _DAY[new Date(r.date + 'T00:00:00').getDay()];
-            const isMon = _day === 'Mon';
-            const dayCell = isMon ? '<span class="hoi-day-mon">Mon</span>' : `<span style="color:var(--pf-text-2);font-size:11px;font-weight:600">${_day}</span>`;
-            const monBox  = txt => isMon ? `<span class="hoi-mon-box">${txt}</span>` : txt;
-            const prevRec    = rows[idx + 1];
-            // "Chng Fut OI" = day-over-day change in FII net index-futures OI
-            // (FII Future Index Long − Short, from NSE participant-wise OI).
-            const curFut     = r.fii_fut_oi != null ? Number(r.fii_fut_oi) : null;
-            const prevFut    = prevRec?.fii_fut_oi != null ? Number(prevRec.fii_fut_oi) : null;
-            const chngFut    = (curFut != null && prevFut != null) ? curFut - prevFut : null;
-            const chngFutCls = chngFut == null ? 'hoi-flat' : chngFut > 0 ? 'hoi-up' : 'hoi-down';
-            const chngFutTxt = chngFut == null ? '—' : (chngFut > 0 ? '+' : '-') + _hoiFmt(Math.abs(chngFut));
-            const _fiiRaw = r.FII_Index_futures;
-            const futOI  = (_fiiRaw != null && _fiiRaw !== 0) ? Number(_fiiRaw) : null;
-            const fiiCls = futOI == null ? 'hoi-flat' : futOI > 0 ? 'hoi-up' : 'hoi-down';
-            const fiiTxt = futOI == null ? '—' : (futOI > 0 ? '+' : '') + futOI.toFixed(0) + ' Cr';
-            return `<tr${isMon ? ' class="hoi-mon-row"' : ''}>
-              <td class="sw-td-l">${r.date}</td>
-              <td class="sw-td-c">${dayCell}</td>
-              <td class="${diffCls}">${diffArrow}${_hoiFmt(Math.abs(diff))}</td>
-              <td class="${pcrCls}">${pcr}</td>
-              <td class="${chngFutCls}">${chngFutTxt}</td>
-              <td class="${fiiCls}">${fiiTxt}</td>
-              <td>${fmtP(o)}</td>
-              <td>${monBox(fmtP(h))}</td>
-              <td>${monBox(fmtP(l))}</td>
-              <td>${fmtP(c)}</td>
-              <td class="sw-td-c ${moveCls}">${moveText}</td>
-              <td class="sw-td-c">${delCell}</td>
-            </tr>`;
-        }).join('');
+        const _DAY = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        const dayOf   = r => _DAY[new Date(r.date + 'T00:00:00').getDay()];
+        const isMon   = r => dayOf(r) === 'Mon';
+        const hasOHLC = r => Number(r.close || 0) > 0;
+        const fmtP = (r, n) => hasOHLC(r) && Number(n)
+            ? Number(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+        // Monday's High/Low get the accent box — the week-open range the case
+        // studies key off.
+        const monBox = (r, txt) => isMon(r) ? `<span class="hoi-mon-box">${txt}</span>` : txt;
+        const diffOf = r => Number(r.pe_oi) - Number(r.ce_oi);
+        const pcrOf  = r => Number(r.ce_oi) > 0 ? Number(r.pe_oi) / Number(r.ce_oi) : null;
+        // "Chng Fut OI" = day-over-day change in FII net index-futures OI
+        // (FII Future Index Long − Short, from NSE participant-wise OI).
+        // rows[i+1] is the PREVIOUS session — the grid is newest-first.
+        const chngFutOf = (r, i) => {
+            const cur  = r.fii_fut_oi != null ? Number(r.fii_fut_oi) : null;
+            const prev = rows[i + 1]?.fii_fut_oi != null ? Number(rows[i + 1].fii_fut_oi) : null;
+            return (cur != null && prev != null) ? cur - prev : null;
+        };
+        const futOf = r => (r.FII_Index_futures != null && r.FII_Index_futures !== 0)
+            ? Number(r.FII_Index_futures) : null;
+        const cls = v => v == null ? 'hoi-flat' : v > 0 ? 'hoi-up' : v < 0 ? 'hoi-down' : 'hoi-flat';
+
+        grid.innerHTML = DataGrid.render({
+            rows,
+            rowClass: r => isMon(r) ? 'hoi-mon-row' : '',
+            columns: [
+                { key: 'date', label: 'Date', strong: true },
+                { label: 'Day', align: 'center', render: (_, r) => isMon(r)
+                    ? '<span class="hoi-day-mon">Mon</span>'
+                    : `<span style="color:var(--pf-text-2);font-size:11px;font-weight:600">${dayOf(r)}</span>` },
+                { label: 'CHNG OPT OI', align: 'right',
+                  cellClass: (_, r) => cls(diffOf(r)),
+                  render: (_, r) => {
+                      const d = diffOf(r);
+                      return (d > 0 ? '↑ ' : d < 0 ? '↓ ' : '') + _hoiFmt(Math.abs(d));
+                  } },
+                { label: 'PCR', align: 'right',
+                  cellClass: (_, r) => { const p = pcrOf(r); return p == null ? 'hoi-flat' : p >= 1 ? 'hoi-up' : 'hoi-down'; },
+                  format: (_, r) => { const p = pcrOf(r); return p == null ? '—' : p.toFixed(2); } },
+                { label: 'FII Chng Fut OI', align: 'right',
+                  cellClass: (_, r, i) => cls(chngFutOf(r, i)),
+                  format: (_, r, i) => {
+                      const d = chngFutOf(r, i);
+                      return d == null ? '—' : (d > 0 ? '+' : '-') + _hoiFmt(Math.abs(d));
+                  } },
+                { label: 'FII Fut', align: 'right',
+                  cellClass: (_, r) => cls(futOf(r)),
+                  format: (_, r) => { const f = futOf(r); return f == null ? '—' : (f > 0 ? '+' : '') + f.toFixed(0) + ' Cr'; } },
+                { label: 'Open',  align: 'right', format: (_, r) => fmtP(r, r.open) },
+                { label: 'High',  align: 'right', render: (_, r) => monBox(r, fmtP(r, r.high)) },
+                { label: 'Low',   align: 'right', render: (_, r) => monBox(r, fmtP(r, r.low)) },
+                { label: 'Close', align: 'right', format: (_, r) => fmtP(r, r.close) },
+                { label: 'Move', align: 'center',
+                  cellClass: (_, r) => !hasOHLC(r) ? 'hoi-flat' : Number(r.close) >= Number(r.open) ? 'hoi-up' : 'hoi-down',
+                  format: (_, r) => !hasOHLC(r) ? '—' : Number(r.close) >= Number(r.open) ? '▲' : '▼' },
+                { label: '', align: 'center', render: (_, r) => {
+                    const refresh = `<button class="hoi-refresh-btn" title="Refresh this row from all sources (OI, OHLC, Fut OI, FII)" onclick="refreshHistoricOI('${r.date}','${r.symbol}',this)">&#x21bb;</button>`;
+                    const del = r.date === _today
+                        ? `<button class="hoi-del-btn" title="Delete" onclick="deleteHistoricOI('${r.date}','${r.symbol}')">&#x2715;</button>`
+                        : '';
+                    return refresh + del;
+                } },
+            ],
+        });
     });
 }
 
@@ -150,8 +164,8 @@ function loadHistoricOI() {
         .then(d => { if (d.success) _hoiRenderAll(d.records); })
         .catch(() => {
             _HOI_SYMBOLS.forEach(s => {
-                document.getElementById('hoiTbody-' + s).innerHTML =
-                    '<tr><td colspan="12" class="sw-empty hoi-down">Failed to load records.</td></tr>';
+                const grid = document.getElementById('hoiGrid-' + s);
+                if (grid) grid.innerHTML = '<div class="dg-empty hoi-down">Failed to load records.</div>';
             });
         });
 }

@@ -208,32 +208,5 @@
     margin-top: 0;
 }
 
-.notif-data-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-}
-
-.notif-data-table th,
-.notif-data-table td {
-    padding: 6px 8px;
-    text-align: left;
-    border-bottom: 1px solid var(--border-color, #f0f0f0);
-}
-
-.notif-data-table th {
-    color: var(--text-muted, #888);
-    font-weight: 600;
-    font-size: 10px;
-    text-transform: uppercase;
-}
-
-.notif-dir-buy {
-    color: #198754;
-    font-weight: 700;
-}
-
-.notif-dir-sell {
-    color: #dc3545;
-    font-weight: 700;
-}
+/* Signal tables in the notification modal use the shared grid (DataGrid,
+   components/data-grid.css) — no table CSS needed here. */

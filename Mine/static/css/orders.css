@@ -260,44 +260,16 @@ body.ocean-theme .orders-page {
     box-shadow: var(--ord-shadow);
 }
 
-/* ── Table ───────────────────────────────────────────────────── */
-.ord-table {
-    width: 100%;
-    border-collapse: collapse;
-    background: var(--ord-surface);
-    font-size: 12px;
-}
+/* ── Table ───────────────────────────────────────────────────────
+   The grid is the shared component (.dg-table, components/data-grid.css).
+   Only the orders-specific layer lives here: the per-row action accent and
+   the editable/action cells. Pills are shared .dg-badge tones, set in
+   renderOrdersGrid — no orders-specific chip CSS. */
 
-.ord-table thead th {
-    padding: 8px 12px;
-    text-align: left;
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--ord-text-3);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    background: var(--ord-bg);
-    border-bottom: 1px solid var(--ord-border);
-    white-space: nowrap;
-}
-
-/* ── Rows ────────────────────────────────────────────────────── */
-.ord-row { transition: background 0.1s; background: var(--ord-surface); }
-.ord-row:nth-child(even) { background: var(--ord-surface); }
-.ord-row:hover { background: var(--ord-row-hover); }
-
-/* Left accent strip by action */
-.ord-row.ord-action-buy  td:first-child { border-left: 3px solid #22c55e; }
-.ord-row.ord-action-sell td:first-child { border-left: 3px solid #ef4444; }
-
-.ord-td {
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--ord-border-sub);
-    vertical-align: middle;
-    color: var(--ord-text);
-}
-
-.ord-row:last-child .ord-td { border-bottom: none; }
+/* Left accent strip by action. The grid paints hover on the cell, so this
+   sits on .dg-td:first-child at matching specificity to survive. */
+.ord-row.ord-action-buy  .dg-td:first-child { border-left: 3px solid #22c55e; }
+.ord-row.ord-action-sell .dg-td:first-child { border-left: 3px solid #ef4444; }
 
 /* ── Column specifics ────────────────────────────────────────── */
 .ord-td-time {
@@ -321,58 +293,6 @@ body.ocean-theme .orders-page {
 .ord-td-price { font-variant-numeric: tabular-nums; }
 
 .ord-price-val { font-weight: 600; }
-
-/* ── Type chip ───────────────────────────────────────────────── */
-.ord-type {
-    display: inline-block;
-    padding: 1px 6px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-}
-
-.ord-type-market { background: var(--ord-accent-dim); color: var(--ord-accent); }
-.ord-type-limit  { background: rgba(124,58,237,0.08); color: #7c3aed; }
-
-body.dark-theme .orders-page .ord-type-limit   { background: rgba(167,139,250,0.12); color: #a78bfa; }
-body.forest-theme .orders-page .ord-type-limit { background: rgba(167,139,250,0.12); color: #a78bfa; }
-
-/* ── Action chip ─────────────────────────────────────────────── */
-.ord-action-badge-buy,
-.ord-action-badge-sell {
-    display: inline-block;
-    padding: 1px 8px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-}
-
-.ord-action-badge-buy  { background: rgba(34,197,94,0.1);  color: #15803d; }
-.ord-action-badge-sell { background: rgba(239,68,68,0.1);  color: #be123c; }
-
-body.dark-theme   .orders-page .ord-action-badge-buy  { background: #14321e; color: #4ade80; }
-body.dark-theme   .orders-page .ord-action-badge-sell { background: #3b1219; color: #f87171; }
-body.forest-theme .orders-page .ord-action-badge-buy  { background: #14532d; color: #86efac; }
-body.forest-theme .orders-page .ord-action-badge-sell { background: #450a0a; color: #fca5a5; }
-
-/* ── Status badge ────────────────────────────────────────────── */
-.ord-status {
-    display: inline-block;
-    padding: 2px 7px;
-    border-radius: 3px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    white-space: nowrap;
-}
-
-.ord-status-pending   { background: var(--ord-pending-bg);   color: var(--ord-pending-fg);   border: 1px solid var(--ord-pending-bd); }
-.ord-status-executing { background: var(--ord-executing-bg); color: var(--ord-executing-fg); border: 1px solid var(--ord-executing-bd); }
-.ord-status-executed  { background: var(--ord-executed-bg);  color: var(--ord-executed-fg);  border: 1px solid var(--ord-executed-bd); }
-.ord-status-cancelled { background: var(--ord-cancelled-bg); color: var(--ord-cancelled-fg); border: 1px solid var(--ord-cancelled-bd); }
-.ord-status-rejected  { background: var(--ord-rejected-bg);  color: var(--ord-rejected-fg);  border: 1px solid var(--ord-rejected-bd); }
 
 /* ── Inline price input ──────────────────────────────────────── */
 .ord-price-input {

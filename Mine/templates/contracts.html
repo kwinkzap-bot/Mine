@@ -42,28 +42,12 @@
     <!-- Market direction analysis (derived from the contract list) -->
     <div class="ac-analysis hidden" id="acAnalysis"></div>
 
+    <!-- Shared grid (DataGrid, rendered by render() in
+         static/js/active_contracts.js). Column order is volume-ranked from the
+         server; the top-6 highlight and straddle boxes are position-based, so
+         the grid is deliberately not sortable. -->
     <div class="ac-table-wrap" id="acTableWrap">
-        <table class="ac-table">
-            <thead>
-                <tr>
-                    <th class="ac-th-info"></th>
-                    <th>INSTRUMENT TYPE</th>
-                    <th>EXPIRY DATE</th>
-                    <th>OPTION</th>
-                    <th class="col-r">STRIKE</th>
-                    <th class="col-r">OPEN</th>
-                    <th class="col-r">HIGH</th>
-                    <th class="col-r">LOW</th>
-                    <th class="col-r">CLOSE</th>
-                    <th class="col-r">PREV. CLOSE</th>
-                    <th class="col-r ac-th-last">LAST</th>
-                    <th class="col-r">CHNG</th>
-                    <th class="col-r">%CHNG</th>
-                    <th class="col-r">VOLUME<br><small>(CONTRACTS)</small></th>
-                </tr>
-            </thead>
-            <tbody id="acTableBody"></tbody>
-        </table>
+        <div id="acGrid"></div>
         <div class="ac-empty hidden" id="acEmpty">
             <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
                 <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/>

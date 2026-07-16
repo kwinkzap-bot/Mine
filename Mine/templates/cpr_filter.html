@@ -88,60 +88,19 @@
     <div class="results-row">
         <div id="highIvResults" class="results results-hidden results-block">
             <h3>🔥 High IV Percentile (>80%) <span id="highIvCount">(0)</span></h3>
-            <div class="results-scroll">
-                <table id="highIvTable">
-                    <thead>
-                        <tr>
-                            <th data-column-index="0">Symbol</th>
-                            <th data-column-index="1">Price</th>
-                            <th data-column-index="2">IV Pctl %</th>
-                            <th data-column-index="3">ATM IV %</th>
-                            <th data-column-index="4">Day Chg %</th>
-                            <th data-column-index="5">Volume</th>
-                            <th data-column-index="6">OI% Chg</th>
-                            <th data-column-index="7">PCR</th>
-                            <th data-column-index="8">Max Pain</th>
-                        </tr>
-                    </thead>
-                    <tbody id="highIvBody"></tbody>
-                </table>
-            </div>
+            <!-- Shared grid (DataGrid.mountSortable, static/js/cpr_filter.js) —
+                 headers, sorting, and rows are all built from column config. -->
+            <div id="highIvGrid"></div>
         </div>
     </div>
     <div class="results-row">
         <div id="expiryHlBuyResults" class="results results-hidden results-block">
             <h3>🟢 Expiry High/Low Breakout — BUY <span id="expiryHlBuyCount">(0)</span></h3>
-            <div class="results-scroll">
-                <table id="expiryHlBuyTable">
-                    <thead>
-                        <tr>
-                            <th data-column-index="0">Symbol</th>
-                            <th data-column-index="1">Price</th>
-                            <th data-column-index="2">Expiry High</th>
-                            <th data-column-index="3">Expiry Low</th>
-                            <th data-column-index="4">Expiry Date</th>
-                        </tr>
-                    </thead>
-                    <tbody id="expiryHlBuyBody"></tbody>
-                </table>
-            </div>
+            <div id="expiryHlBuyGrid"></div>
         </div>
         <div id="expiryHlSellResults" class="results results-hidden results-block">
             <h3>🔴 Expiry High/Low Breakout — SELL <span id="expiryHlSellCount">(0)</span></h3>
-            <div class="results-scroll">
-                <table id="expiryHlSellTable">
-                    <thead>
-                        <tr>
-                            <th data-column-index="0">Symbol</th>
-                            <th data-column-index="1">Price</th>
-                            <th data-column-index="2">Expiry High</th>
-                            <th data-column-index="3">Expiry Low</th>
-                            <th data-column-index="4">Expiry Date</th>
-                        </tr>
-                    </thead>
-                    <tbody id="expiryHlSellBody"></tbody>
-                </table>
-            </div>
+            <div id="expiryHlSellGrid"></div>
         </div>
     </div>
     <!-- Camarilla Monthly S3/R3 Reversal Scanner — commented out
@@ -299,23 +258,12 @@
         <div id="emaNarrowResults" class="results results-hidden results-block">
             <h3><span class="h3-title-text">🧲 EMA Narrow (each timeframe spread ≤ <span id="emaNarrowThresholdLabel">3%</span>)</span>
                 <span id="emaNarrowCount">(0)</span></h3>
-            <div class="results-scroll">
-                <table id="emaNarrowTable">
-                    <thead>
-                        <tr>
-                            <th data-col="0">Symbol</th>
-                            <th data-col="1">Price</th>
-                            <th data-col="2">Close</th>
-                            <th data-col="3">Day Spread %</th>
-                            <th data-col="4">Week Spread %</th>
-                            <th data-col="5">Month Spread %</th>
-                            <th data-col="6">Max Spread %</th>
-                            <th data-col="7">Price Zone</th>
-                        </tr>
-                    </thead>
-                    <tbody id="emaNarrowBody"></tbody>
-                </table>
-            </div>
+            <!-- Shared grid (DataGrid.mountSortable, static/js/ema_narrow_filter.js).
+                 #emaNarrowLoader is a separate sibling, not a table row — the
+                 background scan's progress message no longer has to be spliced
+                 into (and pinned at the bottom of) the row list. -->
+            <div id="emaNarrowGrid"></div>
+            <div id="emaNarrowLoader"></div>
         </div>
 
         <!-- Shown only when 0 matches — closest stocks to compression -->
@@ -324,22 +272,7 @@
                 <small style="font-weight:400;font-size:0.75rem;opacity:0.7;"> — no compression yet, showing
                     tightest stocks</small>
             </h3>
-            <div class="results-scroll">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Symbol</th>
-                            <th>Price</th>
-                            <th>Close</th>
-                            <th>Day Spread %</th>
-                            <th>Week Spread %</th>
-                            <th>Month Spread %</th>
-                            <th>Max Spread %</th>
-                        </tr>
-                    </thead>
-                    <tbody id="emaNarrowNearestBody"></tbody>
-                </table>
-            </div>
+            <div id="emaNarrowNearestGrid"></div>
         </div>
     </div>
 

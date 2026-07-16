@@ -696,44 +696,11 @@ body.ocean-theme .sm-gl-overlay {
 .ag-panel        { display: none; }
 .ag-panel.active { display: contents; } /* transparent to parent flex — preserves gap/direction */
 
-/* ── History table ────────────────────────────────────────────── */
-.ag-hist-scroll {
-    width: 100%;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-}
-.ag-hist-table {
-    width: max-content;
-    min-width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-}
-.ag-hist-th {
-    padding: 6px 8px;
-    font-size: 9px;
-    font-weight: 700;
-    text-transform: none;
-    letter-spacing: 0.05em;
-    color: var(--ag-text-3);
-    text-align: left;
-    border-bottom: 1px solid var(--ag-border-sub);
-    background: var(--ag-bg);
-    white-space: nowrap;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-}
-.ag-hist-td {
-    font-size: 10px;
-    padding: 7px 8px;
-    color: var(--ag-text);
-    border-bottom: 1px solid var(--ag-border-sub);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-}
-.ag-hist-table tbody tr:hover .ag-hist-td { background: var(--ag-row-hover); }
-.ag-hist-table tbody tr:last-child .ag-hist-td { border-bottom: none; }
-.ag-hist-td-del { width: 28px; text-align: center; padding: 2px 4px; }
+/* ── History-grid delete cell ─────────────────────────────────── */
+/* The grid itself is components/data-grid.css. Only the per-row delete
+   control is algo's own. .dg-table .dg-td is (0,2,0), so the cell rule must
+   match that specificity to win. */
+.dg-table .dg-td.ag-hist-td-del { width: 28px; text-align: center; padding: 2px 4px; }
 .ag-hist-del-btn {
     background: none;
     border: none;
@@ -745,81 +712,6 @@ body.ocean-theme .sm-gl-overlay {
     transition: opacity .15s, background .15s;
 }
 .ag-hist-del-btn:hover { opacity: 1; background: rgba(220,38,38,.12); }
-
-/* ── Reason badges ────────────────────────────────────────────── */
-.ag-reason-badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    border: 1px solid;
-}
-.ag-reason-badge.target {
-    color: var(--ag-pos);
-    background: rgba(22, 163, 74, 0.08);
-    border-color: rgba(22, 163, 74, 0.25);
-}
-.ag-reason-badge.sl {
-    color: var(--ag-neg);
-    background: rgba(220, 38, 38, 0.08);
-    border-color: rgba(220, 38, 38, 0.25);
-}
-.ag-reason-badge.eod {
-    color: var(--ag-text-2);
-    background: var(--ag-accent-dim);
-    border-color: var(--ag-border);
-}
-.ag-reason-badge.manual {
-    color: #7c3aed;
-    background: rgba(124, 58, 237, 0.08);
-    border-color: rgba(124, 58, 237, 0.25);
-}
-.ag-reason-badge.range-reclaim {
-    color: #0891b2;
-    background: rgba(8, 145, 178, 0.08);
-    border-color: rgba(8, 145, 178, 0.25);
-}
-
-/* ── Live / Paper mode chips ──────────────────────────────────── */
-.ag-mode-chip {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    border: 1px solid;
-    white-space: nowrap;
-}
-.ag-mode-chip.live {
-    color: var(--ag-pos);
-    background: rgba(22, 163, 74, 0.08);
-    border-color: rgba(22, 163, 74, 0.25);
-}
-.ag-mode-chip.paper {
-    color: #d97706;
-    background: rgba(217, 119, 6, 0.08);
-    border-color: rgba(217, 119, 6, 0.28);
-}
-
-/* Small "PAPER" flag on the tab-bar button itself */
-.ag-tab-mode-flag {
-    display: inline-block;
-    margin-left: 5px;
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 8px;
-    font-weight: 800;
-    letter-spacing: 0.05em;
-    vertical-align: middle;
-    color: #d97706;
-    background: rgba(217, 119, 6, 0.12);
-    border: 1px solid rgba(217, 119, 6, 0.3);
-}
 
 /* ── Card header action buttons ───────────────────────────────── */
 .ag-card-hdr-actions {
@@ -833,10 +725,6 @@ body.ocean-theme .sm-gl-overlay {
     font-size: 0.75rem;
 }
 
-/* ── Responsive — history table ───────────────────────────────── */
-@media (max-width: 600px) {
-    .ag-hist-th, .ag-hist-td { padding: 5px 6px; font-size: 10px; }
-}
 
 /* ── Swing Momentum Live Watch — broker groups ──────────────────── */
 .sm-broker-group {
