@@ -112,11 +112,11 @@ body.ocean-theme {
 }
 
 .scanner-header-row {
-    background: var(--scan-th-bg);
+    background: var(--dg-surface);
     border: 1px solid var(--scan-border);
     padding: 6px 12px;
     border-radius: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
     box-shadow: var(--shadow-card);
     display: flex;
     justify-content: space-between;

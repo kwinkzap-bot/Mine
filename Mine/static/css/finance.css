@@ -1,10 +1,12 @@
 /* ================================================================
    Finance tab — reads the hand-maintained 'Mine' Google Sheet.
 
-   Everything is built from the app's --oip-* theme tokens, so the tab
-   speaks each theme's own language (light/cream/ocean/dark/forest) and
-   any theme added later is picked up for free. The series colour is the
-   theme's accent; the peak bar is a stronger step of that same hue,
+   Surfaces (background/text/border/card) follow the app's --oip-* theme
+   tokens; the accent (series colour, active sub-tab, focus rings) follows
+   the app's shared --color-accent instead, so it stays in step with the
+   DataGrid tables rendered inside this same tab. Either way, every theme
+   (light/cream/ocean/dark/forest) is spoken and any theme added later is
+   picked up for free. The peak bar is a stronger step of the accent hue,
    computed in finance.js against the surface's luminance.
 
    Status hexes (good/critical) are fixed and never themed — a status
@@ -12,16 +14,23 @@
    ================================================================ */
 
 .fin-wrap {
-    /* Series follows the theme. One hue; emphasis is a step of it. */
-    --fin-series-1: var(--oip-accent, #2a78d6);
+    /* Series follows the theme. One hue; emphasis is a step of it.
+       --color-accent is the app's shared/parent theme token (theme.css,
+       loaded globally from base.html — the same one components/data-grid.css
+       aliases as --dg-accent). Anchoring to it, rather than the OI-Profile
+       page's own --oip-accent, keeps this tab's accent in step with the
+       DataGrid sort indicators and focus rings it renders inside the same
+       tables — --oip-accent has since drifted to a different hue per theme
+       (light/dark/forest all differ; only cream/ocean happened to match). */
+    --fin-series-1: var(--color-accent, var(--oip-accent, #2a78d6));
     --fin-good: #0ca30c;
     --fin-warning: #fab219;
     --fin-critical: #d03b3b;
 
     /* Accent washes — tint from the theme rather than a fixed blue. */
-    --fin-tint-6: color-mix(in srgb, var(--oip-accent, #2a78d6) 6%, transparent);
-    --fin-tint-10: color-mix(in srgb, var(--oip-accent, #2a78d6) 10%, transparent);
-    --fin-tint-30: color-mix(in srgb, var(--oip-accent, #2a78d6) 30%, transparent);
+    --fin-tint-6: color-mix(in srgb, var(--fin-series-1) 6%, transparent);
+    --fin-tint-10: color-mix(in srgb, var(--fin-series-1) 10%, transparent);
+    --fin-tint-30: color-mix(in srgb, var(--fin-series-1) 30%, transparent);
 
     --fin-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.03);
     --fin-shadow-lift: 0 2px 6px rgba(0, 0, 0, 0.07), 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -31,8 +40,7 @@
        renders its option list with the system's LIGHT popup while the
        options inherit our near-white text — white on white. */
     color-scheme: light;
-
-    padding: 14px;
+    padding-top: 8px;
     background:
         radial-gradient(1200px 340px at 12% -10%, var(--fin-tint-6), transparent 70%),
         var(--oip-bg, #f8fafc);
@@ -54,7 +62,7 @@ body.forest-theme .fin-wrap {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
     flex-wrap: wrap;
 }
 .fin-title {
@@ -97,7 +105,12 @@ body.forest-theme .fin-wrap {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
     gap: 6px;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
+    padding: 10px 12px;
+    background: var(--dg-surface);
+    border: 1px solid var(--dg-border);
+    border-radius: 10px;
+    box-shadow: var(--dg-shadow-card);
 }
 .fin-kpi {
     position: relative;
@@ -175,7 +188,7 @@ body.forest-theme .fin-pill.warn { color: var(--fin-warning); }
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
     gap: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
 }
 /* The two Pending cards wear the shared grid shell — .dg-card, .dg-card-hdr
    and a DataGrid body, from components/data-grid.css. Nothing about that look
@@ -207,7 +220,7 @@ body.forest-theme .fin-pill.warn { color: var(--fin-warning); }
     font-variant-numeric: tabular-nums;
     margin-left: auto;
 }
-.fin-acc-body { padding: 10px 12px; }
+/* .fin-acc-body { padding: 10px 12px; } */
 /* Shorter than the main tables — these are a glance, not a workspace. */
 .fin-accs .dg-scroll { max-height: 230px; overflow-y: auto; }
 
@@ -241,11 +254,12 @@ body.forest-theme .fin-pill.warn { color: var(--fin-warning); }
 .fin-subtabs {
     display: flex;
     gap: 3px;
-    margin-bottom: 12px;
-    padding: 3px;
-    background: var(--oip-header-bg, #f1f5f9);
+    margin-bottom: 8px;
+    padding: 7px;
+    background: var(--dg-surface);
     border: 1px solid var(--oip-border, #e2e8f0);
     border-radius: 9px;
+    box-shadow: var(--fin-shadow);
     overflow-x: auto;
     scrollbar-width: none;
 }
@@ -274,18 +288,18 @@ body.forest-theme .fin-pill.warn { color: var(--fin-warning); }
 
 /* ── Cards & charts ───────────────────────────────────────────── */
 .fin-card {
-    background: var(--oip-card-bg, #fff);
+    background: var(--dg-surface);
     border: 1px solid var(--oip-border, #e2e8f0);
     border-radius: 10px;
     padding: 13px;
-    margin-bottom: 12px;
-    box-shadow: var(--fin-shadow);
+    margin-bottom: 8px;
+    box-shadow: var(--dg-shadow-card);
 }
 .fin-card-head {
     display: flex;
     align-items: baseline;
     gap: 8px;
-    margin-bottom: 11px;
+    margin-bottom: 8px;
 }
 .fin-card-title {
     font-size: 12px;
@@ -314,7 +328,6 @@ body.forest-theme .fin-pill.warn { color: var(--fin-warning); }
 /* Zebra + hover. The grid paints hover on the cell (.dg-table tbody tr:hover
    .dg-td), so both the stripe and the finance hover have to be set on .dg-td
    too, at matching specificity, or the component rule wins. */
-.fin-table-wrap .dg-table tbody tr:nth-child(even) .dg-td { background: var(--fin-tint-6); }
 .fin-table-wrap .dg-table tbody tr:hover .dg-td { background: var(--fin-tint-10); }
 
 /* Past its end date. A translucent wash of the fixed status red, so it

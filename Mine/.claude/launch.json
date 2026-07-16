@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "trading-app",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["main.py"],
+      "port": 5000
+    }
+  ]
+}

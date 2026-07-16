@@ -55,7 +55,7 @@
 .bt-header {
     display: flex; justify-content: space-between; align-items: center;
     padding: 7px 12px;
-    background: var(--oip-header-bg);
+    background: var(--dg-surface);
     border-bottom: 1px solid var(--oip-border);
     flex-wrap: wrap; gap: 6px;
 }
@@ -68,12 +68,12 @@
     align-items: stretch;
 }
 .bt-left {
-    background: var(--oip-header-bg);
+    background: var(--dg-surface);
     padding: 10px 12px;
     border-right: 1px solid var(--oip-border);
 }
 .bt-right {
-    background: var(--oip-card-bg);
+    background: var(--dg-surface);
     padding: 10px 12px;
     position: relative;
 }
@@ -250,7 +250,7 @@
 
 .equity-curve-container {
     margin-top: 8px;
-    background: var(--oip-card-bg);
+    background: var(--dg-surface);
     border-radius: 6px;
     border: 1px solid var(--oip-border);
     padding: 8px 10px 8px;
@@ -524,7 +524,7 @@
 /* ── Period Breakdown ───────────────────────────────── */
 .period-breakdown {
     margin-top: 8px;
-    background: var(--oip-card-bg);
+    background: var(--dg-surface);
     border-radius: 6px;
     border: 1px solid var(--oip-border);
     padding: 8px 10px 10px;

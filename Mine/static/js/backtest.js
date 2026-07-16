@@ -802,8 +802,25 @@ document.addEventListener('DOMContentLoaded', function() {
         if (btPlaceholder2) btPlaceholder2.style.display = 'none';
     }
 
+    // ── Chart theming ─────────────────────────────────────────────────
+    // Same text/grid tones as OIP_CHART_THEMES (oi_profile.js) — the app's
+    // established pattern for theming a chart library that can't read CSS
+    // custom properties directly.
+    const BT_CHART_THEME = {
+        light:  { tick: '#374151', grid: 'rgba(15, 23, 42, 0.05)',   gridZero: 'rgba(15, 23, 42, 0.25)' },
+        dark:   { tick: '#94a3b8', grid: 'rgba(255, 255, 255, 0.06)', gridZero: 'rgba(255, 255, 255, 0.25)' },
+        forest: { tick: '#6ba88f', grid: 'rgba(16, 185, 129, 0.08)', gridZero: 'rgba(16, 185, 129, 0.3)' },
+        cream:  { tick: '#7c7267', grid: 'rgba(180, 83, 9, 0.06)',   gridZero: 'rgba(180, 83, 9, 0.3)' },
+        ocean:  { tick: '#475569', grid: 'rgba(2, 132, 199, 0.06)',  gridZero: 'rgba(2, 132, 199, 0.3)' },
+    };
+    function _btChartColors() {
+        return BT_CHART_THEME[window.AppTheme.getActiveTheme()] || BT_CHART_THEME.ocean;
+    }
+
     // ── Equity Curve ────────────────────────────────────────────────
     let _equityChart = null;
+    let _lastEquityArgs = null;   // cached args so a theme switch can redraw in place
+    let _lastSmEquityArgs = null;
 
     function renderEquityCurve(trades, isRtp, lots, lotValue, investment) {
         const section = document.getElementById('equityCurveSection');
@@ -811,6 +828,9 @@ document.addEventListener('DOMContentLoaded', function() {
             if (section) section.style.display = 'none';
             return;
         }
+        _lastEquityArgs = { trades, isRtp, lots, lotValue, investment };
+        _lastSmEquityArgs = null;
+        const chartColors = _btChartColors();
 
         // Sort by entry time chronologically
         const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
@@ -908,12 +928,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 },
                 scales: {
                     x: {
-                        ticks: { maxTicksLimit: 15, color: '#999', font: { size: 11 }, autoSkip: true },
-                        grid:  { color: 'rgba(0,0,0,0.04)' },
+                        ticks: { maxTicksLimit: 15, color: chartColors.tick, font: { size: 11 }, autoSkip: true },
+                        grid:  { color: chartColors.grid },
                     },
                     y: {
-                        ticks: { color: '#999', font: { size: 11 }, callback: fmtY },
-                        grid:  { color: 'rgba(0,0,0,0.05)' },
+                        ticks: { color: chartColors.tick, font: { size: 11 }, callback: fmtY },
+                        grid:  { color: chartColors.grid },
                     }
                 }
             }
@@ -995,6 +1015,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function renderPeriodBreakdown(trades, isRtp, lots, lotValue, period) {
         const section = document.getElementById('periodBreakdownSection');
+        const chartColors = _btChartColors();
         if (!section || !trades || trades.length === 0) {
             if (section) section.style.display = 'none';
             return;
@@ -1079,17 +1100,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 scales: {
                     x: {
                         grid: { display: false },
-                        ticks: { font: { size: 9, weight: '500' }, color: '#94a3b8' }
+                        ticks: { font: { size: 9, weight: '500' }, color: chartColors.tick }
                     },
                     y: {
                         grid: {
                             color: ctx => ctx.tick.value === 0
-                                ? 'rgba(0,0,0,.25)'
-                                : 'rgba(0,0,0,.04)',
+                                ? chartColors.gridZero
+                                : chartColors.grid,
                             lineWidth: ctx => ctx.tick.value === 0 ? 1.5 : 1,
                         },
                         ticks: {
-                            font: { size: 9 }, color: '#94a3b8',
+                            font: { size: 9 }, color: chartColors.tick,
                             callback: v => {
                                 if (v === 0) return '0';
                                 const abs = Math.abs(v);
@@ -1116,6 +1137,23 @@ document.addEventListener('DOMContentLoaded', function() {
             btn.classList.add('active');
             renderPeriodBreakdown(_periodTrades, _periodIsRtp, _periodLots, _periodLotValue, btn.dataset.period);
         });
+    });
+
+    // Redraw whichever charts are on screen when the app theme changes —
+    // Chart.js bakes colors into its config at creation time, so a CSS
+    // variable swap alone doesn't repaint an existing canvas.
+    window.addEventListener('themechanged', () => {
+        if (_lastEquityArgs) {
+            const a = _lastEquityArgs;
+            renderEquityCurve(a.trades, a.isRtp, a.lots, a.lotValue, a.investment);
+        } else if (_lastSmEquityArgs) {
+            const a = _lastSmEquityArgs;
+            _renderSmEquityCurve(a.curve, a.investment);
+        }
+        if (_periodTrades && _periodTrades.length) {
+            const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
+            renderPeriodBreakdown(_periodTrades, _periodIsRtp, _periodLots, _periodLotValue, activePeriod);
+        }
     });
 
     const TRADES_COLS = [
@@ -2236,6 +2274,9 @@ document.addEventListener('DOMContentLoaded', function() {
             if (section) section.style.display = 'none';
             return;
         }
+        _lastSmEquityArgs = { curve, investment };
+        _lastEquityArgs = null;
+        const chartColors = _btChartColors();
 
         const labels = curve.map(p => p.date.slice(0, 7));   // YYYY-MM
         const values = curve.map(p => p.value);
@@ -2310,12 +2351,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 },
                 scales: {
                     x: {
-                        ticks: { maxTicksLimit: 15, color: '#999', font: { size: 11 }, autoSkip: true },
-                        grid:  { color: 'rgba(0,0,0,0.04)' },
+                        ticks: { maxTicksLimit: 15, color: chartColors.tick, font: { size: 11 }, autoSkip: true },
+                        grid:  { color: chartColors.grid },
                     },
                     y: {
-                        ticks: { color: '#999', font: { size: 11 }, callback: fmtY },
-                        grid:  { color: 'rgba(0,0,0,0.05)' },
+                        ticks: { color: chartColors.tick, font: { size: 11 }, callback: fmtY },
+                        grid:  { color: chartColors.grid },
                     }
                 }
             }

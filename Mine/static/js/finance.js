@@ -178,6 +178,7 @@ function _finRender() {
         <button class="fin-subtab" data-sub="track">Daily / Weekly Loans (${d.counts.track_loans})</button>
         <button class="fin-subtab" data-sub="monthly">Monthly Loans (${d.counts.monthly_loans})</button>
         <button class="fin-subtab" data-sub="withdraw">Withdrawals (${d.counts.withdrawals})</button>
+        <button class="fin-subtab" data-sub="collections">Collections (${d.counts.collection_blocks})</button>
       </div>
       <div id="finSubBody"></div>`;
 
@@ -370,6 +371,8 @@ function _finSwitchSub(sub) {
         _finRenderMonthly(box, d.monthly_loans);
     } else if (sub === 'withdraw') {
         _finRenderWithdraw(box, d.withdrawals);
+    } else if (sub === 'collections') {
+        _finRenderCollections(box, d.collections);
     }
 }
 
@@ -744,5 +747,83 @@ function _finRenderWithdraw(box, rows) {
     };
     document.getElementById('finWdReason').onchange = draw;
     document.getElementById('finWdSort').onchange = draw;
+    draw();
+}
+
+/**
+ * Collections: one row per loan cycle "block" (name + status + a dated
+ * amounts series). The same customer has many blocks over the years, so
+ * this is a flat list rather than grouped — the name filter is what narrows
+ * it down to one customer's history.
+ */
+function _finCollStatusBadge(status) {
+    const s = (status || '').trim();
+    const tone = s.toLowerCase() === 'yes' ? 'pos' : s.toLowerCase() === 'no' ? 'warn' : 'neutral';
+    return s ? DataGrid.badge(s, tone) : '—';
+}
+
+function _finRenderCollections(box, collections) {
+    const blocks = (collections && collections.blocks) || [];
+    const skipped = (collections && collections.skipped_blocks) || 0;
+
+    box.innerHTML = `<div class="fin-card">
+      <div class="fin-filter-row">
+        <input type="text" class="fin-input" id="finCollFilter" placeholder="Filter by customer…" autocomplete="off">
+        <select class="fin-select" id="finCollStatus">
+          <option value="all" selected>All statuses</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+        <select class="fin-select" id="finCollSort">
+          <option value="total-desc" selected>Total: highest first</option>
+          <option value="total-asc">Total: lowest first</option>
+          <option value="name">Name: A–Z</option>
+        </select>
+        <span class="fin-count" id="finCollCount"></span>
+      </div>
+      <div class="fin-table-wrap" id="finCollTable"></div>
+      ${skipped ? `<div class="fin-note">${skipped} malformed block${skipped === 1 ? '' : 's'}
+          in the Collections sheet ${skipped === 1 ? 'was' : 'were'} skipped rather than shown.</div>` : ''}
+    </div>`;
+
+    const draw = () => {
+        const q = document.getElementById('finCollFilter').value.trim().toLowerCase();
+        const status = document.getElementById('finCollStatus').value;
+        const sort = document.getElementById('finCollSort').value;
+
+        const list = blocks.filter(b => {
+            const hitName = !q || (b.name || '').toLowerCase().includes(q);
+            const hitStatus = status === 'all' || (b.status || '').trim().toLowerCase() === status;
+            return hitName && hitStatus;
+        }).sort((a, b) => {
+            if (sort === 'name') return (a.name || '').localeCompare(b.name || '');
+            const diff = (a.total || 0) - (b.total || 0);
+            return sort === 'total-asc' ? diff : -diff;
+        });
+
+        document.getElementById('finCollTable').innerHTML = DataGrid.render({
+            rows: list,
+            empty: 'No collection blocks match this filter.',
+            columns: [
+                { key: 'name', label: 'Name', strong: true },
+                { key: 'status', label: 'Status', render: (v) => _finCollStatusBadge(v) },
+                { key: 'entry_count', label: 'Entries', align: 'right' },
+                { key: 'paid_count', label: 'Paid', align: 'right' },
+                { key: 'total', label: 'Total', ..._FIN_AMOUNT },
+                { label: 'Last Entry', align: 'right',
+                  render: (_, r) => {
+                      const last = r.entries && r.entries.length ? r.entries[r.entries.length - 1] : null;
+                      return last ? DataGrid.escape(last.date) : '—';
+                  } },
+            ],
+        });
+
+        const total = list.reduce((a, r) => a + (r.total || 0), 0);
+        document.getElementById('finCollCount').textContent =
+            `${list.length} of ${blocks.length} · ${_finFmt(total)}`;
+    };
+    document.getElementById('finCollFilter').oninput = draw;
+    document.getElementById('finCollStatus').onchange = draw;
+    document.getElementById('finCollSort').onchange = draw;
     draw();
 }
