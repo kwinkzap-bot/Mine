@@ -46,7 +46,7 @@
   "pe_boundary_day_low": 156.1,
   "low_reclaim_level": 24160.7,
   "high_reclaim_level": 24093.9,
-  "above_low_reclaim_polls": 1,
+  "above_low_reclaim_polls": 0,
   "below_high_reclaim_polls": 0,
   "buy_reclaim_done": false,
   "sell_reclaim_done": false,
