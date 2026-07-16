@@ -30,7 +30,10 @@ let _intrinsicHistoryTimer   = null;
 let _intrinsicLastEntryTime  = null;
 let _intrinsicLastActiveFlag = false;
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'rtp', 'rtp30s', 'rtp2m', 'rtp3m', 'rtp5m', 'sc', 'intrinsic', 'swing-momentum'];
+const _ALGO_TABS = ['active', 'rtp', 'sc', 'intrinsic', 'swing-momentum'];
+// Sub-tabs nested inside the 'rtp' (EMA RTP) tab — 30s / 1m / 2m / 3m / 5m candles.
+const _ALGO_RTP_SUBTABS = ['rtp30s', 'rtp', 'rtp2m', 'rtp3m', 'rtp5m'];
+let _algoRtpActiveSub = 'rtp30s';
 
 // Round-trip brokerage charged per lot (1 lot = 65 qty). The performance
 // dashboards express ₹ P&L on a single-lot basis (opt_pnl_pts × lot_size), so
@@ -363,7 +366,13 @@ function _algoHistoryGrid(trades, { onDelete, shape = 'option' } = {}) {
 
 function algoLoad() {
     const hash = location.hash.replace('#', '');
-    algoSwitch(_ALGO_TABS.includes(hash) ? hash : 'active');
+    if (_ALGO_RTP_SUBTABS.includes(hash)) {
+        // Back-compat for old bookmarked hashes (#rtp30s, #rtp2m, ...).
+        algoSwitch('rtp');
+        algoRtpSubSwitch(hash);
+    } else {
+        algoSwitch(_ALGO_TABS.includes(hash) ? hash : 'active');
+    }
     _algoLoadStrikeModes();
 }
 
@@ -441,20 +450,7 @@ function algoSwitch(tab) {
     if (tab === 'active') {
         _activeFetchAll();
     } else if (tab === 'rtp') {
-        _rtpFetchStatus();
-        _rtpFetchHistory();
-    } else if (tab === 'rtp30s') {
-        _rtp30sFetchStatus();
-        _rtp30sFetchHistory();
-    } else if (tab === 'rtp2m') {
-        _rtp2mFetchStatus();
-        _rtp2mFetchHistory();
-    } else if (tab === 'rtp3m') {
-        _rtp3mFetchStatus();
-        _rtp3mFetchHistory();
-    } else if (tab === 'rtp5m') {
-        _rtp5mFetchStatus();
-        _rtp5mFetchHistory();
+        _algoRtpFetchSub(_algoRtpActiveSub);
     } else if (tab === 'sc') {
         scLoadSettings();
         _scFetchStatus();
@@ -464,6 +460,47 @@ function algoSwitch(tab) {
         _intrinsicFetchHistory();
     } else if (tab === 'swing-momentum') {
         _smLiveFetchConfigs();
+    }
+}
+
+// ── EMA RTP sub-tab switching (30s / 1m / 2m / 3m / 5m, nested in 'rtp') ──────
+
+function algoRtpSubSwitch(sub) {
+    _ALGO_RTP_SUBTABS.forEach(t => {
+        document.getElementById('algo-' + t + '-subpanel').classList.toggle('active', t === sub);
+        document.getElementById('algo-subtab-' + t).classList.toggle('active', t === sub);
+    });
+    _algoRtpActiveSub = sub;
+    history.replaceState(null, '', '#' + sub);
+    _algoRtpFetchSub(sub);
+}
+
+function _algoRtpFetchSub(sub) {
+    clearTimeout(_rtpStatusTimer);
+    clearTimeout(_rtpHistoryTimer);
+    clearTimeout(_rtp30sStatusTimer);
+    clearTimeout(_rtp30sHistoryTimer);
+    clearTimeout(_rtp2mStatusTimer);
+    clearTimeout(_rtp2mHistoryTimer);
+    clearTimeout(_rtp3mStatusTimer);
+    clearTimeout(_rtp3mHistoryTimer);
+    clearTimeout(_rtp5mStatusTimer);
+    clearTimeout(_rtp5mHistoryTimer);
+    if (sub === 'rtp') {
+        _rtpFetchStatus();
+        _rtpFetchHistory();
+    } else if (sub === 'rtp30s') {
+        _rtp30sFetchStatus();
+        _rtp30sFetchHistory();
+    } else if (sub === 'rtp2m') {
+        _rtp2mFetchStatus();
+        _rtp2mFetchHistory();
+    } else if (sub === 'rtp3m') {
+        _rtp3mFetchStatus();
+        _rtp3mFetchHistory();
+    } else if (sub === 'rtp5m') {
+        _rtp5mFetchStatus();
+        _rtp5mFetchHistory();
     }
 }
 

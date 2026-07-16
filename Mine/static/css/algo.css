@@ -642,6 +642,43 @@ body.ocean-theme .sm-gl-overlay {
 .ag-panel        { display: none; }
 .ag-panel.active { display: contents; } /* transparent to parent flex — preserves gap/direction */
 
+/* ── Sub-tab bar (nested inside a panel, e.g. EMA RTP 30s/1m/2m/3m/5m) ── */
+.ag-subtab-bar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 0 6px;
+    border-bottom: 1px solid var(--ag-border);
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.ag-subtab-bar::-webkit-scrollbar { display: none; }
+
+.ag-subtab {
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ag-text-2);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    letter-spacing: 0.01em;
+    transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+.ag-subtab:hover  { color: var(--ag-text); }
+.ag-subtab.active {
+    color: var(--ag-accent);
+    font-weight: 700;
+    background: linear-gradient(rgba(255,255,255,0.08), rgba(255,255,255,0.08)), var(--ag-surface);
+    border-color: var(--ag-border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.ag-subpanel        { display: none; }
+.ag-subpanel.active { display: contents; }
+
 /* ── History-grid delete cell ─────────────────────────────────── */
 /* The grid itself is components/data-grid.css. Only the per-row delete
    control is algo's own. .dg-table .dg-td is (0,2,0), so the cell rule must
