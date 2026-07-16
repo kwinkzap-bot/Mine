@@ -7,7 +7,7 @@
 :root {
     --oip-bg: #ffffff;
     --oip-text: #1f2328;
-    --oip-border: #cbd5e1;
+    --oip-border: var(--color-border);
     --oip-header-bg: #f8fafc;
     --oip-metric-lbl: #64748b;
     --oip-card-bg: #ffffff;
@@ -19,7 +19,7 @@
 body.light-theme, .oip-page.light-theme {
     --oip-bg: #ffffff;
     --oip-text: #1f2328;
-    --oip-border: #cbd5e1;
+    --oip-border: var(--color-border);
     --oip-header-bg: #f8fafc;
     --oip-metric-lbl: #64748b;
     --oip-card-bg: #ffffff;
@@ -30,7 +30,7 @@ body.light-theme, .oip-page.light-theme {
 body.dark-theme, .oip-page.dark-theme {
     --oip-bg: #090e17;
     --oip-text: #f8fafc;
-    --oip-border: #1f2937;
+    --oip-border: var(--color-border);
     --oip-header-bg: #111827;
     --oip-metric-lbl: #94a3b8;
     --oip-card-bg: #111827;
@@ -41,7 +41,7 @@ body.dark-theme, .oip-page.dark-theme {
 body.forest-theme, .oip-page.forest-theme {
     --oip-bg: #060c09;
     --oip-text: #e8f7f0;
-    --oip-border: #142820;
+    --oip-border: var(--color-border);
     --oip-header-bg: #0a1410;
     --oip-metric-lbl: #6ba88f;
     --oip-card-bg: #0a1410;
@@ -52,7 +52,7 @@ body.forest-theme, .oip-page.forest-theme {
 body.cream-theme, .oip-page.cream-theme {
     --oip-bg: #fdfbf7;
     --oip-text: #433c35;
-    --oip-border: #e6dfd3;
+    --oip-border: var(--color-border);
     --oip-header-bg: #f5f0e6;
     --oip-metric-lbl: #7c7267;
     --oip-card-bg: #fdfbf7;
@@ -63,7 +63,7 @@ body.cream-theme, .oip-page.cream-theme {
 body.ocean-theme, .oip-page.ocean-theme {
     --oip-bg: #f3f8fc;
     --oip-text: #1e293b;
-    --oip-border: #dbebfa;
+    --oip-border: var(--color-border);
     --oip-header-bg: #f0f6fc;
     --oip-metric-lbl: #64748b;
     --oip-card-bg: #f3f8fc;

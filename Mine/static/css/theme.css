@@ -1,0 +1,110 @@
+/* ================================================================
+   theme.css — shared color tokens for the app's 5 themes
+   (light / dark / forest / cream / ocean), toggled via a
+   body.{theme}-theme class (see base.html's theme-switch script).
+
+   These are the values that were already byte-identical across
+   algo.css (the ag tokens) and components/data-grid.css (the dg
+   tokens) — data-grid.css even said as much ("ported verbatim from
+   algo.css's ag set"). Centralizing them here means a page's own
+   prefixed tokens can alias var(--color-*) instead of repeating the
+   same hex per theme.
+
+   A page with its own brand palette (CPR filter's teal, OI Profile's
+   blue accent, etc.) keeps that palette local — only truly shared
+   values (border color, the one card shadow, and the ag/dg neutral +
+   status palette) live here. Load this right after main.css, before
+   any page stylesheet, so pages can still override a token locally.
+   ================================================================ */
+
+:root,
+body.light-theme {
+    --color-bg:          #f8fafc;
+    --color-surface:     #ffffff;
+    --color-border:      #cbd5e1;
+    --color-border-sub:  #f1f5f9;
+    --color-text:        #1e293b;
+    --color-text-2:      #475569;
+    --color-text-3:      #94a3b8;
+    --color-accent:      #3b82f6;
+    --color-accent-dim:  rgba(59, 130, 246, 0.08);
+    --color-row-hover:   #f8fafc;
+    --color-pos:         #16a34a;
+    --color-neg:         #dc2626;
+    --color-warning:     #d97706;
+    --color-info:        #0891b2;
+    --color-special:     #7c3aed;
+    --shadow-card:        0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+body.dark-theme {
+    --color-bg:          #090e17;
+    --color-surface:     #111827;
+    --color-border:      #1f2937;
+    --color-border-sub:  #1a2332;
+    --color-text:        #f1f5f9;
+    --color-text-2:      #94a3b8;
+    --color-text-3:      #475569;
+    --color-accent:      #60a5fa;
+    --color-accent-dim:  rgba(96, 165, 250, 0.1);
+    --color-row-hover:   rgba(59, 130, 246, 0.04);
+    --color-pos:         #4ade80;
+    --color-neg:         #f87171;
+    --color-warning:     #fbbf24;
+    --color-info:        #22d3ee;
+    --color-special:     #a78bfa;
+}
+
+body.forest-theme {
+    --color-bg:          #060c09;
+    --color-surface:     #0a1810;
+    --color-border:      #142820;
+    --color-border-sub:  #0a1e14;
+    --color-text:        #ecfdf5;
+    --color-text-2:      #6ba88f;
+    --color-text-3:      #4d8068;
+    --color-accent:      #34d399;
+    --color-accent-dim:  rgba(52, 211, 153, 0.1);
+    --color-row-hover:   rgba(16, 185, 129, 0.04);
+    --color-pos:         #86efac;
+    --color-neg:         #fca5a5;
+    --color-warning:     #fcd34d;
+    --color-info:        #67e8f9;
+    --color-special:     #c4b5fd;
+}
+
+body.cream-theme {
+    --color-bg:          #fdfbf7;
+    --color-surface:     #fdf6e9;
+    --color-border:      #e6dfd3;
+    --color-border-sub:  #eeddc4;
+    --color-text:        #3b2f20;
+    --color-text-2:      #9b7a52;
+    --color-text-3:      #c4a882;
+    --color-accent:      #b45309;
+    --color-accent-dim:  rgba(180, 83, 9, 0.08);
+    --color-row-hover:   #f5ead8;
+    --color-pos:         #15803d;
+    --color-neg:         #b91c1c;
+    --color-warning:     #b45309;
+    --color-info:        #0e7490;
+    --color-special:     #6d28d9;
+}
+
+body.ocean-theme {
+    --color-bg:          #f0f6fc;
+    --color-surface:     #ffffff;
+    --color-border:      #dbebfa;
+    --color-border-sub:  #dbedf8;
+    --color-text:        #0f172a;
+    --color-text-2:      #475569;
+    --color-text-3:      #94a3b8;
+    --color-accent:      #0284c7;
+    --color-accent-dim:  rgba(2, 132, 199, 0.08);
+    --color-row-hover:   #e8f4fd;
+    --color-pos:         #15803d;
+    --color-neg:         #dc2626;
+    --color-warning:     #d97706;
+    --color-info:        #0891b2;
+    --color-special:     #7c3aed;
+}

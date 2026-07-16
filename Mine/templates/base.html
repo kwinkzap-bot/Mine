@@ -6,6 +6,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}?v={{ sv('css/main.css') }}">
+    <!-- Shared theme tokens (light/dark/forest/cream/ocean) — must precede
+         every page stylesheet so a page's own --xx-* tokens can alias
+         var(--color-*) and still be overridden locally if needed. -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}?v={{ sv('css/theme.css') }}">
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32.png') }}">
     <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icons/icon-192.png') }}">

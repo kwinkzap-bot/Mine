@@ -6,7 +6,7 @@
 :root {
     --scan-bg: #ffffff;
     --scan-text: #333333;
-    --scan-border: #cbd5e1;
+    --scan-border: var(--color-border);
     --scan-header-bg: linear-gradient(135deg, #0f766e 0%, #14919b 100%);
     --scan-th-bg: #f0fffe;
     --scan-th-text: #0f766e;
@@ -22,7 +22,7 @@
 body.light-theme {
     --scan-bg: #ffffff;
     --scan-text: #1e293b;
-    --scan-border: #cbd5e1;
+    --scan-border: var(--color-border);
     --scan-header-bg: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
     --scan-th-bg: #f1f5f9;
     --scan-th-text: #475569;
@@ -38,7 +38,7 @@ body.light-theme {
 body.dark-theme {
     --scan-bg: #0f172a;
     --scan-text: #f8fafc;
-    --scan-border: #1f2937;
+    --scan-border: var(--color-border);
     --scan-header-bg: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
     --scan-th-bg: #1e293b;
     --scan-th-text: #38bdf8;
@@ -54,7 +54,7 @@ body.dark-theme {
 body.forest-theme {
     --scan-bg: #060e0a;
     --scan-text: #e8f7f0;
-    --scan-border: #142820;
+    --scan-border: var(--color-border);
     --scan-header-bg: linear-gradient(135deg, #142820 0%, #060e0a 100%);
     --scan-th-bg: #142820;
     --scan-th-text: #10b981;
@@ -70,7 +70,7 @@ body.forest-theme {
 body.cream-theme {
     --scan-bg: #fdfbf7;
     --scan-text: #433c35;
-    --scan-border: #e6dfd3;
+    --scan-border: var(--color-border);
     --scan-header-bg: linear-gradient(135deg, #d97706 0%, #b45309 100%);
     --scan-th-bg: #f5f0e6;
     --scan-th-text: #b45309;
@@ -86,7 +86,7 @@ body.cream-theme {
 body.ocean-theme {
     --scan-bg: #f3f8fc;
     --scan-text: #1e293b;
-    --scan-border: #dbebfa;
+    --scan-border: var(--color-border);
     --scan-header-bg: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
     --scan-th-bg: #f0f6fc;
     --scan-th-text: #0284c7;
@@ -195,8 +195,7 @@ body.ocean-theme {
 .results-row {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
-    gap: 5px;
-    margin-top: 8px;
+    gap: 8px;
 }
 
 /* Results Block - Compact Card Design */
@@ -213,6 +212,19 @@ body.ocean-theme {
 .results-block:hover {
     box-shadow: 0 8px 20px rgba(15, 118, 110, 0.12);
     transform: translateY(-2px);
+}
+
+/* High IV / Expiry HL / EMA Narrow blocks nest the shared .dg-card (see
+   static/css/components/data-grid.css) for their header+surface instead of
+   a bespoke <h3>; .results-block on the wrapper is then only needed for the
+   entrance animation and results-row grid membership, so its own surface
+   is turned off to avoid a card-inside-a-card look. */
+.results-block:has(> .dg-card) {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    overflow: visible;
 }
 
 /* Results Section */
@@ -245,10 +257,6 @@ body.ocean-theme {
     margin-left: 10px;
 }
 
-#highIvResults h3 {
-    border-left: 4px solid #f97316 !important;
-}
-
 #camarillaCprReversalBullishResults h3,
 #drsiReversalBullishResults h3 {
     border-left: 4px solid #10b981 !important;
@@ -270,6 +278,14 @@ body.ocean-theme {
 }
 
 /* Scrollbar styled globally in main.css (modern thin/floating) */
+
+/* Shared DataGrid (.dg-scroll) grids in the Scanner tabs: cap at 400px and
+   scroll once rows overflow it; with fewer rows the div has no explicit
+   height so it shrinks to fit the table instead of leaving empty space. */
+.results-block .dg-scroll {
+    max-height: 400px;
+    overflow-y: auto;
+}
 
 .results-scroll table {
     margin: 0;

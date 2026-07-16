@@ -19,103 +19,32 @@
    ================================================================ */
 
 /* ── Tokens ───────────────────────────────────────────────────────
-   :root carries the light values so a page with no theme class on
-   <body> still renders correctly; body.{theme} overrides via cascade.
+   Aliased to the shared theme tokens in css/theme.css (loaded from
+   base.html before this file) — same values as before, just defined
+   once. Must be declared on `body` itself (not just :root/html):
+   --color-* is overridden on body.{theme}-theme, and a var()
+   reference only re-resolves using the referenced property's value
+   at the SAME element — declaring the alias only at :root would
+   freeze it to :root's own (light) --color-* forever.
    ---------------------------------------------------------------- */
 :root,
-body.light-theme {
-    --dg-bg:          #f8fafc;
-    --dg-surface:     #ffffff;
-    --dg-border:      #cbd5e1;
-    --dg-border-sub:  #f1f5f9;
-    --dg-text:        #1e293b;
-    --dg-text-2:      #475569;
-    --dg-text-3:      #94a3b8;
-    --dg-accent:      #3b82f6;
-    --dg-accent-dim:  rgba(59, 130, 246, 0.08);
-    --dg-row-hover:   #f8fafc;
-    --dg-shadow-card: 0 4px 12px rgba(0, 0, 0, 0.15);
-    --dg-pos:         #16a34a;
-    --dg-neg:         #dc2626;
-    --dg-warning:     #d97706;
-    --dg-info:        #0891b2;
-    --dg-special:     #7c3aed;
-}
-
-body.dark-theme {
-    --dg-bg:          #090e17;
-    --dg-surface:     #111827;
-    --dg-border:      #1f2937;
-    --dg-border-sub:  #1a2332;
-    --dg-text:        #f1f5f9;
-    --dg-text-2:      #94a3b8;
-    --dg-text-3:      #475569;
-    --dg-accent:      #60a5fa;
-    --dg-accent-dim:  rgba(96, 165, 250, 0.1);
-    --dg-row-hover:   rgba(59, 130, 246, 0.04);
-    --dg-shadow-card: 0 4px 12px rgba(0, 0, 0, 0.15);
-    --dg-pos:         #4ade80;
-    --dg-neg:         #f87171;
-    --dg-warning:     #fbbf24;
-    --dg-info:        #22d3ee;
-    --dg-special:     #a78bfa;
-}
-
-body.forest-theme {
-    --dg-bg:          #060c09;
-    --dg-surface:     #0a1810;
-    --dg-border:      #142820;
-    --dg-border-sub:  #0a1e14;
-    --dg-text:        #ecfdf5;
-    --dg-text-2:      #6ba88f;
-    --dg-text-3:      #4d8068;
-    --dg-accent:      #34d399;
-    --dg-accent-dim:  rgba(52, 211, 153, 0.1);
-    --dg-row-hover:   rgba(16, 185, 129, 0.04);
-    --dg-shadow-card: 0 4px 12px rgba(0, 0, 0, 0.15);
-    --dg-pos:         #86efac;
-    --dg-neg:         #fca5a5;
-    --dg-warning:     #fcd34d;
-    --dg-info:        #67e8f9;
-    --dg-special:     #c4b5fd;
-}
-
-body.cream-theme {
-    --dg-bg:          #fdfbf7;
-    --dg-surface:     #fdf6e9;
-    --dg-border:      #e6dfd3;
-    --dg-border-sub:  #eeddc4;
-    --dg-text:        #3b2f20;
-    --dg-text-2:      #9b7a52;
-    --dg-text-3:      #c4a882;
-    --dg-accent:      #b45309;
-    --dg-accent-dim:  rgba(180, 83, 9, 0.08);
-    --dg-row-hover:   #f5ead8;
-    --dg-shadow-card: 0 4px 12px rgba(0, 0, 0, 0.15);
-    --dg-pos:         #15803d;
-    --dg-neg:         #b91c1c;
-    --dg-warning:     #b45309;
-    --dg-info:        #0e7490;
-    --dg-special:     #6d28d9;
-}
-
-body.ocean-theme {
-    --dg-bg:          #f0f6fc;
-    --dg-surface:     #ffffff;
-    --dg-border:      #dbebfa;
-    --dg-border-sub:  #dbedf8;
-    --dg-text:        #0f172a;
-    --dg-text-2:      #475569;
-    --dg-text-3:      #94a3b8;
-    --dg-accent:      #0284c7;
-    --dg-accent-dim:  rgba(2, 132, 199, 0.08);
-    --dg-row-hover:   #e8f4fd;
-    --dg-shadow-card: 0 4px 12px rgba(0, 0, 0, 0.15);
-    --dg-pos:         #15803d;
-    --dg-neg:         #dc2626;
-    --dg-warning:     #d97706;
-    --dg-info:        #0891b2;
-    --dg-special:     #7c3aed;
+body {
+    --dg-bg:          var(--color-bg);
+    --dg-surface:     var(--color-surface);
+    --dg-border:      var(--color-border);
+    --dg-border-sub:  var(--color-border-sub);
+    --dg-text:        var(--color-text);
+    --dg-text-2:      var(--color-text-2);
+    --dg-text-3:      var(--color-text-3);
+    --dg-accent:      var(--color-accent);
+    --dg-accent-dim:  var(--color-accent-dim);
+    --dg-row-hover:   var(--color-row-hover);
+    --dg-shadow-card: var(--shadow-card);
+    --dg-pos:         var(--color-pos);
+    --dg-neg:         var(--color-neg);
+    --dg-warning:     var(--color-warning);
+    --dg-info:        var(--color-info);
+    --dg-special:     var(--color-special);
 }
 
 /* ── Card shell ───────────────────────────────────────────────────

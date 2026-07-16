@@ -5,22 +5,28 @@
 ================================================================ */
 
 /* ── Default / Light-theme properties ─────────────────────────── */
+/* bg/surface/border/text/accent/pos/neg/warning/shadow alias the shared
+   tokens in css/theme.css (identical values — data-grid.css ported this
+   same palette verbatim from here). --color-* itself changes per
+   body.{theme}-theme, so aliasing once covers every theme without a
+   repeated block below; only the ce/pe/badge/btn/msg tones stay
+   page-specific and still need a block per theme. */
 .algo-page {
-    --ag-bg:            #f8fafc;
-    --ag-surface:       #ffffff;
-    --ag-border:        #cbd5e1;
-    --ag-border-sub:    #f1f5f9;
-    --ag-text:          #1e293b;
-    --ag-text-2:        #475569;
-    --ag-text-3:        #94a3b8;
-    --ag-accent:        #3b82f6;
-    --ag-accent-dim:    rgba(59,130,246,0.08);
-    --ag-row-hover:     #f8fafc;
-    --ag-shadow:        0 4px 12px rgba(0,0,0,0.15);
-    --ag-shadow-card:   0 4px 12px rgba(0,0,0,0.15);
-    --ag-pos:           #16a34a;
-    --ag-neg:           #dc2626;
-    --ag-warning:       #d97706;
+    --ag-bg:            var(--color-bg);
+    --ag-surface:       var(--color-surface);
+    --ag-border:        var(--color-border);
+    --ag-border-sub:    var(--color-border-sub);
+    --ag-text:          var(--color-text);
+    --ag-text-2:        var(--color-text-2);
+    --ag-text-3:        var(--color-text-3);
+    --ag-accent:        var(--color-accent);
+    --ag-accent-dim:    var(--color-accent-dim);
+    --ag-row-hover:     var(--color-row-hover);
+    --ag-shadow:        var(--shadow-card);
+    --ag-shadow-card:   var(--shadow-card);
+    --ag-pos:           var(--color-pos);
+    --ag-neg:           var(--color-neg);
+    --ag-warning:       var(--color-warning);
     --ag-ce:            #2563eb;
     --ag-pe:            #dc2626;
     --ag-badge-active-bg:     rgba(22,163,74,0.12);
@@ -48,21 +54,6 @@
    listed here too or the popups fall back to the light :root variables. */
 body.dark-theme .algo-page,
 body.dark-theme .sm-gl-overlay {
-    --ag-bg:            #090e17;
-    --ag-surface:       #111827;
-    --ag-border:        #1f2937;
-    --ag-border-sub:    #1a2332;
-    --ag-text:          #f1f5f9;
-    --ag-text-2:        #94a3b8;
-    --ag-text-3:        #475569;
-    --ag-accent:        #60a5fa;
-    --ag-accent-dim:    rgba(96,165,250,0.1);
-    --ag-row-hover:     rgba(59,130,246,0.04);
-    --ag-shadow:        0 4px 12px rgba(0,0,0,0.15);
-    --ag-shadow-card:   0 4px 12px rgba(0,0,0,0.15);
-    --ag-pos:           #4ade80;
-    --ag-neg:           #f87171;
-    --ag-warning:       #fbbf24;
     --ag-ce:            #60a5fa;
     --ag-pe:            #f87171;
     --ag-badge-active-bg:     rgba(74,222,128,0.12);
@@ -88,21 +79,6 @@ body.dark-theme .sm-gl-overlay {
 /* ── Forest Theme ────────────────────────────────────────────── */
 body.forest-theme .algo-page,
 body.forest-theme .sm-gl-overlay {
-    --ag-bg:            #060c09;
-    --ag-surface:       #0a1810;
-    --ag-border:        #142820;
-    --ag-border-sub:    #0a1e14;
-    --ag-text:          #ecfdf5;
-    --ag-text-2:        #6ba88f;
-    --ag-text-3:        #4d8068;
-    --ag-accent:        #34d399;
-    --ag-accent-dim:    rgba(52,211,153,0.1);
-    --ag-row-hover:     rgba(16,185,129,0.04);
-    --ag-shadow:        0 4px 12px rgba(0,0,0,0.15);
-    --ag-shadow-card:   0 4px 12px rgba(0,0,0,0.15);
-    --ag-pos:           #86efac;
-    --ag-neg:           #fca5a5;
-    --ag-warning:       #fcd34d;
     --ag-ce:            #93c5fd;
     --ag-pe:            #fca5a5;
     --ag-badge-active-bg:     rgba(52,211,153,0.12);
@@ -128,21 +104,6 @@ body.forest-theme .sm-gl-overlay {
 /* ── Cream Theme ─────────────────────────────────────────────── */
 body.cream-theme .algo-page,
 body.cream-theme .sm-gl-overlay {
-    --ag-bg:            #fdfbf7;
-    --ag-surface:       #fdf6e9;
-    --ag-border:        #e6dfd3;
-    --ag-border-sub:    #eeddc4;
-    --ag-text:          #3b2f20;
-    --ag-text-2:        #9b7a52;
-    --ag-text-3:        #c4a882;
-    --ag-accent:        #b45309;
-    --ag-accent-dim:    rgba(180,83,9,0.08);
-    --ag-row-hover:     #f5ead8;
-    --ag-shadow:        0 4px 12px rgba(0,0,0,0.15);
-    --ag-shadow-card:   0 4px 12px rgba(0,0,0,0.15);
-    --ag-pos:           #15803d;
-    --ag-neg:           #b91c1c;
-    --ag-warning:       #b45309;
     --ag-ce:            #1d4ed8;
     --ag-pe:            #b91c1c;
     --ag-badge-active-bg:     rgba(21,128,61,0.1);
@@ -168,21 +129,6 @@ body.cream-theme .sm-gl-overlay {
 /* ── Ocean Theme ─────────────────────────────────────────────── */
 body.ocean-theme .algo-page,
 body.ocean-theme .sm-gl-overlay {
-    --ag-bg:            #f0f6fc;
-    --ag-surface:       #ffffff;
-    --ag-border:        #dbebfa;
-    --ag-border-sub:    #dbedf8;
-    --ag-text:          #0f172a;
-    --ag-text-2:        #475569;
-    --ag-text-3:        #94a3b8;
-    --ag-accent:        #0284c7;
-    --ag-accent-dim:    rgba(2,132,199,0.08);
-    --ag-row-hover:     #e8f4fd;
-    --ag-shadow:        0 4px 12px rgba(0,0,0,0.15);
-    --ag-shadow-card:   0 4px 12px rgba(0,0,0,0.15);
-    --ag-pos:           #15803d;
-    --ag-neg:           #dc2626;
-    --ag-warning:       #d97706;
     --ag-ce:            #1d4ed8;
     --ag-pe:            #dc2626;
     --ag-badge-active-bg:     rgba(21,128,61,0.1);
