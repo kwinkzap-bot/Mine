@@ -210,20 +210,14 @@
 <script>
     (function () {
         const page = document.getElementById('tdPage');
-        const themes = ['light', 'forest', 'cream', 'ocean'];
 
-        function applyTheme(theme) {
-            page.classList.remove(...themes.map(t => t + '-theme'));
-            if (themes.includes(theme)) page.classList.add(theme + '-theme');
-            document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
-            document.body.classList.add(theme + '-theme');
-            localStorage.setItem('app-theme', theme);
-        }
+        // Sync to the already-active theme on load (no dispatch needed — it
+        // isn't changing).
+        window.AppTheme.syncTheme(window.AppTheme.getActiveTheme(), [page]);
 
-        const saved = localStorage.getItem('app-theme') || localStorage.getItem('mkt-theme') || 'ocean';
-        applyTheme(saved);
-
-        window.addEventListener('themechanged', e => applyTheme(e.detail.theme));
+        window.addEventListener('themechanged', e => {
+            window.AppTheme.applyThemeClass(page, e.detail.theme);
+        });
     })();
 </script>
 {% endblock %}

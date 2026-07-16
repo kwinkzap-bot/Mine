@@ -220,7 +220,7 @@
     padding: 10px;
     text-align: center;
     transition: all 0.25s ease;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
 }
 
 .info-card:hover {
@@ -254,7 +254,7 @@
     border-radius: 8px;
     padding: 12px;
     margin-bottom: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
 }
 
 .signals-section h3 {
@@ -342,7 +342,7 @@
     border-radius: 8px;
     padding: 12px;
     margin-bottom: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
 }
 
 /* Chart Styles - See tradingview-chart.css for reusable styles */
@@ -354,7 +354,7 @@
     border-radius: 8px;
     padding: 12px;
     margin-bottom: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
 }
 
 .position-section h3 {

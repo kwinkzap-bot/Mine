@@ -5,78 +5,78 @@
 
 /* ── Custom properties (light defaults) ─────────────────────── */
 .portfolio-page {
-    --pf-bg:         #f8fafc;
-    --pf-surface:    #ffffff;
-    --pf-border:     #cbd5e1;
-    --pf-border-sub: #f1f5f9;
-    --pf-text:       #1e293b;
+    --pf-bg:         var(--color-bg);
+    --pf-surface:    var(--color-surface);
+    --pf-border:     var(--color-border);
+    --pf-border-sub: var(--color-border-sub);
+    --pf-text:       var(--color-text);
     --pf-text-2:     #64748b;
-    --pf-text-3:     #94a3b8;
-    --pf-accent:     #3b82f6;
-    --pf-accent-dim: rgba(59,130,246,0.08);
-    --pf-row-hover:  #f8fafc;
-    --pf-shadow:     0 4px 12px rgba(0,0,0,0.15);
+    --pf-text-3:     var(--color-text-3);
+    --pf-accent:     var(--color-accent);
+    --pf-accent-dim: var(--color-accent-dim);
+    --pf-row-hover:  var(--color-row-hover);
+    --pf-shadow:     var(--shadow-card);
     --pf-pos:        #16a34a;
     --pf-neg:        #dc2626;
 }
 
 /* ── Theme overrides ─────────────────────────────────────────── */
 body.dark-theme .portfolio-page {
-    --pf-bg:         #090e17;
-    --pf-surface:    #111827;
-    --pf-border:     #1f2937;
-    --pf-border-sub: #1a2332;
-    --pf-text:       #f1f5f9;
+    --pf-bg:         var(--color-bg);
+    --pf-surface:    var(--color-surface);
+    --pf-border:     var(--color-border);
+    --pf-border-sub: var(--color-border-sub);
+    --pf-text:       var(--color-text);
     --pf-text-2:     #94a3b8;
-    --pf-text-3:     #475569;
-    --pf-accent:     #60a5fa;
-    --pf-accent-dim: rgba(96,165,250,0.1);
-    --pf-row-hover:  rgba(59,130,246,0.04);
-    --pf-shadow:     0 4px 12px rgba(0,0,0,0.15);
+    --pf-text-3:     var(--color-text-3);
+    --pf-accent:     var(--color-accent);
+    --pf-accent-dim: var(--color-accent-dim);
+    --pf-row-hover:  var(--color-row-hover);
+    --pf-shadow:     var(--shadow-card);
     --pf-pos:        #4ade80;
     --pf-neg:        #f87171;
 }
 
 body.forest-theme .portfolio-page {
-    --pf-bg:         #060c09;
-    --pf-surface:    #0a1810;
-    --pf-border:     #142820;
-    --pf-border-sub: #0a1e14;
-    --pf-text:       #ecfdf5;
+    --pf-bg:         var(--color-bg);
+    --pf-surface:    var(--color-surface);
+    --pf-border:     var(--color-border);
+    --pf-border-sub: var(--color-border-sub);
+    --pf-text:       var(--color-text);
     --pf-text-2:     #6ba88f;
-    --pf-text-3:     #4d8068;
-    --pf-accent:     #34d399;
-    --pf-accent-dim: rgba(52,211,153,0.1);
-    --pf-row-hover:  rgba(16,185,129,0.04);
-    --pf-shadow:     0 4px 12px rgba(0,0,0,0.15);
+    --pf-text-3:     var(--color-text-3);
+    --pf-accent:     var(--color-accent);
+    --pf-accent-dim: var(--color-accent-dim);
+    --pf-row-hover:  var(--color-row-hover);
+    --pf-shadow:     var(--shadow-card);
     --pf-pos:        #86efac;
     --pf-neg:        #fca5a5;
 }
 
 body.cream-theme .portfolio-page {
-    --pf-bg:         #fdfbf7;
-    --pf-surface:    #fdf6e9;
-    --pf-border:     #e6dfd3;
-    --pf-border-sub: #eeddc4;
-    --pf-text:       #3b2f20;
+    --pf-bg:         var(--color-bg);
+    --pf-surface:    var(--color-surface);
+    --pf-border:     var(--color-border);
+    --pf-border-sub: var(--color-border-sub);
+    --pf-text:       var(--color-text);
     --pf-text-2:     #9b7a52;
-    --pf-text-3:     #c4a882;
-    --pf-accent:     #b45309;
-    --pf-accent-dim: rgba(180,83,9,0.08);
-    --pf-row-hover:  #f5ead8;
+    --pf-text-3:     var(--color-text-3);
+    --pf-accent:     var(--color-accent);
+    --pf-accent-dim: var(--color-accent-dim);
+    --pf-row-hover:  var(--color-row-hover);
 }
 
 body.ocean-theme .portfolio-page {
-    --pf-bg:         #f0f6fc;
-    --pf-surface:    #ffffff;
-    --pf-border:     #dbebfa;
-    --pf-border-sub: #dbedf8;
-    --pf-text:       #0f172a;
+    --pf-bg:         var(--color-bg);
+    --pf-surface:    var(--color-surface);
+    --pf-border:     var(--color-border);
+    --pf-border-sub: var(--color-border-sub);
+    --pf-text:       var(--color-text);
     --pf-text-2:     #475569;
-    --pf-text-3:     #94a3b8;
-    --pf-accent:     #0284c7;
-    --pf-accent-dim: rgba(2,132,199,0.08);
-    --pf-row-hover:  #f0f6fc;
+    --pf-text-3:     var(--color-text-3);
+    --pf-accent:     var(--color-accent);
+    --pf-accent-dim: var(--color-accent-dim);
+    --pf-row-hover:  var(--color-row-hover);
 }
 
 /* ── Page shell ──────────────────────────────────────────────── */

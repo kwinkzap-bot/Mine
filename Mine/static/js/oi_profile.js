@@ -43,18 +43,9 @@ function updateOIProfileTheme(themeName) {
     const oipPage = document.querySelector('.oip-page');
     if (!oipPage) return;
 
-    // 1. Remove all old theme classes
-    oipPage.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
-    // 2. Add new theme class
-    oipPage.classList.add(`${themeName}-theme`);
-
-    // Also apply to document.body for styling the main template / navigation bar
-    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
-    document.body.classList.add(`${themeName}-theme`);
-
-    // 3. Save to localStorage
-    localStorage.setItem('app-theme', themeName);
-    localStorage.setItem('oip-theme', themeName);
+    // 1-3. Class toggle on .oip-page + body, and localStorage persistence,
+    // now shared via AppTheme (static/js/theme.js).
+    window.AppTheme.syncTheme(themeName, [oipPage]);
 
     // 4. Update the theme toggle button label/icon
     const themeBtn = document.getElementById('oip-theme-toggle-btn');
@@ -526,7 +517,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Theme setup and handling
-    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
+    const activeTheme = window.AppTheme.getActiveTheme();
     updateOIProfileTheme(activeTheme);
 
     // Event listener for global theme changes
@@ -626,7 +617,7 @@ function oipInitCharts() {
 }
 
 function creatBaseChart(el) {
-    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
+    const activeTheme = window.AppTheme.getActiveTheme();
     const cfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
     return LightweightCharts.createChart(el, {
         width: el.clientWidth || 1200, height: 375,
@@ -713,7 +704,7 @@ function oipDrawOIBars() {
     if (!oipAllStrikes.length) return;
 
     // Resolve dynamic colors based on active theme
-    const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
+    const activeTheme = window.AppTheme.getActiveTheme();
     const cfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
     const lblColor = activeTheme === 'light' ? '#000000' : cfg.text;
     const borderCol = activeTheme === 'light' ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.1)';

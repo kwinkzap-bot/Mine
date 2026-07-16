@@ -4,7 +4,7 @@
 .oi-container {
     --oip-bg: #f3f4f6;
     --oip-text: #1f2328;
-    --oip-border: #cbd5e1;
+    --oip-border: var(--color-border);
     --oip-header-bg: #f8fafc;
     --oip-metric-lbl: #64748b;
     --oip-card-bg: #ffffff;
@@ -13,7 +13,7 @@
     --oip-body-bg: #f1f5f9;
     --oip-input-bg: #ffffff;
     --oip-text-muted: #555555;
-    --oip-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    --oip-shadow: var(--shadow-card);
 
     margin: 0 auto;
     background: var(--oip-body-bg);
@@ -26,7 +26,7 @@
 .oi-container.light-theme {
     --oip-bg: #f3f4f6;
     --oip-text: #1f2328;
-    --oip-border: #cbd5e1;
+    --oip-border: var(--color-border);
     --oip-header-bg: #f8fafc;
     --oip-metric-lbl: #64748b;
     --oip-card-bg: #ffffff;
@@ -35,13 +35,13 @@
     --oip-body-bg: #f1f5f9;
     --oip-input-bg: #ffffff;
     --oip-text-muted: #555555;
-    --oip-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    --oip-shadow: var(--shadow-card);
 }
 
 .oi-container.dark-theme {
     --oip-bg: #090e17;
     --oip-text: #f8fafc;
-    --oip-border: #1f2937;
+    --oip-border: var(--color-border);
     --oip-header-bg: #111827;
     --oip-metric-lbl: #94a3b8;
     --oip-card-bg: #111827;
@@ -50,13 +50,13 @@
     --oip-body-bg: #090e17;
     --oip-input-bg: #1f2937;
     --oip-text-muted: #94a3b8;
-    --oip-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    --oip-shadow: var(--shadow-card);
 }
 
 .oi-container.forest-theme {
     --oip-bg: #060c09;
     --oip-text: #e8f7f0;
-    --oip-border: #142820;
+    --oip-border: var(--color-border);
     --oip-header-bg: #0a1410;
     --oip-metric-lbl: #6ba88f;
     --oip-card-bg: #0a1410;
@@ -65,13 +65,13 @@
     --oip-body-bg: #060c09;
     --oip-input-bg: #0d1f18;
     --oip-text-muted: #6ba88f;
-    --oip-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    --oip-shadow: var(--shadow-card);
 }
 
 .oi-container.cream-theme {
     --oip-bg: #fdfbf7;
     --oip-text: #433c35;
-    --oip-border: #e6dfd3;
+    --oip-border: var(--color-border);
     --oip-header-bg: #f5f0e6;
     --oip-metric-lbl: #7c7267;
     --oip-card-bg: #fdfbf7;
@@ -80,13 +80,13 @@
     --oip-body-bg: #fdfbf7;
     --oip-input-bg: #f5f0e6;
     --oip-text-muted: #7c7267;
-    --oip-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    --oip-shadow: var(--shadow-card);
 }
 
 .oi-container.ocean-theme {
     --oip-bg: #f3f8fc;
     --oip-text: #1e293b;
-    --oip-border: #dbebfa;
+    --oip-border: var(--color-border);
     --oip-header-bg: #f0f6fc;
     --oip-metric-lbl: #64748b;
     --oip-card-bg: #ffffff;
@@ -95,7 +95,7 @@
     --oip-body-bg: #f3f8fc;
     --oip-input-bg: #f0f6fc;
     --oip-text-muted: #64748b;
-    --oip-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    --oip-shadow: var(--shadow-card);
 }
 
 .oi-header {

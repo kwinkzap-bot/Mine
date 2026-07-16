@@ -12,7 +12,7 @@
     margin-bottom: 12px;
     font-size: 12px;
     font-weight: 500;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -128,7 +128,7 @@ select.date-picker.tf-picker option {
 .results-block {
     background: white;
     border-radius: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
     overflow: hidden;
     transition: all 0.2s ease;
     border: 1px solid #e2e8f0;
@@ -343,7 +343,7 @@ body.ocean-theme .ema-status-bar {
     background: var(--scan-th-bg) !important;
     color: var(--scan-text) !important;
     border: 1px solid var(--scan-border);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
 }
 
 body.light-theme .ema-refresh-btn,
@@ -365,7 +365,7 @@ body.dark-theme .ema-status-bar,
 body.forest-theme .ema-status-bar {
     background: var(--scan-header-bg);
     color: var(--scan-text);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
 }
 
 body.light-theme select.date-picker.tf-picker option,

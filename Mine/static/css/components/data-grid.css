@@ -72,7 +72,7 @@ body {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .5px;
-    color: var(--dg-text-3);
+    color: var(--td-text);
 }
 
 /* Right-aligned meta in the header — row counts, "12 trades", etc. */

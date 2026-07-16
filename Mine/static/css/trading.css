@@ -14,7 +14,7 @@
     background: var(--tp-bg, #fff);
     border: 1px solid var(--tp-border, #dfe3ea);
     border-radius: 10px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
 }
 .tt-title { font-weight: 700; font-size: 15px; color: var(--tp-text, #1f2733); }
 .tt-title small { font-weight: 500; color: var(--tp-muted, #6b7686); margin-left: 8px; }

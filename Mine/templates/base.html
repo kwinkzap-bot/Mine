@@ -39,6 +39,9 @@
        Note this is a Jinja comment, not an HTML one: Jinja parses tags inside
        <!-- --> normally, so naming a block tag there would open a real block. #}
     <script src="{{ url_for('static', filename='js/components/data-grid.js') }}?v={{ sv('js/components/data-grid.js') }}"></script>
+    <!-- Shared theme-switching logic (getActiveTheme/setTheme/cycleTheme) —
+         functions only, safe to load before <body> exists. -->
+    <script src="{{ url_for('static', filename='js/theme.js') }}?v={{ sv('js/theme.js') }}"></script>
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
         rel="stylesheet">
@@ -55,54 +58,29 @@
         }
     </script>
     <script>
-        (function () {
-            // 1. Immediately apply theme class to body to prevent flash
-            const theme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
-            document.body.classList.add(theme + '-theme');
+        // Immediately apply the theme class to body to prevent a flash of
+        // the wrong theme — must stay inline, at the top of <body>, so it
+        // runs before the rest of the page renders.
+        document.body.classList.add(window.AppTheme.getActiveTheme() + '-theme');
 
-            // 2. Setup theme toggle variables & cycle
-            const themes = ['dark', 'forest', 'light', 'cream', 'ocean'];
-            const themeIcons = {
-                'dark': '🌌',
-                'forest': '🌲',
-                'light': '☀️',
-                'cream': '📜',
-                'ocean': '🌊'
+        document.addEventListener('DOMContentLoaded', () => {
+            const themeBtn = document.getElementById('global-theme-btn');
+            if (!themeBtn) return;
+            const { THEME_ICONS, getActiveTheme, setTheme, cycleTheme } = window.AppTheme;
+
+            const updateBtn = (theme) => {
+                themeBtn.innerHTML = THEME_ICONS[theme] || '🌌';
+                themeBtn.title = "Theme: " + theme.charAt(0).toUpperCase() + theme.slice(1);
             };
+            updateBtn(getActiveTheme());
 
-            document.addEventListener('DOMContentLoaded', () => {
-                const themeBtn = document.getElementById('global-theme-btn');
-                if (!themeBtn) return;
-
-                // Load saved preference or fallback
-                const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
-                themeBtn.innerHTML = themeIcons[activeTheme] || '🌌';
-                themeBtn.title = "Theme: " + activeTheme.charAt(0).toUpperCase() + activeTheme.slice(1);
-
-                themeBtn.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    const currentTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
-                    const currentIndex = themes.indexOf(currentTheme);
-                    const nextTheme = themes[(currentIndex + 1) % themes.length];
-
-                    // Apply next theme class to body
-                    document.body.classList.remove('light-theme', 'dark-theme', 'forest-theme', 'cream-theme', 'ocean-theme');
-                    document.body.classList.add(nextTheme + '-theme');
-
-                    // Save to local storage
-                    localStorage.setItem('app-theme', nextTheme);
-                    localStorage.setItem('oip-theme', nextTheme);
-                    localStorage.setItem('mkt-theme', nextTheme);
-
-                    // Update UI icon & title
-                    themeBtn.innerHTML = themeIcons[nextTheme] || '🌌';
-                    themeBtn.title = "Theme: " + nextTheme.charAt(0).toUpperCase() + nextTheme.slice(1);
-
-                    // Dispatch custom event to notify all components/pages
-                    window.dispatchEvent(new CustomEvent('themechanged', { detail: { theme: nextTheme } }));
-                });
+            themeBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                const nextTheme = cycleTheme(getActiveTheme());
+                setTheme(nextTheme);
+                updateBtn(nextTheme);
             });
-        })();
+        });
     </script>
     <div id="notification-container"></div>
     <div class="container">

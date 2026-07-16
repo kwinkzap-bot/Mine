@@ -410,7 +410,7 @@ window.TradingViewChart = (function () {
                 'cream': { bg: '#ffffff', text: '#7c7267', grid: 'rgba(180, 83, 9, 0.05)' },
                 'ocean': { bg: '#ffffff', text: '#475569', grid: 'rgba(2, 132, 199, 0.05)' }
             };
-            const activeTheme = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || localStorage.getItem('mkt-theme') || 'ocean';
+            const activeTheme = window.AppTheme.getActiveTheme();
             const themeCfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
 
             const chart = LightweightCharts.createChart(container, {

@@ -49,7 +49,7 @@ function vegaRefresh() {
 
 // ── Chart creation ─────────────────────────────────────────────────────────
 function _vegaGetTheme() {
-    const name = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || 'ocean';
+    const name = window.AppTheme.getActiveTheme();
     const themes = {
         light:  { bg: '#ffffff', text: '#374151', grid: '#f0f0f0' },
         dark:   { bg: '#111827', text: '#94a3b8', grid: 'rgba(255,255,255,0.06)' },

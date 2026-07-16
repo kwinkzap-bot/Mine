@@ -6,19 +6,19 @@
 
 /* ── Custom properties (light defaults) ─────────────────────── */
 .orders-page {
-    --ord-bg:         #f8fafc;
-    --ord-surface:    #ffffff;
-    --ord-border:     #cbd5e1;
-    --ord-border-sub: #f1f5f9;
-    --ord-text:       #1e293b;
+    --ord-bg:         var(--color-bg);
+    --ord-surface:    var(--color-surface);
+    --ord-border:     var(--color-border);
+    --ord-border-sub: var(--color-border-sub);
+    --ord-text:       var(--color-text);
     --ord-text-2:     #64748b;
-    --ord-text-3:     #94a3b8;
-    --ord-accent:     #3b82f6;
-    --ord-accent-dim: rgba(59,130,246,0.08);
-    --ord-row-hover:  #f8fafc;
+    --ord-text-3:     var(--color-text-3);
+    --ord-accent:     var(--color-accent);
+    --ord-accent-dim: var(--color-accent-dim);
+    --ord-row-hover:  var(--color-row-hover);
     --ord-input-bg:   #f1f5f9;
     --ord-btn-hover:  #f1f5f9;
-    --ord-shadow:     0 4px 12px rgba(0,0,0,0.15);
+    --ord-shadow:     var(--shadow-card);
 
     /* status colours */
     --ord-pending-fg:   #c2410c;  --ord-pending-bg:   #fff7ed;  --ord-pending-bd:   #fed7aa;
@@ -30,19 +30,19 @@
 
 /* ── Theme overrides ─────────────────────────────────────────── */
 body.dark-theme .orders-page {
-    --ord-bg:         #090e17;
-    --ord-surface:    #111827;
-    --ord-border:     #1f2937;
-    --ord-border-sub: #1a2332;
-    --ord-text:       #f1f5f9;
+    --ord-bg:         var(--color-bg);
+    --ord-surface:    var(--color-surface);
+    --ord-border:     var(--color-border);
+    --ord-border-sub: var(--color-border-sub);
+    --ord-text:       var(--color-text);
     --ord-text-2:     #94a3b8;
-    --ord-text-3:     #475569;
-    --ord-accent:     #60a5fa;
-    --ord-accent-dim: rgba(96,165,250,0.1);
-    --ord-row-hover:  rgba(59,130,246,0.04);
+    --ord-text-3:     var(--color-text-3);
+    --ord-accent:     var(--color-accent);
+    --ord-accent-dim: var(--color-accent-dim);
+    --ord-row-hover:  var(--color-row-hover);
     --ord-input-bg:   #1e293b;
     --ord-btn-hover:  #1e293b;
-    --ord-shadow:     0 4px 12px rgba(0,0,0,0.15);
+    --ord-shadow:     var(--shadow-card);
     --ord-pending-fg:   #fb923c; --ord-pending-bg:   #431407; --ord-pending-bd:   #7c2d12;
     --ord-executing-fg: #fbbf24; --ord-executing-bg: #422006; --ord-executing-bd: #92400e;
     --ord-executed-fg:  #4ade80; --ord-executed-bg:  #14321e; --ord-executed-bd:  #166534;
@@ -51,19 +51,19 @@ body.dark-theme .orders-page {
 }
 
 body.forest-theme .orders-page {
-    --ord-bg:         #060c09;
-    --ord-surface:    #0a1810;
-    --ord-border:     #142820;
-    --ord-border-sub: #0a1e14;
-    --ord-text:       #ecfdf5;
+    --ord-bg:         var(--color-bg);
+    --ord-surface:    var(--color-surface);
+    --ord-border:     var(--color-border);
+    --ord-border-sub: var(--color-border-sub);
+    --ord-text:       var(--color-text);
     --ord-text-2:     #6ba88f;
-    --ord-text-3:     #4d8068;
-    --ord-accent:     #34d399;
-    --ord-accent-dim: rgba(52,211,153,0.1);
-    --ord-row-hover:  rgba(16,185,129,0.04);
+    --ord-text-3:     var(--color-text-3);
+    --ord-accent:     var(--color-accent);
+    --ord-accent-dim: var(--color-accent-dim);
+    --ord-row-hover:  var(--color-row-hover);
     --ord-input-bg:   #0a1e14;
     --ord-btn-hover:  #0a1e14;
-    --ord-shadow:     0 4px 12px rgba(0,0,0,0.15);
+    --ord-shadow:     var(--shadow-card);
     --ord-pending-fg:   #fb923c; --ord-pending-bg:   #431407; --ord-pending-bd:   #7c2d12;
     --ord-executing-fg: #fcd34d; --ord-executing-bg: #422006; --ord-executing-bd: #92400e;
     --ord-executed-fg:  #86efac; --ord-executed-bg:  #14532d; --ord-executed-bd:  #166534;
@@ -72,31 +72,31 @@ body.forest-theme .orders-page {
 }
 
 body.cream-theme .orders-page {
-    --ord-bg:         #fdfbf7;
-    --ord-surface:    #fdf6e9;
-    --ord-border:     #e6dfd3;
-    --ord-border-sub: #eeddc4;
-    --ord-text:       #3b2f20;
+    --ord-bg:         var(--color-bg);
+    --ord-surface:    var(--color-surface);
+    --ord-border:     var(--color-border);
+    --ord-border-sub: var(--color-border-sub);
+    --ord-text:       var(--color-text);
     --ord-text-2:     #9b7a52;
-    --ord-text-3:     #c4a882;
-    --ord-accent:     #b45309;
-    --ord-accent-dim: rgba(180,83,9,0.08);
-    --ord-row-hover:  #f5ead8;
+    --ord-text-3:     var(--color-text-3);
+    --ord-accent:     var(--color-accent);
+    --ord-accent-dim: var(--color-accent-dim);
+    --ord-row-hover:  var(--color-row-hover);
     --ord-input-bg:   #f5ead8;
     --ord-btn-hover:  #f5ead8;
 }
 
 body.ocean-theme .orders-page {
-    --ord-bg:         #f0f6fc;
-    --ord-surface:    #ffffff;
-    --ord-border:     #dbebfa;
-    --ord-border-sub: #dbedf8;
-    --ord-text:       #0f172a;
+    --ord-bg:         var(--color-bg);
+    --ord-surface:    var(--color-surface);
+    --ord-border:     var(--color-border);
+    --ord-border-sub: var(--color-border-sub);
+    --ord-text:       var(--color-text);
     --ord-text-2:     #475569;
-    --ord-text-3:     #94a3b8;
-    --ord-accent:     #0284c7;
-    --ord-accent-dim: rgba(2,132,199,0.08);
-    --ord-row-hover:  #f0f6fc;
+    --ord-text-3:     var(--color-text-3);
+    --ord-accent:     var(--color-accent);
+    --ord-accent-dim: var(--color-accent-dim);
+    --ord-row-hover:  var(--color-row-hover);
     --ord-input-bg:   #e0edf8;
     --ord-btn-hover:  #e0edf8;
 }

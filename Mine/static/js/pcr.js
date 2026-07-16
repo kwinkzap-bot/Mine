@@ -87,7 +87,7 @@ function pcrRefresh() {
 
 // ── Theme helpers ──────────────────────────────────────────────────────────
 function _pcrGetTheme() {
-    const name = localStorage.getItem('app-theme') || localStorage.getItem('oip-theme') || 'ocean';
+    const name = window.AppTheme.getActiveTheme();
     return PCR_CHART_THEMES[name] || PCR_CHART_THEMES['ocean'];
 }
 

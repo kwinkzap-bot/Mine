@@ -16,7 +16,7 @@
     background: var(--oip-bg, #ffffff);
     border: 1px solid var(--oip-border, #e2e8f0);
     border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
     overflow: hidden;
 }
 .pcr-section-header {

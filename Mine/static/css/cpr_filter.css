@@ -117,7 +117,7 @@ body.ocean-theme {
     padding: 6px 12px;
     border-radius: 8px;
     margin-bottom: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -164,7 +164,7 @@ body.ocean-theme {
     margin-bottom: 12px;
     font-size: 12px;
     font-weight: 500;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
     letter-spacing: 0.3px;
     display: flex;
     justify-content: flex-end;
@@ -202,7 +202,7 @@ body.ocean-theme {
 .results-block {
     background: var(--scan-bg);
     border-radius: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
     padding: 0;
     overflow: hidden;
     transition: all 0.2s ease;
@@ -646,7 +646,7 @@ body.dark-theme .scanner-header-row,
 body.forest-theme .scanner-header-row {
     background: var(--scan-header-bg);
     border: 1px solid var(--scan-border);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-card);
 }
 
 body.dark-theme .results h3,
