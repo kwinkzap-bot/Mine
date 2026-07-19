@@ -23,14 +23,17 @@ let oipRSIMarkers = [];
 
 /* ── Indicator state persistence ─────────────────────────── */
 const _OIP_IND_IDS = [
-    'oipShowOIBars', 'oipShowVwapOI', 'oipShowVwapInt', 'oipShowCVWAP', 'oipShowPVWAP',
+    'oipShowOIBars', 'oipShowVwapInt', 'oipShowVwapGroup', 'oipShowCVWAP', 'oipShowPVWAP', 'oipShow3AvgVWAP',
     'oipShowCpr', 'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
     'oipShowSignals', 'oipShowRSI', 'oipShowAtmCeOi',
     'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
     'oipShowMaxPain', 'oipShow2ndCandle30s', 'oipShow2nd5mCandle', 'oipShowMondayBox', 'oipShowPremium',
     'oipShow30mReversalLines', 'oipReversal30mCountUp', 'oipReversal30mCountDn', 'oipReversal30mRange',
     'oipShow1DReversalLines',  'oipReversal1DCount',  'oipReversal1DRange',
-    'oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h'
+    'oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h',
+    'oipShowSynthetic', 'oipShow2ndCandle30sOpt', 'oipShow2nd5mCandleOpt', 'oipShowVwapOpt',
+    'oipShowFixedCeAvg', 'oipShowFixedPeAvg', 'oipShowFixedCePeAvg',
+    'oipShowEma9Opt', 'oipShowEma20Opt', 'oipShowEma50Opt'
 ];
 
 function _oipSaveIndicators(key) {
@@ -55,7 +58,355 @@ function _oipRestoreIndicators(key) {
     });
 }
 
+/* ── Per-line style (Solid / Dotted / Dashed) ─────────────────────────────
+   One dropdown per existing indicator checkbox, injected right into that
+   checkbox's <label class="oip-ind-item">. LightweightCharts v5 LineStyle
+   enum: 0=Solid, 1=Dotted, 2=Dashed (the only three exposed here). Persisted
+   separately from _OIP_IND_IDS since it's a style choice, not a toggle. */
+const _OIP_LINE_STYLE_STORAGE_KEY = 'oip-line-styles';
+let oipLineStyles = {};
+
+function _oipLoadLineStyles() {
+    try { oipLineStyles = JSON.parse(localStorage.getItem(_OIP_LINE_STYLE_STORAGE_KEY) || '{}') || {}; }
+    catch(e) { oipLineStyles = {}; }
+}
+function _oipSaveLineStyles() {
+    try { localStorage.setItem(_OIP_LINE_STYLE_STORAGE_KEY, JSON.stringify(oipLineStyles)); } catch(e) {}
+}
+// Default Solid (0) for any key with no saved preference yet.
+// Preserves each indicator's pre-existing hardcoded look (e.g. Max Pain and
+// the 9:18 ATM CE OI lines were already dashed) until the user picks a style.
+const _OIP_LINE_STYLE_DEFAULTS = { maxPain: 2, atmCeOi: 2 };
+function oipGetLineStyle(key) {
+    if (key in oipLineStyles) return oipLineStyles[key];
+    return _OIP_LINE_STYLE_DEFAULTS[key] ?? 0;
+}
+
+/* ── Per-line color + width — same idea, same storage pattern as style
+   above. Each key's DEFAULT mirrors its current hardcoded look so nothing
+   changes visually until the user picks a color/width. rsi and reversal1d
+   are intentionally excluded: rsi has 4 differently-colored sub-lines and
+   reversal1d's color is dynamic (green=bullish/red=bearish per candle) —
+   a single override would erase the distinction those exist to show. */
+const _OIP_LINE_COLOR_STORAGE_KEY = 'oip-line-colors';
+const _OIP_LINE_WIDTH_STORAGE_KEY = 'oip-line-widths';
+let oipLineColors = {};
+let oipLineWidths = {};
+
+const _OIP_LINE_DEFAULTS = {
+    cvwap: { color: '#3b82f6', width: 2 }, pvwap: { color: '#fdba74', width: 2 }, avg3vwap: { color: '#ef4444', width: 2 },
+    ceAvg: { color: '#16a34a', width: 1 }, peAvg: { color: '#7c3aed', width: 1 }, cepeAvg: { color: '#000000', width: 1 },
+    cprPrevHL: { color: '#ef07f9', width: 1 }, cprBand: { color: '#00008B', width: 1 },
+    cprResistance: { color: '#006400', width: 1 }, cprSupport: { color: '#ff0000', width: 1 }, cprCumR3S3: { color: '#a020f0', width: 2 },
+    multiCpr15m: { color: '#f97316', width: 1 }, multiCpr30m: { color: '#06b6d4', width: 1 }, multiCpr1h: { color: '#9c28b0', width: 1 },
+    ema9: { color: '#22c55e', width: 1 }, ema20: { color: '#f97316', width: 1 }, ema50: { color: '#ef4444', width: 1 },
+    ema100: { color: '#3b82f6', width: 1 }, ema200: { color: '#888888', width: 1 },
+    maxPain: { color: '#2563eb', width: 2 }, atmCeOi: { color: '#000000', width: 1 }, reversal30m: { color: '#f97316', width: 1 },
+    synthDiff: { color: '#000000', width: 2 }, synthPdc: { color: '#22d3ee', width: 2 }, synthCp: { color: '#a78bfa', width: 2 },
+    box30s: { color: '#FFC800', width: 1, opacity: 0.09 }, box5m: { color: '#2dd2ff', width: 1, opacity: 0.09 },
+    mondayBox: { color: '#34ed0b', width: 1 },
+    fixedCeAvg: { color: '#16a34a', width: 1 }, fixedPeAvg: { color: '#7c3aed', width: 1 }, fixedCePeAvg: { color: '#000000', width: 1 },
+};
+// Keys that only get a style dropdown (no color/width — see comment above).
+const _OIP_NO_COLOR_KEYS = new Set(['rsi', 'reversal1d']);
+// Keys that also get a background fill-opacity control — only the box
+// indicators have a filled background (a translucent rect between the box's
+// high/low border lines); every other indicator here is a bare line.
+const _OIP_FILL_OPACITY_KEYS = new Set(['box30s', 'box5m']);
+
+function _oipLoadLineColorsWidths() {
+    try { oipLineColors = JSON.parse(localStorage.getItem(_OIP_LINE_COLOR_STORAGE_KEY) || '{}') || {}; } catch(e) { oipLineColors = {}; }
+    try { oipLineWidths = JSON.parse(localStorage.getItem(_OIP_LINE_WIDTH_STORAGE_KEY) || '{}') || {}; } catch(e) { oipLineWidths = {}; }
+}
+function _oipSaveLineColors() { try { localStorage.setItem(_OIP_LINE_COLOR_STORAGE_KEY, JSON.stringify(oipLineColors)); } catch(e) {} }
+function _oipSaveLineWidths() { try { localStorage.setItem(_OIP_LINE_WIDTH_STORAGE_KEY, JSON.stringify(oipLineWidths)); } catch(e) {} }
+function oipGetLineColor(key) { return oipLineColors[key] ?? _OIP_LINE_DEFAULTS[key]?.color ?? '#000000'; }
+function oipGetLineWidth(key) { return oipLineWidths[key] ?? _OIP_LINE_DEFAULTS[key]?.width ?? 1; }
+
+// Background fill opacity (0-1) — box30s / box5m only, see _OIP_FILL_OPACITY_KEYS.
+const _OIP_LINE_OPACITY_STORAGE_KEY = 'oip-line-opacities';
+let oipLineOpacities = {};
+function _oipLoadLineOpacities() {
+    try { oipLineOpacities = JSON.parse(localStorage.getItem(_OIP_LINE_OPACITY_STORAGE_KEY) || '{}') || {}; }
+    catch(e) { oipLineOpacities = {}; }
+}
+function _oipSaveLineOpacities() { try { localStorage.setItem(_OIP_LINE_OPACITY_STORAGE_KEY, JSON.stringify(oipLineOpacities)); } catch(e) {} }
+function oipGetLineOpacity(key) { return oipLineOpacities[key] ?? _OIP_LINE_DEFAULTS[key]?.opacity ?? 0.09; }
+
+// key -> checkbox id whose <label class="oip-ind-item"> gets the dropdown appended.
+const _OIP_LINE_STYLE_ITEMS = [
+    { key: 'cvwap',          checkboxId: 'oipShowCVWAP' },
+    { key: 'pvwap',          checkboxId: 'oipShowPVWAP' },
+    { key: 'avg3vwap',       checkboxId: 'oipShow3AvgVWAP' },
+    { key: 'cprPrevHL',      checkboxId: 'oipCprShowPrevHL' },
+    { key: 'cprBand',        checkboxId: 'oipCprShowBand' },
+    { key: 'cprResistance',  checkboxId: 'oipCprShowResistance' },
+    { key: 'cprSupport',     checkboxId: 'oipCprShowSupport' },
+    { key: 'cprCumR3S3',     checkboxId: 'oipCprShowCumR3S3' },
+    { key: 'multiCpr15m',    checkboxId: 'oipMultiCpr15m' },
+    { key: 'multiCpr30m',    checkboxId: 'oipMultiCpr30m' },
+    { key: 'multiCpr1h',     checkboxId: 'oipMultiCpr1h' },
+    { key: 'ema9',           checkboxId: 'oipShowEma9' },
+    { key: 'ema20',          checkboxId: 'oipShowEma20' },
+    { key: 'ema50',          checkboxId: 'oipShowEma50' },
+    { key: 'ema100',         checkboxId: 'oipShowEma100' },
+    { key: 'ema200',         checkboxId: 'oipShowEma200' },
+    { key: 'rsi',            checkboxId: 'oipShowRSI' },
+    { key: 'maxPain',        checkboxId: 'oipShowMaxPain' },
+    { key: 'atmCeOi',        checkboxId: 'oipShowAtmCeOi' },
+    { key: 'reversal30m',    checkboxId: 'oipShow30mReversalLines' },
+    { key: 'reversal1d',     checkboxId: 'oipShow1DReversalLines' },
+    { key: 'box30s',         checkboxId: 'oipShow2ndCandle30s' },
+    { key: 'box5m',          checkboxId: 'oipShow2nd5mCandle' },
+    { key: 'mondayBox',      checkboxId: 'oipShowMondayBox' },
+];
+// Synthetic value's 3 named lines share ONE checkbox — inject all 3 selects
+// after it instead of the generic one-per-checkbox pattern above.
+const _OIP_SYNTH_STYLE_ITEMS = [
+    { key: 'synthDiff', label: 'Diff' },
+    { key: 'synthPdc',  label: 'PDC' },
+    { key: 'synthCp',   label: 'C-P' },
+];
+
+// Wires an ALREADY-IN-THE-DOM <select class="oip-line-style-sel" data-style-key="...">
+// — restores its persisted value and attaches the change listener. Shared by
+// both freshly-injected selects and hand-written ones (e.g. the Fixed Chart
+// Lines rows, which have no checkbox to inject after).
+function _oipWireStyleSelect(sel) {
+    if (sel.dataset.wired) return;
+    sel.dataset.wired = '1';
+    const key = sel.dataset.styleKey;
+    sel.value = String(oipGetLineStyle(key));
+    // Prevent the click from also toggling the parent <label>'s checkbox.
+    sel.addEventListener('click', e => e.stopPropagation());
+    sel.addEventListener('change', e => {
+        e.stopPropagation();
+        oipLineStyles[key] = parseInt(sel.value, 10);
+        _oipSaveLineStyles();
+        oipApplyLineStyleChange(key);
+    });
+}
+
+function _oipBuildStyleSelect(key) {
+    const sel = document.createElement('select');
+    sel.className = 'oip-line-style-sel';
+    sel.dataset.styleKey = key;
+    sel.title = 'Line style';
+    [[0, 'Solid'], [1, 'Dotted'], [2, 'Dashed']].forEach(([val, label]) => {
+        const opt = document.createElement('option');
+        opt.value = val; opt.textContent = label;
+        sel.appendChild(opt);
+    });
+    _oipWireStyleSelect(sel);
+    return sel;
+}
+
+// Wires an ALREADY-IN-THE-DOM <input type="color" data-color-key="...">.
+function _oipWireColorInput(inp) {
+    if (inp.dataset.wired) return;
+    inp.dataset.wired = '1';
+    const key = inp.dataset.colorKey;
+    inp.value = oipGetLineColor(key);
+    inp.addEventListener('click', e => e.stopPropagation());
+    inp.addEventListener('input', e => {
+        e.stopPropagation();
+        oipLineColors[key] = inp.value;
+        _oipSaveLineColors();
+        oipApplyLineStyleChange(key);
+    });
+}
+
+function _oipBuildColorInput(key) {
+    const inp = document.createElement('input');
+    inp.type = 'color';
+    inp.className = 'oip-line-color-inp';
+    inp.dataset.colorKey = key;
+    inp.title = 'Line color';
+    _oipWireColorInput(inp);
+    return inp;
+}
+
+// Wires an ALREADY-IN-THE-DOM <select class="oip-line-width-sel" data-width-key="...">.
+function _oipWireWidthSelect(sel) {
+    if (sel.dataset.wired) return;
+    sel.dataset.wired = '1';
+    const key = sel.dataset.widthKey;
+    sel.value = String(oipGetLineWidth(key));
+    sel.addEventListener('click', e => e.stopPropagation());
+    sel.addEventListener('change', e => {
+        e.stopPropagation();
+        oipLineWidths[key] = parseInt(sel.value, 10);
+        _oipSaveLineWidths();
+        oipApplyLineStyleChange(key);
+    });
+}
+
+function _oipBuildWidthSelect(key) {
+    const sel = document.createElement('select');
+    sel.className = 'oip-line-width-sel';
+    sel.dataset.widthKey = key;
+    sel.title = 'Line width';
+    [1, 2, 3, 4].forEach(w => {
+        const opt = document.createElement('option');
+        opt.value = w; opt.textContent = w + 'px';
+        sel.appendChild(opt);
+    });
+    _oipWireWidthSelect(sel);
+    return sel;
+}
+
+// Wires an ALREADY-IN-THE-DOM <select class="oip-line-opacity-sel" data-opacity-key="...">.
+function _oipWireOpacitySelect(sel) {
+    if (sel.dataset.wired) return;
+    sel.dataset.wired = '1';
+    const key = sel.dataset.opacityKey;
+    sel.value = String(oipGetLineOpacity(key));
+    sel.addEventListener('click', e => e.stopPropagation());
+    sel.addEventListener('change', e => {
+        e.stopPropagation();
+        oipLineOpacities[key] = parseFloat(sel.value);
+        _oipSaveLineOpacities();
+        oipApplyLineStyleChange(key);
+    });
+}
+
+function _oipBuildOpacitySelect(key) {
+    const sel = document.createElement('select');
+    sel.className = 'oip-line-opacity-sel';
+    sel.dataset.opacityKey = key;
+    sel.title = 'Background opacity';
+    [0, 0.03, 0.06, 0.09, 0.12, 0.15, 0.18, 0.20].forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v; opt.textContent = Math.round(v * 100) + '%';
+        sel.appendChild(opt);
+    });
+    _oipWireOpacitySelect(sel);
+    return sel;
+}
+
+// Builds the full per-line control group (color + width + style, right-aligned
+// as one unit) — or just style, for the 2 keys excluded from color/width
+// (rsi, reversal1d — see _OIP_NO_COLOR_KEYS comment above). Box indicators
+// (box30s/box5m) also get a background-opacity select for their filled rect.
+function _oipBuildLinePropsGroup(key) {
+    const wrap = document.createElement('span');
+    wrap.className = 'oip-line-props';
+    if (!_OIP_NO_COLOR_KEYS.has(key)) {
+        wrap.appendChild(_oipBuildColorInput(key));
+        if (_OIP_FILL_OPACITY_KEYS.has(key)) wrap.appendChild(_oipBuildOpacitySelect(key));
+        wrap.appendChild(_oipBuildWidthSelect(key));
+    }
+    wrap.appendChild(_oipBuildStyleSelect(key));
+    return wrap;
+}
+
+function oipInjectLineStyleSelectors() {
+    _oipLoadLineStyles();
+    _oipLoadLineColorsWidths();
+    _oipLoadLineOpacities();
+    _OIP_LINE_STYLE_ITEMS.forEach(({ key, checkboxId }) => {
+        const cb = document.getElementById(checkboxId);
+        const label = cb?.closest('.oip-ind-item, .oip-ind-sub-item');
+        if (!label || label.querySelector(`[data-style-key="${key}"]`)) return;
+        label.appendChild(_oipBuildLinePropsGroup(key));
+    });
+    // Synthetic value's 3 sub-lines: append a small row of control groups after its label.
+    const synthCb = document.getElementById('oipShowSynthetic');
+    const synthLabel = synthCb?.closest('.oip-ind-item');
+    if (synthLabel && !document.getElementById('oipSynthStyleRow')) {
+        const row = document.createElement('div');
+        row.id = 'oipSynthStyleRow';
+        row.style.cssText = 'display:flex;flex-direction:column;gap:3px;padding:2px 12px 6px 30px;';
+        _OIP_SYNTH_STYLE_ITEMS.forEach(({ key, label }) => {
+            // Full-width row: fixed-width label so Diff/PDC/C-P's controls all
+            // start at the same x-position, with the props group pushed to the
+            // popup's right edge (same alignment every other row uses).
+            const wrap = document.createElement('span');
+            wrap.style.cssText = 'display:flex;align-items:center;width:100%;font-size:10px;color:var(--oip-metric-lbl);';
+            const lbl = document.createElement('span');
+            lbl.textContent = label;
+            lbl.style.cssText = 'width:28px;flex-shrink:0;';
+            wrap.appendChild(lbl);
+            wrap.appendChild(_oipBuildLinePropsGroup(key));
+            row.appendChild(wrap);
+        });
+        synthLabel.insertAdjacentElement('afterend', row);
+    }
+
+    // Wire any hand-written controls already in the HTML (e.g. the Fixed Chart
+    // Lines rows) — the ones just created above are already wired and skipped.
+    document.querySelectorAll('.oip-line-style-sel').forEach(_oipWireStyleSelect);
+    document.querySelectorAll('.oip-line-color-inp').forEach(_oipWireColorInput);
+    document.querySelectorAll('.oip-line-width-sel').forEach(_oipWireWidthSelect);
+    document.querySelectorAll('.oip-line-opacity-sel').forEach(_oipWireOpacitySelect);
+}
+
+// key -> array of persistent series objects (addSeries-based, reused via
+// applyOptions). Recreated-on-redraw indicators (CPR/Multi CPR/Max Pain/
+// Synthetic/ATM CE OI/reversal lines) are handled separately below since
+// their lineStyle is read fresh inside their own draw function each redraw.
+function _oipLineStyleSeriesMap() {
+    return {
+        cvwap:    [oipCvwapSeries, oipCvwapIntSeries, oipCvwapIntPeSeries, oipCECvwapSeries, oipPECvwapSeries],
+        pvwap:    [oipPvwapSeries, oipPvwapIntSeries, oipPvwapIntPeSeries, oipCEPvwapSeries, oipPEPvwapSeries],
+        avg3vwap: [oipAvg3VwapSeries, oipAvg3VwapIntSeries, oipAvg3VwapIntPeSeries, oipCEAvg3VwapSeries, oipPEAvg3VwapSeries],
+        ema9:     [oipEma9Series, oipCEEma9Series, oipPEEma9Series],
+        ema20:    [oipEma20Series, oipCEEma20Series, oipPEEma20Series],
+        ema50:    [oipEma50Series, oipCEEma50Series, oipPEEma50Series],
+        ema100:   [oipEma100Series],
+        ema200:   [oipEma200Series],
+        rsi:      oipRSISeriesObj ? Object.values(oipRSISeriesObj) : [],
+        fixedCeAvg:   [oipFixedCeHL2Series, oipCEFixedCeAvgSeries, oipPEFixedCeAvgSeries, oipIntFixedCeAvgSeries],
+        fixedPeAvg:   [oipFixedPeHL2Series, oipPEFixedPeAvgSeries, oipCEFixedPeAvgSeries, oipIntFixedPeAvgSeries],
+        fixedCePeAvg: [oipFixedCloseAvgSeries, oipCEFixedCePeAvgSeries, oipPEFixedCePeAvgSeries, oipIntFixedCePeAvgSeries],
+    };
+}
+
+// Re-applies every persisted line style to already-created series. Needed
+// because charts are built (oipInitCharts) before the popup loads persisted
+// styles (oipInjectLineStyleSelectors, called from oipInitIndicatorsPopup) —
+// same ordering issue oipSyncVwapVisibility already works around.
+// Applies color + width + style together for keys that DO have a color
+// picker; no-color keys (rsi, reversal1d) only get style.
+function _oipApplyLineProps(s, key) {
+    if (!s) return;
+    const opts = { lineStyle: oipGetLineStyle(key) };
+    if (!_OIP_NO_COLOR_KEYS.has(key)) {
+        opts.color = oipGetLineColor(key);
+        opts.lineWidth = oipGetLineWidth(key);
+    }
+    try { s.applyOptions(opts); } catch(e) {}
+}
+
+function oipApplyAllLineStyles() {
+    const seriesMap = _oipLineStyleSeriesMap();
+    Object.keys(seriesMap).forEach(key => {
+        (seriesMap[key] || []).forEach(s => _oipApplyLineProps(s, key));
+    });
+}
+
+function oipApplyLineStyleChange(key) {
+    const seriesMap = _oipLineStyleSeriesMap();
+    if (key in seriesMap) {
+        (seriesMap[key] || []).forEach(s => _oipApplyLineProps(s, key));
+        return;
+    }
+    // Recreated-on-redraw indicators — re-run their draw function so the new
+    // style (read via oipGetLineStyle inside each) takes effect immediately.
+    if (key.startsWith('cpr')) { if (oipOIData?.candles) oipDrawCpr(oipOIData.candles); return; }
+    if (key.startsWith('multiCpr')) { if (oipOIData?.candles) oipDrawMultiCPR(oipOIData.candles); return; }
+    if (key === 'maxPain') { if (typeof oipUpdateMaxPainLine === 'function') oipUpdateMaxPainLine(oipCurrentPrice, oipOIData?.max_pain); return; }
+    if (key.startsWith('synth')) { if (typeof oipDrawPremStrikeLines === 'function') oipDrawPremStrikeLines(); return; }
+    if (key === 'atmCeOi') { oipDrawAtmCeOiLines(); return; }
+    if (key === 'reversal30m') { if (typeof oipFullCandles !== 'undefined' && oipFullCandles) oipDraw30mReversalLines(oipFullCandles); return; }
+    if (key === 'reversal1d')  { if (typeof oipFullCandles !== 'undefined' && oipFullCandles) oipDraw1DReversalLines(oipFullCandles); return; }
+    if (key === 'box30s') { if (oipOIData?.candles) oipDraw2ndCandle30sBox(oipOIData.candles); return; }
+    if (key === 'box5m')  { if (oipOIData?.candles) oipDraw2nd5mCandleBox(oipOIData.candles); return; }
+    if (key === 'mondayBox') { if (oipOIData?.candles) oipDrawMondayBox(oipOIData.candles); return; }
+}
+
 /* ── EMA visibility ───────────────────────────────────────── */
+// Main chart ONLY — controlled by the main Indicators popup's EMA checkboxes.
 function oipUpdateEmaVisibility() {
     const s9   = oipElems.showEma9?.checked   ?? false;
     const s20  = oipElems.showEma20?.checked  ?? false;
@@ -68,9 +419,19 @@ function oipUpdateEmaVisibility() {
     if (oipEma50Series)  oipEma50Series.applyOptions({ visible: s50 });
     if (oipEma100Series) oipEma100Series.applyOptions({ visible: s100 });
     if (oipEma200Series) oipEma200Series.applyOptions({ visible: s200 });
+}
 
-    // Defer CE/PE series past their charts' init RAF — applyOptions triggers
-    // LC's async render RAF which crashes if the chart isn't yet initialized.
+// CE Only / PE Only charts ONLY — controlled INDEPENDENTLY by the Opt
+// Indicator popup's own EMA 9/20/50 checkboxes (previously these silently
+// mirrored the main popup's checkboxes, so CE/PE always looked "identical"
+// to whatever the main chart's EMA state was — there was no separate switch).
+function oipUpdateOptEmaVisibility() {
+    const s9  = document.getElementById('oipShowEma9Opt')?.checked  ?? false;
+    const s20 = document.getElementById('oipShowEma20Opt')?.checked ?? false;
+    const s50 = document.getElementById('oipShowEma50Opt')?.checked ?? false;
+
+    // Defer past the CE/PE charts' init RAF — applyOptions triggers LC's async
+    // render RAF which crashes if the chart isn't yet initialized.
     requestAnimationFrame(() => {
         try { if (oipCEEma9Series)  oipCEEma9Series.applyOptions({ visible: s9 }); } catch(e) {}
         try { if (oipCEEma20Series) oipCEEma20Series.applyOptions({ visible: s20 }); } catch(e) {}
@@ -203,6 +564,131 @@ function oipCalculatePVWAP(candles) {
     candles.forEach(c => {
         const pv = prevDayVwap[dateOf(c.time)];
         if (pv != null && !isNaN(pv)) result.push({ time: c.time, value: pv });
+    });
+    return result;
+}
+
+// 3-AVG_VWAP — average of the FINAL VWAP of the 3 PREVIOUS trading days, drawn
+// as a flat line across the current session (same convention as PVWAP above,
+// and the "Avg 3 VWAP" column / Pine CPR script's Avg 3 VWAP plot).
+function oipCalculateAvg3VWAP(candles) {
+    if (!candles || candles.length === 0) return [];
+    const dateOf = (t) => {
+        const d = new Date(t * 1000);
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    };
+
+    // Pass 1 — final VWAP per day, preserving day order (mirrors PVWAP's pass 1).
+    const finalVwap = {};
+    const dayOrder = [];
+    let cumPV = 0, cumV = 0, lastDate = null, lastVwap = null;
+    candles.forEach(c => {
+        const date = dateOf(c.time);
+        if (date !== lastDate) {
+            if (lastDate !== null) finalVwap[lastDate] = lastVwap;
+            cumPV = 0; cumV = 0; lastVwap = null; lastDate = date;
+            dayOrder.push(date);
+        }
+        const vol = c.volume || 0;
+        if (vol <= 0) return;
+        cumPV += ((c.high + c.low + c.close) / 3) * vol;
+        cumV += vol;
+        const v = cumPV / cumV;
+        if (!isNaN(v)) lastVwap = v;
+    });
+    if (lastDate !== null) finalVwap[lastDate] = lastVwap;
+
+    // Map each day to the average of the 3 PRECEDING days' final VWAP.
+    const avg3Vwap = {};
+    for (let i = 3; i < dayOrder.length; i++) {
+        const v1 = finalVwap[dayOrder[i - 1]], v2 = finalVwap[dayOrder[i - 2]], v3 = finalVwap[dayOrder[i - 3]];
+        if (v1 != null && v2 != null && v3 != null && !isNaN(v1) && !isNaN(v2) && !isNaN(v3)) {
+            avg3Vwap[dayOrder[i]] = (v1 + v2 + v3) / 3;
+        }
+    }
+
+    // Pass 2 — emit a flat 3-day-average VWAP line for each candle.
+    const result = [];
+    candles.forEach(c => {
+        const av = avg3Vwap[dateOf(c.time)];
+        if (av != null && !isNaN(av)) result.push({ time: c.time, value: av });
+    });
+    return result;
+}
+
+/* ── Fixed-strike chart: previous-day reference lines ────────
+   Same "final value per day, held flat across the NEXT session" convention
+   as PVWAP above. Used for the 24000-strike monthly-expiry combined chart. */
+function _oipGroupCandlesByDay(candles) {
+    const map = {};
+    const order = [];
+    (candles || []).forEach(c => {
+        const d = new Date(c.time * 1000);
+        // UTC methods match the 'Fake IST Epoch' the server emits.
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        if (!map[key]) { map[key] = []; order.push(key); }
+        map[key].push(c);
+    });
+    return { map, order };
+}
+
+// Previous day's (High + Low) / 2 for a single option leg, drawn as a flat
+// line across the current session.
+function oipCalculatePrevDayHL2(candles) {
+    if (!candles || !candles.length) return [];
+    const { map, order } = _oipGroupCandlesByDay(candles);
+
+    const dayVal = {};
+    order.forEach(day => {
+        const dc = map[day];
+        const high = Math.max(...dc.map(c => c.high));
+        const low  = Math.min(...dc.map(c => c.low));
+        if (!isNaN(high) && !isNaN(low)) dayVal[day] = (high + low) / 2;
+    });
+
+    const prevVal = {};
+    for (let i = 1; i < order.length; i++) {
+        if (dayVal[order[i - 1]] != null) prevVal[order[i]] = dayVal[order[i - 1]];
+    }
+
+    const result = [];
+    candles.forEach(c => {
+        const d = new Date(c.time * 1000);
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        const v = prevVal[key];
+        if (v != null && !isNaN(v)) result.push({ time: c.time, value: v });
+    });
+    return result;
+}
+
+// Previous day's (CE close + PE close) / 2, drawn as a flat line across the
+// current session. ceCandles/peCandles are expected to share the same
+// trading-day boundaries (both come from the same fetch).
+function oipCalculatePrevDayCloseAvg(ceCandles, peCandles) {
+    if (!ceCandles?.length || !peCandles?.length) return [];
+    const ce = _oipGroupCandlesByDay(ceCandles);
+    const pe = _oipGroupCandlesByDay(peCandles);
+
+    const dayVal = {};
+    ce.order.forEach(day => {
+        const peDay = pe.map[day];
+        if (!peDay || !peDay.length) return;
+        const ceClose = ce.map[day][ce.map[day].length - 1].close;
+        const peClose = peDay[peDay.length - 1].close;
+        if (!isNaN(ceClose) && !isNaN(peClose)) dayVal[day] = (ceClose + peClose) / 2;
+    });
+
+    const prevVal = {};
+    for (let i = 1; i < ce.order.length; i++) {
+        if (dayVal[ce.order[i - 1]] != null) prevVal[ce.order[i]] = dayVal[ce.order[i - 1]];
+    }
+
+    const result = [];
+    ceCandles.forEach(c => {
+        const d = new Date(c.time * 1000);
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+        const v = prevVal[key];
+        if (v != null && !isNaN(v)) result.push({ time: c.time, value: v });
     });
     return result;
 }
@@ -430,6 +916,14 @@ function oipDrawCpr(candles) {
         s1: 'oipCprShowSupport',   s2: 'oipCprShowSupport', s3: 'oipCprShowSupport', s4: 'oipCprShowSupport',
         cr3: 'oipCprShowCumR3S3',  cs3: 'oipCprShowCumR3S3'
     };
+    // Same grouping, mapped to line-style keys (one dropdown per checkbox group).
+    const styleKeyGroup = {
+        prevH: 'cprPrevHL', prevL: 'cprPrevHL',
+        pp: 'cprBand', bc: 'cprBand', tc: 'cprBand',
+        r1: 'cprResistance', r2: 'cprResistance', r3: 'cprResistance', r4: 'cprResistance',
+        s1: 'cprSupport', s2: 'cprSupport', s3: 'cprSupport', s4: 'cprSupport',
+        cr3: 'cprCumR3S3', cs3: 'cprCumR3S3'
+    };
     const boxGroup = {
         'cpr':   'oipCprShowBand',
         'r1_r2': 'oipCprShowResistance', 'r2_r3': 'oipCprShowResistance', 'r3_r4': 'oipCprShowResistance',
@@ -470,6 +964,10 @@ function oipDrawCpr(candles) {
                 });
                 oipCprSeriesMap[seriesKey] = series;
             }
+            // Series are cached and reused across redraws — always re-apply the
+            // current color/width/style choice, not just at first creation.
+            const sk = styleKeyGroup[key];
+            series.applyOptions({ lineStyle: oipGetLineStyle(sk), color: oipGetLineColor(sk), lineWidth: oipGetLineWidth(sk) });
             const val = day.levels[key];
             const visible = subChecked(keyGroup[key]);
             series.setData(visible && val != null && !isNaN(val) ? day.times.map(t => ({ time: t, value: val })) : []);
@@ -625,9 +1123,9 @@ function oipDrawMultiCPR(candles) {
     };
 
     const configs = [
-        { id: 'oipMultiCpr15m', minutes: 15, color: '#f97316', fill: 'rgba(249,115,22,0.07)'  },
-        { id: 'oipMultiCpr30m', minutes: 30, color: '#06b6d4', fill: 'rgba(6,182,212,0.07)'   },
-        { id: 'oipMultiCpr1h',  minutes: 60, color: '#9c28b0', fill: 'rgba(235, 212, 239, 0.5)'  }  // #ebd4ef @ 50%
+        { id: 'oipMultiCpr15m', styleKey: 'multiCpr15m', minutes: 15, color: '#f97316', fill: 'rgba(249,115,22,0.07)'  },
+        { id: 'oipMultiCpr30m', styleKey: 'multiCpr30m', minutes: 30, color: '#06b6d4', fill: 'rgba(6,182,212,0.07)'   },
+        { id: 'oipMultiCpr1h',  styleKey: 'multiCpr1h',  minutes: 60, color: '#9c28b0', fill: 'rgba(235, 212, 239, 0.5)'  }  // #ebd4ef @ 50%
     ];
 
     // Build per-config CONTINUOUS line data (one stepped line spanning all
@@ -635,7 +1133,7 @@ function oipDrawMultiCPR(candles) {
     // baseValue, so the band fill stays segmented while the lines run continuous).
     const fillSegs  = [];
     const lineSpecs = [];
-    configs.forEach(({ id, minutes, color, fill }) => {
+    configs.forEach(({ id, styleKey, minutes, color, fill }) => {
         const enabled = document.getElementById(id)?.checked !== false;
         const bars    = _oipAggregateToNMin(candles, minutes);
         const ppData = [], bcData = [], tcData = [];
@@ -655,7 +1153,7 @@ function oipDrawMultiCPR(candles) {
             fillSegs.push({ fill, enabled, times: curr.times, tc, bc, fillKey: `mc_fill_${minutes}_${i}` });
         }
         lineSpecs.push({
-            color, enabled, ppData, bcData, tcData,
+            color, enabled, ppData, bcData, tcData, styleKey,
             tcKey: `mc_tc_${minutes}`, ppKey: `mc_pp_${minutes}`, bcKey: `mc_bc_${minutes}`
         });
     });
@@ -680,15 +1178,23 @@ function oipDrawMultiCPR(candles) {
 
     // Pass 2 — one continuous PP/BC/TC line per config, drawn above every fill.
     lineSpecs.forEach(s => {
+        const style = oipGetLineStyle(s.styleKey);
+        const col   = oipGetLineColor(s.styleKey);
+        const wid   = oipGetLineWidth(s.styleKey);
         if (!oipMultiCprSeriesMap[s.tcKey]) {
-            oipMultiCprSeriesMap[s.tcKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: s.color, lineWidth: 1, lineStyle: 0, ...shared });
+            oipMultiCprSeriesMap[s.tcKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: col, lineWidth: wid, lineStyle: style, ...shared });
         }
         if (!oipMultiCprSeriesMap[s.ppKey]) {
-            oipMultiCprSeriesMap[s.ppKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: s.color, lineWidth: 1, lineStyle: 0, ...shared });
+            oipMultiCprSeriesMap[s.ppKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: col, lineWidth: wid, lineStyle: style, ...shared });
         }
         if (!oipMultiCprSeriesMap[s.bcKey]) {
-            oipMultiCprSeriesMap[s.bcKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: s.color, lineWidth: 1, lineStyle: 0, ...shared });
+            oipMultiCprSeriesMap[s.bcKey] = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: col, lineWidth: wid, lineStyle: style, ...shared });
         }
+        // Series are cached and reused across redraws — always re-apply the
+        // current color/width/style choice, not just at first creation.
+        oipMultiCprSeriesMap[s.tcKey].applyOptions({ lineStyle: style, color: col, lineWidth: wid });
+        oipMultiCprSeriesMap[s.ppKey].applyOptions({ lineStyle: style, color: col, lineWidth: wid });
+        oipMultiCprSeriesMap[s.bcKey].applyOptions({ lineStyle: style, color: col, lineWidth: wid });
         oipMultiCprSeriesMap[s.tcKey].setData(s.enabled ? s.tcData : []);
         oipMultiCprSeriesMap[s.ppKey].setData(s.enabled ? s.ppData : []);
         oipMultiCprSeriesMap[s.bcKey].setData(s.enabled ? s.bcData : []);
@@ -720,10 +1226,11 @@ function oipApplyZOrder() {
     });
     // EMAs + VWAP variants + max-pain (all lines on the main pane).
     [oipEma9Series, oipEma20Series, oipEma50Series, oipEma100Series, oipEma200Series,
-     typeof oipVwapSeries    !== 'undefined' ? oipVwapSeries    : null,
-     typeof oipCvwapSeries   !== 'undefined' ? oipCvwapSeries   : null,
-     typeof oipPvwapSeries   !== 'undefined' ? oipPvwapSeries   : null,
-     typeof oipMaxPainSeries !== 'undefined' ? oipMaxPainSeries : null
+     typeof oipVwapSeries     !== 'undefined' ? oipVwapSeries     : null,
+     typeof oipCvwapSeries    !== 'undefined' ? oipCvwapSeries    : null,
+     typeof oipPvwapSeries    !== 'undefined' ? oipPvwapSeries    : null,
+     typeof oipAvg3VwapSeries !== 'undefined' ? oipAvg3VwapSeries : null,
+     typeof oipMaxPainSeries  !== 'undefined' ? oipMaxPainSeries  : null
     ].forEach(s => { if (s) lines.push(s); });
 
     // RSI S&R lines (drawn on the price pane).
@@ -802,6 +1309,10 @@ function oipInitIndicatorsPopup(storageKey) {
     // Restore persisted state before anything is drawn
     if (storageKey) _oipRestoreIndicators(storageKey);
 
+    // Inject the per-line Solid/Dotted/Dashed selectors into every indicator
+    // checkbox row (main popup + Opt Indicator popup + Synthetic sub-row).
+    oipInjectLineStyleSelectors();
+
     const btn   = document.getElementById('oipIndicatorsBtn');
     const popup = document.getElementById('oipIndicatorsPopup');
 
@@ -826,6 +1337,54 @@ function oipInitIndicatorsPopup(storageKey) {
             }
         }, true);
     }
+
+    // ── "Opt Indicator" popup — a separate, smaller popup for the option
+    // (CE-only/PE-only) charts: Synthetic value (Diff/PDC/C-P) + proxy
+    // checkboxes for indicators that also apply to the option charts.
+    const optBtn   = document.getElementById('oipOptIndicatorsBtn');
+    const optPopup = document.getElementById('oipOptIndicatorsPopup');
+
+    if (optBtn && optPopup) {
+        optBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            optPopup.classList.toggle('hidden');
+        });
+        document.addEventListener('click', e => {
+            if (!optPopup.contains(e.target) && e.target !== optBtn && !optBtn.contains(e.target)) {
+                optPopup.classList.add('hidden');
+            }
+        });
+        // Save whenever any checkbox inside this popup changes (proxy checkboxes
+        // aren't in _OIP_IND_IDS — only their mirrored main-popup ids are — so
+        // this only actually persists oipShowSynthetic).
+        if (storageKey) optPopup.addEventListener('change', () => _oipSaveIndicators(storageKey));
+    }
+
+    // Synthetic value (Diff / PDC / C-P) — drawn by oipDrawPremStrikeLines(),
+    // already gated on strikeMode === 'atm'; this checkbox adds an explicit
+    // on/off switch on top of that.
+    document.getElementById('oipShowSynthetic')?.addEventListener('change', () => {
+        if (typeof oipDrawPremStrikeLines === 'function') oipDrawPremStrikeLines();
+    });
+
+    // Option-chart-only checkboxes — INDEPENDENT from their main-popup
+    // namesakes: the main popup's checkbox controls only the main (and, for
+    // VWAP, Options Premium) chart; these control only the CE Only / PE Only
+    // charts. Each has its own persisted state via _OIP_IND_IDS.
+    document.getElementById('oipShow2ndCandle30sOpt')?.addEventListener('change', () => {
+        if (oipOIData?.candles) oipDraw2ndCandle30sBox(oipOIData.candles);
+    });
+    document.getElementById('oipShow2nd5mCandleOpt')?.addEventListener('change', () => {
+        if (oipOIData?.candles) oipDraw2nd5mCandleBox(oipOIData.candles);
+    });
+    document.getElementById('oipShowVwapOpt')?.addEventListener('change', () => oipSyncVwapVisibility());
+
+    // Fixed 24000-strike chart's own reference lines — each has its own checkbox.
+    ['oipShowFixedCeAvg', 'oipShowFixedPeAvg', 'oipShowFixedCePeAvg'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', () => {
+            if (typeof oipSyncFixedChartVisibility === 'function') oipSyncFixedChartVisibility();
+        });
+    });
 
     // CPR expand / collapse
     const cprExpandBtn = document.getElementById('oipCprExpandBtn');
@@ -871,6 +1430,29 @@ function oipInitIndicatorsPopup(storageKey) {
     if (multiCprMaster) {
         multiCprMaster.addEventListener('change', _syncMultiCprSubState);
         _syncMultiCprSubState();
+    }
+
+    // VWAP group (CVWAP / PVWAP / 3-AVG_VWAP) expand / collapse
+    const vwapExpandBtn = document.getElementById('oipVwapExpandBtn');
+    const vwapSub       = document.getElementById('oipVwapSub');
+    const vwapMaster     = document.getElementById('oipShowVwapGroup');
+
+    if (vwapExpandBtn && vwapSub) {
+        vwapExpandBtn.addEventListener('click', e => {
+            e.stopPropagation();
+            e.preventDefault();
+            const isNowHidden = vwapSub.classList.toggle('hidden');
+            vwapExpandBtn.classList.toggle('expanded', !isNowHidden);
+        });
+    }
+
+    function _syncVwapSubState() {
+        if (!vwapSub || !vwapMaster) return;
+        vwapSub.classList.toggle('oip-cpr-disabled', !vwapMaster.checked);
+    }
+    if (vwapMaster) {
+        vwapMaster.addEventListener('change', _syncVwapSubState);
+        _syncVwapSubState();
     }
 
     // Moving Averages (EMA) expand / collapse
@@ -930,9 +1512,9 @@ function oipDrawAtmCeOiLines() {
         if (s.strike == null) return;
         oipAtmCeOiLines.push(oipOISeries.createPriceLine({
             price: s.strike,
-            color: '#e11d48',          // same as the indicator label color
-            lineWidth: 2,
-            lineStyle: 0,              // both lines solid
+            color: oipGetLineColor('atmCeOi'),
+            lineWidth: oipGetLineWidth('atmCeOi'),
+            lineStyle: oipGetLineStyle('atmCeOi'), // dashed by default
             axisLabelVisible: false,
             title: ''
         }));
@@ -1110,9 +1692,9 @@ function oipDraw30mReversalLines(candles, recompute = true) {
             .map(c => ({ time: c.time, value: level }));
         const future = futureTimes.map(t => ({ time: t, value: level }));
         const s = oipOIChart.addSeries(LightweightCharts.LineSeries, {
-            color: '#f97316',
-            lineWidth: 1,
-            lineStyle: 0,
+            color: oipGetLineColor('reversal30m'),
+            lineWidth: oipGetLineWidth('reversal30m'),
+            lineStyle: oipGetLineStyle('reversal30m'),
             lastValueVisible: false,
             priceLineVisible: false,
             crosshairMarkerVisible: false,
@@ -1215,12 +1797,12 @@ function oipDraw1DReversalLines(candles) {
         ];
 
         // Top border
-        const topS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: 0, ...shared });
+        const topS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: oipGetLineStyle('reversal1d'), ...shared });
         topS.setData(allTimes.map(t => ({ time: t, value: top })));
         oip1DReversalSeries.push(topS);
 
         // Bottom border
-        const botS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: 0, ...shared });
+        const botS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: oipGetLineStyle('reversal1d'), ...shared });
         botS.setData(allTimes.map(t => ({ time: t, value: bottom })));
         oip1DReversalSeries.push(botS);
 
@@ -1234,8 +1816,8 @@ function oipDraw1DReversalLines(candles) {
         fillS.setData(allTimes.map(t => ({ time: t, value: top })));
         oip1DReversalSeries.push(fillS);
 
-        // Center line (dashed)
-        const cenS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: 1, ...shared });
+        // Center line
+        const cenS = oipOIChart.addSeries(LightweightCharts.LineSeries, { color: lineColor, lineWidth: 1, lineStyle: oipGetLineStyle('reversal1d'), ...shared });
         cenS.setData(allTimes.map(t => ({ time: t, value: center })));
         oip1DReversalSeries.push(cenS);
     });

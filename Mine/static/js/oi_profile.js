@@ -13,7 +13,6 @@ let oipIntrinsicSeries = null;
 let oipIntrinsicPeSeries = null;
 let oipOIData = null;
 let oipOptionData = null;
-let oipVwapSeries = null;
 let oipVwapIntSeries = null;
 let oipVwapIntPeSeries = null;
 // CVWAP (current-session) / PVWAP (previous-session) — main index chart + premium chart
@@ -23,6 +22,25 @@ let oipCvwapIntPeSeries = null, oipPvwapIntPeSeries = null;
 // CVWAP / PVWAP on the individual CE Only and PE Only charts
 let oipCECvwapSeries = null, oipCEPvwapSeries = null;
 let oipPECvwapSeries = null, oipPEPvwapSeries = null;
+// 3-AVG_VWAP (average of the 3 preceding sessions' closing VWAP) — mirrors
+// CVWAP/PVWAP across all five chart panels.
+let oipAvg3VwapSeries = null;
+let oipAvg3VwapIntSeries = null, oipAvg3VwapIntPeSeries = null;
+let oipCEAvg3VwapSeries = null, oipPEAvg3VwapSeries = null;
+// Fixed 24000 strike / monthly expiry combined chart
+let oipFixedChart = null, oipFixedCeSeries = null, oipFixedPeSeries = null;
+// Previous-day reference lines on the fixed chart: CE (H+L)/2, PE (H+L)/2, (CE close + PE close)/2
+let oipFixedCeHL2Series = null, oipFixedPeHL2Series = null, oipFixedCloseAvgSeries = null;
+// "Fixed Chart Lines" ALSO drawn on the other 2 option charts + Combined
+// chart — shares checkboxes/style keys with the fixed chart's own lines, but
+// on these 3 panels the data is each chart's OWN current premium (weekly
+// strike), not the fixed chart's 24000-monthly data.
+let oipCEFixedCeAvgSeries = null, oipCEFixedCePeAvgSeries = null;
+let oipPEFixedPeAvgSeries = null, oipPEFixedCePeAvgSeries = null;
+// Cross-drawn legs — Fixed CE Avg also on the PE-only chart, Fixed PE Avg
+// also on the CE-only chart — so all 3 Fixed Chart Lines appear on both.
+let oipCEFixedPeAvgSeries = null, oipPEFixedCeAvgSeries = null;
+let oipIntFixedCeAvgSeries = null, oipIntFixedPeAvgSeries = null, oipIntFixedCePeAvgSeries = null;
 // EMA/CPR/RSI series state declared in oi_indicators.js
 let oipCEChart = null;
 let oipPEChart = null;
@@ -111,7 +129,7 @@ let oipCurrentPEStrike = null;
 
 // Premium Strike (Prem. Str.) mode state
 let oipPremiumStrikeData = null;           // Cached result from /api/oi-profile/premium-strikes
-const oipPremStrikeLines = { ce: [], pe: [] }; // Price-line handles for cleanup
+const oipPremStrikeLines = { ce: [], pe: [], intCe: [], intPe: [] }; // Price-line handles for cleanup
 
 let oipAllStrikes = [];
 let oipCurrentPrice = 0;
@@ -141,7 +159,7 @@ let oipAllSymbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTY MIDC
 const oipElems = {
     symbolInput: null, symbolList: null, interval: null,
     spotHigh: null, spotLow: null, step: null, multiplier: null,
-    view: null, showVwapOI: null, showVwapInt: null, showCVWAP: null, showPVWAP: null,
+    view: null, showVwapInt: null, showVwapGroup: null, showCVWAP: null, showPVWAP: null, show3AvgVWAP: null,
     showCpr: null, showEMA: null, showRSI: null, showOIBars: null, autoHL: null, chartWrap: null, canvas: null,
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
     hdrPrice: null, hdrPcr: null, hdrPcrCard: null, hdrMaxPain: null, hdrCeOI: null,
@@ -168,10 +186,11 @@ function oipInitElems() {
     oipElems.multiplier = document.getElementById('oipMultiplier');
     oipElems.view = document.getElementById('oipIntrinsicView');
     oipElems.showOIBars = document.getElementById('oipShowOIBars');
-    oipElems.showVwapOI = document.getElementById('oipShowVwapOI');
     oipElems.showVwapInt = document.getElementById('oipShowVwapInt');
+    oipElems.showVwapGroup = document.getElementById('oipShowVwapGroup');
     oipElems.showCVWAP = document.getElementById('oipShowCVWAP');
     oipElems.showPVWAP = document.getElementById('oipShowPVWAP');
+    oipElems.show3AvgVWAP = document.getElementById('oipShow3AvgVWAP');
     oipElems.showCpr = document.getElementById('oipShowCpr');
     oipElems.showEMA = document.getElementById('oipShowEMA');
     oipElems.showRSI = document.getElementById('oipShowRSI');
@@ -226,15 +245,51 @@ function oipInitElems() {
 }
 
 /* ── Bootstrap ────────────────────────────────────────────── */
-// Applies the CVWAP/PVWAP checkbox state to every series across all charts
+// Applies the VWAP-group checkbox state to every series across all charts
 // (main index, Opt Prem, CE Only, PE Only). Used on init and on toggle.
+// "VWAP" is the group master (mirrors CPR Levels / Multi CPR) — CVWAP, PVWAP
+// and 3-AVG_VWAP only render when both the master AND their own sub-checkbox
+// are checked.
 function oipSyncVwapVisibility() {
-    const cv = oipElems.showCVWAP?.checked ?? false;
-    const pv = oipElems.showPVWAP?.checked ?? false;
-    [oipCvwapSeries, oipCvwapIntSeries, oipCvwapIntPeSeries, oipCECvwapSeries, oipPECvwapSeries]
-        .forEach(s => { try { s?.applyOptions({ visible: cv }); } catch (e) {} });
-    [oipPvwapSeries, oipPvwapIntSeries, oipPvwapIntPeSeries, oipCEPvwapSeries, oipPEPvwapSeries]
-        .forEach(s => { try { s?.applyOptions({ visible: pv }); } catch (e) {} });
+    const master = oipElems.showVwapGroup?.checked ?? false;
+    const cv = master && (oipElems.showCVWAP?.checked ?? false);
+    const pv = master && (oipElems.showPVWAP?.checked ?? false);
+    const av = master && (oipElems.show3AvgVWAP?.checked ?? false);
+    // Main index chart ONLY — controlled by the main Indicators popup's VWAP
+    // group (master + CVWAP/PVWAP/3-AVG_VWAP).
+    [oipCvwapSeries].forEach(s => { try { s?.applyOptions({ visible: cv }); } catch (e) {} });
+    [oipPvwapSeries].forEach(s => { try { s?.applyOptions({ visible: pv }); } catch (e) {} });
+    [oipAvg3VwapSeries].forEach(s => { try { s?.applyOptions({ visible: av }); } catch (e) {} });
+
+    // All 3 option charts (CE Only, PE Only, Combined/Options Premium) —
+    // controlled INDEPENDENTLY by the Opt Indicator popup's single "VWAP"
+    // checkbox (shows CVWAP + PVWAP + 3-AVG_VWAP together, regardless of the
+    // main popup's own CVWAP/PVWAP/3-AVG_VWAP sub-states).
+    const optVwap = document.getElementById('oipShowVwapOpt')?.checked ?? false;
+    [
+        oipCECvwapSeries, oipPECvwapSeries, oipCvwapIntSeries, oipCvwapIntPeSeries,
+        oipCEPvwapSeries, oipPEPvwapSeries, oipPvwapIntSeries, oipPvwapIntPeSeries,
+        oipCEAvg3VwapSeries, oipPEAvg3VwapSeries, oipAvg3VwapIntSeries, oipAvg3VwapIntPeSeries,
+    ].forEach(s => { try { s?.applyOptions({ visible: optVwap }); } catch (e) {} });
+}
+
+// Fixed 24000-strike chart's own reference lines — each has its own checkbox
+// in the Opt Indicator popup's "Fixed Chart Lines" section (no group master).
+// The SAME checkboxes also control the same-labeled CE Avg/PE Avg/CE&PE Avg
+// lines cross-drawn on CE Only/PE Only/Combined — those panels compute the
+// values from their own current premium (see oipRefreshLocalView), not the
+// fixed chart's 24000-monthly data.
+function oipSyncFixedChartVisibility() {
+    const ce   = document.getElementById('oipShowFixedCeAvg')?.checked ?? true;
+    const pe   = document.getElementById('oipShowFixedPeAvg')?.checked ?? true;
+    const cepe = document.getElementById('oipShowFixedCePeAvg')?.checked ?? true;
+    // CE Avg and PE Avg each appear on BOTH the CE-only and PE-only charts.
+    [oipFixedCeHL2Series, oipCEFixedCeAvgSeries, oipPEFixedCeAvgSeries, oipIntFixedCeAvgSeries]
+        .forEach(s => { try { s?.applyOptions({ visible: ce }); } catch (e) {} });
+    [oipFixedPeHL2Series, oipPEFixedPeAvgSeries, oipCEFixedPeAvgSeries, oipIntFixedPeAvgSeries]
+        .forEach(s => { try { s?.applyOptions({ visible: pe }); } catch (e) {} });
+    [oipFixedCloseAvgSeries, oipCEFixedCePeAvgSeries, oipPEFixedCePeAvgSeries, oipIntFixedCePeAvgSeries]
+        .forEach(s => { try { s?.applyOptions({ visible: cepe }); } catch (e) {} });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -244,6 +299,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Charts are built before the popup restores persisted checkbox state, so the
     // VWAP/CVWAP/PVWAP series are created with stale (default) visibility. Re-sync now.
     oipSyncVwapVisibility();
+    oipSyncFixedChartVisibility();
+    oipUpdateOptEmaVisibility();
+    oipApplyAllLineStyles();
 
     // OI Bar popup — lazy-loads the Open Interest page inside an iframe
     (() => {
@@ -354,18 +412,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    oipElems.showVwapOI?.addEventListener('change', e => {
-        if (oipVwapSeries) oipVwapSeries.applyOptions({ visible: e.target.checked });
-    });
-
     oipElems.showVwapInt?.addEventListener('change', e => {
         const show = e.target.checked;
         if (oipVwapIntSeries) oipVwapIntSeries.applyOptions({ visible: show });
         if (oipVwapIntPeSeries) oipVwapIntPeSeries.applyOptions({ visible: show });
     });
 
+    oipElems.showVwapGroup?.addEventListener('change', () => oipSyncVwapVisibility());
     oipElems.showCVWAP?.addEventListener('change', () => oipSyncVwapVisibility());
     oipElems.showPVWAP?.addEventListener('change', () => oipSyncVwapVisibility());
+    oipElems.show3AvgVWAP?.addEventListener('change', () => oipSyncVwapVisibility());
 
     oipElems.showCpr?.addEventListener('change', () => {
         if (oipOIData && oipOIData.candles) oipDrawCpr(oipOIData.candles);
@@ -377,6 +433,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     oipElems.showEMA?.addEventListener('change', e => {
         oipUpdateEmaVisibility();
+    });
+
+    ['oipShowEma9Opt', 'oipShowEma20Opt', 'oipShowEma50Opt'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', () => oipUpdateOptEmaVisibility());
     });
 
     oipElems.showRSI?.addEventListener('change', () => {
@@ -560,13 +620,7 @@ function oipInitCharts() {
             autoscaleInfoProvider: customAutoscale
         });
         lwBringToFront(oipOISeries);
-        oipVwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
-            color: '#f59e0b', lineWidth: 2, title: '',
-            visible: oipElems.showVwapOI?.checked ?? false,
-            priceLineVisible: false, lastValueVisible: false,
-            autoscaleInfoProvider: () => null
-        });
-        // CVWAP (current-session) + PVWAP (previous-session flat line)
+        // CVWAP (current-session) + PVWAP (previous-session flat line) + 3-AVG_VWAP
         oipCvwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
             color: '#3b82f6', lineWidth: 2, title: '',
             visible: oipElems.showCVWAP?.checked ?? false,
@@ -574,8 +628,14 @@ function oipInitCharts() {
             autoscaleInfoProvider: () => null
         });
         oipPvwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
-            color: '#f97316', lineWidth: 2, title: '',
+            color: '#fdba74', lineWidth: 2, title: '',
             visible: oipElems.showPVWAP?.checked ?? false,
+            priceLineVisible: false, lastValueVisible: false,
+            autoscaleInfoProvider: () => null
+        });
+        oipAvg3VwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
+            color: '#ef4444', lineWidth: 2, title: '',
+            visible: oipElems.show3AvgVWAP?.checked ?? false,
             priceLineVisible: false, lastValueVisible: false,
             autoscaleInfoProvider: () => null
         });
@@ -947,6 +1007,33 @@ async function oipLoadOI() {
     } catch (e) { console.warn('[OIP] OI Load Err:', e); }
 }
 
+// Fixed 24000 strike / monthly expiry combined chart — ALWAYS 24000 CE/PE
+// monthly, independent of the ATM-relative strike selection above (only the
+// weekly CE-only/PE-only/Combined charts track the user's strike selection).
+// Its own 3 reference lines (CE/PE/CE&PE Avg) are computed from this fixed
+// 24000-monthly data; the SAME-LABELED lines on the weekly charts are a
+// separate computation from each weekly chart's own premium — see the
+// "Fixed Chart Lines" block in oipRefreshLocalView.
+function oipUpdateFixedChart(data) {
+    if (!oipFixedChart) return;
+    const ceRaw = (data.fixed_ce_candles || []).map(c => ({ ...c, type: 'CE' }));
+    const peRaw = (data.fixed_pe_candles || []).map(c => ({ ...c, type: 'PE' }));
+    try {
+        oipFixedChart.update(ceRaw, peRaw, false);
+        const ceAvgData   = oipCalculatePrevDayHL2(ceRaw);
+        const peAvgData   = oipCalculatePrevDayHL2(peRaw);
+        const cePeAvgData = oipCalculatePrevDayCloseAvg(ceRaw, peRaw);
+        if (oipFixedCeHL2Series) oipFixedCeHL2Series.setData(ceAvgData);
+        if (oipFixedPeHL2Series) oipFixedPeHL2Series.setData(peAvgData);
+        if (oipFixedCloseAvgSeries) oipFixedCloseAvgSeries.setData(cePeAvgData);
+    } catch (e) { console.warn('[OIP] Fixed chart update err:', e); }
+
+    const ceLbl = document.getElementById('oipLegendFixedCE');
+    const peLbl = document.getElementById('oipLegendFixedPE');
+    if (ceLbl) ceLbl.textContent = data.fixed_ce_symbol ? `${data.fixed_ce_symbol} (Monthly)` : '24000 CE (Monthly)';
+    if (peLbl) peLbl.textContent = data.fixed_pe_symbol ? `${data.fixed_pe_symbol} (Monthly)` : '24000 PE (Monthly)';
+}
+
 async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     try {
 
@@ -990,7 +1077,11 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
 
         if (!forceFetch && oipOIData && !needsOptionData) { oipRefreshLocalView(view, resetZoom); return; }
 
-        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${dateRangeParams}&_t=${Date.now()}`;
+        // Fixed 24000 strike / monthly expiry — always requested alongside the
+        // main (ATM-relative) data, independent of the page's strike-mode
+        // controls. Only the weekly (nearest-expiry) charts above track the
+        // user's strike selection; this fixed chart never changes.
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}&fixed_strike=24000&fixed_expiry=monthly${dateRangeParams}&_t=${Date.now()}`;
 
         const res = await fetch(url);
         const data = await res.json();
@@ -1000,6 +1091,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         if (data.fetch_error) showNotification(`Data fetch error: ${data.fetch_error}`, 'error');
 
         oipOIData = Object.assign(oipOIData || {}, data);
+        oipUpdateFixedChart(data);
         const indexCandles = data.candles || [];
         let validCandles = [];
 
@@ -1038,9 +1130,9 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                         oipOIChart.priceScale('right').applyOptions({ autoScale: true });
                     }
 
-                    if (oipVwapSeries) oipVwapSeries.setData(oipCalculateVWAP(validCandles));
                     if (oipCvwapSeries) oipCvwapSeries.setData(oipCalculateCVWAP(validCandles));
                     if (oipPvwapSeries) oipPvwapSeries.setData(oipCalculatePVWAP(validCandles));
+                    if (oipAvg3VwapSeries) oipAvg3VwapSeries.setData(oipCalculateAvg3VWAP(validCandles));
                     oipDrawSignals(validCandles);
                 } catch (e) { console.warn('[OIP] SetData Err:', e); }
             }
@@ -1255,9 +1347,9 @@ function oipUpdateMaxPainLine(currentPrice, maxPain) {
     if (mpValue > 0 && document.getElementById('oipShowMaxPain')?.checked !== false) {
         oipMaxPainLine = oipOISeries.createPriceLine({
             price: mpValue,
-            color: '#2563eb',
-            lineWidth: 2,
-            lineStyle: 2, // Dashed
+            color: oipGetLineColor('maxPain'),
+            lineWidth: oipGetLineWidth('maxPain'),
+            lineStyle: oipGetLineStyle('maxPain'),
             axisLabelVisible: true,
             title: '',
         });
@@ -1498,8 +1590,10 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData([]);
         if (oipCvwapIntSeries) oipCvwapIntSeries.setData(oipCalculateCVWAP(idxCandles));
         if (oipPvwapIntSeries) oipPvwapIntSeries.setData(oipCalculatePVWAP(idxCandles));
+        if (oipAvg3VwapIntSeries) oipAvg3VwapIntSeries.setData(oipCalculateAvg3VWAP(idxCandles));
         if (oipCvwapIntPeSeries) oipCvwapIntPeSeries.setData([]);
         if (oipPvwapIntPeSeries) oipPvwapIntPeSeries.setData([]);
+        if (oipAvg3VwapIntPeSeries) oipAvg3VwapIntPeSeries.setData([]);
         if (oipIntrinsicChart.setMarkers) oipIntrinsicChart.setMarkers([], []);
     } else {
         let optionData = oipOptionData || [];
@@ -1570,6 +1664,22 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         const peCvwapData = oipCalculateCVWAP(peRaw);
         const cePvwapData = oipCalculatePVWAP(ceRaw);
         const pePvwapData = oipCalculatePVWAP(peRaw);
+        const ceAvg3Data  = oipCalculateAvg3VWAP(ceRaw);
+        const peAvg3Data  = oipCalculateAvg3VWAP(peRaw);
+        // Prev Day Avg group (CE Avg / PE Avg / CE & PE Avg) for the CE Only / PE Only charts —
+        // from each chart's OWN currently-selected strike data (ceRaw/peRaw above).
+        const ceAvgData    = oipCalculatePrevDayHL2(ceRaw);
+        const peAvgData    = oipCalculatePrevDayHL2(peRaw);
+        const cePeAvgData  = oipCalculatePrevDayCloseAvg(ceRaw, peRaw);
+
+        // "Fixed Chart Lines" (CE Avg / PE Avg / CE & PE Avg) on the Combined
+        // (Options Premium) chart — despite the name/checkboxes shared with the
+        // fixed 24000-monthly chart's own lines, these are computed from THIS
+        // chart's own current premium (ceRaw/peRaw above, same as the Prev Day
+        // Avg group), so they move with the weekly strike selection.
+        if (oipIntFixedCeAvgSeries) oipIntFixedCeAvgSeries.setData(ceAvgData);
+        if (oipIntFixedPeAvgSeries) oipIntFixedPeAvgSeries.setData(peAvgData);
+        if (oipIntFixedCePeAvgSeries) oipIntFixedCePeAvgSeries.setData(cePeAvgData);
 
         // Update Individual Premium Chart
         if (view === 'combined') {
@@ -1580,6 +1690,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             if (oipCvwapIntPeSeries) oipCvwapIntPeSeries.setData(peCvwapData);
             if (oipPvwapIntSeries) oipPvwapIntSeries.setData(cePvwapData);
             if (oipPvwapIntPeSeries) oipPvwapIntPeSeries.setData(pePvwapData);
+            if (oipAvg3VwapIntSeries) oipAvg3VwapIntSeries.setData(ceAvg3Data);
+            if (oipAvg3VwapIntPeSeries) oipAvg3VwapIntPeSeries.setData(peAvg3Data);
         } else if (view === 'ce') {
             oipIntrinsicChart.update(ceData, null, resetZoom);
             if (oipVwapIntSeries) oipVwapIntSeries.setData(ceVwapData);
@@ -1588,6 +1700,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             if (oipCvwapIntPeSeries) oipCvwapIntPeSeries.setData([]);
             if (oipPvwapIntSeries) oipPvwapIntSeries.setData(cePvwapData);
             if (oipPvwapIntPeSeries) oipPvwapIntPeSeries.setData([]);
+            if (oipAvg3VwapIntSeries) oipAvg3VwapIntSeries.setData(ceAvg3Data);
+            if (oipAvg3VwapIntPeSeries) oipAvg3VwapIntPeSeries.setData([]);
         } else {
             oipIntrinsicChart.update(null, peData, resetZoom);
             if (oipVwapIntSeries) oipVwapIntSeries.setData([]);
@@ -1596,6 +1710,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             if (oipCvwapIntPeSeries) oipCvwapIntPeSeries.setData(peCvwapData);
             if (oipPvwapIntSeries) oipPvwapIntSeries.setData([]);
             if (oipPvwapIntPeSeries) oipPvwapIntPeSeries.setData(pePvwapData);
+            if (oipAvg3VwapIntSeries) oipAvg3VwapIntSeries.setData([]);
+            if (oipAvg3VwapIntPeSeries) oipAvg3VwapIntPeSeries.setData(peAvg3Data);
         }
 
         oipIntChartReady = true;
@@ -1617,6 +1733,12 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             }
             if (oipCECvwapSeries) oipCECvwapSeries.setData(ceCvwapData);
             if (oipCEPvwapSeries) oipCEPvwapSeries.setData(cePvwapData);
+            if (oipCEAvg3VwapSeries) oipCEAvg3VwapSeries.setData(ceAvg3Data);
+            // "Fixed Chart Lines" (shared checkboxes with the monthly chart's own
+            // lines) — computed from THIS chart's own premium, not the monthly data.
+            if (oipCEFixedCeAvgSeries) oipCEFixedCeAvgSeries.setData(ceAvgData);
+            if (oipCEFixedPeAvgSeries) oipCEFixedPeAvgSeries.setData(peAvgData);
+            if (oipCEFixedCePeAvgSeries) oipCEFixedCePeAvgSeries.setData(cePeAvgData);
 
             const _sm = oipElems.strikeMode?.value;
             let _ceLbl;
@@ -1638,6 +1760,12 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             }
             if (oipPECvwapSeries) oipPECvwapSeries.setData(peCvwapData);
             if (oipPEPvwapSeries) oipPEPvwapSeries.setData(pePvwapData);
+            if (oipPEAvg3VwapSeries) oipPEAvg3VwapSeries.setData(peAvg3Data);
+            // "Fixed Chart Lines" (shared checkboxes with the monthly chart's own
+            // lines) — computed from THIS chart's own premium, not the monthly data.
+            if (oipPEFixedPeAvgSeries) oipPEFixedPeAvgSeries.setData(peAvgData);
+            if (oipPEFixedCeAvgSeries) oipPEFixedCeAvgSeries.setData(ceAvgData);
+            if (oipPEFixedCePeAvgSeries) oipPEFixedCePeAvgSeries.setData(cePeAvgData);
 
             const _sm = oipElems.strikeMode?.value;
             let _peLbl;
@@ -1674,7 +1802,7 @@ function _oipColorAlpha(color, alpha) {
 
 // Draw a 1px-border + fill box on the given LightweightCharts instance.
 // Returns { chart, fill, top, bottom } for later cleanup.
-function _oipDrawCandleBox(chart, hi, lo, times, color, fillAlpha = 0.10, borderAlpha = 0.65, borderColor = null) {
+function _oipDrawCandleBox(chart, hi, lo, times, color, fillAlpha = 0.10, borderAlpha = 0.65, borderColor = null, lineStyle = 0, borderWidth = 1) {
     const safeTimes = times.filter(t => t != null && isFinite(t) && t > 0);
     if (!safeTimes.length) return null;
     const fillCol   = _oipColorAlpha(color, fillAlpha);
@@ -1693,10 +1821,10 @@ function _oipDrawCandleBox(chart, hi, lo, times, color, fillAlpha = 0.10, border
             fill.setData(safeTimes.map(t => ({ time: t, value: hi })));
         }
 
-        const top = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+        const top = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth: borderWidth, lineStyle, ...shared });
         top.setData(safeTimes.map(t => ({ time: t, value: hi })));
 
-        const bottom = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth: 1, lineStyle: 0, ...shared });
+        const bottom = chart.addSeries(LightweightCharts.LineSeries, { color: borderCol, lineWidth: borderWidth, lineStyle, ...shared });
         bottom.setData(safeTimes.map(t => ({ time: t, value: lo })));
 
         return { chart, fill, top, bottom };
@@ -1740,16 +1868,23 @@ function _oipL(c) { return parseFloat(c.low  ?? c.l); }
 
 // ── 2nd 30-second candle box — all days ──────────────────────────────────────
 let oip30sSecondCandle = { oi: [], ce: [], pe: [] };
-let oip2ndCandle30sBox = { oi: [], ce: [], pe: [] };
+let oip2ndCandle30sBox = { oi: [], ce: [], pe: [], intCe: [], intPe: [] };
 
 function oipDraw2ndCandle30sBox(candles) {
     oip2ndCandle30sBox.oi.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.oi = [];
     oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
     oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
+    oip2ndCandle30sBox.intCe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.intCe = [];
+    oip2ndCandle30sBox.intPe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.intPe = [];
 
-    const _30s_allowed = ['30second', 'minute'];
+    const _30s_allowed = ['30second', 'minute', '2minute', '3minute', '5minute', '15minute', '30minute'];
     if (!_30s_allowed.includes(oipInterval) || !candles || !candles.length) return;
-    if (!document.getElementById('oipShow2ndCandle30s')?.checked) return;
+    // Main chart and option (CE/PE-only) charts are gated independently —
+    // the main Indicators popup checkbox only controls the main chart; the
+    // Opt Indicator popup checkbox only controls the option charts.
+    const showMain = document.getElementById('oipShow2ndCandle30s')?.checked;
+    const showOpt  = document.getElementById('oipShow2ndCandle30sOpt')?.checked;
+    if (!showMain && !showOpt) return;
 
     // Build a day-key → candle lookup from the backend-supplied 2nd 30s candles.
     // These are only populated when oipInterval === 'minute'; otherwise empty.
@@ -1768,12 +1903,16 @@ function oipDraw2ndCandle30sBox(candles) {
         const srcMap = _oipGroupByDay(src);
         Object.keys(srcMap).sort().forEach(dk => {
             const day = srcMap[dk];
-            // Use actual 2nd 30s candle H/L when available (1-min timeframe),
-            // otherwise fall back to day[1] which is the 2nd bar in src (30s timeframe).
+            // Use actual 2nd 30-second candle H/L when available (backend-supplied
+            // for every interval this indicator supports, up to 30min). The day[1]
+            // fallback is ONLY valid when the chart itself is already showing
+            // 30-second bars — at any coarser interval (2min/5min/15min/30min),
+            // day[1] is a completely different (wrong) bar, so skip rather than
+            // draw an incorrect box.
             let c2;
             if (map30s && map30s[dk]) {
                 c2 = map30s[dk];
-            } else if (day.length >= 2) {
+            } else if (oipInterval === '30second' && day.length >= 2) {
                 c2 = day[1];
             } else {
                 return;
@@ -1781,25 +1920,36 @@ function oipDraw2ndCandle30sBox(candles) {
             const hi = _oipH(c2), lo = _oipL(c2);
             if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
             const times = day.filter(c => c.time >= c2.time).map(c => c.time);
-            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#FFC800'));
+            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, oipGetLineColor('box30s'), oipGetLineOpacity('box30s'), 0.65, null, oipGetLineStyle('box30s'), oipGetLineWidth('box30s')));
         });
         return boxes;
     }
 
     const _oi30sMap  = _build30sMap(oip30sSecondCandle.oi);
-    if (oipOIChart)
+    if (showMain && oipOIChart)
         oip2ndCandle30sBox.oi = _draw30sAllDays(oipOIChart, candles, _oi30sMap);
 
     requestAnimationFrame(() => {
         try {
             oip2ndCandle30sBox.ce.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.ce = [];
             oip2ndCandle30sBox.pe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.pe = [];
+            oip2ndCandle30sBox.intCe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.intCe = [];
+            oip2ndCandle30sBox.intPe.forEach(_oipRemoveBoxSeries); oip2ndCandle30sBox.intPe = [];
+            if (!showOpt) return;
             const _ce30sMap = _build30sMap(oip30sSecondCandle.ce);
             const _pe30sMap = _build30sMap(oip30sSecondCandle.pe);
             if (oipCEChart?.chart && oipOptionData)
                 oip2ndCandle30sBox.ce = _draw30sAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'), _ce30sMap);
             if (oipPEChart?.chart && oipOptionData)
                 oip2ndCandle30sBox.pe = _draw30sAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'), _pe30sMap);
+            // All 3 option charts (CE-only, PE-only, Combined) — Combined gets
+            // both legs' boxes on its own CE/PE series.
+            if (oipIntrinsicChart?.chart && oipOptionData) {
+                if (oipIntrinsicSeries)
+                    oip2ndCandle30sBox.intCe = _draw30sAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'CE'), _ce30sMap);
+                if (oipIntrinsicPeSeries)
+                    oip2ndCandle30sBox.intPe = _draw30sAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'PE'), _pe30sMap);
+            }
             if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder();
         } catch(e) {}
     });
@@ -1807,16 +1957,31 @@ function oipDraw2ndCandle30sBox(candles) {
 }
 
 // ── 2nd 5-minute candle box (09:20–09:25) — all days, 1m/2m/3m/5m ───────────
-let oip2nd5mCandleBox = { oi: [], ce: [], pe: [] };
+let oip2nd5mCandleBox = { oi: [], ce: [], pe: [], intCe: [], intPe: [] };
 
 function oipDraw2nd5mCandleBox(candles) {
     oip2nd5mCandleBox.oi.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.oi = [];
     oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
     oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
+    oip2nd5mCandleBox.intCe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.intCe = [];
+    oip2nd5mCandleBox.intPe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.intPe = [];
 
-    const allowedIntervals = ['minute', '2minute', '3minute', '5minute'];
+    const allowedIntervals = ['minute', '2minute', '3minute', '5minute', '15minute', '30minute'];
     if (!allowedIntervals.includes(oipInterval) || !candles || !candles.length) return;
-    if (!document.getElementById('oipShow2nd5mCandle')?.checked) return;
+    // Main chart and option (CE/PE-only) charts are gated independently — see
+    // oipDraw2ndCandle30sBox above for the same convention.
+    const showMain = document.getElementById('oipShow2nd5mCandle')?.checked;
+    const showOpt  = document.getElementById('oipShow2nd5mCandleOpt')?.checked;
+    if (!showMain && !showOpt) return;
+
+    // Bar duration in minutes per interval — needed to find which bar(s)
+    // OVERLAP the 09:20–09:25 window rather than start exactly inside it.
+    // A 1–5min bar's own start minute already falls in [20,24] when it does
+    // (matches the old exact-match behavior); a 15/30min bar starting before
+    // 09:20 can still span across it, so overlap is checked instead.
+    const _5M_BAR_MINUTES = { minute: 1, '2minute': 2, '3minute': 3, '5minute': 5, '15minute': 15, '30minute': 30 };
+    const barMin = _5M_BAR_MINUTES[oipInterval] || 5;
+    const WIN_START = 9 * 60 + 20, WIN_END = 9 * 60 + 25; // minutes since midnight
 
     function _draw5mAllDays(chart, src) {
         const boxes = [];
@@ -1825,20 +1990,21 @@ function oipDraw2nd5mCandleBox(candles) {
             const day = map[dk];
             const w = day.filter(c => {
                 const d = new Date(c.time * 1000);
-                return d.getUTCHours() === 9 && d.getUTCMinutes() >= 20 && d.getUTCMinutes() < 25;
+                const startMin = d.getUTCHours() * 60 + d.getUTCMinutes();
+                return startMin < WIN_END && (startMin + barMin) > WIN_START;
             });
             if (!w.length) return;
             const hi = Math.max(...w.map(_oipH));
             const lo = Math.min(...w.map(_oipL));
             if (!isFinite(hi) || !isFinite(lo) || hi === lo) return;
             const times = day.filter(c => c.time >= w[0].time).map(c => c.time);
-            // #2dd2ff background @ 10% opacity with a solid #2dd2ff border (candles render on top).
-            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, '#2dd2ff', 0.1, 1, '#2dd2ff'));
+            // Background opacity user-configurable (default 10%); border is solid box5m color by default.
+            if (times.length) boxes.push(_oipDrawCandleBox(chart, hi, lo, times, oipGetLineColor('box5m'), oipGetLineOpacity('box5m'), 1, oipGetLineColor('box5m'), oipGetLineStyle('box5m'), oipGetLineWidth('box5m')));
         });
         return boxes;
     }
 
-    if (oipOIChart)
+    if (showMain && oipOIChart)
         oip2nd5mCandleBox.oi = _draw5mAllDays(oipOIChart, candles);
 
     // Defer CE/PE draws past their charts' init RAF — addBaselineSeries triggers
@@ -1847,10 +2013,20 @@ function oipDraw2nd5mCandleBox(candles) {
         try {
             oip2nd5mCandleBox.ce.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.ce = [];
             oip2nd5mCandleBox.pe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.pe = [];
+            oip2nd5mCandleBox.intCe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.intCe = [];
+            oip2nd5mCandleBox.intPe.forEach(_oipRemoveBoxSeries); oip2nd5mCandleBox.intPe = [];
+            if (!showOpt) return;
             if (oipCEChart?.chart && oipOptionData)
                 oip2nd5mCandleBox.ce = _draw5mAllDays(oipCEChart.chart, oipOptionData.filter(c => c.type === 'CE'));
             if (oipPEChart?.chart && oipOptionData)
                 oip2nd5mCandleBox.pe = _draw5mAllDays(oipPEChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+            // All 3 option charts (CE-only, PE-only, Combined).
+            if (oipIntrinsicChart?.chart && oipOptionData) {
+                if (oipIntrinsicSeries)
+                    oip2nd5mCandleBox.intCe = _draw5mAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'CE'));
+                if (oipIntrinsicPeSeries)
+                    oip2nd5mCandleBox.intPe = _draw5mAllDays(oipIntrinsicChart.chart, oipOptionData.filter(c => c.type === 'PE'));
+            }
             if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder();
         } catch(e) {}
     });
@@ -1885,8 +2061,8 @@ function oipDrawMondayBox(candles) {
         const weekStart = first.time;
         const weekEnd   = weekStart + 7 * 86400;
         const times = candles.filter(c => c.time >= weekStart && c.time < weekEnd).map(c => c.time);
-        // Solid border lines, zero background opacity.
-        if (times.length) oipMondayBoxes.push(_oipDrawCandleBox(oipOIChart, hi, lo, times, '#34ed0b', 0, 1));
+        // Zero background opacity (border-only box); color/width/style user-configurable.
+        if (times.length) oipMondayBoxes.push(_oipDrawCandleBox(oipOIChart, hi, lo, times, oipGetLineColor('mondayBox'), 0, 1, null, oipGetLineStyle('mondayBox'), oipGetLineWidth('mondayBox')));
     });
     if (typeof oipApplyZOrder === 'function') oipApplyZOrder();
 }
@@ -2179,8 +2355,12 @@ async function oipFetchAndApplyPremiumStrikes(resetZoom = true) {
 function oipClearPremStrikeLines() {
     oipPremStrikeLines.ce.forEach(l => { try { oipCESeries?.removePriceLine(l); } catch (e) {} });
     oipPremStrikeLines.pe.forEach(l => { try { oipPESeries?.removePriceLine(l); } catch (e) {} });
+    oipPremStrikeLines.intCe.forEach(l => { try { oipIntrinsicSeries?.removePriceLine(l); } catch (e) {} });
+    oipPremStrikeLines.intPe.forEach(l => { try { oipIntrinsicPeSeries?.removePriceLine(l); } catch (e) {} });
     oipPremStrikeLines.ce = [];
     oipPremStrikeLines.pe = [];
+    oipPremStrikeLines.intCe = [];
+    oipPremStrikeLines.intPe = [];
 }
 
 /**
@@ -2195,6 +2375,7 @@ function oipDrawPremStrikeLines() {
     oipClearPremStrikeLines();
     const psd = oipPremiumStrikeData;
     if (!psd || oipElems.strikeMode?.value !== 'atm') return;
+    if (!document.getElementById('oipShowSynthetic')?.checked) return;
     if (!oipCESeries || !oipPESeries) return;
 
     const strikeDiff = Math.abs(psd.pe_strike - psd.ce_strike);
@@ -2209,19 +2390,39 @@ function oipDrawPremStrikeLines() {
 
         if (strikeDiff > 0)
             oipPremStrikeLines.ce.push(oipCESeries.createPriceLine({
-                price: strikeDiff, color: '#000000', lineWidth: 2, lineStyle: 0,
-                axisLabelVisible: true, title: `Diff ${strikeDiff}`
+                price: strikeDiff, color: oipGetLineColor('synthDiff'), lineWidth: oipGetLineWidth('synthDiff'), lineStyle: oipGetLineStyle('synthDiff'),
+                axisLabelVisible: true, title: `Diff`
             }));
         if (cePdc != null)
             oipPremStrikeLines.ce.push(oipCESeries.createPriceLine({
-                price: cePdc, color: '#22d3ee', lineWidth: 2, lineStyle: 0,
-                axisLabelVisible: true, title: `PDC ${cePdc}`
+                price: cePdc, color: oipGetLineColor('synthPdc'), lineWidth: oipGetLineWidth('synthPdc'), lineStyle: oipGetLineStyle('synthPdc'),
+                axisLabelVisible: true, title: `PDC`
             }));
         if (ceDiff != null)
             oipPremStrikeLines.ce.push(oipCESeries.createPriceLine({
-                price: ceDiff, color: '#a78bfa', lineWidth: 2, lineStyle: 0,
-                axisLabelVisible: true, title: `C-P ${ceDiff}`
+                price: ceDiff, color: oipGetLineColor('synthCp'), lineWidth: oipGetLineWidth('synthCp'), lineStyle: oipGetLineStyle('synthCp'),
+                axisLabelVisible: true, title: `C-P`
             }));
+
+        // Same 3 lines, ALSO on the Combined (Options Premium) chart's CE series —
+        // one of the 3 option charts.
+        if (oipIntrinsicSeries) {
+            if (strikeDiff > 0)
+                oipPremStrikeLines.intCe.push(oipIntrinsicSeries.createPriceLine({
+                    price: strikeDiff, color: oipGetLineColor('synthDiff'), lineWidth: oipGetLineWidth('synthDiff'), lineStyle: oipGetLineStyle('synthDiff'),
+                    axisLabelVisible: true, title: `Diff`
+                }));
+            if (cePdc != null)
+                oipPremStrikeLines.intCe.push(oipIntrinsicSeries.createPriceLine({
+                    price: cePdc, color: oipGetLineColor('synthPdc'), lineWidth: oipGetLineWidth('synthPdc'), lineStyle: oipGetLineStyle('synthPdc'),
+                    axisLabelVisible: true, title: `PDC`
+                }));
+            if (ceDiff != null)
+                oipPremStrikeLines.intCe.push(oipIntrinsicSeries.createPriceLine({
+                    price: ceDiff, color: oipGetLineColor('synthCp'), lineWidth: oipGetLineWidth('synthCp'), lineStyle: oipGetLineStyle('synthCp'),
+                    axisLabelVisible: true, title: `C-P`
+                }));
+        }
     }
 
     // ── PE chart lines ────────────────────────────────────────────────
@@ -2233,19 +2434,23 @@ function oipDrawPremStrikeLines() {
 
         if (strikeDiff > 0)
             oipPremStrikeLines.pe.push(oipPESeries.createPriceLine({
-                price: strikeDiff, color: '#000000', lineWidth: 2, lineStyle: 0,
-                axisLabelVisible: true, title: `Diff ${strikeDiff}`
+                price: strikeDiff, color: oipGetLineColor('synthDiff'), lineWidth: oipGetLineWidth('synthDiff'), lineStyle: oipGetLineStyle('synthDiff'),
+                axisLabelVisible: true, title: `Diff`
             }));
         if (pePdc != null)
             oipPremStrikeLines.pe.push(oipPESeries.createPriceLine({
-                price: pePdc, color: '#c084fc', lineWidth: 2, lineStyle: 0,
-                axisLabelVisible: true, title: `PDC ${pePdc}`
+                price: pePdc, color: oipGetLineColor('synthPdc'), lineWidth: oipGetLineWidth('synthPdc'), lineStyle: oipGetLineStyle('synthPdc'),
+                axisLabelVisible: true, title: `PDC`
             }));
         if (peDiff != null)
             oipPremStrikeLines.pe.push(oipPESeries.createPriceLine({
-                price: peDiff, color: '#a78bfa', lineWidth: 2, lineStyle: 0,
-                axisLabelVisible: true, title: `C-P ${peDiff}`
+                price: peDiff, color: oipGetLineColor('synthCp'), lineWidth: oipGetLineWidth('synthCp'), lineStyle: oipGetLineStyle('synthCp'),
+                axisLabelVisible: true, title: `C-P`
             }));
+        // NOTE: intentionally NOT also drawn on the Combined chart's PE series —
+        // the CE-side block above already draws Diff/PDC/C-P once on the
+        // Combined chart; drawing this PE-side set too made every line appear
+        // twice there (once per series sharing the same pane).
     }
 }
 

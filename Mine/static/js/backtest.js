@@ -265,6 +265,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const scLotRow      = document.getElementById('secondCandleLotRow');
         const scOptPanel    = document.getElementById('secondCandleOptimisePanel');
         const expParamsRow  = document.getElementById('expiryBreakoutParamsRow');
+        const tmfParamsRow  = document.getElementById('thirtyMinFakeoutParamsRow');
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (vwapParamsRow) vwapParamsRow.style.display = 'none';
         if (vwapLotRow)    vwapLotRow.style.display    = 'none';
@@ -273,6 +274,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (scLotRow)      scLotRow.style.display      = 'none';
         if (scOptPanel)    scOptPanel.style.display    = 'none';
         if (expParamsRow)  expParamsRow.style.display  = 'none';
+        if (tmfParamsRow)  tmfParamsRow.style.display  = 'none';
         // Restore symbol/date/interval visibility (hidden for some strategies)
         const symFg      = document.getElementById('mainSymbolFg');
         const intFg      = document.getElementById('mainIntervalFg');
@@ -336,6 +338,17 @@ document.addEventListener('DOMContentLoaded', function() {
             if (startDateInput) startDateInput.value = localToday();
             if (endDateInput)   endDateInput.value   = localToday();
 
+        } else if (val === 'thirty_min_fakeout') {
+            if (tmfParamsRow) tmfParamsRow.style.display = 'grid';
+            // Pure filter — no symbol picking: scans every F&O futures
+            // stock/index. Always fetches 1-minute candles server-side —
+            // the interval picker doesn't apply to this strategy.
+            if (symFg) symFg.style.display = 'none';
+            if (intFg) intFg.style.display = 'none';
+            const endDateInput = document.getElementById('endDate');
+            if (startDateInput) startDateInput.value = localToday();
+            if (endDateInput)   endDateInput.value   = localToday();
+
         } else if (val === 'swing_momentum') {
             if (smParamsRow) smParamsRow.style.display = 'grid';
             if (symFg) symFg.style.display = 'none';
@@ -375,6 +388,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
     };
 
+    // 30-Min Opening Fakeout investment display
     // 3. Run Backtest
     runBtn.addEventListener('click', async function() {
         const _strat = strategySelect ? strategySelect.value : 'rtp';
@@ -383,7 +397,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         const symbol = symbolSearch.value.toUpperCase();
-        if (_strat !== 'swing_momentum' && !symbol) {
+        if (_strat !== 'swing_momentum' && _strat !== 'thirty_min_fakeout' && !symbol) {
             window.showNotification('Please select a symbol', 'warning');
             return;
         }
@@ -436,6 +450,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 const dir = document.getElementById('scDirection')?.value || 'both';
                 payload.enable_long  = dir !== 'short';
                 payload.enable_short = dir !== 'long';
+            }
+
+            // 30-Min Opening Fakeout breakdown/breakout
+            if (strat === 'thirty_min_fakeout') {
+                endpoint = '/api/backtest/thirty-min-fakeout';
+                payload.direction = document.getElementById('tmfDirection')?.value || 'both';
+                payload.exit_on   = document.getElementById('tmfExitOn')?.value || 'cross';
+                const exitTime = (document.getElementById('tmfExitTime')?.value || '15:18').split(':');
+                payload.exit_hour   = parseInt(exitTime[0] || 15);
+                payload.exit_minute = parseInt(exitTime[1] || 18);
             }
 
             // Swing Momentum: different endpoint + payload
@@ -642,6 +666,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const isSM   = strategySelect && strategySelect.value === 'swing_momentum';
         const isVwap = strategySelect && strategySelect.value === 'vwap';
         const isSc   = strategySelect && strategySelect.value === 'second_candle';
+        // 30-Min Fakeout scans many symbols at once, each already sized
+        // server-side to ~₹1,00,000/entry (summary.total_pnl_rupees etc.,
+        // per-trade t.pnl_rupees) — no Lots/Lot Value input needed here,
+        // just a ₹ unit on the Row 1 Total P&L card instead of "points".
+        const isTmf  = strategySelect && strategySelect.value === 'thirty_min_fakeout';
         // 2nd-candle reuses the VWAP-style ₹ cards, each reading its own lot inputs.
         const moneyLotsId    = isSc ? 'scLots'     : 'vwapLots';
         const moneyLotValId  = isSc ? 'scLotValue' : 'vwapLotValue';
@@ -664,10 +693,12 @@ document.addEventListener('DOMContentLoaded', function() {
             ? ((summary.wins / summary.total_trades) * 100).toFixed(1) + '%'
             : '0%';
 
-        const pnl    = summary.total_pnl ?? 0;
+        const pnl    = isTmf ? (summary.total_pnl_rupees ?? 0) : (summary.total_pnl ?? 0);
         const pnlEl  = document.getElementById('statTotalPnl');
-        pnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2);
+        pnlEl.textContent = (pnl >= 0 ? '+' : '') + (isTmf ? '₹' + Math.round(pnl).toLocaleString('en-IN') : pnl.toFixed(2));
         pnlEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
+        const pnlUnitEl = document.getElementById('statTotalPnlUnit');
+        if (pnlUnitEl) pnlUnitEl.textContent = isTmf ? `≈₹1L/entry, ${summary.total_trades || 0} entries` : 'points';
 
         const outcomeEl = document.getElementById('statOutcome');
         outcomeEl.textContent = pnl >= 0 ? 'PROFIT' : 'LOSS';
@@ -771,6 +802,36 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             const netSubEl = document.getElementById('statNetRsSub');
             if (netSubEl) netSubEl.textContent = 'brok: ₹' + totalBrokerage.toLocaleString('en-IN');
+        } else if (isTmf && rtpRow) {
+            // Every field here is already sized server-side (~₹1,00,000
+            // per entry, per-symbol lot size) — no Lots/Lot Value inputs
+            // to read, unlike the isVwap/isSc branch above.
+            rtpRow.style.display = '';
+
+            document.getElementById('statProfitFactor').textContent =
+                summary.profit_factor_rupees != null ? summary.profit_factor_rupees : '—';
+
+            const avgWinEl  = document.getElementById('statAvgWin');
+            const avgLossEl = document.getElementById('statAvgLoss');
+            if (avgWinEl)  avgWinEl.textContent  = summary.avg_win_rupees  != null ? '+₹' + Math.round(summary.avg_win_rupees).toLocaleString('en-IN') : '—';
+            if (avgLossEl) avgLossEl.textContent = summary.avg_loss_rupees != null ? '-₹' + Math.round(Math.abs(summary.avg_loss_rupees)).toLocaleString('en-IN') : '—';
+
+            const dd      = summary.max_drawdown_rupees ?? 0;
+            const ddPtsEl = document.getElementById('statMaxDDPts');
+            const ddEl    = document.getElementById('statMaxDD');
+            if (ddPtsEl) ddPtsEl.textContent = '₹';
+            if (ddEl)    ddEl.textContent    = '₹' + Math.round(Math.abs(dd)).toLocaleString('en-IN');
+
+            const ddDatesEl = document.getElementById('statMaxDDDates');
+            if (ddDatesEl) ddDatesEl.textContent = '';
+
+            const netEl = document.getElementById('statNetRs');
+            if (netEl) {
+                netEl.textContent = (pnl >= 0 ? '+' : '') + '₹' + Math.round(pnl).toLocaleString('en-IN');
+                netEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
+            }
+            const netSubEl = document.getElementById('statNetRsSub');
+            if (netSubEl) netSubEl.textContent = `before brokerage · ~₹${Math.round(summary.capital_per_trade || 100000).toLocaleString('en-IN')}/entry`;
         } else {
             if (rtpRow) rtpRow.style.display = 'none';
         }
@@ -782,8 +843,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const lotValue2 = (isVwap || isSc)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
-        const isMoney     = isRtp || isVwap || isSc;
-        const investment2 = lots2 * 50000;
+        const isMoney     = isRtp || isVwap || isSc || isTmf;
+        // Each 30-Min Fakeout trade already carries its own sized pnl_rupees
+        // (~₹1,00,000/entry, per-symbol lot size) — renderEquityCurve/
+        // groupByPeriod use that directly when present, ignoring lots2/lotValue2.
+        const investment2 = isTmf ? (summary.capital_per_trade || 100000) : lots2 * 50000;
         renderEquityCurve(data.trades, isMoney, lots2, lotValue2, investment2);
 
         // Store for period tab re-renders
@@ -791,8 +855,9 @@ document.addEventListener('DOMContentLoaded', function() {
         _periodIsRtp    = isMoney;
         _periodLots     = lots2;
         _periodLotValue = lotValue2;
+        _periodUseDirectRupees = isTmf;
         const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
-        renderPeriodBreakdown(data.trades, isMoney, lots2, lotValue2, activePeriod);
+        renderPeriodBreakdown(data.trades, isMoney, lots2, lotValue2, activePeriod, isTmf);
 
         renderTable();
         resultsArea.style.display = 'block';
@@ -845,13 +910,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
         let portfolio = totalInvestment;
         sorted.forEach((t, idx) => {
-            const tradeRs = isRtp
-                ? Math.round((t.pnl || 0) * lotValue * lots)
-                : (t.pnl || 0);
+            const tradeRs = (t.pnl_rupees != null)
+                ? t.pnl_rupees
+                : (isRtp ? Math.round((t.pnl || 0) * lotValue * lots) : (t.pnl || 0));
             portfolio += tradeRs;
             labels.push('T' + (idx + 1));
             chartData.push(Math.round(portfolio));
-            pointColors.push((t.pnl || 0) >= 0 ? '#00c853' : '#ff1744');
+            pointColors.push(tradeRs >= 0 ? '#00c853' : '#ff1744');
             tooltipDates.push(t.entry_time ? String(t.entry_time).replace('T', ' ').slice(0, 16) : '');
         });
 
@@ -948,6 +1013,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let _periodIsRtp = false;
     let _periodLots = 1;
     let _periodLotValue = 75;
+    let _periodUseDirectRupees = false;
 
     function getWeekKey(date) {
         const d = new Date(date);
@@ -967,8 +1033,9 @@ document.addEventListener('DOMContentLoaded', function() {
             else if (period === 'quarterly')  key = `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
             else if (period === 'halfyearly') key = `${d.getFullYear()}-H${d.getMonth() < 6 ? 1 : 2}`;
             else                           key = `${d.getFullYear()}`;
-            if (!groups[key]) groups[key] = { pnl: 0, wins: 0, losses: 0 };
-            groups[key].pnl += (t.pnl || 0);
+            if (!groups[key]) groups[key] = { pnl: 0, pnlRupees: 0, wins: 0, losses: 0 };
+            groups[key].pnl       += (t.pnl || 0);
+            groups[key].pnlRupees += (t.pnl_rupees != null ? t.pnl_rupees : (t.pnl || 0));
             if ((t.pnl || 0) > 0) groups[key].wins++;
             else                  groups[key].losses++;
         });
@@ -1013,7 +1080,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     };
 
-    function renderPeriodBreakdown(trades, isRtp, lots, lotValue, period) {
+    function renderPeriodBreakdown(trades, isRtp, lots, lotValue, period, useDirectRupees) {
         const section = document.getElementById('periodBreakdownSection');
         const chartColors = _btChartColors();
         if (!section || !trades || trades.length === 0) {
@@ -1039,6 +1106,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         const values = keys.map(k => {
+            if (useDirectRupees) return Math.round(groups[k].pnlRupees);
             const raw = groups[k].pnl;
             return isRtp ? Math.round(raw * lotValue * lots) : Math.round(raw * 100) / 100;
         });
@@ -1135,7 +1203,7 @@ document.addEventListener('DOMContentLoaded', function() {
         btn.addEventListener('click', () => {
             document.querySelectorAll('.period-tab').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            renderPeriodBreakdown(_periodTrades, _periodIsRtp, _periodLots, _periodLotValue, btn.dataset.period);
+            renderPeriodBreakdown(_periodTrades, _periodIsRtp, _periodLots, _periodLotValue, btn.dataset.period, _periodUseDirectRupees);
         });
     });
 
@@ -1152,7 +1220,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (_periodTrades && _periodTrades.length) {
             const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
-            renderPeriodBreakdown(_periodTrades, _periodIsRtp, _periodLots, _periodLotValue, activePeriod);
+            renderPeriodBreakdown(_periodTrades, _periodIsRtp, _periodLots, _periodLotValue, activePeriod, _periodUseDirectRupees);
         }
     });
 
@@ -1183,15 +1251,33 @@ document.addEventListener('DOMContentLoaded', function() {
           format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
     ];
 
+    // 30-Min Fakeout scans every F&O futures stock/index at once, each
+    // entry sized to ~₹1,00,000 (capital_per_trade) — Symbol/Lots columns
+    // the single-symbol strategies don't need, SL/Target Price columns
+    // (the engine already returns sl_price/target_price per trade), and
+    // a ₹-sized P&L instead of the generic raw-points column.
+    const TMF_TRADES_COLS = [
+        { key: 'symbol', label: 'Symbol', sortable: true },
+        ...TRADES_COLS.slice(0, -1),
+        { key: 'sl_price', label: 'SL Price', sortable: true,
+          format: v => (v || 0).toFixed(2) },
+        { key: 'target_price', label: 'Target Price', sortable: true,
+          format: v => (v || 0).toFixed(2) },
+        { key: 'lots', label: 'Lots', sortable: true },
+        { key: 'pnl_rupees', label: 'P&L (₹)', sortable: true, strong: true,
+          format: v => '₹' + Math.round(v || 0).toLocaleString('en-IN'), tone: DataGrid.sign },
+    ];
+
     function renderTable() {
         if (!lastData || !lastData.trades) return;
         if (lastData.is_swing_momentum) { _renderSmTable(lastData.trades); return; }
 
+        const isTmf = strategySelect && strategySelect.value === 'thirty_min_fakeout';
         DataGrid.mountSortable('tradesGrid', {
             rows: lastData.trades,
-            columns: TRADES_COLS,
+            columns: isTmf ? TMF_TRADES_COLS : TRADES_COLS,
             empty: 'No trades generated',
-            defaultSort: { key: 'exit_time', dir: 'desc' },
+            defaultSort: isTmf ? { key: 'symbol', dir: 'asc' } : { key: 'exit_time', dir: 'desc' },
         });
     }
 

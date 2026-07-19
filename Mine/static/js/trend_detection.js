@@ -123,6 +123,19 @@ function renderNextSessionOutlook(d) {
     const mv   = d.expected_move_pct;
     const mvTxt = (mv > 0 ? '+' : '') + mv.toFixed(2) + '%';
 
+    // Open-vs-Prev-Avg-3-VWAP read: computed server-side (analyze_and_predict)
+    // so this matches the Historic OI page's Open-column tint exactly — kept
+    // as its own chip, separate from the 5-year blended signals below.
+    const openSig = d.open_vs_prev_avg3vwap;
+    const openSigChip = openSig ? (() => {
+        const c   = openSig.upside ? 'var(--pf-pos)' : 'var(--pf-neg)';
+        const fmt = n => Number(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+        return `<span class="hoi-sig-chip">
+                  <span style="color:${c};font-size:9px">●</span>Open <b style="color:var(--pf-text-1);font-variant-numeric:tabular-nums">${fmt(openSig.open)}</b>
+                  vs Prev Avg3 VWAP <b style="color:var(--pf-text-1);font-variant-numeric:tabular-nums">${fmt(openSig.prev_avg3_vwap)}</b>
+                  <b style="color:${c};font-variant-numeric:tabular-nums">${openSig.upside ? 'Upside' : 'Downside'}</b></span>`;
+    })() : '';
+
     const chips = (d.reasons || []).map(r => {
         const short = r.name.split('(')[0].trim();
         const c = r.bullish ? 'var(--pf-pos)' : 'var(--pf-neg)';
@@ -161,5 +174,5 @@ function renderNextSessionOutlook(d) {
           <div class="hoi-info-pop">${popup}</div>
         </span>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${chips}</div>`;
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${openSigChip}${chips}</div>`;
 }

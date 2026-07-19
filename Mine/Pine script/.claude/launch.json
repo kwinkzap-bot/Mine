@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "trading-app",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd '/Users/kavinkumar/Mine/Mine' && python3 main.py"],
+      "port": 5000
+    }
+  ]
+}

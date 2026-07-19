@@ -72,15 +72,24 @@
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowOIBars" checked><span>OI Bars</span>
                                 </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowVwapOI"><span>VWAP</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowCVWAP"><span style="color:#3b82f6">CVWAP</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowPVWAP"><span style="color:#f97316">PVWAP</span>
-                                </label>
+                                <div class="oip-ind-cpr-group">
+                                    <div class="oip-ind-item oip-ind-cpr-header">
+                                        <input type="checkbox" id="oipShowVwapGroup" checked>
+                                        <label for="oipShowVwapGroup" class="oip-ind-cpr-label">VWAP</label>
+                                        <span class="oip-cpr-expand" id="oipVwapExpandBtn">&#9658;</span>
+                                    </div>
+                                    <div class="oip-ind-cpr-sub hidden" id="oipVwapSub">
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipShowCVWAP" checked><span style="color:#3b82f6">CVWAP</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipShowPVWAP" checked><span style="color:#fdba74">PVWAP</span>
+                                        </label>
+                                        <label class="oip-ind-item oip-ind-sub-item">
+                                            <input type="checkbox" id="oipShow3AvgVWAP" checked><span style="color:#ef4444">3-AVG_VWAP</span>
+                                        </label>
+                                    </div>
+                                </div>
                                 <div class="oip-ind-cpr-group">
                                     <div class="oip-ind-item oip-ind-cpr-header">
                                         <input type="checkbox" id="oipShowCpr">
@@ -130,7 +139,7 @@
                                     <input type="checkbox" id="oipShowRSI"><span>RSI S&amp;R</span>
                                 </label>
                                 <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowAtmCeOi" checked><span style="color:#e11d48">9:18 ATM CE OI Lines</span>
+                                    <input type="checkbox" id="oipShowAtmCeOi" checked><span style="color:#000000">9:18 ATM CE OI Lines</span>
                                 </label>
                             </div>
 
@@ -339,9 +348,6 @@
                         <label class="oip-checkbox" title="VWAP">
                             <input type="checkbox" id="oipShowVwapInt" checked><span>VWAP</span>
                         </label>
-                        <label class="oip-checkbox" title="Premium Levels">
-                            <input type="checkbox" id="oipShowPremium" checked><span>Prem.</span>
-                        </label>
                     </div>
 
                     <div class="oip-prem-sep" style="display:none"></div>
@@ -371,6 +377,90 @@
                         <select id="oipCEStrikeDropdown" class="oip-select oip-select--xs" style="display:none" title="CE Strike"></select>
                         <!-- PE strike: visible for mode=ce_pe -->
                         <select id="oipPEStrikeDropdown" class="oip-select oip-select--xs" style="display:none" title="PE Strike"></select>
+                        <div class="oip-prem-group" style="position:relative;">
+                            <button id="oipOptIndicatorsBtn" class="oip-btn" type="button" title="Toggle Option Indicators">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                                </svg>
+                                Opt Indicator
+                            </button>
+
+                            <div id="oipOptIndicatorsPopup" class="oip-ind-popup hidden">
+                                <div class="oip-ind-popup-header">Option Indicators</div>
+                                <div class="oip-ind-section">
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowSynthetic" checked><span>Synthetic value</span>
+                                    </label>
+                                    <div class="oip-ind-section-title">Lines</div>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShow2ndCandle30sOpt" checked><span style="color:#FFC800">2nd 30Sec candle</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShow2nd5mCandleOpt" checked><span style="color:#00D2FF">2nd 5Min candle</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowVwapOpt" checked><span>VWAP</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowPremium" checked><span>Premium (Entry/Current/Target)</span>
+                                    </label>
+                                    <div class="oip-ind-section-title">EMA (CE Only / PE Only)</div>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma9Opt" checked><span style="color:#22c55e">EMA 9</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma20Opt" checked><span style="color:#f97316">EMA 20</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma50Opt" checked><span style="color:#ef4444">EMA 50</span>
+                                    </label>
+                                    <div class="oip-ind-section-title">Fixed Chart Lines</div>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowFixedCeAvg" checked><span style="color:#16a34a">CE Avg</span>
+                                        <span class="oip-line-props">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedCeAvg" title="Line color">
+                                            <select class="oip-line-width-sel" data-width-key="fixedCeAvg" title="Line width">
+                                                <option value="1">1px</option><option value="2">2px</option><option value="3">3px</option><option value="4">4px</option>
+                                            </select>
+                                            <select class="oip-line-style-sel" data-style-key="fixedCeAvg" title="Line style">
+                                                <option value="0">Solid</option>
+                                                <option value="1">Dotted</option>
+                                                <option value="2">Dashed</option>
+                                            </select>
+                                        </span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowFixedPeAvg" checked><span style="color:#7c3aed">PE Avg</span>
+                                        <span class="oip-line-props">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedPeAvg" title="Line color">
+                                            <select class="oip-line-width-sel" data-width-key="fixedPeAvg" title="Line width">
+                                                <option value="1">1px</option><option value="2">2px</option><option value="3">3px</option><option value="4">4px</option>
+                                            </select>
+                                            <select class="oip-line-style-sel" data-style-key="fixedPeAvg" title="Line style">
+                                                <option value="0">Solid</option>
+                                                <option value="1">Dotted</option>
+                                                <option value="2">Dashed</option>
+                                            </select>
+                                        </span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowFixedCePeAvg" checked><span style="color:#000000">CE & PE Avg</span>
+                                        <span class="oip-line-props">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedCePeAvg" title="Line color">
+                                            <select class="oip-line-width-sel" data-width-key="fixedCePeAvg" title="Line width">
+                                                <option value="1">1px</option><option value="2">2px</option><option value="3">3px</option><option value="4">4px</option>
+                                            </select>
+                                            <select class="oip-line-style-sel" data-style-key="fixedCePeAvg" title="Line style">
+                                                <option value="0">Solid</option>
+                                                <option value="1">Dotted</option>
+                                                <option value="2">Dashed</option>
+                                            </select>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="oip-prem-sep"></div>
@@ -430,6 +520,17 @@
             <div id="oipIntrinsicChart"></div>
         </div>
 
+        <!-- Fixed 24000 strike / monthly expiry combined chart — independent of
+             the ATM-relative strike selection used by the charts above. -->
+        <div class="oip-chart-wrap" id="oipFixed24000ChartWrap">
+            <div class="oip-chart-legend">
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
+                        id="oipLegendFixedCE">24000 CE (Monthly)</span></div>
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
+                        id="oipLegendFixedPE">24000 PE (Monthly)</span></div>
+            </div>
+            <div id="oipFixed24000Chart"></div>
+        </div>
 
     </div>
 </div>

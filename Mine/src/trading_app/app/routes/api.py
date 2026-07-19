@@ -242,19 +242,24 @@ _api_executor = ThreadPoolExecutor(max_workers=10)
 _strike_token_cache: Dict[Tuple, Any] = {}
 _strike_token_cache_lock = threading.Lock()
 
-def _get_cached_strike_token(kite_service, data_provider, is_fyers: bool, symbol: str, strike: int, opt_type: str):
-    """Return (token, symbol_str) from cache; populate on miss. TTL = end of current trading day."""
-    key = (symbol, strike, opt_type)
+def _get_cached_strike_token(kite_service, data_provider, is_fyers: bool, symbol: str, strike: int, opt_type: str, expiry_type: str = 'nearest'):
+    """Return (token, symbol_str) from cache; populate on miss. TTL = end of current trading day.
+
+    expiry_type: 'nearest' (default, matches every existing caller) or
+    'monthly' — see get_option_symbol/find_option_symbol for the resolution
+    logic. Included in the cache key so the two never collide.
+    """
+    key = (symbol, strike, opt_type, expiry_type)
     now_ts = _time.time()
     with _strike_token_cache_lock:
         cached = _strike_token_cache.get(key)
         if cached and cached[2] > now_ts:
             return cached[0], cached[1]
     if is_fyers:
-        sym = data_provider.find_option_symbol(symbol, strike, opt_type)
+        sym = data_provider.find_option_symbol(symbol, strike, opt_type, expiry_type=expiry_type)
         tok = sym
     else:
-        sym = kite_service.get_option_symbol(symbol, strike, opt_type)
+        sym = kite_service.get_option_symbol(symbol, strike, opt_type, expiry_type=expiry_type)
         tok = kite_service.get_instrument_token(sym) if sym else None
     today = datetime.now()
     expire_ts = today.replace(hour=15, minute=30, second=0, microsecond=0).timestamp()
@@ -3701,6 +3706,196 @@ def run_expiry_breakout_scan_api():
                 'error': 'Authentication failed. Please login again.',
                 'auth_error': True,
             }), 401
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _fo_futures_universe():
+    """Every underlying with a live FUTURES contract — the index list plus
+    every stock name found in the cached NFO instruments (instrument_type
+    == 'FUT'). Same cache/shape as get_backtest_symbols()."""
+    import json
+    cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cache', 'nfo_instruments.json')
+    if not os.path.exists(cache_path):
+        return None
+    with open(cache_path, 'r') as f:
+        instruments = json.load(f)
+    indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']
+    stock_names = sorted({
+        inst.get('name') for inst in instruments
+        if inst.get('instrument_type') == 'FUT' and inst.get('name')
+        and inst.get('name') not in indices
+    })
+    return indices + stock_names
+
+
+@api_bp.route('/backtest/thirty-min-fakeout', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_thirty_min_fakeout_backtest_api():
+    """Scan EVERY F&O futures stock/index for the 30-Min Opening Fakeout
+    Breakdown/Breakout pattern across [start_date, end_date] — no single
+    symbol; the universe is every underlying with a live futures contract.
+    The pattern check and entry/exit simulation run on the SPOT/equity
+    (or index) price series, matching a normal chart — the futures
+    contract is only resolved for its lot size (position sizing below).
+
+    Rule (per trading day, using 30-min candles aligned to 09:15):
+      SHORT: candle 1 & 2 both green, candle 3's High crosses above the
+      higher of candle 1/2's High but candle 3's CLOSE is back below
+      candle 2's High (a fakeout). Candle 3's Low is the breakdown
+      trigger — the first 1-min bar (from 10:45 onward) to trade
+      through it fires a SELL. SL = candle 3's High, Target = the
+      day's session Low (only knowable in hindsight — a backtest-only
+      target). LONG is the exact mirror (candles red, breakout above
+      candle 3's High, Target = day's session High).
+      Force-closed at the cutoff time (default 15:18 IST) if neither
+      SL nor Target is hit.
+
+    exit_on ('cross' default | 'close') controls how SL/Target are
+    confirmed post-entry: 'cross' exits as soon as any bar's High/Low
+    touches the level (same as a 30-min candle's High/Low touching it);
+    'close' only exits once a full 30-min candle CLOSES beyond the level,
+    ignoring an intrabar wick that doesn't hold through the candle's close.
+
+    Each entry is sized to ~capital_per_trade (default ₹1,00,000) worth
+    of that symbol's futures contract: lots = round(capital / (entry_price
+    x lot_size)), rounded down to at least 1 lot. pnl (points) is
+    unchanged; pnl_rupees = pnl x lots x lot_size is the sized P&L, and
+    the returned summary's totals/averages/drawdown are computed on
+    pnl_rupees so stocks of very different prices are comparable.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data              = request.get_json()
+        start_date_str    = data.get('start_date')
+        end_date_str      = data.get('end_date')
+        direction         = str(data.get('direction', 'both')).lower()
+        enable_long       = direction != 'short'
+        enable_short      = direction != 'long'
+        exit_hour         = int(data.get('exit_hour', 15) or 15)
+        exit_minute       = int(data.get('exit_minute', 18) or 18)
+        capital_per_trade = float(data.get('capital_per_trade', 100000) or 100000)
+        exit_on           = str(data.get('exit_on', 'cross')).lower()
+        if exit_on not in ('cross', 'close'):
+            exit_on = 'cross'
+
+        if not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        symbols = _fo_futures_universe()
+        if not symbols:
+            return jsonify({'success': False, 'error': 'NFO instruments cache not found. Please login to refresh.'}), 404
+
+        is_fyers = hasattr(current_kite, 'fyers')
+        kite_service = None
+        if not is_fyers:
+            from trading_app.service.kite_order_services import KiteService
+            kite_service = KiteService(kite_instance=current_kite)
+
+        # Spot/equity (or index) price series — the pattern check and
+        # entry/exit simulation run on this, matching what a normal chart
+        # shows. The futures contract (resolved separately below) is only
+        # used for its lot size, since that's the actual tradable unit.
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+        kite_indices = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105,
+            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+        }
+
+        import pandas as pd
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from trading_app.Backtest.thirty_min_fakeout_engine import ThirtyMinFakeoutEngine, summarize_trades
+
+        def _scan_symbol(symbol):
+            # Futures contract must exist (this stock is part of the F&O
+            # universe) and gives the lot size used for position sizing.
+            if is_fyers:
+                fut_token = current_kite.find_future_symbol(symbol)
+                lot_size  = current_kite.get_lot_size(symbol)
+            else:
+                fut_symbol = kite_service.get_future_symbol(symbol)
+                fut_token  = kite_service.get_instrument_token(fut_symbol) if fut_symbol else None
+                lot_size   = kite_service.get_lot_size(symbol)
+            if not fut_token:
+                return []
+            lot_size = max(1, int(lot_size or 1))
+
+            if is_fyers:
+                spot_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+            else:
+                spot_token = kite_indices.get(symbol, symbol)
+            candles = current_kite.historical_data(
+                instrument_token=spot_token, from_date=start_date_str, to_date=end_date_str,
+                interval='minute', use_cache=False,
+            )
+            if not candles:
+                return []
+            engine = ThirtyMinFakeoutEngine(
+                df=pd.DataFrame(candles), exit_hour=exit_hour, exit_minute=exit_minute,
+                enable_long=enable_long, enable_short=enable_short, exit_on=exit_on,
+            )
+            trades, _ = engine.run()
+            for t in trades:
+                entry_price = t['entry_price']
+                lots = max(1, round(capital_per_trade / (entry_price * lot_size))) if entry_price > 0 else 1
+                qty  = lots * lot_size
+                t['symbol']      = symbol
+                t['lot_size']    = lot_size
+                t['lots']        = lots
+                t['qty']         = qty
+                t['capital']     = round(entry_price * qty, 2)
+                t['pnl_rupees']  = round(t['pnl'] * qty, 2)
+            return trades
+
+        all_trades = []
+        failed = 0
+        workers = 15 if is_fyers else 8
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_scan_symbol, sym): sym for sym in symbols}
+            for future in as_completed(futures):
+                sym = futures[future]
+                try:
+                    all_trades.extend(future.result(timeout=60))
+                except Exception as e:
+                    failed += 1
+                    logger.error(f"[ThirtyMinFakeout scan] {sym} failed: {e}")
+
+        summary = summarize_trades(all_trades)
+        rupee_summary = summarize_trades([{**t, 'pnl': t['pnl_rupees']} for t in all_trades])
+        summary['total_pnl_rupees']    = rupee_summary['total_pnl']
+        summary['avg_win_rupees']      = rupee_summary['avg_win']
+        summary['avg_loss_rupees']     = rupee_summary['avg_loss']
+        summary['profit_factor_rupees'] = rupee_summary['profit_factor']
+        summary['max_drawdown_rupees'] = rupee_summary['max_drawdown']
+        summary['capital_per_trade']   = capital_per_trade
+
+        logger.info('[ThirtyMinFakeout scan] %d symbols (%d failed) -> %d trades',
+                    len(symbols), failed, len(all_trades))
+
+        return jsonify({
+            'success': True,
+            'trades':  all_trades,
+            'summary': summary,
+            '_debug': {
+                'symbols_scanned': len(symbols),
+                'symbols_failed':  failed,
+            },
+        })
+
+    except Exception as e:
+        logger.error(f"Error in Thirty-Min Fakeout scan API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -7660,19 +7855,34 @@ def oi_profile_candles() -> EndpointResponse:
         pe_strike = request.args.get('pe_strike', type=int)
         start_date_str = request.args.get('start_date')
         end_date_str   = request.args.get('end_date')
+        # Independent, always-on secondary chart (fixed EXPIRY — e.g. monthly —
+        # but the STRIKE tracks whatever the user currently has selected via
+        # custom_strike/ce_strike/pe_strike). fixed_ce_strike/fixed_pe_strike
+        # let CE and PE use different strikes (CE & PE strike mode); fixed_strike
+        # is kept as a shared fallback for both sides for backward compatibility.
+        fixed_strike = request.args.get('fixed_strike', type=int)
+        fixed_ce_strike = request.args.get('fixed_ce_strike', type=int) or fixed_strike
+        fixed_pe_strike = request.args.get('fixed_pe_strike', type=int) or fixed_strike
+        fixed_expiry = request.args.get('fixed_expiry', 'nearest')
 
         # Sentinel Check: Ignore UI placeholders (20000 for Nifty, 50000 for BankNifty)
         # and fallback to ATM calculation to prevent fetching wrong data on first load.
-        if custom_strike:
-            is_placeholder = (symbol == 'NIFTY' and custom_strike == 20000) or \
-                             (symbol == 'BANKNIFTY' and custom_strike == 50000)
-            if is_placeholder:
-                custom_strike = None
+        # fixed_ce_strike/fixed_pe_strike mirror custom_strike from the same UI
+        # dropdown, so they carry the same placeholder and need the same guard.
+        def _is_placeholder_strike(strike):
+            return (symbol == 'NIFTY' and strike == 20000) or \
+                   (symbol == 'BANKNIFTY' and strike == 50000)
+        if custom_strike and _is_placeholder_strike(custom_strike):
+            custom_strike = None
+        if fixed_ce_strike and _is_placeholder_strike(fixed_ce_strike):
+            fixed_ce_strike = None
+        if fixed_pe_strike and _is_placeholder_strike(fixed_pe_strike):
+            fixed_pe_strike = None
 
         # ── 1. Check Response Cache & Coalesce Requests ──────────────
         # Use request parameters as cache key (ignore _t timestamp)
         # Include start_date/end_date so historical range requests are cached independently
-        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str)
+        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry)
         
         # Request Coalescing: Only one thread fetches for this key at a time
         req_lock = _get_request_lock(cache_key)
@@ -7839,11 +8049,32 @@ def oi_profile_candles() -> EndpointResponse:
 
         # ── Parallel execution ──────────────────────────────────────
         executor = _api_executor # Use shared global executor
+
+        # Independent fixed-expiry (e.g. monthly) chart — strike tracks the
+        # caller-supplied fixed_ce_strike/fixed_pe_strike (normally mirroring
+        # whatever strike is currently selected on the ATM-relative charts),
+        # resolved and fetched in parallel with everything else below.
+        fixed_ce_token = fixed_pe_token = fixed_ce_symbol = fixed_pe_symbol = None
+        future_fixed_ce = future_fixed_pe = None
+        if fixed_ce_strike:
+            fixed_ce_token, fixed_ce_symbol = _get_cached_strike_token(
+                kite_service, _data_provider, _is_fyers_provider, symbol, fixed_ce_strike, 'CE', expiry_type=fixed_expiry)
+            if fixed_ce_token:
+                future_fixed_ce = executor.submit(fetch_task, fixed_ce_token, opt_from_date, to_date, fetch_interval)
+        if fixed_pe_strike:
+            fixed_pe_token, fixed_pe_symbol = _get_cached_strike_token(
+                kite_service, _data_provider, _is_fyers_provider, symbol, fixed_pe_strike, 'PE', expiry_type=fixed_expiry)
+            if fixed_pe_token:
+                future_fixed_pe = executor.submit(fetch_task, fixed_pe_token, opt_from_date, to_date, fetch_interval)
+
         # 1. Start fetching index intraday and index daily
         future_index = executor.submit(fetch_task, token, from_date, to_date, fetch_interval)
-        # For 1-minute interval, also fetch 30-second candles in parallel so the
-        # "2nd 30-second candle" box indicator can use accurate H/L.
-        future_index_30s = executor.submit(fetch_task, token, from_date, to_date, '30second') if interval == 'minute' else None
+        # Also fetch 30-second candles in parallel — needed by the "2nd 30-second
+        # candle" box indicator on every timeframe it supports (up to 30min), not
+        # just 1-minute; day[1] of a coarser interval is a completely different
+        # (wrong) bar and was giving that indicator an incorrect box.
+        _wants_30s_subcandles = interval in ('minute', '2minute', '3minute', '5minute', '15minute', '30minute')
+        future_index_30s = executor.submit(fetch_task, token, from_date, to_date, '30second') if _wants_30s_subcandles else None
         
         # Use daily OHLC cache if available (TTL 5 mins)
         daily_cache_key = (symbol, days)
@@ -7898,8 +8129,8 @@ def oi_profile_candles() -> EndpointResponse:
         future_pe = None
         if ce_token: future_ce = executor.submit(fetch_task, ce_token, opt_from_date, to_date, fetch_interval)
         if pe_token: future_pe = executor.submit(fetch_task, pe_token, opt_from_date, to_date, fetch_interval)
-        future_ce_30s = executor.submit(fetch_task, ce_token, opt_from_date, to_date, '30second') if interval == 'minute' and ce_token else None
-        future_pe_30s = executor.submit(fetch_task, pe_token, opt_from_date, to_date, '30second') if interval == 'minute' and pe_token else None
+        future_ce_30s = executor.submit(fetch_task, ce_token, opt_from_date, to_date, '30second') if _wants_30s_subcandles and ce_token else None
+        future_pe_30s = executor.submit(fetch_task, pe_token, opt_from_date, to_date, '30second') if _wants_30s_subcandles and pe_token else None
 
         # 4. Wait for Index to finish if auto_hl is true
         index_raw = future_index.result()
@@ -8012,8 +8243,8 @@ def oi_profile_candles() -> EndpointResponse:
             
             if ce_token: future_ce = executor.submit(fetch_task, ce_token, opt_from_date, to_date, fetch_interval)
             if pe_token: future_pe = executor.submit(fetch_task, pe_token, opt_from_date, to_date, fetch_interval)
-            future_ce_30s = executor.submit(fetch_task, ce_token, opt_from_date, to_date, '30second') if interval == 'minute' and ce_token else None
-            future_pe_30s = executor.submit(fetch_task, pe_token, opt_from_date, to_date, '30second') if interval == 'minute' and pe_token else None
+            future_ce_30s = executor.submit(fetch_task, ce_token, opt_from_date, to_date, '30second') if _wants_30s_subcandles and ce_token else None
+            future_pe_30s = executor.submit(fetch_task, pe_token, opt_from_date, to_date, '30second') if _wants_30s_subcandles and pe_token else None
 
         # 5. Collect remaining results
         daily_raw = cached_daily if cached_daily else (future_daily.result() if future_daily else [])
@@ -8077,6 +8308,11 @@ def oi_profile_candles() -> EndpointResponse:
         ce_candles = format_candles(ce_raw, ist_offset, interval)
         pe_candles = format_candles(pe_raw, ist_offset, interval)
 
+        fixed_ce_raw = future_fixed_ce.result() if future_fixed_ce else []
+        fixed_pe_raw = future_fixed_pe.result() if future_fixed_pe else []
+        fixed_ce_candles = format_candles(fixed_ce_raw, ist_offset, interval)
+        fixed_pe_candles = format_candles(fixed_pe_raw, ist_offset, interval)
+
         # ── Intrinsic Levels ─────────────────────────────────────────
         intrinsic_data = None
         if spot_high is not None and spot_low is not None and itm_ce_strike is not None and itm_pe_strike is not None:
@@ -8123,6 +8359,10 @@ def oi_profile_candles() -> EndpointResponse:
             'candles': candles,
             'ce_opt_candles': ce_candles,
             'pe_opt_candles': pe_candles,
+            'fixed_ce_candles': fixed_ce_candles,
+            'fixed_pe_candles': fixed_pe_candles,
+            'fixed_ce_symbol': fixed_ce_symbol,
+            'fixed_pe_symbol': fixed_pe_symbol,
             'second_30s_candle_oi': second_30s_oi,
             'second_30s_candle_ce': second_30s_ce,
             'second_30s_candle_pe': second_30s_pe,

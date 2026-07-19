@@ -490,14 +490,21 @@ class KiteService:
             res = self._nfo_by_name.get('bsesensex', [])
         return res
 
-    def get_option_symbol(self, name: str, strike: float, option_type: str) -> Optional[str]:
+    def get_option_symbol(self, name: str, strike: float, option_type: str, expiry_type: str = 'nearest') -> Optional[str]:
+        """
+        expiry_type: 'nearest' (default, unchanged behaviour for all existing
+        callers) or 'monthly' — the last expiry within the nearest calendar
+        month that still has an unexpired contract (NSE's monthly contract is
+        always the final expiry of its month, regardless of which weekday the
+        exchange currently uses for expiry).
+        """
         # Fast lookup in indexed map
         options = self.get_nfo_instruments(name)
         if not options: return None
-        
+
         today = date.today()
         valid_options = []
-        
+
         # Filter for specific strike, type and ensure it hasn't expired
         for o in options:
             if o.get('strike') == strike and o.get('instrument_type') == option_type:
@@ -506,19 +513,57 @@ class KiteService:
                     # Handle both date and datetime objects for safety
                     if hasattr(expiry, 'date'):
                         expiry = expiry.date()
-                    
+
                     if expiry >= today:
                         valid_options.append(o)
-        
+
         if not valid_options:
             logging.warning(f"[KiteService] No valid non-expired options found for {name} {strike} {option_type}")
             return None
-            
+
         # Sort by expiry to always return the nearest one (most common for intraday)
         valid_options.sort(key=lambda x: x['expiry'])
-        
-        ts = valid_options[0].get('tradingsymbol')
-        logging.info(f"[KiteService] Resolved {name} {strike} {option_type} to nearest expiry ({valid_options[0]['expiry']}): {ts}")
+
+        if expiry_type == 'monthly':
+            by_month: Dict[tuple, List[Dict]] = {}
+            for o in valid_options:
+                exp = o['expiry']
+                if hasattr(exp, 'date'):
+                    exp = exp.date()
+                by_month.setdefault((exp.year, exp.month), []).append(o)
+            nearest_month = min(by_month.keys())
+            chosen = max(by_month[nearest_month], key=lambda x: x['expiry'])
+        else:
+            chosen = valid_options[0]
+
+        ts = chosen.get('tradingsymbol')
+        logging.info(f"[KiteService] Resolved {name} {strike} {option_type} to {expiry_type} expiry ({chosen['expiry']}): {ts}")
+        return ts
+
+    def get_future_symbol(self, name: str) -> Optional[str]:
+        """Nearest-expiry FUTURES tradingsymbol for an underlying. Mirrors
+        get_option_symbol above, minus the strike/option-type match."""
+        futures = [o for o in self.get_nfo_instruments(name) if o.get('instrument_type') == 'FUT']
+        if not futures:
+            return None
+
+        today = date.today()
+        valid = []
+        for o in futures:
+            expiry = o.get('expiry')
+            if expiry:
+                if hasattr(expiry, 'date'):
+                    expiry = expiry.date()
+                if expiry >= today:
+                    valid.append(o)
+
+        if not valid:
+            logging.warning(f"[KiteService] No valid non-expired futures found for {name}")
+            return None
+
+        valid.sort(key=lambda x: x['expiry'])
+        ts = valid[0].get('tradingsymbol')
+        logging.info(f"[KiteService] Resolved {name} future to nearest expiry ({valid[0]['expiry']}): {ts}")
         return ts
 
     def get_lot_size(self, symbol: str) -> int:

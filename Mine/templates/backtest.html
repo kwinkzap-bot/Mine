@@ -23,6 +23,7 @@
                 <option value="vwap">📈 C/P VWAP Strategy</option>
                 <option value="second_candle">🕒 Candle Breakout</option>
                 <option value="expiry_breakout">📅 Monthly Expiry Breakout</option>
+                <option value="thirty_min_fakeout">⏱️ 30-Min Opening Fakeout</option>
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
@@ -278,6 +279,49 @@
                 </div>
             </div>
 
+            <!-- 30-Min Opening Fakeout params — pure filter, no symbol
+                 selection: scans every F&O futures stock/index over the
+                 selected Start/End Date for the fakeout pattern. -->
+            <div id="thirtyMinFakeoutParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="tmfDirection">Direction</label>
+                    <select id="tmfDirection">
+                        <option value="both" selected>Buy &amp; Sell</option>
+                        <option value="long">Buy only</option>
+                        <option value="short">Sell only</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="tmfExitTime">Cut-off Time</label>
+                    <input type="time" id="tmfExitTime" value="15:18">
+                </div>
+                <div class="form-group">
+                    <label for="tmfExitOn">SL/Target Confirm</label>
+                    <select id="tmfExitOn" title="On Cross: exit as soon as price touches the SL/Target level (a wick counts). On Close: exit only once a 30-min candle actually closes beyond the level.">
+                        <option value="cross" selected>On Cross</option>
+                        <option value="close">On Close</option>
+                    </select>
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label>Rule</label>
+                    <div class="rule-box">
+                        Filters <b>every F&amp;O futures stock/index</b> — no symbol selection
+                        needed, each resolved to its nearest-expiry <b>Futures</b> contract.
+                        Every day, using 30-min candles from 09:15: if <b>Candle 1 &amp; 2</b> are
+                        both <b>green</b> and <b>Candle 3</b> crosses above their High but
+                        <b>closes back below Candle 2's High</b> (a fakeout), Candle 3's
+                        <b>Low</b> becomes the breakdown trigger — a break below it fires a
+                        <b>SELL</b>. SL = Candle 3's High, Target = the day's session Low (only
+                        knowable in hindsight — a backtest-only target). <b>BUY</b> is the exact
+                        mirror (red candles, breakout above Candle 3's High, Target = day's
+                        session High). Force-closed at the <b>Cut-off Time</b> if neither SL nor
+                        Target is hit. <b>SL/Target Confirm</b>: <b>On Cross</b> exits the moment
+                        price touches the SL/Target level; <b>On Close</b> waits for a 30-min
+                        candle to actually close beyond it, ignoring a wick that doesn't hold.
+                    </div>
+                </div>
+            </div>
+
             <!-- Swing Momentum params -->
             <div id="swingMomentumParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
@@ -430,7 +474,7 @@
                         <div class="stat-card ac-teal">
                             <span class="stat-card__lbl">Total P&amp;L</span>
                             <span class="stat-card__val" id="statTotalPnl">0</span>
-                            <span class="stat-card__sub">points</span>
+                            <span class="stat-card__sub" id="statTotalPnlUnit">points</span>
                         </div>
                         <div class="stat-card ac-green">
                             <span class="stat-card__lbl">Net Outcome</span>

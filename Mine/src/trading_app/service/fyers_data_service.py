@@ -888,22 +888,30 @@ class FyersDataServiceAdapter:
             return all_inst
 
 
-    def find_option_symbol(self, root: str, strike: float, option_type: str) -> Optional[str]:
+    def find_option_symbol(self, root: str, strike: float, option_type: str, expiry_type: str = 'nearest') -> Optional[str]:
         """
         Find the Fyers instrument_token (symbol string) for a given option.
         Searches the high-speed memory cache first, then the CSV master.
+
+        expiry_type: 'nearest' (default, unchanged behaviour for all existing
+        callers) or 'monthly' — the last expiry within the nearest calendar
+        month that still has an unexpired contract. The fast cache (populated
+        by OpenInterestService) always holds nearest-expiry tokens, so
+        'monthly' requests skip it and go straight to the CSV master.
         """
         root_upper = root.strip().upper()
         opt_upper = option_type.strip().upper()
         cache_key = f"{root_upper}:{int(strike)}:{opt_upper}"
 
-        # 1. Try high-speed token cache (populated by OpenInterestService)
-        from trading_app.service.fyers_data_service import _FYERS_OPTION_TOKEN_CACHE, _FYERS_OPTION_TOKEN_LOCK
-        with _FYERS_OPTION_TOKEN_LOCK:
-            if cache_key in _FYERS_OPTION_TOKEN_CACHE:
-                sym = _FYERS_OPTION_TOKEN_CACHE[cache_key]
-                logger.debug(f"[FyersAdapter] Resolved option from FAST CACHE: {cache_key} -> {sym}")
-                return sym
+        # 1. Try high-speed token cache (populated by OpenInterestService) —
+        #    nearest-expiry only.
+        if expiry_type == 'nearest':
+            from trading_app.service.fyers_data_service import _FYERS_OPTION_TOKEN_CACHE, _FYERS_OPTION_TOKEN_LOCK
+            with _FYERS_OPTION_TOKEN_LOCK:
+                if cache_key in _FYERS_OPTION_TOKEN_CACHE:
+                    sym = _FYERS_OPTION_TOKEN_CACHE[cache_key]
+                    logger.debug(f"[FyersAdapter] Resolved option from FAST CACHE: {cache_key} -> {sym}")
+                    return sym
 
         # 2. Fallback to CSV Master
         from datetime import date as _date
@@ -939,10 +947,59 @@ class FyersDataServiceAdapter:
             logger.warning(f"[FyersAdapter] No option found for {root} {strike}{opt_upper}")
             return None
 
-        # Return the nearest-expiry match
+        matches.sort(key=lambda x: x['expiry'])
+
+        if expiry_type == 'monthly':
+            by_month = {}
+            for m in matches:
+                exp = m['expiry']
+                by_month.setdefault((exp.year, exp.month), []).append(m)
+            nearest_month = min(by_month.keys())
+            chosen = max(by_month[nearest_month], key=lambda x: x['expiry'])
+        else:
+            chosen = matches[0]
+
+        sym = chosen['instrument_token']
+        logger.info(f"[FyersAdapter] Resolved option: {root} {strike} {opt_upper} -> {sym} ({expiry_type} expiry={chosen['expiry']})")
+        return sym
+
+    def find_future_symbol(self, root: str) -> Optional[str]:
+        """
+        Find the Fyers instrument_token (symbol string) for the nearest-
+        expiry FUTURES contract of a given underlying. Mirrors
+        find_option_symbol above, minus the strike/option-type match.
+        """
+        root_upper = root.strip().upper()
+        from datetime import date as _date
+        instruments = self.instruments('NFO')  # Uses 1-hour cache
+        today = _date.today()
+
+        matches = []
+        for inst in instruments:
+            inst_name = (inst.get('name', '') or '').strip().upper()
+            inst_ts   = (inst.get('tradingsymbol', '') or '').strip().upper()
+            inst_type = (inst.get('instrument_type', '') or '').strip().upper()
+            inst_exp  = inst.get('expiry')
+
+            if inst_type != 'FUT':
+                continue
+            if inst_exp is None or inst_exp < today:
+                continue
+
+            name_ok = (inst_name == root_upper)
+            ts_ok   = (inst_ts.startswith(root_upper) and
+                       len(inst_ts) > len(root_upper) and
+                       not inst_ts[len(root_upper)].isalpha())
+            if name_ok or ts_ok:
+                matches.append(inst)
+
+        if not matches:
+            logger.warning(f"[FyersAdapter] No futures contract found for {root}")
+            return None
+
         matches.sort(key=lambda x: x['expiry'])
         sym = matches[0]['instrument_token']
-        logger.info(f"[FyersAdapter] Resolved option: {root} {strike} {opt_upper} -> {sym} (expiry={matches[0]['expiry']})")
+        logger.info(f"[FyersAdapter] Resolved future: {root} -> {sym} (expiry={matches[0]['expiry']})")
         return sym
 
     def get_lot_size(self, symbol: str) -> int:

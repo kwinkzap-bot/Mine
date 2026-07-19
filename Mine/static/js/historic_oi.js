@@ -2,6 +2,11 @@
 // ── Historic OI ────────────────────────────────────────────────
 const _HOI_SYMBOLS = ['NIFTY'];
 
+// Previous completed session's Avg 3 VWAP per symbol — set by _hoiRenderAll,
+// read by the live badge (fresh close-values, so we don't recompute it from
+// the grid on every tick).
+const _hoiPrevAvg3Vwap = {};
+
 function _hoiFmt(n) {
     if (n == null) return '—';
     return Number(n).toLocaleString('en-IN');
@@ -31,6 +36,25 @@ function _hoiRenderAll(records) {
         const hasOHLC = r => Number(r.close || 0) > 0;
         const fmtP = (r, n) => hasOHLC(r) && Number(n)
             ? Number(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+        const fmtVwap = r => r.vwap != null && Number(r.vwap) > 0
+            ? Number(r.vwap).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—';
+        // 3-day average VWAP = this row's VWAP plus the two PREVIOUS sessions'
+        // (rows[i+1], rows[i+2] — the grid is newest-first, same convention as
+        // chngFutOf below). null until 3 consecutive VWAP values are available.
+        const avg3VwapOf = (i) => {
+            const a = rows[i]?.vwap, b = rows[i + 1]?.vwap, c = rows[i + 2]?.vwap;
+            if (!(a > 0) || !(b > 0) || !(c > 0)) return null;
+            return (Number(a) + Number(b) + Number(c)) / 3;
+        };
+        // Previous session's Avg 3 VWAP — one row further back (newest-first grid).
+        const prevAvg3VwapOf = (i) => avg3VwapOf(i + 1);
+        // Baseline for the live badge: the last FULLY COMPLETED session's Avg 3
+        // VWAP. Skip row 0 if it's already today's (partially-formed) record so
+        // "previous session" means the same thing whether or not today has been
+        // recorded yet.
+        const todayIso = new Date().toLocaleDateString('sv');
+        const baseIdx  = (rows[0] && rows[0].date === todayIso) ? 1 : 0;
+        _hoiPrevAvg3Vwap[sym] = avg3VwapOf(baseIdx);
         // Monday's High/Low get the accent box — the week-open range the case
         // studies key off.
         const monBox = (r, txt) => isMon(r) ? `<span class="hoi-mon-box">${txt}</span>` : txt;
@@ -74,10 +98,22 @@ function _hoiRenderAll(records) {
                 { label: 'FII Fut', align: 'right',
                   cellClass: (_, r) => cls(futOf(r)),
                   format: (_, r) => { const f = futOf(r); return f == null ? '—' : (f > 0 ? '+' : '') + f.toFixed(0) + ' Cr'; } },
-                { label: 'Open',  align: 'right', format: (_, r) => fmtP(r, r.open) },
+                { label: 'Open',  align: 'right',
+                  cellClass: (_, r, i) => {
+                      if (!hasOHLC(r)) return '';
+                      const pa = prevAvg3VwapOf(i);
+                      if (pa == null) return '';
+                      return Number(r.open) > pa ? 'hoi-bg-pos' : 'hoi-bg-neg';
+                  },
+                  format: (_, r) => fmtP(r, r.open) },
                 { label: 'High',  align: 'right', render: (_, r) => monBox(r, fmtP(r, r.high)) },
                 { label: 'Low',   align: 'right', render: (_, r) => monBox(r, fmtP(r, r.low)) },
                 { label: 'Close', align: 'right', format: (_, r) => fmtP(r, r.close) },
+                { label: 'VWAP', align: 'right', format: (_, r) => fmtVwap(r) },
+                { label: 'Avg 3 VWAP', align: 'right', format: (_, r, i) => {
+                    const a = avg3VwapOf(i);
+                    return a == null ? '—' : Number(a).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+                } },
                 { label: 'Move', align: 'center',
                   cellClass: (_, r) => !hasOHLC(r) ? 'hoi-flat' : Number(r.close) >= Number(r.open) ? 'hoi-up' : 'hoi-down',
                   format: (_, r) => !hasOHLC(r) ? '—' : Number(r.close) >= Number(r.open) ? '▲' : '▼' },
@@ -107,6 +143,20 @@ function _hoiRenderPrediction(d) {
     const icon = d.prediction === 'BULLISH' ? '▲' : d.prediction === 'BEARISH' ? '▼' : '◆';
     const mv   = d.expected_move_pct;
     const mvTxt = (mv > 0 ? '+' : '') + mv.toFixed(2) + '%';
+
+    // Open-vs-Prev-Avg-3-VWAP read: same comparison as the grid's Open-column
+    // tint, computed server-side (analyze_and_predict) so this page and the
+    // Trend page always show the same value — kept as its own chip, separate
+    // from the 5-year blended signals below, since it isn't part of that model.
+    const openSig = d.open_vs_prev_avg3vwap;
+    const openSigChip = openSig ? (() => {
+        const c   = openSig.upside ? 'var(--pf-pos)' : 'var(--pf-neg)';
+        const fmt = n => Number(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+        return `<span class="hoi-sig-chip">
+                  <span style="color:${c};font-size:9px">●</span>Open <b style="color:var(--pf-text-1);font-variant-numeric:tabular-nums">${fmt(openSig.open)}</b>
+                  vs Prev Avg3 VWAP <b style="color:var(--pf-text-1);font-variant-numeric:tabular-nums">${fmt(openSig.prev_avg3_vwap)}</b>
+                  <b style="color:${c};font-variant-numeric:tabular-nums">${openSig.upside ? 'Upside' : 'Downside'}</b></span>`;
+    })() : '';
 
     // Crisp default view — one compact chip per signal (dot + short label + value)
     const chips = (d.reasons || []).map(r => {
@@ -148,7 +198,7 @@ function _hoiRenderPrediction(d) {
           <div class="hoi-info-pop">${popup}</div>
         </span>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${chips}</div>`;
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${openSigChip}${chips}</div>`;
 }
 
 function loadHoiPrediction() {
@@ -158,10 +208,65 @@ function loadHoiPrediction() {
         .catch(() => _hoiRenderPrediction(null));
 }
 
-function loadHistoricOI() {
-    fetch('/api/oi-historic')
+// ── Live badge — NIFTY LTP vs. previous session's Avg 3 VWAP ────────────────
+// Only meaningful while the market is open: outside those hours there's no
+// live tick to compare, so the badge just hides itself.
+let _hoiLiveTimer = null;
+
+function _hoiIsMarketOpen() {
+    // Compute in IST regardless of the viewer's own timezone.
+    const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Kolkata', weekday: 'short', hour: 'numeric',
+        minute: 'numeric', hour12: false,
+    }).formatToParts(new Date());
+    const get = t => parts.find(p => p.type === t)?.value;
+    const weekday = get('weekday');
+    if (weekday === 'Sat' || weekday === 'Sun') return false;
+    const mins = Number(get('hour')) * 60 + Number(get('minute'));
+    return mins >= (9 * 60 + 15) && mins <= (15 * 60 + 30);
+}
+
+function _hoiUpdateLiveBadge() {
+    const el = document.getElementById('hoiLiveBadge');
+    if (!el) return;
+
+    if (!_hoiIsMarketOpen()) {
+        el.style.display = 'none';
+        if (_hoiLiveTimer) { clearInterval(_hoiLiveTimer); _hoiLiveTimer = null; }
+        return;
+    }
+
+    const prevAvg3 = _hoiPrevAvg3Vwap['NIFTY'];
+    if (prevAvg3 == null) { el.style.display = 'none'; return; }
+
+    fetch('/api/underlying-price?symbol=NIFTY&price_source=ltp')
         .then(r => r.json())
-        .then(d => { if (d.success) _hoiRenderAll(d.records); })
+        .then(d => {
+            if (!d.success || !d.ltp) { el.style.display = 'none'; return; }
+            const ltp = Number(d.ltp);
+            const up  = ltp > prevAvg3;
+            const cls = up ? 'hoi-up' : 'hoi-down';
+            const fmt = n => Number(n).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+            el.style.display = '';
+            el.className = 'hoi-live-badge ' + (up ? 'hoi-bg-pos' : 'hoi-bg-neg');
+            el.innerHTML = `
+                <span class="hoi-live-dot ${cls}"></span>
+                <span class="${cls}" style="text-transform:uppercase;letter-spacing:.04em;font-size:10px">Live</span>
+                <span>NIFTY <b class="${cls}">${fmt(ltp)}</b> ${up ? '▲' : '▼'} prev Avg 3 VWAP <b>${fmt(prevAvg3)}</b></span>`;
+        })
+        .catch(() => { el.style.display = 'none'; });
+}
+
+function _hoiStartLiveBadge() {
+    _hoiUpdateLiveBadge();
+    if (_hoiLiveTimer) clearInterval(_hoiLiveTimer);
+    _hoiLiveTimer = setInterval(_hoiUpdateLiveBadge, 15000);
+}
+
+function loadHistoricOI() {
+    return fetch('/api/oi-historic')
+        .then(r => r.json())
+        .then(d => { if (d.success) { _hoiRenderAll(d.records); _hoiStartLiveBadge(); } })
         .catch(() => {
             _HOI_SYMBOLS.forEach(s => {
                 const grid = document.getElementById('hoiGrid-' + s);
@@ -185,6 +290,7 @@ function hoiFetchLatest() {
             btn.textContent = '⟳ Fetch Latest';
             if (d.success) {
                 _hoiRenderAll(d.records);
+                _hoiUpdateLiveBadge();
                 loadHoiPrediction();
                 const errs = (d.errors || []).filter(e => !e.success).map(e => e.symbol).join(', ');
                 status.textContent = errs ? `⚠️ Errors: ${errs}` : '✅ Latest saved';
@@ -310,6 +416,5 @@ function _hoiPollBackfill() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-    loadHistoricOI();
-    loadHoiPrediction();
+    loadHistoricOI().then(loadHoiPrediction);
 });

@@ -166,7 +166,7 @@ body.ocean-theme, .oip-page.ocean-theme {
 
 .oip-select {
     height: 22px;
-    background: var(--oip-header-bg);
+    background: var(--oip-card-bg);
     color: var(--oip-text);
     border: 1px solid var(--oip-border);
     border-radius: 4px;
@@ -180,7 +180,7 @@ body.ocean-theme, .oip-page.ocean-theme {
 
 .oip-select:hover {
     border-color: var(--oip-accent);
-    background: var(--oip-header-bg);
+    background: var(--oip-card-bg);
 }
 
 .oip-select:focus {
@@ -929,7 +929,7 @@ body.ocean-theme .oip-tooltip {
     border-radius: 4px;
     font-size: 11px;
     font-weight: 600;
-    background: var(--oip-header-bg);
+    background: var(--oip-card-bg);
     color: var(--oip-text);
     outline: none;
     transition: all 0.2s;
@@ -1329,6 +1329,8 @@ body.ocean-theme .oip-tooltip {
     box-shadow: 0 4px 16px rgba(0,0,0,0.12);
     padding: 8px 0;
     min-width: 180px;
+    width: max-content;
+    max-width: 320px;
     font-size: 12px;
 }
 .oip-ind-popup.hidden { display: none; }
@@ -1370,6 +1372,7 @@ body.ocean-theme .oip-tooltip {
     font-size: 12px;
     font-weight: 500;
     transition: background 0.1s;
+    white-space: nowrap;
 }
 .oip-ind-item:hover { background: var(--oip-header-bg); }
 .oip-ind-item input[type="checkbox"] {
@@ -1379,6 +1382,43 @@ body.ocean-theme .oip-tooltip {
     accent-color: var(--oip-accent);
     flex-shrink: 0;
 }
+/* The label text itself must never wrap or shrink — width:max-content on the
+   popup already grows to fit it; this just guards against edge cases. */
+.oip-ind-item > span:not(.oip-line-props) { flex-shrink: 0; white-space: nowrap; }
+
+/* ── Per-line customization: color swatch + width select + style select ── */
+.oip-line-props {
+    margin-left: auto;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.oip-line-style-sel, .oip-line-width-sel, .oip-line-opacity-sel {
+    flex-shrink: 0;
+    height: 18px;
+    font-size: 10px;
+    padding: 0 3px;
+    border: 1px solid var(--oip-border);
+    border-radius: 3px;
+    background: var(--oip-card-bg);
+    color: var(--oip-metric-lbl);
+    cursor: pointer;
+    outline: none;
+}
+.oip-line-style-sel:hover, .oip-line-width-sel:hover, .oip-line-opacity-sel:hover { color: var(--oip-text); }
+.oip-line-color-inp {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--oip-border);
+    border-radius: 3px;
+    cursor: pointer;
+    background: none;
+}
+.oip-line-color-inp::-webkit-color-swatch-wrapper { padding: 1px; }
+.oip-line-color-inp::-webkit-color-swatch { border: none; border-radius: 2px; }
 
 /* ── CPR Expand / Collapse ───────────────────────────────── */
 .oip-ind-cpr-header {
@@ -1432,7 +1472,7 @@ body.ocean-theme .oip-tooltip {
     padding: 0 4px;
     border: 1px solid var(--oip-border);
     border-radius: 3px;
-    background: var(--oip-header-bg);
+    background: var(--oip-card-bg);
     color: var(--oip-text);
     text-align: center;
 }

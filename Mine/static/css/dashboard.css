@@ -658,6 +658,25 @@ body.embed-mode .hoi-page { height: 100vh; }
     border: 1px solid var(--pf-accent); border-radius: 3px;
 }
 .hoi-mon-row { background: color-mix(in srgb, var(--pf-accent) 8%, transparent) !important; }
+/* Open cell tint: today's Open vs. the previous session's Avg 3 VWAP */
+.hoi-bg-pos { background: color-mix(in srgb, var(--pf-pos) 16%, transparent) !important; }
+.hoi-bg-neg { background: color-mix(in srgb, var(--pf-neg) 16%, transparent) !important; }
+
+/* Live badge — current NIFTY LTP vs. previous session's Avg 3 VWAP,
+   shown only while the market is open */
+.hoi-live-badge {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 8px; padding: 8px 14px;
+    border: 1px solid var(--pf-border); border-radius: 8px;
+    font-size: 12px; font-weight: 600; color: var(--pf-text-1);
+}
+.hoi-live-badge .hoi-live-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: currentColor;
+    animation: hoi-live-pulse 1.4s ease-in-out infinite;
+}
+@keyframes hoi-live-pulse {
+    0%, 100% { opacity: 1; } 50% { opacity: .35; }
+}
 
 /* delete button */
 .hoi-del-btn {

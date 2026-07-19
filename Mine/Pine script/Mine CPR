@@ -784,6 +784,7 @@ alertcondition(exitSignal, "EMA Retest Exit Signal", "EMA Exit — Close below 5
 // ─── Current & Previous VWAP ─────────────────────────────────────────────────
 vwap_colCurrent  = input.color(color.new(color.blue,   0), "Current VWAP",  group="VWAP Style")
 vwap_colPrevious = input.color(color.new(color.orange, 0), "Previous VWAP", group="VWAP Style")
+vwap_colAvg3     = input.color(color.new(color.red,    0), "Avg 3 VWAP",    group="VWAP Style")
 vwap_lineWidth   = input.int(2, "Line Width", minval=1, maxval=4,            group="VWAP Style")
 
 // Only visible on 15-min and below
@@ -793,24 +794,38 @@ vwap_show = timeframe.isintraday and timeframe.multiplier <= 15
 vwap_isNewSession = ta.change(time("D")) != 0
 vwap_typicalPrice = (high + low + close) / 3.0
 
-var float vwap_cumPV    = 0.0
-var float vwap_cumVol   = 0.0
-var float vwap_prevVWAP = na
+var float vwap_cumPV     = 0.0
+var float vwap_cumVol    = 0.0
+var float vwap_prevVWAP  = na  // last completed session's closing VWAP
+var float vwap_prevVWAP2 = na  // 2 sessions ago
+var float vwap_prevVWAP3 = na  // 3 sessions ago
 
 if vwap_isNewSession
-    vwap_prevVWAP := vwap_cumPV / vwap_cumVol
-    vwap_cumPV    := vwap_typicalPrice * volume
-    vwap_cumVol   := volume
+    // Shift oldest-first so today's newly-completed VWAP lands in vwap_prevVWAP
+    // without clobbering the values it's about to push down the chain.
+    vwap_prevVWAP3 := vwap_prevVWAP2
+    vwap_prevVWAP2 := vwap_prevVWAP
+    vwap_prevVWAP  := vwap_cumPV / vwap_cumVol
+    vwap_cumPV     := vwap_typicalPrice * volume
+    vwap_cumVol    := volume
 else
     vwap_cumPV  += vwap_typicalPrice * volume
     vwap_cumVol += volume
 
 vwap_currentVWAP = vwap_cumPV / vwap_cumVol
 
+// Average of the last 3 COMPLETED sessions' closing VWAP (excludes today's
+// still-forming current VWAP so the line only steps once per day, like
+// Previous VWAP does).
+vwap_avg3 = (not na(vwap_prevVWAP) and not na(vwap_prevVWAP2) and not na(vwap_prevVWAP3)) ? (vwap_prevVWAP + vwap_prevVWAP2 + vwap_prevVWAP3) / 3.0 : na
+
 plot(vwap_show ? vwap_currentVWAP : na, title="Current VWAP",  color=vwap_colCurrent,  linewidth=vwap_lineWidth)
 plot(vwap_show ? vwap_prevVWAP    : na, title="Previous VWAP", color=vwap_colPrevious, linewidth=vwap_lineWidth)
+plot(vwap_show ? vwap_avg3        : na, title="Avg 3 VWAP",    color=vwap_colAvg3,     linewidth=vwap_lineWidth)
 
 if barstate.islast and vwap_show
     label.new(bar_index, vwap_currentVWAP, text="VWAP\n" + str.tostring(vwap_currentVWAP, "#.##"), color=vwap_colCurrent,  textcolor=color.white, style=label.style_label_left, size=size.small)
+    if not na(vwap_avg3)
+        label.new(bar_index, vwap_avg3, text="Avg 3 VWAP\n" + str.tostring(vwap_avg3, "#.##"), color=vwap_colAvg3, textcolor=color.white, style=label.style_label_left, size=size.small)
     if not na(vwap_prevVWAP)
         label.new(bar_index, vwap_prevVWAP, text="Prev VWAP\n" + str.tostring(vwap_prevVWAP, "#.##"), color=vwap_colPrevious, textcolor=color.white, style=label.style_label_left, size=size.small)

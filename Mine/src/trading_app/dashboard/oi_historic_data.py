@@ -151,6 +151,40 @@ def _fetch_day_ohlc(symbol: str, date_str: str, provider) -> Dict[str, Any]:
     return {}
 
 
+def _fetch_day_vwap(symbol: str, date_str: str, provider) -> Optional[float]:
+    """
+    Fetch 1-minute candles for the underlying index on date_str and return the
+    session's closing VWAP (cumulative(typical price × volume) / cumulative
+    volume, evaluated at the last bar of the day) — same formula as
+    VWAPBacktestEngine._calc_vwap (Backtest/vwap_engine.py). Index candles
+    carry no traded volume, so a zero/missing volume bar falls back to weight
+    1.0, degrading gracefully to an unweighted average of the typical price.
+    """
+    if not provider:
+        return None
+    try:
+        from trading_app.service.fyers_data_service import FyersDataServiceAdapter
+        provider_type = 'fyers' if isinstance(provider, FyersDataServiceAdapter) else 'kite'
+        instrument_key = _SYMBOL_INSTRUMENT_KEY[provider_type].get(symbol)
+        if not instrument_key:
+            return None
+        candles = provider.historical_data(instrument_key, date_str, date_str, 'minute')
+        if not candles:
+            return None
+        pv = vol_sum = 0.0
+        for c in candles:
+            vol = float(c.get('volume', 0) or 0) or 1.0
+            typical = (float(c.get('high', 0)) + float(c.get('low', 0)) + float(c.get('close', 0))) / 3.0
+            pv += typical * vol
+            vol_sum += vol
+        if vol_sum <= 0:
+            return None
+        return round(pv / vol_sum, 2)
+    except Exception as e:
+        logger.warning(f"[HistoricOI] VWAP fetch failed for {symbol} on {date_str}: {e}")
+        return None
+
+
 # Symbol → index name as it appears in NSE's daily index snapshot CSV
 _SYMBOL_NSE_INDEX_NAME = {
     'NIFTY': 'Nifty 50',
@@ -531,6 +565,9 @@ def fetch_and_store(symbol: str, provider=None,
         # OHLC from the NIFTY index *spot* (NSE index snapshot; broker index
         # candle as fallback) — never from futures prices.
         ohlc = _fetch_spot_ohlc(symbol, today, provider)
+        # Session-close VWAP — needs 1-minute broker candles (the NSE index
+        # snapshot has no volume), so it's broker-only, no NSE fallback.
+        vwap = _fetch_day_vwap(symbol, today, provider)
 
         record = {
             'date':              today,
@@ -541,6 +578,7 @@ def fetch_and_store(symbol: str, provider=None,
             'high':              ohlc.get('high',  0),
             'low':               ohlc.get('low',   0),
             'close':             ohlc.get('close', 0),
+            'vwap':              vwap,
             'idx_fut_oi':        bhav.get('idx_fut_oi') or None,
             'fii_fut_oi':        _fetch_nse_fii_fut_oi(today),
             'FII_Index_futures': fii_flow if fii_flow is not None else 0,
@@ -561,6 +599,8 @@ def fetch_and_store(symbol: str, provider=None,
                         record['idx_fut_oi'] = r.get('idx_fut_oi')
                     if record['fii_fut_oi'] is None:
                         record['fii_fut_oi'] = r.get('fii_fut_oi')
+                    if record['vwap'] is None:
+                        record['vwap'] = r.get('vwap')
                     records[i] = record
                     updated = True
                     break
@@ -1089,83 +1129,105 @@ def _run_load_all(from_date: str, to_date: str,
             _backfill_status.update({'progress': i, 'message': f'Processing {day}…'})
             changed = False
 
-            # In normal mode, skip days where every symbol already has OHLC + Fut OI
-            if not force:
-                present_keys = [(day, sym) for sym in symbols if (day, sym) in existing_keys]
-                if (len(present_keys) == len(symbols)
-                        and all(float(records[idx_map[k]].get('close', 0) or 0) > 0
-                                for k in present_keys)
-                        and all(records[idx_map[k]].get('idx_fut_oi') is not None
-                                for k in present_keys)):
-                    continue  # fully populated — skip bhavcopy and broker calls
+            # In normal mode, skip the bhavcopy+OHLC phases for days where every
+            # symbol already has OHLC + Fut OI. VWAP (added later) is checked
+            # independently below so it can backfill without re-downloading
+            # bhavcopy for days that are otherwise already complete.
+            present_keys = [(day, sym) for sym in symbols if (day, sym) in existing_keys]
+            skip_bhav_ohlc = (not force and len(present_keys) == len(symbols)
+                    and all(float(records[idx_map[k]].get('close', 0) or 0) > 0
+                            for k in present_keys)
+                    and all(records[idx_map[k]].get('idx_fut_oi') is not None
+                            for k in present_keys))
 
-            # ── Bhavcopy phase ──────────────────────────────────────────────
-            oi_data = _fetch_nse_bhavcopy_oi(day, symbols)
-            time.sleep(0.5)
+            if not skip_bhav_ohlc:
+                # ── Bhavcopy phase ──────────────────────────────────────────
+                oi_data = _fetch_nse_bhavcopy_oi(day, symbols)
+                time.sleep(0.5)
 
-            if oi_data:
-                for symbol in symbols:
-                    sym_oi = oi_data.get(symbol, {})
-                    if not sym_oi.get('ce_oi') and not sym_oi.get('pe_oi'):
-                        continue
+                if oi_data:
+                    for symbol in symbols:
+                        sym_oi = oi_data.get(symbol, {})
+                        if not sym_oi.get('ce_oi') and not sym_oi.get('pe_oi'):
+                            continue
 
-                    key = (day, symbol)
-                    if key not in existing_keys:
-                        records.append({
-                            'date':              day,
-                            'symbol':            symbol,
-                            'ce_oi':             sym_oi.get('ce_oi', 0),
-                            'pe_oi':             sym_oi.get('pe_oi', 0),
-                            'open':              0,
-                            'high':              0,
-                            'low':               0,
-                            'close':             0,
-                            'idx_fut_oi':        sym_oi.get('idx_fut_oi') or None,
-                            'FII_Index_futures': 0,
-                        })
-                        idx_map[key] = len(records) - 1
-                        existing_keys.add(key)
-                        changed = True
-                        inserted += 1
-                    else:
-                        rec = records[idx_map[key]]
-                        if force:
-                            records[idx_map[key]] = {
-                                **rec,
-                                'ce_oi':      sym_oi.get('ce_oi', rec.get('ce_oi', 0)),
-                                'pe_oi':      sym_oi.get('pe_oi', rec.get('pe_oi', 0)),
-                                'idx_fut_oi': sym_oi.get('idx_fut_oi') or None,
-                            }
+                        key = (day, symbol)
+                        if key not in existing_keys:
+                            records.append({
+                                'date':              day,
+                                'symbol':            symbol,
+                                'ce_oi':             sym_oi.get('ce_oi', 0),
+                                'pe_oi':             sym_oi.get('pe_oi', 0),
+                                'open':              0,
+                                'high':              0,
+                                'low':               0,
+                                'close':             0,
+                                'idx_fut_oi':        sym_oi.get('idx_fut_oi') or None,
+                                'FII_Index_futures': 0,
+                            })
+                            idx_map[key] = len(records) - 1
+                            existing_keys.add(key)
                             changed = True
-                            updated += 1
+                            inserted += 1
                         else:
-                            if rec.get('idx_fut_oi') is None and sym_oi.get('idx_fut_oi'):
+                            rec = records[idx_map[key]]
+                            if force:
                                 records[idx_map[key]] = {
-                                    **rec, 'idx_fut_oi': sym_oi['idx_fut_oi'],
+                                    **rec,
+                                    'ce_oi':      sym_oi.get('ce_oi', rec.get('ce_oi', 0)),
+                                    'pe_oi':      sym_oi.get('pe_oi', rec.get('pe_oi', 0)),
+                                    'idx_fut_oi': sym_oi.get('idx_fut_oi') or None,
                                 }
                                 changed = True
                                 updated += 1
+                            else:
+                                if rec.get('idx_fut_oi') is None and sym_oi.get('idx_fut_oi'):
+                                    records[idx_map[key]] = {
+                                        **rec, 'idx_fut_oi': sym_oi['idx_fut_oi'],
+                                    }
+                                    changed = True
+                                    updated += 1
 
-            # ── Spot OHLC (NSE index snapshot; broker index candle fallback) ─
-            # OHLC always comes from the NIFTY index spot, never futures.
-            # Normal mode: fills missing OHLC only.
-            # Force/recalculate mode: refreshes OHLC for all existing records.
-            spot_map = _fetch_nse_index_spot_ohlc(day, symbols)
-            for symbol in symbols:
-                key = (day, symbol)
-                if key not in existing_keys:
-                    continue
-                rec = records[idx_map[key]]
-                if float(rec.get('close', 0) or 0) > 0 and not force:
-                    continue  # has OHLC in normal mode — skip
-                ohlc = spot_map.get(symbol) or {}
-                if not ohlc.get('close') and provider:
-                    _backfill_status['message'] = f'OHLC {symbol} {day}…'
-                    ohlc = _fetch_day_ohlc(symbol, day, provider)
-                if ohlc.get('close') and any(rec.get(k) != v for k, v in ohlc.items()):
-                    records[idx_map[key]] = {**records[idx_map[key]], **ohlc}
-                    changed = True
-                    updated += 1
+                # ── Spot OHLC (NSE index snapshot; broker index candle fallback)
+                # OHLC always comes from the NIFTY index spot, never futures.
+                # Normal mode: fills missing OHLC only.
+                # Force/recalculate mode: refreshes OHLC for all existing records.
+                spot_map = _fetch_nse_index_spot_ohlc(day, symbols)
+                for symbol in symbols:
+                    key = (day, symbol)
+                    if key not in existing_keys:
+                        continue
+                    rec = records[idx_map[key]]
+                    if float(rec.get('close', 0) or 0) > 0 and not force:
+                        continue  # has OHLC in normal mode — skip
+                    ohlc = spot_map.get(symbol) or {}
+                    if not ohlc.get('close') and provider:
+                        _backfill_status['message'] = f'OHLC {symbol} {day}…'
+                        ohlc = _fetch_day_ohlc(symbol, day, provider)
+                    if ohlc.get('close') and any(rec.get(k) != v for k, v in ohlc.items()):
+                        records[idx_map[key]] = {**records[idx_map[key]], **ohlc}
+                        changed = True
+                        updated += 1
+
+            # ── Spot VWAP (broker 1-minute candles; NIFTY index) ──────────────
+            # Session-close VWAP needs 1-minute data, which only the broker
+            # provides (the NSE index snapshot carries no volume) — no NSE
+            # fallback, so this phase always runs through `provider`.
+            if provider:
+                for symbol in symbols:
+                    key = (day, symbol)
+                    if key not in existing_keys:
+                        continue
+                    rec = records[idx_map[key]]
+                    if rec.get('vwap') is not None and not force:
+                        continue  # has VWAP in normal mode — skip
+                    _backfill_status['message'] = f'VWAP {symbol} {day}…'
+                    vwap = _fetch_day_vwap(symbol, day, provider)
+                    time.sleep(0.15)  # gentle rate limit between broker calls
+                    if vwap is not None and rec.get('vwap') != vwap:
+                        records[idx_map[key]] = {**records[idx_map[key]], 'vwap': vwap}
+                        changed = True
+                        updated += 1
 
             if changed:
                 with _lock:
@@ -1483,6 +1545,26 @@ def analyze_and_predict(symbol: str = 'NIFTY') -> Dict[str, Any]:
     while nxt.weekday() >= 5:
         nxt += timedelta(days=1)
 
+    # Latest session's Open vs. the PRIOR session's Avg 3 VWAP (avg of the 3
+    # sessions ending the day before latest) — same "Upside/Downside" read as
+    # the Historic OI grid's Open-column tint, computed once here so every
+    # consumer of this endpoint (Historic OI page, Trend page) shows the same
+    # value without re-deriving it from raw records.
+    open_vs_prev_avg3vwap = None
+    if len(recs) >= 4:
+        latest_rec = recs[-1]
+        prev3      = recs[-4:-1]
+        vwaps      = [r.get('vwap') for r in prev3]
+        open_val   = float(latest_rec.get('open') or 0)
+        if open_val > 0 and all(v is not None and float(v) > 0 for v in vwaps):
+            prev_avg3 = sum(float(v) for v in vwaps) / 3
+            open_vs_prev_avg3vwap = {
+                'date':           latest_rec['date'],
+                'open':           round(open_val, 2),
+                'prev_avg3_vwap': round(prev_avg3, 2),
+                'upside':         open_val > prev_avg3,
+            }
+
     return {
         'success':           True,
         'symbol':            symbol,
@@ -1498,6 +1580,7 @@ def analyze_and_predict(symbol: str = 'NIFTY') -> Dict[str, Any]:
         'from_date':         recs[0]['date'],
         'to_date':           latest['date'],
         'reasons':           reasons,
+        'open_vs_prev_avg3vwap': open_vs_prev_avg3vwap,
     }
 
 
@@ -1530,6 +1613,9 @@ def refresh_record(date: str, symbol: str, provider=None) -> Dict[str, Any]:
         # ── OHLC: NIFTY index spot (NSE index snapshot; broker fallback) ────
         ohlc = _fetch_spot_ohlc(symbol, date, provider)
 
+        # ── Session-close VWAP: broker 1-minute candles only ────────────────
+        vwap = _fetch_day_vwap(symbol, date, provider)
+
         # ── FII net index-futures OI (NSE participant report) ───────────────
         fii_fut_oi = _fetch_nse_fii_fut_oi(date)
 
@@ -1556,6 +1642,7 @@ def refresh_record(date: str, symbol: str, provider=None) -> Dict[str, Any]:
             if sym_oi.get('ce_oi'):      merged['ce_oi'] = sym_oi['ce_oi']
             if sym_oi.get('pe_oi'):      merged['pe_oi'] = sym_oi['pe_oi']
             if ohlc.get('close'):        merged.update(ohlc)
+            if vwap is not None:         merged['vwap'] = vwap
             if sym_oi.get('idx_fut_oi'): merged['idx_fut_oi'] = sym_oi['idx_fut_oi']
             if fii_fut_oi is not None:   merged['fii_fut_oi'] = fii_fut_oi
             if fii_flow is not None:     merged['FII_Index_futures'] = fii_flow
@@ -1571,7 +1658,8 @@ def refresh_record(date: str, symbol: str, provider=None) -> Dict[str, Any]:
         logger.info(
             f'[HistoricOI] Refreshed {symbol} {date}: '
             f"CE={merged.get('ce_oi')} PE={merged.get('pe_oi')} "
-            f"close={merged.get('close')} futOI={merged.get('idx_fut_oi')} "
+            f"close={merged.get('close')} vwap={merged.get('vwap')} "
+            f"futOI={merged.get('idx_fut_oi')} "
             f"fiiFutOI={merged.get('fii_fut_oi')} fiiFlow={merged.get('FII_Index_futures')}"
         )
         return {'success': True, 'record': merged}

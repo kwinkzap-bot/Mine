@@ -37,23 +37,32 @@ window.oipInitSecondaryCharts = function() {
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
 
-        // CVWAP (current-session) / PVWAP (previous-session) on the Options Premium chart.
-        const showCV = oipElems.showCVWAP?.checked ?? false;
-        const showPV = oipElems.showPVWAP?.checked ?? false;
+        // CVWAP (current-session) / PVWAP (previous-session) / 3-AVG_VWAP on the Options
+        // Premium (Combined) chart — one of the 3 "option charts" controlled independently
+        // by the Opt Indicator popup's own "VWAP" checkbox (see oipSyncVwapVisibility).
+        const showOptVwapInt = document.getElementById('oipShowVwapOpt')?.checked ?? false;
         oipCvwapIntSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#3b82f6', lineWidth: 1, title: '', visible: showCV,
+            color: '#3b82f6', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
         oipCvwapIntPeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#60a5fa', lineWidth: 1, title: '', visible: showCV,
+            color: '#60a5fa', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
         oipPvwapIntSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#f97316', lineWidth: 1, title: '', visible: showPV,
+            color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
         oipPvwapIntPeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#fdba74', lineWidth: 1, title: '', visible: showPV,
+            color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwapInt,
+            priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
+        });
+        oipAvg3VwapIntSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#ef4444', lineWidth: 1, title: '', visible: showOptVwapInt,
+            priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
+        });
+        oipAvg3VwapIntPeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#f87171', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
 
@@ -71,23 +80,108 @@ window.oipInitSecondaryCharts = function() {
         });
         oipPESeries = oipPEChart.series;
 
-        const showEma9 = oipElems.showEma9?.checked ?? false;
-        const showEma20 = oipElems.showEma20?.checked ?? false;
-        const showEma50 = oipElems.showEma50?.checked ?? false;
+        // Fixed 24000 strike / monthly expiry combined chart — independent of
+        // the ATM-relative strike selection above; not part of the shared
+        // zoom/crosshair sync web (different strike+expiry, own time axis).
+        oipFixedChart = TradingViewChart.create({
+            containerId: 'oipFixed24000Chart', data: [], type: 'COMBINED',
+            isCombined: true, timeframe: oipInterval, options: { height: 375 }
+        });
+        oipFixedCeSeries = oipFixedChart.ceSeries || oipFixedChart.series;
+        oipFixedPeSeries = oipFixedChart.peSeries;
 
-        oipCEEma9Series = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
-        oipCEEma20Series = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma20, autoscaleInfoProvider: () => null });
-        oipCEEma50Series = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
+        // Previous-day reference lines: CE (H+L)/2, PE (H+L)/2, (CE close + PE close)/2 —
+        // all flat lines using the PRIOR trading day's values, drawn across the current session.
+        // title + lastValueVisible label each line with its name and current value.
+        oipFixedCeHL2Series = oipFixedChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#16a34a', lineWidth: 1, title: 'CE Avg',
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
+        oipFixedPeHL2Series = oipFixedChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#7c3aed', lineWidth: 1, title: 'PE Avg',
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
+        oipFixedCloseAvgSeries = oipFixedChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#000000', lineWidth: 1, title: 'CE & PE Avg',
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
 
-        oipPEEma9Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma9, autoscaleInfoProvider: () => null });
-        oipPEEma20Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma20, autoscaleInfoProvider: () => null });
-        oipPEEma50Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showEma50, autoscaleInfoProvider: () => null });
+        // "Fixed Chart Lines" on the Combined (Options Premium) chart — shares
+        // checkboxes/style keys with the fixed 24000-monthly chart's own lines,
+        // but the DATA is this chart's own weekly premium (set in
+        // oipRefreshLocalView), not the 24000-monthly data.
+        const showFixedCe   = document.getElementById('oipShowFixedCeAvg')?.checked ?? true;
+        const showFixedPe   = document.getElementById('oipShowFixedPeAvg')?.checked ?? true;
+        const showFixedCePe = document.getElementById('oipShowFixedCePeAvg')?.checked ?? true;
+        oipIntFixedCeAvgSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#16a34a', lineWidth: 1, title: 'CE Avg', visible: showFixedCe,
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
+        oipIntFixedPeAvgSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#7c3aed', lineWidth: 1, title: 'PE Avg', visible: showFixedPe,
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
+        oipIntFixedCePeAvgSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#000000', lineWidth: 1, title: 'CE & PE Avg', visible: showFixedCePe,
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
 
-        // CVWAP (current-session) / PVWAP (previous-session) on the CE Only & PE Only charts.
-        oipCECvwapSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, title: '', visible: showCV, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
-        oipCEPvwapSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, title: '', visible: showPV, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
-        oipPECvwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, title: '', visible: showCV, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
-        oipPEPvwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, title: '', visible: showPV, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        // CE Only / PE Only EMA visibility is controlled independently by the
+        // Opt Indicator popup's own EMA checkboxes (see oipUpdateOptEmaVisibility
+        // in oi_indicators.js) — NOT the main popup's EMA9/20/50, which only
+        // apply to the main chart now.
+        const showOptEma9  = document.getElementById('oipShowEma9Opt')?.checked  ?? false;
+        const showOptEma20 = document.getElementById('oipShowEma20Opt')?.checked ?? false;
+        const showOptEma50 = document.getElementById('oipShowEma50Opt')?.checked ?? false;
+
+        oipCEEma9Series = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showOptEma9, autoscaleInfoProvider: () => null });
+        oipCEEma20Series = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showOptEma20, autoscaleInfoProvider: () => null });
+        oipCEEma50Series = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showOptEma50, autoscaleInfoProvider: () => null });
+
+        oipPEEma9Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#22c55e', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showOptEma9, autoscaleInfoProvider: () => null });
+        oipPEEma20Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#f97316', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showOptEma20, autoscaleInfoProvider: () => null });
+        oipPEEma50Series = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, visible: showOptEma50, autoscaleInfoProvider: () => null });
+
+        // CVWAP (current-session) / PVWAP (previous-session) / 3-AVG_VWAP on the CE Only & PE
+        // Only charts — visibility controlled independently by the Opt Indicator popup's
+        // own "VWAP" checkbox, not the main popup's CVWAP/PVWAP/3-AVG_VWAP sub-states.
+        const showOptVwap = document.getElementById('oipShowVwapOpt')?.checked ?? false;
+        oipCECvwapSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipCEPvwapSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipCEAvg3VwapSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipPECvwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipPEPvwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+        oipPEAvg3VwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
+
+        // "Fixed Chart Lines" on the CE Only / PE Only charts — shares
+        // checkboxes/style keys with the fixed 24000-monthly chart's own lines,
+        // but the DATA is each chart's own weekly premium (set in
+        // oipRefreshLocalView), not the 24000-monthly data. CE Avg and PE Avg
+        // each appear on BOTH charts.
+        oipCEFixedCeAvgSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#16a34a', lineWidth: 1, title: 'CE Avg', visible: showFixedCe,
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
+        oipCEFixedPeAvgSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#7c3aed', lineWidth: 1, title: 'PE Avg', visible: showFixedPe,
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
+        oipCEFixedCePeAvgSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#000000', lineWidth: 1, title: 'CE & PE Avg', visible: showFixedCePe,
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
+        oipPEFixedPeAvgSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#7c3aed', lineWidth: 1, title: 'PE Avg', visible: showFixedPe,
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
+        oipPEFixedCeAvgSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#16a34a', lineWidth: 1, title: 'CE Avg', visible: showFixedCe,
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
+        oipPEFixedCePeAvgSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#000000', lineWidth: 1, title: 'CE & PE Avg', visible: showFixedCePe,
+            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+        });
 
         oipInitPremiumSeries();
         
@@ -202,6 +296,10 @@ window.oipInitSecondaryCharts = function() {
         if (oipPEChart?.chart) {
             const wrap = document.getElementById('oipPEChartWrap');
             if (wrap) new ResizeObserver(() => syncSize(oipPEChart.chart, wrap)).observe(wrap);
+        }
+        if (oipFixedChart?.chart) {
+            const wrap = document.getElementById('oipFixed24000ChartWrap');
+            if (wrap) new ResizeObserver(() => syncSize(oipFixedChart.chart, wrap)).observe(wrap);
         }
         if (oipOIChart) {
             oipOIChart.subscribeCrosshairMove(param => {
