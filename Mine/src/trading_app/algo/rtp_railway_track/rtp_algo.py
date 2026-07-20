@@ -8,7 +8,7 @@ Multiple re-entries allowed per day. Auto-started at 9:15 AM by the scheduler.
 
 Timeframe variants share this identical logic (see RTP_VARIANTS):
   '1m'  — 1-minute candles,  SL 30 / Target 90, ADX off, confirm candle 2 bars
-  '30s' — 30-second candles, SL 10 / Target 30, ADX on @ 25, rail gap ≥ 0.2×ATR
+  '30s' — 30-second candles, SL 30 / Target 90, ADX on @ 20, confirm candle 2 bars
   '2m'  — 2-minute candles,  SL 30 / Target 90, ADX off, confirm candle 2 bars
   '3m'  — 3-minute candles,  SL 25 / Target 75, ADX off, confirm candle 2 bars
   '5m'  — 5-minute candles,  SL 30 / Target 90, ADX off, confirm candle 2 bars, rail gap ≥ 0.2×ATR
@@ -112,11 +112,11 @@ RTP_VARIANTS: Dict[str, RTPVariant] = {
     '30s': RTPVariant(
         key='30s',
         interval='30second',
-        sl_points=10.0,
-        tgt_points=30.0,
+        sl_points=30.0,
+        tgt_points=90.0,
         use_adx=True,
-        adx_thresh=25.0,
-        min_rail_gap_atr=0.2,
+        adx_thresh=20.0,
+        confirm_bars=2,
         state_file=os.path.join(_DIR, 'rtp_state_30s.json'),
         history_file=os.path.join(_DIR, 'rtp_trades_history_30s.json'),
         all_history_file=os.path.join(_DIR, 'rtp_trades_all_history_30s.json'),

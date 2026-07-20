@@ -6,11 +6,16 @@ open (candle 1 = 09:15-09:44, candle 2 = 09:45-10:14, candle 3 =
 10:15-10:44):
 
   SHORT setup (breakdown):
-    1. Candle 1 is green (close > open) AND Candle 2 is green.
-    2. Candle 3's High crosses ABOVE the higher of Candle 1/2's High,
-       but Candle 3's CLOSE is back below Candle 2's High — a fakeout
-       rejection candle.
-    3. Candle 3's Low becomes the breakdown trigger. The first 1-minute
+    1. Candle 1 is green (close > open).
+    2. Candle 2 is green AND Candle 2's High > Candle 1's High.
+    3. Candle 3's High crosses ABOVE Candle 2's High, but Candle 3's
+       CLOSE is back below Candle 2's High — a fakeout rejection candle.
+    4. Candle 3's CLOSE must not be below the 50% level (midpoint of
+       High/Low) of Candle 2 — too deep a close invalidates the setup.
+    5. Candle 3's lower wick must not be bigger than its upper wick
+       (lower_wick <= upper_wick) — a SELL entry needs a rejection
+       candle with a dominant upper wick, not a hammer-like tail.
+    6. Candle 3's Low becomes the breakdown trigger. The first 1-minute
        bar (from 10:45 onward) whose Low trades through that trigger
        fires the SELL entry — fills at the trigger level, or at the
        bar's open if it gaps straight through.
@@ -23,10 +28,13 @@ open (candle 1 = 09:15-09:44, candle 2 = 09:45-10:14, candle 3 =
     neither is hit by then.
 
   LONG setup (breakout) — the exact mirror:
-    Candle 1 & 2 both red, Candle 3's Low crosses below the lower of
-    Candle 1/2's Low but closes back above Candle 2's Low. Candle 3's
-    High is the breakout trigger -> BUY. SL = Candle 3's Low, Target =
-    the day's session High.
+    Candle 1 red. Candle 2 red AND Candle 2's Low < Candle 1's Low.
+    Candle 3's Low crosses below Candle 2's Low but closes back above
+    Candle 2's Low, and Candle 3's CLOSE must not be above the 50%
+    level of Candle 2. Candle 3's upper wick must not be bigger than
+    its lower wick (upper_wick <= lower_wick). Candle 3's High is the
+    breakout trigger -> BUY. SL = Candle 3's Low, Target = the day's
+    session High.
 
 Only one setup (and one trade) per day. No new entries at/after the
 cutoff time.
@@ -124,15 +132,22 @@ def _run_day(day_df: pd.DataFrame, cutoff: int, enable_long: bool, enable_short:
     direction = None
     trigger = sl_level = None
 
-    if enable_short and c1['close'] > c1['open'] and c2['close'] > c2['open']:
-        range_high = max(c1['high'], c2['high'])
-        if c3['high'] > range_high and c3['close'] < c2['high']:
+    c3_upper_wick = c3['high'] - max(c3['open'], c3['close'])
+    c3_lower_wick = min(c3['open'], c3['close']) - c3['low']
+
+    if (enable_short and c1['close'] > c1['open'] and c2['close'] > c2['open']
+            and c2['high'] > c1['high']):
+        c2_mid = (c2['high'] + c2['low']) / 2
+        if (c3['high'] > c2['high'] and c3['close'] < c2['high'] and c3['close'] >= c2_mid
+                and c3_lower_wick <= c3_upper_wick):
             direction = 'short'
             trigger, sl_level = c3['low'], c3['high']
 
-    if direction is None and enable_long and c1['close'] < c1['open'] and c2['close'] < c2['open']:
-        range_low = min(c1['low'], c2['low'])
-        if c3['low'] < range_low and c3['close'] > c2['low']:
+    if (direction is None and enable_long and c1['close'] < c1['open'] and c2['close'] < c2['open']
+            and c2['low'] < c1['low']):
+        c2_mid = (c2['high'] + c2['low']) / 2
+        if (c3['low'] < c2['low'] and c3['close'] > c2['low'] and c3['close'] <= c2_mid
+                and c3_upper_wick <= c3_lower_wick):
             direction = 'long'
             trigger, sl_level = c3['high'], c3['low']
 

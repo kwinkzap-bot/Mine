@@ -768,11 +768,11 @@ class OpenInterestService:
 
         Rule (CE-OI based):
             ATM = round(snapshot_price / step) * step
-            If CE_OI(ATM + step) > CE_OI(ATM) -> select [ATM, ATM + step]
-            Else                              -> select [ATM, ATM - step]
+            Compare CE_OI(ATM + step) vs CE_OI(ATM - step) directly and
+            select whichever neighbor has the higher CE OI (ties favor ATM + step).
 
-        Example: ATM 24100 CE has 1.1 Cr OI. If 24150 CE OI > 24100 CE OI,
-        select 24100 and 24150; otherwise select 24100 and 24050.
+        Example: 24150 CE OI is 1.2 Cr and 24050 CE OI is 0.9 Cr (ATM 24100) ->
+        select 24100 and 24150, regardless of ATM's own CE OI.
 
         Returns a dict ready for the frontend to draw horizontal lines at the
         two selected strike price levels.
@@ -840,11 +840,12 @@ class OpenInterestService:
                 return {'success': False,
                         'error': f'ATM strike {atm} CE OI missing in snapshot for {symbol} on {date_str}'}
 
-            # Compare ATM CE OI with the next (upper) strike CE OI.
-            if up_oi is not None and up_oi > atm_oi:
-                second, second_oi = up, up_oi
-            else:
+            # Compare the two ATM-adjacent strikes' CE OI directly and pick
+            # whichever is higher (ties, or both missing, favor the upper strike).
+            if dn_oi is not None and (up_oi is None or dn_oi > up_oi):
                 second, second_oi = dn, dn_oi
+            else:
+                second, second_oi = up, up_oi
 
             return {
                 'success': True,

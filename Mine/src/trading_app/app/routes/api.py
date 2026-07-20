@@ -3728,6 +3728,9 @@ def _fo_futures_universe():
     return indices + stock_names
 
 
+_TMF_BROKERAGE_PER_TRADE = 300  # flat ₹ round-trip brokerage per trade
+
+
 @api_bp.route('/backtest/thirty-min-fakeout', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -3740,14 +3743,20 @@ def run_thirty_min_fakeout_backtest_api():
     contract is only resolved for its lot size (position sizing below).
 
     Rule (per trading day, using 30-min candles aligned to 09:15):
-      SHORT: candle 1 & 2 both green, candle 3's High crosses above the
-      higher of candle 1/2's High but candle 3's CLOSE is back below
-      candle 2's High (a fakeout). Candle 3's Low is the breakdown
-      trigger — the first 1-min bar (from 10:45 onward) to trade
-      through it fires a SELL. SL = candle 3's High, Target = the
-      day's session Low (only knowable in hindsight — a backtest-only
-      target). LONG is the exact mirror (candles red, breakout above
-      candle 3's High, Target = day's session High).
+      SHORT: candle 1 green, candle 2 green with its High > candle 1's
+      High, candle 3's High crosses above candle 2's High but candle
+      3's CLOSE is back below candle 2's High (a fakeout) while not
+      closing below candle 2's 50% (midpoint of High/Low) level, and
+      candle 3's lower wick must not be bigger than its upper wick.
+      Candle 3's Low is the breakdown trigger — the first 1-min bar
+      (from 10:45 onward) to trade through it fires a SELL. SL =
+      candle 3's High, Target = the day's session Low (only knowable
+      in hindsight — a backtest-only target). LONG is the exact mirror
+      (candle 1 red, candle 2 red with its Low < candle 1's Low,
+      breakout below candle 2's Low then close back above it without
+      closing past candle 2's 50% level, and candle 3's upper wick not
+      bigger than its lower wick, trigger = candle 3's High,
+      Target = day's session High).
       Force-closed at the cutoff time (default 15:18 IST) if neither
       SL nor Target is hit.
 
@@ -3760,9 +3769,10 @@ def run_thirty_min_fakeout_backtest_api():
     Each entry is sized to ~capital_per_trade (default ₹1,00,000) worth
     of that symbol's futures contract: lots = round(capital / (entry_price
     x lot_size)), rounded down to at least 1 lot. pnl (points) is
-    unchanged; pnl_rupees = pnl x lots x lot_size is the sized P&L, and
-    the returned summary's totals/averages/drawdown are computed on
-    pnl_rupees so stocks of very different prices are comparable.
+    unchanged; pnl_rupees = pnl x lots x lot_size, net of a flat ₹300
+    brokerage per trade (round-trip), is the sized P&L, and the returned
+    summary's totals/averages/drawdown are computed on pnl_rupees so
+    stocks of very different prices are comparable.
     """
     auth_error = check_auth()
     if auth_error:
@@ -3856,7 +3866,8 @@ def run_thirty_min_fakeout_backtest_api():
                 t['lots']        = lots
                 t['qty']         = qty
                 t['capital']     = round(entry_price * qty, 2)
-                t['pnl_rupees']  = round(t['pnl'] * qty, 2)
+                t['brokerage']   = _TMF_BROKERAGE_PER_TRADE
+                t['pnl_rupees']  = round(t['pnl'] * qty - _TMF_BROKERAGE_PER_TRADE, 2)
             return trades
 
         all_trades = []
@@ -3880,6 +3891,7 @@ def run_thirty_min_fakeout_backtest_api():
         summary['profit_factor_rupees'] = rupee_summary['profit_factor']
         summary['max_drawdown_rupees'] = rupee_summary['max_drawdown']
         summary['capital_per_trade']   = capital_per_trade
+        summary['total_brokerage']     = _TMF_BROKERAGE_PER_TRADE * len(all_trades)
 
         logger.info('[ThirtyMinFakeout scan] %d symbols (%d failed) -> %d trades',
                     len(symbols), failed, len(all_trades))

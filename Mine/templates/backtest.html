@@ -307,17 +307,25 @@
                     <div class="rule-box">
                         Filters <b>every F&amp;O futures stock/index</b> — no symbol selection
                         needed, each resolved to its nearest-expiry <b>Futures</b> contract.
-                        Every day, using 30-min candles from 09:15: if <b>Candle 1 &amp; 2</b> are
-                        both <b>green</b> and <b>Candle 3</b> crosses above their High but
-                        <b>closes back below Candle 2's High</b> (a fakeout), Candle 3's
-                        <b>Low</b> becomes the breakdown trigger — a break below it fires a
-                        <b>SELL</b>. SL = Candle 3's High, Target = the day's session Low (only
-                        knowable in hindsight — a backtest-only target). <b>BUY</b> is the exact
-                        mirror (red candles, breakout above Candle 3's High, Target = day's
-                        session High). Force-closed at the <b>Cut-off Time</b> if neither SL nor
-                        Target is hit. <b>SL/Target Confirm</b>: <b>On Cross</b> exits the moment
-                        price touches the SL/Target level; <b>On Close</b> waits for a 30-min
-                        candle to actually close beyond it, ignoring a wick that doesn't hold.
+                        Every day, using 30-min candles from 09:15: <b>Candle 1</b> must be
+                        <b>green</b>, and <b>Candle 2</b> must be <b>green</b> with its High
+                        above Candle 1's High. <b>Candle 3</b> must cross above Candle 2's
+                        High but <b>close back below Candle 2's High</b> (a fakeout) without
+                        closing below <b>Candle 2's 50% level</b> (midpoint of its High/Low),
+                        and Candle 3's <b>lower wick must not exceed its upper wick</b>.
+                        Candle 3's <b>Low</b> then becomes the breakdown trigger — a break
+                        below it fires a <b>SELL</b>. SL = Candle 3's High, Target = the day's
+                        session Low (only knowable in hindsight — a backtest-only target).
+                        <b>BUY</b> is the exact mirror (Candle 1 red, Candle 2 red with its Low
+                        below Candle 1's Low, Candle 3 breaking below Candle 2's Low then
+                        closing back above it without closing past Candle 2's 50% level, with
+                        its <b>upper wick not exceeding its lower wick</b>, trigger = Candle
+                        3's High, Target = day's session High). Force-closed
+                        at the <b>Cut-off Time</b> if neither SL nor Target is hit.
+                        <b>SL/Target Confirm</b>: <b>On Cross</b> exits the moment price
+                        touches the SL/Target level; <b>On Close</b> waits for a 30-min candle
+                        to actually close beyond it, ignoring a wick that doesn't hold. A flat
+                        <b>₹300 brokerage</b> is deducted from every trade's P&amp;L (₹).
                     </div>
                 </div>
             </div>

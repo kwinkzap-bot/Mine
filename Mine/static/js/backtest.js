@@ -831,7 +831,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 netEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
             }
             const netSubEl = document.getElementById('statNetRsSub');
-            if (netSubEl) netSubEl.textContent = `before brokerage · ~₹${Math.round(summary.capital_per_trade || 100000).toLocaleString('en-IN')}/entry`;
+            if (netSubEl) netSubEl.textContent = `net of ₹300/trade brokerage (₹${Math.round(summary.total_brokerage || 0).toLocaleString('en-IN')} total) · ~₹${Math.round(summary.capital_per_trade || 100000).toLocaleString('en-IN')}/entry`;
         } else {
             if (rtpRow) rtpRow.style.display = 'none';
         }
@@ -1264,6 +1264,8 @@ document.addEventListener('DOMContentLoaded', function() {
         { key: 'target_price', label: 'Target Price', sortable: true,
           format: v => (v || 0).toFixed(2) },
         { key: 'lots', label: 'Lots', sortable: true },
+        { key: 'brokerage', label: 'Brokerage (₹)', sortable: true,
+          format: v => '-₹' + Math.round(v || 0).toLocaleString('en-IN') },
         { key: 'pnl_rupees', label: 'P&L (₹)', sortable: true, strong: true,
           format: v => '₹' + Math.round(v || 0).toLocaleString('en-IN'), tone: DataGrid.sign },
     ];

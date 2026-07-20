@@ -160,12 +160,12 @@ const oipElems = {
     symbolInput: null, symbolList: null, interval: null,
     spotHigh: null, spotLow: null, step: null, multiplier: null,
     view: null, showVwapInt: null, showVwapGroup: null, showCVWAP: null, showPVWAP: null, show3AvgVWAP: null,
-    showCpr: null, showEMA: null, showRSI: null, showOIBars: null, autoHL: null, chartWrap: null, canvas: null,
+    showCpr: null, showEMA: null, showOIBars: null, autoHL: null, chartWrap: null, canvas: null,
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
     hdrPrice: null, hdrPcr: null, hdrPcrCard: null, hdrMaxPain: null, hdrCeOI: null,
     hdrCeChg: null, hdrPeOI: null,
     hdrPeChg: null, hdrTrend: null, hdrAtm: null, brokerSelect: null,
-    showPremium: null, showSignals: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
+    showPremium: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
     strikeMode: null, ceStrikeDropdown: null, peStrikeDropdown: null, premExtra: null,
     showEma9: null, showEma20: null, showEma50: null, showEma100: null, showEma200: null,
     exitAll: null,
@@ -193,7 +193,6 @@ function oipInitElems() {
     oipElems.show3AvgVWAP = document.getElementById('oipShow3AvgVWAP');
     oipElems.showCpr = document.getElementById('oipShowCpr');
     oipElems.showEMA = document.getElementById('oipShowEMA');
-    oipElems.showRSI = document.getElementById('oipShowRSI');
     oipElems.autoHL = document.getElementById('oipAutoHL');
     oipElems.chartWrap = document.getElementById('oipChartWrap');
     oipElems.canvas = document.getElementById('oipOICanvas');
@@ -213,7 +212,6 @@ function oipInitElems() {
     oipElems.hdrLotSize = document.getElementById('hdrLotSize');
     oipElems.brokerSelect = document.getElementById('oipBrokerSelect');
     oipElems.showPremium = document.getElementById('oipShowPremium');
-    oipElems.showSignals = document.getElementById('oipShowSignals');
     oipElems.first5mATM = document.getElementById('oipFirst5mATM');
     oipElems.customStrikeCheck = document.getElementById('oipCustomStrikeCheck');
     oipElems.customStrikeDropdown = document.getElementById('oipCustomStrikeDropdown');
@@ -340,7 +338,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // Dropdown Logic
     oipElems.symbolInput?.addEventListener('input', (e) => oipRenderDropdown(e.target.value.toUpperCase(), oipElems.symbolList));
     oipElems.showOIBars?.addEventListener('change', () => oipRequestDraw());
-    oipElems.showSignals?.addEventListener('change', () => { if (oipOIData?.candles) oipDrawSignals(oipOIData.candles); });
     // Toggle only redraws from cached data — the 9:18 selection is computed on load regardless.
     document.getElementById('oipShowAtmCeOi')?.addEventListener('change', () => oipDrawAtmCeOiLines());
     oipElems.symbolInput?.addEventListener('click', function (e) {
@@ -437,10 +434,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     ['oipShowEma9Opt', 'oipShowEma20Opt', 'oipShowEma50Opt'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => oipUpdateOptEmaVisibility());
-    });
-
-    oipElems.showRSI?.addEventListener('change', () => {
-        if (oipOIData && oipOIData.candles) oipDrawRSI(oipOIData.candles);
     });
 
     ['oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3'].forEach(id => {
@@ -542,10 +535,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     oipElems.peStrikeDropdown?.addEventListener('change', () => {
         if (oipElems.strikeMode?.value === 'ce_pe') oipLoadCandles(true, true);
-    });
-
-    oipElems.showSignals?.addEventListener('change', () => {
-        oipRefreshLocalView(oipElems.view?.value);
     });
 
     oipElems.targetDistance?.addEventListener('change', () => {
@@ -1133,7 +1122,6 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                     if (oipCvwapSeries) oipCvwapSeries.setData(oipCalculateCVWAP(validCandles));
                     if (oipPvwapSeries) oipPvwapSeries.setData(oipCalculatePVWAP(validCandles));
                     if (oipAvg3VwapSeries) oipAvg3VwapSeries.setData(oipCalculateAvg3VWAP(validCandles));
-                    oipDrawSignals(validCandles);
                 } catch (e) { console.warn('[OIP] SetData Err:', e); }
             }
 
@@ -1150,7 +1138,6 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
             oipUpdateEmaVisibility();
             oipDrawCpr(validCandles);
             oipDrawMultiCPR(validCandles);
-            oipDrawRSI(validCandles);
 
             // 9:18 ATM CE OI lines — always compute & cache (kept ready);
             // oipDrawAtmCeOiLines() only renders when the checkbox is on.
@@ -2565,11 +2552,6 @@ function oipUpdateCustomStrikeOptions(strikes, centerPrice = null) {
 
     return parseFloat(oipElems.customStrikeDropdown.value) || atm;
 }
-
-// oipRSISeriesObj, oipSignalMarkers, oipRSIMarkers — declared in oi_indicators.js
-// oipUpdateAllMarkers, oipDrawSignals, oipDrawRSI, oipCalculateRSISnR — defined in oi_indicators.js
-
-// oipDrawSignals, oipDrawRSI, oipCalculateRSISnR — defined in oi_indicators.js
 
 
 
