@@ -88,7 +88,15 @@ def _save_persistent_quotes(cache_dict):
 
 # Global API Locks to prevent parallel requests per endpoint (Serialization)
 _GLOBAL_FYERS_QUOTE_LOCK = threading.Lock()
-_GLOBAL_FYERS_HIST_LOCK = threading.Lock()
+# History was a full Lock (hard one-at-a-time), which meant a full-universe
+# scan's ThreadPoolExecutor sat mostly idle waiting on this instead of
+# _rate_limiter's paced 8 req/s — each locked call only starts once the
+# previous one's full network round-trip finishes, so real throughput was
+# ~1/latency instead of the intended 8/s. A small semaphore still bounds
+# concurrent in-flight requests (avoids hammering the API) while letting
+# several round-trips overlap so _rate_limiter's pacing is what actually
+# governs throughput.
+_GLOBAL_FYERS_HIST_LOCK = threading.Semaphore(4)
 
 # Monkeypatch Fyers V3 SDK - Disabled as api-t1 is currently active and working
 # try:

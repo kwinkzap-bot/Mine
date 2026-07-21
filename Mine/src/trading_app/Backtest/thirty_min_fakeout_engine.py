@@ -7,7 +7,9 @@ open (candle 1 = 09:15-09:44, candle 2 = 09:45-10:14, candle 3 =
 
   SHORT setup (breakdown):
     1. Candle 1 is green (close > open).
-    2. Candle 2 is green AND Candle 2's High > Candle 1's High.
+    2. Candle 2 is green AND Candle 2's High > Candle 1's High AND
+       Candle 2's CLOSE is above Candle 1's HIGH (not just above Candle
+       1's High intrabar — it closes there).
     3. Candle 3's High crosses ABOVE Candle 2's High, but Candle 3's
        CLOSE is back below Candle 2's High — a fakeout rejection candle.
     4. Candle 3's CLOSE must not be below the 50% level (midpoint of
@@ -15,11 +17,16 @@ open (candle 1 = 09:15-09:44, candle 2 = 09:45-10:14, candle 3 =
     5. Candle 3's lower wick must not be bigger than its upper wick
        (lower_wick <= upper_wick) — a SELL entry needs a rejection
        candle with a dominant upper wick, not a hammer-like tail.
-    6. Candle 3's Low becomes the breakdown trigger. The first 1-minute
-       bar (from 10:45 onward) whose Low trades through that trigger
-       fires the SELL entry — fills at the trigger level, or at the
-       bar's open if it gaps straight through.
-    SL     = Candle 3's High
+    6. If Candle 3 is itself GREEN (against the SELL direction), its
+       body must not exceed 1/4 of its High-Low range — a small,
+       indecisive green body is fine, a decisively green Candle 3
+       contradicts the breakdown.
+    7. Candle 3's Low, minus a 0.05% buffer, becomes the breakdown
+       trigger — price must clear the Low by that much, not just touch
+       it. The first 1-minute bar (from 10:45 onward) whose Low trades
+       through that trigger fires the SELL entry — fills at the
+       trigger level, or at the bar's open if it gaps straight through.
+    SL     = Candle 3's High (the real High, no buffer applied)
     Target = the day's session Low — only knowable in hindsight, this
              is a backtest-only "how far did the day actually fall"
              target, not a level that could be set at entry time live.
@@ -28,13 +35,17 @@ open (candle 1 = 09:15-09:44, candle 2 = 09:45-10:14, candle 3 =
     neither is hit by then.
 
   LONG setup (breakout) — the exact mirror:
-    Candle 1 red. Candle 2 red AND Candle 2's Low < Candle 1's Low.
-    Candle 3's Low crosses below Candle 2's Low but closes back above
-    Candle 2's Low, and Candle 3's CLOSE must not be above the 50%
+    Candle 1 red. Candle 2 red AND Candle 2's Low < Candle 1's Low AND
+    Candle 2's CLOSE is below Candle 1's LOW (closes there, not just
+    wicks below it). Candle 3's Low crosses below Candle 2's Low but
+    closes back above Candle 2's Low, and
+    Candle 3's CLOSE must not be above the 50%
     level of Candle 2. Candle 3's upper wick must not be bigger than
-    its lower wick (upper_wick <= lower_wick). Candle 3's High is the
-    breakout trigger -> BUY. SL = Candle 3's Low, Target = the day's
-    session High.
+    its lower wick (upper_wick <= lower_wick). If Candle 3 is itself
+    RED (against the BUY direction), its body must not exceed 1/4 of
+    its High-Low range. Candle 3's High, plus a 0.05% buffer, is the
+    breakout trigger -> BUY. SL = Candle 3's Low (the real Low, no
+    buffer), Target = the day's session High.
 
 Only one setup (and one trade) per day. No new entries at/after the
 cutoff time.
@@ -48,6 +59,11 @@ logger = logging.getLogger(__name__)
 _SESSION_START_MIN = 9 * 60 + 15   # 09:15
 _THIRD_CANDLE_END_MIN = _SESSION_START_MIN + 90  # 10:45 — watch window starts here
 
+# Entry trigger buffer: the breakdown/breakout must clear Candle 3's Low/High
+# by this much (not just touch it) before the entry fires — filters a bar
+# that merely wicks the exact level without a real break.
+_ENTRY_TRIGGER_BUFFER_PCT = 0.0005  # 0.05%
+
 
 class ThirtyMinFakeoutEngine:
 
@@ -59,12 +75,29 @@ class ThirtyMinFakeoutEngine:
         enable_long: bool = True,
         enable_short: bool = True,
         exit_on: str = 'cross',
+        use_entry_buffer: bool = True,
+        use_body_filter: bool = True,
+        use_c2_close_filter: bool = True,
     ):
         self.df = df.copy()
         self.exit_hour = exit_hour
         self.exit_minute = exit_minute
         self.enable_long = enable_long
         self.enable_short = enable_short
+        # Optional filters, all on by default:
+        #   use_entry_buffer   — require price to clear Candle 3's Low/High
+        #     by _ENTRY_TRIGGER_BUFFER_PCT before the entry fires, instead
+        #     of the raw (unbuffered) Low/High.
+        #   use_body_filter    — reject a Candle 3 that's a decisive
+        #     against-direction color (green for SELL, red for BUY) with a
+        #     body bigger than 1/4 of its High-Low range.
+        #   use_c2_close_filter — require Candle 2's CLOSE beyond Candle 1's
+        #     CLOSE (above it for SELL, below it for BUY) — Candle 2 must
+        #     be closing further into the move, not just have a wider
+        #     High/Low than Candle 1.
+        self.use_entry_buffer = use_entry_buffer
+        self.use_body_filter = use_body_filter
+        self.use_c2_close_filter = use_c2_close_filter
         # SL/Target confirmation mode, post-entry:
         #   'cross' (default) — exit as soon as ANY bar's High/Low touches
         #     the level (equivalent to the 30-min candle's High/Low
@@ -98,7 +131,8 @@ class ThirtyMinFakeoutEngine:
         cutoff = self.exit_hour * 60 + self.exit_minute
         trades = []
         for _, day_df in self.df.groupby(self.df.index.normalize()):
-            t = _run_day(day_df, cutoff, self.enable_long, self.enable_short, self.exit_on)
+            t = _run_day(day_df, cutoff, self.enable_long, self.enable_short, self.exit_on,
+                         self.use_entry_buffer, self.use_body_filter, self.use_c2_close_filter)
             if t is not None:
                 trades.append(t)
 
@@ -121,7 +155,8 @@ def _resample_30min(day_df: pd.DataFrame) -> pd.DataFrame:
     return grouped
 
 
-def _run_day(day_df: pd.DataFrame, cutoff: int, enable_long: bool, enable_short: bool, exit_on: str = 'cross'):
+def _run_day(day_df: pd.DataFrame, cutoff: int, enable_long: bool, enable_short: bool, exit_on: str = 'cross',
+             use_entry_buffer: bool = True, use_body_filter: bool = True, use_c2_close_filter: bool = True):
     day_df = day_df.sort_index()
     thirty = _resample_30min(day_df)
     if not all(b in thirty.index for b in (0, 1, 2)):
@@ -134,22 +169,40 @@ def _run_day(day_df: pd.DataFrame, cutoff: int, enable_long: bool, enable_short:
 
     c3_upper_wick = c3['high'] - max(c3['open'], c3['close'])
     c3_lower_wick = min(c3['open'], c3['close']) - c3['low']
+    c3_body  = abs(c3['close'] - c3['open'])
+    c3_range = c3['high'] - c3['low']
+    # An "against-direction" colored Candle 3 (green for a SELL, red for a
+    # BUY) is only acceptable if it's small-bodied/indecisive — a decisive
+    # opposite-colored candle with a big body contradicts the fakeout.
+    # Disabled (use_body_filter=False) simply always passes.
+    c3_against_short_body_ok = (not use_body_filter) or not (c3['close'] > c3['open'] and c3_body * 4 > c3_range)
+    c3_against_long_body_ok  = (not use_body_filter) or not (c3['close'] < c3['open'] and c3_body * 4 > c3_range)
+    # Candle 2 must CLOSE beyond Candle 1's High/Low (not just wick past it,
+    # which the c2.high>c1.high / c2.low<c1.low gates already require) —
+    # above Candle 1's High for a SELL, below Candle 1's Low for a BUY.
+    # Disabled (use_c2_close_filter=False) simply always passes.
+    c2_close_short_ok = (not use_c2_close_filter) or (c2['close'] > c1['high'])
+    c2_close_long_ok  = (not use_c2_close_filter) or (c2['close'] < c1['low'])
+
+    entry_buffer = _ENTRY_TRIGGER_BUFFER_PCT if use_entry_buffer else 0.0
 
     if (enable_short and c1['close'] > c1['open'] and c2['close'] > c2['open']
-            and c2['high'] > c1['high']):
+            and c2['high'] > c1['high'] and c2_close_short_ok):
         c2_mid = (c2['high'] + c2['low']) / 2
         if (c3['high'] > c2['high'] and c3['close'] < c2['high'] and c3['close'] >= c2_mid
-                and c3_lower_wick <= c3_upper_wick):
+                and c3_lower_wick <= c3_upper_wick and c3_against_short_body_ok):
             direction = 'short'
-            trigger, sl_level = c3['low'], c3['high']
+            trigger  = c3['low'] * (1 - entry_buffer)
+            sl_level = c3['high']
 
     if (direction is None and enable_long and c1['close'] < c1['open'] and c2['close'] < c2['open']
-            and c2['low'] < c1['low']):
+            and c2['low'] < c1['low'] and c2_close_long_ok):
         c2_mid = (c2['high'] + c2['low']) / 2
         if (c3['low'] < c2['low'] and c3['close'] > c2['low'] and c3['close'] <= c2_mid
-                and c3_upper_wick <= c3_lower_wick):
+                and c3_upper_wick <= c3_lower_wick and c3_against_long_body_ok):
             direction = 'long'
-            trigger, sl_level = c3['high'], c3['low']
+            trigger  = c3['high'] * (1 + entry_buffer)
+            sl_level = c3['low']
 
     if direction is None:
         return None

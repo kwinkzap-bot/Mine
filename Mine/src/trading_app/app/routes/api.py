@@ -3709,54 +3709,74 @@ def run_expiry_breakout_scan_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+_TMF_INDEX_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']
+
+
 def _fo_futures_universe():
-    """Every underlying with a live FUTURES contract — the index list plus
-    every stock name found in the cached NFO instruments (instrument_type
-    == 'FUT'). Same cache/shape as get_backtest_symbols()."""
+    """Every F&O stock (instrument_type == 'FUT' in the cached NFO
+    instruments) — indices excluded, since the 30-Min Fakeout scan sizes
+    every symbol as a real intraday equity position, and there's no
+    equity share of an index to buy. Same cache/shape as
+    get_backtest_symbols() otherwise."""
     import json
     cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cache', 'nfo_instruments.json')
     if not os.path.exists(cache_path):
         return None
     with open(cache_path, 'r') as f:
         instruments = json.load(f)
-    indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']
     stock_names = sorted({
         inst.get('name') for inst in instruments
         if inst.get('instrument_type') == 'FUT' and inst.get('name')
-        and inst.get('name') not in indices
+        and inst.get('name') not in _TMF_INDEX_SYMBOLS
     })
-    return indices + stock_names
+    return stock_names
 
 
 _TMF_BROKERAGE_PER_TRADE = 300  # flat ₹ round-trip brokerage per trade
+# No broker exposes *historical* per-stock MIS leverage (only today's live
+# value), so a single assumed multiplier is applied uniformly to every
+# stock. 5x matches Zerodha's typical MIS leverage for liquid F&O-eligible
+# large/mid-caps — an approximation, not the real historical leverage for
+# every stock/day.
+_TMF_EQUITY_LEVERAGE = 5
+_TMF_MAX_SL_RISK_RUPEES  = 5000  # default for sl_risk_max — user-editable per request
 
 
 @api_bp.route('/backtest/thirty-min-fakeout', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
 def run_thirty_min_fakeout_backtest_api():
-    """Scan EVERY F&O futures stock/index for the 30-Min Opening Fakeout
+    """Scan EVERY F&O stock for the 30-Min Opening Fakeout
     Breakdown/Breakout pattern across [start_date, end_date] — no single
-    symbol; the universe is every underlying with a live futures contract.
-    The pattern check and entry/exit simulation run on the SPOT/equity
-    (or index) price series, matching a normal chart — the futures
-    contract is only resolved for its lot size (position sizing below).
+    symbol; the universe is every stock with a live futures contract
+    (indices excluded — see _fo_futures_universe). The pattern check and
+    entry/exit simulation run on the SPOT/equity price series, matching a
+    normal chart. Every stock is sized as a real intraday (MIS) equity
+    position — qty = floor(capital_per_trade x _TMF_EQUITY_LEVERAGE /
+    entry_price), same as a broker's order-entry quantity field, no lot
+    concept at all.
 
     Rule (per trading day, using 30-min candles aligned to 09:15):
       SHORT: candle 1 green, candle 2 green with its High > candle 1's
-      High, candle 3's High crosses above candle 2's High but candle
-      3's CLOSE is back below candle 2's High (a fakeout) while not
-      closing below candle 2's 50% (midpoint of High/Low) level, and
-      candle 3's lower wick must not be bigger than its upper wick.
-      Candle 3's Low is the breakdown trigger — the first 1-min bar
-      (from 10:45 onward) to trade through it fires a SELL. SL =
-      candle 3's High, Target = the day's session Low (only knowable
-      in hindsight — a backtest-only target). LONG is the exact mirror
-      (candle 1 red, candle 2 red with its Low < candle 1's Low,
-      breakout below candle 2's Low then close back above it without
-      closing past candle 2's 50% level, and candle 3's upper wick not
-      bigger than its lower wick, trigger = candle 3's High,
-      Target = day's session High).
+      High and its CLOSE > candle 1's HIGH (closes there, not just
+      wicks above it), candle 3's High crosses above candle 2's High
+      but candle 3's CLOSE is back below candle 2's High (a fakeout)
+      while not closing below candle 2's 50% (midpoint of High/Low)
+      level, and candle 3's lower wick must not be bigger than its
+      upper wick. If candle 3 itself is green (against the SELL), its
+      body must not exceed 1/4 of its High-Low range. Candle 3's Low,
+      minus a 0.05% buffer, is the breakdown trigger — the first 1-min
+      bar (from 10:45 onward) to trade through it fires a SELL. SL =
+      candle 3's real High (no buffer), Target = the day's session Low
+      (only knowable in hindsight — a backtest-only target). LONG is
+      the exact mirror (candle 1 red, candle 2 red with its Low <
+      candle 1's Low and its CLOSE < candle 1's LOW (closes there, not
+      just wicks below it), breakout below candle 2's Low then close
+      back above it without closing past candle 2's 50% level, candle
+      3's upper wick not bigger than its lower wick, and if candle 3
+      itself is red (against the BUY) its body not exceeding 1/4 of its
+      High-Low range, trigger = candle 3's High plus a 0.05% buffer, SL
+      = candle 3's real Low, Target = day's session High).
       Force-closed at the cutoff time (default 15:18 IST) if neither
       SL nor Target is hit.
 
@@ -3766,13 +3786,24 @@ def run_thirty_min_fakeout_backtest_api():
     'close' only exits once a full 30-min candle CLOSES beyond the level,
     ignoring an intrabar wick that doesn't hold through the candle's close.
 
+    use_entry_buffer, use_body_filter, and use_c2_close_filter (bool,
+    each default True) independently toggle one of the three optional
+    filters described above (the 0.05% trigger buffer, the Candle 3
+    against-direction body-size cap, and the Candle 2 close-beyond-
+    Candle-1-High/Low requirement) — off means that check is skipped.
+
     Each entry is sized to ~capital_per_trade (default ₹1,00,000) worth
     of that symbol's futures contract: lots = round(capital / (entry_price
     x lot_size)), rounded down to at least 1 lot. pnl (points) is
     unchanged; pnl_rupees = pnl x lots x lot_size, net of a flat ₹300
-    brokerage per trade (round-trip), is the sized P&L, and the returned
-    summary's totals/averages/drawdown are computed on pnl_rupees so
-    stocks of very different prices are comparable.
+    brokerage per trade (round-trip), is the sized P&L. use_sl_risk_filter
+    (bool, default True) then drops any trade whose sized SL risk (|entry -
+    SL| x qty) exceeds sl_risk_max (float, default ₹5,000 — user-editable)
+    — the setup fired but the position size at this capital makes the
+    rupee stop-loss too large to take; that trade never enters the
+    results. The returned summary's totals/averages/drawdown are
+    computed on the surviving trades' pnl_rupees so stocks of very
+    different prices are comparable.
     """
     auth_error = check_auth()
     if auth_error:
@@ -3790,6 +3821,11 @@ def run_thirty_min_fakeout_backtest_api():
         exit_on           = str(data.get('exit_on', 'cross')).lower()
         if exit_on not in ('cross', 'close'):
             exit_on = 'cross'
+        use_entry_buffer   = bool(data.get('use_entry_buffer', True))
+        use_body_filter    = bool(data.get('use_body_filter', True))
+        use_c2_close_filter = bool(data.get('use_c2_close_filter', True))
+        use_sl_risk_filter = bool(data.get('use_sl_risk_filter', True))
+        sl_risk_max        = float(data.get('sl_risk_max', _TMF_MAX_SL_RISK_RUPEES) or _TMF_MAX_SL_RISK_RUPEES)
 
         if not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
@@ -3803,72 +3839,58 @@ def run_thirty_min_fakeout_backtest_api():
             return jsonify({'success': False, 'error': 'NFO instruments cache not found. Please login to refresh.'}), 404
 
         is_fyers = hasattr(current_kite, 'fyers')
-        kite_service = None
-        if not is_fyers:
-            from trading_app.service.kite_order_services import KiteService
-            kite_service = KiteService(kite_instance=current_kite)
-
-        # Spot/equity (or index) price series — the pattern check and
-        # entry/exit simulation run on this, matching what a normal chart
-        # shows. The futures contract (resolved separately below) is only
-        # used for its lot size, since that's the actual tradable unit.
-        fyers_indices = {
-            'NIFTY':      'NSE:NIFTY50-INDEX',
-            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
-            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
-            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-            'SENSEX':     'BSE:SENSEX-INDEX',
-        }
-        kite_indices = {
-            'NIFTY': 256265, 'BANKNIFTY': 260105,
-            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
-        }
 
         import pandas as pd
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from trading_app.Backtest.thirty_min_fakeout_engine import ThirtyMinFakeoutEngine, summarize_trades
+        from trading_app.Backtest.minute_candle_store import get_minute_history
+
+        provider_tag = 'fyers' if is_fyers else 'kite'
 
         def _scan_symbol(symbol):
-            # Futures contract must exist (this stock is part of the F&O
-            # universe) and gives the lot size used for position sizing.
-            if is_fyers:
-                fut_token = current_kite.find_future_symbol(symbol)
-                lot_size  = current_kite.get_lot_size(symbol)
-            else:
-                fut_symbol = kite_service.get_future_symbol(symbol)
-                fut_token  = kite_service.get_instrument_token(fut_symbol) if fut_symbol else None
-                lot_size   = kite_service.get_lot_size(symbol)
-            if not fut_token:
-                return []
-            lot_size = max(1, int(lot_size or 1))
-
-            if is_fyers:
-                spot_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
-            else:
-                spot_token = kite_indices.get(symbol, symbol)
-            candles = current_kite.historical_data(
-                instrument_token=spot_token, from_date=start_date_str, to_date=end_date_str,
-                interval='minute', use_cache=False,
+            spot_token = f'NSE:{symbol}-EQ' if is_fyers else symbol
+            # Local per-symbol disk cache — closed trading days are fetched
+            # once and kept forever, so re-running a backtest over the same
+            # (or an overlapping) range is a local read, not a re-download.
+            df = get_minute_history(
+                current_kite, spot_token, symbol, start_date_str, end_date_str,
+                provider_tag=provider_tag,
             )
-            if not candles:
+            if df is None or df.empty:
                 return []
             engine = ThirtyMinFakeoutEngine(
-                df=pd.DataFrame(candles), exit_hour=exit_hour, exit_minute=exit_minute,
+                df=df, exit_hour=exit_hour, exit_minute=exit_minute,
                 enable_long=enable_long, enable_short=enable_short, exit_on=exit_on,
+                use_entry_buffer=use_entry_buffer, use_body_filter=use_body_filter,
+                use_c2_close_filter=use_c2_close_filter,
             )
             trades, _ = engine.run()
+            kept_trades = []
             for t in trades:
                 entry_price = t['entry_price']
-                lots = max(1, round(capital_per_trade / (entry_price * lot_size))) if entry_price > 0 else 1
-                qty  = lots * lot_size
-                t['symbol']      = symbol
-                t['lot_size']    = lot_size
-                t['lots']        = lots
-                t['qty']         = qty
-                t['capital']     = round(entry_price * qty, 2)
-                t['brokerage']   = _TMF_BROKERAGE_PER_TRADE
-                t['pnl_rupees']  = round(t['pnl'] * qty - _TMF_BROKERAGE_PER_TRADE, 2)
-            return trades
+                # Real intraday (MIS) equity sizing: capital x leverage buys
+                # as many whole shares as it can, same as the broker's
+                # order-entry quantity field — no lot concept.
+                qty = max(1, int((capital_per_trade * _TMF_EQUITY_LEVERAGE) // entry_price)) if entry_price > 0 else 1
+                sl_risk_rupees = abs(entry_price - t['sl_price']) * qty
+                # Skip a trade whose sized SL risk is too large to take —
+                # the setup fired, but the position size at this capital
+                # makes the actual rupee stop-loss unacceptable.
+                if use_sl_risk_filter and sl_risk_rupees > sl_risk_max:
+                    continue
+                t['symbol']           = symbol
+                t['qty']              = qty
+                t['capital']          = round(entry_price * qty, 2)
+                t['brokerage']        = _TMF_BROKERAGE_PER_TRADE
+                t['sl_risk_rupees']   = round(sl_risk_rupees, 2)
+                t['gross_pnl_rupees'] = round(t['pnl'] * qty, 2)
+                # Net P&L = gross P&L minus brokerage — this is the trade's
+                # real, realized result and what the trades table/equity
+                # curve show; the summary also separately reports the gross
+                # figure so the two are visibly distinct.
+                t['pnl_rupees']       = round(t['gross_pnl_rupees'] - _TMF_BROKERAGE_PER_TRADE, 2)
+                kept_trades.append(t)
+            return kept_trades
 
         all_trades = []
         failed = 0
@@ -3883,9 +3905,19 @@ def run_thirty_min_fakeout_backtest_api():
                     failed += 1
                     logger.error(f"[ThirtyMinFakeout scan] {sym} failed: {e}")
 
+        # Chronological order, not thread-completion order — summarize_trades'
+        # running/peak/drawdown walk is order-sensitive, and as_completed()
+        # yields symbols in whatever (nondeterministic) order their scans
+        # happened to finish, which made Max Drawdown differ run to run for
+        # the exact same trade set. The frontend's equity curve already
+        # sorts by entry_time independently; this makes the backend match it.
+        all_trades.sort(key=lambda t: t['entry_time'])
+
         summary = summarize_trades(all_trades)
         rupee_summary = summarize_trades([{**t, 'pnl': t['pnl_rupees']} for t in all_trades])
-        summary['total_pnl_rupees']    = rupee_summary['total_pnl']
+        gross_rupee_summary = summarize_trades([{**t, 'pnl': t['gross_pnl_rupees']} for t in all_trades])
+        summary['total_pnl_rupees']       = rupee_summary['total_pnl']
+        summary['total_gross_pnl_rupees'] = gross_rupee_summary['total_pnl']
         summary['avg_win_rupees']      = rupee_summary['avg_win']
         summary['avg_loss_rupees']     = rupee_summary['avg_loss']
         summary['profit_factor_rupees'] = rupee_summary['profit_factor']

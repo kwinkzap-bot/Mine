@@ -363,6 +363,38 @@ document.addEventListener('DOMContentLoaded', function() {
         updateStrategyView();
     }
 
+    // ── 30-Min Opening Fakeout: Rule popup ─────────────────────────────
+    const tmfRuleTrigger = document.getElementById('tmfRuleTrigger');
+    const tmfRuleModal   = document.getElementById('tmfRuleModal');
+    const tmfRuleClose   = document.getElementById('tmfRuleModalClose');
+    if (tmfRuleTrigger && tmfRuleModal) {
+        // Re-parent to <body> so the overlay's `position:fixed` is always
+        // relative to the real viewport — safe against any ancestor ever
+        // gaining a transform/filter/contain, which would otherwise turn
+        // "fixed" into "fixed relative to that ancestor" and let the popup
+        // scroll away with the page instead of staying put on screen.
+        document.body.appendChild(tmfRuleModal);
+
+        let _tmfPrevBodyOverflow = '';
+        const openTmfRule = () => {
+            tmfRuleModal.style.display = 'flex';
+            // Lock background scroll while open so the page underneath can't
+            // scroll out from under the overlay.
+            _tmfPrevBodyOverflow = document.body.style.overflow;
+            document.body.style.overflow = 'hidden';
+        };
+        const closeTmfRule = () => {
+            tmfRuleModal.style.display = 'none';
+            document.body.style.overflow = _tmfPrevBodyOverflow;
+        };
+        tmfRuleTrigger.addEventListener('click', openTmfRule);
+        if (tmfRuleClose) tmfRuleClose.addEventListener('click', closeTmfRule);
+        tmfRuleModal.addEventListener('click', (e) => { if (e.target === tmfRuleModal) closeTmfRule(); });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && tmfRuleModal.style.display !== 'none') closeTmfRule();
+        });
+    }
+
     // Investment display: ₹50,000 per lot
     window.updateRtpInvestment = function() {
         const lots = Math.max(1, parseInt(document.getElementById('rtpLots')?.value || 1));
@@ -460,6 +492,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 const exitTime = (document.getElementById('tmfExitTime')?.value || '15:18').split(':');
                 payload.exit_hour   = parseInt(exitTime[0] || 15);
                 payload.exit_minute = parseInt(exitTime[1] || 18);
+                payload.use_entry_buffer   = document.getElementById('tmfUseEntryBuffer')?.checked ?? true;
+                payload.use_body_filter    = document.getElementById('tmfUseBodyFilter')?.checked ?? true;
+                payload.use_c2_close_filter = document.getElementById('tmfUseC2CloseFilter')?.checked ?? true;
+                payload.use_sl_risk_filter = document.getElementById('tmfUseSlRiskFilter')?.checked ?? true;
+                payload.sl_risk_max = parseFloat(document.getElementById('tmfSlRiskMax')?.value || '5000') || 5000;
             }
 
             // Swing Momentum: different endpoint + payload
@@ -667,9 +704,12 @@ document.addEventListener('DOMContentLoaded', function() {
         const isVwap = strategySelect && strategySelect.value === 'vwap';
         const isSc   = strategySelect && strategySelect.value === 'second_candle';
         // 30-Min Fakeout scans many symbols at once, each already sized
-        // server-side to ~₹1,00,000/entry (summary.total_pnl_rupees etc.,
-        // per-trade t.pnl_rupees) — no Lots/Lot Value input needed here,
-        // just a ₹ unit on the Row 1 Total P&L card instead of "points".
+        // server-side to ~₹1,00,000/entry — no Lots/Lot Value input needed
+        // here, just a ₹ unit on the Row 1 Total P&L card instead of
+        // "points". Row 1 shows GROSS (summary.total_gross_pnl_rupees);
+        // the Net P&L (₹) card subtracts brokerage to get the real figure
+        // (matches summary.total_pnl_rupees / per-trade t.pnl_rupees, both
+        // already net).
         const isTmf  = strategySelect && strategySelect.value === 'thirty_min_fakeout';
         // 2nd-candle reuses the VWAP-style ₹ cards, each reading its own lot inputs.
         const moneyLotsId    = isSc ? 'scLots'     : 'vwapLots';
@@ -693,12 +733,14 @@ document.addEventListener('DOMContentLoaded', function() {
             ? ((summary.wins / summary.total_trades) * 100).toFixed(1) + '%'
             : '0%';
 
-        const pnl    = isTmf ? (summary.total_pnl_rupees ?? 0) : (summary.total_pnl ?? 0);
+        // For TMF this is the GROSS figure (before brokerage) — the
+        // dedicated Net P&L (₹) card below is what actually subtracts it.
+        const pnl    = isTmf ? (summary.total_gross_pnl_rupees ?? 0) : (summary.total_pnl ?? 0);
         const pnlEl  = document.getElementById('statTotalPnl');
         pnlEl.textContent = (pnl >= 0 ? '+' : '') + (isTmf ? '₹' + Math.round(pnl).toLocaleString('en-IN') : pnl.toFixed(2));
         pnlEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
         const pnlUnitEl = document.getElementById('statTotalPnlUnit');
-        if (pnlUnitEl) pnlUnitEl.textContent = isTmf ? `≈₹1L/entry, ${summary.total_trades || 0} entries` : 'points';
+        if (pnlUnitEl) pnlUnitEl.textContent = isTmf ? `gross, before brokerage · ${summary.total_trades || 0} entries` : 'points';
 
         const outcomeEl = document.getElementById('statOutcome');
         outcomeEl.textContent = pnl >= 0 ? 'PROFIT' : 'LOSS';
@@ -825,13 +867,18 @@ document.addEventListener('DOMContentLoaded', function() {
             const ddDatesEl = document.getElementById('statMaxDDDates');
             if (ddDatesEl) ddDatesEl.textContent = '';
 
+            // Net P&L = gross P&L (the Row 1 Total P&L card, before
+            // brokerage) minus total brokerage — matches summary.total_pnl_rupees,
+            // which the backend already computes the same way per-trade.
+            const totalBrok = summary.total_brokerage || 0;
+            const netRsTmf  = pnl - totalBrok;
             const netEl = document.getElementById('statNetRs');
             if (netEl) {
-                netEl.textContent = (pnl >= 0 ? '+' : '') + '₹' + Math.round(pnl).toLocaleString('en-IN');
-                netEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
+                netEl.textContent = (netRsTmf >= 0 ? '+' : '') + '₹' + Math.round(netRsTmf).toLocaleString('en-IN');
+                netEl.className   = 'stat-card__val ' + (netRsTmf >= 0 ? 'stat-val-green' : 'stat-val-red');
             }
             const netSubEl = document.getElementById('statNetRsSub');
-            if (netSubEl) netSubEl.textContent = `net of ₹300/trade brokerage (₹${Math.round(summary.total_brokerage || 0).toLocaleString('en-IN')} total) · ~₹${Math.round(summary.capital_per_trade || 100000).toLocaleString('en-IN')}/entry`;
+            if (netSubEl) netSubEl.textContent = `brok: ₹${Math.round(totalBrok).toLocaleString('en-IN')} · ~₹${Math.round(summary.capital_per_trade || 100000).toLocaleString('en-IN')}/entry`;
         } else {
             if (rtpRow) rtpRow.style.display = 'none';
         }
@@ -1263,7 +1310,9 @@ document.addEventListener('DOMContentLoaded', function() {
           format: v => (v || 0).toFixed(2) },
         { key: 'target_price', label: 'Target Price', sortable: true,
           format: v => (v || 0).toFixed(2) },
-        { key: 'lots', label: 'Lots', sortable: true },
+        { key: 'qty', label: 'Quantity', sortable: true },
+        { key: 'sl_risk_rupees', label: 'SL Risk (₹)', sortable: true,
+          format: v => '₹' + Math.round(v || 0).toLocaleString('en-IN') },
         { key: 'brokerage', label: 'Brokerage (₹)', sortable: true,
           format: v => '-₹' + Math.round(v || 0).toLocaleString('en-IN') },
         { key: 'pnl_rupees', label: 'P&L (₹)', sortable: true, strong: true,

@@ -280,8 +280,9 @@
             </div>
 
             <!-- 30-Min Opening Fakeout params — pure filter, no symbol
-                 selection: scans every F&O futures stock/index over the
-                 selected Start/End Date for the fakeout pattern. -->
+                 selection: scans every F&O stock (indices excluded — no
+                 equity share to buy) over the selected Start/End Date
+                 for the fakeout pattern. -->
             <div id="thirtyMinFakeoutParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
                     <label for="tmfDirection">Direction</label>
@@ -304,28 +305,97 @@
                 </div>
                 <div class="form-group" style="grid-column: span 2;">
                     <label>Rule</label>
-                    <div class="rule-box">
-                        Filters <b>every F&amp;O futures stock/index</b> — no symbol selection
-                        needed, each resolved to its nearest-expiry <b>Futures</b> contract.
-                        Every day, using 30-min candles from 09:15: <b>Candle 1</b> must be
-                        <b>green</b>, and <b>Candle 2</b> must be <b>green</b> with its High
-                        above Candle 1's High. <b>Candle 3</b> must cross above Candle 2's
-                        High but <b>close back below Candle 2's High</b> (a fakeout) without
-                        closing below <b>Candle 2's 50% level</b> (midpoint of its High/Low),
-                        and Candle 3's <b>lower wick must not exceed its upper wick</b>.
-                        Candle 3's <b>Low</b> then becomes the breakdown trigger — a break
-                        below it fires a <b>SELL</b>. SL = Candle 3's High, Target = the day's
-                        session Low (only knowable in hindsight — a backtest-only target).
-                        <b>BUY</b> is the exact mirror (Candle 1 red, Candle 2 red with its Low
-                        below Candle 1's Low, Candle 3 breaking below Candle 2's Low then
-                        closing back above it without closing past Candle 2's 50% level, with
-                        its <b>upper wick not exceeding its lower wick</b>, trigger = Candle
-                        3's High, Target = day's session High). Force-closed
-                        at the <b>Cut-off Time</b> if neither SL nor Target is hit.
-                        <b>SL/Target Confirm</b>: <b>On Cross</b> exits the moment price
-                        touches the SL/Target level; <b>On Close</b> waits for a 30-min candle
-                        to actually close beyond it, ignoring a wick that doesn't hold. A flat
-                        <b>₹300 brokerage</b> is deducted from every trade's P&amp;L (₹).
+                    <button type="button" class="rule-trigger-btn" id="tmfRuleTrigger">
+                        View SELL / BUY rule &amp; targets
+                        <span class="rule-trigger-btn__icon">↗</span>
+                    </button>
+                </div>
+                <div class="form-group form-check-group" style="grid-column: span 2;">
+                    <input type="checkbox" id="tmfUseEntryBuffer" checked>
+                    <label for="tmfUseEntryBuffer" title="Requires price to clear Candle 3's Low/High by 0.05% before the entry fires, instead of the raw Low/High — filters a bar that merely wicks the exact level.">Entry Buffer (0.05%)</label>
+                </div>
+                <div class="form-group form-check-group" style="grid-column: span 2;">
+                    <input type="checkbox" id="tmfUseBodyFilter" checked>
+                    <label for="tmfUseBodyFilter" title="Rejects a Candle 3 that's a decisive against-direction color (green for SELL, red for BUY) with a body bigger than 1/4 of its High-Low range.">Body Filter (¼ range)</label>
+                </div>
+                <div class="form-group form-check-group" style="grid-column: span 2;">
+                    <input type="checkbox" id="tmfUseC2CloseFilter" checked>
+                    <label for="tmfUseC2CloseFilter" title="Requires Candle 2's CLOSE to be beyond Candle 1's High/Low — above Candle 1's High for SELL, below Candle 1's Low for BUY — closing there, not just wicking past it.">C2 Close &gt; C1 High</label>
+                </div>
+                <div class="form-group">
+                    <label for="tmfSlRiskMax">Max SL Risk (&#8377;)</label>
+                    <input type="number" id="tmfSlRiskMax" value="5000" min="0" step="100">
+                </div>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="tmfUseSlRiskFilter" checked>
+                    <label for="tmfUseSlRiskFilter" title="Skips a trade whose sized SL risk (|entry − SL| × qty, at the current capital-per-trade sizing) exceeds the Max SL Risk value — the setup fired, but the rupee stop-loss at this position size is too large to take.">SL Risk Filter</label>
+                </div>
+            </div>
+
+            <!-- Rule popup — trigger lives inline above, content only builds
+                 the DOM (and its layout cost) when actually opened. -->
+            <div class="bt-modal-overlay" id="tmfRuleModal" style="display:none">
+                <div class="bt-modal-box">
+                    <div class="bt-modal-hdr">
+                        <div class="bt-modal-hdr-text">
+                            <div class="bt-modal-title">30-Min Opening Fakeout — Rule</div>
+                            <div class="bt-modal-subtitle">SELL / BUY setup, targets &amp; cut-off behaviour</div>
+                        </div>
+                        <button class="bt-modal-close" id="tmfRuleModalClose" type="button">✕</button>
+                    </div>
+                    <div class="bt-modal-body">
+                        <div class="rule-box rule-box--modal">
+                            <p class="rule-intro">
+                                Filters <b>every F&amp;O stock</b> — no symbol selection needed
+                                (indices excluded, since there's no equity share of an index to
+                                buy). Every symbol is sized as a real intraday (MIS) equity
+                                position — quantity = capital ÷ price × <b>5x leverage</b>, same
+                                as your broker's order-entry quantity field. Every day, using
+                                30-min candles from 09:15:
+                            </p>
+                            <div class="rule-cols">
+                                <div class="rule-col">
+                                    <h4 class="rule-col__title rule-col__title--sell">SELL setup (breakdown)</h4>
+                                    <ol>
+                                        <li>Candle 1 is <b>green</b></li>
+                                        <li>Candle 2 is <b>green</b> with its High above Candle 1's High, and its <b>close above Candle 1's High</b></li>
+                                        <li>Candle 3 crosses above Candle 2's High but <b>closes back below it</b> (fakeout)</li>
+                                        <li>Candle 3's close stays at/above Candle 2's <b>50% level</b> (midpoint of its High/Low)</li>
+                                        <li>Candle 3's <b>lower wick ≤ upper wick</b></li>
+                                        <li>If Candle 3 is <b>green</b> (against SELL), its body ≤ 1/4 of its High-Low range</li>
+                                    </ol>
+                                    <p class="rule-col__result">
+                                        Trigger = Candle 3's <b>Low − 0.05%</b> — a break below it fires <b>SELL</b><br>
+                                        SL = Candle 3's real High &nbsp;·&nbsp; Target = day's session Low
+                                    </p>
+                                </div>
+                                <div class="rule-col">
+                                    <h4 class="rule-col__title rule-col__title--buy">BUY setup (breakout) — mirror</h4>
+                                    <ol>
+                                        <li>Candle 1 is <b>red</b></li>
+                                        <li>Candle 2 is <b>red</b> with its Low below Candle 1's Low, and its <b>close below Candle 1's Low</b></li>
+                                        <li>Candle 3 crosses below Candle 2's Low but <b>closes back above it</b> (fakeout)</li>
+                                        <li>Candle 3's close stays at/below Candle 2's <b>50% level</b> (midpoint of its High/Low)</li>
+                                        <li>Candle 3's <b>upper wick ≤ lower wick</b></li>
+                                        <li>If Candle 3 is <b>red</b> (against BUY), its body ≤ 1/4 of its High-Low range</li>
+                                    </ol>
+                                    <p class="rule-col__result">
+                                        Trigger = Candle 3's <b>High + 0.05%</b> — a break above it fires <b>BUY</b><br>
+                                        SL = Candle 3's real Low &nbsp;·&nbsp; Target = day's session High
+                                    </p>
+                                </div>
+                            </div>
+                            <ul class="rule-notes">
+                                <li>The trigger adds a <b>0.05% buffer</b> beyond Candle 3's Low/High — price must clear it, not just touch it. SL stays at the exact (unbuffered) Candle 3 High/Low. Toggle with <b>Entry Buffer</b>, on by default.</li>
+                                <li>The Candle 3 against-direction <b>body-size cap (¼ of range)</b> — toggle with <b>Body Filter</b>, on by default.</li>
+                                <li>Candle 2's <b>close beyond Candle 1's High/Low</b> (above Candle 1's High for SELL, below Candle 1's Low for BUY) — toggle with <b>C2 Close &gt; C1 High</b>, on by default.</li>
+                                <li>A trade whose sized SL risk (|entry − SL| × qty, at the current capital-per-trade) exceeds <b>Max SL Risk</b> (default ₹5,000, editable) is skipped entirely — toggle with <b>SL Risk Filter</b>, on by default.</li>
+                                <li>Target (day's session Low/High) is only knowable in hindsight — a backtest-only level.</li>
+                                <li>Force-closed at the <b>Cut-off Time</b> if neither SL nor Target is hit.</li>
+                                <li><b>SL/Target Confirm</b> — <b>On Cross</b>: exits the moment price touches the level. <b>On Close</b>: waits for a 30-min candle to actually close beyond it, ignoring a wick that doesn't hold.</li>
+                                <li>A flat <b>₹300 brokerage</b> is deducted from every trade's P&amp;L (₹).</li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
             </div>

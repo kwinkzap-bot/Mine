@@ -66,6 +66,7 @@
     display: grid;
     grid-template-columns: 240px 1fr;
     align-items: stretch;
+    min-height: 800px;
 }
 .bt-left {
     background: var(--dg-surface);
@@ -326,6 +327,50 @@
     font-size: 12px; font-weight: 500; line-height: 1.5;
 }
 .rule-box b { color: var(--oip-accent); }
+/* Rule content shown inside a popup instead of inline — the modal box
+   already has its own border/shadow, so drop rule-box's own to avoid a
+   double frame. */
+.rule-box--modal { border: none; border-radius: 0; background: none; padding: 12px 14px; }
+/* Inline trigger that opens the Rule popup, sized to match the row's other
+   28px controls (Direction/Cut-off Time/Confirm) for alignment. */
+.rule-trigger-btn {
+    height: 28px; padding: 0 10px; border: 1px solid var(--oip-border); border-radius: 5px;
+    background: var(--oip-bg); color: var(--oip-accent);
+    font-size: 11px; font-weight: 700; cursor: pointer; text-align: left;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    width: 100%; box-sizing: border-box; transition: all .15s;
+}
+.rule-trigger-btn:hover { background: var(--oip-header-bg); border-color: var(--oip-accent); }
+.rule-trigger-btn__icon { font-size: 12px; opacity: .7; }
+/* Structured (step-list) rule layout — used where a plain paragraph gets
+   too dense to scan at a glance (e.g. a SELL/BUY mirrored setup). */
+.rule-box .rule-intro { margin: 0 0 8px; }
+.rule-box .rule-cols {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+    margin-bottom: 8px;
+}
+@media (max-width: 640px) {
+    .rule-box .rule-cols { grid-template-columns: 1fr; }
+}
+.rule-box .rule-col {
+    padding: 8px 10px; border: 1px solid var(--oip-border); border-radius: 6px;
+    background: var(--oip-card-bg, rgba(0,0,0,.04));
+}
+.rule-box .rule-col__title {
+    margin: 0 0 6px; font-size: 12px; font-weight: 700; letter-spacing: .3px;
+}
+.rule-box .rule-col__title--sell { color: #ef4444; }
+.rule-box .rule-col__title--buy  { color: #22c55e; }
+.rule-box .rule-col ol {
+    margin: 0 0 6px; padding-left: 18px;
+}
+.rule-box .rule-col ol li { margin-bottom: 2px; }
+.rule-box .rule-col__result {
+    margin: 6px 0 0; padding-top: 6px; border-top: 1px dashed var(--oip-border);
+    font-size: 11.5px;
+}
+.rule-box .rule-notes { margin: 0; padding-left: 18px; }
+.rule-box .rule-notes li { margin-bottom: 2px; }
 .expiry-group-hdr td {
     cursor: pointer; user-select: none;
     background: var(--oip-header-bg) !important;
@@ -393,13 +438,26 @@
     background: rgba(0,0,0,.42);
     display: flex; align-items: center; justify-content: center;
     padding: 16px;
+    /* Fixed to the viewport, not the document — stays put and centered no
+       matter how far the page underneath is scrolled. Own scrollbar as a
+       last resort if a box is ever taller than an unusually short viewport
+       (the box itself already scrolls its body first — see .bt-modal-body). */
+    overflow-y: auto;
 }
 .bt-modal-box {
     background: var(--oip-card-bg, #fff);
     border: 1px solid var(--oip-border);
     border-radius: 12px;
     box-shadow: 0 12px 40px rgba(0,0,0,.16), 0 2px 8px rgba(0,0,0,.08);
-    width: 100%; max-width: 500px; max-height: 82vh;
+    /* Sized off the viewport, never the content: width caps at 600px but
+       always shrinks to fit narrow screens, height caps at 82% of the
+       viewport with the body scrolling internally past that (dvh accounts
+       for mobile browsers' collapsing address bar; vh is the fallback for
+       browsers that don't support it). */
+    width: min(600px, 100%);
+    max-height: 82vh;
+    max-height: 82dvh;
+    margin: auto;
     display: flex; flex-direction: column; overflow: hidden;
 }
 .bt-modal-hdr {
