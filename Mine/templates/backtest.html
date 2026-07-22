@@ -500,6 +500,21 @@
                 <div id="scOptGrids"></div>
             </div>
 
+            <!-- 30-Min Opening Fakeout Optimise results panel — flat grid, no
+                 timeframe axis (the engine always uses 30-min candles). -->
+            <div id="thirtyMinFakeoutOptimisePanel" style="display:none;">
+                <div class="opt-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">⚡ 30-Min Fakeout Best Params</h4>
+                        <button id="tmfRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="tmfOptMeta"></small>
+                </div>
+                <div class="opt-table-wrap">
+                    <div id="tmfOptGrid"></div>
+                </div>
+            </div>
+
             <!-- Loader — sits below the optimisation panel, above results -->
             <div id="loading" class="bt-loading" style="display:none;">
                 <div class="bt-loader">

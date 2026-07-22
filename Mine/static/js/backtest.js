@@ -21,6 +21,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Same generation-token pattern for the 2nd-Candle optimise.
     let _scOptRun    = 0;
     let _scOptAbort  = null;
+    // Same generation-token pattern for the 30-Min Fakeout optimise.
+    let _tmfOptRun   = 0;
+    let _tmfOptAbort = null;
 
     // ── Live-algo configs (LIVE badges) ──────────────────────────────────
     // Param sets currently running as live algos. Used to flag the backtest
@@ -266,6 +269,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const scOptPanel    = document.getElementById('secondCandleOptimisePanel');
         const expParamsRow  = document.getElementById('expiryBreakoutParamsRow');
         const tmfParamsRow  = document.getElementById('thirtyMinFakeoutParamsRow');
+        const tmfOptPanel   = document.getElementById('thirtyMinFakeoutOptimisePanel');
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (vwapParamsRow) vwapParamsRow.style.display = 'none';
         if (vwapLotRow)    vwapLotRow.style.display    = 'none';
@@ -275,6 +279,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (scOptPanel)    scOptPanel.style.display    = 'none';
         if (expParamsRow)  expParamsRow.style.display  = 'none';
         if (tmfParamsRow)  tmfParamsRow.style.display  = 'none';
+        if (tmfOptPanel)   tmfOptPanel.style.display   = 'none';
         // Restore symbol/date/interval visibility (hidden for some strategies)
         const symFg      = document.getElementById('mainSymbolFg');
         const intFg      = document.getElementById('mainIntervalFg');
@@ -287,7 +292,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle' || val === 'thirty_min_fakeout') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -448,6 +453,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const periodSec     = document.getElementById('periodBreakdownSection');
         const smOptPanel    = document.getElementById('smOptimisePanel');
         const vwapOptPanel2 = document.getElementById('vwapOptimisePanel');
+        const tmfOptPanel2  = document.getElementById('thirtyMinFakeoutOptimisePanel');
         if (btTradesSec)    btTradesSec.style.display    = 'none';
         if (btPlaceholder)  btPlaceholder.style.display  = 'none';
         if (periodSec)      periodSec.style.display      = 'none';
@@ -457,6 +463,7 @@ document.addEventListener('DOMContentLoaded', function() {
         setCollapsed(document.querySelector('#secondCandleOptimisePanel .opt-header'), true);
         if (smOptPanel)     smOptPanel.style.display     = 'none';
         if (vwapOptPanel2)  vwapOptPanel2.style.display  = 'none';
+        if (tmfOptPanel2)   tmfOptPanel2.style.display   = 'none';
 
         try {
             const strat = strategySelect ? strategySelect.value : 'rtp';
@@ -2015,6 +2022,165 @@ document.addEventListener('DOMContentLoaded', function() {
     const scRecalcBtn = document.getElementById('scRecalcOptBtn');
     if (scRecalcBtn) scRecalcBtn.addEventListener('click', () => runScOptimise(true));
 
+    // ── 30-Min Opening Fakeout Optimise ──────────────────────────────────
+    // Sweeps Direction × SL/Target-Confirm × the 3 boolean pattern filters
+    // (48 combos) across the full F&O stock universe — no per-symbol/
+    // per-timeframe axis like RTP/2nd-Candle, since this strategy always
+    // scans every stock at a fixed 30-min-candle resolution. One flat
+    // leaderboard, ranked by real ₹ Net P&L.
+    const TMF_OPT_COLS = [
+        { label: '#',              key: null,                  fmt: (r, i) => i + 1 },
+        { label: 'Direction',      key: 'direction',           fmt: r => r.direction },
+        { label: 'SL/TGT Confirm', key: 'exit_on',              fmt: r => r.exit_on === 'close' ? 'On Close' : 'On Cross' },
+        { label: 'Entry Buffer',   key: 'use_entry_buffer',     fmt: r => r.use_entry_buffer ? 'On' : 'Off' },
+        { label: 'Body Filter',    key: 'use_body_filter',      fmt: r => r.use_body_filter ? 'On' : 'Off' },
+        { label: 'C2 Close',       key: 'use_c2_close_filter',  fmt: r => r.use_c2_close_filter ? 'On' : 'Off' },
+        { label: 'Trades',         key: 'total_trades',         fmt: r => r.total_trades },
+        { label: 'Win%',           key: 'win_rate',             fmt: r => `${r.win_rate ?? 0}%` },
+        { label: 'Net P&L (₹)',    key: 'net_pnl_rupees',       fmt: r => `<span class="${r.net_pnl_rupees >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.net_pnl_rupees >= 0 ? '+' : '') + '₹' + Math.round(r.net_pnl_rupees).toLocaleString('en-IN')}</span>` },
+        { label: 'Prof. Factor',   key: 'profit_factor_rupees', fmt: r => (r.profit_factor_rupees || 0).toFixed(2) },
+        { label: 'Max DD (₹)',     key: 'max_drawdown_rupees',  fmt: r => `<span class="pnl-negative">₹${Math.round(r.max_drawdown_rupees || 0).toLocaleString('en-IN')}</span>` },
+        { label: '',               key: null,                  fmt: () => '' },   // Use button
+    ];
+
+    function renderTmfOptResults(data) {
+        const panel     = document.getElementById('thirtyMinFakeoutOptimisePanel');
+        const metaEl    = document.getElementById('tmfOptMeta');
+        const recalcBtn = document.getElementById('tmfRecalcOptBtn');
+
+        if (metaEl) {
+            let meta = `${data.total_combos_tested} combos · ${data.total} passed min-trades · ${data.symbols_used} stocks`;
+            if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
+            metaEl.textContent = meta;
+        }
+
+        _mountSingleOptGrid('tmfOptGrid', data.results || [], TMF_OPT_COLS, 'net_pnl_rupees', applyTmfOptResult,
+            { win_rate: r => r.total_trades ? r.wins / r.total_trades : 0 });
+
+        if (panel)     panel.style.display     = '';
+        if (recalcBtn) recalcBtn.style.display = '';
+        if (data.best) applyTmfOptResult(data.best);
+    }
+
+    function cancelTmfOptimise() {
+        _tmfOptRun += 1;
+        if (_tmfOptAbort) {
+            try { _tmfOptAbort.abort(); } catch (e) { /* noop */ }
+            _tmfOptAbort = null;
+        }
+    }
+
+    async function runTmfOptimise(recalculate) {
+        const panel     = document.getElementById('thirtyMinFakeoutOptimisePanel');
+        const recalcBtn = document.getElementById('tmfRecalcOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+
+        cancelTmfOptimise();
+        const myRun      = _tmfOptRun;
+        const controller = new AbortController();
+        _tmfOptAbort     = controller;
+
+        const exitTime = (document.getElementById('tmfExitTime')?.value || '15:18').split(':');
+        try {
+            const resp = await fetch('/api/backtest/thirty-min-fakeout/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
+                body: JSON.stringify({
+                    start_date:         document.getElementById('startDate').value,
+                    end_date:           document.getElementById('endDate').value,
+                    exit_hour:          parseInt(exitTime[0] || 15),
+                    exit_minute:        parseInt(exitTime[1] || 18),
+                    use_sl_risk_filter: document.getElementById('tmfUseSlRiskFilter')?.checked ?? true,
+                    sl_risk_max:        parseFloat(document.getElementById('tmfSlRiskMax')?.value || '5000') || 5000,
+                    recalculate,
+                })
+            });
+            const data = await resp.json();
+            if (myRun !== _tmfOptRun) return; // superseded
+            if (!data.success) {
+                window.showNotification(data.error || 'Optimisation failed', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            if (data.from_cache) {
+                _tmfOptAbort = null;
+                renderTmfOptResults(data);
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            _pollTmfOptimise(data.task_id, activeBtn, origText, Date.now(), myRun);
+        } catch (err) {
+            if (err && err.name === 'AbortError') return;
+            console.error('30-Min Fakeout optimise error:', err);
+            window.showNotification('Optimisation request failed', 'error');
+            if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+        }
+    }
+
+    function _pollTmfOptimise(taskId, activeBtn, origText, startMs, myRun) {
+        const MAX_WAIT_MS = 20 * 60 * 1000;   // full-universe x 48 combos — generous
+        function tick() {
+            if (myRun !== _tmfOptRun) return;
+            const elapsed = Math.round((Date.now() - startMs) / 1000);
+            if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s…`;
+            if (Date.now() - startMs > MAX_WAIT_MS) {
+                window.showNotification('Optimisation timed out — try a shorter date range', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            fetch(`/api/backtest/thirty-min-fakeout/optimise/status/${taskId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (myRun !== _tmfOptRun) return;
+                    if (data.status === 'running') {
+                        if (activeBtn && data.progress) activeBtn.textContent = `⏳ ${elapsed}s · ${data.progress}`;
+                        setTimeout(tick, 2000);
+                        return;
+                    }
+                    _tmfOptAbort = null;
+                    if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                    if (!data.success || data.status === 'error') {
+                        window.showNotification(data.error || 'Optimisation failed', 'error');
+                        return;
+                    }
+                    renderTmfOptResults(data);
+                })
+                .catch(err => {
+                    if (myRun !== _tmfOptRun) return;
+                    console.error('30-Min Fakeout poll error:', err);
+                    setTimeout(tick, 3000);
+                });
+        }
+        setTimeout(tick, 2000);
+    }
+
+    function applyTmfOptResult(r) {
+        const dir = document.getElementById('tmfDirection');
+        const exitOn = document.getElementById('tmfExitOn');
+        const entryBuf = document.getElementById('tmfUseEntryBuffer');
+        const bodyFilt = document.getElementById('tmfUseBodyFilter');
+        const c2Filt   = document.getElementById('tmfUseC2CloseFilter');
+        if (dir) dir.value = r.direction;
+        if (exitOn) exitOn.value = r.exit_on;
+        if (entryBuf) entryBuf.checked = !!r.use_entry_buffer;
+        if (bodyFilt) bodyFilt.checked = !!r.use_body_filter;
+        if (c2Filt) c2Filt.checked = !!r.use_c2_close_filter;
+        if (window.showNotification) {
+            window.showNotification(
+                `Applied: ${r.direction}  ·  ${r.exit_on === 'close' ? 'On Close' : 'On Cross'}  ·  Win% ${r.win_rate}%  ·  Net ₹${Math.round(r.net_pnl_rupees).toLocaleString('en-IN')}`,
+                'success'
+            );
+        }
+    }
+
+    const tmfRecalcBtn = document.getElementById('tmfRecalcOptBtn');
+    if (tmfRecalcBtn) tmfRecalcBtn.addEventListener('click', () => runTmfOptimise(true));
+
     const optimiseBtn   = document.getElementById('runOptimiseBtn');
     const recalcOptBtn  = document.getElementById('recalculateOptBtn');
     if (optimiseBtn)  optimiseBtn.addEventListener('click', () => {
@@ -2022,6 +2188,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (strat === 'swing_momentum') _runSmOptimise(false);
         else if (strat === 'vwap')      runVwapOptimise(false);
         else if (strat === 'second_candle') runScOptimise(false);
+        else if (strat === 'thirty_min_fakeout') runTmfOptimise(false);
         else                            runOptimise(false);
     });
     if (recalcOptBtn) recalcOptBtn.addEventListener('click', () => runOptimise(true));

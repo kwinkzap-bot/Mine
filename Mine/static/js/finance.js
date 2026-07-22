@@ -312,8 +312,8 @@ function _finKpisHtml(d) {
       ${kpi('Total Invested', _finFmtCompact(s.total_invested), _finFmt(s.total_invested))}
       ${kpi('TT Amt in Line Track', _finFmtCompact(track.in_line), _finFmt(track.in_line))}
       ${kpi('TT Amt in Line Monthly', _finFmtCompact(mon.in_line), _finFmt(mon.in_line))}
-      ${kpi('Amt in Hand', _finFmtCompact(s.amt_in_hand), _finFmt(s.amt_in_hand))}
       ${kpi('TT Amt in Line', _finFmtCompact(s.total_in_line), 'Track + Monthly')}
+      ${kpi('Amt in Hand', _finFmtCompact(s.amt_in_hand), _finFmt(s.amt_in_hand))}
       ${kpi('Total Amount in Line', _finFmtCompact(grand),
             grandMismatch
               ? `<span class="fin-pill warn">! sheet says ${_finFmtCompact(sheetGrand)}</span>`

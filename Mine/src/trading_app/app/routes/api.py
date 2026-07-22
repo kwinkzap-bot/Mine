@@ -181,6 +181,10 @@ _rtp_opt_tasks_lock = threading.Lock()
 _sc_opt_tasks: Dict[str, Dict] = {}
 _sc_opt_tasks_lock = threading.Lock()
 
+# In-memory task store for long-running 30-Min Fakeout optimisation background jobs
+_tmf_opt_tasks: Dict[str, Dict] = {}
+_tmf_opt_tasks_lock = threading.Lock()
+
 # Rankings cache — keyed by index name, expires after 15 min
 _sm_rankings_cache: Dict[str, tuple] = {}
 _SM_RANKINGS_TTL = 900  # seconds
@@ -3941,6 +3945,206 @@ def run_thirty_min_fakeout_backtest_api():
     except Exception as e:
         logger.error(f"Error in Thirty-Min Fakeout scan API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# Grid swept by /backtest/thirty-min-fakeout/optimise — every other request
+# param (dates, cutoff time, capital, SL-risk cap) stays fixed at whatever
+# the form currently has; only these five toggles get combined.
+_TMF_OPT_DIRECTIONS = ['both', 'long', 'short']
+_TMF_OPT_EXIT_ON    = ['cross', 'close']
+_TMF_OPT_BOOL_GRID  = [True, False]
+_TMF_OPT_MIN_TRADES = 20  # drop combos too thin to trust
+
+
+@api_bp.route('/backtest/thirty-min-fakeout/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_thirty_min_fakeout_optimise():
+    """Sweep direction x SL/Target-confirm x the three optional pattern
+    filters (entry buffer, body filter, C2-close filter) across the full
+    F&O stock universe, and rank combos by real ₹ Net P&L (after sizing +
+    brokerage) — same universe scan as the plain backtest, run once per
+    combo. Unlike RTP/2nd-Candle, there's no timeframe axis here (the
+    engine always resamples to 30-min candles), so this returns one flat
+    leaderboard instead of one per timeframe."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data              = request.get_json()
+        start_date_str    = data.get('start_date')
+        end_date_str      = data.get('end_date')
+        exit_hour         = int(data.get('exit_hour', 15) or 15)
+        exit_minute       = int(data.get('exit_minute', 18) or 18)
+        capital_per_trade = float(data.get('capital_per_trade', 100000) or 100000)
+        use_sl_risk_filter = bool(data.get('use_sl_risk_filter', True))
+        sl_risk_max        = float(data.get('sl_risk_max', _TMF_MAX_SL_RISK_RUPEES) or _TMF_MAX_SL_RISK_RUPEES)
+        recalculate        = bool(data.get('recalculate', False))
+
+        if not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        cache_key = (f"tmf_opt_{start_date_str}_{end_date_str}_{exit_hour:02d}{exit_minute:02d}"
+                     f"_{int(capital_per_trade)}_{int(use_sl_risk_filter)}_{int(sl_risk_max)}_v1")
+
+        if not recalculate:
+            cache = _load_opt_cache()
+            if cache_key in cache:
+                entry = cache[cache_key]
+                return jsonify({'success': True, 'status': 'complete', 'from_cache': True, **entry})
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        symbols = _fo_futures_universe()
+        if not symbols:
+            return jsonify({'success': False, 'error': 'NFO instruments cache not found. Please login to refresh.'}), 404
+
+        task_id = str(uuid.uuid4())
+        with _tmf_opt_tasks_lock:
+            _tmf_opt_tasks[task_id] = {'status': 'running', 'started_at': _time.time(), 'progress': 'fetching data'}
+
+        def _run():
+            try:
+                import pandas as pd
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                from trading_app.Backtest.thirty_min_fakeout_engine import ThirtyMinFakeoutEngine, summarize_trades
+                from trading_app.Backtest.minute_candle_store import get_minute_history
+                import itertools
+
+                is_fyers = hasattr(current_kite, 'fyers')
+                provider_tag = 'fyers' if is_fyers else 'kite'
+
+                # ── Fetch every symbol's data ONCE — the grid below reruns the
+                # engine against these same in-memory frames for each combo,
+                # instead of re-fetching (which dominates the plain scan's cost). ──
+                def _fetch(symbol):
+                    spot_token = f'NSE:{symbol}-EQ' if is_fyers else symbol
+                    return symbol, get_minute_history(
+                        current_kite, spot_token, symbol, start_date_str, end_date_str,
+                        provider_tag=provider_tag,
+                    )
+
+                dfs = {}
+                workers = 15 if is_fyers else 8
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {executor.submit(_fetch, sym): sym for sym in symbols}
+                    done = 0
+                    for future in as_completed(futures):
+                        done += 1
+                        try:
+                            sym, df = future.result(timeout=60)
+                            if df is not None and not df.empty:
+                                dfs[sym] = df
+                        except Exception:
+                            pass
+                        if done % 20 == 0 or done == len(symbols):
+                            with _tmf_opt_tasks_lock:
+                                _tmf_opt_tasks[task_id]['progress'] = f'fetching data {done}/{len(symbols)}'
+
+                if not dfs:
+                    with _tmf_opt_tasks_lock:
+                        _tmf_opt_tasks[task_id] = {'status': 'error', 'error': 'No historical data returned'}
+                    return
+
+                grid = list(itertools.product(
+                    _TMF_OPT_DIRECTIONS, _TMF_OPT_EXIT_ON,
+                    _TMF_OPT_BOOL_GRID, _TMF_OPT_BOOL_GRID, _TMF_OPT_BOOL_GRID,
+                ))
+                results = []
+                for i, (direction, exit_on, use_entry_buffer, use_body_filter, use_c2_close_filter) in enumerate(grid):
+                    enable_long  = direction != 'short'
+                    enable_short = direction != 'long'
+                    all_trades = []
+                    for symbol, df in dfs.items():
+                        engine = ThirtyMinFakeoutEngine(
+                            df=df, exit_hour=exit_hour, exit_minute=exit_minute,
+                            enable_long=enable_long, enable_short=enable_short, exit_on=exit_on,
+                            use_entry_buffer=use_entry_buffer, use_body_filter=use_body_filter,
+                            use_c2_close_filter=use_c2_close_filter,
+                        )
+                        trades, _ = engine.run()
+                        for t in trades:
+                            entry_price = t['entry_price']
+                            qty = max(1, int((capital_per_trade * _TMF_EQUITY_LEVERAGE) // entry_price)) if entry_price > 0 else 1
+                            sl_risk_rupees = abs(entry_price - t['sl_price']) * qty
+                            if use_sl_risk_filter and sl_risk_rupees > sl_risk_max:
+                                continue
+                            t['symbol']      = symbol
+                            t['qty']         = qty
+                            t['brokerage']   = _TMF_BROKERAGE_PER_TRADE
+                            t['pnl_rupees']  = round(t['pnl'] * qty - _TMF_BROKERAGE_PER_TRADE, 2)
+                            all_trades.append(t)
+
+                    if len(all_trades) >= _TMF_OPT_MIN_TRADES:
+                        rupee_summary = summarize_trades([{**t, 'pnl': t['pnl_rupees']} for t in all_trades])
+                        results.append({
+                            'direction': direction, 'exit_on': exit_on,
+                            'use_entry_buffer': use_entry_buffer, 'use_body_filter': use_body_filter,
+                            'use_c2_close_filter': use_c2_close_filter,
+                            'total_trades': len(all_trades),
+                            'wins': rupee_summary['wins'], 'losses': rupee_summary['losses'],
+                            'win_rate': rupee_summary['win_rate'],
+                            'net_pnl_rupees': rupee_summary['total_pnl'],
+                            'avg_win_rupees': rupee_summary['avg_win'],
+                            'avg_loss_rupees': rupee_summary['avg_loss'],
+                            'profit_factor_rupees': rupee_summary['profit_factor'],
+                            'max_drawdown_rupees': rupee_summary['max_drawdown'],
+                            'total_brokerage': round(_TMF_BROKERAGE_PER_TRADE * len(all_trades), 2),
+                        })
+
+                    with _tmf_opt_tasks_lock:
+                        _tmf_opt_tasks[task_id]['progress'] = f'{i + 1}/{len(grid)} combos'
+
+                results.sort(key=lambda r: r['net_pnl_rupees'], reverse=True)
+                top_results = results[:15]
+
+                payload = {
+                    'total_combos_tested': len(grid),
+                    'total': len(results),
+                    'symbols_used': len(dfs),
+                    'results': top_results,
+                    'best': top_results[0] if top_results else None,
+                    'cached_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
+                }
+
+                disk_cache = _load_opt_cache()
+                disk_cache[cache_key] = payload
+                _save_opt_cache(disk_cache)
+
+                with _tmf_opt_tasks_lock:
+                    _tmf_opt_tasks[task_id] = {'status': 'complete', 'payload': payload}
+            except Exception as e:
+                logger.error(f"[TMF OPT] background error: {e}", exc_info=True)
+                with _tmf_opt_tasks_lock:
+                    _tmf_opt_tasks[task_id] = {'status': 'error', 'error': str(e)}
+
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id, 'status': 'running'})
+
+    except Exception as e:
+        logger.error(f"Error in Thirty-Min Fakeout optimise API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/thirty-min-fakeout/optimise/status/<task_id>', methods=['GET'])
+@csrf.exempt
+@require_user_auth
+def run_thirty_min_fakeout_optimise_status(task_id):
+    """Poll the status of a background 30-Min Fakeout optimisation job."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    with _tmf_opt_tasks_lock:
+        task = _tmf_opt_tasks.get(task_id)
+    if not task:
+        return jsonify({'success': False, 'error': 'Task not found'}), 404
+    if task['status'] == 'running':
+        return jsonify({'success': True, 'status': 'running', 'progress': task.get('progress', '')})
+    if task['status'] == 'error':
+        return jsonify({'success': False, 'status': 'error', 'error': task.get('error', 'Unknown error')}), 500
+    return jsonify({'success': True, 'status': 'complete', 'from_cache': False, **task['payload']})
 
 
 @api_bp.route('/backtest/vwap/optimise', methods=['POST'], strict_slashes=False)
