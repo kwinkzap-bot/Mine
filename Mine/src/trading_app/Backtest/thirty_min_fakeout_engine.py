@@ -162,14 +162,15 @@ def _resample_30min(day_df: pd.DataFrame) -> pd.DataFrame:
     return grouped
 
 
-def _run_day(day_df: pd.DataFrame, thirty: pd.DataFrame, cutoff: int, enable_long: bool, enable_short: bool,
-             use_entry_buffer: bool = True, use_body_filter: bool = True, use_c2_close_filter: bool = True):
-    """day_df: one day's 1-min bars, already sorted. thirty: that same
-    day's 30-min candles (from iter_days_with_candles) — resampling
-    happens once per day upstream and is reused across combos, not
-    redone here."""
-    c1, c2, c3 = thirty.loc[0], thirty.loc[1], thirty.loc[2]
-
+def _detect_setup(c1, c2, c3, enable_long: bool, enable_short: bool,
+                   use_entry_buffer: bool = True, use_body_filter: bool = True,
+                   use_c2_close_filter: bool = True):
+    """The pattern check itself, isolated from day-simulation — c1/c2/c3 are
+    each a row (dict-like with open/high/low/close) for that day's first
+    three 30-min candles. Returns {'direction': 'short'|'long', 'trigger':
+    float, 'sl_level': float} or None. Shared by the backtest's _run_day
+    and the live algo (tmf_algo.py) so live entries can never silently
+    drift from what the backtest considers a valid setup."""
     direction = None
     trigger = sl_level = None
 
@@ -212,6 +213,24 @@ def _run_day(day_df: pd.DataFrame, thirty: pd.DataFrame, cutoff: int, enable_lon
 
     if direction is None:
         return None
+    return {'direction': direction, 'trigger': trigger, 'sl_level': sl_level}
+
+
+def _run_day(day_df: pd.DataFrame, thirty: pd.DataFrame, cutoff: int, enable_long: bool, enable_short: bool,
+             use_entry_buffer: bool = True, use_body_filter: bool = True, use_c2_close_filter: bool = True):
+    """day_df: one day's 1-min bars, already sorted. thirty: that same
+    day's 30-min candles (from iter_days_with_candles) — resampling
+    happens once per day upstream and is reused across combos, not
+    redone here."""
+    c1, c2, c3 = thirty.loc[0], thirty.loc[1], thirty.loc[2]
+
+    setup_hit = _detect_setup(c1, c2, c3, enable_long, enable_short,
+                               use_entry_buffer, use_body_filter, use_c2_close_filter)
+    if setup_hit is None:
+        return None
+    direction = setup_hit['direction']
+    trigger   = setup_hit['trigger']
+    sl_level  = setup_hit['sl_level']
 
     time_mins = day_df.index.hour * 60 + day_df.index.minute
 

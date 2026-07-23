@@ -102,6 +102,17 @@ _IR_ALL_HISTORY_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'intrinsic_range', 'intrinsic_range_trades_all_history.json')
 )
 
+# 30-Min Opening Fakeout live algo state and history files
+_TMF_STATE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'thirty_min_fakeout', 'tmf_state.json')
+)
+_TMF_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'thirty_min_fakeout', 'tmf_trades_history.json')
+)
+_TMF_ALL_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'thirty_min_fakeout', 'tmf_trades_all_history.json')
+)
+
 def _algo_option_live(trade: dict, provider) -> dict:
     """Live option-premium P&L for an active algo trade.
 
@@ -3713,201 +3724,39 @@ def run_expiry_breakout_scan_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-_TMF_INDEX_SYMBOLS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']
-
-
-def _fo_futures_universe():
-    """Every F&O stock (instrument_type == 'FUT' in the cached NFO
-    instruments) — indices excluded, since the 30-Min Fakeout scan sizes
-    every symbol as a real intraday equity position, and there's no
-    equity share of an index to buy. Same cache/shape as
-    get_backtest_symbols() otherwise."""
-    import json
-    cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cache', 'nfo_instruments.json')
-    if not os.path.exists(cache_path):
-        return None
-    with open(cache_path, 'r') as f:
-        instruments = json.load(f)
-    stock_names = sorted({
-        inst.get('name') for inst in instruments
-        if inst.get('instrument_type') == 'FUT' and inst.get('name')
-        and inst.get('name') not in _TMF_INDEX_SYMBOLS
-    })
-    return stock_names
-
-
 _TMF_BROKERAGE_PER_TRADE = 300  # flat ₹ round-trip brokerage per trade
-# No broker exposes *historical* per-stock MIS leverage (only today's live
-# value), so a single assumed multiplier is applied uniformly to every
-# stock. 5x matches Zerodha's typical MIS leverage for liquid F&O-eligible
-# large/mid-caps — an approximation, not the real historical leverage for
-# every stock/day.
-_TMF_EQUITY_LEVERAGE = 5
 _TMF_MAX_SL_RISK_RUPEES  = 5000  # default for sl_risk_max — user-editable per request
 
-# Per-stock default combo (direction + the 3 filter toggles) — the
-# best-known settings for each stock, found by running "Find Best Params"
-# one stock at a time. Used as the default filter set for that stock's
-# scan instead of one combo applied uniformly to every stock; a stock
-# missing here falls back to whatever the request's global direction/
-# filter fields say. See run_thirty_min_fakeout_backtest_api's
-# use_symbol_defaults flag.
-_TMF_SYMBOL_DEFAULTS = {
-    '360ONE': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'ADANIENSOL': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'ADANIENT': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'ADANIPORTS': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'ADANIPOWER': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'ALKEM': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'AMBUJACEM': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'ANGELONE': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'APOLLOHOSP': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'ASHOKLEY': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'ASIANPAINT': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'ASTRAL': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'AUROPHARMA': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'BAJAJ-AUTO': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'BAJAJFINSV': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'BAJAJHLDNG': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'BAJFINANCE': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'BANDHANBNK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'BANKBARODA': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'BANKINDIA': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'BDL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'BHARATFORG': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'BHARTIARTL': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'BHEL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'BOSCHLTD': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'BPCL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'CANBK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'CDSL': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'CGPOWER': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'CHOLAFIN': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'COCHINSHIP': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'COLPAL': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'CONCOR': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'CROMPTON': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'CUMMINSIND': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'DABUR': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'DALBHARAT': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'DIVISLAB': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'DIXON': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'DLF': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'DRREDDY': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'EICHERMOT': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'EXIDEIND': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'FEDERALBNK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'FORCEMOT': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'GAIL': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'GLENMARK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'GODREJCP': {'direction': 'long', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'GODREJPROP': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'GRASIM': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'GVT&D': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'HAL': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'HAVELLS': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'HCLTECH': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'HDFCAMC': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'HDFCBANK': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'HEROMOTOCO': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'HINDALCO': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'HINDPETRO': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'ICICIGI': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'IDEA': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'IDFCFIRSTB': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'INDHOTEL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'INDIANB': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'INDIGO': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'INDUSINDBK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'IOC': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'JINDALSTEL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'JIOFIN': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'JSWSTEEL': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'KAYNES': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'KEI': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'KFINTECH': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'KPITTECH': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'LICI': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'LODHA': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'LT': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'LTF': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'LTM': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'LUPIN': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'M&M': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'MANAPPURAM': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'MANKIND': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'MARICO': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'MARUTI': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'MAZDOCK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'MCX': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'MFSL': {'direction': 'long', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'MOTHERSON': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'MOTILALOFS': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'MPHASIS': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'MUTHOOTFIN': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'NAM-INDIA': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'NATIONALUM': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'NAUKRI': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'NBCC': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'NESTLEIND': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'NMDC': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'NTPC': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'NYKAA': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'OBEROIRLTY': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'OIL': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'ONGC': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'PERSISTENT': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'PETRONET': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'PFC': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'PGEL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'PHOENIXLTD': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'PIDILITIND': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'PIIND': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'POLYCAB': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'POWERINDIA': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'PRESTIGE': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'RADICO': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'RBLBANK': {'direction': 'long', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'RECLTD': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'RVNL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'SAIL': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'SAMMAANCAP': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'SBICARD': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'SBILIFE': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'SBIN': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'SHREECEM': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'SIEMENS': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'SOLARINDS': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
-    'SRF': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'SUNPHARMA': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'TATACONSUM': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'TECHM': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'TIINDIA': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'TMPV': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'TORNTPHARM': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'TRENT': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'TVSMOTOR': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'ULTRACEMCO': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'UNIONBANK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'UNITDSPR': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'UNOMINDA': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
-    'UPL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'VBL': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
-    'VOLTAS': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'YESBANK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
-    'ZYDUSLIFE': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
-}
+from trading_app.Backtest.tmf_symbol_universe import (
+    TMF_SYMBOL_DEFAULTS as _TMF_SYMBOL_DEFAULTS,
+    TMF_STOCK_UNIVERSE as _TMF_STOCK_UNIVERSE,
+    TMF_EQUITY_LEVERAGE as _TMF_EQUITY_LEVERAGE,
+)
+
+
+@api_bp.route('/backtest/thirty-min-fakeout/symbol-defaults', methods=['GET'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def get_thirty_min_fakeout_symbol_defaults():
+    """The per-stock default combo table (_TMF_SYMBOL_DEFAULTS) as JSON, so
+    the frontend can preview a picked symbol's own Direction/filter combo
+    in the form the moment it's selected — same table the backtest route
+    already applies server-side when use_symbol_defaults is on."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    return jsonify({'success': True, 'defaults': _TMF_SYMBOL_DEFAULTS})
 
 
 @api_bp.route('/backtest/thirty-min-fakeout', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
 def run_thirty_min_fakeout_backtest_api():
-    """Scan EVERY F&O stock for the 30-Min Opening Fakeout
-    Breakdown/Breakout pattern across [start_date, end_date] — by default
-    the universe is every stock with a live futures contract (indices
-    excluded — see _fo_futures_universe); pass symbol (str) to backtest
-    just that one stock instead of the full universe. The pattern check
+    """Scan the 30-Min Opening Fakeout Breakdown/Breakout pattern across
+    [start_date, end_date] — by default the universe is the fixed,
+    user-supplied stock list in _TMF_STOCK_UNIVERSE (not every F&O
+    stock); pass symbol (str) to backtest just that one stock instead of
+    the full list. The pattern check
     and entry/exit simulation run on the SPOT/equity price series,
     matching a normal chart. Every stock is sized as a real intraday (MIS)
     equity position — qty = floor(capital_per_trade x _TMF_EQUITY_LEVERAGE /
@@ -3992,17 +3841,14 @@ def run_thirty_min_fakeout_backtest_api():
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
-        universe = _fo_futures_universe()
-        if not universe:
-            return jsonify({'success': False, 'error': 'NFO instruments cache not found. Please login to refresh.'}), 404
         # Empty selection (the default) scans the full universe; a specific
         # symbol backtests just that one stock instead.
         if single_symbol:
-            if single_symbol not in universe:
-                return jsonify({'success': False, 'error': f'{single_symbol} is not an F&O stock (or has no futures contract).'}), 400
+            if single_symbol not in _TMF_STOCK_UNIVERSE:
+                return jsonify({'success': False, 'error': f'{single_symbol} is not in the 30-Min Fakeout stock list.'}), 400
             symbols = [single_symbol]
         else:
-            symbols = universe
+            symbols = _TMF_STOCK_UNIVERSE
 
         is_fyers = hasattr(current_kite, 'fyers')
 
@@ -4175,7 +4021,7 @@ def run_thirty_min_fakeout_optimise():
 
         cache_key = (f"tmf_opt_{start_date_str}_{end_date_str}_{exit_hour:02d}{exit_minute:02d}"
                      f"_{int(capital_per_trade)}_{int(use_sl_risk_filter)}_{int(sl_risk_max)}"
-                     f"_{single_symbol or 'ALL'}_v2")
+                     f"_{single_symbol or 'ALL'}_v3")
 
         if not recalculate:
             cache = _load_opt_cache()
@@ -4187,15 +4033,12 @@ def run_thirty_min_fakeout_optimise():
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
-        universe = _fo_futures_universe()
-        if not universe:
-            return jsonify({'success': False, 'error': 'NFO instruments cache not found. Please login to refresh.'}), 404
         if single_symbol:
-            if single_symbol not in universe:
-                return jsonify({'success': False, 'error': f'{single_symbol} is not an F&O stock (or has no futures contract).'}), 400
+            if single_symbol not in _TMF_STOCK_UNIVERSE:
+                return jsonify({'success': False, 'error': f'{single_symbol} is not in the 30-Min Fakeout stock list.'}), 400
             symbols = [single_symbol]
         else:
-            symbols = universe
+            symbols = _TMF_STOCK_UNIVERSE
 
         task_id = str(uuid.uuid4())
         with _tmf_opt_tasks_lock:
@@ -7089,6 +6932,159 @@ def algo_intrinsic_range_stop() -> EndpointResponse:
         return jsonify({'success': True, 'message': 'Intrinsic Range algo stopped'})
     except Exception as e:
         logger.error(f'[intrinsic-range/stop] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/thirty-min-fakeout/status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_tmf_status() -> EndpointResponse:
+    """Today's per-stock 30-Min Fakeout state (phase/direction/trigger/SL/
+    entry/target for every stock in TMF_STOCK_UNIVERSE) plus a summary
+    count by phase."""
+    try:
+        try:
+            with open(_TMF_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {'date': None, 'eod_handled': False, 'stocks': {}}
+
+        stocks = state.get('stocks') or {}
+        summary = {'pending_scan': 0, 'no_setup': 0, 'watching': 0, 'pending_entry': 0, 'in_position': 0, 'done': 0}
+        for s in stocks.values():
+            phase = s.get('phase', 'pending_scan')
+            summary[phase] = summary.get(phase, 0) + 1
+
+        from trading_app.algo.thirty_min_fakeout.tmf_algo import get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        instance = get_instance(username)
+
+        # Whether the thread is actually armed to place real orders right
+        # now, vs. just scanning and logging signals — the same two gates
+        # tmf_algo.py itself checks (global flag + at least one active
+        # Zerodha broker slot for TMF).
+        from trading_app.app.utils.user_env import UserEnvManager
+        algo_active = (UserEnvManager.get_user_var(username, 'TMF_ALGO_ACTIVE', 'false') or 'false').strip().lower() == 'true'
+        active_brokers = 0
+        for i in range(1, 11):
+            if (UserEnvManager.get_user_var(username, f'BROKER_{i}_ACTIVE', 'false') or 'false').strip().lower() != 'true':
+                continue
+            if (UserEnvManager.get_user_var(username, f'BROKER_{i}_TMF_ACTIVE', 'false') or 'false').strip().lower() != 'true':
+                continue
+            if (UserEnvManager.get_user_var(username, f'BROKER_{i}_TYPE', '') or '').strip().lower() == 'zerodha':
+                active_brokers += 1
+        capital_per_trade = float(UserEnvManager.get_user_var(username, 'TMF_CAPITAL_PER_TRADE', '100000') or 100000)
+
+        return jsonify({
+            'success': True,
+            'running': bool(instance and instance.is_running()),
+            'live_armed': bool(algo_active and active_brokers > 0),
+            'algo_active': algo_active,
+            'active_brokers': active_brokers,
+            'capital_per_trade': capital_per_trade,
+            'date': state.get('date'),
+            'eod_handled': bool(state.get('eod_handled')),
+            'summary': summary,
+            'stocks': stocks,
+        })
+    except Exception as e:
+        logger.error(f'[tmf/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/thirty-min-fakeout/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_tmf_history() -> EndpointResponse:
+    """Return all completed 30-Min Fakeout live trades (latest-first)."""
+    try:
+        try:
+            with open(_TMF_ALL_HISTORY_PATH, 'r') as _f:
+                all_trades = json.load(_f)
+            if not isinstance(all_trades, list):
+                all_trades = []
+        except Exception:
+            all_trades = []
+        return jsonify({'success': True, 'trades': all_trades, 'count': len(all_trades)})
+    except Exception as e:
+        logger.error(f'[tmf/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/thirty-min-fakeout/history', methods=['DELETE'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_tmf_history_delete() -> EndpointResponse:
+    """Delete a live-trade record by entry_time (or all) from both the
+    daily and all-time history files."""
+    try:
+        data       = request.get_json(silent=True) or {}
+        entry_time = data.get('entry_time')
+        delete_all = bool(data.get('all'))
+        if not entry_time and not delete_all:
+            return jsonify({'success': False, 'error': 'entry_time or all:true required'}), 400
+
+        for path in [_TMF_HISTORY_PATH, _TMF_ALL_HISTORY_PATH]:
+            try:
+                with open(path, 'r') as _f:
+                    records = json.load(_f)
+                if isinstance(records, list):
+                    records = [] if delete_all else \
+                        [r for r in records if r.get('entry_time') != entry_time]
+                    with open(path, 'w') as _f:
+                        json.dump(records, _f, indent=2, default=str)
+            except Exception:
+                pass
+
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f'[tmf/history/delete] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/thirty-min-fakeout/start', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_tmf_start() -> EndpointResponse:
+    """Start (or restart) the 30-Min Fakeout monitoring thread."""
+    try:
+        from trading_app.algo.thirty_min_fakeout.tmf_algo import TMFAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        existing = get_instance(username)
+        if existing and existing.is_running():
+            return jsonify({'success': False, 'error': 'Algo already running'}), 409
+
+        algo = TMFAlgo(username=username)
+        algo.start()
+        return jsonify({'success': True, 'message': '30-Min Fakeout algo started'})
+    except Exception as e:
+        logger.error(f'[tmf/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/thirty-min-fakeout/stop', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_tmf_stop() -> EndpointResponse:
+    """Stop the 30-Min Fakeout monitoring thread."""
+    try:
+        from trading_app.algo.thirty_min_fakeout.tmf_algo import get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        existing = get_instance(username)
+        if not existing or not existing.is_running():
+            return jsonify({'success': False, 'error': 'Algo not running'}), 409
+
+        existing.stop()
+        return jsonify({'success': True, 'message': '30-Min Fakeout algo stopped'})
+    except Exception as e:
+        logger.error(f'[tmf/stop] {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

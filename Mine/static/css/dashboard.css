@@ -64,7 +64,7 @@
 
 .bt-layout {
     display: grid;
-    grid-template-columns: 240px 1fr;
+    grid-template-columns: 240px minmax(0, 1fr);
     align-items: stretch;
     min-height: 800px;
 }
@@ -72,11 +72,14 @@
     background: var(--dg-surface);
     padding: 10px 12px;
     border-right: 1px solid var(--oip-border);
+    min-width: 0;
 }
 .bt-right {
     background: var(--dg-surface);
     padding: 10px 12px;
     position: relative;
+    min-width: 0;
+    overflow-x: auto;
 }
 .bt-left .form-row {
     grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)) !important;
@@ -113,7 +116,7 @@
 #btTradesSection .trades-table-container { margin-top: 0; border-radius: 0; border: none; box-shadow: none; }
 #btTradesSection .trades-table-container h3 { display: none; }
 
-.form-row   { display: grid; gap: 6px; margin-bottom: 6px; }
+.form-row   { display: grid; gap: 8px; margin-bottom: 6px; }
 .form-row-2 { grid-template-columns: repeat(2,1fr); }
 .form-row-3 { grid-template-columns: repeat(3,1fr); }
 .form-row-4 { grid-template-columns: repeat(4,1fr); }
@@ -158,9 +161,9 @@
     display: flex; align-items: center;
 }
 
-.form-check-group { flex-direction: row; align-items: center; gap: 8px; padding-top: 22px; }
+.form-check-group { flex-direction: row; align-items: center; gap: 8px; padding-top: 8px; }
 .form-check-group input[type="checkbox"] { width: 16px; height: 16px; accent-color: #2962ff; cursor: pointer; flex-shrink: 0; }
-.form-check-group label { font-size: 13px; font-weight: 600; color: #555; cursor: pointer; margin: 0; text-transform: uppercase; letter-spacing: .4px; }
+.form-check-group label { font-size: 11px; font-weight: 600; color: #555; cursor: pointer; margin: 0; text-transform: uppercase; letter-spacing: .4px; }
 
 .btn-run { width: 100%; padding: 8px; background: var(--oip-accent); color: #fff; border: none; border-radius: 5px; cursor: pointer; font-weight: 700; font-size: 11px; transition: opacity .15s; margin-top: 4px; text-transform: uppercase; letter-spacing: .8px; }
 .btn-run:hover  { opacity: .85; }
@@ -601,7 +604,8 @@
 }
 .period-tab:hover  { background: var(--oip-header-bg); color: var(--oip-text); }
 .period-tab.active { background: var(--oip-accent); color: #fff; border-color: var(--oip-accent); }
-.period-chart-wrap { position: relative; height: 210px; }
+.period-chart-wrap { position: relative; height: 210px; overflow-x: auto; overflow-y: hidden; }
+.period-chart-inner { position: relative; height: 100%; }
 
 /* Trade History is now the shared grid (.dg-table); .trades-table-container
    is just its scroll/card frame. BUY/SELL used to get a fixed badge-buy/

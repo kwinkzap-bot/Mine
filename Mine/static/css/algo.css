@@ -480,9 +480,9 @@ body.ocean-theme .sm-gl-overlay {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 9px 20px;
+    padding: 5px 12px;
     border-radius: 8px;
-    font-size: 0.83rem;
+    font-size: 0.75rem;
     font-weight: 600;
     cursor: pointer;
     border: none;

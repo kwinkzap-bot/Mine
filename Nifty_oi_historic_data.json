@@ -19162,7 +19162,7 @@
     "close": 23996.25,
     "vwap": 24009.49,
     "idx_fut_oi": 17956575,
-    "fii_fut_oi": null,
-    "FII_Index_futures": 0
+    "fii_fut_oi": -251704,
+    "FII_Index_futures": -3606.85
   }
 ]

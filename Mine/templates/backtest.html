@@ -284,17 +284,17 @@
                  selected Start/End Date for the fakeout pattern, unless a
                  single symbol is picked below to test just that one. -->
             <div id="thirtyMinFakeoutParamsRow" class="form-row" style="display:none">
-                <div class="form-group">
+                 <div class="form-group form-check-group" style="grid-column: span 2;">
+                    <input type="checkbox" id="tmfUseSymbolDefaults" checked>
+                    <label for="tmfUseSymbolDefaults" title="Each stock uses its own best-known Direction/Entry Buffer/Body Filter/C2 Close combo (found by running Find Best Params one stock at a time) instead of the single combo set below applied to every stock. A stock with no known combo falls back to the fields below. Uncheck to force every stock to use the same combo below, like before.">Use Per-Stock Best Settings</label>
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
                     <label for="tmfSymbol">Symbol</label>
                     <select id="tmfSymbol" title="Leave on 'All Stocks' to scan the full F&O universe, or pick one symbol to backtest just that stock.">
                         <option value="" selected>All Stocks (full scan)</option>
                     </select>
                 </div>
-                <div class="form-group form-check-group">
-                    <input type="checkbox" id="tmfUseSymbolDefaults" checked>
-                    <label for="tmfUseSymbolDefaults" title="Each stock uses its own best-known Direction/Entry Buffer/Body Filter/C2 Close combo (found by running Find Best Params one stock at a time) instead of the single combo set below applied to every stock. A stock with no known combo falls back to the fields below. Uncheck to force every stock to use the same combo below, like before.">Use Per-Stock Best Settings</label>
-                </div>
-                <div class="form-group">
+                <div class="form-group" style="grid-column: span 2;">
                     <label for="tmfDirection">Direction</label>
                     <select id="tmfDirection">
                         <option value="both" selected>Buy &amp; Sell</option>
@@ -302,7 +302,7 @@
                         <option value="short">Sell only</option>
                     </select>
                 </div>
-                <div class="form-group">
+                <div class="form-group" style="grid-column: span 2;">
                     <label for="tmfExitTime">Cut-off Time</label>
                     <input type="time" id="tmfExitTime" value="15:18">
                 </div>
@@ -325,11 +325,11 @@
                     <input type="checkbox" id="tmfUseC2CloseFilter" checked>
                     <label for="tmfUseC2CloseFilter" title="Requires Candle 2's CLOSE to be beyond Candle 1's High/Low — above Candle 1's High for SELL, below Candle 1's Low for BUY — closing there, not just wicking past it.">C2 Close &gt; C1 High</label>
                 </div>
-                <div class="form-group">
+                <div class="form-group" style="grid-column: span 2;">
                     <label for="tmfSlRiskMax">Max SL Risk (&#8377;)</label>
                     <input type="number" id="tmfSlRiskMax" value="5000" min="0" step="100">
                 </div>
-                <div class="form-group form-check-group">
+                <div class="form-group form-check-group" style="grid-column: span 2;">
                     <input type="checkbox" id="tmfUseSlRiskFilter">
                     <label for="tmfUseSlRiskFilter" title="Skips a trade whose sized SL risk (|entry − SL| × qty, at the current capital-per-trade sizing) exceeds the Max SL Risk value — the setup fired, but the rupee stop-loss at this position size is too large to take.">SL Risk Filter</label>
                 </div>
@@ -663,7 +663,9 @@
                         </div>
                     </div>
                     <div class="period-chart-wrap">
-                        <canvas id="periodBreakdownChart"></canvas>
+                        <div class="period-chart-inner" id="periodChartInner">
+                            <canvas id="periodBreakdownChart"></canvas>
+                        </div>
                     </div>
                 </div>
 

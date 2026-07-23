@@ -5,6 +5,12 @@
 {{ super() }}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/algo.css') }}?v={{ sv('css/algo.css') }}">
+<!-- oi_profile.css defines the --oip-* variables; dashboard.css defines the
+     .equity-curve-container / .period-breakdown classes — both needed to
+     reuse the Backtest page's Equity Curve / P&L Breakdown chart styling
+     for the 30-Min Fakeout Live Algo tab (algo_tmf.html + algo_tmf.js). -->
+<link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}?v={{ sv('css/oi_profile.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ sv('css/dashboard.css') }}">
 {% endblock %}
 
 {% block content %}
@@ -17,6 +23,7 @@
         <button class="ag-tab"        id="algo-tab-rtp"              onclick="algoSwitch('rtp')">EMA RTP</button>
         <button class="ag-tab"        id="algo-tab-sc"              onclick="algoSwitch('sc')">2nd 30s Candle</button>
         <button class="ag-tab"        id="algo-tab-intrinsic"       onclick="algoSwitch('intrinsic')">Intrinsic Range</button>
+        <button class="ag-tab"        id="algo-tab-tmf"             onclick="algoSwitch('tmf')">30-Min Fakeout</button>
         <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
     </div>
 
@@ -779,6 +786,8 @@
 
     </div><!-- #algo-intrinsic-panel -->
 
+    {% include 'algo_tmf.html' %}
+
     <!-- ════════════════════════════════════════════════════════ -->
     <!-- Swing Momentum panel                                     -->
     <!-- ════════════════════════════════════════════════════════ -->
@@ -812,6 +821,7 @@
 </div><!-- .algo-inner -->
 </div><!-- .algo-page -->
 
+<script src="{{ url_for('static', filename='js/algo_tmf.js') }}?v={{ sv('js/algo_tmf.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo.js') }}?v={{ sv('js/algo.js') }}"></script>
 <script>algoLoad();</script>
 {% endblock %}

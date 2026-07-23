@@ -137,9 +137,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // The page loads with NIFTY pre-selected before this fetch
                 // resolves — re-apply now that real lot sizes are in.
                 applyLotValueForSymbol(selectedSymbol);
-                // TMF's universe is stocks only (data.symbols, no indices —
-                // there's no equity share of an index to buy).
-                _populateTmfSymbolDropdown(data.symbols || []);
+                _fetchTmfSymbolDefaults();
             } else {
                 if (window.showNotification) window.showNotification('Error loading symbols: ' + data.error, 'error');
             }
@@ -149,7 +147,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Fills the TMF "Symbol" dropdown (defaults to "All Stocks", i.e. the
-    // full universe scan) once the F&O stock list is in.
+    // full scan) from the fixed TMF stock list — not every F&O stock.
     function _populateTmfSymbolDropdown(symbols) {
         const sel = document.getElementById('tmfSymbol');
         if (!sel) return;
@@ -157,6 +155,49 @@ document.addEventListener('DOMContentLoaded', function() {
         sel.innerHTML = '<option value="">All Stocks (full scan)</option>' +
             symbols.slice().sort().map(s => `<option value="${s}">${s}</option>`).join('');
         sel.value = current || '';
+    }
+
+    // The same per-stock best-combo table the backend applies server-side
+    // (_TMF_SYMBOL_DEFAULTS in api.py) — fetched once so picking a symbol
+    // can preview its combo in the form immediately, without a round trip.
+    // Its keys are also the TMF strategy's entire stock universe (a fixed,
+    // user-supplied list, not every F&O stock), so the same fetch fills
+    // the Symbol dropdown.
+    let _tmfSymbolDefaults = {};
+    async function _fetchTmfSymbolDefaults() {
+        try {
+            const res = await fetch('/api/backtest/thirty-min-fakeout/symbol-defaults');
+            const data = await res.json();
+            if (data.success) {
+                _tmfSymbolDefaults = data.defaults || {};
+                _populateTmfSymbolDropdown(Object.keys(_tmfSymbolDefaults));
+            }
+        } catch (error) {
+            console.error('Failed to fetch TMF symbol defaults:', error);
+        }
+    }
+
+    // Picking a specific stock previews ITS OWN best combo in the Direction/
+    // filter fields — purely a display update; the backend looks the combo
+    // up by symbol itself whenever "Use Per-Stock Best Settings" is on, so
+    // this just keeps what's shown in sync with what will actually run.
+    // Switching back to "All Stocks" leaves the fields alone (each stock in
+    // that scan gets its own combo server-side regardless of what's shown).
+    const tmfSymbolSelect = document.getElementById('tmfSymbol');
+    if (tmfSymbolSelect) {
+        tmfSymbolSelect.addEventListener('change', () => {
+            const sym = tmfSymbolSelect.value;
+            const d = sym && _tmfSymbolDefaults[sym];
+            if (!d) return;
+            const dir = document.getElementById('tmfDirection');
+            const entryBuf = document.getElementById('tmfUseEntryBuffer');
+            const bodyFilt = document.getElementById('tmfUseBodyFilter');
+            const c2Filt   = document.getElementById('tmfUseC2CloseFilter');
+            if (dir) dir.value = d.direction;
+            if (entryBuf) entryBuf.checked = !!d.use_entry_buffer;
+            if (bodyFilt) bodyFilt.checked = !!d.use_body_filter;
+            if (c2Filt) c2Filt.checked = !!d.use_c2_close_filter;
+        });
     }
 
     fetchSymbols();
@@ -1208,6 +1249,17 @@ document.addEventListener('DOMContentLoaded', function() {
         const canvas = document.getElementById('periodBreakdownChart');
         if (!canvas) return;
         if (_periodChart) { _periodChart.destroy(); _periodChart = null; }
+
+        // Give every bar a minimum pixel width so long histories (e.g. Daily
+        // over years) scroll horizontally instead of squeezing into
+        // illegible slivers — the wrap has overflow-x:auto, the inner div
+        // is what actually grows past it.
+        const inner = document.getElementById('periodChartInner');
+        if (inner) {
+            const MIN_BAR_PX = 34;
+            const wrapWidth  = inner.parentElement.clientWidth;
+            inner.style.minWidth = Math.max(wrapWidth, keys.length * MIN_BAR_PX) + 'px';
+        }
 
         const fmt = v => fmtCompact(v, isRtp);
 

@@ -1,0 +1,467 @@
+{
+  "date": "2026-07-23",
+  "eod_handled": true,
+  "stocks": {
+    "360ONE": {
+      "phase": "no_setup"
+    },
+    "ADANIENSOL": {
+      "phase": "no_setup"
+    },
+    "ADANIENT": {
+      "phase": "no_setup"
+    },
+    "ADANIPORTS": {
+      "phase": "no_setup"
+    },
+    "ADANIPOWER": {
+      "phase": "no_setup"
+    },
+    "ALKEM": {
+      "phase": "no_setup"
+    },
+    "AMBUJACEM": {
+      "phase": "no_setup"
+    },
+    "ANGELONE": {
+      "phase": "no_setup"
+    },
+    "APOLLOHOSP": {
+      "phase": "no_setup"
+    },
+    "ASHOKLEY": {
+      "phase": "no_setup"
+    },
+    "ASIANPAINT": {
+      "phase": "no_setup"
+    },
+    "ASTRAL": {
+      "phase": "no_setup"
+    },
+    "AUROPHARMA": {
+      "phase": "no_setup"
+    },
+    "BAJAJ-AUTO": {
+      "phase": "no_setup"
+    },
+    "BAJAJFINSV": {
+      "phase": "no_setup"
+    },
+    "BAJAJHLDNG": {
+      "phase": "no_setup"
+    },
+    "BAJFINANCE": {
+      "phase": "no_setup"
+    },
+    "BANDHANBNK": {
+      "phase": "no_setup"
+    },
+    "BANKBARODA": {
+      "phase": "no_setup"
+    },
+    "BANKINDIA": {
+      "phase": "no_setup"
+    },
+    "BDL": {
+      "phase": "no_setup"
+    },
+    "BHARATFORG": {
+      "phase": "no_setup"
+    },
+    "BHARTIARTL": {
+      "phase": "no_setup"
+    },
+    "BHEL": {
+      "phase": "no_setup"
+    },
+    "BOSCHLTD": {
+      "phase": "no_setup"
+    },
+    "BPCL": {
+      "phase": "no_setup"
+    },
+    "CANBK": {
+      "phase": "no_setup"
+    },
+    "CDSL": {
+      "phase": "no_setup"
+    },
+    "CGPOWER": {
+      "phase": "no_setup"
+    },
+    "CHOLAFIN": {
+      "phase": "no_setup"
+    },
+    "COCHINSHIP": {
+      "phase": "no_setup"
+    },
+    "COLPAL": {
+      "phase": "no_setup"
+    },
+    "CONCOR": {
+      "phase": "no_setup"
+    },
+    "CROMPTON": {
+      "phase": "no_setup"
+    },
+    "CUMMINSIND": {
+      "phase": "no_setup"
+    },
+    "DABUR": {
+      "phase": "no_setup"
+    },
+    "DALBHARAT": {
+      "phase": "no_setup"
+    },
+    "DIVISLAB": {
+      "phase": "no_setup"
+    },
+    "DIXON": {
+      "phase": "no_setup"
+    },
+    "DLF": {
+      "phase": "no_setup"
+    },
+    "DRREDDY": {
+      "phase": "no_setup"
+    },
+    "EICHERMOT": {
+      "phase": "no_setup"
+    },
+    "EXIDEIND": {
+      "phase": "no_setup"
+    },
+    "FEDERALBNK": {
+      "phase": "no_setup"
+    },
+    "FORCEMOT": {
+      "phase": "no_setup"
+    },
+    "GAIL": {
+      "phase": "no_setup"
+    },
+    "GLENMARK": {
+      "phase": "no_setup"
+    },
+    "GODREJCP": {
+      "phase": "no_setup"
+    },
+    "GODREJPROP": {
+      "phase": "no_setup"
+    },
+    "GRASIM": {
+      "phase": "no_setup"
+    },
+    "GVT&D": {
+      "phase": "no_setup"
+    },
+    "HAL": {
+      "phase": "no_setup"
+    },
+    "HAVELLS": {
+      "phase": "done",
+      "direction": "short",
+      "trigger": 1212.8,
+      "sl_level": 1219.9,
+      "qty": 412,
+      "entry_time": "2026-07-23T11:48:09.747185",
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "{'order_id': '2080175619819626496'}",
+          "filled": false,
+          "dead": true
+        }
+      ],
+      "exit_reason": "Entry never filled"
+    },
+    "HCLTECH": {
+      "phase": "no_setup"
+    },
+    "HDFCAMC": {
+      "phase": "no_setup"
+    },
+    "HDFCBANK": {
+      "phase": "no_setup"
+    },
+    "HEROMOTOCO": {
+      "phase": "no_setup"
+    },
+    "HINDALCO": {
+      "phase": "no_setup"
+    },
+    "HINDPETRO": {
+      "phase": "no_setup"
+    },
+    "ICICIGI": {
+      "phase": "no_setup"
+    },
+    "IDEA": {
+      "phase": "no_setup"
+    },
+    "IDFCFIRSTB": {
+      "phase": "no_setup"
+    },
+    "INDHOTEL": {
+      "phase": "no_setup"
+    },
+    "INDIANB": {
+      "phase": "no_setup"
+    },
+    "INDIGO": {
+      "phase": "no_setup"
+    },
+    "INDUSINDBK": {
+      "phase": "no_setup"
+    },
+    "IOC": {
+      "phase": "no_setup"
+    },
+    "JINDALSTEL": {
+      "phase": "no_setup"
+    },
+    "JIOFIN": {
+      "phase": "no_setup"
+    },
+    "JSWSTEEL": {
+      "phase": "no_setup"
+    },
+    "KAYNES": {
+      "phase": "no_setup"
+    },
+    "KEI": {
+      "phase": "no_setup"
+    },
+    "KFINTECH": {
+      "phase": "no_setup"
+    },
+    "KPITTECH": {
+      "phase": "no_setup"
+    },
+    "LICI": {
+      "phase": "no_setup"
+    },
+    "LODHA": {
+      "phase": "no_setup"
+    },
+    "LT": {
+      "phase": "no_setup"
+    },
+    "LTF": {
+      "phase": "no_setup"
+    },
+    "LTM": {
+      "phase": "no_setup"
+    },
+    "LUPIN": {
+      "phase": "no_setup"
+    },
+    "M&M": {
+      "phase": "no_setup"
+    },
+    "MANAPPURAM": {
+      "phase": "no_setup"
+    },
+    "MANKIND": {
+      "phase": "no_setup"
+    },
+    "MARICO": {
+      "phase": "no_setup"
+    },
+    "MARUTI": {
+      "phase": "no_setup"
+    },
+    "MAZDOCK": {
+      "phase": "no_setup"
+    },
+    "MCX": {
+      "phase": "no_setup"
+    },
+    "MFSL": {
+      "phase": "no_setup"
+    },
+    "MOTHERSON": {
+      "phase": "no_setup"
+    },
+    "MOTILALOFS": {
+      "phase": "no_setup"
+    },
+    "MPHASIS": {
+      "phase": "no_setup"
+    },
+    "MUTHOOTFIN": {
+      "phase": "no_setup"
+    },
+    "NAM-INDIA": {
+      "phase": "no_setup"
+    },
+    "NATIONALUM": {
+      "phase": "no_setup"
+    },
+    "NAUKRI": {
+      "phase": "no_setup"
+    },
+    "NBCC": {
+      "phase": "no_setup"
+    },
+    "NESTLEIND": {
+      "phase": "no_setup"
+    },
+    "NMDC": {
+      "phase": "no_setup"
+    },
+    "NTPC": {
+      "phase": "no_setup"
+    },
+    "NYKAA": {
+      "phase": "no_setup"
+    },
+    "OBEROIRLTY": {
+      "phase": "no_setup"
+    },
+    "OIL": {
+      "phase": "no_setup"
+    },
+    "ONGC": {
+      "phase": "done",
+      "direction": "long",
+      "trigger": 253.08,
+      "sl_level": 252.01,
+      "qty": 1975,
+      "entry_time": "2026-07-23T11:55:15.034049",
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "{'order_id': '2080177402423992320'}",
+          "filled": false,
+          "dead": true
+        }
+      ],
+      "exit_reason": "Entry never filled"
+    },
+    "PERSISTENT": {
+      "phase": "no_setup"
+    },
+    "PETRONET": {
+      "phase": "no_setup"
+    },
+    "PFC": {
+      "phase": "no_setup"
+    },
+    "PGEL": {
+      "phase": "no_setup"
+    },
+    "PHOENIXLTD": {
+      "phase": "no_setup"
+    },
+    "PIDILITIND": {
+      "phase": "no_setup"
+    },
+    "PIIND": {
+      "phase": "no_setup"
+    },
+    "POLYCAB": {
+      "phase": "no_setup"
+    },
+    "POWERINDIA": {
+      "phase": "no_setup"
+    },
+    "PRESTIGE": {
+      "phase": "no_setup"
+    },
+    "RADICO": {
+      "phase": "no_setup"
+    },
+    "RBLBANK": {
+      "phase": "no_setup"
+    },
+    "RECLTD": {
+      "phase": "no_setup"
+    },
+    "RVNL": {
+      "phase": "no_setup"
+    },
+    "SAIL": {
+      "phase": "no_setup"
+    },
+    "SAMMAANCAP": {
+      "phase": "no_setup"
+    },
+    "SBICARD": {
+      "phase": "no_setup"
+    },
+    "SBILIFE": {
+      "phase": "no_setup"
+    },
+    "SBIN": {
+      "phase": "no_setup"
+    },
+    "SHREECEM": {
+      "phase": "no_setup"
+    },
+    "SIEMENS": {
+      "phase": "no_setup"
+    },
+    "SOLARINDS": {
+      "phase": "no_setup"
+    },
+    "SRF": {
+      "phase": "no_setup"
+    },
+    "SUNPHARMA": {
+      "phase": "no_setup"
+    },
+    "TATACONSUM": {
+      "phase": "no_setup"
+    },
+    "TECHM": {
+      "phase": "no_setup"
+    },
+    "TIINDIA": {
+      "phase": "no_setup"
+    },
+    "TMPV": {
+      "phase": "no_setup"
+    },
+    "TORNTPHARM": {
+      "phase": "no_setup"
+    },
+    "TRENT": {
+      "phase": "no_setup"
+    },
+    "TVSMOTOR": {
+      "phase": "no_setup"
+    },
+    "ULTRACEMCO": {
+      "phase": "no_setup"
+    },
+    "UNIONBANK": {
+      "phase": "no_setup"
+    },
+    "UNITDSPR": {
+      "phase": "no_setup"
+    },
+    "UNOMINDA": {
+      "phase": "no_setup"
+    },
+    "UPL": {
+      "phase": "done",
+      "direction": "short",
+      "trigger": 610.19,
+      "sl_level": 612.6,
+      "exit_reason": "Invalidated (SL hit before entry)"
+    },
+    "VBL": {
+      "phase": "no_setup"
+    },
+    "VOLTAS": {
+      "phase": "no_setup"
+    },
+    "YESBANK": {
+      "phase": "no_setup"
+    },
+    "ZYDUSLIFE": {
+      "phase": "no_setup"
+    }
+  }
+}

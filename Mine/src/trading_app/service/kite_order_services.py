@@ -706,6 +706,99 @@ class KiteService:
             logging.error(f"[KiteService] Failed to place SL order: {e}")
             return {'success': False, 'error': str(e)}
 
+    def place_equity_order(self, tradingsymbol: str, transaction_type: str, quantity: int,
+                            price: float, product: str = 'MIS') -> Dict[str, Any]:
+        """Plain NSE cash-market LIMIT order at an exact price — no market/
+        padded-limit fallback (unlike place_option_order), since callers
+        that need this (e.g. the 30-Min Fakeout live algo) require the
+        exact computed price, not a best-effort fill. product='MIS' is
+        intraday (auto-squared-off by the exchange if not closed manually)."""
+        try:
+            txn_const = self.kite.TRANSACTION_TYPE_BUY if transaction_type.upper() == 'BUY' else self.kite.TRANSACTION_TYPE_SELL
+            mapped_product = self.kite.PRODUCT_MIS if product.upper() == 'MIS' else self.kite.PRODUCT_CNC
+            logging.info(f"[KiteService] Placing equity LIMIT order: {transaction_type} {tradingsymbol} x {quantity} @ {price} ({product})")
+            order_id = self._safe_place_order(
+                tradingsymbol=tradingsymbol,
+                exchange=self.kite.EXCHANGE_NSE,
+                transaction_type=txn_const,
+                quantity=int(quantity),
+                order_type=self.kite.ORDER_TYPE_LIMIT,
+                price=float(price),
+                product=mapped_product,
+                variety=self.kite.VARIETY_REGULAR,
+            )
+            return {'success': True, 'order_id': order_id, 'response': {'order_id': order_id}}
+        except Exception as e:
+            logging.error(f"[KiteService] Failed to place equity LIMIT order: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def place_equity_sl_order(self, tradingsymbol: str, transaction_type: str, quantity: int,
+                               trigger_price: float, product: str = 'MIS') -> Dict[str, Any]:
+        """NSE cash-market SL-Market order — triggers a market order once
+        the trigger price is touched. Used for the SL leg of a position."""
+        try:
+            txn_const = self.kite.TRANSACTION_TYPE_BUY if transaction_type.upper() == 'BUY' else self.kite.TRANSACTION_TYPE_SELL
+            mapped_product = self.kite.PRODUCT_MIS if product.upper() == 'MIS' else self.kite.PRODUCT_CNC
+            logging.info(f"[KiteService] Placing equity SL order: {transaction_type} {tradingsymbol} x {quantity} @ trigger {trigger_price} ({product})")
+            order_id = self._safe_place_order(
+                tradingsymbol=tradingsymbol,
+                exchange=self.kite.EXCHANGE_NSE,
+                transaction_type=txn_const,
+                quantity=int(quantity),
+                order_type=self.kite.ORDER_TYPE_SLM,
+                trigger_price=float(trigger_price),
+                product=mapped_product,
+                variety=self.kite.VARIETY_REGULAR,
+                market_protection=-1,
+            )
+            return {'success': True, 'order_id': order_id, 'response': {'order_id': order_id}}
+        except Exception as e:
+            logging.error(f"[KiteService] Failed to place equity SL order: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def cancel_order(self, order_id: str, variety: Optional[str] = None) -> Dict[str, Any]:
+        try:
+            self.kite.cancel_order(variety=variety or self.kite.VARIETY_REGULAR, order_id=str(order_id))
+            return {'success': True}
+        except Exception as e:
+            # Kite raises if the order already completed/was already cancelled —
+            # callers treat that as a non-fatal race (the order is gone either
+            # way), so surface it as data rather than an exception.
+            logging.warning(f"[KiteService] cancel_order({order_id}) failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def get_order_status(self, order_id: str) -> Dict[str, Any]:
+        """Latest status for one order — 'COMPLETE', 'CANCELLED', 'REJECTED',
+        'OPEN', 'TRIGGER PENDING', etc. (Kite's own status strings)."""
+        try:
+            history = self.kite.order_history(order_id=str(order_id))
+            if not history:
+                return {'success': False, 'error': 'No order history returned'}
+            latest = history[-1]
+            return {
+                'success': True,
+                'status': latest.get('status'),
+                'filled_quantity': latest.get('filled_quantity', 0),
+                'average_price': latest.get('average_price', 0),
+                'order': latest,
+            }
+        except Exception as e:
+            logging.warning(f"[KiteService] get_order_status({order_id}) failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def get_orderbook_by_id(self) -> Dict[str, Dict[str, Any]]:
+        """Today's full order book (kite.orders()) as {order_id: order_dict}
+        — one API call to check the status of many orders at once, instead
+        of one get_order_status() call per order_id. Used by algos polling
+        several pending orders (e.g. entry/SL/Target legs across many
+        symbols) each tick."""
+        try:
+            orders = self.kite.orders() or []
+            return {str(o.get('order_id')): o for o in orders}
+        except Exception as e:
+            logging.warning(f"[KiteService] get_orderbook_by_id() failed: {e}")
+            return {}
+
     @staticmethod
     def _is_socks_error(exc: Exception) -> bool:
         msg = str(exc).lower()
@@ -730,6 +823,17 @@ class KiteService:
         for attempt in range(3):
             try:
                 result = self.kite._post("order.place", url_args={"variety": variety}, params=params)
+                # The raw API response is {'order_id': '...'} — the SDK's own
+                # place_order() unwraps this with ["order_id"]; this method
+                # calls _post directly (to pass market_protection, which
+                # place_order doesn't expose) and must do the same unwrapping
+                # itself, or every caller ends up storing str(the whole dict)
+                # as "the order ID" — silently breaking any later order-status
+                # lookup by ID (place_option_order/place_stoploss_order never
+                # noticed because they never poll status by ID; TMF's OCO
+                # fill-polling does, which is how this surfaced).
+                if isinstance(result, dict) and 'order_id' in result:
+                    return result['order_id']
                 return str(result) if isinstance(result, bytes) else result
             except Exception as exc:
                 msg = str(exc)
