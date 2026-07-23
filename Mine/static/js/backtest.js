@@ -137,12 +137,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 // The page loads with NIFTY pre-selected before this fetch
                 // resolves — re-apply now that real lot sizes are in.
                 applyLotValueForSymbol(selectedSymbol);
+                // TMF's universe is stocks only (data.symbols, no indices —
+                // there's no equity share of an index to buy).
+                _populateTmfSymbolDropdown(data.symbols || []);
             } else {
                 if (window.showNotification) window.showNotification('Error loading symbols: ' + data.error, 'error');
             }
         } catch (error) {
             console.error('Failed to fetch symbols:', error);
         }
+    }
+
+    // Fills the TMF "Symbol" dropdown (defaults to "All Stocks", i.e. the
+    // full universe scan) once the F&O stock list is in.
+    function _populateTmfSymbolDropdown(symbols) {
+        const sel = document.getElementById('tmfSymbol');
+        if (!sel) return;
+        const current = sel.value;
+        sel.innerHTML = '<option value="">All Stocks (full scan)</option>' +
+            symbols.slice().sort().map(s => `<option value="${s}">${s}</option>`).join('');
+        sel.value = current || '';
     }
 
     fetchSymbols();
@@ -351,7 +365,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (symFg) symFg.style.display = 'none';
             if (intFg) intFg.style.display = 'none';
             const endDateInput = document.getElementById('endDate');
-            if (startDateInput) startDateInput.value = localToday();
+            if (startDateInput) startDateInput.value = '2017-01-01';
             if (endDateInput)   endDateInput.value   = localToday();
 
         } else if (val === 'swing_momentum') {
@@ -494,14 +508,18 @@ document.addEventListener('DOMContentLoaded', function() {
             // 30-Min Opening Fakeout breakdown/breakout
             if (strat === 'thirty_min_fakeout') {
                 endpoint = '/api/backtest/thirty-min-fakeout';
+                // payload.symbol defaults to the shared (hidden-for-TMF) Symbol
+                // search field's stale value — override with the TMF dropdown's
+                // choice, or clear it entirely for a full universe scan.
+                payload.symbol = document.getElementById('tmfSymbol')?.value || '';
                 payload.direction = document.getElementById('tmfDirection')?.value || 'both';
-                payload.exit_on   = document.getElementById('tmfExitOn')?.value || 'cross';
                 const exitTime = (document.getElementById('tmfExitTime')?.value || '15:18').split(':');
                 payload.exit_hour   = parseInt(exitTime[0] || 15);
                 payload.exit_minute = parseInt(exitTime[1] || 18);
                 payload.use_entry_buffer   = document.getElementById('tmfUseEntryBuffer')?.checked ?? true;
                 payload.use_body_filter    = document.getElementById('tmfUseBodyFilter')?.checked ?? true;
                 payload.use_c2_close_filter = document.getElementById('tmfUseC2CloseFilter')?.checked ?? true;
+                payload.use_symbol_defaults = document.getElementById('tmfUseSymbolDefaults')?.checked ?? true;
                 payload.use_sl_risk_filter = document.getElementById('tmfUseSlRiskFilter')?.checked ?? true;
                 payload.sl_risk_max = parseFloat(document.getElementById('tmfSlRiskMax')?.value || '5000') || 5000;
             }
@@ -758,6 +776,14 @@ document.addEventListener('DOMContentLoaded', function() {
         if (isRtp && rtpRow) {
             rtpRow.style.display = '';
 
+            // RTP doesn't compute CAGR (its sizing is fixed lots, not a
+            // compounding capital base) — reset so a prior TMF run's value
+            // doesn't linger.
+            const cagrElRtp = document.getElementById('statCagr');
+            const cagrSubElRtp = document.getElementById('statCagrSub');
+            if (cagrElRtp) { cagrElRtp.textContent = '—'; cagrElRtp.className = 'stat-card__val'; }
+            if (cagrSubElRtp) cagrSubElRtp.textContent = '';
+
             // Profit factor
             document.getElementById('statProfitFactor').textContent = summary.profit_factor ?? '—';
 
@@ -886,6 +912,15 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             const netSubEl = document.getElementById('statNetRsSub');
             if (netSubEl) netSubEl.textContent = `brok: ₹${Math.round(totalBrok).toLocaleString('en-IN')} · ~₹${Math.round(summary.capital_per_trade || 100000).toLocaleString('en-IN')}/entry`;
+
+            const cagrEl    = document.getElementById('statCagr');
+            const cagrSubEl = document.getElementById('statCagrSub');
+            if (cagrEl) {
+                const cagr = summary.cagr_pct;
+                cagrEl.textContent = cagr != null ? (cagr >= 0 ? '+' : '') + cagr.toFixed(1) + '%' : '—';
+                cagrEl.className   = 'stat-card__val ' + (cagr != null && cagr >= 0 ? 'stat-val-green' : 'stat-val-red');
+            }
+            if (cagrSubEl) cagrSubEl.textContent = 'annualized, on capital-per-trade';
         } else {
             if (rtpRow) rtpRow.style.display = 'none';
         }
@@ -1478,13 +1513,22 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             // "Use" buttons: one delegated listener per grid, survives re-render.
+            // Must look `tfState` up fresh via spec.stateStore[g.tf_label] on
+            // every click rather than close over this call's `tfState` — a
+            // later re-render (e.g. re-running "Find Best Params") replaces
+            // spec.stateStore[g.tf_label] with a brand-new object (line above),
+            // and this listener is only wired once, so a captured `tfState`
+            // would go stale and "Use" would apply rows from the previous run.
             if (!grid.dataset.optUseWired) {
                 grid.dataset.optUseWired = '1';
+                const tfLabel = g.tf_label;
                 grid.addEventListener('click', (e) => {
                     const btn = e.target.closest('.btn-opt-use');
                     if (!btn) return;
                     const idx = parseInt(btn.dataset.idx, 10);
-                    spec.applyFn(tfState.displayed[idx]);
+                    const current = spec.stateStore[tfLabel];
+                    const row = current && current.displayed[idx];
+                    if (row) spec.applyFn(row);
                 });
             }
         });
@@ -1737,7 +1781,12 @@ document.addEventListener('DOMContentLoaded', function() {
             // Neither VWAP nor SM has a live-algo concept — drop the column
             // rather than render one that's permanently off.
             .filter(c => c.label !== 'Live');
-        let displayed = rows.slice();
+        // `_displayed` lives on the grid element itself, not a closure-local
+        // var — the "Use" click listener below is wired only once (guarded by
+        // optUseWired) and survives every later re-render (e.g. re-running
+        // "Find Best Params"), so it must always read whatever the CURRENT
+        // render's rows are rather than closing over the first render's array.
+        grid._displayed = rows.slice();
         let sortState = null;
         DataGrid.mountSortable(grid, {
             rows, columns, empty: 'No combos passed the filter.',
@@ -1746,14 +1795,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 const isLeader = sortState && sortState.key === defaultSortKey && sortState.dir === 'desc';
                 return (i === 0 && isLeader) ? 'opt-best' : '';
             },
-            onSorted: (r, st) => { displayed = r; sortState = st; },
+            onSorted: (r, st) => { grid._displayed = r; sortState = st; },
         });
         if (!grid.dataset.optUseWired) {
             grid.dataset.optUseWired = '1';
             grid.addEventListener('click', (e) => {
                 const btn = e.target.closest('.btn-opt-use');
                 if (!btn) return;
-                applyFn(displayed[parseInt(btn.dataset.idx, 10)]);
+                const row = grid._displayed[parseInt(btn.dataset.idx, 10)];
+                if (row) applyFn(row);
             });
         }
     }
@@ -2031,7 +2081,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const TMF_OPT_COLS = [
         { label: '#',              key: null,                  fmt: (r, i) => i + 1 },
         { label: 'Direction',      key: 'direction',           fmt: r => r.direction },
-        { label: 'SL/TGT Confirm', key: 'exit_on',              fmt: r => r.exit_on === 'close' ? 'On Close' : 'On Cross' },
         { label: 'Entry Buffer',   key: 'use_entry_buffer',     fmt: r => r.use_entry_buffer ? 'On' : 'Off' },
         { label: 'Body Filter',    key: 'use_body_filter',      fmt: r => r.use_body_filter ? 'On' : 'Off' },
         { label: 'C2 Close',       key: 'use_c2_close_filter',  fmt: r => r.use_c2_close_filter ? 'On' : 'Off' },
@@ -2068,6 +2117,33 @@ document.addEventListener('DOMContentLoaded', function() {
             try { _tmfOptAbort.abort(); } catch (e) { /* noop */ }
             _tmfOptAbort = null;
         }
+        _hideTmfOptLoader();
+    }
+
+    // Progress card — reuses the shared #loading card (already sits right
+    // above #resultsArea in the DOM) instead of cramming elapsed time/combo
+    // progress into the button text. #resultsArea is deliberately left
+    // alone (not hidden) so a previous run's stat cards stay visible with
+    // the loader stacked above them, same idea as _showTmfOptLoader's name.
+    function _showTmfOptLoader(title, sub) {
+        const loading    = document.getElementById('loading');
+        const titleEl    = document.getElementById('btLoaderTitle');
+        const subEl      = document.getElementById('btLoaderSub');
+        const placeholder = document.getElementById('btRightPlaceholder');
+        if (titleEl) titleEl.innerHTML = `${title}<span class="bt-dots"></span>`;
+        if (subEl)   subEl.textContent = sub;
+        if (loading) loading.style.display = 'flex';
+        if (placeholder) placeholder.style.display = 'none';
+    }
+    function _hideTmfOptLoader() {
+        const loading = document.getElementById('loading');
+        const titleEl = document.getElementById('btLoaderTitle');
+        const subEl   = document.getElementById('btLoaderSub');
+        if (loading) loading.style.display = 'none';
+        // Restore the default text so a later plain "BACKTEST" run doesn't
+        // show stale optimiser progress.
+        if (titleEl) titleEl.innerHTML = 'Running backtest<span class="bt-dots"></span>';
+        if (subEl)   subEl.textContent = 'Fetching candles & scanning signals';
     }
 
     async function runTmfOptimise(recalculate) {
@@ -2076,10 +2152,13 @@ document.addEventListener('DOMContentLoaded', function() {
         const optimBtn  = document.getElementById('runOptimiseBtn');
         const activeBtn = recalculate ? recalcBtn : optimBtn;
         const origText  = activeBtn ? activeBtn.textContent : '';
+        // Button just shows a simple, static loading state — the live
+        // elapsed-time/progress count goes on the loader card instead.
         if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
         if (panel) panel.style.display = 'none';
 
-        cancelTmfOptimise();
+        cancelTmfOptimise();   // cancel any prior in-flight run (also clears its loader)
+        _showTmfOptLoader('Finding best params…', 'Fetching data for the full universe…');
         const myRun      = _tmfOptRun;
         const controller = new AbortController();
         _tmfOptAbort     = controller;
@@ -2091,6 +2170,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 headers: { 'Content-Type': 'application/json' },
                 signal: controller.signal,
                 body: JSON.stringify({
+                    symbol:             document.getElementById('tmfSymbol')?.value || '',
                     start_date:         document.getElementById('startDate').value,
                     end_date:           document.getElementById('endDate').value,
                     exit_hour:          parseInt(exitTime[0] || 15),
@@ -2105,10 +2185,12 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!data.success) {
                 window.showNotification(data.error || 'Optimisation failed', 'error');
                 if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                _hideTmfOptLoader();
                 return;
             }
             if (data.from_cache) {
                 _tmfOptAbort = null;
+                _hideTmfOptLoader();
                 renderTmfOptResults(data);
                 if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
                 return;
@@ -2119,6 +2201,7 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('30-Min Fakeout optimise error:', err);
             window.showNotification('Optimisation request failed', 'error');
             if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+            _hideTmfOptLoader();
         }
     }
 
@@ -2127,10 +2210,10 @@ document.addEventListener('DOMContentLoaded', function() {
         function tick() {
             if (myRun !== _tmfOptRun) return;
             const elapsed = Math.round((Date.now() - startMs) / 1000);
-            if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s…`;
             if (Date.now() - startMs > MAX_WAIT_MS) {
                 window.showNotification('Optimisation timed out — try a shorter date range', 'error');
                 if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                _hideTmfOptLoader();
                 return;
             }
             fetch(`/api/backtest/thirty-min-fakeout/optimise/status/${taskId}`)
@@ -2138,12 +2221,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(data => {
                     if (myRun !== _tmfOptRun) return;
                     if (data.status === 'running') {
-                        if (activeBtn && data.progress) activeBtn.textContent = `⏳ ${elapsed}s · ${data.progress}`;
+                        _showTmfOptLoader('Finding best params…', `${elapsed}s elapsed · ${data.progress || 'starting…'}`);
                         setTimeout(tick, 2000);
                         return;
                     }
                     _tmfOptAbort = null;
                     if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                    _hideTmfOptLoader();
                     if (!data.success || data.status === 'error') {
                         window.showNotification(data.error || 'Optimisation failed', 'error');
                         return;
@@ -2159,20 +2243,21 @@ document.addEventListener('DOMContentLoaded', function() {
         setTimeout(tick, 2000);
     }
 
+    // "Use" only populates the form fields with the row's combo — it never
+    // triggers a backtest run itself. The user runs the backtest manually
+    // once they're happy with the populated inputs.
     function applyTmfOptResult(r) {
         const dir = document.getElementById('tmfDirection');
-        const exitOn = document.getElementById('tmfExitOn');
         const entryBuf = document.getElementById('tmfUseEntryBuffer');
         const bodyFilt = document.getElementById('tmfUseBodyFilter');
         const c2Filt   = document.getElementById('tmfUseC2CloseFilter');
         if (dir) dir.value = r.direction;
-        if (exitOn) exitOn.value = r.exit_on;
         if (entryBuf) entryBuf.checked = !!r.use_entry_buffer;
         if (bodyFilt) bodyFilt.checked = !!r.use_body_filter;
         if (c2Filt) c2Filt.checked = !!r.use_c2_close_filter;
         if (window.showNotification) {
             window.showNotification(
-                `Applied: ${r.direction}  ·  ${r.exit_on === 'close' ? 'On Close' : 'On Cross'}  ·  Win% ${r.win_rate}%  ·  Net ₹${Math.round(r.net_pnl_rupees).toLocaleString('en-IN')}`,
+                `Applied: ${r.direction}  ·  Win% ${r.win_rate}%  ·  Net ₹${Math.round(r.net_pnl_rupees).toLocaleString('en-IN')}`,
                 'success'
             );
         }

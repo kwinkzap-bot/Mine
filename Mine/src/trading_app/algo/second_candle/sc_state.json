@@ -1,7 +1,7 @@
 {
   "active_trade": null,
-  "traded_today": true,
-  "trade_date": "2026-07-21",
+  "traded_today": false,
+  "trade_date": "2026-07-22",
   "params": {
     "candle_index": 2,
     "rr_ratio": 3.0,

@@ -1,5 +1,92 @@
 [
   {
+    "date": "2026-07-22",
+    "direction": "SELL",
+    "entry_spot": 23988.3,
+    "exit_spot": 24018.35,
+    "pnl_pts": -30.05,
+    "reason": "SL",
+    "entry_time": "2026-07-22T13:11:42.538075",
+    "exit_time": "2026-07-22T15:14:14.494101",
+    "strike": 24150,
+    "option_type": "PE",
+    "lot_size": 65,
+    "opt_entry_price": 263.4,
+    "opt_exit_price": 238.05,
+    "opt_pnl_pts": -25.35,
+    "opt_pnl_inr": -1647.75,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2079834166929055744'}",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUL24150PE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
+    "date": "2026-07-22",
+    "direction": "BUY",
+    "entry_spot": 24025.7,
+    "exit_spot": 23995.25,
+    "pnl_pts": -30.45,
+    "reason": "SL",
+    "entry_time": "2026-07-22T11:19:02.033739",
+    "exit_time": "2026-07-22T12:14:25.182887",
+    "strike": 23850,
+    "option_type": "CE",
+    "lot_size": 65,
+    "opt_entry_price": 252.6,
+    "opt_exit_price": 232.85,
+    "opt_pnl_pts": -19.75,
+    "opt_pnl_inr": -1283.75,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2079805896107941888'}",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUL23850CE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
+    "date": "2026-07-22",
+    "direction": "SELL",
+    "entry_spot": 23999.4,
+    "exit_spot": 24030.15,
+    "pnl_pts": -30.75,
+    "reason": "SL",
+    "entry_time": "2026-07-22T10:39:03.258409",
+    "exit_time": "2026-07-22T10:58:03.358456",
+    "strike": 24150,
+    "option_type": "PE",
+    "lot_size": 65,
+    "opt_entry_price": 255.55,
+    "opt_exit_price": 232.7,
+    "opt_pnl_pts": -22.85,
+    "opt_pnl_inr": -1485.25,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "{'order_id': '2079795834727620609'}",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUL24150PE",
+        "lots": 1,
+        "quantity": 65
+      }
+    ]
+  },
+  {
     "date": "2026-07-21",
     "direction": "BUY",
     "entry_spot": 24190.05,

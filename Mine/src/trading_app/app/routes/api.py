@@ -3745,18 +3745,172 @@ _TMF_BROKERAGE_PER_TRADE = 300  # flat ₹ round-trip brokerage per trade
 _TMF_EQUITY_LEVERAGE = 5
 _TMF_MAX_SL_RISK_RUPEES  = 5000  # default for sl_risk_max — user-editable per request
 
+# Per-stock default combo (direction + the 3 filter toggles) — the
+# best-known settings for each stock, found by running "Find Best Params"
+# one stock at a time. Used as the default filter set for that stock's
+# scan instead of one combo applied uniformly to every stock; a stock
+# missing here falls back to whatever the request's global direction/
+# filter fields say. See run_thirty_min_fakeout_backtest_api's
+# use_symbol_defaults flag.
+_TMF_SYMBOL_DEFAULTS = {
+    '360ONE': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'ADANIENSOL': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'ADANIENT': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'ADANIPORTS': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'ADANIPOWER': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'ALKEM': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'AMBUJACEM': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'ANGELONE': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'APOLLOHOSP': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'ASHOKLEY': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'ASIANPAINT': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'ASTRAL': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'AUROPHARMA': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'BAJAJ-AUTO': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'BAJAJFINSV': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'BAJAJHLDNG': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'BAJFINANCE': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'BANDHANBNK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'BANKBARODA': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'BANKINDIA': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'BDL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'BHARATFORG': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'BHARTIARTL': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'BHEL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'BOSCHLTD': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'BPCL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'CANBK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'CDSL': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'CGPOWER': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'CHOLAFIN': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'COCHINSHIP': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'COLPAL': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'CONCOR': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'CROMPTON': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'CUMMINSIND': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'DABUR': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'DALBHARAT': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'DIVISLAB': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'DIXON': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'DLF': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'DRREDDY': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'EICHERMOT': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'EXIDEIND': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'FEDERALBNK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'FORCEMOT': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'GAIL': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'GLENMARK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'GODREJCP': {'direction': 'long', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'GODREJPROP': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'GRASIM': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'GVT&D': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'HAL': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'HAVELLS': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'HCLTECH': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'HDFCAMC': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'HDFCBANK': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'HEROMOTOCO': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'HINDALCO': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'HINDPETRO': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'ICICIGI': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'IDEA': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'IDFCFIRSTB': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'INDHOTEL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'INDIANB': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'INDIGO': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'INDUSINDBK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'IOC': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'JINDALSTEL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'JIOFIN': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'JSWSTEEL': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'KAYNES': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'KEI': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'KFINTECH': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'KPITTECH': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'LICI': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'LODHA': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'LT': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'LTF': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'LTM': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'LUPIN': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'M&M': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'MANAPPURAM': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'MANKIND': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'MARICO': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'MARUTI': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'MAZDOCK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'MCX': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'MFSL': {'direction': 'long', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'MOTHERSON': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'MOTILALOFS': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'MPHASIS': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'MUTHOOTFIN': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'NAM-INDIA': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'NATIONALUM': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'NAUKRI': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'NBCC': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'NESTLEIND': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'NMDC': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'NTPC': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'NYKAA': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'OBEROIRLTY': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'OIL': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'ONGC': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'PERSISTENT': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'PETRONET': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'PFC': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'PGEL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'PHOENIXLTD': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'PIDILITIND': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'PIIND': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'POLYCAB': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'POWERINDIA': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'PRESTIGE': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'RADICO': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'RBLBANK': {'direction': 'long', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'RECLTD': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'RVNL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'SAIL': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'SAMMAANCAP': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'SBICARD': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'SBILIFE': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'SBIN': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'SHREECEM': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'SIEMENS': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'SOLARINDS': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': True},
+    'SRF': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'SUNPHARMA': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'TATACONSUM': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'TECHM': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'TIINDIA': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'TMPV': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'TORNTPHARM': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'TRENT': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'TVSMOTOR': {'direction': 'short', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'ULTRACEMCO': {'direction': 'short', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'UNIONBANK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'UNITDSPR': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'UNOMINDA': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': True, 'use_c2_close_filter': False},
+    'UPL': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'VBL': {'direction': 'long', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': False},
+    'VOLTAS': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'YESBANK': {'direction': 'both', 'use_entry_buffer': True, 'use_body_filter': False, 'use_c2_close_filter': True},
+    'ZYDUSLIFE': {'direction': 'both', 'use_entry_buffer': False, 'use_body_filter': False, 'use_c2_close_filter': False},
+}
+
 
 @api_bp.route('/backtest/thirty-min-fakeout', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
 def run_thirty_min_fakeout_backtest_api():
     """Scan EVERY F&O stock for the 30-Min Opening Fakeout
-    Breakdown/Breakout pattern across [start_date, end_date] — no single
-    symbol; the universe is every stock with a live futures contract
-    (indices excluded — see _fo_futures_universe). The pattern check and
-    entry/exit simulation run on the SPOT/equity price series, matching a
-    normal chart. Every stock is sized as a real intraday (MIS) equity
-    position — qty = floor(capital_per_trade x _TMF_EQUITY_LEVERAGE /
+    Breakdown/Breakout pattern across [start_date, end_date] — by default
+    the universe is every stock with a live futures contract (indices
+    excluded — see _fo_futures_universe); pass symbol (str) to backtest
+    just that one stock instead of the full universe. The pattern check
+    and entry/exit simulation run on the SPOT/equity price series,
+    matching a normal chart. Every stock is sized as a real intraday (MIS)
+    equity position — qty = floor(capital_per_trade x _TMF_EQUITY_LEVERAGE /
     entry_price), same as a broker's order-entry quantity field, no lot
     concept at all.
 
@@ -3784,11 +3938,8 @@ def run_thirty_min_fakeout_backtest_api():
       Force-closed at the cutoff time (default 15:18 IST) if neither
       SL nor Target is hit.
 
-    exit_on ('cross' default | 'close') controls how SL/Target are
-    confirmed post-entry: 'cross' exits as soon as any bar's High/Low
-    touches the level (same as a 30-min candle's High/Low touching it);
-    'close' only exits once a full 30-min candle CLOSES beyond the level,
-    ignoring an intrabar wick that doesn't hold through the candle's close.
+    SL/Target are confirmed as soon as any bar's High/Low touches the
+    level (same as a 30-min candle's High/Low touching it).
 
     use_entry_buffer, use_body_filter, and use_c2_close_filter (bool,
     each default True) independently toggle one of the three optional
@@ -3822,14 +3973,17 @@ def run_thirty_min_fakeout_backtest_api():
         exit_hour         = int(data.get('exit_hour', 15) or 15)
         exit_minute       = int(data.get('exit_minute', 18) or 18)
         capital_per_trade = float(data.get('capital_per_trade', 100000) or 100000)
-        exit_on           = str(data.get('exit_on', 'cross')).lower()
-        if exit_on not in ('cross', 'close'):
-            exit_on = 'cross'
         use_entry_buffer   = bool(data.get('use_entry_buffer', True))
         use_body_filter    = bool(data.get('use_body_filter', True))
         use_c2_close_filter = bool(data.get('use_c2_close_filter', True))
         use_sl_risk_filter = bool(data.get('use_sl_risk_filter', True))
         sl_risk_max        = float(data.get('sl_risk_max', _TMF_MAX_SL_RISK_RUPEES) or _TMF_MAX_SL_RISK_RUPEES)
+        single_symbol      = str(data.get('symbol', '') or '').strip().upper()
+        # When on (the default), each stock uses ITS OWN best-known combo
+        # from _TMF_SYMBOL_DEFAULTS instead of the direction/filter fields
+        # above applied uniformly to every stock — those fields above then
+        # only serve as the fallback for a stock missing from the table.
+        use_symbol_defaults = bool(data.get('use_symbol_defaults', True))
 
         if not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
@@ -3838,9 +3992,17 @@ def run_thirty_min_fakeout_backtest_api():
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
-        symbols = _fo_futures_universe()
-        if not symbols:
+        universe = _fo_futures_universe()
+        if not universe:
             return jsonify({'success': False, 'error': 'NFO instruments cache not found. Please login to refresh.'}), 404
+        # Empty selection (the default) scans the full universe; a specific
+        # symbol backtests just that one stock instead.
+        if single_symbol:
+            if single_symbol not in universe:
+                return jsonify({'success': False, 'error': f'{single_symbol} is not an F&O stock (or has no futures contract).'}), 400
+            symbols = [single_symbol]
+        else:
+            symbols = universe
 
         is_fyers = hasattr(current_kite, 'fyers')
 
@@ -3862,11 +4024,23 @@ def run_thirty_min_fakeout_backtest_api():
             )
             if df is None or df.empty:
                 return []
+            symbol_defaults = _TMF_SYMBOL_DEFAULTS.get(symbol) if use_symbol_defaults else None
+            if symbol_defaults:
+                sym_direction    = symbol_defaults['direction']
+                sym_enable_long  = sym_direction != 'short'
+                sym_enable_short = sym_direction != 'long'
+                sym_entry_buffer = symbol_defaults['use_entry_buffer']
+                sym_body_filter  = symbol_defaults['use_body_filter']
+                sym_c2_filter    = symbol_defaults['use_c2_close_filter']
+            else:
+                sym_enable_long, sym_enable_short = enable_long, enable_short
+                sym_entry_buffer, sym_body_filter, sym_c2_filter = (
+                    use_entry_buffer, use_body_filter, use_c2_close_filter)
             engine = ThirtyMinFakeoutEngine(
                 df=df, exit_hour=exit_hour, exit_minute=exit_minute,
-                enable_long=enable_long, enable_short=enable_short, exit_on=exit_on,
-                use_entry_buffer=use_entry_buffer, use_body_filter=use_body_filter,
-                use_c2_close_filter=use_c2_close_filter,
+                enable_long=sym_enable_long, enable_short=sym_enable_short,
+                use_entry_buffer=sym_entry_buffer, use_body_filter=sym_body_filter,
+                use_c2_close_filter=sym_c2_filter,
             )
             trades, _ = engine.run()
             kept_trades = []
@@ -3929,6 +4103,20 @@ def run_thirty_min_fakeout_backtest_api():
         summary['capital_per_trade']   = capital_per_trade
         summary['total_brokerage']     = _TMF_BROKERAGE_PER_TRADE * len(all_trades)
 
+        # CAGR over the tested [start_date, end_date] span — same formula as
+        # Swing Momentum's cagr_pct: annualized growth of capital_per_trade
+        # (the "starting portfolio") to capital_per_trade + net P&L.
+        cagr_pct = 0.0
+        try:
+            span_days = (datetime.strptime(end_date_str, '%Y-%m-%d')
+                         - datetime.strptime(start_date_str, '%Y-%m-%d')).days
+            ending_value = capital_per_trade + summary['total_pnl_rupees']
+            if span_days > 0 and capital_per_trade > 0 and ending_value > 0:
+                cagr_pct = round(((ending_value / capital_per_trade) ** (365.0 / span_days) - 1) * 100, 2)
+        except Exception:
+            cagr_pct = 0.0
+        summary['cagr_pct'] = cagr_pct
+
         logger.info('[ThirtyMinFakeout scan] %d symbols (%d failed) -> %d trades',
                     len(symbols), failed, len(all_trades))
 
@@ -3949,9 +4137,8 @@ def run_thirty_min_fakeout_backtest_api():
 
 # Grid swept by /backtest/thirty-min-fakeout/optimise — every other request
 # param (dates, cutoff time, capital, SL-risk cap) stays fixed at whatever
-# the form currently has; only these five toggles get combined.
+# the form currently has; only these four toggles get combined.
 _TMF_OPT_DIRECTIONS = ['both', 'long', 'short']
-_TMF_OPT_EXIT_ON    = ['cross', 'close']
 _TMF_OPT_BOOL_GRID  = [True, False]
 _TMF_OPT_MIN_TRADES = 20  # drop combos too thin to trust
 
@@ -3960,13 +4147,14 @@ _TMF_OPT_MIN_TRADES = 20  # drop combos too thin to trust
 @csrf.exempt
 @require_user_auth
 def run_thirty_min_fakeout_optimise():
-    """Sweep direction x SL/Target-confirm x the three optional pattern
-    filters (entry buffer, body filter, C2-close filter) across the full
-    F&O stock universe, and rank combos by real ₹ Net P&L (after sizing +
-    brokerage) — same universe scan as the plain backtest, run once per
-    combo. Unlike RTP/2nd-Candle, there's no timeframe axis here (the
-    engine always resamples to 30-min candles), so this returns one flat
-    leaderboard instead of one per timeframe."""
+    """Sweep direction x the three optional pattern filters (entry buffer,
+    body filter, C2-close filter) across the full F&O stock universe (or
+    just one stock if symbol is passed — same override as the plain
+    backtest), and rank combos by real ₹ Net P&L (after sizing +
+    brokerage) — same universe scan as the plain backtest,
+    run once per combo. Unlike RTP/2nd-Candle, there's no timeframe axis
+    here (the engine always resamples to 30-min candles), so this returns
+    one flat leaderboard instead of one per timeframe."""
     auth_error = check_auth()
     if auth_error:
         return auth_error
@@ -3980,12 +4168,14 @@ def run_thirty_min_fakeout_optimise():
         use_sl_risk_filter = bool(data.get('use_sl_risk_filter', True))
         sl_risk_max        = float(data.get('sl_risk_max', _TMF_MAX_SL_RISK_RUPEES) or _TMF_MAX_SL_RISK_RUPEES)
         recalculate        = bool(data.get('recalculate', False))
+        single_symbol      = str(data.get('symbol', '') or '').strip().upper()
 
         if not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
 
         cache_key = (f"tmf_opt_{start_date_str}_{end_date_str}_{exit_hour:02d}{exit_minute:02d}"
-                     f"_{int(capital_per_trade)}_{int(use_sl_risk_filter)}_{int(sl_risk_max)}_v1")
+                     f"_{int(capital_per_trade)}_{int(use_sl_risk_filter)}_{int(sl_risk_max)}"
+                     f"_{single_symbol or 'ALL'}_v2")
 
         if not recalculate:
             cache = _load_opt_cache()
@@ -3997,9 +4187,15 @@ def run_thirty_min_fakeout_optimise():
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
-        symbols = _fo_futures_universe()
-        if not symbols:
+        universe = _fo_futures_universe()
+        if not universe:
             return jsonify({'success': False, 'error': 'NFO instruments cache not found. Please login to refresh.'}), 404
+        if single_symbol:
+            if single_symbol not in universe:
+                return jsonify({'success': False, 'error': f'{single_symbol} is not an F&O stock (or has no futures contract).'}), 400
+            symbols = [single_symbol]
+        else:
+            symbols = universe
 
         task_id = str(uuid.uuid4())
         with _tmf_opt_tasks_lock:
@@ -4007,9 +4203,12 @@ def run_thirty_min_fakeout_optimise():
 
         def _run():
             try:
+                import os
                 import pandas as pd
                 from concurrent.futures import ThreadPoolExecutor, as_completed
-                from trading_app.Backtest.thirty_min_fakeout_engine import ThirtyMinFakeoutEngine, summarize_trades
+                from trading_app.Backtest.thirty_min_fakeout_engine import (
+                    summarize_trades, _prepare_df, iter_days_with_candles, _run_day,
+                )
                 from trading_app.Backtest.minute_candle_store import get_minute_history
                 import itertools
 
@@ -4027,8 +4226,8 @@ def run_thirty_min_fakeout_optimise():
                     )
 
                 dfs = {}
-                workers = 15 if is_fyers else 8
-                with ThreadPoolExecutor(max_workers=workers) as executor:
+                fetch_workers = 15 if is_fyers else 8
+                with ThreadPoolExecutor(max_workers=fetch_workers) as executor:
                     futures = {executor.submit(_fetch, sym): sym for sym in symbols}
                     done = 0
                     for future in as_completed(futures):
@@ -4049,38 +4248,67 @@ def run_thirty_min_fakeout_optimise():
                     return
 
                 grid = list(itertools.product(
-                    _TMF_OPT_DIRECTIONS, _TMF_OPT_EXIT_ON,
+                    _TMF_OPT_DIRECTIONS,
                     _TMF_OPT_BOOL_GRID, _TMF_OPT_BOOL_GRID, _TMF_OPT_BOOL_GRID,
                 ))
-                results = []
-                for i, (direction, exit_on, use_entry_buffer, use_body_filter, use_c2_close_filter) in enumerate(grid):
-                    enable_long  = direction != 'short'
-                    enable_short = direction != 'long'
-                    all_trades = []
-                    for symbol, df in dfs.items():
-                        engine = ThirtyMinFakeoutEngine(
-                            df=df, exit_hour=exit_hour, exit_minute=exit_minute,
-                            enable_long=enable_long, enable_short=enable_short, exit_on=exit_on,
-                            use_entry_buffer=use_entry_buffer, use_body_filter=use_body_filter,
-                            use_c2_close_filter=use_c2_close_filter,
-                        )
-                        trades, _ = engine.run()
-                        for t in trades:
+                cutoff = exit_hour * 60 + exit_minute
+
+                # ── Sweep every combo per symbol, one symbol at a time, instead
+                # of the old per-combo x per-symbol double loop. Resampling to
+                # 30-min candles (the expensive, combo-invariant part of a
+                # day's pattern check) now happens ONCE per symbol via
+                # iter_days_with_candles, reused across all len(grid) combos —
+                # previously redone from scratch on every combo. Symbols are
+                # also independent of each other, so they run in parallel
+                # across threads instead of the old single-threaded sweep.
+                def _sweep_symbol(symbol, raw_df):
+                    prepared = _prepare_df(raw_df.copy())
+                    days = list(iter_days_with_candles(prepared))
+                    per_combo_trades = [[] for _ in grid]
+                    for day_df, thirty in days:
+                        for gi, (direction, use_entry_buffer, use_body_filter, use_c2_close_filter) in enumerate(grid):
+                            enable_long  = direction != 'short'
+                            enable_short = direction != 'long'
+                            t = _run_day(day_df, thirty, cutoff, enable_long, enable_short,
+                                         use_entry_buffer, use_body_filter, use_c2_close_filter)
+                            if t is None:
+                                continue
                             entry_price = t['entry_price']
                             qty = max(1, int((capital_per_trade * _TMF_EQUITY_LEVERAGE) // entry_price)) if entry_price > 0 else 1
                             sl_risk_rupees = abs(entry_price - t['sl_price']) * qty
                             if use_sl_risk_filter and sl_risk_rupees > sl_risk_max:
                                 continue
-                            t['symbol']      = symbol
-                            t['qty']         = qty
-                            t['brokerage']   = _TMF_BROKERAGE_PER_TRADE
-                            t['pnl_rupees']  = round(t['pnl'] * qty - _TMF_BROKERAGE_PER_TRADE, 2)
-                            all_trades.append(t)
+                            t['symbol']     = symbol
+                            t['qty']        = qty
+                            t['brokerage']  = _TMF_BROKERAGE_PER_TRADE
+                            t['pnl_rupees'] = round(t['pnl'] * qty - _TMF_BROKERAGE_PER_TRADE, 2)
+                            per_combo_trades[gi].append(t)
+                    return per_combo_trades
 
+                combo_trades = [[] for _ in grid]
+                sweep_workers = min(32, (os.cpu_count() or 4) * 4)
+                completed = 0
+                with ThreadPoolExecutor(max_workers=sweep_workers) as executor:
+                    futures = {executor.submit(_sweep_symbol, sym, df): sym for sym, df in dfs.items()}
+                    for future in as_completed(futures):
+                        completed += 1
+                        try:
+                            per_combo = future.result(timeout=120)
+                            for gi, trades in enumerate(per_combo):
+                                combo_trades[gi].extend(trades)
+                        except Exception as e:
+                            logger.warning(f"[TMF OPT] symbol sweep failed: {e}")
+                        if completed % 10 == 0 or completed == len(dfs):
+                            with _tmf_opt_tasks_lock:
+                                _tmf_opt_tasks[task_id]['progress'] = f'{completed}/{len(dfs)} stocks swept'
+
+                results = []
+                for gi, (direction, use_entry_buffer, use_body_filter, use_c2_close_filter) in enumerate(grid):
+                    all_trades = combo_trades[gi]
                     if len(all_trades) >= _TMF_OPT_MIN_TRADES:
                         rupee_summary = summarize_trades([{**t, 'pnl': t['pnl_rupees']} for t in all_trades])
                         results.append({
-                            'direction': direction, 'exit_on': exit_on,
+                            'direction': direction,
                             'use_entry_buffer': use_entry_buffer, 'use_body_filter': use_body_filter,
                             'use_c2_close_filter': use_c2_close_filter,
                             'total_trades': len(all_trades),
@@ -4094,11 +4322,8 @@ def run_thirty_min_fakeout_optimise():
                             'total_brokerage': round(_TMF_BROKERAGE_PER_TRADE * len(all_trades), 2),
                         })
 
-                    with _tmf_opt_tasks_lock:
-                        _tmf_opt_tasks[task_id]['progress'] = f'{i + 1}/{len(grid)} combos'
-
                 results.sort(key=lambda r: r['net_pnl_rupees'], reverse=True)
-                top_results = results[:15]
+                top_results = results[:10]
 
                 payload = {
                     'total_combos_tested': len(grid),

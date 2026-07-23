@@ -74,7 +74,6 @@ class ThirtyMinFakeoutEngine:
         exit_minute: int = 18,
         enable_long: bool = True,
         enable_short: bool = True,
-        exit_on: str = 'cross',
         use_entry_buffer: bool = True,
         use_body_filter: bool = True,
         use_c2_close_filter: bool = True,
@@ -98,31 +97,7 @@ class ThirtyMinFakeoutEngine:
         self.use_entry_buffer = use_entry_buffer
         self.use_body_filter = use_body_filter
         self.use_c2_close_filter = use_c2_close_filter
-        # SL/Target confirmation mode, post-entry:
-        #   'cross' (default) — exit as soon as ANY bar's High/Low touches
-        #     the level (equivalent to the 30-min candle's High/Low
-        #     touching it, since a 30-min candle's High/Low is just the
-        #     max/min of its constituent 1-min bars — no extra aggregation
-        #     needed to get that).
-        #   'close' — exit only once a full 30-min candle CLOSES beyond
-        #     the level (checked once that candle's bucket completes, not
-        #     on every 1-min bar within it) — a genuine close-through
-        #     confirmation instead of a same-bar wick touch.
-        self.exit_on = exit_on if exit_on in ('cross', 'close') else 'cross'
-        self._prepare()
-
-    def _prepare(self):
-        df = self.df
-        if not pd.api.types.is_datetime64_any_dtype(df.index):
-            if 'date' in df.columns:
-                df = df.set_index('date')
-            elif 'datetime' in df.columns:
-                df = df.set_index('datetime')
-            df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-        df = df[~df.index.duplicated(keep='last')]
-        df.columns = [c.lower() for c in df.columns]
-        self.df = df
+        self.df = _prepare_df(self.df)
 
     def run(self):
         if self.df.empty:
@@ -130,8 +105,8 @@ class ThirtyMinFakeoutEngine:
 
         cutoff = self.exit_hour * 60 + self.exit_minute
         trades = []
-        for _, day_df in self.df.groupby(self.df.index.normalize()):
-            t = _run_day(day_df, cutoff, self.enable_long, self.enable_short, self.exit_on,
+        for day_df, thirty in iter_days_with_candles(self.df):
+            t = _run_day(day_df, thirty, cutoff, self.enable_long, self.enable_short,
                          self.use_entry_buffer, self.use_body_filter, self.use_c2_close_filter)
             if t is not None:
                 trades.append(t)
@@ -140,6 +115,38 @@ class ThirtyMinFakeoutEngine:
 
 
 # ── Single-day simulation ──────────────────────────────────────────────────────
+
+def _prepare_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a raw OHLC dataframe: datetime index, sorted, deduped,
+    lower-cased columns. Split out from the engine so a caller sweeping
+    many filter combos against the same symbol (e.g. the "Find Best
+    Params" grid search) can prepare once and reuse via
+    iter_days_with_candles instead of re-preparing per combo."""
+    if not pd.api.types.is_datetime64_any_dtype(df.index):
+        if 'date' in df.columns:
+            df = df.set_index('date')
+        elif 'datetime' in df.columns:
+            df = df.set_index('datetime')
+        df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+    df = df[~df.index.duplicated(keep='last')]
+    df.columns = [c.lower() for c in df.columns]
+    return df
+
+
+def iter_days_with_candles(df: pd.DataFrame):
+    """Yield (day_df, thirty) for every trading day in an already-prepared
+    df (see _prepare_df) that has all of Candle 1/2/3 present. Resampling
+    to 30-min candles is the expensive, filter-combo-invariant part of a
+    day's pattern check — computing it here once and feeding the same
+    (day_df, thirty) pairs into _run_day for several different filter
+    combos (as the optimiser route does) avoids redoing it once per combo."""
+    for _, day_df in df.groupby(df.index.normalize()):
+        day_df = day_df.sort_index()
+        thirty = _resample_30min(day_df)
+        if all(b in thirty.index for b in (0, 1, 2)):
+            yield day_df, thirty
+
 
 def _resample_30min(day_df: pd.DataFrame) -> pd.DataFrame:
     """30-min OHLC candles aligned to the 09:15 session open (not epoch-
@@ -155,13 +162,12 @@ def _resample_30min(day_df: pd.DataFrame) -> pd.DataFrame:
     return grouped
 
 
-def _run_day(day_df: pd.DataFrame, cutoff: int, enable_long: bool, enable_short: bool, exit_on: str = 'cross',
+def _run_day(day_df: pd.DataFrame, thirty: pd.DataFrame, cutoff: int, enable_long: bool, enable_short: bool,
              use_entry_buffer: bool = True, use_body_filter: bool = True, use_c2_close_filter: bool = True):
-    day_df = day_df.sort_index()
-    thirty = _resample_30min(day_df)
-    if not all(b in thirty.index for b in (0, 1, 2)):
-        return None
-
+    """day_df: one day's 1-min bars, already sorted. thirty: that same
+    day's 30-min candles (from iter_days_with_candles) — resampling
+    happens once per day upstream and is reused across combos, not
+    redone here."""
     c1, c2, c3 = thirty.loc[0], thirty.loc[1], thirty.loc[2]
 
     direction = None
@@ -259,50 +265,30 @@ def _run_day(day_df: pd.DataFrame, cutoff: int, enable_long: bool, enable_short:
     }
 
     # ── Manage the position from the entry bar onward ──
-    close_mode = (exit_on == 'close')
-    # Session-aligned 30-min bucket number for every watch bar — used only
-    # in 'close' mode, to know when a candle has just completed.
-    bucket_of = (watch_time_mins - _SESSION_START_MIN) // 30
-
+    # Exits as soon as any bar's High/Low crosses the SL/Target level
+    # (equivalent to a 30-min candle's High/Low touching it, since a
+    # 30-min candle's High/Low is just the max/min of its constituent
+    # 1-min bars — no extra aggregation needed to get that).
     for pos in range(entry_pos, len(watch)):
         tmin = watch_time_mins[pos]
         bar = watch.iloc[pos]
-        o, h, l, c = bar['open'], bar['high'], bar['low'], bar['close']
+        o, h, l = bar['open'], bar['high'], bar['low']
 
         if tmin >= cutoff and pos > entry_pos:
             exit_price = o
             pnl = (entry - exit_price) if direction == 'short' else (exit_price - entry)
             return _make_trade(setup, watch.index[pos], exit_price, pnl, 'Time Exit')
 
-        if close_mode:
-            # Only test once the 30-min candle this bar belongs to has
-            # actually completed (its bucket is about to change, or this
-            # is the last available bar) — a genuine close-beyond
-            # confirmation, not a same-bar wick touch.
-            is_bucket_end = (pos == len(watch) - 1) or (bucket_of[pos + 1] != bucket_of[pos])
-            if not is_bucket_end:
-                continue
-            if direction == 'short':
-                if c >= sl_level:
-                    return _make_trade(setup, watch.index[pos], c, entry - c, 'SL Hit')
-                if c <= target_level:
-                    return _make_trade(setup, watch.index[pos], c, entry - c, 'Target Hit')
-            else:
-                if c <= sl_level:
-                    return _make_trade(setup, watch.index[pos], c, c - entry, 'SL Hit')
-                if c >= target_level:
-                    return _make_trade(setup, watch.index[pos], c, c - entry, 'Target Hit')
+        if direction == 'short':
+            if h >= sl_level:
+                return _make_trade(setup, watch.index[pos], sl_level, entry - sl_level, 'SL Hit')
+            if l <= target_level:
+                return _make_trade(setup, watch.index[pos], target_level, entry - target_level, 'Target Hit')
         else:
-            if direction == 'short':
-                if h >= sl_level:
-                    return _make_trade(setup, watch.index[pos], sl_level, entry - sl_level, 'SL Hit')
-                if l <= target_level:
-                    return _make_trade(setup, watch.index[pos], target_level, entry - target_level, 'Target Hit')
-            else:
-                if l <= sl_level:
-                    return _make_trade(setup, watch.index[pos], sl_level, sl_level - entry, 'SL Hit')
-                if h >= target_level:
-                    return _make_trade(setup, watch.index[pos], target_level, target_level - entry, 'Target Hit')
+            if l <= sl_level:
+                return _make_trade(setup, watch.index[pos], sl_level, sl_level - entry, 'SL Hit')
+            if h >= target_level:
+                return _make_trade(setup, watch.index[pos], target_level, target_level - entry, 'Target Hit')
 
     # Data ran out before the cutoff/SL/Target — close at the last available bar.
     last_ts = watch.index[-1]

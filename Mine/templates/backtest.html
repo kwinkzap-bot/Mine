@@ -23,7 +23,7 @@
                 <option value="vwap">📈 C/P VWAP Strategy</option>
                 <option value="second_candle">🕒 Candle Breakout</option>
                 <option value="expiry_breakout">📅 Monthly Expiry Breakout</option>
-                <option value="thirty_min_fakeout">⏱️ 30-Min Opening Fakeout</option>
+                <option value="thirty_min_fakeout" selected>⏱️ 30-Min Opening Fakeout</option>
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
@@ -279,11 +279,21 @@
                 </div>
             </div>
 
-            <!-- 30-Min Opening Fakeout params — pure filter, no symbol
-                 selection: scans every F&O stock (indices excluded — no
-                 equity share to buy) over the selected Start/End Date
-                 for the fakeout pattern. -->
+            <!-- 30-Min Opening Fakeout params — scans every F&O stock
+                 (indices excluded — no equity share to buy) over the
+                 selected Start/End Date for the fakeout pattern, unless a
+                 single symbol is picked below to test just that one. -->
             <div id="thirtyMinFakeoutParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="tmfSymbol">Symbol</label>
+                    <select id="tmfSymbol" title="Leave on 'All Stocks' to scan the full F&O universe, or pick one symbol to backtest just that stock.">
+                        <option value="" selected>All Stocks (full scan)</option>
+                    </select>
+                </div>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="tmfUseSymbolDefaults" checked>
+                    <label for="tmfUseSymbolDefaults" title="Each stock uses its own best-known Direction/Entry Buffer/Body Filter/C2 Close combo (found by running Find Best Params one stock at a time) instead of the single combo set below applied to every stock. A stock with no known combo falls back to the fields below. Uncheck to force every stock to use the same combo below, like before.">Use Per-Stock Best Settings</label>
+                </div>
                 <div class="form-group">
                     <label for="tmfDirection">Direction</label>
                     <select id="tmfDirection">
@@ -295,13 +305,6 @@
                 <div class="form-group">
                     <label for="tmfExitTime">Cut-off Time</label>
                     <input type="time" id="tmfExitTime" value="15:18">
-                </div>
-                <div class="form-group">
-                    <label for="tmfExitOn">SL/Target Confirm</label>
-                    <select id="tmfExitOn" title="On Cross: exit as soon as price touches the SL/Target level (a wick counts). On Close: exit only once a 30-min candle actually closes beyond the level.">
-                        <option value="cross" selected>On Cross</option>
-                        <option value="close">On Close</option>
-                    </select>
                 </div>
                 <div class="form-group" style="grid-column: span 2;">
                     <label>Rule</label>
@@ -327,7 +330,7 @@
                     <input type="number" id="tmfSlRiskMax" value="5000" min="0" step="100">
                 </div>
                 <div class="form-group form-check-group">
-                    <input type="checkbox" id="tmfUseSlRiskFilter" checked>
+                    <input type="checkbox" id="tmfUseSlRiskFilter">
                     <label for="tmfUseSlRiskFilter" title="Skips a trade whose sized SL risk (|entry − SL| × qty, at the current capital-per-trade sizing) exceeds the Max SL Risk value — the setup fired, but the rupee stop-loss at this position size is too large to take.">SL Risk Filter</label>
                 </div>
             </div>
@@ -389,10 +392,9 @@
                                 <li>The trigger adds a <b>0.05% buffer</b> beyond Candle 3's Low/High — price must clear it, not just touch it. SL stays at the exact (unbuffered) Candle 3 High/Low. Toggle with <b>Entry Buffer</b>, on by default.</li>
                                 <li>The Candle 3 against-direction <b>body-size cap (¼ of range)</b> — toggle with <b>Body Filter</b>, on by default.</li>
                                 <li>Candle 2's <b>close beyond Candle 1's High/Low</b> (above Candle 1's High for SELL, below Candle 1's Low for BUY) — toggle with <b>C2 Close &gt; C1 High</b>, on by default.</li>
-                                <li>A trade whose sized SL risk (|entry − SL| × qty, at the current capital-per-trade) exceeds <b>Max SL Risk</b> (default ₹5,000, editable) is skipped entirely — toggle with <b>SL Risk Filter</b>, on by default.</li>
+                                <li>A trade whose sized SL risk (|entry − SL| × qty, at the current capital-per-trade) exceeds <b>Max SL Risk</b> (default ₹5,000, editable) is skipped entirely — toggle with <b>SL Risk Filter</b>, off by default.</li>
                                 <li>Target (day's session Low/High) is only knowable in hindsight — a backtest-only level.</li>
-                                <li>Force-closed at the <b>Cut-off Time</b> if neither SL nor Target is hit.</li>
-                                <li><b>SL/Target Confirm</b> — <b>On Cross</b>: exits the moment price touches the level. <b>On Close</b>: waits for a 30-min candle to actually close beyond it, ignoring a wick that doesn't hold.</li>
+                                <li>Force-closed at the <b>Cut-off Time</b> if neither SL nor Target is hit. SL/Target are confirmed the moment any bar's High/Low touches the level.</li>
                                 <li>A flat <b>₹300 brokerage</b> is deducted from every trade's P&amp;L (₹).</li>
                             </ul>
                         </div>
@@ -528,8 +530,8 @@
                         <span class="bt-candle"></span>
                     </div>
                     <div class="bt-loader-text">
-                        <p class="bt-loader-title">Running backtest<span class="bt-dots"></span></p>
-                        <small>Fetching candles &amp; scanning signals</small>
+                        <p class="bt-loader-title" id="btLoaderTitle">Running backtest<span class="bt-dots"></span></p>
+                        <small id="btLoaderSub">Fetching candles &amp; scanning signals</small>
                     </div>
                 </div>
             </div>
@@ -575,8 +577,8 @@
                         </div>
                     </div>
 
-                    <!-- Row 2 — RTP only -->
-                    <div id="rtpStatsRow" class="results-row results-row-5" style="display:none;">
+                    <!-- Row 2 — RTP / TMF -->
+                    <div id="rtpStatsRow" class="results-row results-row-6" style="display:none;">
                         <div class="stat-card ac-orange">
                             <span class="stat-card__lbl">Profit Factor</span>
                             <span class="stat-card__val" id="statProfitFactor">—</span>
@@ -600,6 +602,11 @@
                             <span class="stat-card__lbl">Net P&amp;L (₹)</span>
                             <span class="stat-card__val" id="statNetRs">—</span>
                             <span class="stat-card__sub" id="statNetRsSub">after brokerage</span>
+                        </div>
+                        <div class="stat-card ac-teal">
+                            <span class="stat-card__lbl">CAGR</span>
+                            <span class="stat-card__val" id="statCagr">—</span>
+                            <span class="stat-card__sub" id="statCagrSub"></span>
                         </div>
                     </div>
 
