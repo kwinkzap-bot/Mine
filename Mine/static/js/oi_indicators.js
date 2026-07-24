@@ -356,9 +356,9 @@ function _oipLineStyleSeriesMap() {
         ema100:   [oipEma100Series],
         ema200:   [oipEma200Series],
         rsi:      oipRSISeriesObj ? Object.values(oipRSISeriesObj) : [],
-        fixedCeAvg:   [oipFixedCeHL2Series, oipCEFixedCeAvgSeries, oipPEFixedCeAvgSeries, oipIntFixedCeAvgSeries],
-        fixedPeAvg:   [oipFixedPeHL2Series, oipPEFixedPeAvgSeries, oipCEFixedPeAvgSeries, oipIntFixedPeAvgSeries],
-        fixedCePeAvg: [oipFixedCloseAvgSeries, oipCEFixedCePeAvgSeries, oipPEFixedCePeAvgSeries, oipIntFixedCePeAvgSeries],
+        fixedCeAvg:   [oipFixedCeHL2Series],
+        fixedPeAvg:   [oipFixedPeHL2Series],
+        fixedCePeAvg: [oipFixedCloseAvgSeries],
     };
 }
 
@@ -1189,6 +1189,14 @@ function oipApplyOptionZOrder() {
     _oipLayerPane(
         [oipIntrinsicSeries, oipIntrinsicPeSeries],
         [oipVwapIntSeries, oipVwapIntPeSeries, oipCvwapIntSeries, oipCvwapIntPeSeries, oipPvwapIntSeries, oipPvwapIntPeSeries],
+        []
+    );
+    _oipLayerPane(
+        [typeof oipFixedCeSeries !== 'undefined' ? oipFixedCeSeries : null,
+         typeof oipFixedPeSeries !== 'undefined' ? oipFixedPeSeries : null],
+        [typeof oipFixedCeHL2Series    !== 'undefined' ? oipFixedCeHL2Series    : null,
+         typeof oipFixedPeHL2Series    !== 'undefined' ? oipFixedPeHL2Series    : null,
+         typeof oipFixedCloseAvgSeries !== 'undefined' ? oipFixedCloseAvgSeries : null],
         []
     );
 }

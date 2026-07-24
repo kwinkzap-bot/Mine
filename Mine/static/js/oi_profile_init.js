@@ -1,3 +1,14 @@
+// Disarms the horizontal-ray tool on all 4 Opt Prem charts (Intrinsic/Combined,
+// CE Only, PE Only, Fixed 24000) and resets the toolbar button — called after a
+// ray is drawn on any one of them, since arming is shared across all four.
+function oipRayDisarmAll() {
+    [oipIntrinsicChart, oipCEChart, oipPEChart, oipFixedChart].forEach(c => {
+        if (c && c.setRayMode) c.setRayMode(false);
+    });
+    document.getElementById('oipRayToolBtn')?.classList.remove('oip-btn--armed');
+    document.getElementById('oipRayOptionsPopup')?.classList.add('hidden');
+}
+
 window.oipInitSecondaryCharts = function() {
     const elInt = document.getElementById('oipIntrinsicChart');
 
@@ -23,24 +34,26 @@ window.oipInitSecondaryCharts = function() {
     if (elInt && typeof TradingViewChart !== 'undefined') {
         oipIntrinsicChart = TradingViewChart.create({
             containerId: 'oipIntrinsicChart', data: [], type: 'COMBINED',
-            isCombined: true, timeframe: oipInterval, options: { height: 375 }
+            isCombined: true, timeframe: oipInterval, options: { height: 375 },
+            onRayDrawn: oipRayDisarmAll,
+            reapplyZOrder: () => { if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder(); }
         });
         oipIntrinsicSeries = oipIntrinsicChart.ceSeries || oipIntrinsicChart.series;
         oipIntrinsicPeSeries = oipIntrinsicChart.peSeries;
-        const showV = oipElems.showVwapInt?.checked;
+
+        // Plain VWAP (green/purple) + CVWAP/PVWAP/3-AVG_VWAP on the Options Premium
+        // (Combined) chart — one of the 3 "option charts" controlled by the Opt
+        // Indicator popup's own "VWAP" checkbox (see oipSyncVwapVisibility). Both
+        // sets share that single checkbox so "VWAP" means the same thing to the user.
+        const showOptVwapInt = document.getElementById('oipShowVwapOpt')?.checked ?? false;
         oipVwapIntSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#1b9981', lineWidth: 1, title: '', visible: showV,
+            color: '#1b9981', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
         oipVwapIntPeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#8b5cf6', lineWidth: 1, title: '', visible: showV,
+            color: '#8b5cf6', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
         });
-
-        // CVWAP (current-session) / PVWAP (previous-session) / 3-AVG_VWAP on the Options
-        // Premium (Combined) chart — one of the 3 "option charts" controlled independently
-        // by the Opt Indicator popup's own "VWAP" checkbox (see oipSyncVwapVisibility).
-        const showOptVwapInt = document.getElementById('oipShowVwapOpt')?.checked ?? false;
         oipCvwapIntSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
             color: '#3b82f6', lineWidth: 1, title: '', visible: showOptVwapInt,
             priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
@@ -69,14 +82,18 @@ window.oipInitSecondaryCharts = function() {
         // Initialize Individual CE Chart
         oipCEChart = TradingViewChart.create({
             containerId: 'oipCEChart', data: [], type: 'CE',
-            timeframe: oipInterval, options: { height: 375, rightOffset: 5 }
+            timeframe: oipInterval, options: { height: 375, rightOffset: 5 },
+            onRayDrawn: oipRayDisarmAll,
+            reapplyZOrder: () => { if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder(); }
         });
         oipCESeries = oipCEChart.series;
 
         // Initialize Individual PE Chart
         oipPEChart = TradingViewChart.create({
             containerId: 'oipPEChart', data: [], type: 'PE',
-            timeframe: oipInterval, options: { height: 375, rightOffset: 5 }
+            timeframe: oipInterval, options: { height: 375, rightOffset: 5 },
+            onRayDrawn: oipRayDisarmAll,
+            reapplyZOrder: () => { if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder(); }
         });
         oipPESeries = oipPEChart.series;
 
@@ -85,7 +102,9 @@ window.oipInitSecondaryCharts = function() {
         // zoom/crosshair sync web (different strike+expiry, own time axis).
         oipFixedChart = TradingViewChart.create({
             containerId: 'oipFixed24000Chart', data: [], type: 'COMBINED',
-            isCombined: true, timeframe: oipInterval, options: { height: 375 }
+            isCombined: true, timeframe: oipInterval, options: { height: 375 },
+            onRayDrawn: oipRayDisarmAll,
+            reapplyZOrder: () => { if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder(); }
         });
         oipFixedCeSeries = oipFixedChart.ceSeries || oipFixedChart.series;
         oipFixedPeSeries = oipFixedChart.peSeries;
@@ -103,26 +122,6 @@ window.oipInitSecondaryCharts = function() {
         });
         oipFixedCloseAvgSeries = oipFixedChart.chart.addSeries(LightweightCharts.LineSeries, {
             color: '#000000', lineWidth: 1, title: 'CE & PE Avg',
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-
-        // "Fixed Chart Lines" on the Combined (Options Premium) chart — shares
-        // checkboxes/style keys with the fixed 24000-monthly chart's own lines,
-        // but the DATA is this chart's own weekly premium (set in
-        // oipRefreshLocalView), not the 24000-monthly data.
-        const showFixedCe   = document.getElementById('oipShowFixedCeAvg')?.checked ?? true;
-        const showFixedPe   = document.getElementById('oipShowFixedPeAvg')?.checked ?? true;
-        const showFixedCePe = document.getElementById('oipShowFixedCePeAvg')?.checked ?? true;
-        oipIntFixedCeAvgSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#16a34a', lineWidth: 1, title: 'CE Avg', visible: showFixedCe,
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-        oipIntFixedPeAvgSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#7c3aed', lineWidth: 1, title: 'PE Avg', visible: showFixedPe,
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-        oipIntFixedCePeAvgSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#000000', lineWidth: 1, title: 'CE & PE Avg', visible: showFixedCePe,
             priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
         });
 
@@ -152,36 +151,6 @@ window.oipInitSecondaryCharts = function() {
         oipPECvwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#3b82f6', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
         oipPEPvwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#fdba74', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
         oipPEAvg3VwapSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, { color: '#ef4444', lineWidth: 1, title: '', visible: showOptVwap, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null });
-
-        // "Fixed Chart Lines" on the CE Only / PE Only charts — shares
-        // checkboxes/style keys with the fixed 24000-monthly chart's own lines,
-        // but the DATA is each chart's own weekly premium (set in
-        // oipRefreshLocalView), not the 24000-monthly data. CE Avg and PE Avg
-        // each appear on BOTH charts.
-        oipCEFixedCeAvgSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#16a34a', lineWidth: 1, title: 'CE Avg', visible: showFixedCe,
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-        oipCEFixedPeAvgSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#7c3aed', lineWidth: 1, title: 'PE Avg', visible: showFixedPe,
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-        oipCEFixedCePeAvgSeries = oipCEChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#000000', lineWidth: 1, title: 'CE & PE Avg', visible: showFixedCePe,
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-        oipPEFixedPeAvgSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#7c3aed', lineWidth: 1, title: 'PE Avg', visible: showFixedPe,
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-        oipPEFixedCeAvgSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#16a34a', lineWidth: 1, title: 'CE Avg', visible: showFixedCe,
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
-        oipPEFixedCePeAvgSeries = oipPEChart.chart.addSeries(LightweightCharts.LineSeries, {
-            color: '#000000', lineWidth: 1, title: 'CE & PE Avg', visible: showFixedCePe,
-            priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
-        });
 
         oipInitPremiumSeries();
         
@@ -331,6 +300,55 @@ window.oipInitSecondaryCharts = function() {
                 if (oipOIChart && oipOISeries) syncCrosshair(oipPEChart.chart, oipOIChart, param, oipOISeries);
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipPEChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipPEChart.chart, oipCEChart.chart, param, oipCESeries);
+            });
+        }
+
+        // --- Horizontal Ray drawing tool toolbar wiring ---
+        // Arming is shared across all 4 Opt Prem charts: click "Ray" once to
+        // arm the tool AND open the style popup below the button, then click
+        // whichever chart you want the ray on — it auto-disarms and closes
+        // the popup after the first ray is drawn (see oipRayDisarmAll, called
+        // via onRayDrawn above). Color/width/style pickers set the look of
+        // the NEXT ray; changing them while armed re-applies live so the
+        // in-progress ray reflects the new choice, without touching rays
+        // already drawn.
+        const oipRayChartList = [oipIntrinsicChart, oipCEChart, oipPEChart, oipFixedChart].filter(c => c && c.setRayMode);
+        const oipRayBtn = document.getElementById('oipRayToolBtn');
+        const oipRayClearBtn = document.getElementById('oipRayClearBtn');
+        const oipRayPopup = document.getElementById('oipRayOptionsPopup');
+        const oipRayStyleFromPickers = () => ({
+            color: document.getElementById('oipRayColorInp')?.value || '#f59e0b',
+            width: parseInt(document.getElementById('oipRayWidthSel')?.value, 10) || 2,
+            lineStyle: parseInt(document.getElementById('oipRayStyleSel')?.value, 10) ?? 2
+        });
+        if (oipRayBtn) {
+            oipRayBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const willArm = !oipRayBtn.classList.contains('oip-btn--armed');
+                const style = willArm ? oipRayStyleFromPickers() : undefined;
+                oipRayChartList.forEach(c => c.setRayMode(willArm, style));
+                oipRayBtn.classList.toggle('oip-btn--armed', willArm);
+                oipRayPopup?.classList.toggle('hidden', !willArm);
+            });
+        }
+        // Live-restyle the armed (not-yet-placed) ray as the pickers change.
+        if (oipRayPopup) {
+            oipRayPopup.addEventListener('change', () => {
+                if (oipRayBtn?.classList.contains('oip-btn--armed')) {
+                    oipRayChartList.forEach(c => c.setRayMode(true, oipRayStyleFromPickers()));
+                }
+            });
+        }
+        // Clicking outside the popup/button while armed cancels ray mode
+        // (matches the Indicators popup's outside-click-to-close behavior).
+        document.addEventListener('click', (e) => {
+            if (!oipRayBtn?.classList.contains('oip-btn--armed')) return;
+            if (oipRayPopup?.contains(e.target) || e.target === oipRayBtn || oipRayBtn.contains(e.target)) return;
+            oipRayDisarmAll();
+        });
+        if (oipRayClearBtn) {
+            oipRayClearBtn.addEventListener('click', () => {
+                oipRayChartList.forEach(c => c.clearRays());
             });
         }
     }

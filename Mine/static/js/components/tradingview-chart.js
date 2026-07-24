@@ -28,6 +28,181 @@ window.lwBringToFront = window.lwBringToFront || function (series) {
 window.TradingViewChart = (function () {
     'use strict';
 
+    // ---- Horizontal Ray drawing tool ----
+    // Lightweight Charts has no built-in drawing-tool API, so a "ray" is
+    // implemented as a 2-point LineSeries: start at the clicked bar, end a
+    // little past the most recently loaded candle (using the caller's
+    // `rightOffset` margin so it visibly reaches the Y-axis instead of
+    // stopping at the last candle). Anchoring the end to real data plus a
+    // SMALL fixed bar count — not a synthetic far-future timestamp, and not
+    // thousands of filler points — introduces at most one new logical index
+    // on the chart's shared time axis, so it can't reshuffle other series'
+    // positions or disturb the user's pan/zoom — tried both of those first;
+    // a single far-future point only ever lands ~1 index past the last real
+    // bar (renders a few px past it, however large the time jump — LWC
+    // positions numeric-timestamp data by rank order, not real elapsed
+    // time), and filling thousands of points to compensate corrupted the
+    // shared index when the ray started well before the most recent data.
+    // Trade-off: the ray only reaches whatever was loaded at draw time, not
+    // literally forever; it grows further on the next data reload.
+    //
+    // Standalone (not tied to TradingViewChart.create) so ANY chart+series
+    // pair can get the ray tool — including charts built directly against
+    // the raw LightweightCharts API (e.g. the main OI Profile candlestick
+    // chart in oi_profile.js), not just ones created via .create() below.
+    // `opts.timeframe` may be a plain string or a zero-arg function; charts
+    // whose interval can change after creation (a TF dropdown) should pass a
+    // function so the ray's reach uses the CURRENT interval, not the one at
+    // attach time.
+    function createRayTool(chart, series, container, opts) {
+        opts = opts || {};
+        const rightOffset = opts.rightOffset != null ? opts.rightOffset : 20;
+        const RAY_INTERVAL_SECONDS = {
+            '30second': 30, minute: 60, '2minute': 120, '3minute': 180, '5minute': 300,
+            '15minute': 900, '30minute': 1800, '60minute': 3600, day: 86400, week: 604800, month: 2592000
+        };
+        function resolveTimeframe() {
+            return typeof opts.timeframe === 'function' ? opts.timeframe() : opts.timeframe;
+        }
+        function buildRayPoints(startTime, price, lastRealTime) {
+            const step = RAY_INTERVAL_SECONDS[resolveTimeframe()] || 60;
+            const base = (lastRealTime != null && lastRealTime > startTime) ? lastRealTime : startTime;
+            const end = base + (rightOffset + 5) * step;
+            return [{ time: startTime, value: price }, { time: end, value: price }];
+        }
+
+        let rayModeActive = false;
+        const rayLines = [];
+        // Style applied to the NEXT ray drawn — set via setRayMode(active, style)
+        // when the caller's toolbar (color/width/style pickers) arms the tool, so
+        // each new ray can use different settings without touching rays already drawn.
+        let rayStyle = {
+            color: opts.rayColor || '#f59e0b',
+            width: 2,
+            lineStyle: LightweightCharts.LineStyle.Dashed
+        };
+
+        // Creates one ray line series and tracks it. Shared by the click
+        // handler (new ray, current rayStyle) and the public addRay() method
+        // (restoring a saved ray with its own saved style) so both paths stay
+        // in sync. Stashes {time, price, color, width, lineStyle} on the
+        // series itself so callers can read back what was actually drawn —
+        // needed for onRayDrawn/onRayRemoved to hand the caller enough to
+        // persist and later restore it.
+        function createRayLine(startTime, price, style) {
+            const s = style || rayStyle;
+            const raySeries = chart.addSeries(LightweightCharts.LineSeries, {
+                color: s.color,
+                lineWidth: s.width,
+                lineStyle: s.lineStyle,
+                title: 'Ray',
+                lastValueVisible: true,
+                priceLineVisible: false,
+                crosshairMarkerVisible: false,
+                autoscaleInfoProvider: () => null
+            });
+            const priceData = series ? series.data() : [];
+            const lastRealTime = priceData.length ? priceData[priceData.length - 1].time : null;
+            raySeries.setData(buildRayPoints(startTime, price, lastRealTime));
+            raySeries._rayInfo = { time: startTime, price, color: s.color, width: s.width, lineStyle: s.lineStyle };
+            rayLines.push(raySeries);
+            // New series render on top by default — pull the candles back to
+            // the front so rays (like other indicator lines) sit behind them.
+            // Panes with more than one candle series (e.g. the CE+PE Combined
+            // chart) need their full app-level z-order policy re-applied, not
+            // just this one anchor series, or bringing only it forward would
+            // reorder it ahead of the OTHER candle series sharing the pane.
+            if (typeof opts.reapplyZOrder === 'function') opts.reapplyZOrder();
+            else if (typeof window.lwBringToFront === 'function') window.lwBringToFront(series);
+            return raySeries;
+        }
+
+        chart.subscribeClick((param) => {
+            if (!rayModeActive || !series) return;
+            if (!param || !param.point || param.time == null) return;
+            const price = series.coordinateToPrice(param.point.y);
+            if (price == null) return;
+
+            const raySeries = createRayLine(param.time, price, rayStyle);
+
+            rayModeActive = false;
+            container.style.cursor = '';
+            if (typeof opts.onRayDrawn === 'function') {
+                try { opts.onRayDrawn(raySeries._rayInfo); } catch (e) {}
+            }
+        });
+
+        // Right-click near a ray removes it (does not block the browser menu elsewhere).
+        container.addEventListener('contextmenu', (e) => {
+            if (rayLines.length === 0) return;
+            const rect = container.getBoundingClientRect();
+            const y = e.clientY - rect.top;
+            let closestIdx = -1, closestDist = 8;
+            rayLines.forEach((rs, idx) => {
+                try {
+                    const rdata = rs.data();
+                    if (!rdata || !rdata.length) return;
+                    const yCoord = rs.priceToCoordinate(rdata[0].value);
+                    if (yCoord == null) return;
+                    const dist = Math.abs(yCoord - y);
+                    if (dist < closestDist) { closestDist = dist; closestIdx = idx; }
+                } catch (err) {}
+            });
+            if (closestIdx >= 0) {
+                e.preventDefault();
+                const removed = rayLines[closestIdx];
+                try { chart.removeSeries(removed); } catch (err) {}
+                rayLines.splice(closestIdx, 1);
+                if (typeof opts.onRayRemoved === 'function') {
+                    try { opts.onRayRemoved(removed._rayInfo); } catch (err) {}
+                }
+            }
+        });
+
+        return {
+            /**
+             * Arms/disarms the horizontal-ray draw tool. While armed, the next
+             * click on this chart drops a ray and auto-disarms.
+             * @param {boolean} active
+             * @param {{color?: string, width?: number, lineStyle?: number}} [style] -
+             *   Overrides the style used for the NEXT ray only; rays already drawn
+             *   are unaffected. Any field omitted keeps its previous value.
+             */
+            setRayMode: function (active, style) {
+                rayModeActive = !!active;
+                container.style.cursor = rayModeActive ? 'crosshair' : '';
+                if (style) {
+                    if (style.color != null) rayStyle.color = style.color;
+                    if (style.width != null) rayStyle.width = style.width;
+                    if (style.lineStyle != null) rayStyle.lineStyle = style.lineStyle;
+                }
+            },
+            isRayModeActive: function () {
+                return rayModeActive;
+            },
+            /**
+             * Programmatically draws a ray without arming/clicking — used to
+             * restore rays a caller persisted (e.g. to localStorage) on page
+             * load. `style` defaults to the tool's current style if omitted.
+             * @param {number} time
+             * @param {number} price
+             * @param {{color?: string, width?: number, lineStyle?: number}} [style]
+             */
+            addRay: function (time, price, style) {
+                if (time == null || price == null) return null;
+                const merged = Object.assign({}, rayStyle, style || {});
+                return createRayLine(time, price, merged);
+            },
+            /**
+             * Removes all ray lines drawn on this chart.
+             */
+            clearRays: function () {
+                rayLines.forEach(rs => { try { chart.removeSeries(rs); } catch (e) {} });
+                rayLines.length = 0;
+            }
+        };
+    }
+
     // Private helper functions
     /**
      * Formats raw candlestick data for Lightweight Charts
@@ -633,6 +808,18 @@ window.TradingViewChart = (function () {
             // Price lines array to store reference lines (no PDH/PDL lines)
             const priceLinesArray = [];
 
+            // Horizontal Ray drawing tool — see createRayTool() above for the
+            // implementation notes (2-point LineSeries, reach vs. pan/zoom trade-off).
+            const rayPriceSeries = ceSeries || series;
+            const rayTool = createRayTool(chart, rayPriceSeries, container, {
+                timeframe: timeframe,
+                rightOffset: rightOffset,
+                rayColor: config.rayColor,
+                onRayDrawn: config.onRayDrawn,
+                onRayRemoved: config.onRayRemoved,
+                reapplyZOrder: config.reapplyZOrder
+            });
+
             // Store PDH/PDL values for status calculation
             let storedCePdh = null;
             let storedCePdl = null;
@@ -1155,6 +1342,41 @@ window.TradingViewChart = (function () {
                 },
 
                 /**
+                 * Arms/disarms the horizontal-ray draw tool. While armed, the next
+                 * click on this chart drops a ray and auto-disarms.
+                 * @param {boolean} active
+                 * @param {{color?: string, width?: number, lineStyle?: number}} [style] -
+                 *   Overrides the style used for the NEXT ray only; rays already drawn
+                 *   are unaffected. Any field omitted keeps its previous value.
+                 */
+                setRayMode: function (active, style) {
+                    rayTool.setRayMode(active, style);
+                },
+
+                isRayModeActive: function () {
+                    return rayTool.isRayModeActive();
+                },
+
+                /**
+                 * Programmatically draws a ray without arming/clicking — used to
+                 * restore rays a caller persisted (e.g. to localStorage) on page
+                 * load. `style` defaults to the tool's current style if omitted.
+                 * @param {number} time
+                 * @param {number} price
+                 * @param {{color?: string, width?: number, lineStyle?: number}} [style]
+                 */
+                addRay: function (time, price, style) {
+                    return rayTool.addRay(time, price, style);
+                },
+
+                /**
+                 * Removes all ray lines drawn on this chart.
+                 */
+                clearRays: function () {
+                    rayTool.clearRays();
+                },
+
+                /**
                  * Resizes chart to fit container
                  */
                 resize: function () {
@@ -1342,6 +1564,7 @@ window.TradingViewChart = (function () {
                 destroy: function () {
                     try {
                         this.clearPriceLines();
+                        this.clearRays();
                         chart.remove();
                     } catch (e) {
                         console.warn('[Chart] Error during cleanup:', e);
@@ -1368,7 +1591,19 @@ window.TradingViewChart = (function () {
         /**
          * Utility: Add Scroll to Right button
          */
-        addScrollButton: addScrollButton
+        addScrollButton: addScrollButton,
+
+        /**
+         * Utility: Attach the horizontal-ray draw tool to any chart+series pair,
+         * including charts NOT created via TradingViewChart.create() — e.g. the
+         * main OI Profile candlestick chart, built directly against the raw
+         * LightweightCharts API. Returns { setRayMode, isRayModeActive, addRay, clearRays }.
+         * @param {Object} chart - LightweightCharts chart instance
+         * @param {Object} series - price series used to convert click Y-coordinate to price
+         * @param {HTMLElement} container - chart's container element (for cursor + right-click removal)
+         * @param {Object} [opts] - { timeframe, rightOffset, rayColor, onRayDrawn, onRayRemoved }
+         */
+        attachRayTool: createRayTool
     };
 
     /**

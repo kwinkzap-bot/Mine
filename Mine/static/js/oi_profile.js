@@ -8,6 +8,7 @@
 /* ── State ────────────────────────────────────────────────── */
 let oipOIChart = null;
 let oipOISeries = null;
+let oipOIRayTool = null;
 let oipIntrinsicChart = null;
 let oipIntrinsicSeries = null;
 let oipIntrinsicPeSeries = null;
@@ -27,20 +28,17 @@ let oipPECvwapSeries = null, oipPEPvwapSeries = null;
 let oipAvg3VwapSeries = null;
 let oipAvg3VwapIntSeries = null, oipAvg3VwapIntPeSeries = null;
 let oipCEAvg3VwapSeries = null, oipPEAvg3VwapSeries = null;
-// Fixed 24000 strike / monthly expiry combined chart
+// Fixed strike / monthly expiry combined chart — strike is user-selectable
+// via the dropdown+Update button in that chart's header and persists across
+// refreshes in localStorage (defaults to 24000 the first time).
+const OIP_FIXED_STRIKE_KEY = 'oipFixedStrike_v1';
+let oipFixedStrike = parseInt(localStorage.getItem(OIP_FIXED_STRIKE_KEY), 10) || 24000;
 let oipFixedChart = null, oipFixedCeSeries = null, oipFixedPeSeries = null;
 // Previous-day reference lines on the fixed chart: CE (H+L)/2, PE (H+L)/2, (CE close + PE close)/2
+// "Fixed Chart Lines" — CE Avg / PE Avg / CE & PE Avg — apply ONLY to the
+// Fixed 24000 strike / monthly expiry combined chart above, not to the CE
+// Only / PE Only / weekly Combined charts.
 let oipFixedCeHL2Series = null, oipFixedPeHL2Series = null, oipFixedCloseAvgSeries = null;
-// "Fixed Chart Lines" ALSO drawn on the other 2 option charts + Combined
-// chart — shares checkboxes/style keys with the fixed chart's own lines, but
-// on these 3 panels the data is each chart's OWN current premium (weekly
-// strike), not the fixed chart's 24000-monthly data.
-let oipCEFixedCeAvgSeries = null, oipCEFixedCePeAvgSeries = null;
-let oipPEFixedPeAvgSeries = null, oipPEFixedCePeAvgSeries = null;
-// Cross-drawn legs — Fixed CE Avg also on the PE-only chart, Fixed PE Avg
-// also on the CE-only chart — so all 3 Fixed Chart Lines appear on both.
-let oipCEFixedPeAvgSeries = null, oipPEFixedCeAvgSeries = null;
-let oipIntFixedCeAvgSeries = null, oipIntFixedPeAvgSeries = null, oipIntFixedCePeAvgSeries = null;
 // EMA/CPR/RSI series state declared in oi_indicators.js
 let oipCEChart = null;
 let oipPEChart = null;
@@ -134,6 +132,10 @@ const oipPremStrikeLines = { ce: [], pe: [], intCe: [], intPe: [] }; // Price-li
 let oipAllStrikes = [];
 let oipCurrentPrice = 0;
 let oipSymbol = 'NIFTY';
+// CPR-width card: { index: {pp,bc,tc,width_pct,type}, future: {...}, future_symbol } — refetched
+// once per symbol switch (previous-day OHLC doesn't change intraday, so no poll needed).
+let oipCprData = null;
+let oipCprShowFuture = false;
 let oipLotSize = 50, oipStrikeStep = 50;
 let oipInterval = '5minute';
 let oipStrikeCount = 15;
@@ -163,13 +165,15 @@ const oipElems = {
     showCpr: null, showEMA: null, showOIBars: null, autoHL: null, chartWrap: null, canvas: null,
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
     hdrPrice: null, hdrPcr: null, hdrPcrCard: null, hdrMaxPain: null, hdrCeOI: null,
-    hdrCeChg: null, hdrPeOI: null,
-    hdrPeChg: null, hdrTrend: null, hdrAtm: null, brokerSelect: null,
+    hdrPeOI: null,
+    hdrTrend: null, hdrAtm: null, brokerSelect: null,
+    hdrCprCard: null, hdrCprSrc: null, hdrCpr: null,
     showPremium: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
     strikeMode: null, ceStrikeDropdown: null, peStrikeDropdown: null, premExtra: null,
     showEma9: null, showEma20: null, showEma50: null, showEma100: null, showEma200: null,
     exitAll: null,
-    slPrice: null, slCEBtn: null, slPEBtn: null
+    slPrice: null, slCEBtn: null, slPEBtn: null,
+    fixedStrikeDropdown: null, fixedStrikeUpdateBtn: null
 };
 
 
@@ -204,11 +208,12 @@ function oipInitElems() {
     oipElems.hdrPcr = document.getElementById('hdrPcr');
     oipElems.hdrPcrCard = document.getElementById('hdrPcrCard');
     oipElems.hdrCeOI = document.getElementById('hdrCeOI');
-    oipElems.hdrCeChg = document.getElementById('hdrCeChg');
     oipElems.hdrPeOI = document.getElementById('hdrPeOI');
-    oipElems.hdrPeChg = document.getElementById('hdrPeChg');
     oipElems.hdrTrend = document.getElementById('hdrTrend');
     oipElems.hdrAtm = document.getElementById('hdrAtm');
+    oipElems.hdrCprCard = document.getElementById('hdrCprCard');
+    oipElems.hdrCprSrc = document.getElementById('hdrCprSrc');
+    oipElems.hdrCpr = document.getElementById('hdrCpr');
     oipElems.hdrLotSize = document.getElementById('hdrLotSize');
     oipElems.brokerSelect = document.getElementById('oipBrokerSelect');
     oipElems.showPremium = document.getElementById('oipShowPremium');
@@ -232,6 +237,8 @@ function oipInitElems() {
     oipElems.startDate = document.getElementById('oipStartDate');
     oipElems.endDate = document.getElementById('oipEndDate');
     oipElems.fetchRange = document.getElementById('oipFetchRange');
+    oipElems.fixedStrikeDropdown = document.getElementById('oipFixedStrikeDropdown');
+    oipElems.fixedStrikeUpdateBtn = document.getElementById('oipFixedStrikeUpdateBtn');
 
     // IVP & Alerts
     oipElems.hdrIVP = document.getElementById('hdrIVP');
@@ -240,6 +247,39 @@ function oipInitElems() {
 
     // Initial population for custom strikes (will be refined on first load)
     oipUpdateCustomStrikeOptions(50, 25000);
+    oipUpdateFixedStrikeOptions();
+}
+
+// Populates the Fixed-strike chart's strike dropdown and selects the
+// persisted choice (oipFixedStrike, restored from localStorage). Prefers the
+// real option-chain strikes (oipAllStrikes, fetched by oipLoadOI) rounded to
+// the nearest 100 — matching this chart's round-strike convention — falling
+// back to a generated round-100 range around the current selection until
+// that chain arrives.
+function oipUpdateFixedStrikeOptions() {
+    const el = oipElems.fixedStrikeDropdown;
+    if (!el) return;
+
+    let strikes = (oipAllStrikes || [])
+        .map(s => parseFloat(s.strike))
+        .filter(s => s > 0 && s % 100 === 0);
+
+    if (strikes.length === 0) {
+        for (let i = -20; i <= 20; i++) {
+            const s = oipFixedStrike + i * 100;
+            if (s > 0) strikes.push(s);
+        }
+    }
+    strikes.push(oipFixedStrike);
+    strikes = [...new Set(strikes)].sort((a, b) => a - b);
+
+    el.innerHTML = strikes.map(s => `<option value="${s}">${s}</option>`).join('');
+    el.value = String(oipFixedStrike);
+}
+
+function oipUpdateFixedStrikeTitle() {
+    const el = document.getElementById('oipFixedStrikeTitle');
+    if (el) el.textContent = `Fixed ${oipFixedStrike} Monthly`;
 }
 
 /* ── Bootstrap ────────────────────────────────────────────── */
@@ -268,26 +308,20 @@ function oipSyncVwapVisibility() {
         oipCECvwapSeries, oipPECvwapSeries, oipCvwapIntSeries, oipCvwapIntPeSeries,
         oipCEPvwapSeries, oipPEPvwapSeries, oipPvwapIntSeries, oipPvwapIntPeSeries,
         oipCEAvg3VwapSeries, oipPEAvg3VwapSeries, oipAvg3VwapIntSeries, oipAvg3VwapIntPeSeries,
+        oipVwapIntSeries, oipVwapIntPeSeries,
     ].forEach(s => { try { s?.applyOptions({ visible: optVwap }); } catch (e) {} });
 }
 
 // Fixed 24000-strike chart's own reference lines — each has its own checkbox
 // in the Opt Indicator popup's "Fixed Chart Lines" section (no group master).
-// The SAME checkboxes also control the same-labeled CE Avg/PE Avg/CE&PE Avg
-// lines cross-drawn on CE Only/PE Only/Combined — those panels compute the
-// values from their own current premium (see oipRefreshLocalView), not the
-// fixed chart's 24000-monthly data.
+// Applies ONLY to the Fixed 24000/monthly chart, not CE Only/PE Only/Combined.
 function oipSyncFixedChartVisibility() {
     const ce   = document.getElementById('oipShowFixedCeAvg')?.checked ?? true;
     const pe   = document.getElementById('oipShowFixedPeAvg')?.checked ?? true;
     const cepe = document.getElementById('oipShowFixedCePeAvg')?.checked ?? true;
-    // CE Avg and PE Avg each appear on BOTH the CE-only and PE-only charts.
-    [oipFixedCeHL2Series, oipCEFixedCeAvgSeries, oipPEFixedCeAvgSeries, oipIntFixedCeAvgSeries]
-        .forEach(s => { try { s?.applyOptions({ visible: ce }); } catch (e) {} });
-    [oipFixedPeHL2Series, oipPEFixedPeAvgSeries, oipCEFixedPeAvgSeries, oipIntFixedPeAvgSeries]
-        .forEach(s => { try { s?.applyOptions({ visible: pe }); } catch (e) {} });
-    [oipFixedCloseAvgSeries, oipCEFixedCePeAvgSeries, oipPEFixedCePeAvgSeries, oipIntFixedCePeAvgSeries]
-        .forEach(s => { try { s?.applyOptions({ visible: cepe }); } catch (e) {} });
+    try { oipFixedCeHL2Series?.applyOptions({ visible: ce }); } catch (e) {}
+    try { oipFixedPeHL2Series?.applyOptions({ visible: pe }); } catch (e) {}
+    try { oipFixedCloseAvgSeries?.applyOptions({ visible: cepe }); } catch (e) {}
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -537,6 +571,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (oipElems.strikeMode?.value === 'ce_pe') oipLoadCandles(true, true);
     });
 
+    // Fixed-strike chart's own strike dropdown — only applied when the
+    // Update button is clicked (not on every dropdown change), then
+    // persisted so a page refresh defaults back to this strike.
+    oipElems.fixedStrikeUpdateBtn?.addEventListener('click', () => {
+        const val = parseInt(oipElems.fixedStrikeDropdown?.value, 10);
+        if (!val) return;
+        oipFixedStrike = val;
+        try { localStorage.setItem(OIP_FIXED_STRIKE_KEY, String(val)); } catch (e) {}
+        oipUpdateFixedStrikeTitle();
+        oipLoadCandles(true, false);
+    });
+
     oipElems.targetDistance?.addEventListener('change', () => {
         oipRefreshLocalView(oipElems.view?.value);
     });
@@ -577,6 +623,59 @@ document.addEventListener('DOMContentLoaded', () => {
     oipSelectSymbol(oipSymbol);
 });
 
+/* ── Main OI Profile chart: Horizontal Ray drawing tool ──────── */
+// Disarms the tool and resets the toolbar button — called after a ray is
+// drawn (single-shot arm, matches the Opt Prem / Round Strike Ray tools).
+function oipOIRayDisarm() {
+    oipOIRayTool?.setRayMode(false);
+    document.getElementById('oipOIRayToolBtn')?.classList.remove('oip-btn--armed');
+    document.getElementById('oipOIRayOptionsPopup')?.classList.add('hidden');
+}
+
+// Color/width/style pickers set the look of the NEXT ray only — read fresh
+// on each arm, so changing them mid-session doesn't touch rays already drawn.
+function oipOIRayStyleFromPickers() {
+    return {
+        color: document.getElementById('oipOIRayColorInp')?.value || '#f59e0b',
+        width: parseInt(document.getElementById('oipOIRayWidthSel')?.value, 10) || 2,
+        lineStyle: parseInt(document.getElementById('oipOIRayStyleSel')?.value, 10) ?? 2
+    };
+}
+
+function oipInitMainRayTool() {
+    const rayBtn = document.getElementById('oipOIRayToolBtn');
+    const clearBtn = document.getElementById('oipOIRayClearBtn');
+    const popup = document.getElementById('oipOIRayOptionsPopup');
+    if (rayBtn) {
+        rayBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const willArm = !rayBtn.classList.contains('oip-btn--armed');
+            oipOIRayTool?.setRayMode(willArm, willArm ? oipOIRayStyleFromPickers() : undefined);
+            rayBtn.classList.toggle('oip-btn--armed', willArm);
+            popup?.classList.toggle('hidden', !willArm);
+        });
+    }
+    // Live-restyle the armed (not-yet-placed) ray as the pickers change.
+    if (popup) {
+        popup.addEventListener('change', () => {
+            if (rayBtn?.classList.contains('oip-btn--armed')) {
+                oipOIRayTool?.setRayMode(true, oipOIRayStyleFromPickers());
+            }
+        });
+    }
+    // Clicking outside the popup/button while armed cancels ray mode.
+    document.addEventListener('click', (e) => {
+        if (!rayBtn?.classList.contains('oip-btn--armed')) return;
+        if (popup?.contains(e.target) || e.target === rayBtn || rayBtn.contains(e.target)) return;
+        oipOIRayTool?.setRayMode(false);
+        rayBtn.classList.remove('oip-btn--armed');
+        popup?.classList.add('hidden');
+    });
+    if (clearBtn) {
+        clearBtn.addEventListener('click', () => oipOIRayTool?.clearRays());
+    }
+}
+
 /* ── Lightweight Charts Initialization ──────────────────────── */
 function oipInitCharts() {
     const elOI = document.getElementById('oipCandleChart');
@@ -609,6 +708,20 @@ function oipInitCharts() {
             autoscaleInfoProvider: customAutoscale
         });
         lwBringToFront(oipOISeries);
+
+        // Horizontal Ray drawing tool — `timeframe` is a getter (not the plain
+        // string the Opt Prem charts pass) because oipInterval can change via
+        // the TF dropdown after this chart is created (this chart, unlike the
+        // Opt Prem ones, is never recreated on interval change).
+        if (typeof TradingViewChart !== 'undefined' && TradingViewChart.attachRayTool) {
+            oipOIRayTool = TradingViewChart.attachRayTool(oipOIChart, oipOISeries, elOI, {
+                timeframe: () => oipInterval,
+                rightOffset: 20,
+                onRayDrawn: oipOIRayDisarm,
+                reapplyZOrder: () => { if (typeof oipApplyZOrder === 'function') oipApplyZOrder(); }
+            });
+            oipInitMainRayTool();
+        }
         // CVWAP (current-session) + PVWAP (previous-session flat line) + 3-AVG_VWAP
         oipCvwapSeries = oipOIChart.addSeries(LightweightCharts.LineSeries, {
             color: '#3b82f6', lineWidth: 2, title: '',
@@ -979,6 +1092,7 @@ async function oipLoadOI() {
         let resolvedStrike = 0;
         if (oipAllStrikes.length > 0) {
             resolvedStrike = oipUpdateCustomStrikeOptions(oipAllStrikes, oipCurrentPrice);
+            oipUpdateFixedStrikeOptions();
         }
 
         // Auto-initialize custom strike to ATM if Custom is checked on first load
@@ -996,13 +1110,14 @@ async function oipLoadOI() {
     } catch (e) { console.warn('[OIP] OI Load Err:', e); }
 }
 
-// Fixed 24000 strike / monthly expiry combined chart — ALWAYS 24000 CE/PE
-// monthly, independent of the ATM-relative strike selection above (only the
-// weekly CE-only/PE-only/Combined charts track the user's strike selection).
-// Its own 3 reference lines (CE/PE/CE&PE Avg) are computed from this fixed
-// 24000-monthly data; the SAME-LABELED lines on the weekly charts are a
-// separate computation from each weekly chart's own premium — see the
-// "Fixed Chart Lines" block in oipRefreshLocalView.
+// Fixed strike / monthly expiry combined chart — strike is user-selected via
+// the header dropdown+Update button (oipFixedStrike, persisted in
+// localStorage), independent of the ATM-relative strike selection above
+// (only the weekly CE-only/PE-only/Combined charts track the user's strike
+// selection there). Its own 3 reference lines (CE/PE/CE&PE Avg) are computed
+// from this fixed-strike monthly data; the SAME-LABELED lines on the weekly
+// charts are a separate computation from each weekly chart's own premium —
+// see the "Fixed Chart Lines" block in oipRefreshLocalView.
 function oipUpdateFixedChart(data) {
     if (!oipFixedChart) return;
     const ceRaw = (data.fixed_ce_candles || []).map(c => ({ ...c, type: 'CE' }));
@@ -1019,8 +1134,9 @@ function oipUpdateFixedChart(data) {
 
     const ceLbl = document.getElementById('oipLegendFixedCE');
     const peLbl = document.getElementById('oipLegendFixedPE');
-    if (ceLbl) ceLbl.textContent = data.fixed_ce_symbol ? `${data.fixed_ce_symbol} (Monthly)` : '24000 CE (Monthly)';
-    if (peLbl) peLbl.textContent = data.fixed_pe_symbol ? `${data.fixed_pe_symbol} (Monthly)` : '24000 PE (Monthly)';
+    if (ceLbl) ceLbl.textContent = data.fixed_ce_symbol ? `${data.fixed_ce_symbol} (Monthly)` : `${oipFixedStrike} CE (Monthly)`;
+    if (peLbl) peLbl.textContent = data.fixed_pe_symbol ? `${data.fixed_pe_symbol} (Monthly)` : `${oipFixedStrike} PE (Monthly)`;
+    oipUpdateFixedStrikeTitle();
 }
 
 async function oipLoadCandles(forceFetch = true, resetZoom = false) {
@@ -1066,11 +1182,12 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
 
         if (!forceFetch && oipOIData && !needsOptionData) { oipRefreshLocalView(view, resetZoom); return; }
 
-        // Fixed 24000 strike / monthly expiry — always requested alongside the
+        // Fixed strike / monthly expiry — always requested alongside the
         // main (ATM-relative) data, independent of the page's strike-mode
         // controls. Only the weekly (nearest-expiry) charts above track the
-        // user's strike selection; this fixed chart never changes.
-        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}&fixed_strike=24000&fixed_expiry=monthly${dateRangeParams}&_t=${Date.now()}`;
+        // user's strike selection; this fixed chart's strike (oipFixedStrike)
+        // is set separately via its own header dropdown+Update button.
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}&fixed_strike=${oipFixedStrike}&fixed_expiry=monthly${dateRangeParams}&_t=${Date.now()}`;
 
         const res = await fetch(url);
         const data = await res.json();
@@ -1170,7 +1287,15 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                 oipCurrentCEStrike = ceStrike; oipCurrentPEStrike = peStrike;
                 if (ceStrike && peStrike) {
                     let ceData = [], peData = [];
-                    if (data.ce_opt_candles && data.pe_opt_candles) {
+                    // A broker/network hiccup makes the backend return an empty
+                    // (but present) ce_opt_candles/pe_opt_candles array for this
+                    // one poll tick — NOT null/undefined (fetch_task in api.py
+                    // swallows fetch exceptions and returns []). Only replace
+                    // oipOptionData when this tick actually has both legs, so a
+                    // transient empty response keeps showing the last good data
+                    // instead of blanking the CE/PE candles + their indicator
+                    // lines for a tick (visible as a "hide then show" flicker).
+                    if (data.ce_opt_candles?.length && data.pe_opt_candles?.length) {
                         ceData = data.ce_opt_candles.map(c => ({ ...c, type: 'CE' }));
                         peData = data.pe_opt_candles.map(c => ({ ...c, type: 'PE' }));
                         oipOptionData = [...ceData, ...peData];
@@ -1288,9 +1413,7 @@ function oipUpdateHeader(data) {
         console.log('[OIP] Candles first load complete');
     }
     if (oipElems.hdrCeOI) oipElems.hdrCeOI.textContent = fmtL(ce.total_oi);
-    if (oipElems.hdrCeChg) oipElems.hdrCeChg.textContent = fmtL(ce.change_in_oi);
     if (oipElems.hdrPeOI) oipElems.hdrPeOI.textContent = fmtL(pe.total_oi);
-    if (oipElems.hdrPeChg) oipElems.hdrPeChg.textContent = fmtL(pe.change_in_oi);
 
     if (pcr >= 1.25) {
         if (oipElems.hdrTrend) { oipElems.hdrTrend.textContent = 'Bullish'; oipElems.hdrTrend.className = 'oip-hdr-val grn'; }
@@ -1653,20 +1776,6 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         const pePvwapData = oipCalculatePVWAP(peRaw);
         const ceAvg3Data  = oipCalculateAvg3VWAP(ceRaw);
         const peAvg3Data  = oipCalculateAvg3VWAP(peRaw);
-        // Prev Day Avg group (CE Avg / PE Avg / CE & PE Avg) for the CE Only / PE Only charts —
-        // from each chart's OWN currently-selected strike data (ceRaw/peRaw above).
-        const ceAvgData    = oipCalculatePrevDayHL2(ceRaw);
-        const peAvgData    = oipCalculatePrevDayHL2(peRaw);
-        const cePeAvgData  = oipCalculatePrevDayCloseAvg(ceRaw, peRaw);
-
-        // "Fixed Chart Lines" (CE Avg / PE Avg / CE & PE Avg) on the Combined
-        // (Options Premium) chart — despite the name/checkboxes shared with the
-        // fixed 24000-monthly chart's own lines, these are computed from THIS
-        // chart's own current premium (ceRaw/peRaw above, same as the Prev Day
-        // Avg group), so they move with the weekly strike selection.
-        if (oipIntFixedCeAvgSeries) oipIntFixedCeAvgSeries.setData(ceAvgData);
-        if (oipIntFixedPeAvgSeries) oipIntFixedPeAvgSeries.setData(peAvgData);
-        if (oipIntFixedCePeAvgSeries) oipIntFixedCePeAvgSeries.setData(cePeAvgData);
 
         // Update Individual Premium Chart
         if (view === 'combined') {
@@ -1721,11 +1830,6 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             if (oipCECvwapSeries) oipCECvwapSeries.setData(ceCvwapData);
             if (oipCEPvwapSeries) oipCEPvwapSeries.setData(cePvwapData);
             if (oipCEAvg3VwapSeries) oipCEAvg3VwapSeries.setData(ceAvg3Data);
-            // "Fixed Chart Lines" (shared checkboxes with the monthly chart's own
-            // lines) — computed from THIS chart's own premium, not the monthly data.
-            if (oipCEFixedCeAvgSeries) oipCEFixedCeAvgSeries.setData(ceAvgData);
-            if (oipCEFixedPeAvgSeries) oipCEFixedPeAvgSeries.setData(peAvgData);
-            if (oipCEFixedCePeAvgSeries) oipCEFixedCePeAvgSeries.setData(cePeAvgData);
 
             const _sm = oipElems.strikeMode?.value;
             let _ceLbl;
@@ -1748,11 +1852,6 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             if (oipPECvwapSeries) oipPECvwapSeries.setData(peCvwapData);
             if (oipPEPvwapSeries) oipPEPvwapSeries.setData(pePvwapData);
             if (oipPEAvg3VwapSeries) oipPEAvg3VwapSeries.setData(peAvg3Data);
-            // "Fixed Chart Lines" (shared checkboxes with the monthly chart's own
-            // lines) — computed from THIS chart's own premium, not the monthly data.
-            if (oipPEFixedPeAvgSeries) oipPEFixedPeAvgSeries.setData(peAvgData);
-            if (oipPEFixedCeAvgSeries) oipPEFixedCeAvgSeries.setData(ceAvgData);
-            if (oipPEFixedCePeAvgSeries) oipPEFixedCePeAvgSeries.setData(cePeAvgData);
 
             const _sm = oipElems.strikeMode?.value;
             let _peLbl;
@@ -2291,7 +2390,53 @@ async function oipSelectSymbol(s) {
     oipCustomStrikeSetOnLoad = false;
 
     oipFullRefresh(true);
+    oipFetchCprWidth(s);
 }
+
+/* ── CPR Width card (Narrow/Medium/Wide) ─────────────────────
+ * Fetches once per symbol switch — the underlying previous-day OHLC (and
+ * therefore the CPR band) is fixed for the whole trading day, so there's
+ * no need to refetch on every candle poll. Clicking the card just toggles
+ * which already-fetched side (Index vs Future) is displayed. */
+async function oipFetchCprWidth(symbol) {
+    oipCprData = null;
+    oipRenderCprCard();
+    try {
+        const res = await fetch(`/api/oi-profile/cpr-width?symbol=${symbol}`);
+        const data = await res.json();
+        if (data.success) oipCprData = data;
+    } catch (e) {
+        console.warn('[OIP] CPR width fetch failed:', e);
+    }
+    oipRenderCprCard();
+}
+
+function oipRenderCprCard() {
+    if (!oipElems.hdrCpr) return;
+    const band = oipCprData ? (oipCprShowFuture ? oipCprData.future : oipCprData.index) : null;
+    if (oipElems.hdrCprSrc) oipElems.hdrCprSrc.textContent = oipCprShowFuture ? 'FUT' : 'IDX';
+    if (!band) {
+        oipElems.hdrCpr.textContent = '--';
+        oipElems.hdrCpr.className = 'oip-hdr-val';
+        oipElems.hdrCprCard?.setAttribute('title',
+            oipCprShowFuture && oipCprData && !oipCprData.future
+                ? 'No futures contract found for this symbol'
+                : 'CPR day-range type (Narrow/Medium/Wide) — click to toggle Index vs Future');
+        return;
+    }
+    oipElems.hdrCpr.textContent = band.type;
+    const colorClass = band.type === 'Narrow' ? 'grn' : (band.type === 'Wide' ? 'red' : 'amber');
+    oipElems.hdrCpr.className = 'oip-hdr-val ' + colorClass;
+    oipElems.hdrCprCard?.setAttribute('title',
+        `${oipCprShowFuture ? 'Future' : 'Index'} CPR: PP ${band.pp} / BC ${band.bc} / TC ${band.tc} (width ${band.width_pct}%) — click to toggle Index vs Future`);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('hdrCprCard')?.addEventListener('click', () => {
+        oipCprShowFuture = !oipCprShowFuture;
+        oipRenderCprCard();
+    });
+});
 
 // ── Premium Strike (Prem. Str.) helpers ─────────────────────────────────────
 

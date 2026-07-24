@@ -210,6 +210,17 @@ def _get_request_lock(key: Any) -> threading.Lock:
 from trading_app.service.fyers_data_service import FyersDataServiceAdapter
 from trading_app.service.fyers_order_services import FyersOrderService
 from trading_app.service.kite_order_services import KiteService, apply_kite_proxy
+from trading_app.service.cpr_service import CPRService
+
+# Index instrument tokens for CPR-width lookups (mirrors NSE_INDEX_TOKENS
+# inside oi_profile_candles — kept separate/module-level since that one is
+# local to its own function).
+NSE_INDEX_TOKENS_CPR = {
+    'NIFTY':      256265,
+    'BANKNIFTY':  260105,
+    'FINNIFTY':   257801,
+    'MIDCPNIFTY': 288009,
+}
 
 
 api_bp = Blueprint('api', __name__)
@@ -8856,6 +8867,111 @@ def oi_profile_candles() -> EndpointResponse:
 
     except Exception as exc:
         logger.error(f'[OI-Profile] Optimized fetch error: {exc}', exc_info=True)
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+# CPR Width cache — keyed by (symbol, calendar date), since the previous
+# trading day's OHLC (and therefore its CPR band) is fixed for the whole day.
+_cpr_width_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
+_cpr_width_cache_lock = threading.Lock()
+_CPR_WIDTH_MAX_CACHE = 200
+
+# CPR Width % = |TC - BC| / previous-day-close * 100. Thresholds follow the
+# common Narrow/Medium/Wide day-range convention used by Indian intraday
+# traders (narrow CPR -> more likely a trending/breakout day; wide CPR ->
+# more likely to chop sideways within the band).
+_CPR_WIDTH_NARROW_MAX = 0.5   # < 0.5%  -> Narrow
+_CPR_WIDTH_MEDIUM_MAX = 1.0   # 0.5-1%  -> Medium; >= 1% -> Wide
+
+
+def _classify_cpr_width(width_pct: float) -> str:
+    if width_pct < _CPR_WIDTH_NARROW_MAX:
+        return 'Narrow'
+    if width_pct < _CPR_WIDTH_MEDIUM_MAX:
+        return 'Medium'
+    return 'Wide'
+
+
+def _cpr_band_from_daily(kite_service: 'KiteService', token) -> Optional[Dict[str, Any]]:
+    """Fetches recent daily candles for `token` and computes the CPR band
+    (PP/BC/TC + Narrow/Medium/Wide classification) from the most recent
+    COMPLETE trading day (i.e. excludes today's still-forming daily bar)."""
+    try:
+        today = datetime.now().date()
+        from_dt = datetime.now() - timedelta(days=15)
+        bars = kite_service._historical_with_retry(instrument_token=token, from_date=from_dt, to_date=datetime.now(), interval='day')
+        if not bars:
+            return None
+        bars.sort(key=lambda b: b['date'], reverse=True)
+        prev_bar = None
+        for b in bars:
+            b_date = b['date'].date() if hasattr(b['date'], 'date') else b['date']
+            if b_date < today:
+                prev_bar = b
+                break
+        if not prev_bar:
+            return None
+
+        h, l, c = float(prev_bar['high']), float(prev_bar['low']), float(prev_bar['close'])
+        pp, bc, tc = CPRService.calculate_cpr(h, l, c)
+        width_pct = (abs(tc - bc) / c * 100) if c else 0.0
+        return {
+            'pp': round(pp, 2), 'bc': round(bc, 2), 'tc': round(tc, 2),
+            'width_pct': round(width_pct, 3),
+            'type': _classify_cpr_width(width_pct)
+        }
+    except Exception as e:
+        logger.warning(f"[CPR-Width] Band calc failed for token {token}: {e}")
+        return None
+
+
+@api_bp.route('/oi-profile/cpr-width', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def oi_profile_cpr_width() -> EndpointResponse:
+    """Narrow/Medium/Wide CPR-day classification for a symbol — both for the
+    underlying (index/spot) and its nearest-expiry FUTURES contract, so the
+    OI Profile page's CPR card can toggle between the two views."""
+    try:
+        symbol = request.args.get('symbol', 'NIFTY').upper()
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        cache_key = (symbol, today_str)
+
+        with _cpr_width_cache_lock:
+            cached = _cpr_width_cache.get(cache_key)
+        if cached:
+            return jsonify(cached)
+
+        kite = get_kite(instance=1)
+        _data_provider = get_data_provider()
+        effective_instance = _data_provider if _data_provider else kite
+        if not effective_instance:
+            return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
+        kite_service = KiteService(kite_instance=effective_instance)
+
+        index_token = NSE_INDEX_TOKENS_CPR.get(symbol) or kite_service.get_instrument_token(symbol)
+        index_band = _cpr_band_from_daily(kite_service, index_token) if index_token else None
+
+        future_symbol = kite_service.get_future_symbol(symbol)
+        future_token = kite_service.get_instrument_token(future_symbol) if future_symbol else None
+        future_band = _cpr_band_from_daily(kite_service, future_token) if future_token else None
+
+        response_data = {
+            'success': True,
+            'symbol': symbol,
+            'index': index_band,
+            'future': future_band,
+            'future_symbol': future_symbol,
+        }
+
+        with _cpr_width_cache_lock:
+            if len(_cpr_width_cache) > _CPR_WIDTH_MAX_CACHE:
+                _cpr_width_cache.clear()
+            _cpr_width_cache[cache_key] = response_data
+
+        return jsonify(response_data)
+    except Exception as exc:
+        logger.error(f'[CPR-Width] fetch error: {exc}', exc_info=True)
         return jsonify({'success': False, 'error': str(exc)}), 500
 
 
