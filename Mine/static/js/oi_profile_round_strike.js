@@ -414,11 +414,20 @@ async function oipRSFetchOpenAndStrikes() {
 function oipRSPopulateDropdown(sel, strikes, selected) {
     if (!sel) return;
     sel.innerHTML = '';
+    // If the computed target isn't an exact match (e.g. openPrice was
+    // unavailable and near50 landed off the real chain), snap to the
+    // nearest real strike instead of leaving the <select> to silently
+    // default to whichever option happens to be first in the list.
+    let snapTarget = Number(selected);
+    if (strikes.length && !strikes.some(s => Number(s) === snapTarget)) {
+        snapTarget = strikes.reduce((nearest, s) =>
+            Math.abs(s - selected) < Math.abs(nearest - selected) ? s : nearest, strikes[0]);
+    }
     strikes.forEach(s => {
         const opt = document.createElement('option');
         opt.value = s;
         opt.textContent = s;
-        if (Number(s) === Number(selected)) opt.selected = true;
+        if (Number(s) === snapTarget) opt.selected = true;
         sel.appendChild(opt);
     });
 }

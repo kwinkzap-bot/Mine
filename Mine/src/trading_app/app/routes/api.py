@@ -8825,7 +8825,7 @@ def oi_profile_candles() -> EndpointResponse:
             # We can use Kite's instrument list for strike discovery even if Fyers is the data provider
             all_inst = kite_service.get_nfo_instruments(symbol)
             if all_inst:
-                unique_strikes = sorted(list(set(float(i['strike']) for i in all_inst if i.get('strike') is not None)))
+                unique_strikes = sorted(list(set(float(i['strike']) for i in all_inst if i.get('strike') is not None and i['strike'] > 0)))
                 strikes_list = [{'strike': s} for s in unique_strikes]
         except Exception as e:
             logger.warn(f"[OI-Profile] Strike fetch failed: {e}")
