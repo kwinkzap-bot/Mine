@@ -166,7 +166,7 @@ const oipElems = {
     tooltip: null, refreshIcon: null, itmCE: null, itmPE: null,
     hdrPrice: null, hdrPcr: null, hdrPcrCard: null, hdrMaxPain: null, hdrCeOI: null,
     hdrPeOI: null,
-    hdrTrend: null, hdrAtm: null, brokerSelect: null,
+    hdrTrend: null, hdrAtm: null, hdrVwapBias: null, hdrAtmCeOiBias: null, brokerSelect: null,
     hdrCprCard: null, hdrCprSrc: null, hdrCpr: null,
     showPremium: null, first5mATM: null, targetDistance: null, customStrikeCheck: null, customStrikeDropdown: null,
     strikeMode: null, ceStrikeDropdown: null, peStrikeDropdown: null, premExtra: null,
@@ -211,6 +211,8 @@ function oipInitElems() {
     oipElems.hdrPeOI = document.getElementById('hdrPeOI');
     oipElems.hdrTrend = document.getElementById('hdrTrend');
     oipElems.hdrAtm = document.getElementById('hdrAtm');
+    oipElems.hdrVwapBias = document.getElementById('hdrVwapBias');
+    oipElems.hdrAtmCeOiBias = document.getElementById('hdrAtmCeOiBias');
     oipElems.hdrCprCard = document.getElementById('hdrCprCard');
     oipElems.hdrCprSrc = document.getElementById('hdrCprSrc');
     oipElems.hdrCpr = document.getElementById('hdrCpr');
@@ -1239,6 +1241,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
                     if (oipCvwapSeries) oipCvwapSeries.setData(oipCalculateCVWAP(validCandles));
                     if (oipPvwapSeries) oipPvwapSeries.setData(oipCalculatePVWAP(validCandles));
                     if (oipAvg3VwapSeries) oipAvg3VwapSeries.setData(oipCalculateAvg3VWAP(validCandles));
+                    oipUpdateVwapBiasCard(validCandles);
                 } catch (e) { console.warn('[OIP] SetData Err:', e); }
             }
 
@@ -1261,6 +1264,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
             const _atmCeOiDate = (window.oipReplayMode && oipElems.startDate?.value) ? oipElems.startDate.value : null;
             await oipFetchAtmCeOiStrikes(oipSymbol, oipStrikeStep, _atmCeOiDate);
             oipDrawAtmCeOiLines();
+            oipUpdateAtmCeOiBiasCard(oipCurrentPrice);
         }
 
         if (data.intrinsic?.spot_high && oipElems.spotHigh) {
@@ -1369,6 +1373,46 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
             }
         }
     } catch (e) { console.error('[OIP] Refresh Err:', e); }
+}
+
+// VWAP Bias card — 3-day avg VWAP (same value as the chart's 3-AVG_VWAP line)
+// vs today's opening candle: avg above today's open => Down bias, else Up.
+function oipUpdateVwapBiasCard(candles) {
+    if (!oipElems.hdrVwapBias) return;
+    if (!candles || !candles.length) { oipElems.hdrVwapBias.textContent = '--'; oipElems.hdrVwapBias.className = 'oip-hdr-val'; return; }
+    const dateOf = (t) => {
+        const d = new Date(t * 1000);
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    };
+    const lastDate = dateOf(candles[candles.length - 1].time);
+    const todayOpen = candles.find(c => dateOf(c.time) === lastDate)?.open;
+    const todayAvg3 = oipCalculateAvg3VWAP(candles).find(p => dateOf(p.time) === lastDate)?.value;
+
+    if (todayOpen == null || todayAvg3 == null || isNaN(todayOpen) || isNaN(todayAvg3)) {
+        oipElems.hdrVwapBias.textContent = '--';
+        oipElems.hdrVwapBias.className = 'oip-hdr-val';
+        return;
+    }
+    const isDown = todayAvg3 > todayOpen;
+    oipElems.hdrVwapBias.textContent = isDown ? 'DOWN' : 'UP';
+    oipElems.hdrVwapBias.className = 'oip-hdr-val ' + (isDown ? 'red' : 'grn');
+}
+
+// 9:18 Bias card — price vs the two 9:18 ATM CE OI strike lines (oipAtmCeOiData,
+// populated by oipFetchAtmCeOiStrikes): below both lines => Down, above both => Up,
+// between them => compared against their midpoint.
+function oipUpdateAtmCeOiBiasCard(price) {
+    if (!oipElems.hdrAtmCeOiBias) return;
+    const strikes = (oipAtmCeOiData?.selected || []).map(s => s.strike).filter(v => v != null && !isNaN(v));
+    if (!price || strikes.length < 2) {
+        oipElems.hdrAtmCeOiBias.textContent = '--';
+        oipElems.hdrAtmCeOiBias.className = 'oip-hdr-val';
+        return;
+    }
+    const mid = (Math.min(...strikes) + Math.max(...strikes)) / 2;
+    const isDown = price < mid;
+    oipElems.hdrAtmCeOiBias.textContent = isDown ? 'DOWN' : 'UP';
+    oipElems.hdrAtmCeOiBias.className = 'oip-hdr-val ' + (isDown ? 'red' : 'grn');
 }
 
 function oipUpdateHeader(data) {
@@ -1701,6 +1745,7 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         if (oipCvwapIntSeries) oipCvwapIntSeries.setData(oipCalculateCVWAP(idxCandles));
         if (oipPvwapIntSeries) oipPvwapIntSeries.setData(oipCalculatePVWAP(idxCandles));
         if (oipAvg3VwapIntSeries) oipAvg3VwapIntSeries.setData(oipCalculateAvg3VWAP(idxCandles));
+        oipUpdateVwapBiasCard(idxCandles);
         if (oipCvwapIntPeSeries) oipCvwapIntPeSeries.setData([]);
         if (oipPvwapIntPeSeries) oipPvwapIntPeSeries.setData([]);
         if (oipAvg3VwapIntPeSeries) oipAvg3VwapIntPeSeries.setData([]);

@@ -325,6 +325,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const expParamsRow  = document.getElementById('expiryBreakoutParamsRow');
         const tmfParamsRow  = document.getElementById('thirtyMinFakeoutParamsRow');
         const tmfOptPanel   = document.getElementById('thirtyMinFakeoutOptimisePanel');
+        const emaParamsRow  = document.getElementById('emaPullbackParamsRow');
+        const emaLotRow     = document.getElementById('emaPullbackLotRow');
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (vwapParamsRow) vwapParamsRow.style.display = 'none';
         if (vwapLotRow)    vwapLotRow.style.display    = 'none';
@@ -335,6 +337,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (expParamsRow)  expParamsRow.style.display  = 'none';
         if (tmfParamsRow)  tmfParamsRow.style.display  = 'none';
         if (tmfOptPanel)   tmfOptPanel.style.display   = 'none';
+        if (emaParamsRow)  emaParamsRow.style.display  = 'none';
+        if (emaLotRow)     emaLotRow.style.display     = 'none';
         // Restore symbol/date/interval visibility (hidden for some strategies)
         const symFg      = document.getElementById('mainSymbolFg');
         const intFg      = document.getElementById('mainIntervalFg');
@@ -414,8 +418,52 @@ document.addEventListener('DOMContentLoaded', function() {
             if (symFg) symFg.style.display = 'none';
             if (intFg) intFg.style.display = 'none';
             if (startDateInput) startDateInput.value = '2017-01-01';
+
+        } else if (val === 'ema_pullback') {
+            if (emaParamsRow) emaParamsRow.style.display = 'grid';
+            if (emaLotRow)    emaLotRow.style.display    = 'grid';
+            // Daily-candle-only strategy — no intraday Timeframe to pick.
+            if (intFg) intFg.style.display = 'none';
+            if (startDateInput) startDateInput.value = '2017-01-01';
+            updateEmaInvestment();
         }
     }
+
+    // Investment display: ₹50,000 per lot. Defined BEFORE the initial
+    // updateStrategyView() call below — whichever strategy is the default
+    // `selected` option in the HTML calls its own update*Investment()
+    // immediately on load, so these must already exist by then.
+    window.updateRtpInvestment = function() {
+        const lots = Math.max(1, parseInt(document.getElementById('rtpLots')?.value || 1));
+        const total = lots * 50000;
+        const el = document.getElementById('rtpInvestmentDisplay');
+        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+    };
+
+    // VWAP investment display
+    window.updateVwapInvestment = function() {
+        const lots     = Math.max(1, parseInt(document.getElementById('vwapLots')?.value     || 1));
+        const lotValue = Math.max(1, parseFloat(document.getElementById('vwapLotValue')?.value || 65));
+        const total    = lots * 50000;
+        const el = document.getElementById('vwapInvestmentDisplay');
+        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+    };
+
+    // 2nd 30-Sec Candle investment display
+    window.updateScInvestment = function() {
+        const lots  = Math.max(1, parseInt(document.getElementById('scLots')?.value || 1));
+        const total = lots * 50000;
+        const el = document.getElementById('scInvestmentDisplay');
+        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+    };
+
+    // EMA 200 Trend Pullback investment display
+    window.updateEmaInvestment = function() {
+        const lots  = Math.max(1, parseInt(document.getElementById('emaLots')?.value || 1));
+        const total = lots * 50000;
+        const el = document.getElementById('emaInvestmentDisplay');
+        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+    };
 
     if (strategySelect) {
         strategySelect.addEventListener('change', updateStrategyView);
@@ -455,30 +503,29 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Investment display: ₹50,000 per lot
-    window.updateRtpInvestment = function() {
-        const lots = Math.max(1, parseInt(document.getElementById('rtpLots')?.value || 1));
-        const total = lots * 50000;
-        const el = document.getElementById('rtpInvestmentDisplay');
-        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
-    };
-
-    // VWAP investment display
-    window.updateVwapInvestment = function() {
-        const lots     = Math.max(1, parseInt(document.getElementById('vwapLots')?.value     || 1));
-        const lotValue = Math.max(1, parseFloat(document.getElementById('vwapLotValue')?.value || 65));
-        const total    = lots * 50000;
-        const el = document.getElementById('vwapInvestmentDisplay');
-        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
-    };
-
-    // 2nd 30-Sec Candle investment display
-    window.updateScInvestment = function() {
-        const lots  = Math.max(1, parseInt(document.getElementById('scLots')?.value || 1));
-        const total = lots * 50000;
-        const el = document.getElementById('scInvestmentDisplay');
-        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
-    };
+    // ── EMA 200 Trend Pullback: Rule popup ──────────────────────────────
+    const emaRuleTrigger = document.getElementById('emaRuleTrigger');
+    const emaRuleModal   = document.getElementById('emaRuleModal');
+    const emaRuleClose   = document.getElementById('emaRuleModalClose');
+    if (emaRuleTrigger && emaRuleModal) {
+        document.body.appendChild(emaRuleModal);
+        let _emaPrevBodyOverflow = '';
+        const openEmaRule = () => {
+            emaRuleModal.style.display = 'flex';
+            _emaPrevBodyOverflow = document.body.style.overflow;
+            document.body.style.overflow = 'hidden';
+        };
+        const closeEmaRule = () => {
+            emaRuleModal.style.display = 'none';
+            document.body.style.overflow = _emaPrevBodyOverflow;
+        };
+        emaRuleTrigger.addEventListener('click', openEmaRule);
+        if (emaRuleClose) emaRuleClose.addEventListener('click', closeEmaRule);
+        emaRuleModal.addEventListener('click', (e) => { if (e.target === emaRuleModal) closeEmaRule(); });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && emaRuleModal.style.display !== 'none') closeEmaRule();
+        });
+    }
 
     // 30-Min Opening Fakeout investment display
     // 3. Run Backtest
@@ -563,6 +610,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.use_symbol_defaults = document.getElementById('tmfUseSymbolDefaults')?.checked ?? true;
                 payload.use_sl_risk_filter = document.getElementById('tmfUseSlRiskFilter')?.checked ?? true;
                 payload.sl_risk_max = parseFloat(document.getElementById('tmfSlRiskMax')?.value || '5000') || 5000;
+            }
+
+            // EMA 200 Trend Pullback
+            if (strat === 'ema_pullback') {
+                endpoint = '/api/backtest/ema-pullback';
+                payload.direction   = document.getElementById('emaDirection')?.value || 'both';
+                payload.target_pct  = Math.max(1, parseFloat(document.getElementById('emaTargetPct')?.value || 5));
+                payload.require_candle_color = document.getElementById('emaRequireCandleColor')?.checked ?? true;
             }
 
             // Swing Momentum: different endpoint + payload
@@ -777,9 +832,10 @@ document.addEventListener('DOMContentLoaded', function() {
         // (matches summary.total_pnl_rupees / per-trade t.pnl_rupees, both
         // already net).
         const isTmf  = strategySelect && strategySelect.value === 'thirty_min_fakeout';
-        // 2nd-candle reuses the VWAP-style ₹ cards, each reading its own lot inputs.
-        const moneyLotsId    = isSc ? 'scLots'     : 'vwapLots';
-        const moneyLotValId  = isSc ? 'scLotValue' : 'vwapLotValue';
+        const isEma  = strategySelect && strategySelect.value === 'ema_pullback';
+        // 2nd-candle / EMA Pullback reuse the VWAP-style ₹ cards, each reading their own lot inputs.
+        const moneyLotsId    = isSc ? 'scLots'     : (isEma ? 'emaLots'     : 'vwapLots');
+        const moneyLotValId  = isSc ? 'scLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue');
 
         if (isSM) {
             lastData.is_swing_momentum = true;
@@ -885,7 +941,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     subtitle.textContent = info;
                 }
             }
-        } else if ((isVwap || isSc) && rtpRow) {
+        } else if ((isVwap || isSc || isEma) && rtpRow) {
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -967,13 +1023,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Equity curve + period breakdown
-        const lots2     = (isVwap || isSc)
+        const lots2     = (isVwap || isSc || isEma)
             ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 1))
             : Math.max(1, parseInt(document.getElementById('rtpLots')?.value       || 1));
-        const lotValue2 = (isVwap || isSc)
+        const lotValue2 = (isVwap || isSc || isEma)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
-        const isMoney     = isRtp || isVwap || isSc || isTmf;
+        const isMoney     = isRtp || isVwap || isSc || isTmf || isEma;
         // Each 30-Min Fakeout trade already carries its own sized pnl_rupees
         // (~₹1,00,000/entry, per-symbol lot size) — renderEquityCurve/
         // groupByPeriod use that directly when present, ignoring lots2/lotValue2.

@@ -313,6 +313,14 @@
                     <span class="oip-hdr-lbl">CPR <span id="hdrCprSrc" class="oip-hdr-lbl-badge">IDX</span></span>
                     <span id="hdrCpr" class="oip-hdr-val">--</span>
                 </div>
+                 <div class="oip-hdr-metric" title="3-day Avg VWAP vs today's open — avg above open means Down bias, else Up">
+                    <span class="oip-hdr-lbl">VWAP Bias</span>
+                    <span id="hdrVwapBias" class="oip-hdr-val">--</span>
+                </div>
+                <div class="oip-hdr-metric" title="Price vs the two 9:18 ATM CE OI lines — below both means Down, above both means Up">
+                    <span class="oip-hdr-lbl">9:18 Bias</span>
+                    <span id="hdrAtmCeOiBias" class="oip-hdr-val">--</span>
+                </div>
                 <div id="hdrPcrCard" class="oip-hdr-metric">
                     <span class="oip-hdr-lbl">PCR</span>
                     <span id="hdrPcr" class="oip-hdr-val">--</span>
@@ -671,6 +679,64 @@
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipRSShowVwap" checked><span>VWAP</span>
                                 </label>
+                                <div class="oip-ind-section-title">CE Line Style</div>
+                                <div class="oip-ind-item">
+                                    <span>Color</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRSCeLineColorInp" class="oip-ray-color-inp" value="#16a34a" title="CE reference-line color (applies to all CE lines)">
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Width</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSCeLineWidthSel" class="oip-ray-width-sel" title="CE reference-line width">
+                                            <option value="1" selected>1px</option>
+                                            <option value="2">2px</option>
+                                            <option value="3">3px</option>
+                                            <option value="4">4px</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Style</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSCeLineStyleSel" class="oip-ray-style-sel" title="CE reference-line style">
+                                            <option value="0" selected>Solid</option>
+                                            <option value="1">Dotted</option>
+                                            <option value="2">Dashed</option>
+                                        </select>
+                                    </span>
+                                </div>
+
+                                <div class="oip-ind-section-title">PE Line Style</div>
+                                <div class="oip-ind-item">
+                                    <span>Color</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRSPeLineColorInp" class="oip-ray-color-inp" value="#2563eb" title="PE reference-line color (applies to all PE lines)">
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Width</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSPeLineWidthSel" class="oip-ray-width-sel" title="PE reference-line width">
+                                            <option value="1" selected>1px</option>
+                                            <option value="2">2px</option>
+                                            <option value="3">3px</option>
+                                            <option value="4">4px</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Style</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSPeLineStyleSel" class="oip-ray-style-sel" title="PE reference-line style">
+                                            <option value="0" selected>Solid</option>
+                                            <option value="1">Dotted</option>
+                                            <option value="2">Dashed</option>
+                                        </select>
+                                    </span>
+                                </div>
+
                                 <div class="oip-ind-section-title">Reference Lines</div>
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipRSShowCePdh" checked><span style="color:#16a34a">CE PDH</span>

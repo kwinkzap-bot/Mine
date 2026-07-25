@@ -124,6 +124,83 @@ let oipRSPeRefLineObjs = { pdh: null, pdl: null, open: null, fiveMHi: null, five
 const OIP_RS_CE_REF_COLOR = '#16a34a'; // green
 const OIP_RS_PE_REF_COLOR = '#2563eb'; // blue
 const OIP_RS_REF_KEYS = ['pdh', 'pdl', 'open', 'fiveMHi', 'fiveMLo'];
+
+// Per-side (CE / PE) reference-line style pickers — one color/width/style
+// applies to ALL 5 lines of that side at once (PDH, PDL, Open, 5m Hi, 5m Lo),
+// same idea as the Ray tool's style pickers. Persisted alongside indicator
+// show/hide state.
+const OIP_RS_CE_STYLE_IDS = { color: 'oipRSCeLineColorInp', width: 'oipRSCeLineWidthSel', style: 'oipRSCeLineStyleSel' };
+const OIP_RS_PE_STYLE_IDS = { color: 'oipRSPeLineColorInp', width: 'oipRSPeLineWidthSel', style: 'oipRSPeLineStyleSel' };
+const OIP_RS_STORAGE_KEY_LINESTYLE = 'oipRS_lineStyle_v1';
+
+function oipRSLineStyleFromPickers(ids, fallbackColor) {
+    return {
+        color: document.getElementById(ids.color)?.value || fallbackColor,
+        width: parseInt(document.getElementById(ids.width)?.value, 10) || 1,
+        lineStyle: parseInt(document.getElementById(ids.style)?.value, 10) || 0
+    };
+}
+
+function oipRSSaveLineStyleState() {
+    const state = {
+        ce: oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR),
+        pe: oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR)
+    };
+    try { localStorage.setItem(OIP_RS_STORAGE_KEY_LINESTYLE, JSON.stringify(state)); } catch (e) {}
+}
+
+function oipRSRestoreLineStyleState() {
+    let state;
+    try { state = JSON.parse(localStorage.getItem(OIP_RS_STORAGE_KEY_LINESTYLE) || 'null'); } catch (e) { state = null; }
+    if (!state) return;
+    const apply = (ids, saved) => {
+        if (!saved) return;
+        const c = document.getElementById(ids.color); if (c && saved.color) c.value = saved.color;
+        const w = document.getElementById(ids.width); if (w && saved.width != null) w.value = saved.width;
+        const s = document.getElementById(ids.style); if (s && saved.lineStyle != null) s.value = saved.lineStyle;
+    };
+    apply(OIP_RS_CE_STYLE_IDS, state.ce);
+    apply(OIP_RS_PE_STYLE_IDS, state.pe);
+}
+
+// Reflects the current CE/PE colors onto the reference-line checkbox labels
+// in the Indicators popup, so the swatch text always matches what's drawn.
+function oipRSUpdateCheckboxSpanColors() {
+    const ceColor = document.getElementById(OIP_RS_CE_STYLE_IDS.color)?.value || OIP_RS_CE_REF_COLOR;
+    const peColor = document.getElementById(OIP_RS_PE_STYLE_IDS.color)?.value || OIP_RS_PE_REF_COLOR;
+    ['oipRSShowCePdh', 'oipRSShowCePdl', 'oipRSShowCeOpen', 'oipRSShowCe5mHi', 'oipRSShowCe5mLo'].forEach(id => {
+        const span = document.getElementById(id)?.nextElementSibling;
+        if (span) span.style.color = ceColor;
+    });
+    ['oipRSShowPePdh', 'oipRSShowPePdl', 'oipRSShowPeOpen', 'oipRSShowPe5mHi', 'oipRSShowPe5mLo'].forEach(id => {
+        const span = document.getElementById(id)?.nextElementSibling;
+        if (span) span.style.color = peColor;
+    });
+}
+
+// Live-restyles already-drawn price lines (no data refetch/redraw needed) —
+// used when a style picker changes.
+function oipRSApplyLineStyleLive(lineObjRef, style) {
+    lineObjRef._style = style;
+    OIP_RS_REF_KEYS.forEach(key => {
+        const line = lineObjRef[key];
+        if (line) {
+            try { line.applyOptions({ color: style.color, lineWidth: style.width, lineStyle: style.lineStyle }); } catch (e) {}
+        }
+    });
+}
+
+function oipRSOnCeStyleChange() {
+    oipRSApplyLineStyleLive(oipRSCeRefLineObjs, oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR));
+    oipRSUpdateCheckboxSpanColors();
+    oipRSSaveLineStyleState();
+}
+
+function oipRSOnPeStyleChange() {
+    oipRSApplyLineStyleLive(oipRSPeRefLineObjs, oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR));
+    oipRSUpdateCheckboxSpanColors();
+    oipRSSaveLineStyleState();
+}
 // Bar duration (minutes) per interval — used to find which loaded bar(s)
 // OVERLAP the 09:15–09:20 Opening Range window rather than start exactly
 // inside it (matters for coarser intervals like 15m/30m).
@@ -204,7 +281,10 @@ function oipRSComputeRefLines(candles) {
 function oipRSApplyRefVisibility(lineObjRef, vis) {
     const series = lineObjRef._series;
     const refs = lineObjRef._refs;
-    const color = lineObjRef._color;
+    const style = lineObjRef._style || {};
+    const color = style.color;
+    const lineWidth = style.width || 1;
+    const lineStyle = style.lineStyle ?? LightweightCharts.LineStyle.Solid;
     if (!series || !refs) return;
 
     const titles = { pdh: 'PDH', pdl: 'PDL', open: 'Open', fiveMHi: '5m H', fiveMLo: '5m L' };
@@ -216,7 +296,7 @@ function oipRSApplyRefVisibility(lineObjRef, vis) {
         if (shouldShow && !lineObjRef[key]) {
             try {
                 lineObjRef[key] = series.createPriceLine({
-                    price, color, lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Solid,
+                    price, color, lineWidth, lineStyle,
                     axisLabelVisible: true, title: titles[key]
                 });
             } catch (e) {}
@@ -227,19 +307,20 @@ function oipRSApplyRefVisibility(lineObjRef, vis) {
     });
 }
 
-// Clears the previously-drawn reference lines, caches the new `refs`/color
+// Clears the previously-drawn reference lines, caches the new `refs`/style
 // on `lineObjRef` (so later visibility-only toggles can recreate lines
 // without a full reload), and draws whichever are enabled per `visibility`.
 // `lineObjRef` is the persistent {pdh, pdl, open, ...} object (by
-// reference) tracking this leg's price-line instances.
-function oipRSDrawRefLines(series, lineObjRef, refs, color, visibility) {
+// reference) tracking this leg's price-line instances. `style` is
+// {color, width, lineStyle} — one setting shared by all 5 lines of this leg.
+function oipRSDrawRefLines(series, lineObjRef, refs, style, visibility) {
     OIP_RS_REF_KEYS.forEach(key => {
         if (lineObjRef[key]) { try { series.removePriceLine(lineObjRef[key]); } catch (e) {} }
         lineObjRef[key] = null;
     });
     lineObjRef._series = series;
     lineObjRef._refs = refs;
-    lineObjRef._color = color;
+    lineObjRef._style = style;
     oipRSApplyRefVisibility(lineObjRef, visibility || {});
 }
 
@@ -379,6 +460,15 @@ function oipRSInitIndicatorsPopup() {
         oipRSSyncRefLineVisibility();
         oipRSSaveIndicatorState();
     }));
+
+    [OIP_RS_CE_STYLE_IDS.color, OIP_RS_CE_STYLE_IDS.width, OIP_RS_CE_STYLE_IDS.style].forEach(id => {
+        const el = document.getElementById(id);
+        el?.addEventListener(el.type === 'color' ? 'input' : 'change', oipRSOnCeStyleChange);
+    });
+    [OIP_RS_PE_STYLE_IDS.color, OIP_RS_PE_STYLE_IDS.width, OIP_RS_PE_STYLE_IDS.style].forEach(id => {
+        const el = document.getElementById(id);
+        el?.addEventListener(el.type === 'color' ? 'input' : 'change', oipRSOnPeStyleChange);
+    });
 }
 
 // Fetches today's session-open price + the tradable strike list directly
@@ -464,8 +554,8 @@ async function oipRSLoadCandles(resetZoom = false) {
         if (oipRSVwapPESeries) oipRSVwapPESeries.setData(oipCalculateVWAP(peData));
     }
 
-    if (oipRSCESeries) oipRSDrawRefLines(oipRSCESeries, oipRSCeRefLineObjs, oipRSComputeRefLines(ceData), OIP_RS_CE_REF_COLOR, oipRSRefVisibilityFromCheckboxes('Ce'));
-    if (oipRSPESeries) oipRSDrawRefLines(oipRSPESeries, oipRSPeRefLineObjs, oipRSComputeRefLines(peData), OIP_RS_PE_REF_COLOR, oipRSRefVisibilityFromCheckboxes('Pe'));
+    if (oipRSCESeries) oipRSDrawRefLines(oipRSCESeries, oipRSCeRefLineObjs, oipRSComputeRefLines(ceData), oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR), oipRSRefVisibilityFromCheckboxes('Ce'));
+    if (oipRSPESeries) oipRSDrawRefLines(oipRSPESeries, oipRSPeRefLineObjs, oipRSComputeRefLines(peData), oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR), oipRSRefVisibilityFromCheckboxes('Pe'));
 
     const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
     setText('oipRSLegendCombinedCE', `${ceStrike} CE`);
@@ -663,6 +753,8 @@ async function oipRSLoop() {
 async function oipRSInit() {
     if (!document.getElementById('oipRSCombinedChart')) return; // block not present on this page
     oipRSRestoreIndicatorState(); // before chart/series creation — VWAP's initial visibility reads the checkbox
+    oipRSRestoreLineStyleState(); // before first load — CE/PE ref-line color/width/style pickers
+    oipRSUpdateCheckboxSpanColors();
     oipRSInitCharts();
 
     const { openPrice, strikes } = await oipRSFetchOpenAndStrikes();

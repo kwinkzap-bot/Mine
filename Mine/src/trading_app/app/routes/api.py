@@ -3602,6 +3602,100 @@ def run_expiry_breakout_backtest_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@api_bp.route('/backtest/ema-pullback', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_ema_pullback_backtest_api():
+    """Run the EMA 200 Trend Pullback backtest (daily candles only).
+
+    Rule: Daily EMA20/50/100/200. Trend alignment on the signal candle —
+    EMA20>EMA50 and EMA50>EMA100 for Long (mirrored, EMA20<EMA50 and
+    EMA50<EMA100, for Short). The candle's daily range must TOUCH EMA200
+    AND its close must clear it in the trade's direction (above for Long,
+    below for Short). Entry is filled at the OPEN of the NEXT daily
+    candle. SL is the signal candle's own Low (Long) / High (Short);
+    Target is target_pct (default 5.0, floor 1.0) of the entry price.
+    direction: 'both'|'long'|'short', default 'both'. require_candle_color
+    (default True): the signal candle must also be Green for BUY / Red
+    for SELL.
+    """
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol')
+        start_date_str = data.get('start_date')
+        end_date_str   = data.get('end_date')
+        direction      = str(data.get('direction', 'both')).lower()
+        enable_long    = direction != 'short'
+        enable_short   = direction != 'long'
+        target_pct     = float(data.get('target_pct', 5.0) or 5.0)
+        require_candle_color = bool(data.get('require_candle_color', True))
+
+        if not symbol or not start_date_str or not end_date_str:
+            return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+        kite_indices = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105,
+            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+        }
+        if hasattr(current_kite, 'fyers'):
+            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+        else:
+            instrument_token = kite_indices.get(symbol, symbol)
+
+        daily_candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval='day',
+            use_cache=False,
+        )
+        if not daily_candles:
+            return jsonify({'success': False, 'error': 'No daily data found for the given range'}), 404
+
+        import pandas as pd
+        from trading_app.Backtest.ema_pullback_engine import EmaPullbackEngine
+
+        engine = EmaPullbackEngine(
+            daily_df=pd.DataFrame(daily_candles),
+            enable_long=enable_long,
+            enable_short=enable_short,
+            target_pct=target_pct,
+            require_candle_color=require_candle_color,
+        )
+        trades, summary = engine.run()
+
+        logger.info('[EmaPullback BT] %d daily bars → %d trades', len(daily_candles), len(trades))
+
+        return jsonify({
+            'success': True,
+            'trades':  trades,
+            '_debug': {
+                'daily_bars':  len(daily_candles),
+                'first_daily': str(daily_candles[0].get('date', '?')),
+                'last_daily':  str(daily_candles[-1].get('date', '?')),
+            },
+            'summary': summary,
+        })
+
+    except Exception as e:
+        logger.error(f"Error in EMA Pullback backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @api_bp.route('/backtest/expiry-breakout/levels', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
