@@ -1,11 +1,11 @@
 {
   "active_trade": null,
   "buy_needs_reset": false,
-  "sell_needs_reset": false,
+  "sell_needs_reset": true,
   "last_exit": {
-    "reason": "SL",
-    "spot": 23644.1,
-    "time": "2026-07-24T10:43:33.728335"
+    "reason": "EOD",
+    "spot": 23785.25,
+    "time": "2026-07-24T15:28:02.538731"
   },
   "pending_signal": null
 }

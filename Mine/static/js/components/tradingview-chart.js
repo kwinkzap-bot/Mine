@@ -199,6 +199,23 @@ window.TradingViewChart = (function () {
             clearRays: function () {
                 rayLines.forEach(rs => { try { chart.removeSeries(rs); } catch (e) {} });
                 rayLines.length = 0;
+            },
+            /**
+             * Re-anchors every drawn ray's end point to the latest loaded
+             * candle — call after each data update so rays keep pace with
+             * new candles instead of stopping wherever they were when drawn
+             * (see the createRayTool trade-off note above).
+             */
+            extendRays: function () {
+                if (!series || !rayLines.length) return;
+                const priceData = series.data();
+                const lastRealTime = priceData.length ? priceData[priceData.length - 1].time : null;
+                if (lastRealTime == null) return;
+                rayLines.forEach(rs => {
+                    const info = rs._rayInfo;
+                    if (!info) return;
+                    try { rs.setData(buildRayPoints(info.time, info.price, lastRealTime)); } catch (e) {}
+                });
             }
         };
     }
@@ -1128,6 +1145,10 @@ window.TradingViewChart = (function () {
                         this.addReferenceLines(referenceOrPeData);
                     }
 
+                    // Keep drawn rays reaching the newest candle instead of
+                    // stopping wherever they were when drawn.
+                    try { rayTool.extendRays(); } catch (e) {}
+
                     // Recalculate zoom and timeScale if refresh is requested (e.g. on symbol switch)
                     // Recalculate zoom and timeScale if refresh is requested (e.g. on symbol switch)
                     if (refresh) {
@@ -1374,6 +1395,14 @@ window.TradingViewChart = (function () {
                  */
                 clearRays: function () {
                     rayTool.clearRays();
+                },
+
+                /**
+                 * Re-anchors every drawn ray's end point to the latest loaded
+                 * candle. Called automatically at the end of update().
+                 */
+                extendRays: function () {
+                    rayTool.extendRays();
                 },
 
                 /**

@@ -58,10 +58,12 @@ RTP already accepts for its own per-second spot polling.
 """
 import json
 import logging
+import math
 import os
 import threading
 import time
 from datetime import date, datetime
+from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -72,10 +74,38 @@ _DIR = os.path.dirname(__file__)
 STATE_FILE       = os.path.join(_DIR, 'tmf_state.json')
 HISTORY_FILE     = os.path.join(_DIR, 'tmf_trades_history.json')
 ALL_HISTORY_FILE = os.path.join(_DIR, 'tmf_trades_all_history.json')
+LOG_FILE         = os.path.join(_DIR, 'tmf_algo.log')
+
+# Dedicated file sink for every [TMF] log line — setup detection, order
+# placement/fills/exits, and (crucially) the exact broker error text on a
+# failed placement — so a failure can be diagnosed later without digging
+# through the app's general console output. Guarded so re-importing this
+# module (e.g. Flask's reloader) doesn't stack duplicate handlers.
+if not any(isinstance(h, RotatingFileHandler) and getattr(h, '_tmf_sink', False) for h in logger.handlers):
+    _file_handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3)
+    _file_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+    _file_handler._tmf_sink = True
+    logger.addHandler(_file_handler)
+    logger.setLevel(logging.INFO)
 
 _POLL_SECS = 5           # how often the monitor loop ticks
 _HARD_STOP_MIN = 15 * 60 + 30   # thread exits for the day at/after 15:30 IST
 _RECONCILE_SECS = 30     # how often to cross-check real broker positions against state
+
+_NSE_TICK_SIZE = 0.05    # NSE cash-market tick size — LIMIT order prices not a
+                         # multiple of this are rejected by the exchange
+
+
+def _round_to_tick(price: float, direction: str) -> float:
+    """Snap a computed (buffer-adjusted) price to a valid NSE tick, rounding
+    away from the raw candle level so the trigger keeps meaning "cleared the
+    level by at least the buffer" — up for a long (buy-side) trigger, down
+    for a short (sell-side) one. Raw candle prices (sl_level, entry fills,
+    session high/low) are already exchange-tick-aligned and don't need this."""
+    ticks = price / _NSE_TICK_SIZE
+    ticks = math.ceil(ticks) if direction == 'long' else math.floor(ticks)
+    return round(ticks * _NSE_TICK_SIZE, 2)
 
 
 def _thirty_min_engine():
@@ -285,7 +315,7 @@ class TMFAlgo:
             return
         s['phase']    = 'watching'
         s['direction'] = setup['direction']
-        s['trigger']   = round(float(setup['trigger']), 2)
+        s['trigger']   = _round_to_tick(float(setup['trigger']), setup['direction'])
         s['sl_level']  = round(float(setup['sl_level']), 2)
         logger.info(f"[TMF] {symbol}: setup found — {setup['direction'].upper()} "
                     f"trigger={s['trigger']} sl={s['sl_level']}")
@@ -452,6 +482,21 @@ class TMFAlgo:
         except Exception:
             return None
 
+    def _poll_fill_price(self, svc: Any, order_id: str, fallback: float,
+                          attempts: int = 6, delay_secs: float = 0.5) -> float:
+        """Poll a just-placed marketable order for its real average_price
+        instead of assuming the requested limit price is what it filled at.
+        Falls back to the requested price (logged, so the gap is visible)
+        only if the order hasn't reported COMPLETE with a fill price yet."""
+        for _ in range(attempts):
+            status = svc.get_order_status(order_id)
+            if status.get('success') and status.get('status') == 'COMPLETE' and status.get('average_price'):
+                return float(status['average_price'])
+            time.sleep(delay_secs)
+        logger.warning(f"[TMF] order {order_id}: fill price not confirmed after polling — "
+                        f"recording requested price {fallback} (may not match the real fill)")
+        return fallback
+
     def _square_off(self, symbol: str, s: Dict[str, Any]) -> None:
         """Time Exit: cancel the still-open SL/Target legs, then close the
         position with a marketable Intraday LIMIT (padded off the last
@@ -475,13 +520,20 @@ class TMFAlgo:
             pad = 1.01 if exit_txn == 'BUY' else 0.99
             price = round(ltp * pad, 1)
             res = svc.place_equity_order(symbol, exit_txn, qty, price=price, product='MIS')
+            exit_price = price
             if res.get('success'):
-                logger.info(f"[TMF] {symbol}: EOD square-off {exit_txn} x{qty} @ {price} (broker {bp['broker_idx']}) order={res.get('order_id')}")
+                # This is a padded LIMIT order (fills at price-or-better, often
+                # noticeably better) — recording the *requested* price instead
+                # of the real fill silently corrupts the P&L history, so poll
+                # for the actual average_price rather than assuming they match.
+                exit_price = self._poll_fill_price(svc, res['order_id'], fallback=price)
+                logger.info(f"[TMF] {symbol}: EOD square-off {exit_txn} x{qty} requested @ {price}, "
+                            f"filled @ {exit_price} (broker {bp['broker_idx']}) order={res.get('order_id')}")
             else:
                 logger.error(f"[TMF] {symbol}: EOD square-off FAILED (broker {bp['broker_idx']}): {res.get('error')}")
 
             bp['closed'] = True
-            self._record_exit(symbol, s, bp, price, 'Time Exit')
+            self._record_exit(symbol, s, bp, exit_price, 'Time Exit')
         s['phase'] = 'done'
 
     def _handle_eod(self, state: Dict[str, Any]) -> None:
@@ -533,7 +585,8 @@ class TMFAlgo:
             logger.warning(f"[TMF] positions() fetch failed: {e}")
             return {}
 
-    def _reconcile_orphaned_positions(self, state: Dict[str, Any], force_square_off: bool) -> None:
+    def _reconcile_orphaned_positions(self, state: Dict[str, Any], force_square_off: bool,
+                                       provider: Any = None, is_fyers: bool = False) -> None:
         """Cross-check every active broker's REAL open MIS positions
         against this app's own state. Anything the broker shows as open
         that state has NOT marked in_position (with a live, unclosed
@@ -547,12 +600,49 @@ class TMFAlgo:
             broker_positions = self._get_broker_mis_positions(svc)
             for symbol, pos in broker_positions.items():
                 s = stocks.get(symbol)
-                already_tracked = bool(
-                    s and s.get('phase') == 'in_position' and
-                    any(bp.get('broker_idx') == idx and bp.get('filled') and not bp.get('closed')
-                        for bp in s.get('broker_positions', []))
-                )
-                if already_tracked:
+                tracked_bp = None
+                if s and s.get('phase') == 'in_position':
+                    tracked_bp = next(
+                        (bp for bp in s.get('broker_positions', [])
+                         if bp.get('broker_idx') == idx and bp.get('filled') and not bp.get('closed')),
+                        None,
+                    )
+
+                if tracked_bp is not None:
+                    # Already tracked — but if the entry order was still filling
+                    # incrementally when this sweep first caught it (a LIMIT
+                    # order doesn't fill atomically), the SL/Target armed back
+                    # then are sized for a stale partial quantity while more of
+                    # the position keeps filling at the broker. Re-sync now
+                    # rather than silently leaving the difference unprotected.
+                    real_qty = abs(pos['quantity'])
+                    if not force_square_off and real_qty != tracked_bp.get('filled_qty'):
+                        old_qty = tracked_bp.get('filled_qty')
+                        logger.error(
+                            f"[TMF] RECONCILE: {symbol} broker {idx} real qty ({real_qty}) != "
+                            f"tracked qty ({old_qty}) — entry order filled further after this app "
+                            f"first caught it. Re-arming SL/Target for the corrected quantity."
+                        )
+                        direction = s['direction']
+                        exit_txn = 'BUY' if direction == 'short' else 'SELL'
+                        if tracked_bp.get('sl_order_id'):
+                            self._cancel_broker_order(idx, tracked_bp['sl_order_id'])
+                        if tracked_bp.get('target_order_id'):
+                            self._cancel_broker_order(idx, tracked_bp['target_order_id'])
+                        tracked_bp['filled_qty']  = real_qty
+                        tracked_bp['entry_price'] = pos['average_price']
+                        s['qty']         = real_qty
+                        s['entry_price'] = pos['average_price']
+                        if s.get('sl_level'):
+                            sl_res = svc.place_equity_sl_order(symbol, exit_txn, real_qty, trigger_price=s['sl_level'], product='MIS')
+                            tracked_bp['sl_order_id'] = str(sl_res['order_id']) if sl_res.get('success') else None
+                        if s.get('target_level') is None and provider is not None:
+                            s['target_level'] = self._compute_target(provider, is_fyers, symbol, direction, pos['average_price'])
+                        if s.get('target_level') is not None:
+                            tgt_res = svc.place_equity_order(symbol, exit_txn, real_qty, price=s['target_level'], product='MIS')
+                            tracked_bp['target_order_id'] = str(tgt_res['order_id']) if tgt_res.get('success') else None
+                        logger.info(f"[TMF] RECONCILE: {symbol} re-armed SL={s.get('sl_level')} order={tracked_bp.get('sl_order_id')}, "
+                                    f"Target={s.get('target_level')} order={tracked_bp.get('target_order_id')}")
                     continue
 
                 qty = abs(pos['quantity'])
@@ -585,10 +675,18 @@ class TMFAlgo:
                     exit_txn = 'BUY' if direction == 'short' else 'SELL'
                     sl_res = svc.place_equity_sl_order(symbol, exit_txn, qty, trigger_price=s['sl_level'], product='MIS')
                     bp['sl_order_id'] = str(sl_res['order_id']) if sl_res.get('success') else None
-                    if s.get('target_level'):
+                    # target_level is normally computed once, inline, when the
+                    # entry fill is first observed (_check_entry_fill) — an
+                    # orphan recovered here never went through that path, so
+                    # it has to be computed now or the position is left with
+                    # only an SL leg and no Target order at the broker.
+                    if s.get('target_level') is None and provider is not None:
+                        s['target_level'] = self._compute_target(provider, is_fyers, symbol, direction, pos['average_price'])
+                    if s.get('target_level') is not None:
                         tgt_res = svc.place_equity_order(symbol, exit_txn, qty, price=s['target_level'], product='MIS')
                         bp['target_order_id'] = str(tgt_res['order_id']) if tgt_res.get('success') else None
-                    logger.info(f"[TMF] RECONCILE: {symbol} armed SL={s['sl_level']} order={bp.get('sl_order_id')}")
+                    logger.info(f"[TMF] RECONCILE: {symbol} armed SL={s['sl_level']} order={bp.get('sl_order_id')}, "
+                                f"Target={s.get('target_level')} order={bp.get('target_order_id')}")
                 else:
                     logger.warning(f"[TMF] RECONCILE: {symbol} has no known SL reference — "
                                     f"squaring off immediately rather than running unprotected")
@@ -656,7 +754,8 @@ class TMFAlgo:
             if now_ts - self._last_reconcile_ts >= _RECONCILE_SECS:
                 self._last_reconcile_ts = now_ts
                 try:
-                    self._reconcile_orphaned_positions(state, force_square_off=False)
+                    self._reconcile_orphaned_positions(state, force_square_off=False,
+                                                         provider=provider, is_fyers=is_fyers)
                 except Exception as e:
                     logger.error(f"[TMF] reconciliation failed: {e}", exc_info=True)
 

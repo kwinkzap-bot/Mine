@@ -1,6 +1,6 @@
 {
   "date": "2026-07-24",
-  "eod_handled": false,
+  "eod_handled": true,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
@@ -51,7 +51,7 @@
       "phase": "no_setup"
     },
     "BAJFINANCE": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "long",
       "trigger": 1010.5,
       "sl_level": 1001.3,
@@ -65,7 +65,8 @@
           "entry_price": 1010.5,
           "filled_qty": 494,
           "sl_order_id": "2080523861136695296",
-          "target_order_id": "2080523861828755456"
+          "target_order_id": "2080523861828755456",
+          "closed": true
         }
       ],
       "entry_price": 1010.5,
@@ -262,10 +263,25 @@
       "phase": "no_setup"
     },
     "LTF": {
-      "phase": "watching",
+      "phase": "done",
       "direction": "long",
       "trigger": 299.15,
-      "sl_level": 297.15
+      "sl_level": 297.15,
+      "qty": 1147,
+      "entry_time": "2026-07-24T11:19:28.223463",
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "RECONCILED",
+          "filled": true,
+          "entry_price": 299.1499999999999,
+          "filled_qty": 1147,
+          "closed": true,
+          "sl_order_id": "2080530896242794496",
+          "target_order_id": "2080541807598821376"
+        }
+      ],
+      "entry_price": 299.1499999999999
     },
     "LTM": {
       "phase": "no_setup"
@@ -280,7 +296,7 @@
       "phase": "no_setup"
     },
     "MANKIND": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "long",
       "trigger": 2530.4,
       "sl_level": 2517.4,
@@ -294,7 +310,8 @@
           "entry_price": 2530.4,
           "filled_qty": 197,
           "sl_order_id": "2080524403959324672",
-          "target_order_id": "2080524404622024704"
+          "target_order_id": "2080524404622024704",
+          "closed": true
         }
       ],
       "entry_price": 2530.4,
@@ -328,10 +345,13 @@
       "phase": "no_setup"
     },
     "NAM-INDIA": {
-      "phase": "watching",
+      "phase": "done",
       "direction": "long",
       "trigger": 1089.04,
-      "sl_level": 1079.4
+      "sl_level": 1079.4,
+      "qty": 459,
+      "entry_time": "2026-07-24T11:17:45.202203",
+      "exit_reason": "Entry order placement failed"
     },
     "NATIONALUM": {
       "phase": "no_setup"
@@ -472,10 +492,13 @@
       "phase": "no_setup"
     },
     "UNOMINDA": {
-      "phase": "watching",
+      "phase": "done",
       "direction": "long",
       "trigger": 1110.05,
-      "sl_level": 1101.1
+      "sl_level": 1101.1,
+      "qty": 450,
+      "entry_time": "2026-07-24T11:17:45.344364",
+      "exit_reason": "Entry order placement failed"
     },
     "UPL": {
       "phase": "no_setup"

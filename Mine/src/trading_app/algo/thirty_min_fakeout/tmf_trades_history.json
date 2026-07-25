@@ -1,1 +1,56 @@
-[]
+[
+  {
+    "symbol": "BAJFINANCE",
+    "direction": "BUY",
+    "qty": 494,
+    "entry_price": 1010.5,
+    "exit_price": 1010.9,
+    "sl_price": 1001.3,
+    "target_price": 1030.2,
+    "pnl": 197.6,
+    "reason": "Time Exit",
+    "entry_time": "2026-07-24T10:51:46.289037",
+    "exit_time": "2026-07-24T15:18:01.294494",
+    "broker_idx": 1,
+    "entry_order_id": "2080523815091625984",
+    "sl_order_id": "2080523861136695296",
+    "target_order_id": "2080523861828755456",
+    "date": "2026-07-24"
+  },
+  {
+    "symbol": "MANKIND",
+    "direction": "BUY",
+    "qty": 197,
+    "entry_price": 2530.4,
+    "exit_price": 2517.0573604060914,
+    "sl_price": 2517.4,
+    "target_price": 2554.8,
+    "pnl": -2628.5,
+    "reason": "SL Hit",
+    "entry_time": "2026-07-24T10:52:45.800883",
+    "exit_time": "2026-07-24T14:28:11.029394",
+    "broker_idx": 1,
+    "entry_order_id": "2080524064690462720",
+    "sl_order_id": "2080524403959324672",
+    "target_order_id": "2080524404622024704",
+    "date": "2026-07-24"
+  },
+  {
+    "symbol": "LTF",
+    "direction": "BUY",
+    "qty": 1671,
+    "entry_price": 299.1499999999999,
+    "exit_price": 302.5,
+    "sl_price": 297.15,
+    "target_price": null,
+    "pnl": 5597.85,
+    "reason": "Target Hit",
+    "entry_time": "2026-07-24T11:19:28.223463",
+    "exit_time": "2026-07-24T12:38:37.443611",
+    "broker_idx": 1,
+    "entry_order_id": "RECONCILED",
+    "sl_order_id": "2080530896242794496",
+    "target_order_id": "2080541807598821376",
+    "date": "2026-07-24"
+  }
+]

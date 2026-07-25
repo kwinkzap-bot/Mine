@@ -2536,8 +2536,10 @@ function oipDrawPremStrikeLines() {
                 axisLabelVisible: true, title: `C-P`
             }));
 
-        // Same 3 lines, ALSO on the Combined (Options Premium) chart's CE series —
-        // one of the 3 option charts.
+        // Same lines, ALSO on the Combined (Options Premium) chart's CE series —
+        // one of the 3 option charts. Diff is identical for CE/PE so it's drawn
+        // once here; PDC/C-P are CE-specific values so they're labeled as such
+        // to distinguish them from the PE-side lines drawn below.
         if (oipIntrinsicSeries) {
             if (strikeDiff > 0)
                 oipPremStrikeLines.intCe.push(oipIntrinsicSeries.createPriceLine({
@@ -2547,12 +2549,12 @@ function oipDrawPremStrikeLines() {
             if (cePdc != null)
                 oipPremStrikeLines.intCe.push(oipIntrinsicSeries.createPriceLine({
                     price: cePdc, color: oipGetLineColor('synthPdc'), lineWidth: oipGetLineWidth('synthPdc'), lineStyle: oipGetLineStyle('synthPdc'),
-                    axisLabelVisible: true, title: `PDC`
+                    axisLabelVisible: true, title: `CE PDC`
                 }));
             if (ceDiff != null)
                 oipPremStrikeLines.intCe.push(oipIntrinsicSeries.createPriceLine({
                     price: ceDiff, color: oipGetLineColor('synthCp'), lineWidth: oipGetLineWidth('synthCp'), lineStyle: oipGetLineStyle('synthCp'),
-                    axisLabelVisible: true, title: `C-P`
+                    axisLabelVisible: true, title: `CE C-P`
                 }));
         }
     }
@@ -2579,10 +2581,22 @@ function oipDrawPremStrikeLines() {
                 price: peDiff, color: oipGetLineColor('synthCp'), lineWidth: oipGetLineWidth('synthCp'), lineStyle: oipGetLineStyle('synthCp'),
                 axisLabelVisible: true, title: `C-P`
             }));
-        // NOTE: intentionally NOT also drawn on the Combined chart's PE series —
-        // the CE-side block above already draws Diff/PDC/C-P once on the
-        // Combined chart; drawing this PE-side set too made every line appear
-        // twice there (once per series sharing the same pane).
+
+        // Same PDC/C-P lines, ALSO on the Combined (Options Premium) chart's PE
+        // series, labeled distinctly from the CE-side lines above (Diff is
+        // identical for CE/PE so it's not repeated here).
+        if (oipIntrinsicPeSeries) {
+            if (pePdc != null)
+                oipPremStrikeLines.intPe.push(oipIntrinsicPeSeries.createPriceLine({
+                    price: pePdc, color: oipGetLineColor('synthPdc'), lineWidth: oipGetLineWidth('synthPdc'), lineStyle: oipGetLineStyle('synthPdc'),
+                    axisLabelVisible: true, title: `PE PDC`
+                }));
+            if (peDiff != null)
+                oipPremStrikeLines.intPe.push(oipIntrinsicPeSeries.createPriceLine({
+                    price: peDiff, color: oipGetLineColor('synthCp'), lineWidth: oipGetLineWidth('synthCp'), lineStyle: oipGetLineStyle('synthCp'),
+                    axisLabelVisible: true, title: `PE C-P`
+                }));
+        }
     }
 }
 
