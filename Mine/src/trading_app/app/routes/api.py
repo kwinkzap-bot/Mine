@@ -295,6 +295,38 @@ def _get_cached_strike_token(kite_service, data_provider, is_fyers: bool, symbol
         _strike_token_cache[key] = (tok, sym, expire_ts)
     return tok, sym
 
+# ── Future-token cache: symbol → (token, tradingsymbol, expires_ts) ──────────
+# Eliminates repeated get_future_symbol/find_future_symbol + get_instrument_token
+# calls within the same expiry day (used by the OI-profile future-volume overlay).
+_future_token_cache: Dict[str, Any] = {}
+_future_token_cache_lock = threading.Lock()
+
+def _get_cached_future_token(kite_service, data_provider, is_fyers: bool, symbol: str):
+    """Return (token, tradingsymbol) for the nearest-expiry future of `symbol`.
+
+    token/tradingsymbol are None if the symbol has no listed F&O futures
+    (e.g. sectoral indices like NIFTY IT). Cached until end of trading day.
+    """
+    key = symbol
+    now_ts = _time.time()
+    with _future_token_cache_lock:
+        cached = _future_token_cache.get(key)
+        if cached and cached[2] > now_ts:
+            return cached[0], cached[1]
+    if is_fyers:
+        sym = data_provider.find_future_symbol(symbol)
+        tok = sym
+    else:
+        sym = kite_service.get_future_symbol(symbol)
+        tok = kite_service.get_instrument_token(sym) if sym else None
+    today = datetime.now()
+    expire_ts = today.replace(hour=15, minute=30, second=0, microsecond=0).timestamp()
+    if now_ts > expire_ts:
+        expire_ts = now_ts + 18 * 3600
+    with _future_token_cache_lock:
+        _future_token_cache[key] = (tok, sym, expire_ts)
+    return tok, sym
+
 # ── Dhan security-ID async cache ─────────────────────────────────────────────
 # Populated lazily in background; request path reads from dict (never blocks).
 _dhan_secid_cache: Dict[str, str] = {}
@@ -8438,6 +8470,10 @@ def oi_profile_candles() -> EndpointResponse:
         fixed_ce_strike = request.args.get('fixed_ce_strike', type=int) or fixed_strike
         fixed_pe_strike = request.args.get('fixed_pe_strike', type=int) or fixed_strike
         fixed_expiry = request.args.get('fixed_expiry', 'nearest')
+        # Fixed 24000 Monthly chart's own candle interval — independent of the
+        # main `interval` param (falls back to it if the caller omits this, so
+        # older/other callers keep their previous behavior).
+        fixed_interval = request.args.get('fixed_interval') or interval
 
         # Sentinel Check: Ignore UI placeholders (20000 for Nifty, 50000 for BankNifty)
         # and fallback to ATM calculation to prevent fetching wrong data on first load.
@@ -8456,7 +8492,7 @@ def oi_profile_candles() -> EndpointResponse:
         # ── 1. Check Response Cache & Coalesce Requests ──────────────
         # Use request parameters as cache key (ignore _t timestamp)
         # Include start_date/end_date so historical range requests are cached independently
-        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry)
+        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval)
         
         # Request Coalescing: Only one thread fetches for this key at a time
         req_lock = _get_request_lock(cache_key)
@@ -8539,6 +8575,7 @@ def oi_profile_candles() -> EndpointResponse:
             opt_from_date = (now - timedelta(days=opt_days + 5)).replace(hour=9, minute=0, second=0, microsecond=0)
 
         fetch_interval = 'minute' if interval == '2minute' else interval
+        fixed_fetch_interval = 'minute' if fixed_interval == '2minute' else fixed_interval
 
         # ── Resolve Token ──────────────────────────────────────────
         if _is_fyers_provider:
@@ -8634,15 +8671,25 @@ def oi_profile_candles() -> EndpointResponse:
             fixed_ce_token, fixed_ce_symbol = _get_cached_strike_token(
                 kite_service, _data_provider, _is_fyers_provider, symbol, fixed_ce_strike, 'CE', expiry_type=fixed_expiry)
             if fixed_ce_token:
-                future_fixed_ce = executor.submit(fetch_task, fixed_ce_token, opt_from_date, to_date, fetch_interval)
+                future_fixed_ce = executor.submit(fetch_task, fixed_ce_token, opt_from_date, to_date, fixed_fetch_interval)
         if fixed_pe_strike:
             fixed_pe_token, fixed_pe_symbol = _get_cached_strike_token(
                 kite_service, _data_provider, _is_fyers_provider, symbol, fixed_pe_strike, 'PE', expiry_type=fixed_expiry)
             if fixed_pe_token:
-                future_fixed_pe = executor.submit(fetch_task, fixed_pe_token, opt_from_date, to_date, fetch_interval)
+                future_fixed_pe = executor.submit(fetch_task, fixed_pe_token, opt_from_date, to_date, fixed_fetch_interval)
 
         # 1. Start fetching index intraday and index daily
         future_index = executor.submit(fetch_task, token, from_date, to_date, fetch_interval)
+        # Index itself carries no real traded volume — resolve the current-expiry
+        # future for this symbol (same resolver the CPR-width card already uses)
+        # and fetch its volume in parallel, to overlay real volume on the chart.
+        future_fut_token, future_fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, symbol)
+        future_future_vol = executor.submit(fetch_task, future_fut_token, from_date, to_date, fetch_interval) if future_fut_token else None
+        # Fixed 24000 Monthly's own volume — fetched separately since its candles
+        # are always fixed_interval (5-minute), which can differ from the main
+        # interval above; reusing future_volume would fail to time-match once
+        # they diverge (see fixed_future_volume below).
+        future_fixed_vol = executor.submit(fetch_task, future_fut_token, opt_from_date, to_date, fixed_fetch_interval) if future_fut_token else None
         # Also fetch 30-second candles in parallel — needed by the "2nd 30-second
         # candle" box indicator on every timeframe it supports (up to 30min), not
         # just 1-minute; day[1] of a coarser interval is a completely different
@@ -8718,6 +8765,21 @@ def oi_profile_candles() -> EndpointResponse:
             
         
         candles = format_candles(index_raw, ist_offset, interval)
+
+        # Future volume (real traded volume, unlike the index) — matched to
+        # index candle timestamps client-side since both trade the same NSE
+        # session hours and bucket bars on identical interval boundaries.
+        future_volume = []
+        if future_future_vol is not None:
+            future_vol_raw = future_future_vol.result()
+            future_vol_candles = format_candles(future_vol_raw, ist_offset, interval)
+            future_volume = [{'time': c['time'], 'volume': c['volume']} for c in future_vol_candles]
+
+        fixed_future_volume = []
+        if future_fixed_vol is not None:
+            fixed_future_vol_raw = future_fixed_vol.result()
+            fixed_future_vol_candles = format_candles(fixed_future_vol_raw, ist_offset, fixed_interval)
+            fixed_future_volume = [{'time': c['time'], 'volume': c['volume']} for c in fixed_future_vol_candles]
 
         # Submit DB max_pain query now so it runs in parallel with CE/PE candle collection.
         def _fetch_max_pain_rows(_symbol, _days, _now, _target_dates):
@@ -8884,8 +8946,8 @@ def oi_profile_candles() -> EndpointResponse:
 
         fixed_ce_raw = future_fixed_ce.result() if future_fixed_ce else []
         fixed_pe_raw = future_fixed_pe.result() if future_fixed_pe else []
-        fixed_ce_candles = format_candles(fixed_ce_raw, ist_offset, interval)
-        fixed_pe_candles = format_candles(fixed_pe_raw, ist_offset, interval)
+        fixed_ce_candles = format_candles(fixed_ce_raw, ist_offset, fixed_interval)
+        fixed_pe_candles = format_candles(fixed_pe_raw, ist_offset, fixed_interval)
 
         # ── Intrinsic Levels ─────────────────────────────────────────
         intrinsic_data = None
@@ -8931,12 +8993,15 @@ def oi_profile_candles() -> EndpointResponse:
             'symbol': symbol,
             'interval': interval,
             'candles': candles,
+            'future_volume': future_volume,
+            'future_symbol': future_fut_symbol,
             'ce_opt_candles': ce_candles,
             'pe_opt_candles': pe_candles,
             'fixed_ce_candles': fixed_ce_candles,
             'fixed_pe_candles': fixed_pe_candles,
             'fixed_ce_symbol': fixed_ce_symbol,
             'fixed_pe_symbol': fixed_pe_symbol,
+            'fixed_future_volume': fixed_future_volume,
             'second_30s_candle_oi': second_30s_oi,
             'second_30s_candle_ce': second_30s_ce,
             'second_30s_candle_pe': second_30s_pe,

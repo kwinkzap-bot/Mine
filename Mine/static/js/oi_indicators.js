@@ -23,7 +23,7 @@ let oipRSIMarkers = [];
 
 /* ── Indicator state persistence ─────────────────────────── */
 const _OIP_IND_IDS = [
-    'oipShowOIBars', 'oipShowVwapInt', 'oipShowVwapGroup', 'oipShowCVWAP', 'oipShowPVWAP', 'oipShow3AvgVWAP',
+    'oipShowOIBars', 'oipShowVolume', 'oipShowVwapInt', 'oipShowVwapGroup', 'oipShowCVWAP', 'oipShowPVWAP', 'oipShow3AvgVWAP',
     'oipShowCpr', 'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
     'oipShowSignals', 'oipShowRSI', 'oipShowAtmCeOi',
     'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
@@ -31,7 +31,7 @@ const _OIP_IND_IDS = [
     'oipShow30mReversalLines', 'oipReversal30mCountUp', 'oipReversal30mCountDn', 'oipReversal30mRange',
     'oipShow1DReversalLines',  'oipReversal1DCount',  'oipReversal1DRange',
     'oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h',
-    'oipShowSynthetic', 'oipShow2ndCandle30sOpt', 'oipShow2nd5mCandleOpt', 'oipShowVwapOpt',
+    'oipShowSynthetic', 'oipShow2ndCandle30sOpt', 'oipShow2nd5mCandleOpt', 'oipShowVwapOpt', 'oipShowVolumeOpt',
     'oipShowFixedCeAvg', 'oipShowFixedPeAvg', 'oipShowFixedCePeAvg',
     'oipShowEma9Opt', 'oipShowEma20Opt', 'oipShowEma50Opt'
 ];
@@ -1106,6 +1106,9 @@ function oipApplyZOrder() {
     const fills = [];
     const lines = [];
 
+    // Future-sourced volume histogram sits at the very bottom of the stack.
+    if (typeof oipVolumeSeries !== 'undefined' && oipVolumeSeries) fills.push(oipVolumeSeries);
+
     // CPR levels: box_* are fills, line_* are lines.
     Object.keys(oipCprSeriesMap).forEach(k => {
         const s = oipCprSeriesMap[k];
@@ -1278,6 +1281,9 @@ function oipInitIndicatorsPopup(storageKey) {
         if (oipOIData?.candles) oipDraw2nd5mCandleBox(oipOIData.candles);
     });
     document.getElementById('oipShowVwapOpt')?.addEventListener('change', () => oipSyncVwapVisibility());
+    document.getElementById('oipShowVolumeOpt')?.addEventListener('change', () => {
+        if (typeof oipSyncOptVolumeVisibility === 'function') oipSyncOptVolumeVisibility();
+    });
 
     // Fixed 24000-strike chart's own reference lines — each has its own checkbox.
     ['oipShowFixedCeAvg', 'oipShowFixedPeAvg', 'oipShowFixedCePeAvg'].forEach(id => {

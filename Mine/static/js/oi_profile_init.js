@@ -41,6 +41,24 @@ window.oipInitSecondaryCharts = function() {
         oipIntrinsicSeries = oipIntrinsicChart.ceSeries || oipIntrinsicChart.series;
         oipIntrinsicPeSeries = oipIntrinsicChart.peSeries;
 
+        // Future-volume histogram — one of the 4 Opt Prem charts controlled by
+        // the Opt Indicator popup's single "Volume (Fut)" checkbox (see
+        // oipSyncOptVolumeVisibility in oi_profile.js). Own price scale pinned
+        // to the bottom of the pane, same recipe as the main chart's oipVolumeSeries.
+        const showOptVolumeInt = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
+        oipIntrinsicVolumeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.HistogramSeries, {
+            priceFormat: { type: 'volume' },
+            priceScaleId: 'oipIntVolume',
+            lastValueVisible: false,
+            priceLineVisible: false,
+            crosshairMarkerVisible: false,
+            visible: showOptVolumeInt
+        });
+        oipIntrinsicChart.chart.priceScale('oipIntVolume').applyOptions({
+            scaleMargins: { top: 0.8, bottom: 0 },
+            visible: false
+        });
+
         // Plain VWAP (green/purple) + CVWAP/PVWAP/3-AVG_VWAP on the Options Premium
         // (Combined) chart — one of the 3 "option charts" controlled by the Opt
         // Indicator popup's own "VWAP" checkbox (see oipSyncVwapVisibility). Both
@@ -88,6 +106,20 @@ window.oipInitSecondaryCharts = function() {
         });
         oipCESeries = oipCEChart.series;
 
+        const showOptVolumeCE = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
+        oipCEVolumeSeries = oipCEChart.chart.addSeries(LightweightCharts.HistogramSeries, {
+            priceFormat: { type: 'volume' },
+            priceScaleId: 'oipCEVolume',
+            lastValueVisible: false,
+            priceLineVisible: false,
+            crosshairMarkerVisible: false,
+            visible: showOptVolumeCE
+        });
+        oipCEChart.chart.priceScale('oipCEVolume').applyOptions({
+            scaleMargins: { top: 0.8, bottom: 0 },
+            visible: false
+        });
+
         // Initialize Individual PE Chart
         oipPEChart = TradingViewChart.create({
             containerId: 'oipPEChart', data: [], type: 'PE',
@@ -96,6 +128,20 @@ window.oipInitSecondaryCharts = function() {
             reapplyZOrder: () => { if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder(); }
         });
         oipPESeries = oipPEChart.series;
+
+        const showOptVolumePE = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
+        oipPEVolumeSeries = oipPEChart.chart.addSeries(LightweightCharts.HistogramSeries, {
+            priceFormat: { type: 'volume' },
+            priceScaleId: 'oipPEVolume',
+            lastValueVisible: false,
+            priceLineVisible: false,
+            crosshairMarkerVisible: false,
+            visible: showOptVolumePE
+        });
+        oipPEChart.chart.priceScale('oipPEVolume').applyOptions({
+            scaleMargins: { top: 0.8, bottom: 0 },
+            visible: false
+        });
 
         // Fixed 24000 strike / monthly expiry combined chart — independent of
         // the ATM-relative strike selection above; not part of the shared
@@ -108,6 +154,20 @@ window.oipInitSecondaryCharts = function() {
         });
         oipFixedCeSeries = oipFixedChart.ceSeries || oipFixedChart.series;
         oipFixedPeSeries = oipFixedChart.peSeries;
+
+        const showOptVolumeFixed = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
+        oipFixedVolumeSeries = oipFixedChart.chart.addSeries(LightweightCharts.HistogramSeries, {
+            priceFormat: { type: 'volume' },
+            priceScaleId: 'oipFixedVolume',
+            lastValueVisible: false,
+            priceLineVisible: false,
+            crosshairMarkerVisible: false,
+            visible: showOptVolumeFixed
+        });
+        oipFixedChart.chart.priceScale('oipFixedVolume').applyOptions({
+            scaleMargins: { top: 0.8, bottom: 0 },
+            visible: false
+        });
 
         // Previous-day reference lines: CE (H+L)/2, PE (H+L)/2, (CE close + PE close)/2 —
         // all flat lines using the PRIOR trading day's values, drawn across the current session.
@@ -154,13 +214,17 @@ window.oipInitSecondaryCharts = function() {
 
         oipInitPremiumSeries();
         
-        let activeChartId = null;
-        const setActive = (id) => activeChartId = id;
+        // Active-chart id lives on window (not a local closure var) so charts
+        // created later by a different script — Round Strike's main chart, in
+        // oi_profile_round_strike.js — can join the same hover-tracked sync web.
+        // See oipRSInitCharts() there for its own mouseenter wiring + listener.
+        const setActive = (id) => { window._oipActiveChartId = id; };
         ['mouseenter', 'touchstart'].forEach(e => {
             document.getElementById('oipCandleChart')?.addEventListener(e, () => setActive('index'), {passive: true});
             document.getElementById('oipIntrinsicChart')?.addEventListener(e, () => setActive('intrinsic'), {passive: true});
             document.getElementById('oipCEChart')?.addEventListener(e, () => setActive('ce'), {passive: true});
             document.getElementById('oipPEChart')?.addEventListener(e, () => setActive('pe'), {passive: true});
+            document.getElementById('oipFixed24000Chart')?.addEventListener(e, () => setActive('fixed'), {passive: true});
         });
 
         // Sync zoom level (barSpacing) and scroll position across charts.
@@ -175,17 +239,21 @@ window.oipInitSecondaryCharts = function() {
         // syncing scroll position between the two groups.
         const _OIP_OPTION_RIGHT_ADJ = 15;
 
-        let _oipSyncDepth = 0;
+        // Global (not function-local) — Round Strike's own listener (registered
+        // later, from oi_profile_round_strike.js once oipRSChart exists) reuses
+        // this exact counter + routine via window._oipSyncRange below, so a sync
+        // triggered from either file correctly blocks reverse/nested syncs.
+        window._oipSyncDepth = window._oipSyncDepth || 0;
         // targetCharts may be plain chart instances or {chart, adj} wrapper objects.
         // Wrappers are identified by a numeric `adj` property (never present on LC instances).
         // adj is added to scrollPos when calling scrollToPosition on that target.
         const syncRange = (sourceChart, targetCharts) => {
-            if (_oipSyncDepth > 0) return; // already inside a sync cycle — skip re-entry
+            if (window._oipSyncDepth > 0) return; // already inside a sync cycle — skip re-entry
             const ts = sourceChart.timeScale();
             const barSpacing = ts.options().barSpacing;
             const scrollPos  = ts.scrollPosition();
             if (!barSpacing) return;
-            _oipSyncDepth++;
+            window._oipSyncDepth++;
             targetCharts.forEach(item => {
                 const isWrapped = item !== null && typeof item === 'object' && typeof item.adj === 'number';
                 const t   = isWrapped ? item.chart : item;
@@ -202,47 +270,63 @@ window.oipInitSecondaryCharts = function() {
                     t.timeScale().scrollToPosition(scrollPos + adj, false);
                 } catch(e) {}
             });
-            _oipSyncDepth--;
+            window._oipSyncDepth--;
         };
+        window._oipSyncRange = syncRange; // exposed for Round Strike's own listener
 
         // Link charts (synchronize panning and zooming).
         // window._oipDataRefreshing is set true in oi_profile.js while setData calls are
         // in flight; callbacks that fire from those setData calls must not trigger a sync
         // (the chart may be mid-update with an auto-fitted or stale range).
         if (oipOIChart && oipIntrinsicChart && oipIntrinsicChart.chart) {
+            // "20-group" (default rightOffset=20): OI, Intrinsic, Round Strike —
+            // adj=0 between any pair of these. CE Only/PE Only ("5-group",
+            // rightOffset=5) need ± _OIP_OPTION_RIGHT_ADJ crossing groups.
+            // Fixed 24000 Monthly is NOT part of this pan/zoom web — its candles
+            // are always fixed_interval (5-minute, independent of the shared
+            // oipInterval), so its bar grid won't line up with the others' (it
+            // still joins the separate crosshair-sync web below, which doesn't
+            // care about bar grid alignment). oipRSChart is declared in
+            // oi_profile_round_strike.js (loaded after this file), but these
+            // callbacks only run on user interaction — well after that script
+            // has assigned it — so referencing it here is safe.
             oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
-                if (window._oipDataRefreshing || activeChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
+                if (window._oipDataRefreshing || window._oipActiveChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
                 syncRange(oipOIChart, [
                     oipIntrinsicChart?.chart,
                     { chart: oipCEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
-                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ }
+                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
+                    oipRSChart?.chart
                 ]);
             });
 
             oipIntrinsicChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
-                if (window._oipDataRefreshing || activeChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady) return;
+                if (window._oipDataRefreshing || window._oipActiveChartId !== 'intrinsic' || !oipOIChartReady || !oipIntChartReady) return;
                 syncRange(oipIntrinsicChart.chart, [
                     oipOIChart,
                     { chart: oipCEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
-                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ }
+                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
+                    oipRSChart?.chart
                 ]);
             });
 
             oipCEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
-                if (window._oipDataRefreshing || activeChartId !== 'ce' || !oipOIChartReady || !oipIntChartReady) return;
+                if (window._oipDataRefreshing || window._oipActiveChartId !== 'ce' || !oipOIChartReady || !oipIntChartReady) return;
                 syncRange(oipCEChart.chart, [
                     { chart: oipOIChart, adj: _OIP_OPTION_RIGHT_ADJ },
                     { chart: oipIntrinsicChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ },
-                    oipPEChart?.chart
+                    oipPEChart?.chart,
+                    { chart: oipRSChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ }
                 ]);
             });
 
             oipPEChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
-                if (window._oipDataRefreshing || activeChartId !== 'pe' || !oipOIChartReady || !oipIntChartReady) return;
+                if (window._oipDataRefreshing || window._oipActiveChartId !== 'pe' || !oipOIChartReady || !oipIntChartReady) return;
                 syncRange(oipPEChart.chart, [
                     { chart: oipOIChart, adj: _OIP_OPTION_RIGHT_ADJ },
                     { chart: oipIntrinsicChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ },
-                    oipCEChart?.chart
+                    oipCEChart?.chart,
+                    { chart: oipRSChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ }
                 ]);
             });
         }
@@ -270,36 +354,70 @@ window.oipInitSecondaryCharts = function() {
             const wrap = document.getElementById('oipFixed24000ChartWrap');
             if (wrap) new ResizeObserver(() => syncSize(oipFixedChart.chart, wrap)).observe(wrap);
         }
+        // Exposed so Round Strike's own crosshair listener (registered later,
+        // from oi_profile_round_strike.js once oipRSChart exists) can reuse
+        // the exact same routine — see oipRSInitCharts() in that file.
+        window._oipSyncCrosshair = syncCrosshair;
+
+        // oipFixedCeSeries (Fixed 24000 Monthly) and oipRSCESeries (Round
+        // Strike) are used as each chart's "anchor" series for crosshair
+        // price lookup — same role oipIntrinsicSeries plays for Intrinsic.
+        // oipRSChart is declared in oi_profile_round_strike.js (loaded after
+        // this file) but these callbacks only run on real mouse movement,
+        // well after that script has assigned it.
         if (oipOIChart) {
             oipOIChart.subscribeCrosshairMove(param => {
-                if (activeChartId !== 'index') return;
+                if (window._oipActiveChartId !== 'index') return;
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipOIChart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipOIChart, oipCEChart.chart, param, oipCESeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipOIChart, oipPEChart.chart, param, oipPESeries);
+                if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipOIChart, oipFixedChart.chart, param, oipFixedCeSeries);
+                if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipOIChart, oipRSChart.chart, param, oipRSCESeries);
+                if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) syncCrosshair(oipOIChart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
             });
         }
         if (oipIntrinsicChart?.chart) {
             oipIntrinsicChart.chart.subscribeCrosshairMove(param => {
-                if (activeChartId !== 'intrinsic') return;
+                if (window._oipActiveChartId !== 'intrinsic') return;
                 if (oipOIChart && oipOISeries) syncCrosshair(oipIntrinsicChart.chart, oipOIChart, param, oipOISeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipIntrinsicChart.chart, oipCEChart.chart, param, oipCESeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipIntrinsicChart.chart, oipPEChart.chart, param, oipPESeries);
+                if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipIntrinsicChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
+                if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipIntrinsicChart.chart, oipRSChart.chart, param, oipRSCESeries);
+                if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) syncCrosshair(oipIntrinsicChart.chart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
             });
         }
         if (oipCEChart?.chart) {
             oipCEChart.chart.subscribeCrosshairMove(param => {
-                if (activeChartId !== 'ce') return;
+                if (window._oipActiveChartId !== 'ce') return;
                 if (oipOIChart && oipOISeries) syncCrosshair(oipCEChart.chart, oipOIChart, param, oipOISeries);
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipCEChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipCEChart.chart, oipPEChart.chart, param, oipPESeries);
+                if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipCEChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
+                if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipCEChart.chart, oipRSChart.chart, param, oipRSCESeries);
+                if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) syncCrosshair(oipCEChart.chart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
             });
         }
         if (oipPEChart?.chart) {
             oipPEChart.chart.subscribeCrosshairMove(param => {
-                if (activeChartId !== 'pe') return;
+                if (window._oipActiveChartId !== 'pe') return;
                 if (oipOIChart && oipOISeries) syncCrosshair(oipPEChart.chart, oipOIChart, param, oipOISeries);
                 if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipPEChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipPEChart.chart, oipCEChart.chart, param, oipCESeries);
+                if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipPEChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
+                if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipPEChart.chart, oipRSChart.chart, param, oipRSCESeries);
+                if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) syncCrosshair(oipPEChart.chart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
+            });
+        }
+        if (oipFixedChart?.chart) {
+            oipFixedChart.chart.subscribeCrosshairMove(param => {
+                if (window._oipActiveChartId !== 'fixed') return;
+                if (oipOIChart && oipOISeries) syncCrosshair(oipFixedChart.chart, oipOIChart, param, oipOISeries);
+                if (oipIntrinsicChart?.chart && oipIntrinsicSeries) syncCrosshair(oipFixedChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
+                if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipFixedChart.chart, oipCEChart.chart, param, oipCESeries);
+                if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipFixedChart.chart, oipPEChart.chart, param, oipPESeries);
+                if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipFixedChart.chart, oipRSChart.chart, param, oipRSCESeries);
+                if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) syncCrosshair(oipFixedChart.chart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
             });
         }
 

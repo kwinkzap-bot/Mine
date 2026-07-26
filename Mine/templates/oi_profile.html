@@ -39,10 +39,10 @@
                         <span class="oip-label">TF</span>
                         <select id="oipInterval" class="oip-select oip-select--xs">
                             <option value="30second">30s</option>
-                            <option value="minute">1m</option>
+                            <option value="minute" selected>1m</option>
                             <option value="2minute">2m</option>
                             <option value="3minute">3m</option>
-                            <option value="5minute" selected>5m</option>
+                            <option value="5minute">5m</option>
                             <option value="15minute">15m</option>
                             <option value="30minute">30m</option>
                             <option value="60minute">1h</option>
@@ -71,6 +71,9 @@
                                 <div class="oip-ind-section-title">Overlays</div>
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowOIBars" checked><span>OI Bars</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipShowVolume" checked><span>Volume (Fut)</span>
                                 </label>
                                 <div class="oip-ind-cpr-group">
                                     <div class="oip-ind-item oip-ind-cpr-header">
@@ -458,6 +461,9 @@
                                         <input type="checkbox" id="oipShowVwapOpt" checked><span>VWAP</span>
                                     </label>
                                     <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowVolumeOpt" checked><span>Volume (Fut)</span>
+                                    </label>
+                                    <label class="oip-ind-item">
                                         <input type="checkbox" id="oipShowPremium" checked><span>Premium (Entry/Current/Target)</span>
                                     </label>
                                     <div class="oip-ind-section-title">EMA (CE Only / PE Only)</div>
@@ -679,6 +685,9 @@
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipRSShowVwap" checked><span>VWAP</span>
                                 </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowVolume" checked><span>Volume (Fut)</span>
+                                </label>
                                 <div class="oip-ind-section-title">CE Line Style</div>
                                 <div class="oip-ind-item">
                                     <span>Color</span>
@@ -867,6 +876,21 @@
                         id="oipRSLegendCombinedPE">--</span></div>
             </div>
             <div id="oipRSCombinedChart"></div>
+        </div>
+
+        <!-- Static 5-minute Combined chart — tracks the SAME CE/PE strikes as the
+             Round Strike chart above, but always fetched at a fixed 5-minute
+             interval, independent of the main TF dropdown. Lightweight: candles
+             + future-volume only, no VWAP/ref lines/ray tool/order buttons. -->
+        <div class="oip-chart-wrap" id="oipRSFixed5mChartWrap" style="margin-top:10px;">
+            <div class="oip-chart-legend">
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
+                        id="oipRSFixed5mLegendCE">--</span></div>
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
+                        id="oipRSFixed5mLegendPE">--</span></div>
+                <div class="oip-legend-item" title="Always 5-minute, independent of the TF dropdown above">5m (Fixed)</div>
+            </div>
+            <div id="oipRSFixed5mChart"></div>
         </div>
     </div>
 
