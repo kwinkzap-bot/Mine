@@ -1,5 +1,5 @@
 {
-  "date": "2026-07-24",
+  "date": "2026-07-27",
   "eod_handled": true,
   "stocks": {
     "360ONE": {
@@ -51,26 +51,7 @@
       "phase": "no_setup"
     },
     "BAJFINANCE": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 1010.5,
-      "sl_level": 1001.3,
-      "qty": 494,
-      "entry_time": "2026-07-24T10:51:46.289037",
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2080523815091625984",
-          "filled": true,
-          "entry_price": 1010.5,
-          "filled_qty": 494,
-          "sl_order_id": "2080523861136695296",
-          "target_order_id": "2080523861828755456",
-          "closed": true
-        }
-      ],
-      "entry_price": 1010.5,
-      "target_level": 1030.2
+      "phase": "no_setup"
     },
     "BANDHANBNK": {
       "phase": "no_setup"
@@ -115,7 +96,11 @@
       "phase": "no_setup"
     },
     "COLPAL": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 2118.8,
+      "sl_level": 2129.9,
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "CONCOR": {
       "phase": "no_setup"
@@ -187,16 +172,14 @@
       "phase": "no_setup"
     },
     "HDFCBANK": {
-      "phase": "no_setup"
-    },
-    "HEROMOTOCO": {
       "phase": "done",
       "direction": "long",
-      "trigger": 5019.01,
-      "sl_level": 4982.0,
-      "qty": 99,
-      "entry_time": "2026-07-24T10:52:40.345062",
-      "exit_reason": "Entry order placement failed"
+      "trigger": 741.6,
+      "sl_level": 739.5,
+      "exit_reason": "Invalidated (SL hit before entry)"
+    },
+    "HEROMOTOCO": {
+      "phase": "no_setup"
     },
     "HINDALCO": {
       "phase": "no_setup"
@@ -229,7 +212,10 @@
       "phase": "no_setup"
     },
     "JINDALSTEL": {
-      "phase": "no_setup"
+      "phase": "watching",
+      "direction": "short",
+      "trigger": 1058.85,
+      "sl_level": 1068.2
     },
     "JIOFIN": {
       "phase": "no_setup"
@@ -245,10 +231,25 @@
     },
     "KFINTECH": {
       "phase": "done",
-      "direction": "long",
-      "trigger": 861.75,
-      "sl_level": 856.6,
-      "exit_reason": "Invalidated (SL hit before entry)"
+      "direction": "short",
+      "trigger": 905.15,
+      "sl_level": 914.85,
+      "qty": 552,
+      "entry_time": "2026-07-27T11:08:12.182159",
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2081615113798213632",
+          "filled": true,
+          "entry_price": 905.1500000000001,
+          "filled_qty": 552,
+          "sl_order_id": "2081623302027534336",
+          "target_order_id": "2081623302614736896",
+          "closed": true
+        }
+      ],
+      "entry_price": 905.1500000000001,
+      "target_level": 862.0
     },
     "KPITTECH": {
       "phase": "no_setup"
@@ -263,25 +264,7 @@
       "phase": "no_setup"
     },
     "LTF": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 299.15,
-      "sl_level": 297.15,
-      "qty": 1147,
-      "entry_time": "2026-07-24T11:19:28.223463",
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "RECONCILED",
-          "filled": true,
-          "entry_price": 299.1499999999999,
-          "filled_qty": 1147,
-          "closed": true,
-          "sl_order_id": "2080530896242794496",
-          "target_order_id": "2080541807598821376"
-        }
-      ],
-      "entry_price": 299.1499999999999
+      "phase": "no_setup"
     },
     "LTM": {
       "phase": "no_setup"
@@ -296,35 +279,54 @@
       "phase": "no_setup"
     },
     "MANKIND": {
+      "phase": "no_setup"
+    },
+    "MARICO": {
       "phase": "done",
       "direction": "long",
-      "trigger": 2530.4,
-      "sl_level": 2517.4,
-      "qty": 197,
-      "entry_time": "2026-07-24T10:52:45.800883",
+      "trigger": 856.6,
+      "sl_level": 853.5,
+      "qty": 583,
+      "entry_time": "2026-07-27T11:09:34.849097",
       "broker_positions": [
         {
           "broker_idx": 1,
-          "entry_order_id": "2080524064690462720",
+          "entry_order_id": "2081615460566491136",
           "filled": true,
-          "entry_price": 2530.4,
-          "filled_qty": 197,
-          "sl_order_id": "2080524403959324672",
-          "target_order_id": "2080524404622024704",
+          "entry_price": 856.6,
+          "filled_qty": 583,
+          "sl_order_id": "2081615525141995520",
+          "target_order_id": "2081615526308012032",
           "closed": true
         }
       ],
-      "entry_price": 2530.4,
-      "target_level": 2554.8
-    },
-    "MARICO": {
-      "phase": "no_setup"
+      "entry_price": 856.6,
+      "target_level": 864.6
     },
     "MARUTI": {
       "phase": "no_setup"
     },
     "MAZDOCK": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 2323.9,
+      "sl_level": 2336.2,
+      "qty": 215,
+      "entry_time": "2026-07-27T11:04:16.878972",
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2081614127788646400",
+          "filled": true,
+          "entry_price": 2323.9,
+          "filled_qty": 215,
+          "sl_order_id": "2081614185896534016",
+          "target_order_id": "2081614186643120128",
+          "closed": true
+        }
+      ],
+      "entry_price": 2323.9,
+      "target_level": 2299.0
     },
     "MCX": {
       "phase": "no_setup"
@@ -345,19 +347,17 @@
       "phase": "no_setup"
     },
     "NAM-INDIA": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 1089.04,
-      "sl_level": 1079.4,
-      "qty": 459,
-      "entry_time": "2026-07-24T11:17:45.202203",
-      "exit_reason": "Entry order placement failed"
+      "phase": "no_setup"
     },
     "NATIONALUM": {
       "phase": "no_setup"
     },
     "NAUKRI": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 1187.0,
+      "sl_level": 1198.35,
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "NBCC": {
       "phase": "no_setup"
@@ -432,16 +432,14 @@
       "phase": "no_setup"
     },
     "SBICARD": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 614.26,
-      "sl_level": 611.0,
-      "qty": 813,
-      "entry_time": "2026-07-24T10:46:30.921578",
-      "exit_reason": "Entry order placement failed"
+      "phase": "no_setup"
     },
     "SBILIFE": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 1846.7,
+      "sl_level": 1837.2,
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "SBIN": {
       "phase": "no_setup"
@@ -492,13 +490,7 @@
       "phase": "no_setup"
     },
     "UNOMINDA": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 1110.05,
-      "sl_level": 1101.1,
-      "qty": 450,
-      "entry_time": "2026-07-24T11:17:45.344364",
-      "exit_reason": "Entry order placement failed"
+      "phase": "no_setup"
     },
     "UPL": {
       "phase": "no_setup"

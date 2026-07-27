@@ -1,6 +1,6 @@
 {
   "active_trade": null,
-  "buy_needs_reset": false,
+  "buy_needs_reset": true,
   "sell_needs_reset": false,
   "last_exit": {
     "reason": "SL",

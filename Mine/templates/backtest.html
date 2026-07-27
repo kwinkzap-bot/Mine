@@ -25,7 +25,7 @@
                 <option value="expiry_breakout">📅 Monthly Expiry Breakout</option>
                 <option value="thirty_min_fakeout">⏱️ 30-Min Opening Fakeout</option>
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
-                <option value="ema_pullback" selected>📉 EMA 200 Trend Pullback</option>
+                <option value="ema_pullback" selected>📉 EMA Confluence Breakout</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
             <button id="runOptimiseBtn" class="btn-optimise" style="display:none;">⚡ Find Best Params</button>
@@ -403,7 +403,7 @@
                 </div>
             </div>
 
-            <!-- EMA 200 Trend Pullback params — single symbol, picked from
+            <!-- EMA Confluence Breakout params — single symbol, picked from
                  the Future Stocks list in Symbol above. Daily candles only. -->
             <div id="emaPullbackParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
@@ -418,20 +418,16 @@
                     <label for="emaTargetPct">Target % (min 1%)</label>
                     <input type="number" id="emaTargetPct" value="5" min="1" step="0.5">
                 </div>
-                <div class="form-group form-check-group">
-                    <input type="checkbox" id="emaRequireCandleColor" checked>
-                    <label for="emaRequireCandleColor" title="Requires the signal candle to be Green (close > open) for a BUY entry, or Red (close < open) for a SELL entry — an extra confirmation on top of the EMA200 touch-and-close rule.">Green/Red Candle</label>
-                </div>
                 <div class="form-group" style="grid-column: span 2;">
                     <label>Rule</label>
                     <button type="button" class="rule-trigger-btn" id="emaRuleTrigger">
-                        View EMA Pullback rule &amp; targets
+                        View EMA Confluence Breakout rule &amp; targets
                         <span class="rule-trigger-btn__icon">↗</span>
                     </button>
                 </div>
             </div>
 
-            <!-- EMA 200 Trend Pullback position sizing -->
+            <!-- EMA Confluence Breakout position sizing -->
             <div id="emaPullbackLotRow" class="form-row" style="display:none">
                 <div class="form-group">
                     <label for="emaLots">Lots</label>
@@ -452,8 +448,8 @@
                 <div class="bt-modal-box">
                     <div class="bt-modal-hdr">
                         <div class="bt-modal-hdr-text">
-                            <div class="bt-modal-title">EMA 200 Trend Pullback — Rule</div>
-                            <div class="bt-modal-subtitle">Daily EMA alignment, EMA200 pullback &amp; targets</div>
+                            <div class="bt-modal-title">EMA Confluence Breakout — Rule</div>
+                            <div class="bt-modal-subtitle">4-EMA touch, High/Low breakout &amp; targets</div>
                         </div>
                         <button class="bt-modal-close" id="emaRuleModalClose" type="button">✕</button>
                     </div>
@@ -464,15 +460,20 @@
                                 in <b>Symbol</b> above. Four EMAs are tracked on the close:
                                 <b>EMA 20, 50, 100, 200</b>.
                             </p>
+                            <p class="rule-intro">
+                                <b>Signal candle:</b> its daily range must <b>touch all four EMAs at
+                                once</b> (Low ≤ EMA ≤ High, for EMA20, EMA50, EMA100 and EMA200 each).
+                                The candle's own color then fixes the direction and arms a breakout
+                                order off its own High/Low — watched on every later candle until it
+                                fills. A doji (close = open) gives no signal.
+                            </p>
                             <div class="rule-cols">
                                 <div class="rule-col">
                                     <h4 class="rule-col__title rule-col__title--buy">BUY setup</h4>
                                     <ol>
-                                        <li>Trend aligned: <b>EMA200 &lt; EMA100 &lt; EMA50</b></li>
-                                        <li>The daily candle's range <b>touches EMA200</b> (Low ≤ EMA200 ≤ High)</li>
-                                        <li>The candle's <b>close is above EMA200</b></li>
-                                        <li>If <b>Green/Red Candle</b> is on: the candle is <b>Green</b> (close &gt; open)</li>
-                                        <li>Entry fills at the <b>open of the next daily candle</b></li>
+                                        <li>Signal candle is <b>Green</b> (close &gt; open)</li>
+                                        <li>Arms a breakout order at the signal candle's own <b>High</b></li>
+                                        <li>Fills once a later candle's <b>High breaks above</b> that level (at the level, or that candle's Open if it gapped through)</li>
                                     </ol>
                                     <p class="rule-col__result">
                                         SL = the signal candle's real <b>Low</b><br>
@@ -482,11 +483,9 @@
                                 <div class="rule-col">
                                     <h4 class="rule-col__title rule-col__title--sell">SELL setup — mirror</h4>
                                     <ol>
-                                        <li>Trend aligned: <b>EMA200 &gt; EMA100 &gt; EMA50</b></li>
-                                        <li>The daily candle's range <b>touches EMA200</b> (Low ≤ EMA200 ≤ High)</li>
-                                        <li>The candle's <b>close is below EMA200</b></li>
-                                        <li>If <b>Green/Red Candle</b> is on: the candle is <b>Red</b> (close &lt; open)</li>
-                                        <li>Entry fills at the <b>open of the next daily candle</b></li>
+                                        <li>Signal candle is <b>Red</b> (close &lt; open)</li>
+                                        <li>Arms a breakout order at the signal candle's own <b>Low</b></li>
+                                        <li>Fills once a later candle's <b>Low breaks below</b> that level (at the level, or that candle's Open if it gapped through)</li>
                                     </ol>
                                     <p class="rule-col__result">
                                         SL = the signal candle's real <b>High</b><br>
@@ -495,9 +494,8 @@
                                 </div>
                             </div>
                             <ul class="rule-notes">
-                                <li>EMA20 is tracked (shown per-trade for reference) but is not part of the trend-alignment check — only EMA50 vs EMA100 vs EMA200 matter for alignment. EMA200 is also separately used for the touch-and-close rule.</li>
-                                <li><b>Green/Red Candle</b> (on by default) requires the signal candle's own color to agree with the trade direction — Green for BUY, Red for SELL. Toggle it off to drop this extra confirmation.</li>
-                                <li>SL/Target are confirmed the moment any later daily bar's Low/High touches the level — SL is checked before Target within the same bar.</li>
+                                <li>Only one breakout order is armed at a time — while waiting for a fill, new signal candles are ignored. If price never breaks out, that signal never fills.</li>
+                                <li>SL/Target are confirmed the moment any later daily bar's Low/High touches the level, starting from the breakout (entry) candle itself — SL is checked before Target within the same bar.</li>
                                 <li>If the data ends while still in a trade, it is force-closed at the last available daily close.</li>
                                 <li>Once a trade closes, scanning for the next signal resumes on the very next daily bar — any number of trades can occur across the date range.</li>
                             </ul>
@@ -590,6 +588,21 @@
                 <!-- Shared grid (DataGrid.mountSortable, static/js/backtest.js) -->
                 <div class="opt-table-wrap">
                     <div id="vwapOptGrid"></div>
+                </div>
+            </div>
+
+            <!-- EMA Confluence Breakout Optimise results panel -->
+            <div id="emaOptimisePanel" style="display:none;">
+                <div class="opt-header">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">⚡ EMA Confluence Breakout Parameter Optimisation Results</h4>
+                        <button id="emaRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="emaOptMeta"></small>
+                </div>
+                <!-- Shared grid (DataGrid.mountSortable, static/js/backtest.js) -->
+                <div class="opt-table-wrap">
+                    <div id="emaOptGrid"></div>
                 </div>
             </div>
 

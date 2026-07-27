@@ -1,41 +1,41 @@
 """
-EMA 200 Trend Pullback Backtest Engine.
+EMA Confluence Breakout Backtest Engine.
 
 Daily-candle-only, single-symbol, long and/or short:
   1. Four DAILY EMAs: 20, 50, 100, 200 (close-based, same-bar — the signal
-     is only ever acted on the FOLLOWING candle, so using the signal
-     candle's own EMA values is not look-ahead bias).
-  2. Trend alignment on the signal candle:
-       - BUY  (Long):  EMA200 < EMA100 < EMA50  (i.e. EMA50 > EMA100 > EMA200)
-       - SELL (Short): EMA200 > EMA100 > EMA50  (i.e. EMA50 < EMA100 < EMA200)
-     EMA20 is tracked (and shown per-trade for reference) but is not part
-     of the alignment check.
-  3. The signal candle's DAILY range must TOUCH EMA200 (Low <= EMA200 <=
-     High — a genuine pullback into the average, not a gap-through) AND
-     its CLOSE must clear it in the trade's direction:
-       - BUY:  close > EMA200
-       - SELL: close < EMA200
-     Optionally (require_candle_color, default True) the signal candle's
-     own color must also agree with the trade direction:
-       - BUY:  candle is GREEN (close > open)
-       - SELL: candle is RED   (close < open)
-  4. ENTRY is filled at the OPEN of the NEXT daily candle after the
-     signal candle. If the signal candle is the last bar available, there
-     is no next candle to fill on and that signal is dropped.
-  5. Stop Loss is the signal candle's own High/Low (not a percentage):
-       - Long:  sl_level = signal candle's Low
-       - Short: sl_level = signal candle's High
+     is only ever acted on FOLLOWING candles, so using the signal candle's
+     own EMA values is not look-ahead bias).
+  2. Signal candle: its DAILY range must TOUCH ALL FOUR EMAs at once
+     (Low <= EMA <= High, for EMA20, EMA50, EMA100 and EMA200 each).
+     Its own color then fixes the trade direction:
+       - RED   candle (close < open): SELL setup — watch for a break of
+               this candle's LOW.
+       - GREEN candle (close > open): BUY setup  — watch for a break of
+               this candle's HIGH.
+     A doji (close == open) produces no signal.
+  3. ENTRY is a breakout order armed off the signal candle's own High/Low,
+     watched on every candle AFTER the signal candle until it fills (no
+     expiry — if price never breaks out, that signal never fills):
+       - BUY:  fills once a later candle's High >= signal candle's High.
+       - SELL: fills once a later candle's Low  <= signal candle's Low.
+     Fill price is the trigger level itself, or that candle's Open if it
+     already gapped through the level (realistic slippage on a gap).
+     While a breakout order is armed, new signal candles are ignored —
+     only one pending order at a time.
+  4. Stop Loss is the signal candle's OPPOSITE extreme (not a percentage):
+       - BUY:  sl_level = signal candle's Low
+       - SELL: sl_level = signal candle's High
      Target is a PERCENTAGE of the entry price (target_pct, default 5.0,
      floor 1.0):
-       - Long:  tp_level = entry × (1 + target_pct/100)
-       - Short: tp_level = entry × (1 − target_pct/100)
-     Exit on whichever comes first, checked from the entry candle onward
-     (SL checked before Target within the same bar):
-       - Long:  LOW drops to/through sl_level   → 'SL'
-                HIGH rises to/through tp_level  → 'TARGET'
-       - Short: HIGH rises to/through sl_level  → 'SL'
-                LOW drops to/through tp_level   → 'TARGET'
-  6. If the data ends while still in a position, it is force-closed at
+       - BUY:  tp_level = entry × (1 + target_pct/100)
+       - SELL: tp_level = entry × (1 − target_pct/100)
+     Exit on whichever comes first, checked from the entry (breakout) candle
+     onward (SL checked before Target within the same bar):
+       - BUY:  LOW drops to/through sl_level   → 'SL'
+               HIGH rises to/through tp_level  → 'TARGET'
+       - SELL: HIGH rises to/through sl_level  → 'SL'
+               LOW drops to/through tp_level   → 'TARGET'
+  5. If the data ends while still in a position, it is force-closed at
      the last available daily close → 'DATA_END'.
   Once a trade closes, scanning for the next signal resumes on the very
   next bar — any number of trades can occur across the requested range.
@@ -54,15 +54,12 @@ class EmaPullbackEngine:
 
     def __init__(self, daily_df: pd.DataFrame,
                 enable_long: bool = True, enable_short: bool = True,
-                target_pct: float = 5.0, require_candle_color: bool = True):
+                target_pct: float = 5.0):
         self.daily_df = daily_df.copy()
         self.enable_long  = bool(enable_long)
         self.enable_short = bool(enable_short)
         # Default 5%, floor 1% — never let target_pct go below the floor.
         self.target_pct = max(float(target_pct or 5.0), 1.0)
-        # Signal candle must be Green (close>open) for BUY / Red (close<open)
-        # for SELL — on by default, toggle off to drop this extra filter.
-        self.require_candle_color = bool(require_candle_color)
         self._prepare()
 
     # ── Data prep ────────────────────────────────────────────────────────────
@@ -101,23 +98,22 @@ class EmaPullbackEngine:
     # ── Signal check ─────────────────────────────────────────────────────────
 
     def _signal_direction(self, c) -> str:
-        """'Long', 'Short', or None for a given daily candle row."""
+        """'Long', 'Short', or None for a given daily candle row.
+
+        Signal requires the candle's range to touch ALL FOUR EMAs at once;
+        the candle's own color (Green/Red) then fixes the direction.
+        """
         if pd.isna(c['ema20']) or pd.isna(c['ema50']) or pd.isna(c['ema100']) or pd.isna(c['ema200']):
             return None
-        touches_200 = c['low'] <= c['ema200'] <= c['high']
-        if not touches_200:
+        touches_all = (c['low'] <= c['ema20']  <= c['high'] and
+                       c['low'] <= c['ema50']  <= c['high'] and
+                       c['low'] <= c['ema100'] <= c['high'] and
+                       c['low'] <= c['ema200'] <= c['high'])
+        if not touches_all:
             return None
-        aligned_long  = c['ema50'] > c['ema100'] and c['ema100'] > c['ema200']
-        aligned_short = c['ema50'] < c['ema100'] and c['ema100'] < c['ema200']
-        is_green = c['close'] > c['open']
-        is_red   = c['close'] < c['open']
-        if aligned_long and c['close'] > c['ema200']:
-            if self.require_candle_color and not is_green:
-                return None
+        if c['close'] > c['open']:
             return 'Long'
-        if aligned_short and c['close'] < c['ema200']:
-            if self.require_candle_color and not is_red:
-                return None
+        if c['close'] < c['open']:
             return 'Short'
         return None
 
@@ -130,7 +126,10 @@ class EmaPullbackEngine:
 
         trades = []
         entry = None
-        pending = None   # {'direction', 'sl_level'} — signal fired, awaiting fill at next candle's open
+        # {'direction','trigger_level','sl_level',...} — signal fired, armed
+        # as a breakout order on the candle's own High (Long) / Low (Short),
+        # watched on every subsequent candle until it fills.
+        pending = None
         n = len(df)
 
         for pos in range(n):
@@ -138,43 +137,58 @@ class EmaPullbackEngine:
 
             if entry is None:
                 if pending is not None:
-                    entry_price = float(c['open'])
                     direction = pending['direction']
-                    if direction == 'Long':
-                        tp_level = entry_price * (1 + self.target_pct / 100)
+                    trigger = pending['trigger_level']
+                    filled = False
+                    if direction == 'Long' and c['high'] >= trigger:
+                        entry_price = float(c['open']) if c['open'] > trigger else trigger
+                        filled = True
+                    elif direction == 'Short' and c['low'] <= trigger:
+                        entry_price = float(c['open']) if c['open'] < trigger else trigger
+                        filled = True
+
+                    if filled:
+                        if direction == 'Long':
+                            tp_level = entry_price * (1 + self.target_pct / 100)
+                        else:
+                            tp_level = entry_price * (1 - self.target_pct / 100)
+                        # NSE's real Open print happens at 09:15 IST, so stamp
+                        # entry_time there rather than at the normalized
+                        # midnight used internally.
+                        entry_time = c['datetime'].replace(hour=9, minute=15)
+                        entry = {
+                            'entry_time': entry_time, 'entry_price': entry_price,
+                            'direction': direction,
+                            'sl_level': pending['sl_level'], 'tp_level': tp_level,
+                            'signal_time': pending['signal_time'],
+                            'ema20': pending['ema20'], 'ema50': pending['ema50'],
+                            'ema100': pending['ema100'], 'ema200': pending['ema200'],
+                        }
+                        pending = None
+                        # Fall through — the breakout candle's own range is
+                        # still live, so check SL/Target against it below.
                     else:
-                        tp_level = entry_price * (1 - self.target_pct / 100)
-                    # entry_price is the daily Open — NSE's real Open print
-                    # happens at 09:15 IST, so stamp entry_time there rather
-                    # than at the normalized midnight used internally.
-                    entry_time = c['datetime'].replace(hour=9, minute=15)
-                    entry = {
-                        'entry_time': entry_time, 'entry_price': entry_price,
-                        'direction': direction,
-                        'sl_level': pending['sl_level'], 'tp_level': tp_level,
-                        'signal_time': pending['signal_time'],
-                        'ema20': pending['ema20'], 'ema50': pending['ema50'],
-                        'ema100': pending['ema100'], 'ema200': pending['ema200'],
-                    }
-                    pending = None
+                        continue
+
+                if entry is None:
+                    direction = self._signal_direction(c)
+                    if direction == 'Long' and self.enable_long:
+                        pending = {'direction': 'Long', 'trigger_level': float(c['high']),
+                                   'sl_level': float(c['low']),
+                                   'signal_time': c['datetime'], 'ema20': float(c['ema20']),
+                                   'ema50': float(c['ema50']), 'ema100': float(c['ema100']),
+                                   'ema200': float(c['ema200'])}
+                    elif direction == 'Short' and self.enable_short:
+                        pending = {'direction': 'Short', 'trigger_level': float(c['low']),
+                                   'sl_level': float(c['high']),
+                                   'signal_time': c['datetime'], 'ema20': float(c['ema20']),
+                                   'ema50': float(c['ema50']), 'ema100': float(c['ema100']),
+                                   'ema200': float(c['ema200'])}
                     continue
 
-                direction = self._signal_direction(c)
-                if direction == 'Long' and self.enable_long:
-                    pending = {'direction': 'Long', 'sl_level': float(c['low']),
-                               'signal_time': c['datetime'], 'ema20': float(c['ema20']),
-                               'ema50': float(c['ema50']), 'ema100': float(c['ema100']),
-                               'ema200': float(c['ema200'])}
-                elif direction == 'Short' and self.enable_short:
-                    pending = {'direction': 'Short', 'sl_level': float(c['high']),
-                               'signal_time': c['datetime'], 'ema20': float(c['ema20']),
-                               'ema50': float(c['ema50']), 'ema100': float(c['ema100']),
-                               'ema200': float(c['ema200'])}
-                continue
-
             # In position — SL checked before Target within the same bar.
-            # Checked from the entry bar itself onward, since entry fills
-            # at the open and the rest of that bar's range is still live.
+            # Checked from the entry (breakout) candle itself onward, since
+            # the rest of that bar's range past the fill point is still live.
             sl_level = entry['sl_level']
             tp_level = entry['tp_level']
             exit_reason = exit_price = None
@@ -272,3 +286,53 @@ def _summarise(trades):
         'target_exits':   sum(1 for t in trades if t['exit_reason'] == 'TARGET'),
         'data_end_exits': sum(1 for t in trades if t['exit_reason'] == 'DATA_END'),
     }
+
+
+# ── Optimiser (Find Best Params) ───────────────────────────────────────────
+# The only real free params left are Target % and Direction — SL/entry are
+# fixed by the signal candle itself. Sweep both and rank by a score that
+# rewards P&L but only once there's enough sample size and a positive edge.
+_TARGET_PCT_GRID = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10, 12, 15]
+_DIRECTION_GRID  = ['both', 'long', 'short']
+
+
+def _opt_score(s: dict) -> float:
+    pf  = s.get('profit_factor') or 0
+    pnl = s.get('total_pnl', 0)
+    if s.get('total_trades', 0) < 3 or pf <= 0 or pnl <= 0:
+        return -999.0
+    return pnl * (pf ** 0.5)
+
+
+def optimise_ema_pullback(daily_df: pd.DataFrame, min_trades: int = 3) -> list:
+    """Sweep (direction × target_pct) and return results sorted best-first."""
+    results = []
+    for direction in _DIRECTION_GRID:
+        enable_long  = direction != 'short'
+        enable_short = direction != 'long'
+        for tp in _TARGET_PCT_GRID:
+            try:
+                engine = EmaPullbackEngine(
+                    daily_df=daily_df, enable_long=enable_long,
+                    enable_short=enable_short, target_pct=tp,
+                )
+                _, summary = engine.run()
+                if summary['total_trades'] < min_trades:
+                    continue
+                results.append({
+                    'direction':     direction,
+                    'target_pct':    tp,
+                    'total_trades':  summary['total_trades'],
+                    'wins':          summary['wins'],
+                    'losses':        summary['losses'],
+                    'win_rate':      summary['win_rate'],
+                    'total_pnl':     summary['total_pnl'],
+                    'profit_factor': summary['profit_factor'],
+                    'max_drawdown':  summary['max_drawdown'],
+                    'score':         round(_opt_score(summary), 2),
+                })
+            except Exception as exc:
+                logger.debug('EMA Confluence Breakout optimise skip: dir=%s tp=%s — %s', direction, tp, exc)
+
+    results.sort(key=lambda x: x['score'], reverse=True)
+    return results

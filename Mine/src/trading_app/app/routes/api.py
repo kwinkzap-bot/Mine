@@ -3638,18 +3638,17 @@ def run_expiry_breakout_backtest_api():
 @csrf.exempt
 @require_user_auth
 def run_ema_pullback_backtest_api():
-    """Run the EMA 200 Trend Pullback backtest (daily candles only).
+    """Run the EMA Confluence Breakout backtest (daily candles only).
 
-    Rule: Daily EMA20/50/100/200. Trend alignment on the signal candle —
-    EMA20>EMA50 and EMA50>EMA100 for Long (mirrored, EMA20<EMA50 and
-    EMA50<EMA100, for Short). The candle's daily range must TOUCH EMA200
-    AND its close must clear it in the trade's direction (above for Long,
-    below for Short). Entry is filled at the OPEN of the NEXT daily
-    candle. SL is the signal candle's own Low (Long) / High (Short);
-    Target is target_pct (default 5.0, floor 1.0) of the entry price.
-    direction: 'both'|'long'|'short', default 'both'. require_candle_color
-    (default True): the signal candle must also be Green for BUY / Red
-    for SELL.
+    Rule: Daily EMA20/50/100/200. Signal candle is one whose daily range
+    TOUCHES ALL FOUR EMAs at once. Its own color fixes the direction —
+    Red arms a SELL breakout order on its own Low, Green arms a BUY
+    breakout order on its own High. The order stays armed (watched on
+    every later candle) until a candle's High/Low breaks that level,
+    filling at the trigger level (or that candle's Open if it gapped
+    through). SL is the signal candle's opposite extreme (High for SELL,
+    Low for BUY); Target is target_pct (default 5.0, floor 1.0) of the
+    entry price. direction: 'both'|'long'|'short', default 'both'.
     """
     auth_error = check_auth()
     if auth_error:
@@ -3663,7 +3662,6 @@ def run_ema_pullback_backtest_api():
         enable_long    = direction != 'short'
         enable_short   = direction != 'long'
         target_pct     = float(data.get('target_pct', 5.0) or 5.0)
-        require_candle_color = bool(data.get('require_candle_color', True))
 
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
@@ -3706,11 +3704,10 @@ def run_ema_pullback_backtest_api():
             enable_long=enable_long,
             enable_short=enable_short,
             target_pct=target_pct,
-            require_candle_color=require_candle_color,
         )
         trades, summary = engine.run()
 
-        logger.info('[EmaPullback BT] %d daily bars → %d trades', len(daily_candles), len(trades))
+        logger.info('[EMA Confluence Breakout BT] %d daily bars → %d trades', len(daily_candles), len(trades))
 
         return jsonify({
             'success': True,
@@ -3724,7 +3721,105 @@ def run_ema_pullback_backtest_api():
         })
 
     except Exception as e:
-        logger.error(f"Error in EMA Pullback backtest API: {e}", exc_info=True)
+        logger.error(f"Error in EMA Confluence Breakout backtest API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/backtest/ema-pullback/symbol-defaults', methods=['GET'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def get_ema_pullback_symbol_defaults():
+    """The per-stock default Direction/Target table (EMA_SYMBOL_DEFAULTS) as
+    JSON, so the frontend can preview a picked symbol's own defaults in the
+    form the moment it's selected."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
+    return jsonify({'success': True, 'defaults': EMA_SYMBOL_DEFAULTS})
+
+
+@api_bp.route('/backtest/ema-pullback/optimise', methods=['POST'], strict_slashes=False)
+@csrf.exempt
+@require_user_auth
+def run_ema_pullback_optimise():
+    """Sweep EMA Confluence Breakout (direction × target_pct) and return ranked results."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+    try:
+        data           = request.get_json()
+        symbol         = data.get('symbol', 'NIFTY')
+        start_date_str = data.get('start_date', '2017-01-01')
+        end_date_str   = data.get('end_date')
+        recalculate    = bool(data.get('recalculate', False))
+
+        if not end_date_str:
+            end_date_str = datetime.today().strftime('%Y-%m-%d')
+
+        cache_key = f"ema_pullback_{symbol}"
+
+        if not recalculate:
+            cache = _load_opt_cache()
+            if cache_key in cache:
+                entry = cache[cache_key]
+                return jsonify({'success': True, 'from_cache': True, **entry})
+
+        current_kite = get_data_provider()
+        if not current_kite:
+            return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
+
+        fyers_indices = {
+            'NIFTY':      'NSE:NIFTY50-INDEX',
+            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+            'SENSEX':     'BSE:SENSEX-INDEX',
+        }
+        kite_indices = {
+            'NIFTY': 256265, 'BANKNIFTY': 260105,
+            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+        }
+        if hasattr(current_kite, 'fyers'):
+            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+        else:
+            instrument_token = kite_indices.get(symbol, symbol)
+
+        daily_candles = current_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=start_date_str,
+            to_date=end_date_str,
+            interval='day',
+            use_cache=False,
+        )
+        if not daily_candles:
+            return jsonify({'success': False, 'error': 'No daily data found for the given range'}), 404
+
+        import pandas as pd
+        from trading_app.Backtest.ema_pullback_engine import optimise_ema_pullback
+
+        results = optimise_ema_pullback(pd.DataFrame(daily_candles))
+
+        logger.info('[EMA Confluence Breakout optimise] %d daily bars → %d combos passed filter',
+                    len(daily_candles), len(results))
+
+        cached_at = datetime.now().strftime('%Y-%m-%d %H:%M')
+        payload   = {
+            'symbol':              symbol,
+            'total_combos_tested': len(results),
+            'best':                results[0] if results else None,
+            'results':             results[:15],
+            'cached_at':           cached_at,
+        }
+
+        cache            = _load_opt_cache()
+        cache[cache_key] = payload
+        _save_opt_cache(cache)
+
+        return jsonify({'success': True, 'from_cache': False, **payload})
+
+    except Exception as e:
+        logger.error(f"Error in EMA Confluence Breakout optimise API: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -8456,6 +8551,11 @@ def oi_profile_candles() -> EndpointResponse:
         multiplier = request.args.get('multiplier', 2, type=int)
         auto_hl    = request.args.get('auto_hl', 'false').lower() == 'true'
         first_5m_atm = request.args.get('first_5m_atm', 'false').lower() == 'true'
+        # Callers that never render the "2nd 30-second candle" indicator (e.g.
+        # the Round Strike block) can skip its 3 extra parallel Fyers history
+        # calls per request — one less source of rate-limit contention for
+        # this endpoint's main option-candle fetch.
+        include_30s = request.args.get('include_30s', 'true').lower() != 'false'
         custom_strike = request.args.get('custom_strike', type=int)
         ce_strike = request.args.get('ce_strike', type=int)
         pe_strike = request.args.get('pe_strike', type=int)
@@ -8694,7 +8794,7 @@ def oi_profile_candles() -> EndpointResponse:
         # candle" box indicator on every timeframe it supports (up to 30min), not
         # just 1-minute; day[1] of a coarser interval is a completely different
         # (wrong) bar and was giving that indicator an incorrect box.
-        _wants_30s_subcandles = interval in ('minute', '2minute', '3minute', '5minute', '15minute', '30minute')
+        _wants_30s_subcandles = include_30s and interval in ('minute', '2minute', '3minute', '5minute', '15minute', '30minute')
         future_index_30s = executor.submit(fetch_task, token, from_date, to_date, '30second') if _wants_30s_subcandles else None
         
         # Use daily OHLC cache if available (TTL 5 mins)
@@ -8987,7 +9087,22 @@ def oi_profile_candles() -> EndpointResponse:
             logger.warn(f"[OI-Profile] Strike fetch failed: {e}")
 
         # ── 6. Update Cache and Return ────────────────────────────────
+        # A token was resolved but its candle list still came back empty —
+        # almost always a rate-limited/exhausted-retry historical fetch
+        # (FyersDataServiceAdapter.historical_data swallows that failure and
+        # returns [] rather than raising), not a genuine "no trades" case for
+        # a near-ATM weekly option over a multi-day window. Track this
+        # per-leg so we neither report false success nor cache the broken
+        # result below (see oipRSLoadCandles / oipRSFixed5mLoadCandles in
+        # oi_profile_round_strike.js, whose empty-candle charts this masked).
+        ce_opt_fetch_failed = bool(ce_token) and not ce_candles
+        pe_opt_fetch_failed = bool(pe_token) and not pe_candles
+        fixed_ce_fetch_failed = bool(fixed_ce_token) and not fixed_ce_candles
+        fixed_pe_fetch_failed = bool(fixed_pe_token) and not fixed_pe_candles
         fetch_error_msg = _fetch_errors[0] if _fetch_errors and not candles else None
+        opt_fetch_failed = ce_opt_fetch_failed or pe_opt_fetch_failed or fixed_ce_fetch_failed or fixed_pe_fetch_failed
+        if not fetch_error_msg and opt_fetch_failed:
+            fetch_error_msg = 'Option candle fetch returned no data (likely rate-limited) — retrying next poll.'
         response_data = {
             'success': True,
             'symbol': symbol,
@@ -9017,10 +9132,11 @@ def oi_profile_candles() -> EndpointResponse:
             'fetch_error': fetch_error_msg,
         }
         
-        with _candle_cache_lock:
-            _candle_response_cache[cache_key] = (response_data, datetime.now().timestamp())
-            # Basic cleanup: if cache somehow grows too large, clear it (extra OOM protection)
-            if len(_candle_response_cache) > (_MAX_CACHE_ENTRIES * 2): _candle_response_cache.clear()
+        if not opt_fetch_failed:
+            with _candle_cache_lock:
+                _candle_response_cache[cache_key] = (response_data, datetime.now().timestamp())
+                # Basic cleanup: if cache somehow grows too large, clear it (extra OOM protection)
+                if len(_candle_response_cache) > (_MAX_CACHE_ENTRIES * 2): _candle_response_cache.clear()
 
         return jsonify(response_data)
 

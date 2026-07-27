@@ -1,5 +1,46 @@
 [
   {
+    "date": "2026-07-27",
+    "direction": "BUY",
+    "entry_spot": 23954.85,
+    "exit_spot": 23924.85,
+    "pnl_pts": -30.0,
+    "reason": "SL",
+    "entry_time": "2026-07-27T11:03:43.930085",
+    "exit_time": "2026-07-27T11:06:55.556638",
+    "strike": 23700,
+    "option_type": "CE",
+    "lot_size": 65,
+    "sl_level": 23925.4,
+    "target_level": 24043.2,
+    "opt_entry_price": 259.7,
+    "opt_exit_price": 254.0,
+    "opt_pnl_pts": -5.7,
+    "opt_pnl_inr": -370.5,
+    "broker_entries": [
+      {
+        "broker_idx": 1,
+        "broker_type": "zerodha",
+        "order_id": "2081613978945380352",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUL23700CE",
+        "lots": 5,
+        "quantity": 325
+      },
+      {
+        "broker_idx": 2,
+        "broker_type": "zerodha",
+        "order_id": "2081613980212060160",
+        "entry_success": true,
+        "tradingsymbol": "",
+        "fyers_sym": "NSE:NIFTY26JUL23700CE",
+        "lots": 2,
+        "quantity": 130
+      }
+    ]
+  },
+  {
     "date": "2026-07-24",
     "direction": "BUY",
     "entry_spot": 23699.95,

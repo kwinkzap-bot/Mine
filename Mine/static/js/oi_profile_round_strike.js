@@ -587,7 +587,7 @@ async function oipRSFixed5mLoadCandles(resetZoom = false) {
     const peStrike = document.getElementById('oipRSPEStrikeDropdown')?.value;
     if (!ceStrike || !peStrike || !oipRSFixed5mChart) return;
 
-    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=5minute&days=5&opt_days=5&ce_strike=${ceStrike}&pe_strike=${peStrike}&_t=${Date.now()}`;
+    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=5minute&days=5&opt_days=5&ce_strike=${ceStrike}&pe_strike=${peStrike}&include_30s=false&_t=${Date.now()}`;
 
     let data;
     try {
@@ -728,7 +728,7 @@ function oipRSInitIndicatorsPopup() {
 async function oipRSFetchOpenAndStrikes() {
     const _daysForInterval = { day: 365, week: 1095, month: 3650 };
     const days = _daysForInterval[oipInterval] ?? 5;
-    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${days}&_t=${Date.now()}`;
+    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${days}&include_30s=false&_t=${Date.now()}`;
 
     try {
         const res = await fetch(url);
@@ -779,7 +779,7 @@ async function oipRSLoadCandles(resetZoom = false) {
 
     const _daysForInterval = { day: 365, week: 1095, month: 3650 };
     const days = _daysForInterval[oipInterval] ?? 5;
-    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${days}&ce_strike=${ceStrike}&pe_strike=${peStrike}&_t=${Date.now()}`;
+    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${days}&ce_strike=${ceStrike}&pe_strike=${peStrike}&include_30s=false&_t=${Date.now()}`;
 
     let data;
     try {

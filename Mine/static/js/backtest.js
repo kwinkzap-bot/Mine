@@ -138,6 +138,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // resolves — re-apply now that real lot sizes are in.
                 applyLotValueForSymbol(selectedSymbol);
                 _fetchTmfSymbolDefaults();
+                _fetchEmaSymbolDefaults();
             } else {
                 if (window.showNotification) window.showNotification('Error loading symbols: ' + data.error, 'error');
             }
@@ -176,6 +177,35 @@ document.addEventListener('DOMContentLoaded', function() {
             console.error('Failed to fetch TMF symbol defaults:', error);
         }
     }
+
+    // Per-symbol default Direction/Target for EMA Confluence Breakout
+    // (EMA_SYMBOL_DEFAULTS in ema_symbol_universe.py) — fetched once so
+    // picking a symbol in the shared Symbol box can preview its own
+    // defaults immediately, same idea as the TMF table above.
+    let _emaSymbolDefaults = {};
+    async function _fetchEmaSymbolDefaults() {
+        try {
+            const res = await fetch('/api/backtest/ema-pullback/symbol-defaults');
+            const data = await res.json();
+            if (data.success) {
+                _emaSymbolDefaults = data.defaults || {};
+                applyEmaDefaultsForSymbol(selectedSymbol);
+            }
+        } catch (error) {
+            console.error('Failed to fetch EMA symbol defaults:', error);
+        }
+    }
+
+    // Applies symbol's own Direction/Target defaults to the EMA Confluence
+    // Breakout fields — a display update only (like applyLotValueForSymbol);
+    // a symbol missing from the table falls back to Both/5%.
+    window.applyEmaDefaultsForSymbol = function(symbol) {
+        const d = _emaSymbolDefaults[(symbol || '').toUpperCase()];
+        const dirSel  = document.getElementById('emaDirection');
+        const tgtInput = document.getElementById('emaTargetPct');
+        if (dirSel)  dirSel.value  = d ? d.direction   : 'both';
+        if (tgtInput) tgtInput.value = d ? d.target_pct : 5;
+    };
 
     // Picking a specific stock previews ITS OWN best combo in the Direction/
     // filter fields — purely a display update; the backend looks the combo
@@ -248,6 +278,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 selectedSymbol = val;
                 this.value = selectedSymbol;
                 applyLotValueForSymbol(selectedSymbol);
+                applyEmaDefaultsForSymbol(selectedSymbol);
                 cancelRtpOptimise(); // stale: results would be for the old symbol
                 cancelScOptimise();
                 this.blur();
@@ -263,6 +294,7 @@ document.addEventListener('DOMContentLoaded', function() {
             symbolSearch.value = selectedSymbol;
             symbolList.classList.remove('show');
             applyLotValueForSymbol(selectedSymbol);
+            applyEmaDefaultsForSymbol(selectedSymbol);
             cancelRtpOptimise(); // stale: results would be for the old symbol
             cancelScOptimise();
         }
@@ -277,13 +309,14 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     function applyLotValueForSymbol(symbol) {
         const lotValue = lotValueForSymbol(symbol);
-        ['rtpLotValue', 'vwapLotValue', 'scLotValue'].forEach(function(id) {
+        ['rtpLotValue', 'vwapLotValue', 'scLotValue', 'emaLotValue'].forEach(function(id) {
             const el = document.getElementById(id);
             if (el) el.value = lotValue;
         });
     }
     // Seed lot values for the symbol selected on initial page load.
     applyLotValueForSymbol(selectedSymbol);
+    applyEmaDefaultsForSymbol(selectedSymbol);
 
     // Close dropdown when clicking outside
     document.addEventListener('click', function(e) {
@@ -327,6 +360,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const tmfOptPanel   = document.getElementById('thirtyMinFakeoutOptimisePanel');
         const emaParamsRow  = document.getElementById('emaPullbackParamsRow');
         const emaLotRow     = document.getElementById('emaPullbackLotRow');
+        const emaOptPanel   = document.getElementById('emaOptimisePanel');
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (vwapParamsRow) vwapParamsRow.style.display = 'none';
         if (vwapLotRow)    vwapLotRow.style.display    = 'none';
@@ -339,6 +373,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (tmfOptPanel)   tmfOptPanel.style.display   = 'none';
         if (emaParamsRow)  emaParamsRow.style.display  = 'none';
         if (emaLotRow)     emaLotRow.style.display     = 'none';
+        if (emaOptPanel)   emaOptPanel.style.display   = 'none';
         // Restore symbol/date/interval visibility (hidden for some strategies)
         const symFg      = document.getElementById('mainSymbolFg');
         const intFg      = document.getElementById('mainIntervalFg');
@@ -351,7 +386,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle' || val === 'thirty_min_fakeout') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle' || val === 'thirty_min_fakeout' || val === 'ema_pullback') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -457,7 +492,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
     };
 
-    // EMA 200 Trend Pullback investment display
+    // EMA Confluence Breakout investment display
     window.updateEmaInvestment = function() {
         const lots  = Math.max(1, parseInt(document.getElementById('emaLots')?.value || 1));
         const total = lots * 50000;
@@ -503,7 +538,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // ── EMA 200 Trend Pullback: Rule popup ──────────────────────────────
+    // ── EMA Confluence Breakout: Rule popup ──────────────────────────────
     const emaRuleTrigger = document.getElementById('emaRuleTrigger');
     const emaRuleModal   = document.getElementById('emaRuleModal');
     const emaRuleClose   = document.getElementById('emaRuleModalClose');
@@ -612,12 +647,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.sl_risk_max = parseFloat(document.getElementById('tmfSlRiskMax')?.value || '5000') || 5000;
             }
 
-            // EMA 200 Trend Pullback
+            // EMA Confluence Breakout
             if (strat === 'ema_pullback') {
                 endpoint = '/api/backtest/ema-pullback';
                 payload.direction   = document.getElementById('emaDirection')?.value || 'both';
                 payload.target_pct  = Math.max(1, parseFloat(document.getElementById('emaTargetPct')?.value || 5));
-                payload.require_candle_color = document.getElementById('emaRequireCandleColor')?.checked ?? true;
             }
 
             // Swing Momentum: different endpoint + payload
@@ -2000,6 +2034,89 @@ document.addEventListener('DOMContentLoaded', function() {
     const vwapRecalcBtn = document.getElementById('vwapRecalcOptBtn');
     if (vwapRecalcBtn) vwapRecalcBtn.addEventListener('click', () => runVwapOptimise(true));
 
+    // ── EMA Confluence Breakout Optimise (Find Best Params) ─────────────────
+    // Only two real free params — Direction and Target % — so a single flat
+    // grid (no per-timeframe grouping) sweeping both, same shape as VWAP's.
+    const EMA_OPT_COLS = [
+        { label: '#',             key: null,            fmt: (r, i) => i + 1 },
+        { label: 'Direction',     key: 'direction',      fmt: r => r.direction === 'both' ? 'Buy & Sell' : (r.direction === 'long' ? 'Buy only' : 'Sell only') },
+        { label: 'Target %',      key: 'target_pct',     fmt: r => `${r.target_pct}%` },
+        { label: 'Trades',        key: 'total_trades',   fmt: r => r.total_trades },
+        { label: 'Win%',          key: 'win_rate',       fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
+        { label: 'Net P&L (pts)', key: 'total_pnl',      fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1)} pts</span>` },
+        { label: 'Prof. Factor',  key: 'profit_factor',  fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD',        key: 'max_drawdown',   fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: '',              key: null,            fmt: () => '' },
+    ];
+
+    function applyEmaOptResult(r) {
+        const direction = document.getElementById('emaDirection');
+        const target    = document.getElementById('emaTargetPct');
+        if (direction) direction.value = r.direction;
+        if (target)    target.value    = r.target_pct;
+        if (window.showNotification) {
+            window.showNotification(
+                `Applied: ${direction ? direction.options[direction.selectedIndex].text : r.direction}  ·  Target ${r.target_pct}%  ·  Win% ${((r.wins / r.total_trades) * 100).toFixed(0)}%`, 'success'
+            );
+        }
+    }
+
+    function renderEmaOptResults(data) {
+        const panel     = document.getElementById('emaOptimisePanel');
+        const metaEl    = document.getElementById('emaOptMeta');
+        const recalcBtn = document.getElementById('emaRecalcOptBtn');
+
+        if (metaEl) {
+            let meta = `${data.total_combos_tested} combos · ${data.symbol}`;
+            if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
+            metaEl.textContent = meta;
+        }
+
+        _mountSingleOptGrid('emaOptGrid', data.results || [], EMA_OPT_COLS, 'total_pnl', applyEmaOptResult,
+            { win_rate: r => r.total_trades ? r.wins / r.total_trades : 0 });
+
+        if (panel)     panel.style.display     = '';
+        if (recalcBtn) recalcBtn.style.display = '';
+        if (data.best) applyEmaOptResult(data.best);
+    }
+
+    async function runEmaOptimise(recalculate) {
+        const symbol = symbolSearch.value.trim().toUpperCase();
+        if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
+
+        const panel     = document.getElementById('emaOptimisePanel');
+        const recalcBtn = document.getElementById('emaRecalcOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+
+        try {
+            const resp = await fetch('/api/backtest/ema-pullback/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    symbol,
+                    start_date: document.getElementById('startDate').value,
+                    end_date:   document.getElementById('endDate').value,
+                    recalculate,
+                })
+            });
+            const data = await resp.json();
+            if (!data.success) { window.showNotification(data.error || 'Optimisation failed', 'error'); return; }
+            renderEmaOptResults(data);
+        } catch (err) {
+            console.error('EMA Confluence Breakout optimise error:', err);
+            window.showNotification('Optimisation request failed', 'error');
+        } finally {
+            if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+        }
+    }
+
+    const emaRecalcBtn = document.getElementById('emaRecalcOptBtn');
+    if (emaRecalcBtn) emaRecalcBtn.addEventListener('click', () => runEmaOptimise(true));
+
     // ── Candle Breakout Optimise (Find Best Params) — one grid per timeframe ───
     // Position sizing for the 2nd-Candle grid's ₹ columns, from its lot inputs
     // (defaults: 1 lot × 65 ₹/pt — the NIFTY value, same as the result cards).
@@ -2382,6 +2499,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'vwap')      runVwapOptimise(false);
         else if (strat === 'second_candle') runScOptimise(false);
         else if (strat === 'thirty_min_fakeout') runTmfOptimise(false);
+        else if (strat === 'ema_pullback') runEmaOptimise(false);
         else                            runOptimise(false);
     });
     if (recalcOptBtn) recalcOptBtn.addEventListener('click', () => runOptimise(true));
