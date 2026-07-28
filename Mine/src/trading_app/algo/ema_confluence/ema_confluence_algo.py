@@ -82,7 +82,11 @@ if not any(isinstance(h, RotatingFileHandler) and getattr(h, '_emac_sink', False
 
 _POLL_SECS = 15          # daily-swing strategy — no need for an aggressive poll
 _HARD_STOP_MIN = 15 * 60 + 30   # thread exits for the day at/after 15:30 IST
-_EMA_LOOKBACK_DAYS = 800  # ~2.2 calendar years — comfortably covers the 200-day EMA
+# ~3.3 calendar years (≈820 trading bars). Must match the backtest's warm-up
+# (_EMA_BT_WARMUP_DAYS in routes/api.py): a 200-day EMA keeps drifting toward
+# its true value for hundreds of bars, so a shorter run-up here would have live
+# scanning fire on different EMA values than the backtest that validated it.
+_EMA_LOOKBACK_DAYS = 1200
 
 # Index symbols resolve to their own instrument token (same map the backtest
 # route uses); every other symbol is an F&O equity, 'NSE:{symbol}-EQ' (Fyers)

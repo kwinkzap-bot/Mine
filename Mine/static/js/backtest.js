@@ -849,6 +849,11 @@ document.addEventListener('DOMContentLoaded', function() {
         return 330 + (Math.floor(lots) - 5) * 62;
     }
 
+    // EMA Confluence Breakout is a cash-equity strategy (LICHSGFIN, SBIN, …),
+    // so the NIFTY options table above does not apply to it. Flat ₹1,000 per
+    // round-trip trade, independent of lot count.
+    const EMA_BROKERAGE_PER_TRADE = 1000;
+
     let lastData = null;
 
     function displayResults(data) {
@@ -997,7 +1002,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const ddDatesEl = document.getElementById('statMaxDDDates');
             if (ddDatesEl) ddDatesEl.textContent = '';
 
-            const brokPerTrade   = calcBrokeragePerTrade(vLots);
+            const brokPerTrade   = isEma ? EMA_BROKERAGE_PER_TRADE : calcBrokeragePerTrade(vLots);
             const totalBrokerage = brokPerTrade * (summary.total_trades || 0);
             const grossRs = pnl * vLotVal * vLots;
             const netRs   = grossRs - totalBrokerage;

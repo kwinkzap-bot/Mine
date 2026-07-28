@@ -19206,5 +19206,19 @@
     "idx_fut_oi": 18801900,
     "fii_fut_oi": -266925,
     "FII_Index_futures": 625.78
+  },
+  {
+    "date": "2026-07-28",
+    "symbol": "NIFTY",
+    "ce_oi": 73687250,
+    "pe_oi": 68327025,
+    "open": 23971.25,
+    "high": 24041.15,
+    "low": 23954.6,
+    "close": 23985.35,
+    "vwap": 23999.53,
+    "idx_fut_oi": null,
+    "fii_fut_oi": null,
+    "FII_Index_futures": 0
   }
 ]

@@ -3762,6 +3762,23 @@ def run_expiry_breakout_backtest_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Extra daily history fetched BEFORE the user's start date purely to settle the
+# 200-period EMA. ~3.3 calendar years ≈ 820 trading bars, which drives the
+# seed's residual influence on EMA200 to ~0.03% of itself — far below what
+# could flip the "range touches all four EMAs" test. Without it the same date
+# produced different signals depending on where the backtest started.
+_EMA_BT_WARMUP_DAYS = 1200
+
+
+def _ema_warmup_from(start_date_str: str) -> str:
+    """The fetch-from date: user's start date minus the EMA warm-up run-up."""
+    try:
+        start = datetime.strptime(str(start_date_str)[:10], '%Y-%m-%d')
+    except (ValueError, TypeError):
+        return start_date_str
+    return (start - timedelta(days=_EMA_BT_WARMUP_DAYS)).strftime('%Y-%m-%d')
+
+
 @api_bp.route('/backtest/ema-pullback', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -3814,9 +3831,10 @@ def run_ema_pullback_backtest_api():
         else:
             instrument_token = kite_indices.get(symbol, symbol)
 
+        warmup_from_str = _ema_warmup_from(start_date_str)
         daily_candles = current_kite.historical_data(
             instrument_token=instrument_token,
-            from_date=start_date_str,
+            from_date=warmup_from_str,
             to_date=end_date_str,
             interval='day',
             use_cache=False,
@@ -3832,10 +3850,12 @@ def run_ema_pullback_backtest_api():
             enable_long=enable_long,
             enable_short=enable_short,
             target_pct=target_pct,
+            start_date=start_date_str,
         )
         trades, summary = engine.run()
 
-        logger.info('[EMA Confluence Breakout BT] %d daily bars → %d trades', len(daily_candles), len(trades))
+        logger.info('[EMA Confluence Breakout BT] %d daily bars (warm-up from %s) → %d trades',
+                    len(daily_candles), warmup_from_str, len(trades))
 
         return jsonify({
             'success': True,
@@ -3844,6 +3864,7 @@ def run_ema_pullback_backtest_api():
                 'daily_bars':  len(daily_candles),
                 'first_daily': str(daily_candles[0].get('date', '?')),
                 'last_daily':  str(daily_candles[-1].get('date', '?')),
+                'warmup_from': warmup_from_str,
             },
             'summary': summary,
         })
@@ -3885,7 +3906,9 @@ def run_ema_pullback_optimise():
         if not end_date_str:
             end_date_str = datetime.today().strftime('%Y-%m-%d')
 
-        cache_key = f"ema_pullback_{symbol}"
+        # 'v2' retires every entry cached before the EMA warm-up / stale-order
+        # fixes — those rankings came from a different engine and are wrong.
+        cache_key = f"ema_pullback_v2_{symbol}"
 
         if not recalculate:
             cache = _load_opt_cache()
@@ -3913,9 +3936,10 @@ def run_ema_pullback_optimise():
         else:
             instrument_token = kite_indices.get(symbol, symbol)
 
+        warmup_from_str = _ema_warmup_from(start_date_str)
         daily_candles = current_kite.historical_data(
             instrument_token=instrument_token,
-            from_date=start_date_str,
+            from_date=warmup_from_str,
             to_date=end_date_str,
             interval='day',
             use_cache=False,
@@ -3926,7 +3950,8 @@ def run_ema_pullback_optimise():
         import pandas as pd
         from trading_app.Backtest.ema_pullback_engine import optimise_ema_pullback
 
-        results = optimise_ema_pullback(pd.DataFrame(daily_candles))
+        results = optimise_ema_pullback(pd.DataFrame(daily_candles),
+                                        start_date=start_date_str)
 
         logger.info('[EMA Confluence Breakout optimise] %d daily bars → %d combos passed filter',
                     len(daily_candles), len(results))

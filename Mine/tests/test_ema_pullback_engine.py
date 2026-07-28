@@ -1,0 +1,160 @@
+"""Regression tests for the EMA Confluence Breakout engine.
+
+These pin down the two defects that made the same symbol report completely
+different trades depending only on the backtest's start date:
+  1. an armed-but-never-filled breakout order blocked every later signal, and
+  2. EMAs seeded off the first fetched bar gave the same date different values.
+"""
+import numpy as np
+import pandas as pd
+import pytest
+
+from trading_app.Backtest.ema_pullback_engine import EmaPullbackEngine
+
+# Mirrors _EMA_BT_WARMUP_DAYS in trading_app/app/routes/api.py.
+WARMUP_DAYS = 1200
+
+
+@pytest.fixture(scope='module')
+def daily():
+    """A long synthetic daily series, deterministic across runs."""
+    rng = np.random.default_rng(7)
+    dates = pd.bdate_range('2012-01-01', '2026-07-28')
+    close = 200 * np.exp(np.cumsum(rng.normal(0.0004, 0.016, len(dates))))
+    wick = np.abs(rng.normal(0, 0.011, len(dates)))
+    op = close * (1 + rng.normal(0, 0.006, len(dates)))
+    return pd.DataFrame({'date': dates, 'open': op,
+                         'high': np.maximum(op, close) * (1 + wick),
+                         'low': np.minimum(op, close) * (1 - wick),
+                         'close': close, 'volume': 1000})
+
+
+def _run(daily, start):
+    """Run the engine the way the API does: fetch warm-up, trade from `start`."""
+    fetch_from = pd.Timestamp(start) - pd.Timedelta(days=WARMUP_DAYS)
+    df = daily[daily['date'] >= fetch_from].reset_index(drop=True)
+    return EmaPullbackEngine(daily_df=df, enable_long=False, enable_short=True,
+                             target_pct=15, start_date=start).run()
+
+
+def _ident(t):
+    return (t['signal_time'][:10], t['entry_time'][:10], t['entry_price'],
+            t['exit_time'][:10], t['exit_reason'])
+
+
+def test_start_date_does_not_change_overlapping_trades(daily):
+    """The core bug: a later start date must not invent a different history."""
+    long_trades, _ = _run(daily, '2017-01-01')
+    short_trades, _ = _run(daily, '2020-01-01')
+
+    expected = [_ident(t) for t in long_trades if t['entry_time'] >= '2020-01-01']
+    assert expected, 'fixture must produce trades in the overlap to be meaningful'
+    assert [_ident(t) for t in short_trades] == expected
+
+
+def test_unfilled_order_does_not_block_later_signals(daily):
+    """A signal that never breaks out must not freeze the strategy forever."""
+    trades, _ = _run(daily, '2017-01-01')
+    # Before the fix a stuck pending order ended all trading in 2019; the run
+    # must keep taking trades right through to the end of the data.
+    assert max(t['entry_time'][:4] for t in trades) >= '2025'
+
+
+def test_newer_signal_supersedes_the_armed_level(daily):
+    """Entries must fire off the most recent confluence candle, not a stale one."""
+    trades, _ = _run(daily, '2017-01-01')
+    for t in trades:
+        assert t['signal_time'] <= t['entry_time']
+    # Each signal is used at most once.
+    signals = [t['signal_time'] for t in trades]
+    assert len(signals) == len(set(signals))
+
+
+def test_ema_is_stable_across_fetch_windows(daily):
+    """Same date, different fetch start -> same EMA200 inside the traded window."""
+    def emas(start):
+        fetch_from = pd.Timestamp(start) - pd.Timedelta(days=WARMUP_DAYS)
+        df = daily[daily['date'] >= fetch_from].reset_index(drop=True)
+        eng = EmaPullbackEngine(daily_df=df, target_pct=15, start_date=start)
+        return eng.daily_df.set_index('datetime')[['ema200']]
+
+    joined = emas('2017-01-01').join(emas('2023-01-01'), how='inner',
+                                     lsuffix='_a', rsuffix='_b').dropna()
+    traded = joined[joined.index >= pd.Timestamp('2023-01-01', tz='Asia/Kolkata')]
+    drift = (traded['ema200_b'] - traded['ema200_a']).abs() / traded['ema200_a'] * 100
+    assert len(traded) > 500
+    # Was ~0.8% before warm-up + SMA seeding — far more than enough to flip the
+    # razor-thin "range touches all four EMAs" test.
+    assert drift.max() < 0.01
+
+
+def test_ema_matches_sma_seeded_reference(daily):
+    """_ema must equal TradingView's ta.ema (SMA-seeded recursion)."""
+    closes = daily['close'].to_numpy(dtype=float)
+    n = 50
+    alpha = 2.0 / (n + 1.0)
+    ref = np.full(len(closes), np.nan)
+    prev = closes[:n].mean()
+    ref[n - 1] = prev
+    for i in range(n, len(closes)):
+        prev = alpha * closes[i] + (1 - alpha) * prev
+        ref[i] = prev
+
+    got = EmaPullbackEngine._ema(daily['close'], n).to_numpy()
+    assert np.isnan(got[:n - 1]).all()
+    np.testing.assert_allclose(got[n - 1:], ref[n - 1:], rtol=1e-12)
+
+
+def test_stale_order_is_replaced_by_the_next_signal():
+    """Hand-built proof of the blocking bug, independent of the fixture.
+
+    A signal fires and arms a level price never returns to, then a second,
+    tradeable signal fires much later. The old engine kept the first order
+    armed forever and took NO trade at all; the second signal must win.
+    """
+    rows = []
+
+    def bar(o, h, low, c):
+        rows.append({'open': o, 'high': h, 'low': low, 'close': c, 'volume': 1000})
+
+    # 250 flat bars at 100 -> all four EMAs converge on 100.
+    for _ in range(250):
+        bar(100, 100.2, 99.8, 100)
+    # Signal A: red, range straddles 100, so it touches all four EMAs.
+    # Arms a SELL at its low of 98 — price never trades there again.
+    bar(101, 102, 98, 99)
+    # Rally away and hold at 130 long enough for the EMAs to reconverge there.
+    for i in range(30):
+        px = 100 + i
+        bar(px, px + 0.5, px - 0.3, px + 1)
+    for _ in range(250):
+        bar(130, 130.2, 129.8, 130)
+    # Signal B: red, and wide enough to straddle all four EMAs up here (the
+    # slower ones still trail the rally). Arms a SELL at its low of 125.
+    bar(131, 135, 125, 129)
+    # Next bar opens above 125 then breaks it -> fills at the trigger itself
+    # (not the gap-through path); then drop on to the 15% target.
+    bar(125.5, 126, 123, 123.5)
+    for _ in range(30):
+        bar(105, 106, 104, 105)
+
+    df = pd.DataFrame(rows)
+    df.insert(0, 'date', pd.bdate_range('2015-01-01', periods=len(df)))
+
+    trades, _ = EmaPullbackEngine(daily_df=df, enable_long=False,
+                                  enable_short=True, target_pct=15).run()
+
+    assert len(trades) == 1, f'expected the later signal to trade, got {trades}'
+    t = trades[0]
+    assert t['type'] == 'Short'
+    assert t['entry_price'] == pytest.approx(125, abs=0.01)  # Signal B's low
+    assert t['sl_price'] == pytest.approx(135, abs=0.01)     # Signal B's high
+
+
+def test_warmup_bars_are_never_traded(daily):
+    """Bars before start_date supply EMA history only."""
+    trades, _ = _run(daily, '2020-01-01')
+    assert trades
+    for t in trades:
+        assert t['entry_time'] >= '2020-01-01'
+        assert t['signal_time'] >= '2020-01-01'

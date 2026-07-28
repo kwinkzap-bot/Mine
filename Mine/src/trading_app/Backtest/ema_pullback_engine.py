@@ -14,14 +14,16 @@ Daily-candle-only, single-symbol, long and/or short:
                this candle's HIGH.
      A doji (close == open) produces no signal.
   3. ENTRY is a breakout order armed off the signal candle's own High/Low,
-     watched on every candle AFTER the signal candle until it fills (no
-     expiry — if price never breaks out, that signal never fills):
+     watched on every candle AFTER the signal candle until it fills:
        - BUY:  fills once a later candle's High >= signal candle's High.
        - SELL: fills once a later candle's Low  <= signal candle's Low.
      Fill price is the trigger level itself, or that candle's Open if it
      already gapped through the level (realistic slippage on a gap).
-     While a breakout order is armed, new signal candles are ignored —
-     only one pending order at a time.
+     Only one order is armed at a time, and a NEWER signal candle
+     SUPERSEDES a still-unfilled one — the level you are actually watching
+     is always the most recent confluence candle's. (Without this, a single
+     signal that never breaks out would silently block every later signal
+     for the rest of the backtest, making results depend on the start date.)
   4. Stop Loss is the signal candle's OPPOSITE extreme (not a percentage):
        - BUY:  sl_level = signal candle's Low
        - SELL: sl_level = signal candle's High
@@ -40,9 +42,19 @@ Daily-candle-only, single-symbol, long and/or short:
   Once a trade closes, scanning for the next signal resumes on the very
   next bar — any number of trades can occur across the requested range.
   Long and Short can each be toggled off (enable_long / enable_short).
+
+WARM-UP: pass `start_date` together with a daily_df that reaches back BEFORE
+it. Bars older than start_date are used only to compute the EMAs — they never
+arm an order or open a trade. A 200-period EMA needs a long run-up to settle,
+so feeding the engine only the requested window would (a) blank the first ~200
+bars entirely and (b) leave EMA200 off its true value by up to ~0.8%, which is
+enough to flip the razor-thin "range touches all four EMAs" test. Both effects
+made the same calendar date produce different signals depending on where the
+backtest started.
 """
 import logging
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -54,12 +66,19 @@ class EmaPullbackEngine:
 
     def __init__(self, daily_df: pd.DataFrame,
                 enable_long: bool = True, enable_short: bool = True,
-                target_pct: float = 5.0):
+                target_pct: float = 5.0, start_date=None):
         self.daily_df = daily_df.copy()
         self.enable_long  = bool(enable_long)
         self.enable_short = bool(enable_short)
         # Default 5%, floor 1% — never let target_pct go below the floor.
         self.target_pct = max(float(target_pct or 5.0), 1.0)
+        # Bars before this are warm-up only (EMA history, never traded).
+        # None = trade the whole frame.
+        self.start_ts = None
+        if start_date is not None:
+            ts = pd.Timestamp(start_date)
+            ts = ts.tz_localize('Asia/Kolkata') if ts.tz is None else ts.tz_convert('Asia/Kolkata')
+            self.start_ts = ts.normalize()
         self._prepare()
 
     # ── Data prep ────────────────────────────────────────────────────────────
@@ -89,11 +108,30 @@ class EmaPullbackEngine:
         df['datetime'] = df['datetime'].dt.normalize()
         return df.reset_index(drop=True)
 
+    @staticmethod
+    def _ema(series: pd.Series, n: int) -> pd.Series:
+        """EMA seeded with SMA(n), matching TradingView's ta.ema().
+
+        pandas' own .ewm(adjust=False) seeds off the single first close, which
+        leaves a long-period EMA badly off for hundreds of bars and makes its
+        value depend on where the data happens to start. Seeding with SMA(n)
+        starts far closer to the truth, so the same date yields the same EMA
+        whatever the fetch window — and it matches the Pine reference.
+        """
+        values = series.to_numpy(dtype=float)
+        out = np.full(len(values), np.nan)
+        if len(values) >= n:
+            seeded = values[n - 1:].copy()
+            seeded[0] = values[:n].mean()
+            # .ewm(adjust=False) seeds on its own first element, which is now
+            # the SMA — so this recursion is exactly the seeded EMA.
+            out[n - 1:] = pd.Series(seeded).ewm(span=n, adjust=False).mean().to_numpy()
+        return pd.Series(out, index=series.index)
+
     def _prepare(self):
         self.daily_df = self._normalise(self.daily_df)
         for n in _MA_PERIODS:
-            self.daily_df[f'ema{n}'] = (self.daily_df['close']
-                                         .ewm(span=n, adjust=False, min_periods=n).mean())
+            self.daily_df[f'ema{n}'] = self._ema(self.daily_df['close'], n)
 
     # ── Signal check ─────────────────────────────────────────────────────────
 
@@ -117,6 +155,20 @@ class EmaPullbackEngine:
             return 'Short'
         return None
 
+    def _arm(self, c):
+        """The breakout order this candle arms, or None if it is no signal."""
+        direction = self._signal_direction(c)
+        if direction == 'Long' and self.enable_long:
+            trigger, sl = float(c['high']), float(c['low'])
+        elif direction == 'Short' and self.enable_short:
+            trigger, sl = float(c['low']), float(c['high'])
+        else:
+            return None
+        return {'direction': direction, 'trigger_level': trigger, 'sl_level': sl,
+                'signal_time': c['datetime'], 'ema20': float(c['ema20']),
+                'ema50': float(c['ema50']), 'ema100': float(c['ema100']),
+                'ema200': float(c['ema200'])}
+
     # ── Main loop ────────────────────────────────────────────────────────────
 
     def run(self):
@@ -128,12 +180,16 @@ class EmaPullbackEngine:
         entry = None
         # {'direction','trigger_level','sl_level',...} — signal fired, armed
         # as a breakout order on the candle's own High (Long) / Low (Short),
-        # watched on every subsequent candle until it fills.
+        # watched on every subsequent candle until it fills or a newer
+        # confluence candle replaces it.
         pending = None
         n = len(df)
 
         for pos in range(n):
             c = df.iloc[pos]
+            # Warm-up bars exist purely to give the EMAs history to settle on.
+            if self.start_ts is not None and c['datetime'] < self.start_ts:
+                continue
 
             if entry is None:
                 if pending is not None:
@@ -167,23 +223,12 @@ class EmaPullbackEngine:
                         pending = None
                         # Fall through — the breakout candle's own range is
                         # still live, so check SL/Target against it below.
-                    else:
-                        continue
 
                 if entry is None:
-                    direction = self._signal_direction(c)
-                    if direction == 'Long' and self.enable_long:
-                        pending = {'direction': 'Long', 'trigger_level': float(c['high']),
-                                   'sl_level': float(c['low']),
-                                   'signal_time': c['datetime'], 'ema20': float(c['ema20']),
-                                   'ema50': float(c['ema50']), 'ema100': float(c['ema100']),
-                                   'ema200': float(c['ema200'])}
-                    elif direction == 'Short' and self.enable_short:
-                        pending = {'direction': 'Short', 'trigger_level': float(c['low']),
-                                   'sl_level': float(c['high']),
-                                   'signal_time': c['datetime'], 'ema20': float(c['ema20']),
-                                   'ema50': float(c['ema50']), 'ema100': float(c['ema100']),
-                                   'ema200': float(c['ema200'])}
+                    # Not filled (or nothing was armed). A fresh confluence
+                    # candle supersedes any still-armed level; a non-signal
+                    # candle leaves the existing one armed.
+                    pending = self._arm(c) or pending
                     continue
 
             # In position — SL checked before Target within the same bar.
@@ -304,8 +349,13 @@ def _opt_score(s: dict) -> float:
     return pnl * (pf ** 0.5)
 
 
-def optimise_ema_pullback(daily_df: pd.DataFrame, min_trades: int = 3) -> list:
-    """Sweep (direction × target_pct) and return results sorted best-first."""
+def optimise_ema_pullback(daily_df: pd.DataFrame, min_trades: int = 3,
+                          start_date=None) -> list:
+    """Sweep (direction × target_pct) and return results sorted best-first.
+
+    `start_date` is forwarded to the engine so the sweep scores the exact same
+    window the backtest run will trade — see the module docstring on warm-up.
+    """
     results = []
     for direction in _DIRECTION_GRID:
         enable_long  = direction != 'short'
@@ -315,6 +365,7 @@ def optimise_ema_pullback(daily_df: pd.DataFrame, min_trades: int = 3) -> list:
                 engine = EmaPullbackEngine(
                     daily_df=daily_df, enable_long=enable_long,
                     enable_short=enable_short, target_pct=tp,
+                    start_date=start_date,
                 )
                 _, summary = engine.run()
                 if summary['total_trades'] < min_trades:
