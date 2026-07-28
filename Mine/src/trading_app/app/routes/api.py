@@ -9005,6 +9005,12 @@ def oi_profile_candles() -> EndpointResponse:
             return temp
 
         _fetch_errors = []
+        # Why a given token's fetch came back empty, keyed by str(token). The
+        # Fyers adapter never raises (every failure path returns []), so without
+        # this the empty-candle branch at the bottom could only guess at the
+        # cause. Written from executor threads, but only ever one writer per
+        # key, and read after every future has been resolved.
+        _empty_fetch_reasons = {}
 
         def fetch_task(token, from_dt, to_dt, inter):
             try:
@@ -9013,6 +9019,11 @@ def oi_profile_candles() -> EndpointResponse:
                     from_str = from_dt.strftime('%Y-%m-%d')
                     to_str = to_dt.strftime('%Y-%m-%d')
                     res = _data_provider.historical_data(str(token), from_str, to_str, inter, use_cache=False)
+                    if not res:
+                        # Must be read on the fetching thread — it is thread-local.
+                        reason = getattr(_data_provider, 'last_history_error', lambda: None)()
+                        if reason:
+                            _empty_fetch_reasons[str(token)] = reason
                 elif kite:
                     # Use KiteService's retry logic and rate limiting
                     res = kite_service._historical_with_retry(instrument_token=int(token), from_date=from_dt, to_date=to_dt, interval=inter)
@@ -9354,22 +9365,41 @@ def oi_profile_candles() -> EndpointResponse:
             logger.warn(f"[OI-Profile] Strike fetch failed: {e}")
 
         # ── 6. Update Cache and Return ────────────────────────────────
-        # A token was resolved but its candle list still came back empty —
-        # almost always a rate-limited/exhausted-retry historical fetch
-        # (FyersDataServiceAdapter.historical_data swallows that failure and
-        # returns [] rather than raising), not a genuine "no trades" case for
-        # a near-ATM weekly option over a multi-day window. Track this
-        # per-leg so we neither report false success nor cache the broken
+        # A token was resolved but its candle list still came back empty. Track
+        # this per-leg so we neither report false success nor cache the broken
         # result below (see oipRSLoadCandles / oipRSFixed5mLoadCandles in
         # oi_profile_round_strike.js, whose empty-candle charts this masked).
-        ce_opt_fetch_failed = bool(ce_token) and not ce_candles
-        pe_opt_fetch_failed = bool(pe_token) and not pe_candles
-        fixed_ce_fetch_failed = bool(fixed_ce_token) and not fixed_ce_candles
-        fixed_pe_fetch_failed = bool(fixed_pe_token) and not fixed_pe_candles
+        # FyersDataServiceAdapter.historical_data returns [] rather than raising
+        # on every failure path, so the cause comes from _empty_fetch_reasons
+        # (populated in fetch_task) instead of being guessed at here.
+        empty_legs = [(label, tok) for label, tok, cds in (
+            ('CE', ce_token, ce_candles),
+            ('PE', pe_token, pe_candles),
+            ('fixed CE', fixed_ce_token, fixed_ce_candles),
+            ('fixed PE', fixed_pe_token, fixed_pe_candles),
+        ) if tok and not cds]
         fetch_error_msg = _fetch_errors[0] if _fetch_errors and not candles else None
-        opt_fetch_failed = ce_opt_fetch_failed or pe_opt_fetch_failed or fixed_ce_fetch_failed or fixed_pe_fetch_failed
+        opt_fetch_failed = bool(empty_legs)
         if not fetch_error_msg and opt_fetch_failed:
-            fetch_error_msg = 'Option candle fetch returned no data (likely rate-limited) — retrying next poll.'
+            # A recorded reason means the fetch itself failed (rate limit,
+            # bad/expired token, network). No reason means Fyers answered 's:ok'
+            # with zero candles — an unknown/expired option symbol or a strike
+            # with no trades in the window, which no amount of retrying fixes.
+            # One shared cause (expired token, rate limit) usually hits every
+            # leg at once — group by reason so the toast reads "CE, PE: <cause>"
+            # instead of repeating the same sentence four times.
+            by_reason = {}
+            for label, tok in empty_legs:
+                reason = _empty_fetch_reasons.get(str(tok))
+                if reason:
+                    by_reason.setdefault(reason, []).append(label)
+            explained = [f"{', '.join(labels)}: {reason}" for reason, labels in by_reason.items()]
+            if explained:
+                fetch_error_msg = f"Option candle fetch failed — {'; '.join(explained)}. Retrying next poll."
+            else:
+                legs = ', '.join(label for label, _ in empty_legs)
+                fetch_error_msg = (f"Broker returned no candles for {legs} — strike/expiry may be "
+                                   f"untraded or wrong. Retrying next poll.")
         response_data = {
             'success': True,
             'symbol': symbol,

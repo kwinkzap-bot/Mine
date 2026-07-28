@@ -98,6 +98,15 @@ _GLOBAL_FYERS_QUOTE_LOCK = threading.Lock()
 # governs throughput.
 _GLOBAL_FYERS_HIST_LOCK = threading.Semaphore(4)
 
+# historical_data() never raises — every failure path returns [] — so callers
+# could not tell a rate-limited/errored fetch apart from a symbol that genuinely
+# has no candles, and guessed ("likely rate-limited") in the UI. Each call
+# records why it came back empty here; the caller reads it back via
+# last_history_error() right after. Thread-local because history fetches run
+# concurrently on a shared executor, and cleared at the top of every call so a
+# reused worker thread can never report a previous fetch's error.
+_FYERS_HIST_ERROR = threading.local()
+
 # Monkeypatch Fyers V3 SDK - Disabled as api-t1 is currently active and working
 # try:
 #     from fyers_apiv3.fyersModel import Config
@@ -612,6 +621,7 @@ class FyersDataServiceAdapter:
         oi: bool = False,
         use_cache: bool = True
     ) -> List[Dict[str, Any]]:
+        _FYERS_HIST_ERROR.msg = None
         try:
             _kite_to_fyers = {
                 '30second':  '30S',
@@ -756,7 +766,31 @@ class FyersDataServiceAdapter:
                         break
 
                 if response.get('s') != 'ok':
-                    logger.error(f"[FyersAdapter] history() failed for {instrument_token} [{c_from}-{c_to}]: {response.get('message')}")
+                    api_msg = str(response.get('message') or 'unknown error')
+                    logger.error(f"[FyersAdapter] history() failed for {instrument_token} [{c_from}-{c_to}]: {api_msg}")
+                    # Retries are exhausted only for the rate-limit/malformed
+                    # branches above; every other code breaks out on attempt 0,
+                    # so name the two apart rather than blaming rate limits for
+                    # e.g. an invalid symbol or an expired access token.
+                    #
+                    # The retry branch above lumps -99 in with 429, but they are
+                    # not the same failure. A real throttle comes back as an
+                    # HTTP error whose body fyersModel returns verbatim ("request
+                    # limit reached"). -99 is fyersModel's own code, set in
+                    # post_call/get_call only when the request raised before any
+                    # response existed — connection reset, timeout, DNS/SSL —
+                    # leaving its default "Bad request" message untouched. Both
+                    # are worth retrying; only one is a rate limit, and calling
+                    # a dead connection a rate limit sends you tuning throughput
+                    # when the network is the problem.
+                    api_code = response.get('code')
+                    if 'limit' in api_msg.lower() or api_code == 429:
+                        _FYERS_HIST_ERROR.msg = f"Fyers rate limit — 5 attempts exhausted ({api_msg})"
+                    elif api_code == -99:
+                        _FYERS_HIST_ERROR.msg = ("Fyers API unreachable — no response after 5 attempts "
+                                                 f"(SDK code -99: connection/timeout, message '{api_msg}')")
+                    else:
+                        _FYERS_HIST_ERROR.msg = f"Fyers history error (code {api_code}): {api_msg}"
                     continue
 
                 for candle in response.get('candles', []):
@@ -798,7 +832,18 @@ class FyersDataServiceAdapter:
 
         except Exception as e:
             logger.error(f"[FyersAdapter] historical_data() error for {instrument_token}: {e}")
+            _FYERS_HIST_ERROR.msg = f"{type(e).__name__}: {e}"
             return []
+
+    @staticmethod
+    def last_history_error() -> Optional[str]:
+        """Why the calling thread's most recent historical_data() came back empty.
+
+        None means no error was recorded — an empty candle list then really is
+        an empty response from Fyers (unknown/expired symbol, or a strike with
+        no trades in the window), not a failed fetch.
+        """
+        return getattr(_FYERS_HIST_ERROR, 'msg', None)
 
     # ──────────────────────────────────────────────────────────────────────
     # Instruments (Symbol Master)
