@@ -1,7 +1,20 @@
 {
-  "active_trade": null,
+  "active_trade": {
+    "direction": "SELL",
+    "entry_spot": 24010.4,
+    "entry_time": "2026-07-28T12:01:33.032881",
+    "sl_level": 24040.4,
+    "target_level": 23920.4,
+    "strike": 24250,
+    "option_type": "PE",
+    "lot_size": 65,
+    "expiry": "2026-07-28",
+    "broker_entries": [],
+    "opt_entry_price": 245.7,
+    "strike_mode": "premium250"
+  },
   "buy_needs_reset": false,
-  "sell_needs_reset": false,
+  "sell_needs_reset": true,
   "last_exit": {
     "reason": "SL",
     "spot": 23936.4,

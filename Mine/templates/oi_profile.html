@@ -381,6 +381,25 @@
 
     <!-- New Box: Combined Strike Selector & Intrinsic Levels -->
     <div class="oip-container" style="margin-top: 10px;">
+
+        <div class="oip-charts-row">
+            <!-- CE Individual Chart -->
+            <div class="oip-chart-wrap" id="oipCEChartWrap">
+                <div class="oip-chart-legend">
+                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span><span id="oipLegendCEOnly">--</span></div>
+                </div>
+                <div id="oipCEChart"></div>
+            </div>
+
+            <!-- PE Individual Chart -->
+            <div class="oip-chart-wrap" id="oipPEChartWrap">
+                <div class="oip-chart-legend">
+                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span><span id="oipLegendPEOnly">--</span></div>
+                </div>
+                <div id="oipPEChart"></div>
+            </div>
+        </div>
+
         <div class="oip-header oip-header--compact">
             <!-- Hidden inputs for state -->
             <input type="hidden" id="oipIntrinsicView" value="combined">
@@ -609,24 +628,6 @@
                     </div>
 
                 </div>
-            </div>
-        </div>
-
-        <div class="oip-charts-row">
-            <!-- CE Individual Chart -->
-            <div class="oip-chart-wrap" id="oipCEChartWrap">
-                <div class="oip-chart-legend">
-                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span><span id="oipLegendCEOnly">--</span></div>
-                </div>
-                <div id="oipCEChart"></div>
-            </div>
-
-            <!-- PE Individual Chart -->
-            <div class="oip-chart-wrap" id="oipPEChartWrap">
-                <div class="oip-chart-legend">
-                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span><span id="oipLegendPEOnly">--</span></div>
-                </div>
-                <div id="oipPEChart"></div>
             </div>
         </div>
 

@@ -285,7 +285,7 @@
       "phase": "no_setup"
     },
     "NAM-INDIA": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "long",
       "trigger": 1154.9,
       "sl_level": 1146.6,
@@ -299,7 +299,8 @@
           "entry_price": 1154.9,
           "filled_qty": 432,
           "sl_order_id": "2081977662142078976",
-          "target_order_id": "2081977662674755584"
+          "target_order_id": "2081977662674755584",
+          "closed": true
         }
       ],
       "entry_price": 1154.9,
@@ -363,10 +364,11 @@
       "phase": "no_setup"
     },
     "PGEL": {
-      "phase": "watching",
+      "phase": "done",
       "direction": "long",
       "trigger": 576.7,
-      "sl_level": 571.85
+      "sl_level": 571.85,
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "PHOENIXLTD": {
       "phase": "no_setup"
