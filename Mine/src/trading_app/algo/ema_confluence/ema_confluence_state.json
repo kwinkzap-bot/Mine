@@ -1,413 +1,413 @@
 {
-  "last_scan_date": null,
+  "last_scan_date": "2026-07-28",
   "stocks": {
     "NIFTY": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BANKNIFTY": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SBIN": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "RELIANCE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HDFCBANK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "360ONE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ABB": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ABCAPITAL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ADANIENSOL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ADANIENT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ADANIGREEN": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ADANIPORTS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ADANIPOWER": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ALKEM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "AMBER": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "AMBUJACEM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ANGELONE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "APLAPOLLA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "APOLLOHOSP": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ASIANPAINT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ASTRAL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "AUBANK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "AXISBANK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BAJAJ-AUTO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BAJAJFINSV": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BAJAJHLDNG": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BAJFINANCE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BANDHANBNK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BANKBARODA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BDL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BEL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BHARTIARTL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BHEL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BIOCON": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BLUESTARCO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BOSCHLTD": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BPCL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BRITANNIA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "CAMS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "CIPLA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "COALINDIA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "COCHINSHIP": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "COFORGE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "COLPAL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "CROMPTOM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "CUMMINSIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "DALBHARAT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "DELHIVERY": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "DMART": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "DRREDDY": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ETERNAL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "FEDERALBNK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GAIL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GLENMARK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GMRAIRPORT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GODFRYPHLP": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GODREJCP": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GODREJPROP": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GRASIM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HAL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HAVELLS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HCLTECH": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HDFCAMC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HDFCLIFE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HEROMOTOCO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HINDALCO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HINDUNILVR": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HINDZINC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ICICIGI": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "IDFCFIRSTB": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "INDHOTEL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "INDIANB": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "INDUSINDBK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "INFY": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "IOC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "IREDA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "JUBLFOOD": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "KALYANKJIL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "KEI": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "KFINTECH": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "LAURUSLABS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "LICHSGFIN": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "LT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "LTF": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "LTM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MANAPPURAM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MANKIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MARICO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MAZDOCK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MFSL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MOTHERSON": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MOTILALOFS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NESTLEIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NHPC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NMDC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NYKAA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "OBEROIRLTY": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "OFSS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "OIL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ONGC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PAGEIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PAYTM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PFC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PIIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PNB": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PNBHOUSING": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "POLYCAB": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PRESTIGE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "RADICO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "RBLBANK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "RVNL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SBICARD": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SBILIFE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SHRIRAMFIN": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SOLARINDS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SONACOMS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SRF": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SUNPHARMA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SUPREMEIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SUZLON": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SWIGGY": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TATAPOWER": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TCS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TECHM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TITAN": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TMPV": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TORNTPHARM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TRENT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TVSMOTOR": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ULTRACEMCO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "UNITDSPR": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "UPL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "VOLTAS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "WAAREEENER": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "WIPRO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ZYDUSLIFE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     }
   }
 }

@@ -68,6 +68,195 @@ NARROW_FETCH_DAYS = {
 }
 NARROW_RESAMPLE = {"daily": None, "weekly": "W", "monthly": "M"}
 
+# EMA Touch All scanner: the LAST daily candle's own range must contain every
+# one of EMA 20/50/100/200 (low <= EMA <= high) — a single bar sweeping all
+# four averages. Strict wick containment, no % tolerance, same "touch"
+# definition as RSI_CROSSOVER's sibling above.
+TOUCH_ALL_PERIODS = [20, 50, 100, 200]
+# Daily history depth: reuse the tier the Narrow scanner already uses for a
+# stable daily EMA(200), so the pre-warmed candle store covers this scan too.
+TOUCH_ALL_FETCH_DAYS = NARROW_FETCH_DAYS["daily"][200]
+
+# Fixed futures watchlist this scanner runs on, with each symbol's default
+# trade options. Deliberately an explicit table rather than the NFO dump, so the
+# universe and its defaults are exactly what the user configured and don't drift
+# as the exchange adds/drops F&O names.
+#   direction  — which signals are actionable for this symbol:
+#                "BUY" (long only), "SELL" (short only), "BOTH".
+#   target_pct — default profit target, percent of the entry (candle close).
+# A DOWN candle reads as a SELL signal and an UP candle as a BUY, so `direction`
+# is what decides whether a match is tradeable — see _touch_all_signal().
+TOUCH_ALL_CONFIG = {
+    "NIFTY":       ("BUY", 7),
+    "BANKNIFTY":   ("BOTH", 8),
+    "SBIN":        ("BUY", 2.5),
+    "RELIANCE":    ("SELL", 15),
+    "HDFCBANK":    ("BUY", 15),
+    "360ONE":      ("BUY", 2),
+    "ABB":         ("BUY", 4),
+    "ABCAPITAL":   ("BUY", 4),
+    "ADANIENSOL":  ("BUY", 15),
+    "ADANIENT":    ("SELL", 4),
+    "ADANIGREEN":  ("SELL", 5),
+    "ADANIPORTS":  ("SELL", 4),
+    "ADANIPOWER":  ("BUY", 12),
+    "ALKEM":       ("BUY", 15),
+    "AMBER":       ("BUY", 15),
+    "AMBUJACEM":   ("SELL", 2),
+    "ANGELONE":    ("BUY", 3),
+    "APLAPOLLO":   ("BUY", 3.5),
+    "APOLLOHOSP":  ("BUY", 1.5),
+    "ASIANPAINT":  ("SELL", 7),
+    "ASTRAL":      ("BOTH", 12),
+    "AUBANK":      ("BOTH", 5),
+    "AXISBANK":    ("BUY", 8),
+    "BAJAJ-AUTO":  ("BOTH", 12),
+    "BAJAJFINSV":  ("BOTH", 15),
+    "BAJAJHLDNG":  ("BUY", 12),
+    "BAJFINANCE":  ("BOTH", 7),
+    "BANDHANBNK":  ("BOTH", 3),
+    "BANKBARODA":  ("SELL", 4),
+    "BDL":         ("BOTH", 15),
+    "BEL":         ("BOTH", 10),
+    "BHARTIARTL":  ("BUY", 10),
+    "BHEL":        ("BUY", 15),
+    "BIOCON":      ("BUY", 15),
+    "BLUESTARCO":  ("BOTH", 7),
+    "BOSCHLTD":    ("BUY", 3),
+    "BPCL":        ("BUY", 15),
+    "BRITANNIA":   ("BUY", 15),
+    "CAMS":        ("SELL", 4),
+    "CIPLA":       ("BOTH", 12),
+    "COALINDIA":   ("SELL", 2.5),
+    "COCHINSHIP":  ("BUY", 12),
+    "COFORGE":     ("BUY", 10),
+    "COLPAL":      ("BUY", 5),
+    "CROMPTON":    ("BOTH", 12),
+    "CUMMINSIND":  ("BOTH", 15),
+    "DALBHARAT":   ("SELL", 8),
+    "DELHIVERY":   ("BOTH", 15),
+    "DMART":       ("BUY", 8),
+    "DRREDDY":     ("BOTH", 2),
+    "ETERNAL":     ("BOTH", 4),
+    "FEDERALBNK":  ("BUY", 2.5),
+    "GAIL":        ("BOTH", 8),
+    "GLENMARK":    ("BOTH", 8),
+    "GMRAIRPORT":  ("BUY", 12),
+    "GODFRYPHLP":  ("BUY", 15),
+    "GODREJCP":    ("BUY", 1.5),
+    "GODREJPROP":  ("BUY", 4),
+    "GRASIM":      ("BOTH", 15),
+    "HAL":         ("BOTH", 15),
+    "HAVELLS":     ("SELL", 3.5),
+    "HCLTECH":     ("BUY", 12),
+    "HDFCAMC":     ("BOTH", 4),
+    "HDFCLIFE":    ("BOTH", 3),
+    "HEROMOTOCO":  ("BOTH", 3),
+    "HINDALCO":    ("BUY", 3),
+    "HINDUNILVR":  ("BUY", 12),
+    "HINDZINC":    ("SELL", 2),
+    "ICICIGI":     ("BUY", 10),
+    "IDFCFIRSTB":  ("BOTH", 7),
+    "INDHOTEL":    ("BOTH", 7),
+    "INDIANB":     ("SELL", 8),
+    "INDUSINDBK":  ("BOTH", 15),
+    "INFY":        ("BOTH", 15),
+    "IOC":         ("BOTH", 12),
+    "IREDA":       ("BOTH", 5),
+    "JUBLFOOD":    ("BOTH", 8),
+    "KALYANKJIL":  ("BOTH", 12),
+    "KEI":         ("BOTH", 15),
+    "KFINTECH":    ("SELL", 4),
+    "LAURUSLABS":  ("BUY", 12),
+    "LICHSGFIN":   ("SELL", 15),
+    "LT":          ("SELL", 12),
+    "LTF":         ("BOTH", 12),
+    "LTM":         ("BUY", 15),
+    "MANAPPURAM":  ("BUY", 10),
+    "MANKIND":     ("BOTH", 3.5),
+    "MARICO":      ("BUY", 6),
+    "MAZDOCK":     ("BOTH", 1.5),
+    "MFSL":        ("BOTH", 4),
+    "MOTHERSON":   ("BOTH", 7),
+    "MOTILALOFS":  ("BOTH", 15),
+    "NESTLEIND":   ("BOTH", 2.5),
+    "NHPC":        ("SELL", 6),
+    "NMDC":        ("BOTH", 7),
+    "NYKAA":       ("BUY", 15),
+    "OBEROIRLTY":  ("BUY", 3),
+    "OFSS":        ("BOTH", 4),
+    "OIL":         ("BOTH", 8),
+    "ONGC":        ("BUY", 15),
+    "PAGEIND":     ("BOTH", 12),
+    "PAYTM":       ("BOTH", 6),
+    "PFC":         ("BUY", 15),
+    "PIIND":       ("BUY", 10),
+    "PNB":         ("BOTH", 15),
+    "PNBHOUSING":  ("BOTH", 8),
+    "POLYCAB":     ("BUY", 2.5),
+    "PRESTIGE":    ("BUY", 8),
+    "RADICO":      ("BUY", 15),
+    "RBLBANK":     ("BOTH", 6),
+    "RVNL":        ("BOTH", 8),
+    "SBICARD":     ("SELL", 4),
+    "SBILIFE":     ("BUY", 5),
+    "SHRIRAMFIN":  ("BOTH", 3),
+    "SOLARINDS":   ("BUY", 12),
+    "SONACOMS":    ("BUY", 10),
+    "SRF":         ("BOTH", 6),
+    "SUNPHARMA":   ("BUY", 2.5),
+    "SUPREMEIND":  ("SELL", 15),
+    "SUZLON":      ("BUY", 15),
+    "SWIGGY":      ("BOTH", 2.5),
+    "TATAPOWER":   ("BUY", 5),
+    "TCS":         ("BUY", 5),
+    "TECHM":       ("BUY", 15),
+    "TITAN":       ("BUY", 5),
+    "TMPV":        ("SELL", 15),
+    "TORNTPHARM":  ("BUY", 6),
+    "TRENT":       ("BUY", 10),
+    "TVSMOTOR":    ("BOTH", 7),
+    "ULTRACEMCO":  ("BOTH", 8),
+    "UNITDSPR":    ("SELL", 3),
+    "UPL":         ("BOTH", 3.5),
+    "VOLTAS":      ("BUY", 8),
+    "WAAREEENER":  ("BOTH", 12),
+    "WIPRO":       ("BOTH", 8),
+    "ZYDUSLIFE":   ("SELL", 3.5),
+}
+
+TOUCH_ALL_SYMBOLS = list(TOUCH_ALL_CONFIG)
+TOUCH_ALL_DIRECTIONS = ("BUY", "SELL", "BOTH")
+
+# Indices don't trade as "-EQ" and aren't in the equity instrument list, so
+# they need the provider's own index identifier for both quote and history.
+# Kite is matched by tradingsymbol in the NSE dump; Fyers by its -INDEX symbol.
+TOUCH_ALL_INDEX_MAP = {
+    "NIFTY":     {"fyers": "NSE:NIFTY50-INDEX",   "kite": "NIFTY 50"},
+    "BANKNIFTY": {"fyers": "NSE:NIFTYBANK-INDEX", "kite": "NIFTY BANK"},
+}
+
+
+def _touch_all_signal(symbol: str, status: str, close: float) -> Dict:
+    """Apply a symbol's configured defaults to a matched candle.
+
+    The candle's own direction is the signal — an UP candle (close >= open) is a
+    BUY, a DOWN candle a SELL. `allowed` says whether that signal is one the
+    symbol is configured to take, and the target price is the configured
+    percentage away from the close in the signal's direction."""
+    direction, target_pct = TOUCH_ALL_CONFIG.get(symbol, ("BOTH", 0.0))
+    signal  = "BUY" if status == "UP" else "SELL"
+    allowed = direction == "BOTH" or direction == signal
+    target_price = (close * (1 + target_pct / 100) if signal == "BUY"
+                    else close * (1 - target_pct / 100))
+    return {
+        "direction":    direction,
+        "target_pct":   target_pct,
+        "signal":       signal,
+        "allowed":      allowed,
+        "target_price": round(target_price, 2),
+    }
+
 
 def _calc_ema(prices: List[float], period: int) -> List[float]:
     """Exponential Moving Average (EMA) — strictly matches TradingView's standard EMA indicator.
@@ -186,13 +375,16 @@ class EmaRsiFilterService:
         return None
 
     def _fetch_hist(self, symbol: str, days: int, interval: str = "day",
-                    end_date: Optional[datetime] = None) -> Optional[pd.DataFrame]:
+                    end_date: Optional[datetime] = None,
+                    token: Optional[Union[int, str]] = None) -> Optional[pd.DataFrame]:
+        # `token` overrides the default equity lookup — needed for instruments
+        # _get_token can't resolve on its own (indices are not "-EQ").
         # Daily candles go through the per-stock disk store: full download once,
         # then only incremental tail fetches — much faster repeat scans.
         if interval == "day":
             try:
                 from trading_app.filters.candle_store import get_daily_history
-                token = self._get_token(symbol)
+                token = token or self._get_token(symbol)
                 if token:
                     df = get_daily_history(self.kite, token, symbol, days, end_date)
                     if df is not None and not df.empty:
@@ -210,7 +402,7 @@ class EmaRsiFilterService:
             if cached is not None:
                 return cached
 
-        token = self._get_token(symbol)
+        token = token or self._get_token(symbol)
         if not token:
             return None
         try:
@@ -514,6 +706,199 @@ class EmaRsiFilterService:
             "results": results,
             "nearest": nearest_stocks,
         }
+
+    # ------------------------------------------------------------------
+    # EMA Touch All (daily candle sweeps EMA 20/50/100/200)
+    # ------------------------------------------------------------------
+
+    def _analyse_ema_touch_all(self, symbol: str, current_price: float,
+                               df: Optional[pd.DataFrame]) -> Optional[Dict]:
+        """Does the latest daily candle's range contain ALL of EMA 20/50/100/200?
+
+        Returns the row for every stock with enough history (matched True/False,
+        plus how many of the four it did touch), or None when EMA(200) can't be
+        computed. `status` is the candle's own direction: UP when it closed at
+        or above its open, DOWN otherwise. The symbol's configured defaults
+        (direction, target_pct) and what they imply for this candle (signal,
+        allowed, target_price) are merged in — see _touch_all_signal()."""
+        if df is None or len(df) < 20:
+            return None
+
+        closes = df["close"].tolist()
+        if len(closes) < max(TOUCH_ALL_PERIODS):
+            return None
+
+        emas: Dict[int, float] = {}
+        for p in TOUCH_ALL_PERIODS:
+            val = _calc_ema(closes, p)[-1]
+            if val != val:  # nan check
+                return None
+            emas[p] = float(val)
+
+        last = df.iloc[-1]
+        try:
+            o = float(last["open"])
+            h = float(last["high"])
+            l = float(last["low"])
+            c = float(last["close"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if o <= 0 or l <= 0:
+            return None
+
+        touched = {p: bool(l <= e <= h) for p, e in emas.items()}
+        touched_count = sum(touched.values())
+        status = "UP" if c >= o else "DOWN"
+
+        return {
+            **_touch_all_signal(symbol, status, c),
+            "symbol":        symbol,
+            "current_price": float(current_price),
+            "open":          round(o, 2),
+            "high":          round(h, 2),
+            "low":           round(l, 2),
+            "close":         round(c, 2),
+            "ema20":         round(emas[20], 2),
+            "ema50":         round(emas[50], 2),
+            "ema100":        round(emas[100], 2),
+            "ema200":        round(emas[200], 2),
+            "touched_count": touched_count,
+            "touched":       {str(p): v for p, v in touched.items()},
+            "range_pct":     round((h - l) / l * 100, 2),
+            "change_pct":    round((c - o) / o * 100, 2),
+            "status":        status,
+            "candle_date":   str(df.index[-1].date()) if hasattr(df.index[-1], "date") else str(df.index[-1]),
+            "matched":       bool(touched_count == len(TOUCH_ALL_PERIODS)),
+        }
+
+    def _touch_all_quote_symbol(self, symbol: str) -> str:
+        """Provider quote key for a watchlist entry — index-aware."""
+        idx = TOUCH_ALL_INDEX_MAP.get(symbol)
+        if not idx:
+            return f"NSE:{symbol}"
+        if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+            return idx["fyers"]
+        return f"NSE:{idx['kite']}"
+
+    def _touch_all_token(self, symbol: str) -> Optional[Union[int, str]]:
+        """History token for a watchlist entry. Equities go through the normal
+        equity lookup; indices resolve via their own provider identifier, since
+        they are not '-EQ' instruments."""
+        idx = TOUCH_ALL_INDEX_MAP.get(symbol)
+        if not idx:
+            return self._get_token(symbol)
+        if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+            return idx["fyers"]
+        for inst in self._instruments:
+            if inst.get("tradingsymbol") == idx["kite"] or inst.get("name") == idx["kite"]:
+                return inst.get("instrument_token")
+        return None
+
+    def run_ema_touch_all_filter(self, root_date: Optional[datetime] = None,
+                                 progress_cb=None) -> Dict:
+        """Scan the fixed futures watchlist (TOUCH_ALL_SYMBOLS — indices plus F&O
+        stocks) for instruments whose latest daily candle touches every one of
+        EMA 20 / 50 / 100 / 200.
+
+        Same shape as run_ema_narrow_filter: symbols are processed in batches and
+        progress_cb(done, total, partial) is invoked after each one with a
+        snapshot of the matches found so far, so the UI fills in live. `nearest`
+        holds the closest misses (3 of 4 touched) for when nothing matches
+        outright, and `skipped` lists watchlist entries the provider couldn't
+        resolve or that lack enough history for EMA(200)."""
+        stocks = list(TOUCH_ALL_SYMBOLS)
+        logger.info(f"EMA Touch All filter: scanning {len(stocks)} watchlist symbols "
+                    f"for a daily candle touching EMA {TOUCH_ALL_PERIODS}...")
+
+        # Quote keys differ per instrument (indices aren't NSE:<symbol>), so keep
+        # a reverse map to get back to the plain watchlist name.
+        quote_keys = {self._touch_all_quote_symbol(s): s for s in stocks}
+        price_map: Dict[str, float] = {}
+        keys = list(quote_keys)
+        quote_batch = 500
+        for i in range(0, len(keys), quote_batch):
+            batch = keys[i: i + quote_batch]
+            try:
+                quotes = self.kite.quote(batch)
+                for sym, data in quotes.items():
+                    plain = quote_keys.get(sym) or sym.replace("NSE:", "")
+                    price_map[plain] = float(data.get("last_price", 0))
+            except Exception as e:
+                logger.warning(f"Batch quote failed: {e}")
+
+        results: List[Dict] = []
+        all_results: List[Dict] = []
+        skipped: List[str] = []
+
+        def process_stock(symbol: str):
+            price = price_map.get(symbol, 0.0)
+            token = self._touch_all_token(symbol)
+            if not token:
+                return symbol, None
+            df = self._fetch_hist(symbol, days=TOUCH_ALL_FETCH_DAYS,
+                                  interval="day", end_date=root_date, token=token)
+            return symbol, self._analyse_ema_touch_all(symbol, price, df)
+
+        workers_count = self.MAX_WORKERS
+        if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+            workers_count = 5
+
+        done_count = 0
+        total = len(stocks)
+        batch_size = 50
+
+        def _snapshot() -> Dict:
+            """Sorted copy of everything found so far (widest sweep first)."""
+            return {
+                "results": sorted(results, key=lambda r: -r.get("range_pct", 0)),
+                "nearest": sorted(
+                    [r for r in all_results
+                     if not r.get("matched") and r.get("touched_count", 0) >= 3],
+                    key=lambda r: -r.get("range_pct", 0)
+                )[:10],
+                "scanned": len(all_results),
+                "total":   total,
+                "skipped": sorted(skipped),
+            }
+
+        def _report():
+            if progress_cb:
+                try:
+                    progress_cb(done_count, total, _snapshot())
+                except Exception:
+                    pass
+
+        _report()
+
+        for i in range(0, total, batch_size):
+            chunk = stocks[i: i + batch_size]
+            with ThreadPoolExecutor(max_workers=workers_count) as executor:
+                futures = {executor.submit(process_stock, s): s for s in chunk}
+                for future in as_completed(futures):
+                    try:
+                        sym, res = future.result(timeout=300)
+                        if res:
+                            all_results.append(res)
+                            if res.get("matched"):
+                                results.append(res)
+                        else:
+                            # Unresolvable symbol or too little history for
+                            # EMA(200) — surfaced so a typo in the watchlist
+                            # doesn't silently look like "no match".
+                            skipped.append(sym)
+                    except Exception as e:
+                        futures_sym = futures[future]
+                        skipped.append(futures_sym)
+                        logger.warning(f"EMA Touch All processing error ({futures_sym}): "
+                                       f"{e.__class__.__name__}: {e}")
+            done_count = min(i + batch_size, total)
+            _report()
+
+        final = _snapshot()
+        logger.info(f"EMA Touch All filter → {len(final['results'])} matches "
+                    f"from {final['scanned']}/{total} scanned"
+                    + (f", skipped: {', '.join(final['skipped'])}" if final['skipped'] else ""))
+        return final
 
     # ------------------------------------------------------------------
     # Price fetch helper

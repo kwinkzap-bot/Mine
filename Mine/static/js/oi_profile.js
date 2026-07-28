@@ -251,6 +251,7 @@ function oipInitElems() {
     oipElems.fetchRange = document.getElementById('oipFetchRange');
     oipElems.fixedStrikeDropdown = document.getElementById('oipFixedStrikeDropdown');
     oipElems.fixedStrikeUpdateBtn = document.getElementById('oipFixedStrikeUpdateBtn');
+    oipElems.fixedStrikeRefreshBtn = document.getElementById('oipFixedStrikeRefreshBtn');
 
     // IVP & Alerts
     oipElems.hdrIVP = document.getElementById('hdrIVP');
@@ -630,7 +631,15 @@ document.addEventListener('DOMContentLoaded', () => {
         oipFixedStrike = val;
         try { localStorage.setItem(OIP_FIXED_STRIKE_KEY, String(val)); } catch (e) {}
         oipUpdateFixedStrikeTitle();
-        oipLoadCandles(true, false);
+        oipLoadCandles(true, false, true);
+    });
+
+    // Fixed 24000 Monthly chart is excluded from the live 1s poll (see
+    // oipCandleLoop) to avoid hammering the broker for slow-moving monthly
+    // option data every second. This button is the only way to pull its
+    // latest candles without changing the selected strike.
+    oipElems.fixedStrikeRefreshBtn?.addEventListener('click', () => {
+        oipLoadCandles(true, false, true);
     });
 
     oipElems.targetDistance?.addEventListener('change', () => {
@@ -1109,7 +1118,10 @@ async function oipCandleLoop() {
     setRefreshBtn(true);
     let success = false;
     try {
-        await oipLoadCandles(true, false);
+        // Fixed 24000 Monthly chart is excluded from the recurring live poll —
+        // it only refreshes on initial load, Update, or the chart's own
+        // Refresh button (see oipElems.fixedStrikeRefreshBtn below).
+        await oipLoadCandles(true, false, false);
         success = true;
     } catch (err) { console.error('[OIP] Candle Loop Err:', err); }
     finally {
@@ -1211,7 +1223,7 @@ function oipUpdateFixedChart(data) {
     oipUpdateFixedStrikeTitle();
 }
 
-async function oipLoadCandles(forceFetch = true, resetZoom = false) {
+async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed = true) {
     try {
 
         const h = parseFloat(oipElems.spotHigh?.value || 0);
@@ -1254,16 +1266,24 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
 
         if (!forceFetch && oipOIData && !needsOptionData) { oipRefreshLocalView(view, resetZoom); return; }
 
-        // Fixed strike / monthly expiry — always requested alongside the
-        // main (ATM-relative) data, independent of the page's strike-mode
+        // Fixed strike / monthly expiry — requested alongside the main
+        // (ATM-relative) data, independent of the page's strike-mode
         // controls. Only the weekly (nearest-expiry) charts above track the
         // user's strike selection; this fixed chart's strike (oipFixedStrike)
-        // is set separately via its own header dropdown+Update button.
+        // is set separately via its own header dropdown+Update/Refresh
+        // buttons. Deliberately NOT included on the recurring live-poll loop
+        // (oipCandleLoop passes includeFixed=false) — the backend skips the
+        // fixed CE/PE fetch entirely when these params are omitted, so it
+        // only re-fetches on initial load, Update (strike change), or the
+        // Refresh button click.
         // fixed_interval is hardcoded to 5minute — the Fixed 24000 Monthly
         // chart always shows 5-minute candles regardless of the main TF
         // dropdown (oipInterval), same "always this interval" treatment as
         // Round Strike's 5m Fixed chart.
-        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}&fixed_strike=${oipFixedStrike}&fixed_expiry=monthly&fixed_interval=5minute${dateRangeParams}&_t=${Date.now()}`;
+        const fixedParams = includeFixed
+            ? `&fixed_strike=${oipFixedStrike}&fixed_expiry=monthly&fixed_interval=5minute`
+            : '';
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${fixedParams}${dateRangeParams}&_t=${Date.now()}`;
 
         const res = await fetch(url);
         const data = await res.json();
@@ -1273,7 +1293,10 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false) {
         if (data.fetch_error) showNotification(`Data fetch error: ${data.fetch_error}`, 'error');
 
         oipOIData = Object.assign(oipOIData || {}, data);
-        oipUpdateFixedChart(data);
+        // Only touch the Fixed 24000 Monthly chart when this fetch actually
+        // requested its data — otherwise data.fixed_ce_candles/etc. are
+        // absent and would wipe the chart back to empty on every live poll.
+        if (includeFixed) oipUpdateFixedChart(data);
         const indexCandles = data.candles || [];
         let validCandles = [];
 

@@ -322,6 +322,20 @@ select.date-picker.tf-picker option {
 .ema-empty-title { font-size: 18px; font-weight: 700; color: #64748b; margin-bottom: 6px; }
 .ema-empty-sub   { font-size: 13px; }
 
+/* ─── EMA Touch All coverage note ────────────────────────────────── */
+/* Reports how much of the fixed futures watchlist the scan could actually
+   read, and names anything it had to skip. */
+.touch-all-footnote {
+    padding: 8px 12px 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #94a3b8;
+}
+
+/* A match whose signal direction the symbol isn't configured to trade —
+   shown only under "All matches", dimmed so the actionable rows still lead. */
+.touch-all-blocked { opacity: 0.55; }
+
 /* ─── Sort indicators ────────────────────────────────────────────── */
 .sort-asc::after  { content: " ▲"; font-size: 9px; }
 .sort-desc::after { content: " ▼"; font-size: 9px; }

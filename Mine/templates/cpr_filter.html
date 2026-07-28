@@ -19,6 +19,9 @@
         <button class="scanner-tab-btn" data-tab="ema-narrow" onclick="switchScannerTab('ema-narrow')">
             <span class="tab-icon">🧲</span> EMA Narrow
         </button>
+        <button class="scanner-tab-btn" data-tab="ema-touch-all" onclick="switchScannerTab('ema-touch-all')">
+            <span class="tab-icon">🎯</span> EMA Touch All
+        </button>
     </div>
 
     <!-- Right side: CPR Controls (visible when CPR tab is active) -->
@@ -80,6 +83,18 @@
         </select>
         <input type="date" id="emaNarrowDateFilter" class="date-picker" title="Select analysis date">
         <button id="ema-narrow-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
+    </div>
+
+    <!-- Right side: EMA Touch All Controls (visible when that tab is active) -->
+    <div id="ema-touch-all-header-controls" class="header-controls-container"
+        style="display: none; gap: 8px; align-items: center;">
+        <select id="emaTouchAllDirFilter" class="date-picker tf-picker"
+            title="Show only signals each symbol is configured to trade">
+            <option value="allowed" selected>Allowed direction only</option>
+            <option value="all">All matches</option>
+        </select>
+        <input type="date" id="emaTouchAllDateFilter" class="date-picker" title="Select analysis date">
+        <button id="ema-touch-all-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
     </div>
 </div>
 
@@ -310,12 +325,48 @@
             chosen timeframes.</div>
     </div>
 </div>
+
+<!-- EMA Touch All Section — one grid, no split: the daily candle either sweeps
+     all four EMAs or it isn't a match, so UP/DOWN is a status column here
+     rather than two separate bullish/bearish grids. -->
+<div id="ema-touch-all-scanner-content" style="display: none;">
+    <div class="ema-section-label">
+        <span class="ema-tf-badge daily-badge">📆 Daily</span>
+        <span class="ema-section-title">EMA Touch All — futures watchlist, daily candle range contains
+            EMA 20 / 50 / 100 / 200</span>
+    </div>
+    <div class="results-row">
+        <div id="emaTouchAllResults" class="results results-hidden results-block">
+            <div class="dg-card">
+                <div class="dg-card-hdr">
+                    <span class="dg-card-title">🎯 Daily Candle Touching EMA 20 / 50 / 100 / 200</span>
+                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="emaTouchAllCount">(0)</span>
+                </div>
+                <div id="emaTouchAllGrid"></div>
+                <div id="emaTouchAllLoader"></div>
+            </div>
+        </div>
+    </div>
+    <!-- Coverage note sits OUTSIDE #emaTouchAllResults: that block is hidden
+         when there are no matches, and "0 matches, N symbols skipped" is
+         exactly when this line matters most. -->
+    <div id="emaTouchAllFootnote"></div>
+
+    <!-- Empty State -->
+    <div id="ema-touch-all-empty-state" class="ema-empty-state ema-hidden">
+        <div class="ema-empty-icon">🎯</div>
+        <div class="ema-empty-title">No candle touching all EMAs</div>
+        <div class="ema-empty-sub">No symbol on the futures watchlist has a latest daily candle containing
+            EMA 20, 50, 100 and 200 within its high–low range.</div>
+    </div>
+</div>
 {% endblock %}
 {% block scripts %}
 {{ super() }}
 <script src="{{ url_for('static', filename='js/cpr_filter.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ema_rsi_filter.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ema_narrow_filter.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ema_touch_all_filter.js') }}"></script>
 <script>
     /**
      * Premium Tab switcher function for merged scanner page
@@ -329,6 +380,7 @@
             'cpr':        { content: 'cpr-scanner-content',        controls: 'cpr-header-controls' },
             'ema':        { content: 'ema-scanner-content',        controls: 'ema-header-controls' },
             'ema-narrow': { content: 'ema-narrow-scanner-content', controls: 'ema-narrow-header-controls' },
+            'ema-touch-all': { content: 'ema-touch-all-scanner-content', controls: 'ema-touch-all-header-controls' },
         };
         if (!sections[tab]) tab = 'cpr';
 
@@ -343,13 +395,17 @@
         if (tab === 'ema-narrow' && typeof initEmaNarrowOnce === 'function') {
             initEmaNarrowOnce();
         }
+        // Lazy-load EMA Touch All data on first open
+        if (tab === 'ema-touch-all' && typeof initEmaTouchAllOnce === 'function') {
+            initEmaTouchAllOnce();
+        }
     }
 
     // Auto-detect tab from URL search parameters on load
     document.addEventListener('DOMContentLoaded', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const tabParam = urlParams.get('tab');
-        if (tabParam === 'ema' || tabParam === 'ema-narrow') {
+        if (tabParam === 'ema' || tabParam === 'ema-narrow' || tabParam === 'ema-touch-all') {
             switchScannerTab(tabParam);
         } else {
             switchScannerTab('cpr');
