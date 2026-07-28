@@ -113,6 +113,17 @@ _TMF_ALL_HISTORY_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'thirty_min_fakeout', 'tmf_trades_all_history.json')
 )
 
+# EMA Confluence Breakout live algo (paper trade, futures) state and history files
+_EMAC_STATE_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'ema_confluence', 'ema_confluence_state.json')
+)
+_EMAC_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'ema_confluence', 'ema_confluence_trades_history.json')
+)
+_EMAC_ALL_HISTORY_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), '..', '..', 'algo', 'ema_confluence', 'ema_confluence_trades_all_history.json')
+)
+
 def _algo_option_live(trade: dict, provider) -> dict:
     """Live option-premium P&L for an active algo trade.
 
@@ -7317,6 +7328,145 @@ def algo_tmf_stop() -> EndpointResponse:
         return jsonify({'success': True, 'message': '30-Min Fakeout algo stopped'})
     except Exception as e:
         logger.error(f'[tmf/stop] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/ema-confluence/status', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_ema_confluence_status() -> EndpointResponse:
+    """Today's per-symbol EMA Confluence Breakout state (phase/direction/
+    trigger/SL/entry/target for every symbol in EMA_SYMBOL_DEFAULTS) plus a
+    summary count by phase. PAPER TRADE ONLY — no broker orders."""
+    try:
+        try:
+            with open(_EMAC_STATE_PATH, 'r') as _f:
+                state = json.load(_f)
+        except Exception:
+            state = {'last_scan_date': None, 'stocks': {}}
+
+        stocks = state.get('stocks') or {}
+        summary = {'pending_scan': 0, 'no_setup': 0, 'watching': 0, 'in_position': 0}
+        for s in stocks.values():
+            phase = s.get('phase', 'pending_scan')
+            summary[phase] = summary.get(phase, 0) + 1
+
+        from trading_app.algo.ema_confluence.ema_confluence_algo import get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+        instance = get_instance(username)
+
+        from trading_app.app.utils.user_env import UserEnvManager
+        algo_active = (UserEnvManager.get_user_var(username, 'EMA_CONFLUENCE_ACTIVE', 'false') or 'false').strip().lower() == 'true'
+        lots = int(UserEnvManager.get_user_var(username, 'EMA_CONFLUENCE_LOTS', '1') or 1)
+
+        return jsonify({
+            'success': True,
+            'running': bool(instance and instance.is_running()),
+            'algo_active': algo_active,
+            'mode': 'paper',
+            'lots': lots,
+            'last_scan_date': state.get('last_scan_date'),
+            'summary': summary,
+            'stocks': stocks,
+        })
+    except Exception as e:
+        logger.error(f'[ema-confluence/status] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/ema-confluence/history', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_ema_confluence_history() -> EndpointResponse:
+    """Return all completed EMA Confluence Breakout paper trades (latest-first)."""
+    try:
+        try:
+            with open(_EMAC_ALL_HISTORY_PATH, 'r') as _f:
+                all_trades = json.load(_f)
+            if not isinstance(all_trades, list):
+                all_trades = []
+        except Exception:
+            all_trades = []
+        return jsonify({'success': True, 'trades': all_trades, 'count': len(all_trades)})
+    except Exception as e:
+        logger.error(f'[ema-confluence/history] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/ema-confluence/history', methods=['DELETE'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_ema_confluence_history_delete() -> EndpointResponse:
+    """Delete a paper-trade record by entry_time (or all) from both the
+    daily and all-time history files."""
+    try:
+        data       = request.get_json(silent=True) or {}
+        entry_time = data.get('entry_time')
+        delete_all = bool(data.get('all'))
+        if not entry_time and not delete_all:
+            return jsonify({'success': False, 'error': 'entry_time or all:true required'}), 400
+
+        for path in [_EMAC_HISTORY_PATH, _EMAC_ALL_HISTORY_PATH]:
+            try:
+                with open(path, 'r') as _f:
+                    records = json.load(_f)
+                if isinstance(records, list):
+                    records = [] if delete_all else \
+                        [r for r in records if r.get('entry_time') != entry_time]
+                    with open(path, 'w') as _f:
+                        json.dump(records, _f, indent=2, default=str)
+            except Exception:
+                pass
+
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f'[ema-confluence/history/delete] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/ema-confluence/start', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_ema_confluence_start() -> EndpointResponse:
+    """Start (or restart) the EMA Confluence Breakout monitoring thread."""
+    try:
+        from trading_app.algo.ema_confluence.ema_confluence_algo import EmaConfluenceAlgo, get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        existing = get_instance(username)
+        if existing and existing.is_running():
+            return jsonify({'success': False, 'error': 'Algo already running'}), 409
+
+        algo = EmaConfluenceAlgo(username=username)
+        algo.start()
+        return jsonify({'success': True, 'message': 'EMA Confluence Breakout algo started'})
+    except Exception as e:
+        logger.error(f'[ema-confluence/start] {e}', exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@api_bp.route('/algo/ema-confluence/stop', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+@require_user_auth
+def algo_ema_confluence_stop() -> EndpointResponse:
+    """Stop the EMA Confluence Breakout monitoring thread."""
+    try:
+        from trading_app.algo.ema_confluence.ema_confluence_algo import get_instance
+        username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        existing = get_instance(username)
+        if not existing or not existing.is_running():
+            return jsonify({'success': False, 'error': 'Algo not running'}), 409
+
+        existing.stop()
+        return jsonify({'success': True, 'message': 'EMA Confluence Breakout algo stopped'})
+    except Exception as e:
+        logger.error(f'[ema-confluence/stop] {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

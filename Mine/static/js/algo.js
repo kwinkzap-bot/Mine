@@ -30,7 +30,7 @@ let _intrinsicHistoryTimer   = null;
 let _intrinsicLastEntryTime  = null;
 let _intrinsicLastActiveFlag = false;
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'rtp', 'sc', 'intrinsic', 'tmf', 'swing-momentum'];
+const _ALGO_TABS = ['active', 'rtp', 'sc', 'intrinsic', 'tmf', 'ema-confluence', 'swing-momentum'];
 // Sub-tabs nested inside the 'rtp' (EMA RTP) tab — 30s / 1m / 2m / 3m / 5m candles.
 const _ALGO_RTP_SUBTABS = ['rtp30s', 'rtp', 'rtp2m', 'rtp3m', 'rtp5m'];
 let _algoRtpActiveSub = 'rtp30s';
@@ -448,6 +448,7 @@ function algoSwitch(tab) {
     clearTimeout(_intrinsicHistoryTimer);
     clearTimeout(_activeTimer);
     if (typeof _tmfClearTimers === 'function') _tmfClearTimers();
+    if (typeof _emacClearTimers === 'function') _emacClearTimers();
     if (tab === 'active') {
         _activeFetchAll();
     } else if (tab === 'rtp') {
@@ -462,6 +463,9 @@ function algoSwitch(tab) {
     } else if (tab === 'tmf') {
         _tmfFetchStatus();
         _tmfFetchHistory();
+    } else if (tab === 'ema-confluence') {
+        _emacFetchStatus();
+        _emacFetchHistory();
     } else if (tab === 'swing-momentum') {
         _smLiveFetchConfigs();
     }

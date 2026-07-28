@@ -1,14 +1,37 @@
 {
-  "date": "2026-07-28",
-  "eod_handled": false,
+  "last_scan_date": null,
   "stocks": {
+    "NIFTY": {
+      "phase": "pending_scan"
+    },
+    "BANKNIFTY": {
+      "phase": "pending_scan"
+    },
+    "SBIN": {
+      "phase": "pending_scan"
+    },
+    "RELIANCE": {
+      "phase": "pending_scan"
+    },
+    "HDFCBANK": {
+      "phase": "pending_scan"
+    },
     "360ONE": {
+      "phase": "pending_scan"
+    },
+    "ABB": {
+      "phase": "pending_scan"
+    },
+    "ABCAPITAL": {
       "phase": "pending_scan"
     },
     "ADANIENSOL": {
       "phase": "pending_scan"
     },
     "ADANIENT": {
+      "phase": "pending_scan"
+    },
+    "ADANIGREEN": {
       "phase": "pending_scan"
     },
     "ADANIPORTS": {
@@ -20,16 +43,19 @@
     "ALKEM": {
       "phase": "pending_scan"
     },
+    "AMBER": {
+      "phase": "pending_scan"
+    },
     "AMBUJACEM": {
       "phase": "pending_scan"
     },
     "ANGELONE": {
       "phase": "pending_scan"
     },
-    "APOLLOHOSP": {
+    "APLAPOLLA": {
       "phase": "pending_scan"
     },
-    "ASHOKLEY": {
+    "APOLLOHOSP": {
       "phase": "pending_scan"
     },
     "ASIANPAINT": {
@@ -38,7 +64,10 @@
     "ASTRAL": {
       "phase": "pending_scan"
     },
-    "AUROPHARMA": {
+    "AUBANK": {
+      "phase": "pending_scan"
+    },
+    "AXISBANK": {
       "phase": "pending_scan"
     },
     "BAJAJ-AUTO": {
@@ -59,13 +88,10 @@
     "BANKBARODA": {
       "phase": "pending_scan"
     },
-    "BANKINDIA": {
-      "phase": "pending_scan"
-    },
     "BDL": {
       "phase": "pending_scan"
     },
-    "BHARATFORG": {
+    "BEL": {
       "phase": "pending_scan"
     },
     "BHARTIARTL": {
@@ -74,73 +100,73 @@
     "BHEL": {
       "phase": "pending_scan"
     },
+    "BIOCON": {
+      "phase": "pending_scan"
+    },
+    "BLUESTARCO": {
+      "phase": "pending_scan"
+    },
     "BOSCHLTD": {
       "phase": "pending_scan"
     },
     "BPCL": {
       "phase": "pending_scan"
     },
-    "CANBK": {
+    "BRITANNIA": {
       "phase": "pending_scan"
     },
-    "CDSL": {
+    "CAMS": {
       "phase": "pending_scan"
     },
-    "CGPOWER": {
+    "CIPLA": {
       "phase": "pending_scan"
     },
-    "CHOLAFIN": {
+    "COALINDIA": {
       "phase": "pending_scan"
     },
     "COCHINSHIP": {
       "phase": "pending_scan"
     },
+    "COFORGE": {
+      "phase": "pending_scan"
+    },
     "COLPAL": {
       "phase": "pending_scan"
     },
-    "CONCOR": {
-      "phase": "pending_scan"
-    },
-    "CROMPTON": {
+    "CROMPTOM": {
       "phase": "pending_scan"
     },
     "CUMMINSIND": {
       "phase": "pending_scan"
     },
-    "DABUR": {
-      "phase": "pending_scan"
-    },
     "DALBHARAT": {
       "phase": "pending_scan"
     },
-    "DIVISLAB": {
+    "DELHIVERY": {
       "phase": "pending_scan"
     },
-    "DIXON": {
-      "phase": "pending_scan"
-    },
-    "DLF": {
+    "DMART": {
       "phase": "pending_scan"
     },
     "DRREDDY": {
       "phase": "pending_scan"
     },
-    "EICHERMOT": {
-      "phase": "pending_scan"
-    },
-    "EXIDEIND": {
+    "ETERNAL": {
       "phase": "pending_scan"
     },
     "FEDERALBNK": {
-      "phase": "pending_scan"
-    },
-    "FORCEMOT": {
       "phase": "pending_scan"
     },
     "GAIL": {
       "phase": "pending_scan"
     },
     "GLENMARK": {
+      "phase": "pending_scan"
+    },
+    "GMRAIRPORT": {
+      "phase": "pending_scan"
+    },
+    "GODFRYPHLP": {
       "phase": "pending_scan"
     },
     "GODREJCP": {
@@ -150,9 +176,6 @@
       "phase": "pending_scan"
     },
     "GRASIM": {
-      "phase": "pending_scan"
-    },
-    "GVT&D": {
       "phase": "pending_scan"
     },
     "HAL": {
@@ -167,7 +190,7 @@
     "HDFCAMC": {
       "phase": "pending_scan"
     },
-    "HDFCBANK": {
+    "HDFCLIFE": {
       "phase": "pending_scan"
     },
     "HEROMOTOCO": {
@@ -176,13 +199,13 @@
     "HINDALCO": {
       "phase": "pending_scan"
     },
-    "HINDPETRO": {
+    "HINDUNILVR": {
+      "phase": "pending_scan"
+    },
+    "HINDZINC": {
       "phase": "pending_scan"
     },
     "ICICIGI": {
-      "phase": "pending_scan"
-    },
-    "IDEA": {
       "phase": "pending_scan"
     },
     "IDFCFIRSTB": {
@@ -194,25 +217,22 @@
     "INDIANB": {
       "phase": "pending_scan"
     },
-    "INDIGO": {
+    "INDUSINDBK": {
       "phase": "pending_scan"
     },
-    "INDUSINDBK": {
+    "INFY": {
       "phase": "pending_scan"
     },
     "IOC": {
       "phase": "pending_scan"
     },
-    "JINDALSTEL": {
+    "IREDA": {
       "phase": "pending_scan"
     },
-    "JIOFIN": {
+    "JUBLFOOD": {
       "phase": "pending_scan"
     },
-    "JSWSTEEL": {
-      "phase": "pending_scan"
-    },
-    "KAYNES": {
+    "KALYANKJIL": {
       "phase": "pending_scan"
     },
     "KEI": {
@@ -221,13 +241,10 @@
     "KFINTECH": {
       "phase": "pending_scan"
     },
-    "KPITTECH": {
+    "LAURUSLABS": {
       "phase": "pending_scan"
     },
-    "LICI": {
-      "phase": "pending_scan"
-    },
-    "LODHA": {
+    "LICHSGFIN": {
       "phase": "pending_scan"
     },
     "LT": {
@@ -239,12 +256,6 @@
     "LTM": {
       "phase": "pending_scan"
     },
-    "LUPIN": {
-      "phase": "pending_scan"
-    },
-    "M&M": {
-      "phase": "pending_scan"
-    },
     "MANAPPURAM": {
       "phase": "pending_scan"
     },
@@ -254,13 +265,7 @@
     "MARICO": {
       "phase": "pending_scan"
     },
-    "MARUTI": {
-      "phase": "pending_scan"
-    },
     "MAZDOCK": {
-      "phase": "pending_scan"
-    },
-    "MCX": {
       "phase": "pending_scan"
     },
     "MFSL": {
@@ -272,31 +277,13 @@
     "MOTILALOFS": {
       "phase": "pending_scan"
     },
-    "MPHASIS": {
-      "phase": "pending_scan"
-    },
-    "MUTHOOTFIN": {
-      "phase": "pending_scan"
-    },
-    "NAM-INDIA": {
-      "phase": "pending_scan"
-    },
-    "NATIONALUM": {
-      "phase": "pending_scan"
-    },
-    "NAUKRI": {
-      "phase": "pending_scan"
-    },
-    "NBCC": {
-      "phase": "pending_scan"
-    },
     "NESTLEIND": {
       "phase": "pending_scan"
     },
-    "NMDC": {
+    "NHPC": {
       "phase": "pending_scan"
     },
-    "NTPC": {
+    "NMDC": {
       "phase": "pending_scan"
     },
     "NYKAA": {
@@ -305,37 +292,34 @@
     "OBEROIRLTY": {
       "phase": "pending_scan"
     },
+    "OFSS": {
+      "phase": "pending_scan"
+    },
     "OIL": {
       "phase": "pending_scan"
     },
     "ONGC": {
       "phase": "pending_scan"
     },
-    "PERSISTENT": {
+    "PAGEIND": {
       "phase": "pending_scan"
     },
-    "PETRONET": {
+    "PAYTM": {
       "phase": "pending_scan"
     },
     "PFC": {
       "phase": "pending_scan"
     },
-    "PGEL": {
-      "phase": "pending_scan"
-    },
-    "PHOENIXLTD": {
-      "phase": "pending_scan"
-    },
-    "PIDILITIND": {
-      "phase": "pending_scan"
-    },
     "PIIND": {
       "phase": "pending_scan"
     },
-    "POLYCAB": {
+    "PNB": {
       "phase": "pending_scan"
     },
-    "POWERINDIA": {
+    "PNBHOUSING": {
+      "phase": "pending_scan"
+    },
+    "POLYCAB": {
       "phase": "pending_scan"
     },
     "PRESTIGE": {
@@ -347,16 +331,7 @@
     "RBLBANK": {
       "phase": "pending_scan"
     },
-    "RECLTD": {
-      "phase": "pending_scan"
-    },
     "RVNL": {
-      "phase": "pending_scan"
-    },
-    "SAIL": {
-      "phase": "pending_scan"
-    },
-    "SAMMAANCAP": {
       "phase": "pending_scan"
     },
     "SBICARD": {
@@ -365,16 +340,13 @@
     "SBILIFE": {
       "phase": "pending_scan"
     },
-    "SBIN": {
-      "phase": "pending_scan"
-    },
-    "SHREECEM": {
-      "phase": "pending_scan"
-    },
-    "SIEMENS": {
+    "SHRIRAMFIN": {
       "phase": "pending_scan"
     },
     "SOLARINDS": {
+      "phase": "pending_scan"
+    },
+    "SONACOMS": {
       "phase": "pending_scan"
     },
     "SRF": {
@@ -383,13 +355,25 @@
     "SUNPHARMA": {
       "phase": "pending_scan"
     },
-    "TATACONSUM": {
+    "SUPREMEIND": {
+      "phase": "pending_scan"
+    },
+    "SUZLON": {
+      "phase": "pending_scan"
+    },
+    "SWIGGY": {
+      "phase": "pending_scan"
+    },
+    "TATAPOWER": {
+      "phase": "pending_scan"
+    },
+    "TCS": {
       "phase": "pending_scan"
     },
     "TECHM": {
       "phase": "pending_scan"
     },
-    "TIINDIA": {
+    "TITAN": {
       "phase": "pending_scan"
     },
     "TMPV": {
@@ -407,25 +391,19 @@
     "ULTRACEMCO": {
       "phase": "pending_scan"
     },
-    "UNIONBANK": {
-      "phase": "pending_scan"
-    },
     "UNITDSPR": {
-      "phase": "pending_scan"
-    },
-    "UNOMINDA": {
       "phase": "pending_scan"
     },
     "UPL": {
       "phase": "pending_scan"
     },
-    "VBL": {
-      "phase": "pending_scan"
-    },
     "VOLTAS": {
       "phase": "pending_scan"
     },
-    "YESBANK": {
+    "WAAREEENER": {
+      "phase": "pending_scan"
+    },
+    "WIPRO": {
       "phase": "pending_scan"
     },
     "ZYDUSLIFE": {

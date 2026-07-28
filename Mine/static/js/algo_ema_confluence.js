@@ -1,0 +1,633 @@
+/* algo_ema_confluence.js — EMA Confluence Breakout Algo tab: own file, separate
+   from algo.js (which drives every other Live Algo tab) and separate from
+   backtest.js (the Backtest page). algo.js only calls the small hooks
+   _emacFetchStatus, _emacFetchHistory, _emacClearTimers, and the
+   typeof-guarded call in algoSwitch — everything else about this tab
+   (rendering, start/stop, delete) lives in this file. PAPER TRADE ONLY. */
+'use strict';
+
+let _emacStatusTimer  = null;
+let _emacHistoryTimer = null;
+let _emacStocksData   = {};   // last-fetched {symbol: {phase, direction, ...}}
+let _emacStartingEquity = 100000;  // equity-curve baseline (lot-sized paper P&L, not a real capital pool)
+let _emacHistoryTrades  = [];      // last-fetched trade list, kept for period-tab redraws
+
+const _EMAC_PHASE_LABEL = {
+    pending_scan: 'Not scanned yet',
+    no_setup:     'No setup',
+    watching:     'Watching',
+    in_position:  'In position',
+};
+const _EMAC_PHASE_TONE = {
+    pending_scan: 'neutral',
+    no_setup:     'neutral',
+    watching:     'warn',
+    in_position:  'pos',
+};
+// Phases hidden by default (the bulk of the 136-symbol universe before a
+// setup is found) — the "Show all 136 symbols" checkbox reveals them.
+const _EMAC_QUIET_PHASES = new Set(['pending_scan', 'no_setup']);
+
+function _emacClearTimers() {
+    clearTimeout(_emacStatusTimer);
+    clearTimeout(_emacHistoryTimer);
+}
+
+// ── Status (summary + per-symbol) ───────────────────────────────────────────
+
+function _emacFetchStatus() {
+    fetch('/api/algo/ema-confluence/status')
+        .then(r => r.json())
+        .then(data => {
+            _emacRenderStatus(data);
+            clearTimeout(_emacStatusTimer);
+            _emacStatusTimer = setTimeout(_emacFetchStatus, 15000);
+        })
+        .catch(() => {
+            clearTimeout(_emacStatusTimer);
+            _emacStatusTimer = setTimeout(_emacFetchStatus, 20000);
+        });
+}
+
+function _emacRenderStatus(data) {
+    if (!data || !data.success) return;
+
+    const runBadge = document.getElementById('emacRunBadge');
+    const runText  = document.getElementById('emacRunBadgeText');
+    if (runBadge && runText) {
+        runBadge.className = 'ag-badge ' + (data.running ? 'active' : 'inactive');
+        runText.textContent = data.running ? 'Running' : 'Stopped';
+    }
+
+    const upd = document.getElementById('emacLastUpd');
+    if (upd) upd.textContent = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    const summary = data.summary || {};
+    const summaryGrid = document.getElementById('emacSummaryGrid');
+    if (summaryGrid) {
+        const tiles = [
+            { label: 'Watching',    value: summary.watching || 0 },
+            { label: 'In Position', value: summary.in_position || 0, cls: (summary.in_position || 0) > 0 ? 'ag-warn' : '' },
+            { label: 'No Setup',    value: summary.no_setup || 0 },
+            { label: 'Not Scanned', value: summary.pending_scan || 0 },
+            { label: 'Lots',        value: data.lots || 1 },
+            { label: 'Last Scan',   value: data.last_scan_date || '—' },
+        ];
+        summaryGrid.innerHTML = tiles.map(t =>
+            `<div class="ag-stat">
+                <span class="ag-stat-label">${t.label}</span>
+                <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+            </div>`
+        ).join('');
+    }
+
+    _emacStocksData = data.stocks || {};
+    _emacRenderStocks();
+}
+
+function _emacRenderStocks() {
+    const body = document.getElementById('emacStocksBody');
+    if (!body) return;
+    const showAll = document.getElementById('emacShowAllStocks')?.checked;
+
+    let rows = Object.entries(_emacStocksData).map(([symbol, s]) => ({ symbol, ...s }));
+    if (!showAll) {
+        rows = rows.filter(r => !_EMAC_QUIET_PHASES.has(r.phase));
+    }
+    // Most "active" phases first, alphabetical within a phase.
+    const order = { in_position: 0, watching: 1, no_setup: 2, pending_scan: 3 };
+    rows.sort((a, b) => (order[a.phase] ?? 9) - (order[b.phase] ?? 9) || a.symbol.localeCompare(b.symbol));
+
+    body.innerHTML = DataGrid.render({
+        rows,
+        empty: showAll ? 'No symbols yet' : 'No symbol has a signal today yet — waiting for the daily scan, or check "Show all"',
+        columns: [
+            { key: 'symbol', label: 'Symbol', strong: true },
+            { key: 'phase', label: 'Status',
+              badge: v => _EMAC_PHASE_TONE[v] || 'neutral',
+              format: v => _EMAC_PHASE_LABEL[v] || v },
+            { key: 'direction', label: 'Direction',
+              format: v => v ? (v === 'Short' ? 'SELL' : 'BUY') : '—',
+              tone: v => v === 'Short' ? 'neg' : (v === 'Long' ? 'pos' : undefined) },
+            { key: 'trigger_level', label: 'Trigger', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
+            { key: 'sl_level', label: 'SL', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
+            { key: 'entry_price', label: 'Entry', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
+            { key: 'target_level', label: 'Target', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
+            { key: 'qty', label: 'Qty', align: 'right', format: v => v ?? '—' },
+            { key: 'signal_date', label: 'Signal Candle', format: v => v || '—' },
+        ],
+    });
+}
+
+// ── History ──────────────────────────────────────────────────────────────────
+
+function _emacFetchHistory() {
+    fetch('/api/algo/ema-confluence/history')
+        .then(r => r.json())
+        .then(data => {
+            _emacRenderHistory(data.trades || []);
+            clearTimeout(_emacHistoryTimer);
+            _emacHistoryTimer = setTimeout(_emacFetchHistory, 30000);
+        })
+        .catch(() => {
+            clearTimeout(_emacHistoryTimer);
+            _emacHistoryTimer = setTimeout(_emacFetchHistory, 30000);
+        });
+}
+
+const _EMAC_REASON_TONE = {
+    'TARGET': 'pos',
+    'SL':     'neg',
+};
+
+function _emacRenderHistory(trades) {
+    _emacHistoryTrades = trades || [];
+    _emacRenderEquityCurve(_emacHistoryTrades);
+    const activePeriod = document.querySelector('#emacPeriodTabs .period-tab.active')?.dataset.period || 'monthly';
+    _emacRenderPeriodBreakdown(_emacHistoryTrades, activePeriod);
+
+    const countEl = document.getElementById('emacHistCount');
+    const body    = document.getElementById('emacHistBody');
+    if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
+    if (!body) return;
+
+    body.innerHTML = DataGrid.render({
+        rows: trades,
+        empty: 'No completed trades',
+        columns: [
+            { key: 'date', label: 'Date' },
+            { key: 'symbol', label: 'Symbol', strong: true },
+            { key: 'direction', label: 'Direction', tone: v => v === 'SELL' ? 'neg' : 'pos' },
+            { key: 'entry_time', label: 'Entry Time', format: v => v ? _emacFmtDateTime(v) : '—' },
+            { key: 'exit_time', label: 'Exit Time', format: v => v ? _emacFmtDateTime(v) : '—' },
+            { key: 'qty', label: 'Qty', align: 'right' },
+            { key: 'entry_price', label: 'Entry', format: DataGrid.rupees },
+            { key: 'exit_price', label: 'Exit', format: DataGrid.rupees },
+            { key: 'sl_price', label: 'SL', format: v => v == null ? '—' : DataGrid.rupees(v) },
+            { key: 'target_price', label: 'Target', format: v => v == null ? '—' : DataGrid.rupees(v) },
+            { key: 'pnl', label: 'P&L (₹)', strong: true, format: DataGrid.inr, tone: DataGrid.sign },
+            { key: 'reason', label: 'Reason', badge: v => _EMAC_REASON_TONE[v] || 'neutral' },
+            { label: '', cellClass: 'ag-hist-td-del',
+              render: (_, t) => `<button class="ag-hist-del-btn" title="Delete record"` +
+                  ` onclick="_emacDeleteTrade('${(t.entry_time || '').replace(/"/g, '&quot;')}')">&#128465;</button>` },
+        ],
+    });
+}
+
+function _emacFmtDateTime(iso) {
+    try {
+        return new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+        return iso;
+    }
+}
+
+// ── Equity Curve + P&L Breakdown ────────────────────────────────────────────
+// Same Chart.js approach as the Backtest page's equity curve / period
+// breakdown (static/js/backtest.js), adapted for EMA Confluence: every
+// trade is already a real ₹ paper P&L (qty × price move on the future).
+
+const _EMAC_CHART_THEME = {
+    light:  { tick: '#374151', grid: 'rgba(15, 23, 42, 0.05)',   gridZero: 'rgba(15, 23, 42, 0.25)' },
+    dark:   { tick: '#94a3b8', grid: 'rgba(255, 255, 255, 0.06)', gridZero: 'rgba(255, 255, 255, 0.25)' },
+    forest: { tick: '#6ba88f', grid: 'rgba(16, 185, 129, 0.08)', gridZero: 'rgba(16, 185, 129, 0.3)' },
+    cream:  { tick: '#7c7267', grid: 'rgba(180, 83, 9, 0.06)',   gridZero: 'rgba(180, 83, 9, 0.3)' },
+    ocean:  { tick: '#475569', grid: 'rgba(2, 132, 199, 0.06)',  gridZero: 'rgba(2, 132, 199, 0.3)' },
+};
+function _emacChartColors() {
+    return (window.AppTheme && _EMAC_CHART_THEME[window.AppTheme.getActiveTheme()]) || _EMAC_CHART_THEME.ocean;
+}
+
+let _emacEquityChart = null;
+
+function _emacRenderEquityCurve(trades) {
+    const section = document.getElementById('emacEquityCurveSection');
+    if (!section || !trades || trades.length === 0) {
+        if (section) section.style.display = 'none';
+        return;
+    }
+    const chartColors = _emacChartColors();
+    const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+
+    const labels       = ['Start'];
+    const chartData    = [_emacStartingEquity];
+    const tooltipMeta  = [''];
+    const pointColors  = ['#2962ff'];
+
+    let portfolio = _emacStartingEquity;
+    sorted.forEach((t, idx) => {
+        const pnl = t.pnl || 0;
+        portfolio += pnl;
+        labels.push('T' + (idx + 1));
+        chartData.push(Math.round(portfolio));
+        pointColors.push(pnl >= 0 ? '#00c853' : '#ff1744');
+        tooltipMeta.push(t.symbol ? `${t.symbol} · ${t.entry_time ? String(t.entry_time).replace('T', ' ').slice(0, 16) : ''}` : '');
+    });
+
+    const finalValue = chartData[chartData.length - 1];
+    const diff       = finalValue - _emacStartingEquity;
+    const isProfit   = diff >= 0;
+    const lineColor  = isProfit ? '#2962ff' : '#ff1744';
+    const fillColor  = isProfit ? 'rgba(41,98,255,0.07)' : 'rgba(255,23,68,0.06)';
+
+    const finalEl = document.getElementById('emacEquityCurveFinalPnl');
+    if (finalEl) {
+        const pct = _emacStartingEquity ? ((diff / _emacStartingEquity) * 100).toFixed(1) : '0.0';
+        finalEl.textContent =
+            (diff >= 0 ? '+' : '') + '₹' + Math.abs(diff).toLocaleString('en-IN') +
+            '  (' + (diff >= 0 ? '+' : '') + pct + '%)';
+        finalEl.style.color = isProfit ? '#00c853' : '#ff1744';
+    }
+
+    const fmtY = v => {
+        if (Math.abs(v) >= 100000) return '₹' + (v / 100000).toFixed(1) + 'L';
+        if (Math.abs(v) >= 1000)   return '₹' + (v / 1000).toFixed(0)   + 'K';
+        return '₹' + v;
+    };
+
+    if (_emacEquityChart) { _emacEquityChart.destroy(); _emacEquityChart = null; }
+    const ctx = document.getElementById('emacEquityCurveChart');
+    if (!ctx) return;
+
+    _emacEquityChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Portfolio Value (Paper)',
+                data: chartData,
+                borderColor: lineColor,
+                backgroundColor: fillColor,
+                fill: true,
+                tension: 0.25,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                pointHoverBackgroundColor: pointColors,
+                pointHoverBorderColor: pointColors,
+                borderWidth: 2,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: (items) => {
+                            const i = items[0].dataIndex;
+                            if (i === 0) return 'Starting value';
+                            return `Trade ${i}  ·  ${tooltipMeta[i]}`;
+                        },
+                        label: (item) => {
+                            const v   = item.raw;
+                            const chg = v - _emacStartingEquity;
+                            return [
+                                '  Value: ₹' + Math.round(v).toLocaleString('en-IN'),
+                                '  P&L:   ' + (chg >= 0 ? '+' : '') + '₹' + Math.round(chg).toLocaleString('en-IN'),
+                            ];
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: { maxTicksLimit: 15, color: chartColors.tick, font: { size: 11 }, autoSkip: true },
+                    grid:  { color: chartColors.grid },
+                },
+                y: {
+                    ticks: { color: chartColors.tick, font: { size: 11 }, callback: fmtY },
+                    grid:  { color: chartColors.grid },
+                }
+            }
+        }
+    });
+
+    section.style.display = '';
+}
+
+let _emacPeriodChart = null;
+
+function _emacGetWeekKey(date) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - d.getDay() + 1); // Monday
+    return d.toISOString().slice(0, 10);
+}
+
+function _emacGroupByPeriod(trades, period) {
+    const groups = {};
+    trades.forEach(t => {
+        const d = new Date(t.entry_time);
+        let key;
+        if      (period === 'daily')   key = d.toISOString().slice(0, 10);
+        else if (period === 'weekly')  key = _emacGetWeekKey(d);
+        else if (period === 'monthly') key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+        else if (period === 'quarterly')  key = `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
+        else if (period === 'halfyearly') key = `${d.getFullYear()}-H${d.getMonth() < 6 ? 1 : 2}`;
+        else                            key = `${d.getFullYear()}`;
+        if (!groups[key]) groups[key] = { pnl: 0, wins: 0, losses: 0 };
+        groups[key].pnl += (t.pnl || 0);
+        if ((t.pnl || 0) > 0) groups[key].wins++;
+        else                  groups[key].losses++;
+    });
+    return groups;
+}
+
+function _emacFmtCompact(v) {
+    const abs  = Math.abs(v);
+    const sign = v >= 0 ? '+' : '−';
+    if (abs >= 100000) return sign + '₹' + (abs / 100000).toFixed(1) + 'L';
+    if (abs >= 1000)   return sign + '₹' + (abs / 1000).toFixed(1) + 'K';
+    return sign + '₹' + abs;
+}
+
+const _emacBarValueLabelPlugin = {
+    id: 'emacBarValueLabels',
+    afterDatasetsDraw(chart) {
+        const { ctx, data } = chart;
+        const meta = chart.getDatasetMeta(0);
+        ctx.save();
+        ctx.font = '600 9px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
+        ctx.textAlign = 'center';
+        meta.data.forEach((bar, i) => {
+            const v = data.datasets[0].data[i];
+            if (v == null) return;
+            const text = _emacFmtCompact(v);
+            ctx.fillStyle = v >= 0 ? '#16a34a' : '#dc2626';
+            if (v >= 0) { ctx.textBaseline = 'bottom'; ctx.fillText(text, bar.x, bar.y - 3); }
+            else        { ctx.textBaseline = 'top';    ctx.fillText(text, bar.x, bar.y + 3); }
+        });
+        ctx.restore();
+    }
+};
+
+function _emacRenderPeriodBreakdown(trades, period) {
+    const section = document.getElementById('emacPeriodBreakdownSection');
+    const chartColors = _emacChartColors();
+    if (!section || !trades || trades.length === 0) {
+        if (section) section.style.display = 'none';
+        return;
+    }
+
+    const groups = _emacGroupByPeriod(trades, period);
+    const keys   = Object.keys(groups).sort();
+
+    const labels = keys.map(k => {
+        if (period === 'monthly') {
+            const [y, m] = k.split('-');
+            return new Date(+y, +m - 1).toLocaleString('default', { month: 'short', year: '2-digit' });
+        }
+        if (period === 'weekly')  return 'W ' + k.slice(5);
+        if (period === 'daily')   return k.slice(5);
+        if (period === 'quarterly' || period === 'halfyearly') {
+            const [y, p] = k.split('-');
+            return `${p} '${y.slice(2)}`;
+        }
+        return k;
+    });
+
+    const values = keys.map(k => Math.round(groups[k].pnl));
+    const meta   = keys.map(k => groups[k]);
+
+    const bgColors  = values.map(v => v >= 0 ? 'rgba(34,197,94,.20)'  : 'rgba(239,68,68,.20)');
+    const brdColors = values.map(v => v >= 0 ? 'rgba(34,197,94,.90)'  : 'rgba(239,68,68,.90)');
+
+    const canvas = document.getElementById('emacPeriodBreakdownChart');
+    if (!canvas) return;
+    if (_emacPeriodChart) { _emacPeriodChart.destroy(); _emacPeriodChart = null; }
+
+    const inner = document.getElementById('emacPeriodChartInner');
+    if (inner) {
+        const MIN_BAR_PX = 34;
+        const wrapWidth  = inner.parentElement.clientWidth;
+        inner.style.minWidth = Math.max(wrapWidth, keys.length * MIN_BAR_PX) + 'px';
+    }
+
+    _emacPeriodChart = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        plugins: [_emacBarValueLabelPlugin],
+        data: {
+            labels,
+            datasets: [{
+                data: values,
+                backgroundColor: bgColors,
+                borderColor:     brdColors,
+                borderWidth:  1.5,
+                borderRadius: 4,
+                borderSkipped: false,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            layout: { padding: { top: 18, bottom: 4 } },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        title: ctx => labels[ctx[0].dataIndex],
+                        label: ctx => {
+                            const i  = ctx.dataIndex;
+                            const v  = values[i];
+                            const g  = meta[i];
+                            const tr = g.wins + g.losses;
+                            const wr = tr > 0 ? ((g.wins / tr) * 100).toFixed(0) : 0;
+                            return [
+                                ' P&L: ' + (v >= 0 ? '+' : '') + '₹' + Math.abs(v).toLocaleString('en-IN'),
+                                ` Trades: ${tr}  (${g.wins}W / ${g.losses}L)`,
+                                ` Win Rate: ${wr}%`,
+                            ];
+                        }
+                    },
+                    padding: 10,
+                    displayColors: false,
+                }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { font: { size: 9, weight: '500' }, color: chartColors.tick }
+                },
+                y: {
+                    grid: {
+                        color: ctx => ctx.tick.value === 0 ? chartColors.gridZero : chartColors.grid,
+                        lineWidth: ctx => ctx.tick.value === 0 ? 1.5 : 1,
+                    },
+                    ticks: {
+                        font: { size: 9 }, color: chartColors.tick,
+                        callback: v => {
+                            if (v === 0) return '0';
+                            const abs = Math.abs(v);
+                            const s   = v < 0 ? '−' : '';
+                            if (abs >= 100000) return s + '₹' + (abs/100000).toFixed(1) + 'L';
+                            if (abs >= 1000)   return s + '₹' + (abs/1000).toFixed(0) + 'K';
+                            return s + '₹' + abs;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    section.style.display = '';
+}
+
+document.querySelectorAll('#emacPeriodTabs .period-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('#emacPeriodTabs .period-tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        _emacRenderPeriodBreakdown(_emacHistoryTrades, btn.dataset.period);
+    });
+});
+
+window.addEventListener('themechanged', () => {
+    if (_emacHistoryTrades.length) {
+        _emacRenderEquityCurve(_emacHistoryTrades);
+        const activePeriod = document.querySelector('#emacPeriodTabs .period-tab.active')?.dataset.period || 'monthly';
+        _emacRenderPeriodBreakdown(_emacHistoryTrades, activePeriod);
+    }
+});
+
+// Minimal version of backtest.js's initCollapsibles — click a
+// [data-collapse] header to toggle its target's visibility (chevron ▾/▸).
+function _emacInitCollapsibles() {
+    document.querySelectorAll('#algo-ema-confluence-panel [data-collapse]').forEach(h => {
+        if (h._collapseWired) return;
+        h._collapseWired = true;
+        const sel = h.dataset.collapse;
+        const target = (h.parentElement && h.parentElement.querySelector(sel)) || document.querySelector(sel);
+        const chev = document.createElement('span');
+        chev.className = 'collapse-chev';
+        chev.style.marginRight = '6px';
+        chev.textContent = '▾';
+        const anchor = h.querySelector('h2, h3, h4, h5') || h;
+        anchor.insertBefore(chev, anchor.firstChild);
+        h.addEventListener('click', (e) => {
+            if (e.target.closest('button, a, input, select')) return;
+            if (!target) return;
+            const collapsed = target.classList.toggle('collapsed-hide');
+            chev.textContent = collapsed ? '▸' : '▾';
+        });
+    });
+}
+_emacInitCollapsibles();
+
+function _emacDeleteAllTrades() {
+    if (!confirm('Delete ALL EMA Confluence Breakout trade history records? This clears the entire Executed Trade History and cannot be undone.')) return;
+    fetch('/api/algo/ema-confluence/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ all: true }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_emacHistoryTimer);
+            _emacFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
+function _emacDeleteTrade(entryTime) {
+    if (!confirm('Delete this trade record? This cannot be undone.')) return;
+    fetch('/api/algo/ema-confluence/history', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ entry_time: entryTime }),
+    })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
+            clearTimeout(_emacHistoryTimer);
+            _emacFetchHistory();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
+// ── Logic modal ──────────────────────────────────────────────────────────────
+
+function emacShowLogic() {
+    document.getElementById('emacLogicModal')?.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'emacLogicModal';
+    modal.className = 'sm-modal-overlay';
+    modal.innerHTML = `
+<div class="sm-modal-box rtp-logic-modal">
+
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><polyline points="4 15 9 9 13 13 20 5"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">EMA Confluence Breakout</span>
+            <span class="sm-modal-subtitle">How it enters &amp; exits</span>
+        </div>
+        <button class="sm-modal-close" onclick="document.getElementById('emacLogicModal').remove()" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+
+    <div class="rtp-logic-body">
+
+        <div class="rtp-tf"><span class="rtp-tf-lbl">Mode</span><span class="rtp-tf-val">Simulated (paper) fills on the FUTURES contract</span><span class="rtp-tf-sub">No broker orders — gated by the EMA_CONFLUENCE_ACTIVE kill-switch</span></div>
+
+        <p class="rtp-idea">Scans <b>every symbol</b> in the Backtest page's EMA Confluence symbol table, each using its <b>own</b> default Direction/Target%. Daily EMA 20/50/100/200 — a signal candle's range must touch all four at once; its own colour (red/green) fixes the direction. <b>One setup per symbol at a time</b> — a new signal is ignored while one is still watching or in position.</p>
+
+        <div class="rtp-blk-lbl entry">Entry — breakout of the signal candle, no expiry</div>
+        <div class="rtp-duo">
+            <div class="rtp-duo-card buy">
+                <div class="rtp-duo-hd">▲ BUY</div>
+                <div class="rtp-duo-row">Green signal candle — armed on its own High</div>
+                <div class="rtp-duo-row">Fills whenever the future's LTP trades &ge; that High, any day after</div>
+            </div>
+            <div class="rtp-duo-card sell">
+                <div class="rtp-duo-hd">▼ SELL</div>
+                <div class="rtp-duo-row">Red signal candle — armed on its own Low</div>
+                <div class="rtp-duo-row">Fills whenever the future's LTP trades &le; that Low, any day after</div>
+            </div>
+        </div>
+        <div class="rtp-mode-note">The daily scan runs once each morning off the most recently <b>completed</b> daily candle (index/equity — futures don't carry enough history for a 200-day EMA). The armed trigger/SL stay on the equity/index price scale and are compared directly against the future's live LTP — a known approximation, same spirit as other approximations already used across this app.</div>
+
+        <div class="rtp-blk-lbl exit">Exit — whichever hits first</div>
+        <div class="rtp-chips">
+            <div class="rtp-chip"><span class="rtp-chip-ic tgt">◎</span><div><b>Target</b><span>symbol's own Target% of the entry price</span></div></div>
+            <div class="rtp-chip"><span class="rtp-chip-ic sl">✕</span><div><b>Stop Loss</b><span>signal candle's opposite extreme</span></div></div>
+        </div>
+        <div class="rtp-mode-note">This is a multi-day <b>swing</b> strategy, not intraday — there is no time-based square-off. A position can stay open across any number of days until SL or Target is hit. Qty is Lots (EMA_CONFLUENCE_LOTS) &times; the future's own lot size.</div>
+
+    </div>
+
+</div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.addEventListener('keydown', function esc(ev) {
+        if (ev.key === 'Escape') { document.getElementById('emacLogicModal')?.remove(); document.removeEventListener('keydown', esc); }
+    });
+}
+
+// ── Start / Stop (the scheduler normally handles this automatically at
+//    9:15 AM — these buttons are for manually starting mid-day or
+//    stopping without touching env flags) ────────────────────────────────
+
+function _emacStart() {
+    fetch('/api/algo/ema-confluence/start', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Start failed: ' + (d.error || 'Unknown error')); return; }
+            _emacFetchStatus();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}
+
+function _emacStop() {
+    if (!confirm('Stop the EMA Confluence Breakout monitoring thread? Open paper positions will NOT be tracked until it restarts.')) return;
+    fetch('/api/algo/ema-confluence/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (!d.success) { alert('Stop failed: ' + (d.error || 'Unknown error')); return; }
+            _emacFetchStatus();
+        })
+        .catch(e => alert('Request failed: ' + e));
+}

@@ -424,6 +424,38 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
+        # EMA Confluence Breakout algo (paper trade, futures): start at 9:15 AM weekdays
+        self.scheduler.add_job(
+            self._start_ema_confluence_monitoring,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour=9,
+                minute=15,
+                second=0,
+                timezone='Asia/Kolkata',
+            ),
+            id='ema_confluence_algo_start',
+            name='EMA Confluence Breakout Algo Start',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
+        # Watchdog: restart the EMA Confluence thread if it crashes mid-day
+        self.scheduler.add_job(
+            self._watchdog_ema_confluence,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/5',
+                second=30,
+                timezone='Asia/Kolkata',
+            ),
+            id='ema_confluence_algo_watchdog',
+            name='EMA Confluence Breakout Algo Watchdog',
+            replace_existing=True,
+            misfire_grace_time=60,
+        )
+
         self.scheduler.start()
         jobs = {j.id: str(j.next_run_time) for j in self.scheduler.get_jobs()}
         logger.info(f"Market scheduler started — jobs registered: {list(jobs.keys())}")
@@ -794,6 +826,45 @@ class MarketScheduler:
         """Every 5 minutes during market hours: restart TMF thread if it crashed."""
         self._ensure_tmf_running(source='Watchdog')
 
+    # ── EMA Confluence Breakout algo management (paper trade, futures) ────────
+
+    def _ensure_ema_confluence_running(self, source: str = '') -> None:
+        """Start the EMA Confluence Breakout monitoring thread if it is not
+        already running. Mirrors _ensure_intrinsic_range_running: starts
+        during market hours regardless of EMA_CONFLUENCE_ACTIVE — the
+        kill-switch lives inside the loop and gates paper entries only. All
+        executions here are simulated (paper trade); no broker orders are
+        placed.
+        """
+        try:
+            if not self.is_trading_day():
+                return
+            now = datetime.now()
+            h, m = now.hour, now.minute
+            in_window = (h > 9 or (h == 9 and m >= 15)) and (h < 15 or (h == 15 and m <= 27))
+            if not in_window:
+                return
+            from trading_app.algo.ema_confluence.ema_confluence_algo import EmaConfluenceAlgo, get_instance
+            username = self._rtp_username()
+            existing = get_instance(username)
+            if existing and existing.is_running():
+                return  # Already alive
+            if existing:
+                logger.warning(f"[EmaConfluence {source}] Monitoring thread dead — restarting")
+            else:
+                logger.info(f"[EmaConfluence {source}] Starting monitoring thread for user={username}")
+            EmaConfluenceAlgo(username=username).start()
+        except Exception as e:
+            logger.error(f"[EmaConfluence {source}] _ensure_ema_confluence_running failed: {e}", exc_info=True)
+
+    def _start_ema_confluence_monitoring(self) -> None:
+        """9:15 AM weekdays: start EMA Confluence Breakout algo monitoring thread."""
+        self._ensure_ema_confluence_running(source='Scheduler')
+
+    def _watchdog_ema_confluence(self) -> None:
+        """Every 5 minutes during market hours: restart EMA Confluence thread if it crashed."""
+        self._ensure_ema_confluence_running(source='Watchdog')
+
     def _run_historic_oi_record_task(self):
         """8:00 PM IST: fetch and persist daily OI snapshot for all symbols."""
         try:
@@ -911,6 +982,7 @@ def init_scheduler(app):
         market_scheduler._ensure_sc_running(source='Startup')
         market_scheduler._ensure_intrinsic_range_running(source='Startup')
         market_scheduler._ensure_tmf_running(source='Startup')
+        market_scheduler._ensure_ema_confluence_running(source='Startup')
         # Historic OI self-heal: backfill any recent trading day whose 8 PM
         # record was missed while this process was down. Runs off-thread so a
         # slow NSE bhavcopy fetch never blocks app startup.
