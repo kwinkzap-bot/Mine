@@ -31,6 +31,7 @@ const _OIP_IND_IDS = [
     'oipShow30mReversalLines', 'oipReversal30mCountUp', 'oipReversal30mCountDn', 'oipReversal30mRange',
     'oipShow1DReversalLines',  'oipReversal1DCount',  'oipReversal1DRange',
     'oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h',
+    'oipShow5mClose', 'oipShowOpt5mClose',
     'oipShowSynthetic', 'oipShow2ndCandle30sOpt', 'oipShow2nd5mCandleOpt', 'oipShowVwapOpt', 'oipShowVolumeOpt',
     'oipShowFixedCeAvg', 'oipShowFixedPeAvg', 'oipShowFixedCePeAvg',
     'oipShowEma9Opt', 'oipShowEma20Opt', 'oipShowEma50Opt'
@@ -106,9 +107,15 @@ const _OIP_LINE_DEFAULTS = {
     box30s: { color: '#FFC800', width: 1, opacity: 0.09 }, box5m: { color: '#2dd2ff', width: 1, opacity: 0.09 },
     mondayBox: { color: '#34ed0b', width: 1 },
     fixedCeAvg: { color: '#16a34a', width: 1 }, fixedPeAvg: { color: '#7c3aed', width: 1 }, fixedCePeAvg: { color: '#000000', width: 1 },
+    fiveMClose: { color: '#fbbf24', width: 1 }, fiveMCloseOpt: { color: '#fbbf24', width: 1 },
 };
 // Keys that only get a style dropdown (no color/width — see comment above).
 const _OIP_NO_COLOR_KEYS = new Set(['rsi', 'reversal1d']);
+// Keys that get ONLY a color input — no width, no style. The 5m Close Border
+// isn't a line: it recolors a candlestick's border, and lightweight-charts'
+// candle renderer accepts a border COLOUR only (always a 1px solid hairline),
+// so width/style selects here would be dead knobs.
+const _OIP_COLOR_ONLY_KEYS = new Set(['fiveMClose', 'fiveMCloseOpt']);
 // Keys that also get a background fill-opacity control — only the box
 // indicators have a filled background (a translucent rect between the box's
 // high/low border lines); every other indicator here is a bare line.
@@ -159,6 +166,8 @@ const _OIP_LINE_STYLE_ITEMS = [
     { key: 'box30s',         checkboxId: 'oipShow2ndCandle30s' },
     { key: 'box5m',          checkboxId: 'oipShow2nd5mCandle' },
     { key: 'mondayBox',      checkboxId: 'oipShowMondayBox' },
+    { key: 'fiveMClose',     checkboxId: 'oipShow5mClose' },
+    { key: 'fiveMCloseOpt',  checkboxId: 'oipShowOpt5mClose' },
 ];
 // Synthetic value's 3 named lines share ONE checkbox — inject all 3 selects
 // after it instead of the generic one-per-checkbox pattern above.
@@ -291,6 +300,10 @@ function _oipBuildOpacitySelect(key) {
 function _oipBuildLinePropsGroup(key) {
     const wrap = document.createElement('span');
     wrap.className = 'oip-line-props';
+    if (_OIP_COLOR_ONLY_KEYS.has(key)) {
+        wrap.appendChild(_oipBuildColorInput(key));
+        return wrap;
+    }
     if (!_OIP_NO_COLOR_KEYS.has(key)) {
         wrap.appendChild(_oipBuildColorInput(key));
         if (_OIP_FILL_OPACITY_KEYS.has(key)) wrap.appendChild(_oipBuildOpacitySelect(key));
@@ -307,7 +320,9 @@ function oipInjectLineStyleSelectors() {
     _OIP_LINE_STYLE_ITEMS.forEach(({ key, checkboxId }) => {
         const cb = document.getElementById(checkboxId);
         const label = cb?.closest('.oip-ind-item, .oip-ind-sub-item');
-        if (!label || label.querySelector(`[data-style-key="${key}"]`)) return;
+        // Already-injected check has to look for the colour input too — a
+        // _OIP_COLOR_ONLY_KEYS row has no style select to find (see below).
+        if (!label || label.querySelector(`[data-style-key="${key}"], [data-color-key="${key}"]`)) return;
         label.appendChild(_oipBuildLinePropsGroup(key));
     });
     // Synthetic value's 3 sub-lines: append a small row of control groups after its label.
@@ -403,6 +418,65 @@ function oipApplyLineStyleChange(key) {
     if (key === 'box30s') { if (oipOIData?.candles) oipDraw2ndCandle30sBox(oipOIData.candles); return; }
     if (key === 'box5m')  { if (oipOIData?.candles) oipDraw2nd5mCandleBox(oipOIData.candles); return; }
     if (key === 'mondayBox') { if (oipOIData?.candles) oipDrawMondayBox(oipOIData.candles); return; }
+    // 5m Close Border lives in the candle data itself, not a separate series —
+    // re-push the candles so the new colour lands (see oi_profile.js).
+    // typeof-guarded: this file is also loaded by dashboard/replay, which don't
+    // pull in oi_profile.js (where these live) — same convention as maxPain above.
+    if (key === 'fiveMClose') { if (typeof oipRedraw5mCloseMain === 'function') oipRedraw5mCloseMain(); return; }
+    if (key === 'fiveMCloseOpt') { if (typeof oipRedraw5mCloseOpt === 'function') oipRedraw5mCloseOpt(); return; }
+}
+
+/* ── 5m Close Border ──────────────────────────────────────── */
+// On sub-5-minute intervals the eye can't tell where one 5-minute candle ends
+// and the next begins. Every bar that CLOSES a 5-minute block (on 1m: the
+// :19 / :24 / :29 … bar, i.e. the 5th of each group) gets a distinct border
+// colour while its body keeps its normal up/down colour — read the chart at
+// 1-minute, but still see the 5-minute structure.
+//
+// Only intervals that divide 5 minutes evenly can have such a bar (30s and 1m);
+// 2m/3m bars straddle the boundary, so those are left alone, as is anything
+// already 5m or coarser. Note the newest bar is marked while it is still
+// forming — that is the point: it flags "the 5-minute candle closes on THIS bar".
+//
+// Pure function (no DOM reads) so each block can resolve its own toggle and
+// colour: the main chart and Opt Prem use the indicator popups' own checkboxes
+// + oipGetLineColor keys, Round Strike uses its own local pickers.
+const _OIP_5M_CLOSE_BAR_SECONDS = { '30second': 30, 'minute': 60 };
+
+function oipMark5mCloseBorders(candles, enabled, color) {
+    if (!Array.isArray(candles) || !enabled) return candles;
+    const barSec = _OIP_5M_CLOSE_BAR_SECONDS[oipInterval];
+    if (!barSec) return candles;
+    // Timestamps are epoch seconds already shifted to IST (see the charts'
+    // Etc/UTC formatter); the shift is 19800s, a whole multiple of 300, so a
+    // 5-minute boundary is still just `epoch % 300 === 0`.
+    return candles.map(c => {
+        const t = Number(c.time ?? c.date);
+        if (!isFinite(t)) return c;
+        return ((t + barSec) % 300 === 0) ? { ...c, borderColor: color } : c;
+    });
+}
+
+// Removes a previously applied tag. Needed where candles are read back OUT of
+// a series that already has them tagged (oipOISeries.data() feeding the Opt
+// Prem index view) and must be re-tagged under a different popup's settings.
+function oipStrip5mCloseBorder(candles) {
+    if (!Array.isArray(candles)) return candles;
+    return candles.map(c => {
+        if (!c || c.borderColor === undefined) return c;
+        const { borderColor, ...rest } = c;
+        return rest;
+    });
+}
+
+// Resolves the toggle + colour for one of the two popup-driven instances.
+// which: 'main' (OI Profile chart) | 'opt' (Opt Prem CE/PE/Combined charts).
+function oip5mCloseSettings(which) {
+    const isOpt = which === 'opt';
+    return {
+        enabled: document.getElementById(isOpt ? 'oipShowOpt5mClose' : 'oipShow5mClose')?.checked ?? false,
+        color: oipGetLineColor(isOpt ? 'fiveMCloseOpt' : 'fiveMClose')
+    };
 }
 
 /* ── EMA visibility ───────────────────────────────────────── */
@@ -1281,6 +1355,11 @@ function oipInitIndicatorsPopup(storageKey) {
         if (oipOIData?.candles) oipDraw2nd5mCandleBox(oipOIData.candles);
     });
     document.getElementById('oipShowVwapOpt')?.addEventListener('change', () => oipSyncVwapVisibility());
+    // 5m Close Border — one instance per chart group, each with its own toggle
+    // and colour (main popup drives the OI chart, opt popup the CE/PE/Combined
+    // premium charts).
+    document.getElementById('oipShow5mClose')?.addEventListener('change', () => oipRedraw5mCloseMain());
+    document.getElementById('oipShowOpt5mClose')?.addEventListener('change', () => oipRedraw5mCloseOpt());
     document.getElementById('oipShowVolumeOpt')?.addEventListener('change', () => {
         if (typeof oipSyncOptVolumeVisibility === 'function') oipSyncOptVolumeVisibility();
     });

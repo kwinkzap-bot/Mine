@@ -37,6 +37,18 @@
  * green, PE in blue — recomputed from that leg's own candles on every load
  * (see oipRSComputeRefLines / oipRSDrawRefLines).
  *
+ * The two charts get their data in DIFFERENT ways. The main chart (top,
+ * follows the TF dropdown) stays live, but issues no request of its own: it
+ * needs the same symbol/interval/window as Opt Prem's chart and differs only
+ * in strike, so its legs ride along on that request as rs_ce_strike/
+ * rs_pe_strike and come back as rs_ce_candles/rs_pe_candles — see
+ * oipRSStrikeParams (appended by oi_profile.js's oipLoadCandles) and
+ * oipRSRenderFromMain (called by it once the response lands). The Fixed 5m
+ * chart below it can't share that request — it's pinned to a 5-minute
+ * interval — and doesn't need to: it's read for structure rather than
+ * tick-by-tick price, so it fetches on demand only (initial load, strike
+ * change, and the "⟳ 5m" button in the block header — see oipRSFixed5mRefresh).
+ *
  * Indicator show/hide and drawn Ray lines persist across a page refresh via
  * localStorage (see the "Persistence" block below — oipRSSaveIndicatorState/
  * oipRSRestoreIndicatorState, oipRSAddSavedRay/oipRSRemoveSavedRay/
@@ -49,15 +61,13 @@ let oipRSChart = null, oipRSCESeries = null, oipRSPESeries = null;
 let oipRSVwapCESeries = null, oipRSVwapPESeries = null;
 let oipRSVolumeSeries = null;
 let oipRSCurrentCEStrike = null, oipRSCurrentPEStrike = null;
-let oipRSCandleTimer = null, oipRSIsBusy = false;
-
 // Static 5-minute Combined chart — same CE/PE strikes as the block above
-// (read fresh from the same dropdowns), always fetched at a fixed 5-minute
-// interval. No own poll loop/busy-flag: it piggybacks on oipRSLoadCandles,
-// which calls it after every fetch (initial load, strike change, and each
-// tick of oipRSLoop) — see the end of oipRSLoadCandles below.
+// (read fresh from the same dropdowns), but its own fetch: the shared request
+// is on the main TF interval, and this chart is always 5-minute. Only
+// refetches on initial load, strike change, and the "⟳ 5m" button (own busy
+// flag, since those fetches race the main chart's poll loop).
 let oipRSFixed5mChart = null, oipRSFixed5mCESeries = null, oipRSFixed5mPESeries = null;
-let oipRSFixed5mVolumeSeries = null;
+let oipRSFixed5mVolumeSeries = null, oipRSFixed5mIsBusy = false;
 let oipRSFixed5mVwapCESeries = null, oipRSFixed5mVwapPESeries = null;
 let oipRSFixed5mCeRefLineObjs = { pdh: null, pdl: null, open: null, fiveMHi: null, fiveMLo: null };
 let oipRSFixed5mPeRefLineObjs = { pdh: null, pdl: null, open: null, fiveMHi: null, fiveMLo: null };
@@ -74,7 +84,7 @@ let oipRSFixed5mMirrorRays = [];
 const OIP_RS_STORAGE_KEY_INDICATORS = 'oipRS_indicators_v1';
 const OIP_RS_STORAGE_KEY_RAYS = 'oipRS_rays_v1';
 const OIP_RS_INDICATOR_CHECKBOX_IDS = [
-    'oipRSShowVwap', 'oipRSShowVolume',
+    'oipRSShowVwap', 'oipRSShowVolume', 'oipRSShow5mClose',
     'oipRSShowCePdh', 'oipRSShowCePdl', 'oipRSShowCeOpen', 'oipRSShowCe5mHi', 'oipRSShowCe5mLo',
     'oipRSShowPePdh', 'oipRSShowPePdl', 'oipRSShowPeOpen', 'oipRSShowPe5mHi', 'oipRSShowPe5mLo'
 ];
@@ -192,7 +202,9 @@ function oipRSLineStyleFromPickers(ids, fallbackColor) {
 function oipRSSaveLineStyleState() {
     const state = {
         ce: oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR),
-        pe: oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR)
+        pe: oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR),
+        // 5m Close Border has a colour only (no width/style — see oipRSMark5mCloseBorders).
+        fiveMClose: document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.value || OIP_RS_5M_CLOSE_DEFAULT
     };
     try { localStorage.setItem(OIP_RS_STORAGE_KEY_LINESTYLE, JSON.stringify(state)); } catch (e) {}
 }
@@ -209,6 +221,8 @@ function oipRSRestoreLineStyleState() {
     };
     apply(OIP_RS_CE_STYLE_IDS, state.ce);
     apply(OIP_RS_PE_STYLE_IDS, state.pe);
+    const f = document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID);
+    if (f && state.fiveMClose) f.value = state.fiveMClose;
 }
 
 // Reflects the current CE/PE colors onto the reference-line checkbox labels
@@ -224,6 +238,8 @@ function oipRSUpdateCheckboxSpanColors() {
         const span = document.getElementById(id)?.nextElementSibling;
         if (span) span.style.color = peColor;
     });
+    const fiveMSpan = document.getElementById('oipRSShow5mClose')?.nextElementSibling;
+    if (fiveMSpan) fiveMSpan.style.color = document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.value || OIP_RS_5M_CLOSE_DEFAULT;
 }
 
 // Live-restyles already-drawn price lines (no data refetch/redraw needed) —
@@ -578,10 +594,11 @@ function oipRSFixed5mInitChart() {
     }
 }
 
-// Fetches candles for the SAME CE/PE strikes as oipRSLoadCandles, but always
-// at a fixed 5-minute interval — called from the end of oipRSLoadCandles
-// (see below) rather than its own poll loop, so it stays in lockstep with
-// the strikes above without duplicating timer/busy-flag bookkeeping.
+// Fetches candles for the SAME CE/PE strikes as the main chart above, but
+// always at a fixed 5-minute interval. This is the one request this block
+// still makes on its own — the interval differs from the shared request, so
+// it can't ride along there. Called on initial load, strike change, and the
+// "⟳ 5m" button only; never on the poll loop.
 async function oipRSFixed5mLoadCandles(resetZoom = false) {
     const ceStrike = document.getElementById('oipRSCEStrikeDropdown')?.value;
     const peStrike = document.getElementById('oipRSPEStrikeDropdown')?.value;
@@ -719,6 +736,9 @@ function oipRSInitIndicatorsPopup() {
         const el = document.getElementById(id);
         el?.addEventListener(el.type === 'color' ? 'input' : 'change', oipRSOnPeStyleChange);
     });
+    // 5m Close Border — toggle + colour both re-tag the loaded candles in place.
+    document.getElementById('oipRSShow5mClose')?.addEventListener('change', oipRSOn5mCloseChange);
+    document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.addEventListener('input', oipRSOn5mCloseChange);
 }
 
 // Fetches today's session-open price + the tradable strike list directly
@@ -772,36 +792,104 @@ function oipRSPopulateDropdown(sel, strikes, selected) {
     });
 }
 
-async function oipRSLoadCandles(resetZoom = false) {
+// The strike pair this block wants appended to oi_profile.js's main candle
+// request (see oipLoadCandles). Returning '' — no strikes picked yet, or the
+// block isn't on this page — makes the backend skip those legs entirely.
+function oipRSStrikeParams() {
+    const ceStrike = document.getElementById('oipRSCEStrikeDropdown')?.value;
+    const peStrike = document.getElementById('oipRSPEStrikeDropdown')?.value;
+    if (!ceStrike || !peStrike) return '';
+    return `&rs_ce_strike=${ceStrike}&rs_pe_strike=${peStrike}`;
+}
+
+// Set by the callers that need the NEXT render to re-fit the chart (initial
+// load, strike change). The render itself is driven by oi_profile.js's poll
+// loop, which has no idea a strike just changed, so the intent is parked here
+// and consumed by the first render that follows.
+let oipRSPendingResetZoom = false;
+let oipRSFirstRenderDone = false;
+// Last rendered candles, kept UNTAGGED (no 5m-close borderColor) so indicator
+// changes can re-tag and redraw them without a refetch — see oipRSOn5mCloseChange.
+let oipRSLastCeData = null, oipRSLastPeData = null;
+
+// For callers that already trigger their own reload (e.g. the main TF
+// dropdown) and just need this block's next render to re-fit.
+function oipRSMarkResetZoom() { oipRSPendingResetZoom = true; }
+
+// ── 5m Close Border indicator ────────────────────────────────────────────────
+// This block's own instance of the marker shared with the main OI Profile and
+// Opt Prem charts — see oipMark5mCloseBorders in oi_indicators.js for what it
+// does and why. Only the toggle/colour source differs: this block keeps its
+// own local pickers (the OIP_RS_* convention used throughout this file) rather
+// than the generic oipGetLineColor store the two popups above use.
+//
+// There is deliberately NO width or style picker here (unlike the CE/PE Line
+// Style sections): lightweight-charts' candlestick renderer only accepts a
+// border COLOUR — the outline is always a 1px solid hairline, so a width/style
+// control would be a dead knob.
+const OIP_RS_5M_CLOSE_COLOR_ID = 'oipRS5mCloseColorInp';
+const OIP_RS_5M_CLOSE_DEFAULT = '#fbbf24';  // amber — reads against green/red (CE) and violet/grey (PE)
+
+function oipRSMark5mCloseBorders(candles) {
+    return oipMark5mCloseBorders(
+        candles,
+        document.getElementById('oipRSShow5mClose')?.checked ?? true,
+        document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.value || OIP_RS_5M_CLOSE_DEFAULT
+    );
+}
+
+// Re-applies the marker to the ALREADY-loaded candles so toggling the checkbox
+// or dragging the colour picker takes effect immediately, instead of waiting
+// for the next tick of oi_profile.js's poll loop. Re-uses the raw (untagged)
+// arrays parked by the last render — no refetch. `refresh=false` so the user's
+// current pan/zoom survives.
+let oipRS5mCloseRedrawPending = false;
+
+function oipRSOn5mCloseChange() {
+    oipRSSaveIndicatorState();
+    oipRSSaveLineStyleState();
+    oipRSUpdateCheckboxSpanColors();
+    if (!oipRSChart || !oipRSLastCeData || oipRS5mCloseRedrawPending) return;
+    // Coalesced to one redraw per frame — a colour <input> fires continuously
+    // while the picker is dragged, and each redraw is a full setData of both legs.
+    oipRS5mCloseRedrawPending = true;
+    requestAnimationFrame(() => {
+        oipRS5mCloseRedrawPending = false;
+        window._oipDataRefreshing = true;
+        oipRSChart.update(oipRSMark5mCloseBorders(oipRSLastCeData), oipRSMark5mCloseBorders(oipRSLastPeData), false);
+        requestAnimationFrame(() => { window._oipDataRefreshing = false; });
+    });
+}
+
+// Renders this block's main chart from the SHARED candle response fetched by
+// oi_profile.js (rs_ce_candles / rs_pe_candles — see oipRSStrikeParams). This
+// block deliberately issues no candle request of its own: it needs the same
+// symbol, interval and window as the main chart and only differs in strike,
+// so a separate fetch would duplicate an identical request every poll tick.
+function oipRSRenderFromMain(data) {
+    if (!data || !data.success) return;
     const ceStrike = document.getElementById('oipRSCEStrikeDropdown')?.value;
     const peStrike = document.getElementById('oipRSPEStrikeDropdown')?.value;
     if (!ceStrike || !peStrike) return;
 
-    const _daysForInterval = { day: 365, week: 1095, month: 3650 };
-    const days = _daysForInterval[oipInterval] ?? 5;
-    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${days}&ce_strike=${ceStrike}&pe_strike=${peStrike}&include_30s=false&_t=${Date.now()}`;
-
-    let data;
-    try {
-        const res = await fetch(url);
-        data = await res.json();
-    } catch (e) {
-        console.warn('[RoundStrike] fetch error:', e);
-        return;
-    }
-    if (!data.success) return;
+    const resetZoom = oipRSPendingResetZoom;
+    oipRSPendingResetZoom = false;
 
     oipRSCurrentCEStrike = ceStrike;
     oipRSCurrentPEStrike = peStrike;
 
-    const ceData = (data.ce_opt_candles || []).map(c => ({ ...c, type: 'CE' }));
-    const peData = (data.pe_opt_candles || []).map(c => ({ ...c, type: 'PE' }));
+    const ceData = (data.rs_ce_candles || []).map(c => ({ ...c, type: 'CE' }));
+    const peData = (data.rs_pe_candles || []).map(c => ({ ...c, type: 'PE' }));
+    // Parked untagged so the 5m Close Border indicator can be re-applied on a
+    // checkbox/colour change without waiting for the next poll (oipRSOn5mCloseChange).
+    oipRSLastCeData = ceData;
+    oipRSLastPeData = peData;
 
     // Suppress the cross-chart sync listener (see oipRSInitCharts) while this
     // setData call is in flight — same guard oi_profile.js uses for OI/Opt Prem,
-    // so a live poll tick can't be mistaken for a user-driven pan/zoom.
+    // so a data refresh can't be mistaken for a user-driven pan/zoom.
     window._oipDataRefreshing = true;
-    if (oipRSChart) oipRSChart.update(ceData, peData, resetZoom);
+    if (oipRSChart) oipRSChart.update(oipRSMark5mCloseBorders(ceData), oipRSMark5mCloseBorders(peData), resetZoom);
 
     if (oipRSVolumeSeries) {
         const futVolMap = new Map((data.future_volume || []).map(v => [Number(v.time), Number(v.volume || 0)]));
@@ -830,7 +918,15 @@ async function oipRSLoadCandles(resetZoom = false) {
 
     requestAnimationFrame(() => { window._oipDataRefreshing = false; });
 
-    if (typeof oipRSFixed5mLoadCandles === 'function') oipRSFixed5mLoadCandles(resetZoom);
+    // NOTE: the Fixed 5m chart is deliberately NOT refreshed here — this runs
+    // on every tick of the main poll loop, and that chart is manual-refresh
+    // only, on its own 5-minute interval (see oipRSFixed5mRefresh).
+
+    // Rays are restored once real data exists, so they extend to it correctly.
+    if (!oipRSFirstRenderDone) {
+        oipRSFirstRenderDone = true;
+        oipRSRestoreSavedRays();
+    }
 }
 
 function oipRSInitOrderButtons() {
@@ -989,35 +1085,34 @@ async function oipRSExitAllOrders(btn) {
     }
 }
 
-// Recurring background refresh — mirrors Opt Prem's oipScheduleCandleLoop/
-// oipCandleLoop (oi_profile.js) so the Round Strike chart keeps pulling live
-// candles the same way Fixed Monthly does (Fixed Monthly gets this for free
-// since it rides on Opt Prem's own request; Round Strike uses its own
-// strikes so it needs its own loop). Same cadence: 1s while the market's
-// open, slower otherwise, paused while the tab is hidden.
-function oipRSScheduleLoop(delay) {
-    if (window.oipReplayMode) return;
-    if (oipRSCandleTimer) clearTimeout(oipRSCandleTimer);
-    oipRSCandleTimer = setTimeout(() => {
-        if (!document.hidden) oipRSLoop();
-        else oipRSScheduleLoop(10000);
-    }, delay);
+// Asks oi_profile.js to refetch now, so this block's strikes reach the backend
+// without waiting for the next poll tick. resetZoom stays false — the main
+// chart shouldn't jump because a Round Strike dropdown changed; this block's
+// own re-fit rides on oipRSPendingResetZoom instead.
+// includeFixed=false: the Fixed Monthly chart has its own Update/Refresh
+// buttons and is deliberately kept off routine reloads, so a Round Strike
+// dropdown change shouldn't drag its fetch along.
+function oipRSRequestReload() {
+    oipRSPendingResetZoom = true;
+    if (typeof oipLoadCandles === 'function') oipLoadCandles(true, false, false);
 }
 
-async function oipRSLoop() {
-    if (oipRSIsBusy) return;
-    const isMarketOpen = typeof oipIsMarketOpen === 'function' ? oipIsMarketOpen() : true;
-    oipRSIsBusy = true;
-    let success = false;
+// Manual refresh for the Fixed 5m chart — it's read for structure, not
+// tick-by-tick price, so it sits out the live loop above and only refetches
+// on demand. Same convention as the Fixed Monthly chart's own ⟳ button.
+// Keeps the current zoom (resetZoom=false) so a refresh doesn't throw away
+// where the user has panned to.
+async function oipRSFixed5mRefresh(btn) {
+    if (oipRSFixed5mIsBusy) return;
+    oipRSFixed5mIsBusy = true;
+    if (btn) btn.disabled = true;
     try {
-        await oipRSLoadCandles(false);
-        success = true;
+        await oipRSFixed5mLoadCandles(false);
     } catch (err) {
-        console.warn('[RoundStrike] Candle loop error:', err);
+        console.warn('[RoundStrike/Fixed5m] Refresh error:', err);
     } finally {
-        oipRSIsBusy = false;
-        const delay = isMarketOpen ? (success ? 1000 : 2000) : 300000;
-        oipRSScheduleLoop(delay);
+        oipRSFixed5mIsBusy = false;
+        if (btn) btn.disabled = false;
     }
 }
 
@@ -1035,16 +1130,25 @@ async function oipRSInit() {
     oipRSPopulateDropdown(document.getElementById('oipRSCEStrikeDropdown'), strikes, ceStrike);
     oipRSPopulateDropdown(document.getElementById('oipRSPEStrikeDropdown'), strikes, peStrike);
 
-    document.getElementById('oipRSCEStrikeDropdown')?.addEventListener('change', () => oipRSLoadCandles(true));
-    document.getElementById('oipRSPEStrikeDropdown')?.addEventListener('change', () => oipRSLoadCandles(true));
+    // A strike change reloads BOTH charts — they always show the same strikes.
+    // The main one goes through the shared request (new strikes land in the
+    // URL oi_profile.js builds); the 5m one still fetches on its own.
+    const onStrikeChange = () => { oipRSRequestReload(); oipRSFixed5mLoadCandles(true); };
+    document.getElementById('oipRSCEStrikeDropdown')?.addEventListener('change', onStrikeChange);
+    document.getElementById('oipRSPEStrikeDropdown')?.addEventListener('change', onStrikeChange);
+
+    const fixed5mRefreshBtn = document.getElementById('oipRSFixed5mRefreshBtn');
+    fixed5mRefreshBtn?.addEventListener('click', () => oipRSFixed5mRefresh(fixed5mRefreshBtn));
 
     oipRSInitOrderButtons();
     oipRSInitRayTool();
     oipRSInitIndicatorsPopup();
-    await oipRSLoadCandles(true);
-    oipRSRestoreSavedRays(); // after real data loads, so rays extend to it correctly
 
-    oipRSScheduleLoop(typeof oipIsMarketOpen === 'function' && oipIsMarketOpen() ? 1000 : 300000);
+    // The strikes above were only just resolved, so oi_profile.js's first
+    // request went out without them — kick one more off now to pick them up.
+    // Rays are restored by the render that follows (see oipRSRenderFromMain).
+    oipRSRequestReload();
+    await oipRSFixed5mLoadCandles(true);
 }
 
 document.addEventListener('DOMContentLoaded', () => { oipRSInit(); });

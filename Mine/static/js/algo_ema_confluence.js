@@ -9,6 +9,7 @@
 let _emacStatusTimer  = null;
 let _emacHistoryTimer = null;
 let _emacStocksData   = {};   // last-fetched {symbol: {phase, direction, ...}}
+let _emacDefaults     = {};   // EMA_SYMBOL_DEFAULTS: {symbol: {direction, target_pct}}
 let _emacStartingEquity = 100000;  // equity-curve baseline (lot-sized paper P&L, not a real capital pool)
 let _emacHistoryTrades  = [];      // last-fetched trade list, kept for period-tab redraws
 
@@ -24,9 +25,15 @@ const _EMAC_PHASE_TONE = {
     watching:     'warn',
     in_position:  'pos',
 };
-// Phases hidden by default (the bulk of the 136-symbol universe before a
-// setup is found) — the "Show all 136 symbols" checkbox reveals them.
+// Phases hidden by default (the bulk of the universe before a setup is
+// found) — the "Show all N symbols" checkbox reveals them. N comes from the
+// status payload's universe_count, so growing/shrinking EMA_SYMBOL_DEFAULTS
+// never leaves a stale number baked into the page.
 const _EMAC_QUIET_PHASES = new Set(['pending_scan', 'no_setup']);
+
+// 'long'/'short'/'both' as the user writes them in the symbol table.
+const _EMAC_CFG_DIR_LABEL = { long: 'BUY Only', short: 'Sell Only', both: 'Both' };
+const _EMAC_CFG_DIR_TONE  = { long: 'pos', short: 'neg' };
 
 function _emacClearTimers() {
     clearTimeout(_emacStatusTimer);
@@ -56,7 +63,11 @@ function _emacRenderStatus(data) {
     const runText  = document.getElementById('emacRunBadgeText');
     if (runBadge && runText) {
         runBadge.className = 'ag-badge ' + (data.running ? 'active' : 'inactive');
-        runText.textContent = data.running ? 'Running' : 'Stopped';
+        // `enabled === false` means the user clicked Stop: the scheduler will
+        // leave it alone until Start. Plain "Stopped" means it is still armed
+        // and simply outside market hours (or between restarts).
+        runText.textContent = data.running ? 'Running'
+                            : (data.enabled === false ? 'Stopped (manual)' : 'Stopped');
     }
 
     const upd = document.getElementById('emacLastUpd');
@@ -82,6 +93,11 @@ function _emacRenderStatus(data) {
     }
 
     _emacStocksData = data.stocks || {};
+    _emacDefaults   = data.defaults || {};
+
+    const uniCount = document.getElementById('emacUniverseCount');
+    if (uniCount) uniCount.textContent = data.universe_count ?? Object.keys(_emacDefaults).length;
+
     _emacRenderStocks();
 }
 
@@ -90,7 +106,13 @@ function _emacRenderStocks() {
     if (!body) return;
     const showAll = document.getElementById('emacShowAllStocks')?.checked;
 
-    let rows = Object.entries(_emacStocksData).map(([symbol, s]) => ({ symbol, ...s }));
+    // Join each symbol's configured Direction/Target% (EMA_SYMBOL_DEFAULTS)
+    // onto its live state. A symbol dropped from the table but held open to
+    // its exit has no config left — those render as '—'.
+    let rows = Object.entries(_emacStocksData).map(([symbol, s]) => {
+        const cfg = _emacDefaults[symbol] || {};
+        return { symbol, ...s, cfg_direction: cfg.direction, cfg_target_pct: cfg.target_pct };
+    });
     if (!showAll) {
         rows = rows.filter(r => !_EMAC_QUIET_PHASES.has(r.phase));
     }
@@ -103,10 +125,15 @@ function _emacRenderStocks() {
         empty: showAll ? 'No symbols yet' : 'No symbol has a signal today yet — waiting for the daily scan, or check "Show all"',
         columns: [
             { key: 'symbol', label: 'Symbol', strong: true },
+            { key: 'cfg_direction', label: 'Allowed',
+              format: v => _EMAC_CFG_DIR_LABEL[v] || '—',
+              tone: v => _EMAC_CFG_DIR_TONE[v] },
+            { key: 'cfg_target_pct', label: 'Target %', align: 'right',
+              format: v => v == null ? '—' : Number(v) + '%' },
             { key: 'phase', label: 'Status',
               badge: v => _EMAC_PHASE_TONE[v] || 'neutral',
               format: v => _EMAC_PHASE_LABEL[v] || v },
-            { key: 'direction', label: 'Direction',
+            { key: 'direction', label: 'Signal',
               format: v => v ? (v === 'Short' ? 'SELL' : 'BUY') : '—',
               tone: v => v === 'Short' ? 'neg' : (v === 'Long' ? 'pos' : undefined) },
             { key: 'trigger_level', label: 'Trigger', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
@@ -607,9 +634,10 @@ function emacShowLogic() {
     });
 }
 
-// ── Start / Stop (the scheduler normally handles this automatically at
-//    9:15 AM — these buttons are for manually starting mid-day or
-//    stopping without touching env flags) ────────────────────────────────
+// ── Start / Stop. The algo runs by itself every trading day (9:15 AM job
+//    + 5-min watchdog). Stop is durable — it persists EMA_CONFLUENCE_ENABLED
+//    =false so it stays down across days and restarts, and Start re-arms
+//    that daily schedule as well as launching the thread now. ─────────────
 
 function _emacStart() {
     fetch('/api/algo/ema-confluence/start', { method: 'POST' })
@@ -622,7 +650,7 @@ function _emacStart() {
 }
 
 function _emacStop() {
-    if (!confirm('Stop the EMA Confluence Breakout monitoring thread? Open paper positions will NOT be tracked until it restarts.')) return;
+    if (!confirm('Stop the EMA Confluence Breakout algo? It will stay stopped on every following day too — until you click Start. Open paper positions will NOT be tracked meanwhile.')) return;
     fetch('/api/algo/ema-confluence/stop', { method: 'POST' })
         .then(r => r.json())
         .then(d => {

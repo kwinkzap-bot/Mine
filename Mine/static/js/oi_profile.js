@@ -20,6 +20,9 @@ let oipIntrinsicSeries = null;
 let oipIntrinsicPeSeries = null;
 let oipOIData = null;
 let oipOptionData = null;
+// Last candles pushed to oipOISeries, kept UNTAGGED (no 5m Close Border) so the
+// indicator can be re-applied on a toggle/colour change without a refetch.
+let oipOILastCandles = null;
 let oipVwapIntSeries = null;
 let oipVwapIntPeSeries = null;
 // CVWAP (current-session) / PVWAP (previous-session) — main index chart + premium chart
@@ -453,10 +456,10 @@ document.addEventListener('DOMContentLoaded', () => {
         oipInterval = e.target.value;
         if (window.oipReplayMode) oipResetReplay();
         else oipLoadCandles();
-        // Round Strike has its own independent poll loop (up to 5 min apart
-        // when the market's closed), so without this it wouldn't pick up the
-        // new interval until its next scheduled tick — force it now instead.
-        if (typeof oipRSLoadCandles === 'function') oipRSLoadCandles(true);
+        // Round Strike renders from this same response, so the reload above
+        // already carries the new interval to it — it only needs to re-fit its
+        // own zoom for the new bar width.
+        if (typeof oipRSMarkResetZoom === 'function') oipRSMarkResetZoom();
     });
 
     oipElems.days?.addEventListener('change', () => {
@@ -1283,7 +1286,13 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
         const fixedParams = includeFixed
             ? `&fixed_strike=${oipFixedStrike}&fixed_expiry=monthly&fixed_interval=5minute`
             : '';
-        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${fixedParams}${dateRangeParams}&_t=${Date.now()}`;
+        // Round Strike's CE/PE pair rides along on this request — same symbol,
+        // interval and window, only the strikes differ, so a second identical
+        // fetch every poll tick would be pure duplication. Empty string when
+        // that block isn't on the page (or hasn't picked its strikes yet), and
+        // the backend then skips those legs entirely.
+        const rsParams = (typeof oipRSStrikeParams === 'function') ? oipRSStrikeParams() : '';
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${fixedParams}${rsParams}${dateRangeParams}&_t=${Date.now()}`;
 
         const res = await fetch(url);
         const data = await res.json();
@@ -1297,6 +1306,11 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
         // requested its data — otherwise data.fixed_ce_candles/etc. are
         // absent and would wipe the chart back to empty on every live poll.
         if (includeFixed) oipUpdateFixedChart(data);
+        // Round Strike's main chart renders from this same response (see
+        // rsParams above). Guarded the same way as the fixed chart: only when
+        // its legs were actually requested, so a response without them can't
+        // wipe that chart back to empty.
+        if (rsParams && typeof oipRSRenderFromMain === 'function') oipRSRenderFromMain(data);
         const indexCandles = data.candles || [];
         let validCandles = [];
 
@@ -1327,7 +1341,11 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
 
             if (validCandles.length) {
                 try {
-                    oipOISeries.setData(validCandles);
+                    // Parked untagged so the 5m Close Border indicator can be
+                    // re-applied on a toggle/colour change without a refetch.
+                    oipOILastCandles = validCandles;
+                    const _fm = oip5mCloseSettings('main');
+                    oipOISeries.setData(oipMark5mCloseBorders(validCandles, _fm.enabled, _fm.color));
                     oipOIChartReady = true;
 
                     if (resetZoom) {
@@ -1821,6 +1839,41 @@ function oipIsMarketOpen() {
  * Calculates the sum of CE and PE premiums for Straddle/Strangle tracking.
  * Aligns data by timestamp.
  */
+// ── 5m Close Border live redraws ─────────────────────────────────────────────
+// The marker lives in the candle data (a per-bar borderColor), not in a series
+// of its own, so a toggle/colour change has to re-push candles rather than
+// applyOptions. Both keep the current pan/zoom (no resetZoom) and are called
+// from oi_indicators.js — the checkbox listeners and oipApplyLineStyleChange.
+
+// Both are coalesced to one redraw per animation frame: the colour <input>
+// fires continuously while its picker is dragged, and each redraw re-pushes a
+// full candle set (the Opt one re-renders three charts).
+let _oip5mCloseMainPending = false, _oip5mCloseOptPending = false;
+
+// Main OI Profile chart — re-pushes the parked untagged candles.
+function oipRedraw5mCloseMain() {
+    if (!oipOISeries || !oipOILastCandles?.length || _oip5mCloseMainPending) return;
+    _oip5mCloseMainPending = true;
+    requestAnimationFrame(() => {
+        _oip5mCloseMainPending = false;
+        const { enabled, color } = oip5mCloseSettings('main');
+        window._oipDataRefreshing = true;
+        try { oipOISeries.setData(oipMark5mCloseBorders(oipOILastCandles, enabled, color)); } catch (e) {}
+        requestAnimationFrame(() => { window._oipDataRefreshing = false; });
+    });
+}
+
+// Opt Prem charts (Combined / CE Only / PE Only) — these are rebuilt wholesale
+// from cached globals on every poll tick anyway, so just re-run that render.
+function oipRedraw5mCloseOpt() {
+    if (!oipOIData || _oip5mCloseOptPending) return;
+    _oip5mCloseOptPending = true;
+    requestAnimationFrame(() => {
+        _oip5mCloseOptPending = false;
+        try { oipRefreshLocalView(oipElems.view?.value, false); } catch (e) {}
+    });
+}
+
 function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
     if (!oipOIData || !oipIntrinsicChart) return;
 
@@ -1845,6 +1898,12 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
     };
 
     if (view === 'index') {
+        // Index view shows the SAME candles as the main chart, read straight off
+        // oipOISeries — which already carries the MAIN popup's 5m Close Border
+        // tag. Strip it and re-tag from the Opt popup's own toggle/colour, so
+        // this chart answers to the Opt Indicators popup like its other views do.
+        const _fmIdx = oip5mCloseSettings('opt');
+        masterData = oipMark5mCloseBorders(oipStrip5mCloseBorder(masterData), _fmIdx.enabled, _fmIdx.color);
         oipIntrinsicChart.update(masterData, null, resetZoom);
         oipIntChartReady = true;  // Intrinsic chart now has data — safe to sync
         const idxCandles = masterData.filter(d => d.open !== undefined);
@@ -1913,9 +1972,13 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             });
         };
 
-        // Align to Master Timeline
-        const ceData = alignToMaster(ceRaw);
-        const peData = alignToMaster(peRaw);
+        // Align to Master Timeline, then tag the bars that close each 5-minute
+        // block. Done once here rather than at each chart's update() below, so
+        // Combined / CE Only / PE Only all pick it up from the same source.
+        // (Whitespace entries carry no OHLC and are left alone by the tagger.)
+        const _fmOpt = oip5mCloseSettings('opt');
+        const ceData = oipMark5mCloseBorders(alignToMaster(ceRaw), _fmOpt.enabled, _fmOpt.color);
+        const peData = oipMark5mCloseBorders(alignToMaster(peRaw), _fmOpt.enabled, _fmOpt.color);
 
         const ce_levels = oipOIData.intrinsic?.ce_levels || [];
         const pe_levels = oipOIData.intrinsic?.pe_levels || [];

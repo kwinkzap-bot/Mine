@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-07-28",
+  "last_scan_date": "2026-07-29",
   "stocks": {
     "NIFTY": {
       "phase": "no_setup"
@@ -52,13 +52,7 @@
     "ANGELONE": {
       "phase": "no_setup"
     },
-    "APLAPOLLA": {
-      "phase": "no_setup"
-    },
     "APOLLOHOSP": {
-      "phase": "no_setup"
-    },
-    "ASIANPAINT": {
       "phase": "no_setup"
     },
     "ASTRAL": {
@@ -97,9 +91,6 @@
     "BHARTIARTL": {
       "phase": "no_setup"
     },
-    "BHEL": {
-      "phase": "no_setup"
-    },
     "BIOCON": {
       "phase": "no_setup"
     },
@@ -133,12 +124,6 @@
     "COLPAL": {
       "phase": "no_setup"
     },
-    "CROMPTOM": {
-      "phase": "no_setup"
-    },
-    "CUMMINSIND": {
-      "phase": "no_setup"
-    },
     "DALBHARAT": {
       "phase": "no_setup"
     },
@@ -157,9 +142,6 @@
     "FEDERALBNK": {
       "phase": "no_setup"
     },
-    "GAIL": {
-      "phase": "no_setup"
-    },
     "GLENMARK": {
       "phase": "no_setup"
     },
@@ -167,9 +149,6 @@
       "phase": "no_setup"
     },
     "GODFRYPHLP": {
-      "phase": "no_setup"
-    },
-    "GODREJCP": {
       "phase": "no_setup"
     },
     "GODREJPROP": {
@@ -191,9 +170,6 @@
       "phase": "no_setup"
     },
     "HDFCLIFE": {
-      "phase": "no_setup"
-    },
-    "HEROMOTOCO": {
       "phase": "no_setup"
     },
     "HINDALCO": {
@@ -226,9 +202,6 @@
     "IOC": {
       "phase": "no_setup"
     },
-    "IREDA": {
-      "phase": "no_setup"
-    },
     "JUBLFOOD": {
       "phase": "no_setup"
     },
@@ -242,9 +215,6 @@
       "phase": "no_setup"
     },
     "LAURUSLABS": {
-      "phase": "no_setup"
-    },
-    "LICHSGFIN": {
       "phase": "no_setup"
     },
     "LT": {
@@ -281,7 +251,14 @@
       "phase": "no_setup"
     },
     "NHPC": {
-      "phase": "no_setup"
+      "phase": "watching",
+      "direction": "Short",
+      "trigger_level": 77.85,
+      "sl_level": 79.55,
+      "target_pct": 8,
+      "signal_date": "2026-07-28",
+      "future_token": "NSE:NHPC26AUGFUT",
+      "lot_size": 6950
     },
     "NMDC": {
       "phase": "no_setup"
@@ -296,7 +273,14 @@
       "phase": "no_setup"
     },
     "OIL": {
-      "phase": "no_setup"
+      "phase": "watching",
+      "direction": "Long",
+      "trigger_level": 458.0,
+      "sl_level": 435.4,
+      "target_pct": 8,
+      "signal_date": "2026-07-28",
+      "future_token": "NSE:OIL26AUGFUT",
+      "lot_size": 1400
     },
     "ONGC": {
       "phase": "no_setup"
@@ -361,9 +345,6 @@
     "SUZLON": {
       "phase": "no_setup"
     },
-    "SWIGGY": {
-      "phase": "no_setup"
-    },
     "TATAPOWER": {
       "phase": "no_setup"
     },
@@ -391,9 +372,6 @@
     "ULTRACEMCO": {
       "phase": "no_setup"
     },
-    "UNITDSPR": {
-      "phase": "no_setup"
-    },
     "UPL": {
       "phase": "no_setup"
     },
@@ -407,6 +385,69 @@
       "phase": "no_setup"
     },
     "ZYDUSLIFE": {
+      "phase": "no_setup"
+    },
+    "SENSEX": {
+      "phase": "no_setup"
+    },
+    "APLAPOLLO": {
+      "phase": "no_setup"
+    },
+    "CROMPTON": {
+      "phase": "no_setup"
+    },
+    "EICHERMOT": {
+      "phase": "no_setup"
+    },
+    "ICICIPRULI": {
+      "phase": "no_setup"
+    },
+    "IDEA": {
+      "phase": "no_setup"
+    },
+    "IEX": {
+      "phase": "no_setup"
+    },
+    "INDIGO": {
+      "phase": "no_setup"
+    },
+    "IRFC": {
+      "phase": "no_setup"
+    },
+    "ITC": {
+      "phase": "no_setup"
+    },
+    "M&M": {
+      "phase": "no_setup"
+    },
+    "MUTHOOTFIN": {
+      "phase": "no_setup"
+    },
+    "NAUKRI": {
+      "phase": "no_setup"
+    },
+    "POWERGRID": {
+      "phase": "no_setup"
+    },
+    "PREMIERENE": {
+      "phase": "no_setup"
+    },
+    "RECLTD": {
+      "phase": "no_setup"
+    },
+    "SHREECEM": {
+      "phase": "no_setup"
+    },
+    "TATAELXSI": {
+      "phase": "no_setup"
+    },
+    "TATASTEEL": {
+      "phase": "no_setup"
+    },
+    "TIINDIA": {
+      "phase": "no_setup"
+    },
+    "UNIONBANK": {
       "phase": "no_setup"
     }
   }

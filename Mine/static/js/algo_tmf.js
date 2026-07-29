@@ -60,7 +60,11 @@ function _tmfRenderStatus(data) {
     const runText  = document.getElementById('tmfRunBadgeText');
     if (runBadge && runText) {
         runBadge.className = 'ag-badge ' + (data.running ? 'active' : 'inactive');
-        runText.textContent = data.running ? 'Running' : 'Stopped';
+        // `enabled === false` means the user clicked Stop: the scheduler will
+        // leave it alone until Start. Plain "Stopped" means it is still armed
+        // and simply outside market hours (or between restarts).
+        runText.textContent = data.running ? 'Running'
+                            : (data.enabled === false ? 'Stopped (manual)' : 'Stopped');
     }
 
     const modeBadge = document.getElementById('tmfModeBadge');
@@ -626,9 +630,10 @@ function tmfShowLogic() {
     });
 }
 
-// ── Start / Stop (the scheduler normally handles this automatically at
-//    9:15 AM — these buttons are for manually starting mid-day or
-//    stopping without touching env flags) ────────────────────────────────
+// ── Start / Stop. The algo runs by itself every trading day (9:15 AM job
+//    + 5-min watchdog). Stop is durable — it persists TMF_ALGO_ENABLED=false
+//    so it stays down across days and restarts, and Start re-arms that daily
+//    schedule as well as launching the thread now. ───────────────────────
 
 function _tmfStart() {
     fetch('/api/algo/thirty-min-fakeout/start', { method: 'POST' })
@@ -641,7 +646,7 @@ function _tmfStart() {
 }
 
 function _tmfStop() {
-    if (!confirm('Stop the 30-Min Fakeout monitoring thread? Any open positions will NOT be auto-managed until it restarts.')) return;
+    if (!confirm('Stop the 30-Min Fakeout algo? It will stay stopped on every following day too — until you click Start. Any open positions will NOT be auto-managed meanwhile.')) return;
     fetch('/api/algo/thirty-min-fakeout/stop', { method: 'POST' })
         .then(r => r.json())
         .then(d => {

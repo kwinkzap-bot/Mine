@@ -790,16 +790,31 @@ class MarketScheduler:
 
     # ── 30-Min Opening Fakeout algo management ─────────────────────────────────
 
+    def _algo_enabled(self, var_name: str) -> bool:
+        """Persisted Start/Stop intent from the algo page's buttons.
+
+        Defaults to true: the algo runs every trading day on its own. Clicking
+        Stop writes false to the user's .env, which keeps the scheduler and the
+        5-min watchdog from restarting the thread — across days and app
+        restarts — until Start writes true again.
+        """
+        from trading_app.app.utils.user_env import UserEnvManager
+        val = UserEnvManager.get_user_var(self._rtp_username(), var_name, 'true')
+        return (val or 'true').strip().lower() != 'false'
+
     def _ensure_tmf_running(self, source: str = '') -> None:
         """Start the 30-Min Opening Fakeout monitoring thread if it is not
         already running. Mirrors _ensure_sc_running: starts during market
         hours regardless of TMF_ALGO_ACTIVE — the kill-switch lives inside
         the loop and gates order placement only (the thread always scans
-        and logs signals).
+        and logs signals). TMF_ALGO_ENABLED is separate: it is the user's
+        Stop click, and it does keep the thread from starting.
         """
         try:
             if not self.is_trading_day():
                 return
+            if not self._algo_enabled('TMF_ALGO_ENABLED'):
+                return  # User clicked Stop — stay stopped until they click Start
             now = datetime.now()
             h, m = now.hour, now.minute
             in_window = (h > 9 or (h == 9 and m >= 15)) and (h < 15 or (h == 15 and m <= 27))
@@ -834,11 +849,14 @@ class MarketScheduler:
         during market hours regardless of EMA_CONFLUENCE_ACTIVE — the
         kill-switch lives inside the loop and gates paper entries only. All
         executions here are simulated (paper trade); no broker orders are
-        placed.
+        placed. EMA_CONFLUENCE_ENABLED is separate: it is the user's Stop
+        click, and it does keep the thread from starting.
         """
         try:
             if not self.is_trading_day():
                 return
+            if not self._algo_enabled('EMA_CONFLUENCE_ENABLED'):
+                return  # User clicked Stop — stay stopped until they click Start
             now = datetime.now()
             h, m = now.hour, now.minute
             in_window = (h > 9 or (h == 9 and m >= 15)) and (h < 15 or (h == 15 and m <= 27))

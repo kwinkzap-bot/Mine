@@ -1,6 +1,6 @@
 {
-  "date": "2026-07-28",
-  "eod_handled": true,
+  "date": "2026-07-29",
+  "eod_handled": false,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
@@ -153,13 +153,7 @@
       "phase": "no_setup"
     },
     "GVT&D": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 4034.55,
-      "sl_level": 3962.2,
-      "qty": 123,
-      "entry_time": "2026-07-28T10:50:55.885897",
-      "exit_reason": "Entry order placement failed"
+      "phase": "no_setup"
     },
     "HAL": {
       "phase": "no_setup"
@@ -210,7 +204,11 @@
       "phase": "no_setup"
     },
     "JINDALSTEL": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 1083.45,
+      "sl_level": 1098.0,
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "JIOFIN": {
       "phase": "no_setup"
@@ -285,26 +283,7 @@
       "phase": "no_setup"
     },
     "NAM-INDIA": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 1154.9,
-      "sl_level": 1146.6,
-      "qty": 432,
-      "entry_time": "2026-07-28T11:04:50.309781",
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2081976655194546176",
-          "filled": true,
-          "entry_price": 1154.9,
-          "filled_qty": 432,
-          "sl_order_id": "2081977662142078976",
-          "target_order_id": "2081977662674755584",
-          "closed": true
-        }
-      ],
-      "entry_price": 1154.9,
-      "target_level": 1168.9
+      "phase": "no_setup"
     },
     "NATIONALUM": {
       "phase": "no_setup"
@@ -322,26 +301,7 @@
       "phase": "no_setup"
     },
     "NTPC": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 343.65,
-      "sl_level": 342.1,
-      "qty": 1454,
-      "entry_time": "2026-07-28T10:59:01.014155",
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2081975190036078592",
-          "filled": true,
-          "entry_price": 343.6500000000001,
-          "filled_qty": 1454,
-          "sl_order_id": "2081975191646691328",
-          "target_order_id": "2081975192321974272",
-          "closed": true
-        }
-      ],
-      "entry_price": 343.6500000000001,
-      "target_level": 350.0
+      "phase": "no_setup"
     },
     "NYKAA": {
       "phase": "no_setup"
@@ -365,11 +325,7 @@
       "phase": "no_setup"
     },
     "PGEL": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 576.7,
-      "sl_level": 571.85,
-      "exit_reason": "Invalidated (SL hit before entry)"
+      "phase": "no_setup"
     },
     "PHOENIXLTD": {
       "phase": "no_setup"
@@ -438,7 +394,10 @@
       "phase": "no_setup"
     },
     "TIINDIA": {
-      "phase": "no_setup"
+      "phase": "watching",
+      "direction": "long",
+      "trigger": 2801.0,
+      "sl_level": 2786.5
     },
     "TMPV": {
       "phase": "no_setup"
@@ -456,7 +415,25 @@
       "phase": "no_setup"
     },
     "UNIONBANK": {
-      "phase": "no_setup"
+      "phase": "in_position",
+      "direction": "short",
+      "trigger": 170.75,
+      "sl_level": 171.59,
+      "qty": 2928,
+      "entry_time": "2026-07-29T10:48:03.675253",
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2082334820788527104",
+          "filled": true,
+          "entry_price": 170.75,
+          "filled_qty": 2928,
+          "sl_order_id": "2082335140964917248",
+          "target_order_id": "2082335141673754624"
+        }
+      ],
+      "entry_price": 170.75,
+      "target_level": 168.14
     },
     "UNITDSPR": {
       "phase": "no_setup"

@@ -75,6 +75,9 @@
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipShowVolume" checked><span>Volume (Fut)</span>
                                 </label>
+                                <label class="oip-ind-item" title="Recolors the border of the candle that closes each 5-minute block — 1m / 30s timeframes only">
+                                    <input type="checkbox" id="oipShow5mClose" checked><span>5m Close Border</span>
+                                </label>
                                 <div class="oip-ind-cpr-group">
                                     <div class="oip-ind-item oip-ind-cpr-header">
                                         <input type="checkbox" id="oipShowVwapGroup" checked>
@@ -482,6 +485,9 @@
                                     <label class="oip-ind-item">
                                         <input type="checkbox" id="oipShowVolumeOpt" checked><span>Volume (Fut)</span>
                                     </label>
+                                    <label class="oip-ind-item" title="Recolors the border of the candle that closes each 5-minute block on the Combined / CE Only / PE Only charts — 1m / 30s timeframes only">
+                                        <input type="checkbox" id="oipShowOpt5mClose" checked><span>5m Close Border</span>
+                                    </label>
                                     <label class="oip-ind-item">
                                         <input type="checkbox" id="oipShowPremium" checked><span>Premium (Entry/Current/Target)</span>
                                     </label>
@@ -666,6 +672,7 @@
                         <select id="oipRSCEStrikeDropdown" class="oip-select oip-select--xs" title="CE Strike"></select>
                         <span class="oip-label">PE</span>
                         <select id="oipRSPEStrikeDropdown" class="oip-select oip-select--xs" title="PE Strike"></select>
+                        <button id="oipRSFixed5mRefreshBtn" class="oip-btn" type="button" title="Fetch the latest data for the 5m (Fixed) chart below — it is not auto-refreshed live, unlike the chart above">⟳ 5m</button>
                     </div>
 
                     <div class="oip-prem-sep"></div>
@@ -689,6 +696,15 @@
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipRSShowVolume" checked><span>Volume (Fut)</span>
                                 </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShow5mClose" checked><span>5m Close Border</span>
+                                </label>
+                                <div class="oip-ind-item">
+                                    <span>Color</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRS5mCloseColorInp" class="oip-ray-color-inp" value="#fbbf24" title="Border color of the candle that closes each 5-minute block (1m / 30s only — candle borders have no width or style option)">
+                                    </span>
+                                </div>
                                 <div class="oip-ind-section-title">CE Line Style</div>
                                 <div class="oip-ind-item">
                                     <span>Color</span>
@@ -889,7 +905,7 @@
                         id="oipRSFixed5mLegendCE">--</span></div>
                 <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
                         id="oipRSFixed5mLegendPE">--</span></div>
-                <div class="oip-legend-item" title="Always 5-minute, independent of the TF dropdown above">5m (Fixed)</div>
+                <div class="oip-legend-item" title="Always 5-minute, independent of the TF dropdown above. Not live — use the ⟳ 5m button in the header to fetch the latest data">5m (Fixed, manual ⟳)</div>
             </div>
             <div id="oipRSFixed5mChart"></div>
         </div>

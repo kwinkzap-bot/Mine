@@ -43,6 +43,14 @@ _csv_fetch_lock = threading.Lock()
 _GLOBAL_OI_CHAIN_CACHE: Dict[str, Dict[str, Dict[str, float]]] = {}
 _GLOBAL_OI_CHAIN_TIMESTAMP: Dict[str, datetime] = {}
 
+# Underlyings whose FUTURES live on BFO (BSE), not NFO — and the alias names
+# their contracts may be filed under in the symbol master. Used by
+# find_future_symbol to pick the right master to search.
+_BSE_FUTURE_ROOTS: Dict[str, List[str]] = {
+    'SENSEX': ['SENSEX', 'BSESENSEX'],
+    'BANKEX': ['BANKEX', 'BSEBANKEX'],
+}
+
 # Global Token Mapping (Root:Strike:Type -> FyersSymbol) for high-speed resolution
 _FYERS_OPTION_TOKEN_CACHE: Dict[str, str] = {}
 _FYERS_OPTION_TOKEN_LOCK = threading.Lock()
@@ -918,6 +926,13 @@ class FyersDataServiceAdapter:
                                 kite_type = 'EQ'
                             else:
                                 kite_type = 'FUT'
+                        elif not fyers_type and exch_key in ('NFO', 'BFO') \
+                                and fyers_symbol.upper().endswith('FUT'):
+                            # BSE_FO leaves the option-type column blank on its
+                            # futures rows (NSE_FO writes 'XX' there), so those
+                            # contracts would otherwise carry no instrument_type
+                            # at all and stay invisible to find_future_symbol.
+                            kite_type = 'FUT'
 
                         all_inst.append({
                             'instrument_token': fyers_symbol, # e.g. NSE:NIFTY26MAY24000CE
@@ -1016,15 +1031,23 @@ class FyersDataServiceAdapter:
         logger.info(f"[FyersAdapter] Resolved option: {root} {strike} {opt_upper} -> {sym} ({expiry_type} expiry={chosen['expiry']})")
         return sym
 
-    def find_future_symbol(self, root: str) -> Optional[str]:
+    def find_future_symbol(self, root: str, exchange: Optional[str] = None) -> Optional[str]:
         """
         Find the Fyers instrument_token (symbol string) for the nearest-
         expiry FUTURES contract of a given underlying. Mirrors
         find_option_symbol above, minus the strike/option-type match.
+
+        exchange defaults to NFO, or BFO for the BSE-listed roots (SENSEX /
+        BANKEX have no NFO contract at all — same BSE vs NSE split
+        get_lot_size already handles).
         """
         root_upper = root.strip().upper()
         from datetime import date as _date
-        instruments = self.instruments('NFO')  # Uses 1-hour cache
+        if exchange is None:
+            exchange = 'BFO' if root_upper in _BSE_FUTURE_ROOTS else 'NFO'
+        # SENSEX is listed as BSESENSEX in some masters — accept either.
+        roots = _BSE_FUTURE_ROOTS.get(root_upper, [root_upper])
+        instruments = self.instruments(exchange)  # Uses 1-hour cache
         today = _date.today()
 
         matches = []
@@ -1039,10 +1062,11 @@ class FyersDataServiceAdapter:
             if inst_exp is None or inst_exp < today:
                 continue
 
-            name_ok = (inst_name == root_upper)
-            ts_ok   = (inst_ts.startswith(root_upper) and
-                       len(inst_ts) > len(root_upper) and
-                       not inst_ts[len(root_upper)].isalpha())
+            name_ok = any(inst_name == r for r in roots)
+            ts_ok   = any(inst_ts.startswith(r) and
+                          len(inst_ts) > len(r) and
+                          not inst_ts[len(r)].isalpha()
+                          for r in roots)
             if name_ok or ts_ok:
                 matches.append(inst)
 

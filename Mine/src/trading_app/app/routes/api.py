@@ -7351,6 +7351,9 @@ def algo_tmf_status() -> EndpointResponse:
         # Zerodha broker slot for TMF).
         from trading_app.app.utils.user_env import UserEnvManager
         algo_active = (UserEnvManager.get_user_var(username, 'TMF_ALGO_ACTIVE', 'false') or 'false').strip().lower() == 'true'
+        # Persisted Start/Stop intent (defaults on). False only after a Stop
+        # click — that's what keeps the scheduler from restarting the thread.
+        enabled = (UserEnvManager.get_user_var(username, 'TMF_ALGO_ENABLED', 'true') or 'true').strip().lower() != 'false'
         active_brokers = 0
         for i in range(1, 11):
             if (UserEnvManager.get_user_var(username, f'BROKER_{i}_ACTIVE', 'false') or 'false').strip().lower() != 'true':
@@ -7364,6 +7367,7 @@ def algo_tmf_status() -> EndpointResponse:
         return jsonify({
             'success': True,
             'running': bool(instance and instance.is_running()),
+            'enabled': enabled,
             'live_armed': bool(algo_active and active_brokers > 0),
             'algo_active': algo_active,
             'active_brokers': active_brokers,
@@ -7435,14 +7439,18 @@ def algo_tmf_history_delete() -> EndpointResponse:
 @limiter.exempt
 @require_user_auth
 def algo_tmf_start() -> EndpointResponse:
-    """Start (or restart) the 30-Min Fakeout monitoring thread."""
+    """Start (or restart) the 30-Min Fakeout monitoring thread, and persist
+    that intent so the scheduler keeps starting it every day until Stop."""
     try:
         from trading_app.algo.thirty_min_fakeout.tmf_algo import TMFAlgo, get_instance
+        from trading_app.app.utils.user_env import UserEnvManager
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        UserEnvManager.save_user_var(username, 'TMF_ALGO_ENABLED', 'true')
 
         existing = get_instance(username)
         if existing and existing.is_running():
-            return jsonify({'success': False, 'error': 'Algo already running'}), 409
+            return jsonify({'success': True, 'message': '30-Min Fakeout algo already running'})
 
         algo = TMFAlgo(username=username)
         algo.start()
@@ -7457,14 +7465,19 @@ def algo_tmf_start() -> EndpointResponse:
 @limiter.exempt
 @require_user_auth
 def algo_tmf_stop() -> EndpointResponse:
-    """Stop the 30-Min Fakeout monitoring thread."""
+    """Stop the 30-Min Fakeout monitoring thread and keep it stopped — the
+    flag is persisted, so neither the 9:15 AM job nor the 5-min watchdog
+    restarts it until Start is clicked again."""
     try:
         from trading_app.algo.thirty_min_fakeout.tmf_algo import get_instance
+        from trading_app.app.utils.user_env import UserEnvManager
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        UserEnvManager.save_user_var(username, 'TMF_ALGO_ENABLED', 'false')
 
         existing = get_instance(username)
         if not existing or not existing.is_running():
-            return jsonify({'success': False, 'error': 'Algo not running'}), 409
+            return jsonify({'success': True, 'message': '30-Min Fakeout algo already stopped'})
 
         existing.stop()
         return jsonify({'success': True, 'message': '30-Min Fakeout algo stopped'})
@@ -7494,6 +7507,11 @@ def algo_ema_confluence_status() -> EndpointResponse:
             phase = s.get('phase', 'pending_scan')
             summary[phase] = summary.get(phase, 0) + 1
 
+        # The configured Direction/Target% each symbol is scanned with, so the
+        # UI can show what the algo is actually set to per stock — the state
+        # file only carries a `direction` once a signal has actually fired.
+        from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
+
         from trading_app.algo.ema_confluence.ema_confluence_algo import get_instance
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
         instance = get_instance(username)
@@ -7501,16 +7519,22 @@ def algo_ema_confluence_status() -> EndpointResponse:
         from trading_app.app.utils.user_env import UserEnvManager
         algo_active = (UserEnvManager.get_user_var(username, 'EMA_CONFLUENCE_ACTIVE', 'false') or 'false').strip().lower() == 'true'
         lots = int(UserEnvManager.get_user_var(username, 'EMA_CONFLUENCE_LOTS', '1') or 1)
+        # Persisted Start/Stop intent (defaults on). False only after a Stop
+        # click — that's what keeps the scheduler from restarting the thread.
+        enabled = (UserEnvManager.get_user_var(username, 'EMA_CONFLUENCE_ENABLED', 'true') or 'true').strip().lower() != 'false'
 
         return jsonify({
             'success': True,
             'running': bool(instance and instance.is_running()),
+            'enabled': enabled,
             'algo_active': algo_active,
             'mode': 'paper',
             'lots': lots,
             'last_scan_date': state.get('last_scan_date'),
             'summary': summary,
             'stocks': stocks,
+            'defaults': EMA_SYMBOL_DEFAULTS,
+            'universe_count': len(EMA_SYMBOL_DEFAULTS),
         })
     except Exception as e:
         logger.error(f'[ema-confluence/status] {e}', exc_info=True)
@@ -7574,14 +7598,18 @@ def algo_ema_confluence_history_delete() -> EndpointResponse:
 @limiter.exempt
 @require_user_auth
 def algo_ema_confluence_start() -> EndpointResponse:
-    """Start (or restart) the EMA Confluence Breakout monitoring thread."""
+    """Start (or restart) the EMA Confluence Breakout monitoring thread, and
+    persist that intent so the scheduler keeps starting it daily until Stop."""
     try:
         from trading_app.algo.ema_confluence.ema_confluence_algo import EmaConfluenceAlgo, get_instance
+        from trading_app.app.utils.user_env import UserEnvManager
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        UserEnvManager.save_user_var(username, 'EMA_CONFLUENCE_ENABLED', 'true')
 
         existing = get_instance(username)
         if existing and existing.is_running():
-            return jsonify({'success': False, 'error': 'Algo already running'}), 409
+            return jsonify({'success': True, 'message': 'EMA Confluence Breakout algo already running'})
 
         algo = EmaConfluenceAlgo(username=username)
         algo.start()
@@ -7596,14 +7624,19 @@ def algo_ema_confluence_start() -> EndpointResponse:
 @limiter.exempt
 @require_user_auth
 def algo_ema_confluence_stop() -> EndpointResponse:
-    """Stop the EMA Confluence Breakout monitoring thread."""
+    """Stop the EMA Confluence Breakout monitoring thread and keep it stopped —
+    the flag is persisted, so neither the 9:15 AM job nor the 5-min watchdog
+    restarts it until Start is clicked again."""
     try:
         from trading_app.algo.ema_confluence.ema_confluence_algo import get_instance
+        from trading_app.app.utils.user_env import UserEnvManager
         username = session.get('username') or os.getenv('MONITORING_USERNAME', 'Mine')
+
+        UserEnvManager.save_user_var(username, 'EMA_CONFLUENCE_ENABLED', 'false')
 
         existing = get_instance(username)
         if not existing or not existing.is_running():
-            return jsonify({'success': False, 'error': 'Algo not running'}), 409
+            return jsonify({'success': True, 'message': 'EMA Confluence Breakout algo already stopped'})
 
         existing.stop()
         return jsonify({'success': True, 'message': 'EMA Confluence Breakout algo stopped'})
@@ -8851,6 +8884,13 @@ def oi_profile_candles() -> EndpointResponse:
         custom_strike = request.args.get('custom_strike', type=int)
         ce_strike = request.args.get('ce_strike', type=int)
         pe_strike = request.args.get('pe_strike', type=int)
+        # Round Strike block's own CE/PE pair (oi_profile_round_strike.js). Same
+        # symbol/interval/window as the main ce_strike/pe_strike above — only the
+        # strikes differ — so it rides along on THIS request rather than firing a
+        # second identical one every poll tick. Omitted by callers that don't
+        # render that block, in which case its legs are skipped entirely.
+        rs_ce_strike = request.args.get('rs_ce_strike', type=int)
+        rs_pe_strike = request.args.get('rs_pe_strike', type=int)
         start_date_str = request.args.get('start_date')
         end_date_str   = request.args.get('end_date')
         # Independent, always-on secondary chart (fixed EXPIRY — e.g. monthly —
@@ -8884,7 +8924,10 @@ def oi_profile_candles() -> EndpointResponse:
         # ── 1. Check Response Cache & Coalesce Requests ──────────────
         # Use request parameters as cache key (ignore _t timestamp)
         # Include start_date/end_date so historical range requests are cached independently
-        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval)
+        # include_30s belongs in the key too: it decides whether second_30s_* come
+        # back populated or empty, so without it a caller that opted out could
+        # serve its stripped response to one that needs those candles.
+        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval, rs_ce_strike, rs_pe_strike, include_30s)
         
         # Request Coalescing: Only one thread fetches for this key at a time
         req_lock = _get_request_lock(cache_key)
@@ -9080,6 +9123,23 @@ def oi_profile_candles() -> EndpointResponse:
                 kite_service, _data_provider, _is_fyers_provider, symbol, fixed_pe_strike, 'PE', expiry_type=fixed_expiry)
             if fixed_pe_token:
                 future_fixed_pe = executor.submit(fetch_task, fixed_pe_token, opt_from_date, to_date, fixed_fetch_interval)
+
+        # Round Strike block's CE/PE legs — nearest expiry and the same
+        # `fetch_interval`/window as the main ce_strike/pe_strike pair (only the
+        # strikes differ), submitted here so they run in the same parallel batch
+        # instead of arriving as a separate HTTP request.
+        rs_ce_token = rs_pe_token = rs_ce_symbol = rs_pe_symbol = None
+        future_rs_ce = future_rs_pe = None
+        if rs_ce_strike:
+            rs_ce_token, rs_ce_symbol = _get_cached_strike_token(
+                kite_service, _data_provider, _is_fyers_provider, symbol, rs_ce_strike, 'CE')
+            if rs_ce_token:
+                future_rs_ce = executor.submit(fetch_task, rs_ce_token, opt_from_date, to_date, fetch_interval)
+        if rs_pe_strike:
+            rs_pe_token, rs_pe_symbol = _get_cached_strike_token(
+                kite_service, _data_provider, _is_fyers_provider, symbol, rs_pe_strike, 'PE')
+            if rs_pe_token:
+                future_rs_pe = executor.submit(fetch_task, rs_pe_token, opt_from_date, to_date, fetch_interval)
 
         # 1. Start fetching index intraday and index daily
         future_index = executor.submit(fetch_task, token, from_date, to_date, fetch_interval)
@@ -9352,6 +9412,14 @@ def oi_profile_candles() -> EndpointResponse:
         fixed_ce_candles = format_candles(fixed_ce_raw, ist_offset, fixed_interval)
         fixed_pe_candles = format_candles(fixed_pe_raw, ist_offset, fixed_interval)
 
+        # Round Strike legs — same `interval` as the main CE/PE pair, so the
+        # caller can reuse this response's `future_volume` for that block's
+        # volume overlay without re-matching timestamps.
+        rs_ce_raw = future_rs_ce.result() if future_rs_ce else []
+        rs_pe_raw = future_rs_pe.result() if future_rs_pe else []
+        rs_ce_candles = format_candles(rs_ce_raw, ist_offset, interval)
+        rs_pe_candles = format_candles(rs_pe_raw, ist_offset, interval)
+
         # ── Intrinsic Levels ─────────────────────────────────────────
         intrinsic_data = None
         if spot_high is not None and spot_low is not None and itm_ce_strike is not None and itm_pe_strike is not None:
@@ -9402,6 +9470,8 @@ def oi_profile_candles() -> EndpointResponse:
             ('PE', pe_token, pe_candles),
             ('fixed CE', fixed_ce_token, fixed_ce_candles),
             ('fixed PE', fixed_pe_token, fixed_pe_candles),
+            ('round-strike CE', rs_ce_token, rs_ce_candles),
+            ('round-strike PE', rs_pe_token, rs_pe_candles),
         ) if tok and not cds]
         fetch_error_msg = _fetch_errors[0] if _fetch_errors and not candles else None
         opt_fetch_failed = bool(empty_legs)
@@ -9439,6 +9509,10 @@ def oi_profile_candles() -> EndpointResponse:
             'fixed_ce_symbol': fixed_ce_symbol,
             'fixed_pe_symbol': fixed_pe_symbol,
             'fixed_future_volume': fixed_future_volume,
+            'rs_ce_candles': rs_ce_candles,
+            'rs_pe_candles': rs_pe_candles,
+            'rs_ce_symbol': rs_ce_symbol,
+            'rs_pe_symbol': rs_pe_symbol,
             'second_30s_candle_oi': second_30s_oi,
             'second_30s_candle_ce': second_30s_ce,
             'second_30s_candle_pe': second_30s_pe,

@@ -91,7 +91,15 @@ _EMA_LOOKBACK_DAYS = 1200
 # Index symbols resolve to their own instrument token (same map the backtest
 # route uses); every other symbol is an F&O equity, 'NSE:{symbol}-EQ' (Fyers)
 # or the bare tradingsymbol (Kite).
-_FYERS_INDICES = {'NIFTY': 'NSE:NIFTY50-INDEX', 'BANKNIFTY': 'NSE:NIFTYBANK-INDEX'}
+_FYERS_INDICES = {
+    'NIFTY':     'NSE:NIFTY50-INDEX',
+    'BANKNIFTY': 'NSE:NIFTYBANK-INDEX',
+    'SENSEX':    'BSE:SENSEX-INDEX',
+}
+# Underlyings whose futures are BSE (BFO) contracts, not NFO ones. The Kite
+# path here only ever resolves NFO futures (KiteService.get_nfo_instruments),
+# so these are Fyers-only — see _resolve_future.
+_BSE_UNDERLYINGS = {'SENSEX'}
 
 _instances: Dict[str, 'EmaConfluenceAlgo'] = {}
 
@@ -152,6 +160,16 @@ class EmaConfluenceAlgo:
             from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
             for sym in EMA_SYMBOL_DEFAULTS:
                 state['stocks'].setdefault(sym, {'phase': 'pending_scan'})
+            # …and one DROPPED from the universe would otherwise linger forever,
+            # skewing the status page's phase counts. Drop it — unless it still
+            # has an armed trigger or an open paper position, which must be
+            # seen through to its exit rather than abandoned mid-trade.
+            for sym in [s for s in state['stocks'] if s not in EMA_SYMBOL_DEFAULTS]:
+                if state['stocks'][sym].get('phase') in ('watching', 'in_position'):
+                    self.log.info(f"{sym}: dropped from the universe but still "
+                                  f"{state['stocks'][sym]['phase']} — keeping until it closes")
+                    continue
+                state['stocks'].pop(sym)
             return state
         except Exception:
             return self._fresh_state()
@@ -216,7 +234,7 @@ class EmaConfluenceAlgo:
     def _underlying_token(self, symbol: str, is_fyers: bool) -> Any:
         if is_fyers:
             return _FYERS_INDICES.get(symbol, f'NSE:{symbol}-EQ')
-        kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105}
+        kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105, 'SENSEX': 265}
         return kite_indices.get(symbol, symbol)
 
     def _resolve_future(self, provider: Any, is_fyers: bool, symbol: str) -> Tuple[Optional[Any], int]:
@@ -228,6 +246,12 @@ class EmaConfluenceAlgo:
                     return None, 1
                 lot_size = int(provider.get_lot_size(symbol) or 1)
                 return token, lot_size
+            if symbol in _BSE_UNDERLYINGS:
+                # KiteService resolves futures out of the NFO master only, so a
+                # BSE contract would silently come back as a wrong/absent token.
+                # Better to skip the symbol outright than trade a bad one.
+                self.log.warning(f"{symbol}: BSE futures aren't resolvable on the Kite path — skipping")
+                return None, 1
             from trading_app.service.kite_order_services import KiteService
             svc = KiteService(kite_instance=provider)
             ts = svc.get_future_symbol(symbol)
@@ -319,7 +343,11 @@ class EmaConfluenceAlgo:
         self.log.info(f"{symbol}: setup found — {direction.upper()} "
                        f"trigger={s['trigger_level']} sl={s['sl_level']} (signal candle {s['signal_date']})")
 
-    def _run_daily_scan(self, provider: Any, is_fyers: bool, state: Dict[str, Any]) -> None:
+    def _run_daily_scan(self, provider: Any, is_fyers: bool, state: Dict[str, Any],
+                        only_pending: bool = False) -> None:
+        """The once-a-day sweep. only_pending=True is the catch-up pass for
+        symbols added to EMA_SYMBOL_DEFAULTS after today's sweep already ran —
+        it touches just those, leaving every already-scanned symbol alone."""
         from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
         today = date.today()
         yesterday = today - timedelta(days=1)
@@ -332,13 +360,16 @@ class EmaConfluenceAlgo:
             s = stocks.setdefault(symbol, {'phase': 'pending_scan'})
             if s.get('phase') in ('watching', 'in_position'):
                 continue  # only one pending/open setup at a time, same as the backtest
+            if only_pending and s.get('phase') != 'pending_scan':
+                continue
             try:
                 self._scan_one(provider, is_fyers, symbol, cfg, s, from_date, to_date)
                 scanned += 1
             except Exception as e:
                 self.log.warning(f"{symbol}: scan failed: {e}")
                 s['phase'] = 'no_setup'
-        self.log.info(f"Daily scan complete — {scanned} symbols scanned for {to_date}")
+        label = 'Catch-up scan' if only_pending else 'Daily scan'
+        self.log.info(f"{label} complete — {scanned} symbols scanned for {to_date}")
 
     # ── Paper trade lifecycle ───────────────────────────────────────────
 
@@ -397,6 +428,11 @@ class EmaConfluenceAlgo:
         if state.get('last_scan_date') != today_str:
             self._run_daily_scan(provider, is_fyers, state)
             state['last_scan_date'] = today_str
+        elif any(s.get('phase') == 'pending_scan' for s in state['stocks'].values()):
+            # Today's sweep already ran, but EMA_SYMBOL_DEFAULTS has since
+            # grown (see _load_state's backfill) — scan the newcomers now
+            # instead of leaving them dark until tomorrow morning.
+            self._run_daily_scan(provider, is_fyers, state, only_pending=True)
 
         stocks = state['stocks']
         watching = {sym: s for sym, s in stocks.items() if s.get('phase') == 'watching'}

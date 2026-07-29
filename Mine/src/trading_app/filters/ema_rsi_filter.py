@@ -89,140 +89,149 @@ TOUCH_ALL_FETCH_DAYS = NARROW_FETCH_DAYS["daily"][200]
 TOUCH_ALL_CONFIG = {
     "NIFTY":       ("BUY", 7),
     "BANKNIFTY":   ("BOTH", 8),
+    "SENSEX":      ("BOTH", 2.5),
     "SBIN":        ("BUY", 2.5),
     "RELIANCE":    ("SELL", 15),
     "HDFCBANK":    ("BUY", 15),
     "360ONE":      ("BUY", 2),
-    "ABB":         ("BUY", 4),
+    "ABB":         ("BUY", 15),
     "ABCAPITAL":   ("BUY", 4),
     "ADANIENSOL":  ("BUY", 15),
-    "ADANIENT":    ("SELL", 4),
-    "ADANIGREEN":  ("SELL", 5),
-    "ADANIPORTS":  ("SELL", 4),
+    "ADANIENT":    ("SELL", 7),
+    "ADANIGREEN":  ("BOTH", 3),
+    "ADANIPORTS":  ("BOTH", 2),
     "ADANIPOWER":  ("BUY", 12),
     "ALKEM":       ("BUY", 15),
     "AMBER":       ("BUY", 15),
-    "AMBUJACEM":   ("SELL", 2),
+    "AMBUJACEM":   ("BOTH", 6),
     "ANGELONE":    ("BUY", 3),
     "APLAPOLLO":   ("BUY", 3.5),
-    "APOLLOHOSP":  ("BUY", 1.5),
-    "ASIANPAINT":  ("SELL", 7),
+    "APOLLOHOSP":  ("BUY", 15),
     "ASTRAL":      ("BOTH", 12),
-    "AUBANK":      ("BOTH", 5),
+    "AUBANK":      ("SELL", 5),
     "AXISBANK":    ("BUY", 8),
     "BAJAJ-AUTO":  ("BOTH", 12),
     "BAJAJFINSV":  ("BOTH", 15),
     "BAJAJHLDNG":  ("BUY", 12),
-    "BAJFINANCE":  ("BOTH", 7),
-    "BANDHANBNK":  ("BOTH", 3),
-    "BANKBARODA":  ("SELL", 4),
-    "BDL":         ("BOTH", 15),
+    "BAJFINANCE":  ("SELL", 7),
+    "BANDHANBNK":  ("SELL", 8),
+    "BANKBARODA":  ("BOTH", 3.5),
+    "BDL":         ("BUY", 8),
     "BEL":         ("BOTH", 10),
     "BHARTIARTL":  ("BUY", 10),
-    "BHEL":        ("BUY", 15),
-    "BIOCON":      ("BUY", 15),
-    "BLUESTARCO":  ("BOTH", 7),
-    "BOSCHLTD":    ("BUY", 3),
+    "BIOCON":      ("BOTH", 15),
+    "BLUESTARCO":  ("SELL", 3),
+    "BOSCHLTD":    ("BUY", 12),
     "BPCL":        ("BUY", 15),
-    "BRITANNIA":   ("BUY", 15),
-    "CAMS":        ("SELL", 4),
+    "BRITANNIA":   ("BOTH", 15),
+    "CAMS":        ("BOTH", 4),
     "CIPLA":       ("BOTH", 12),
     "COALINDIA":   ("SELL", 2.5),
-    "COCHINSHIP":  ("BUY", 12),
+    "COCHINSHIP":  ("BOTH", 15),
     "COFORGE":     ("BUY", 10),
     "COLPAL":      ("BUY", 5),
-    "CROMPTON":    ("BOTH", 12),
-    "CUMMINSIND":  ("BOTH", 15),
+    "CROMPTON":    ("SELL", 12),
     "DALBHARAT":   ("SELL", 8),
-    "DELHIVERY":   ("BOTH", 15),
-    "DMART":       ("BUY", 8),
-    "DRREDDY":     ("BOTH", 2),
+    "DELHIVERY":   ("SELL", 2.5),
+    "DMART":       ("BUY", 15),
+    "DRREDDY":     ("BOTH", 2.5),
+    "EICHERMOT":   ("SELL", 8),
     "ETERNAL":     ("BOTH", 4),
     "FEDERALBNK":  ("BUY", 2.5),
-    "GAIL":        ("BOTH", 8),
-    "GLENMARK":    ("BOTH", 8),
+    "GLENMARK":    ("SELL", 2.5),
     "GMRAIRPORT":  ("BUY", 12),
     "GODFRYPHLP":  ("BUY", 15),
-    "GODREJCP":    ("BUY", 1.5),
     "GODREJPROP":  ("BUY", 4),
     "GRASIM":      ("BOTH", 15),
     "HAL":         ("BOTH", 15),
     "HAVELLS":     ("SELL", 3.5),
-    "HCLTECH":     ("BUY", 12),
+    "HCLTECH":     ("BUY", 15),
     "HDFCAMC":     ("BOTH", 4),
     "HDFCLIFE":    ("BOTH", 3),
-    "HEROMOTOCO":  ("BOTH", 3),
     "HINDALCO":    ("BUY", 3),
-    "HINDUNILVR":  ("BUY", 12),
+    "HINDUNILVR":  ("BOTH", 12),
     "HINDZINC":    ("SELL", 2),
     "ICICIGI":     ("BUY", 10),
+    "ICICIPRULI":  ("SELL", 3),
+    "IDEA":        ("SELL", 15),
     "IDFCFIRSTB":  ("BOTH", 7),
+    "IEX":         ("BOTH", 8),
     "INDHOTEL":    ("BOTH", 7),
-    "INDIANB":     ("SELL", 8),
+    "INDIANB":     ("SELL", 5),
+    "INDIGO":      ("BOTH", 15),
     "INDUSINDBK":  ("BOTH", 15),
-    "INFY":        ("BOTH", 15),
+    "INFY":        ("SELL", 15),
     "IOC":         ("BOTH", 12),
-    "IREDA":       ("BOTH", 5),
-    "JUBLFOOD":    ("BOTH", 8),
+    "IRFC":        ("SELL", 15),
+    "ITC":         ("BUY", 15),
+    "JUBLFOOD":    ("BUY", 8),
     "KALYANKJIL":  ("BOTH", 12),
     "KEI":         ("BOTH", 15),
-    "KFINTECH":    ("SELL", 4),
+    "KFINTECH":    ("BOTH", 15),
     "LAURUSLABS":  ("BUY", 12),
-    "LICHSGFIN":   ("SELL", 15),
     "LT":          ("SELL", 12),
-    "LTF":         ("BOTH", 12),
+    "LTF":         ("BOTH", 15),
     "LTM":         ("BUY", 15),
+    "M&M":         ("BOTH", 15),
     "MANAPPURAM":  ("BUY", 10),
     "MANKIND":     ("BOTH", 3.5),
     "MARICO":      ("BUY", 6),
     "MAZDOCK":     ("BOTH", 1.5),
     "MFSL":        ("BOTH", 4),
-    "MOTHERSON":   ("BOTH", 7),
+    "MOTHERSON":   ("BUY", 15),
     "MOTILALOFS":  ("BOTH", 15),
-    "NESTLEIND":   ("BOTH", 2.5),
-    "NHPC":        ("SELL", 6),
-    "NMDC":        ("BOTH", 7),
+    "MUTHOOTFIN":  ("SELL", 2),
+    "NAUKRI":      ("BOTH", 12),
+    "NESTLEIND":   ("BUY", 3),
+    "NHPC":        ("SELL", 8),
+    "NMDC":        ("BUY", 7),
     "NYKAA":       ("BUY", 15),
     "OBEROIRLTY":  ("BUY", 3),
-    "OFSS":        ("BOTH", 4),
+    "OFSS":        ("BUY", 4),
     "OIL":         ("BOTH", 8),
     "ONGC":        ("BUY", 15),
-    "PAGEIND":     ("BOTH", 12),
+    "PAGEIND":     ("BUY", 3.5),
     "PAYTM":       ("BOTH", 6),
     "PFC":         ("BUY", 15),
     "PIIND":       ("BUY", 10),
-    "PNB":         ("BOTH", 15),
+    "PNB":         ("SELL", 8),
     "PNBHOUSING":  ("BOTH", 8),
-    "POLYCAB":     ("BUY", 2.5),
-    "PRESTIGE":    ("BUY", 8),
+    "POLYCAB":     ("BOTH", 2.5),
+    "POWERGRID":   ("SELL", 6),
+    "PREMIERENE":  ("SELL", 3),
+    "PRESTIGE":    ("BOTH", 12),
     "RADICO":      ("BUY", 15),
-    "RBLBANK":     ("BOTH", 6),
+    "RBLBANK":     ("SELL", 15),
+    "RECLTD":      ("BOTH", 10),
     "RVNL":        ("BOTH", 8),
     "SBICARD":     ("SELL", 4),
-    "SBILIFE":     ("BUY", 5),
-    "SHRIRAMFIN":  ("BOTH", 3),
+    "SBILIFE":     ("BUY", 15),
+    "SHREECEM":    ("BUY", 12),
+    "SHRIRAMFIN":  ("BOTH", 7),
     "SOLARINDS":   ("BUY", 12),
-    "SONACOMS":    ("BUY", 10),
-    "SRF":         ("BOTH", 6),
-    "SUNPHARMA":   ("BUY", 2.5),
+    "SONACOMS":    ("BUY", 15),
+    "SRF":         ("BUY", 6),
+    "SUNPHARMA":   ("BUY", 3.5),
     "SUPREMEIND":  ("SELL", 15),
     "SUZLON":      ("BUY", 15),
-    "SWIGGY":      ("BOTH", 2.5),
+    "TATAELXSI":   ("SELL", 15),
     "TATAPOWER":   ("BUY", 5),
-    "TCS":         ("BUY", 5),
+    "TATASTEEL":   ("SELL", 2),
+    "TCS":         ("SELL", 15),
     "TECHM":       ("BUY", 15),
-    "TITAN":       ("BUY", 5),
-    "TMPV":        ("SELL", 15),
-    "TORNTPHARM":  ("BUY", 6),
+    "TIINDIA":     ("SELL", 15),
+    "TITAN":       ("BUY", 7),
+    "TMPV":        ("SELL", 4),
+    "TORNTPHARM":  ("BUY", 8),
     "TRENT":       ("BUY", 10),
-    "TVSMOTOR":    ("BOTH", 7),
+    "TVSMOTOR":    ("BUY", 10),
     "ULTRACEMCO":  ("BOTH", 8),
-    "UNITDSPR":    ("SELL", 3),
-    "UPL":         ("BOTH", 3.5),
+    "UNIONBANK":   ("SELL", 15),
+    "UPL":         ("BOTH", 5),
     "VOLTAS":      ("BUY", 8),
     "WAAREEENER":  ("BOTH", 12),
     "WIPRO":       ("BOTH", 8),
-    "ZYDUSLIFE":   ("SELL", 3.5),
+    "ZYDUSLIFE":   ("BOTH", 3),
 }
 
 TOUCH_ALL_SYMBOLS = list(TOUCH_ALL_CONFIG)
@@ -230,10 +239,13 @@ TOUCH_ALL_DIRECTIONS = ("BUY", "SELL", "BOTH")
 
 # Indices don't trade as "-EQ" and aren't in the equity instrument list, so
 # they need the provider's own index identifier for both quote and history.
-# Kite is matched by tradingsymbol in the NSE dump; Fyers by its -INDEX symbol.
+# Kite is matched by tradingsymbol in that exchange's dump; Fyers by its
+# -INDEX symbol. SENSEX is the reason `exchange` exists — it lives on BSE, not
+# NSE, so it is absent from the NSE instrument list the service loads at init.
 TOUCH_ALL_INDEX_MAP = {
-    "NIFTY":     {"fyers": "NSE:NIFTY50-INDEX",   "kite": "NIFTY 50"},
-    "BANKNIFTY": {"fyers": "NSE:NIFTYBANK-INDEX", "kite": "NIFTY BANK"},
+    "NIFTY":     {"fyers": "NSE:NIFTY50-INDEX",   "kite": "NIFTY 50",   "exchange": "NSE"},
+    "BANKNIFTY": {"fyers": "NSE:NIFTYBANK-INDEX", "kite": "NIFTY BANK", "exchange": "NSE"},
+    "SENSEX":    {"fyers": "BSE:SENSEX-INDEX",    "kite": "SENSEX",     "exchange": "BSE"},
 }
 
 
@@ -352,6 +364,7 @@ class EmaRsiFilterService:
         from trading_app.service.provider_logic import get_data_provider
         self.kite = kite_instance or get_data_provider()
         self._instruments: List[Dict] = []
+        self._other_instruments: Dict[str, List[Dict]] = {}  # exchange -> dump (BSE, ...)
         self._fo_stocks: Optional[List[str]] = None
         self._hist_cache: Dict = _ema_filter_cache
         self._cache_lock = _ema_cache_lock
@@ -778,18 +791,33 @@ class EmaRsiFilterService:
             return f"NSE:{symbol}"
         if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
             return idx["fyers"]
-        return f"NSE:{idx['kite']}"
+        return f"{idx['exchange']}:{idx['kite']}"
+
+    def _exchange_instruments(self, exchange: str) -> List[Dict]:
+        """Instrument dump for an exchange, loaded once. NSE is already fetched
+        at init; anything else (BSE, for SENSEX) is fetched lazily and cached."""
+        if exchange == "NSE":
+            return self._instruments
+        cached = self._other_instruments.get(exchange)
+        if cached is None:
+            try:
+                cached = self.kite.instruments(exchange) or []
+            except Exception as e:
+                logger.error(f"{exchange} instrument load failed: {e}")
+                cached = []
+            self._other_instruments[exchange] = cached
+        return cached
 
     def _touch_all_token(self, symbol: str) -> Optional[Union[int, str]]:
         """History token for a watchlist entry. Equities go through the normal
         equity lookup; indices resolve via their own provider identifier, since
-        they are not '-EQ' instruments."""
+        they are not '-EQ' instruments and may sit on another exchange."""
         idx = TOUCH_ALL_INDEX_MAP.get(symbol)
         if not idx:
             return self._get_token(symbol)
         if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
             return idx["fyers"]
-        for inst in self._instruments:
+        for inst in self._exchange_instruments(idx["exchange"]):
             if inst.get("tradingsymbol") == idx["kite"] or inst.get("name") == idx["kite"]:
                 return inst.get("instrument_token")
         return None
