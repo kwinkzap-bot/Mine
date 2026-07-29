@@ -1,5 +1,23 @@
 [
   {
+    "date": "2026-07-29",
+    "direction": "BUY",
+    "entry_spot": 24251.7,
+    "exit_spot": 24238.7,
+    "pnl_pts": -13.0,
+    "reason": "EOD",
+    "entry_time": "2026-07-29T13:48:00.990793",
+    "exit_time": "2026-07-29T15:28:00.679830",
+    "strike": 24050,
+    "option_type": "CE",
+    "lot_size": 65,
+    "opt_entry_price": 252.1,
+    "opt_exit_price": null,
+    "opt_pnl_pts": null,
+    "opt_pnl_inr": null,
+    "broker_entries": []
+  },
+  {
     "date": "2026-07-28",
     "direction": "SELL",
     "entry_spot": 23986.65,

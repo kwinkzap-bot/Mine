@@ -43,10 +43,10 @@
     "gap_side": null
   },
   "ce_boundary_day_low": 372.3,
-  "pe_boundary_day_low": 136.1,
+  "pe_boundary_day_low": 123.0,
   "low_reclaim_level": 24222.3,
-  "high_reclaim_level": 24113.9,
-  "above_low_reclaim_polls": 60,
+  "high_reclaim_level": 24127.0,
+  "above_low_reclaim_polls": 553,
   "below_high_reclaim_polls": 0,
   "buy_reclaim_done": false,
   "sell_reclaim_done": false,
