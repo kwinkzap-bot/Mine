@@ -4614,9 +4614,10 @@ function _smUpdateMetaRow(id, d) {
 
     const idleEl = document.getElementById(`sm-meta-idle-${id}`);
     if (idleEl) {
-        // Unused (idle) cash = total capital (base + SIP − SWP) not yet deployed.
-        const capital = (d.configured_investment || 0) + (d.total_sip_added || 0) - (d.total_swp_taken || 0);
-        idleEl.textContent = 'Unused ' + _smFmtInr(Math.max(0, capital - (d.total_invested || 0)));
+        // Idle cash the group is holding, tracked server-side. It can't be
+        // derived from capital − deployed: the undeployed part of a SIP never
+        // shows up in either figure.
+        idleEl.textContent = 'Unused ' + _smFmtInr(Math.max(0, d.cash_balance || 0));
     }
 
     const todayAbs = d.today_pnl      || 0;
@@ -4788,7 +4789,8 @@ function _smRenderLiveMode(id, panel, d) {
     _smSipLogs[id]   = sipLog;
 
     // Stash holdings + meta so the SIP/SWP popup can compute allocations client-side
-    _smHoldingsData[id] = { holdings, broker: d.broker || null, configuredInvestment: cfgInv };
+    _smHoldingsData[id] = { holdings, broker: d.broker || null, configuredInvestment: cfgInv,
+                            cashBalance: d.cash_balance };
 
     const totalSwp = d.total_swp_taken || 0;
 
@@ -4921,13 +4923,19 @@ function _smShowSipHistory(id) {
             const isSwp = amt < 0 || e.type === 'swp';
             const tag   = isSwp ? '<span class="sm-mtag sm-mtag-swp">SWP</span>'
                                 : '<span class="sm-mtag sm-mtag-sip">SIP</span>';
+            // The amount is cash in/out; whole-share rounding means only part of
+            // it reaches the market, so spell out the split when they differ.
+            const sub = (e.deployed != null && Math.abs(Math.abs(amt) - e.deployed) >= 1)
+                ? `<span class="sm-flow-sub">${fmtInr(e.deployed)} ${isSwp ? 'from sales' : 'deployed'}`
+                  + (e.cash_after != null ? ` · ${fmtInr(e.cash_after)} idle after` : '') + `</span>`
+                : '';
             return `
             <tr class="${i % 2 === 0 ? 'sm-mrow-even' : 'sm-mrow-odd'}">
                 <td class="sm-mcell sm-mcell-date">
                     <span class="sm-mdate-icon">&#128197;</span>${e.date} ${tag}
                 </td>
                 <td class="sm-mcell sm-mcell-amt ${isSwp ? 'sm-neg' : 'sm-pos'}">${amt < 0 ? '−' : '+'}${fmtInr(Math.abs(amt))}</td>
-                <td class="sm-mcell sm-mcell-note">${e.note || '<span class="sm-mdash">—</span>'}</td>
+                <td class="sm-mcell sm-mcell-note">${e.note || (sub ? '' : '<span class="sm-mdash">—</span>')}${sub}</td>
             </tr>`; }).join('')
         : `<tr><td colspan="3" class="sm-mcell" style="text-align:center;padding:28px 0;color:var(--ag-text-3)">No entries recorded yet</td></tr>`;
 
@@ -5038,7 +5046,7 @@ const _smHoldingsData = {};
 // equal weight the strategy wants — until no share fits in what is left. SWP
 // mirrors it, selling from the largest holding first and never overshooting the
 // requested withdrawal.
-function _smFlowPlan(holdings, mode, amount, configuredInvestment = 0) {
+function _smFlowPlan(holdings, mode, amount, configuredInvestment = 0, cashBalance = null) {
     const n = holdings.length;
     const empty = { allocs: [], sipAmount: amount, idle: 0, fromCash: 0,
                     deployedBase: 0, splitAmount: 0, leftover: 0 };
@@ -5050,7 +5058,12 @@ function _smFlowPlan(holdings, mode, amount, configuredInvestment = 0) {
         return s + (Number.isFinite(bv) ? bv
                     : (Number(h.entry_price) || 0) * (Number(h.qty) || 0));
     }, 0);
-    const idle = Math.max(0, (Number(configuredInvestment) || 0) - deployedBase);
+    // The server tracks idle cash; investment − cost basis is only the fallback
+    // for a group saved before that field existed (it can't see the undeployed
+    // part of past SIPs).
+    const idle = Number.isFinite(Number(cashBalance)) && cashBalance !== null
+        ? Math.max(0, Number(cashBalance))
+        : Math.max(0, (Number(configuredInvestment) || 0) - deployedBase);
 
     const isSip       = mode === 'sip';
     const fromCash    = isSip ? 0 : Math.min(idle, amount);
@@ -5109,6 +5122,7 @@ function _smOpenFlowModal(id, mode) {
             holdings:             d.live_holdings || [],
             broker:               d.broker || (_smHoldingsData[id] || {}).broker || null,
             configuredInvestment: d.configured_investment || 0,
+            cashBalance:          d.cash_balance,
         };
         _smRenderFlowTable(id, mode);
     });
@@ -5174,7 +5188,8 @@ function _smRenderFlowTable(id, mode) {
     const holdings = data.holdings || [];
     const amount   = parseFloat(document.getElementById('flowAmount').value) || 0;
     const isSip    = mode === 'sip';
-    const plan     = _smFlowPlan(holdings, mode, amount, data.configuredInvestment || 0);
+    const plan     = _smFlowPlan(holdings, mode, amount, data.configuredInvestment || 0,
+                                 data.cashBalance);
     const allocs   = plan.allocs;
     const body     = document.getElementById('flowTableBody');
     const fmt      = v => '₹' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
@@ -5224,9 +5239,13 @@ function _smSubmitFlow(id, mode) {
     const holdings = data.holdings || [];
     const amount   = parseFloat(document.getElementById('flowAmount').value) || 0;
     if (!(amount > 0)) { window.showNotification && window.showNotification('Enter a valid amount', 'error'); return; }
-    const allocs   = _smFlowPlan(holdings, mode, amount, data.configuredInvestment || 0)
-                        .allocs.filter(a => a.qty > 0);
-    if (!allocs.length) { window.showNotification && window.showNotification('Amount too small for any share', 'error'); return; }
+    const plan     = _smFlowPlan(holdings, mode, amount, data.configuredInvestment || 0,
+                                 data.cashBalance);
+    const allocs   = plan.allocs.filter(a => a.qty > 0);
+    // A withdrawal covered entirely by idle cash sells nothing — still valid.
+    if (!allocs.length && !(mode === 'swp' && plan.fromCash > 0)) {
+        window.showNotification && window.showNotification('Amount too small for any share', 'error'); return;
+    }
 
     // Use this group's stored broker automatically (no picker in the popup).
     const broker = data.broker || null;

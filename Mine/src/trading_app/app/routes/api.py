@@ -11224,6 +11224,80 @@ def _sm_save_live_configs(configs: list) -> None:
         json.dump({'configs': configs}, f, indent=2)
 
 
+def _sm_cost_basis(config: dict) -> float:
+    """Rupees of cost sitting in the group's open holdings."""
+    return round(sum(float(e.get('entry_price', 0) or 0) * int(e.get('qty', 0) or 0)
+                     for e in (config.get('live_entries') or [])), 2)
+
+
+def _sm_cash_balance(config: dict) -> float:
+    """Idle (undeployed) cash held by a live group.
+
+    Tracked explicitly on the config because it cannot be inferred: a SIP
+    credits the whole amount the user paid in but only debits what actually got
+    deployed, and whole-share rounding means those differ. Inferring it from
+    investment − cost basis (what the UI used to do) silently forgets every
+    undeployed rupee the moment the next buy lands.
+
+    Groups written before the field existed have no balance yet — fall back to
+    the old inference so the number doesn't jump on upgrade.
+    """
+    cash = config.get('cash_balance')
+    if cash is None:
+        return round(max(0.0, float(config.get('investment', 0) or 0) - _sm_cost_basis(config)), 2)
+    try:
+        return round(max(0.0, float(cash)), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _sm_set_cash(config: dict, value: float) -> float:
+    config['cash_balance'] = round(max(0.0, float(value)), 2)
+    return config['cash_balance']
+
+
+def _sm_plan_split(entries: list, prices: dict, mode: str, budget: float) -> list:
+    """Size a SIP/SWP across holdings — the server-side mirror of _smFlowPlan.
+
+    Pass 1 is the equal-₹ split floored by price; pass 2 pools the per-stock
+    remainders and adds one whole share at a time (SIP: whichever holding ends
+    up smallest, SWP: the largest remaining) so the leftover isn't stranded.
+    Returns [(entry, qty, price)] for the holdings that got a non-zero qty.
+    """
+    is_sip = mode == 'sip'
+    rows   = [{'e': e, 'px': float(prices.get(e['symbol']) or e['entry_price'] or 0),
+               'qty': 0, 'held': int(e.get('qty', 0) or 0)} for e in entries]
+    if not rows or budget <= 0:
+        return []
+
+    per_stock = budget / len(rows)
+    for r in rows:
+        if r['px'] <= 0:
+            continue
+        r['qty'] = int(per_stock / r['px'])
+        if not is_sip:
+            r['qty'] = min(r['qty'], r['held'])
+
+    left = budget - sum(r['qty'] * r['px'] for r in rows)
+    for _ in range(100000):
+        best, best_score = None, None
+        for r in rows:
+            if r['px'] <= 0 or r['px'] > left:
+                continue
+            if not is_sip and r['qty'] >= r['held']:
+                continue
+            score = ((r['held'] + r['qty'] + 1) * r['px'] if is_sip
+                     else -(r['held'] - r['qty'] - 1) * r['px'])
+            if best_score is None or score < best_score:
+                best, best_score = r, score
+        if best is None:
+            break
+        best['qty'] += 1
+        left -= best['px']
+
+    return [(r['e'], r['qty'], r['px']) for r in rows if r['qty'] > 0]
+
+
 def _sm_compute_today_rankings(index_name: str):
     """Return today's momentum rankings using avg(3M, 6M, 9M) — same as Swing Trade tab.
 
@@ -11647,7 +11721,13 @@ def sm_live_sip_swp(config_id):
 
     by_sym = {e['symbol']: e for e in entries}
 
-    # Resolve per-stock quantities: trust client allocations, else equal-₹ split
+    # A SIP puts the group's idle cash to work alongside the new money; a SWP
+    # pays out of idle cash first and only sells to cover the shortfall.
+    cash      = _sm_cash_balance(config)
+    from_cash = 0.0 if mode == 'sip' else min(cash, amount)
+    budget    = (amount + cash) if mode == 'sip' else (amount - from_cash)
+
+    # Resolve per-stock quantities: trust client allocations, else split here
     prices = _sm_current_prices(list(by_sym.keys()))
     allocs = body.get('allocations') or []
     plan   = []  # (entry, qty, price)
@@ -11659,16 +11739,10 @@ def sm_live_sip_swp(config_id):
                 continue
             plan.append((e, q, prices.get(sym, e['entry_price'])))
     else:
-        per_stock = amount / len(entries) if entries else 0
-        for e in entries:
-            p = prices.get(e['symbol'], e['entry_price'])
-            q = int(per_stock / p) if p > 0 else 0
-            if mode == 'swp':
-                q = min(q, int(e['qty']))
-            if q > 0:
-                plan.append((e, q, p))
+        plan = _sm_plan_split(entries, prices, mode, budget)
 
-    if not plan:
+    # A withdrawal fully covered by idle cash needs no sales — not an error.
+    if not plan and not (mode == 'swp' and from_cash > 0):
         return jsonify({'success': False, 'error': 'Amount too small for any whole share'}), 400
 
     # Optional broker order placement
@@ -11676,7 +11750,7 @@ def sm_live_sip_swp(config_id):
     broker_inst   = body.get('broker_instance')
     broker_summary = None
     fill_prices   = {}   # symbol -> avg fill price (broker) when available
-    if broker_inst:
+    if broker_inst and plan:
         try:
             import time as _t
             username    = session.get('username', 'Mine')
@@ -11730,12 +11804,28 @@ def sm_live_sip_swp(config_id):
     # Drop fully sold-out holdings
     config['live_entries'] = [e for e in entries if int(e['qty']) > 0]
 
+    # Settle cash. A SIP credits everything the user paid in and debits only what
+    # the market actually took, so the undeployed remainder carries forward to
+    # the next SIP. A SWP debits the part paid straight out of idle cash; the
+    # sale proceeds go to the user, not back into the balance.
+    if mode == 'sip':
+        received = amount
+        new_cash = _sm_set_cash(config, cash + amount - deployed)
+    else:
+        received = from_cash + deployed
+        new_cash = _sm_set_cash(config, cash - from_cash)
+
     log = config.setdefault('monthly_investment_log', [])
     log.append({
-        'date':   body.get('date', datetime.today().strftime('%Y-%m-%d')),
-        'amount': round(deployed if mode == 'sip' else -deployed, 2),
-        'note':   body.get('note', ''),
-        'type':   mode,
+        'date':       body.get('date', datetime.today().strftime('%Y-%m-%d')),
+        # The cash that moved in or out — not the deployed value, which is only
+        # the part that cleared whole-share rounding.
+        'amount':     round(received if mode == 'sip' else -received, 2),
+        'deployed':   round(deployed, 2),
+        'from_cash':  round(from_cash, 2),
+        'cash_after': new_cash,
+        'note':       body.get('note', ''),
+        'type':       mode,
     })
 
     # Remember the broker used as this config's default (so every order popup
@@ -11748,6 +11838,8 @@ def sm_live_sip_swp(config_id):
     _sm_save_live_configs(configs)
     return jsonify({'success': True, 'mode': mode,
                     'deployed': round(deployed, 2),
+                    'from_cash': round(from_cash, 2),
+                    'cash_balance': new_cash,
                     'holdings': len(config['live_entries']),
                     'broker_summary': broker_summary})
 
@@ -11999,10 +12091,12 @@ def sm_live_rebalance(config_id):
         return rec
 
     # 1) SELL the exiting holdings
+    proceeds = 0.0
     for s in sells:
         oid, e = _sm_place_equity_order(broker_type, svc, s['symbol'], s['qty'], 'SELL', price=s['price'])
         if oid:
             summary['sold'] += 1
+            proceeds += s['qty'] * s['price']
             sold_syms.append(s['symbol'])
             orig = by_sym.get(s['symbol'], {})
             _sm_record_exit(config, s['symbol'], s['qty'],
@@ -12039,11 +12133,18 @@ def sm_live_rebalance(config_id):
 
     # 3) Rewrite holdings: drop the sold, add the new
     config['live_entries'] = [e for e in entries if e['symbol'] not in sold_syms] + new_entries
+    # Replacements are sized by flooring the proceeds, so a rebalance leaves a
+    # residual behind. Bank it instead of losing track of it.
+    spent    = sum(e['qty'] * e['entry_price'] for e in new_entries)
+    new_cash = _sm_set_cash(config, _sm_cash_balance(config) + proceeds - spent)
     config.setdefault('monthly_investment_log', []).append({
-        'date':   datetime.today().strftime('%Y-%m-%d'),
-        'amount': 0.0,
-        'note':   f"Rebalance: sold {summary['sold']}, bought {summary['bought']}",
-        'type':   'rebalance',
+        'date':       datetime.today().strftime('%Y-%m-%d'),
+        'amount':     0.0,
+        'proceeds':   round(proceeds, 2),
+        'deployed':   round(spent, 2),
+        'cash_after': new_cash,
+        'note':       f"Rebalance: sold {summary['sold']}, bought {summary['bought']}",
+        'type':       'rebalance',
     })
     _sm_save_live_configs(configs)
 
@@ -12067,6 +12168,7 @@ def sm_live_edit_holding(config_id):
     if not entry:
         return jsonify({'success': False, 'error': 'Holding not found'}), 404
 
+    cost_before = _sm_cost_basis(config)
     try:
         if body.get('qty') not in (None, ''):
             entry['qty'] = int(float(body['qty']))
@@ -12084,6 +12186,10 @@ def sm_live_edit_holding(config_id):
     # Remove the holding entirely if quantity was set to zero
     if int(entry.get('qty', 0)) <= 0:
         config['live_entries'] = [e for e in entries if e['symbol'] != symbol]
+
+    # Correcting a holding moves cost basis, so idle cash moves the other way.
+    if config.get('cash_balance') is not None:
+        _sm_set_cash(config, _sm_cash_balance(config) - (_sm_cost_basis(config) - cost_before))
 
     _sm_save_live_configs(configs)
     return jsonify({'success': True, 'entry': entry})
@@ -12116,7 +12222,14 @@ def sm_live_configs_update(config_id):
     configs = _sm_load_live_configs()
     for c in configs:
         if c['id'] == config_id:
-            if 'investment'       in body: c['investment']       = float(body['investment'])
+            if 'investment' in body:
+                new_inv = float(body['investment'])
+                # Editing base capital adds/removes that much idle cash. Only
+                # for groups already tracking a balance — the others still infer
+                # it from the new investment figure.
+                if c.get('cash_balance') is not None:
+                    _sm_set_cash(c, _sm_cash_balance(c) + new_inv - float(c.get('investment', 0) or 0))
+                c['investment'] = new_inv
             if 'monthly_add'      in body: c['monthly_add']      = float(body['monthly_add'])
             if 'monthly_add_type' in body: c['monthly_add_type'] = body['monthly_add_type']
             break
@@ -12197,6 +12310,9 @@ def sm_live_go_live(config_id):
             if c['id'] == config_id:
                 c['live_since']   = str(today)
                 c['live_entries'] = live_entries
+                # Whatever the initial buy couldn't place in whole shares opens
+                # the group's cash balance.
+                _sm_set_cash(c, cash)
                 break
         _sm_save_live_configs(configs)
 
@@ -12214,6 +12330,7 @@ def sm_live_reset(config_id):
         if c['id'] == config_id:
             c.pop('live_since',   None)
             c.pop('live_entries', None)
+            c.pop('cash_balance', None)
             break
     _sm_save_live_configs(configs)
     return jsonify({'success': True})
@@ -12371,6 +12488,7 @@ def sm_live_signal(config_id):
             'last_rebalance':         config.get('live_since'),
             'rebalance_needed':       False,
             'configured_investment':  config.get('investment', 100000),
+            'cash_balance':           _sm_cash_balance(config),
             'monthly_add':            config.get('monthly_add', 0),
             'monthly_add_type':       config.get('monthly_add_type', 'static'),
             'monthly_investment_log': monthly_log,
