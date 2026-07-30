@@ -37,17 +37,12 @@
  * green, PE in blue — recomputed from that leg's own candles on every load
  * (see oipRSComputeRefLines / oipRSDrawRefLines).
  *
- * The two charts get their data in DIFFERENT ways. The main chart (top,
- * follows the TF dropdown) stays live, but issues no request of its own: it
- * needs the same symbol/interval/window as Opt Prem's chart and differs only
- * in strike, so its legs ride along on that request as rs_ce_strike/
- * rs_pe_strike and come back as rs_ce_candles/rs_pe_candles — see
- * oipRSStrikeParams (appended by oi_profile.js's oipLoadCandles) and
- * oipRSRenderFromMain (called by it once the response lands). The Fixed 5m
- * chart below it can't share that request — it's pinned to a 5-minute
- * interval — and doesn't need to: it's read for structure rather than
- * tick-by-tick price, so it fetches on demand only (initial load, strike
- * change, and the "⟳ 5m" button in the block header — see oipRSFixed5mRefresh).
+ * The chart (follows the TF dropdown) stays live, but issues no request of
+ * its own: it needs the same symbol/interval/window as Opt Prem's chart and
+ * differs only in strike, so its legs ride along on that request as
+ * rs_ce_strike/rs_pe_strike and come back as rs_ce_candles/rs_pe_candles —
+ * see oipRSStrikeParams (appended by oi_profile.js's oipLoadCandles) and
+ * oipRSRenderFromMain (called by it once the response lands).
  *
  * Indicator show/hide and drawn Ray lines persist across a page refresh via
  * localStorage (see the "Persistence" block below — oipRSSaveIndicatorState/
@@ -59,23 +54,8 @@
 
 let oipRSChart = null, oipRSCESeries = null, oipRSPESeries = null;
 let oipRSVwapCESeries = null, oipRSVwapPESeries = null;
-let oipRSVolumeSeries = null;
+let oipRSVolumeSeries = null, oipRSBnfVolumeSeries = null;
 let oipRSCurrentCEStrike = null, oipRSCurrentPEStrike = null;
-// Static 5-minute Combined chart — same CE/PE strikes as the block above
-// (read fresh from the same dropdowns), but its own fetch: the shared request
-// is on the main TF interval, and this chart is always 5-minute. Only
-// refetches on initial load, strike change, and the "⟳ 5m" button (own busy
-// flag, since those fetches race the main chart's poll loop).
-let oipRSFixed5mChart = null, oipRSFixed5mCESeries = null, oipRSFixed5mPESeries = null;
-let oipRSFixed5mVolumeSeries = null, oipRSFixed5mIsBusy = false;
-let oipRSFixed5mVwapCESeries = null, oipRSFixed5mVwapPESeries = null;
-let oipRSFixed5mCeRefLineObjs = { pdh: null, pdl: null, open: null, fiveMHi: null, fiveMLo: null };
-let oipRSFixed5mPeRefLineObjs = { pdh: null, pdl: null, open: null, fiveMHi: null, fiveMLo: null };
-// Rays drawn/removed/cleared on the main oipRSChart are live-mirrored here —
-// the 5m chart has no ray tool of its own (see oipRSRayDisarm/oipRSRemoveSavedRay/
-// oipRSInitRayTool's clear button below). Each entry is the raySeries handle
-// TradingViewChart.addRay() returned, which carries its own `_rayInfo`.
-let oipRSFixed5mMirrorRays = [];
 
 // ── Persistence (localStorage) — indicator show/hide + drawn rays survive a
 // page refresh. Indicator state is restored before charts/series are
@@ -84,7 +64,7 @@ let oipRSFixed5mMirrorRays = [];
 const OIP_RS_STORAGE_KEY_INDICATORS = 'oipRS_indicators_v1';
 const OIP_RS_STORAGE_KEY_RAYS = 'oipRS_rays_v1';
 const OIP_RS_INDICATOR_CHECKBOX_IDS = [
-    'oipRSShowVwap', 'oipRSShowVolume', 'oipRSShow5mClose',
+    'oipRSShowVwap', 'oipRSShowVolume', 'oipRSShowBnfVolume', 'oipRSShow5mClose',
     'oipRSShowCePdh', 'oipRSShowCePdl', 'oipRSShowCeOpen', 'oipRSShowCe5mHi', 'oipRSShowCe5mLo',
     'oipRSShowPePdh', 'oipRSShowPePdl', 'oipRSShowPeOpen', 'oipRSShowPe5mHi', 'oipRSShowPe5mLo'
 ];
@@ -127,7 +107,6 @@ function oipRSRemoveSavedRay(rayInfo) {
     if (!rayInfo) return;
     const rays = oipRSLoadSavedRays().filter(r => !(r.time === rayInfo.time && r.price === rayInfo.price));
     oipRSSaveRaysList(rays);
-    oipRSFixed5mUnmirrorRay(rayInfo);
 }
 
 function oipRSClearSavedRays() {
@@ -138,37 +117,7 @@ function oipRSRestoreSavedRays() {
     if (!oipRSChart?.addRay) return;
     oipRSLoadSavedRays().forEach(r => {
         try { oipRSChart.addRay(r.time, r.price, { color: r.color, width: r.width, lineStyle: r.lineStyle }); } catch (e) {}
-        oipRSFixed5mMirrorRay(r);
     });
-}
-
-// Draws the same ray (identical time/price/style) on the 5m chart — CE/PE
-// premium is the same instrument on both charts, just different bar
-// intervals, so a ray drawn at a given price level is meaningful on both.
-function oipRSFixed5mMirrorRay(rayInfo) {
-    if (!rayInfo || !oipRSFixed5mChart?.addRay) return;
-    try {
-        const series = oipRSFixed5mChart.addRay(rayInfo.time, rayInfo.price, {
-            color: rayInfo.color, width: rayInfo.width, lineStyle: rayInfo.lineStyle
-        });
-        if (series) oipRSFixed5mMirrorRays.push(series);
-    } catch (e) {}
-}
-
-function oipRSFixed5mUnmirrorRay(rayInfo) {
-    if (!rayInfo || !oipRSFixed5mChart?.chart) return;
-    const idx = oipRSFixed5mMirrorRays.findIndex(s =>
-        s._rayInfo && s._rayInfo.time === rayInfo.time && s._rayInfo.price === rayInfo.price);
-    if (idx >= 0) {
-        try { oipRSFixed5mChart.chart.removeSeries(oipRSFixed5mMirrorRays[idx]); } catch (e) {}
-        oipRSFixed5mMirrorRays.splice(idx, 1);
-    }
-}
-
-function oipRSFixed5mClearMirrorRays() {
-    if (!oipRSFixed5mChart?.chart) return;
-    oipRSFixed5mMirrorRays.forEach(s => { try { oipRSFixed5mChart.chart.removeSeries(s); } catch (e) {} });
-    oipRSFixed5mMirrorRays = [];
 }
 
 // Horizontal reference lines — Previous Day High, Previous Day Low, Current
@@ -257,7 +206,6 @@ function oipRSApplyLineStyleLive(lineObjRef, style) {
 function oipRSOnCeStyleChange() {
     const style = oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR);
     oipRSApplyLineStyleLive(oipRSCeRefLineObjs, style);
-    oipRSApplyLineStyleLive(oipRSFixed5mCeRefLineObjs, style);
     oipRSUpdateCheckboxSpanColors();
     oipRSSaveLineStyleState();
 }
@@ -265,7 +213,6 @@ function oipRSOnCeStyleChange() {
 function oipRSOnPeStyleChange() {
     const style = oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR);
     oipRSApplyLineStyleLive(oipRSPeRefLineObjs, style);
-    oipRSApplyLineStyleLive(oipRSFixed5mPeRefLineObjs, style);
     oipRSUpdateCheckboxSpanColors();
     oipRSSaveLineStyleState();
 }
@@ -408,8 +355,6 @@ function oipRSRefVisibilityFromCheckboxes(side) {
 function oipRSSyncRefLineVisibility() {
     oipRSApplyRefVisibility(oipRSCeRefLineObjs, oipRSRefVisibilityFromCheckboxes('Ce'));
     oipRSApplyRefVisibility(oipRSPeRefLineObjs, oipRSRefVisibilityFromCheckboxes('Pe'));
-    oipRSApplyRefVisibility(oipRSFixed5mCeRefLineObjs, oipRSRefVisibilityFromCheckboxes('Ce'));
-    oipRSApplyRefVisibility(oipRSFixed5mPeRefLineObjs, oipRSRefVisibilityFromCheckboxes('Pe'));
 }
 
 function oipRSInitCharts() {
@@ -433,11 +378,10 @@ function oipRSInitCharts() {
     // doesn't exist until this function runs. Reuses that file's
     // window._oipActiveChartId / window._oipSyncRange / window._oipSyncDepth
     // so a pan/zoom started from any of these charts propagates to all of them.
-    // Fixed 24000 Monthly and the 5m Fixed chart below are deliberately NOT
-    // part of this web — both are always fixed to a 5-minute interval
-    // regardless of what the others are doing, so their bar grids won't line
-    // up (they still join the separate crosshair-sync web, which doesn't
-    // care about bar grid alignment — see below).
+    // Fixed 24000 Monthly is deliberately NOT part of this web — it is always
+    // fixed to a 5-minute interval regardless of what the others are doing, so
+    // its bar grid won't line up (it still joins the separate crosshair-sync
+    // web, which doesn't care about bar grid alignment — see below).
     ['mouseenter', 'touchstart'].forEach(evt => {
         document.getElementById('oipRSCombinedChart')?.addEventListener(evt, () => { window._oipActiveChartId = 'rs'; }, { passive: true });
     });
@@ -456,9 +400,7 @@ function oipRSInitCharts() {
     // Same shared web for crosshair hover — reuses oi_profile_init.js's
     // syncCrosshair via window._oipSyncCrosshair. oipRSCESeries is this
     // chart's anchor series for price lookup (same role oipIntrinsicSeries
-    // plays for Intrinsic). Unlike the pan/zoom web above, the 5m Fixed chart
-    // DOES join this one — see oipRSFixed5mInitChart's own listener below —
-    // crosshair hover is display-only and doesn't touch its fixed interval/zoom.
+    // plays for Intrinsic).
     if (oipRSChart?.chart && typeof window._oipSyncCrosshair === 'function') {
         oipRSChart.chart.subscribeCrosshairMove(param => {
             if (window._oipActiveChartId !== 'rs') return;
@@ -467,7 +409,6 @@ function oipRSInitCharts() {
             if (oipCEChart?.chart && oipCESeries) window._oipSyncCrosshair(oipRSChart.chart, oipCEChart.chart, param, oipCESeries);
             if (oipPEChart?.chart && oipPESeries) window._oipSyncCrosshair(oipRSChart.chart, oipPEChart.chart, param, oipPESeries);
             if (oipFixedChart?.chart && oipFixedCeSeries) window._oipSyncCrosshair(oipRSChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
-            if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) window._oipSyncCrosshair(oipRSChart.chart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
         });
     }
 
@@ -485,32 +426,25 @@ function oipRSInitCharts() {
         const v = e.target.checked;
         oipRSVwapCESeries?.applyOptions({ visible: v });
         oipRSVwapPESeries?.applyOptions({ visible: v });
-        oipRSFixed5mVwapCESeries?.applyOptions({ visible: v });
-        oipRSFixed5mVwapPESeries?.applyOptions({ visible: v });
         oipRSSaveIndicatorState();
     });
 
-    // Volume histogram — same current-expiry NIFTY future volume used on the
-    // main OI Profile chart, matched to this block's own candle timestamps.
-    // Own price scale pinned to the bottom of the pane, same recipe as the
-    // main chart's oipVolumeSeries (see oi_profile.js oipInitCharts).
+    // Volume histograms — the same future volumes used on the main OI Profile
+    // chart, matched to this block's own candle timestamps. Both overlays share
+    // one hidden price scale pinned to the bottom of the pane (see
+    // oipAddVolumeSeriesPair in oi_indicators.js).
     const showVolume = document.getElementById('oipRSShowVolume')?.checked ?? true;
-    oipRSVolumeSeries = oipRSChart.chart.addSeries(LightweightCharts.HistogramSeries, {
-        priceFormat: { type: 'volume' },
-        priceScaleId: 'oipRSVolume',
-        lastValueVisible: false,
-        priceLineVisible: false,
-        crosshairMarkerVisible: false,
-        visible: showVolume
-    });
-    oipRSChart.chart.priceScale('oipRSVolume').applyOptions({
-        scaleMargins: { top: 0.8, bottom: 0 },
-        visible: false
-    });
+    const showBnfVolume = document.getElementById('oipRSShowBnfVolume')?.checked ?? false;
+    [oipRSVolumeSeries, oipRSBnfVolumeSeries] = oipAddVolumeSeriesPair(
+        oipRSChart.chart, 'oipRSVolume', showVolume, showBnfVolume);
 
     document.getElementById('oipRSShowVolume')?.addEventListener('change', (e) => {
         oipRSVolumeSeries?.applyOptions({ visible: e.target.checked });
-        oipRSFixed5mVolumeSeries?.applyOptions({ visible: e.target.checked });
+        oipRSSaveIndicatorState();
+    });
+
+    document.getElementById('oipRSShowBnfVolume')?.addEventListener('change', (e) => {
+        oipRSBnfVolumeSeries?.applyOptions({ visible: e.target.checked });
         oipRSSaveIndicatorState();
     });
 
@@ -523,128 +457,6 @@ function oipRSInitCharts() {
     }
 }
 
-// Second Combined chart — no controls of its own. Always 5-minute (so
-// `timeframe` is a plain string, unlike oipRSChart's, which needs to track
-// oipInterval). Its VWAP, ref lines, volume and ray lines are all driven by
-// the SAME checkboxes/pickers/ray tool as oipRSChart above — see the
-// extended listeners in oipRSInitCharts/oipRSSyncRefLineVisibility/
-// oipRSOnCeStyleChange/oipRSOnPeStyleChange/oipRSRayDisarm/oipRSRemoveSavedRay
-// and the mirrored redraw at the end of oipRSFixed5mLoadCandles.
-function oipRSFixed5mInitChart() {
-    if (typeof TradingViewChart === 'undefined' || !document.getElementById('oipRSFixed5mChart')) return;
-
-    oipRSFixed5mChart = TradingViewChart.create({
-        containerId: 'oipRSFixed5mChart', data: [], type: 'COMBINED',
-        // Height matches oipRSChart's — both sit in a .oip-chart-wrap, which
-        // is fixed at 375px in CSS; a shorter chart here just leaves dead
-        // space at the bottom of its wrap instead of filling it.
-        isCombined: true, timeframe: '5minute', options: { height: 375 }
-    });
-    oipRSFixed5mCESeries = oipRSFixed5mChart.ceSeries || oipRSFixed5mChart.series;
-    oipRSFixed5mPESeries = oipRSFixed5mChart.peSeries;
-
-    const showVwap = document.getElementById('oipRSShowVwap')?.checked ?? true;
-    oipRSFixed5mVwapCESeries = oipRSFixed5mChart.chart.addSeries(LightweightCharts.LineSeries, {
-        color: '#1b9981', lineWidth: 1, visible: showVwap,
-        priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
-    });
-    oipRSFixed5mVwapPESeries = oipRSFixed5mChart.chart.addSeries(LightweightCharts.LineSeries, {
-        color: '#8b5cf6', lineWidth: 1, visible: showVwap,
-        priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: () => null
-    });
-
-    const showVolume = document.getElementById('oipRSShowVolume')?.checked ?? true;
-    oipRSFixed5mVolumeSeries = oipRSFixed5mChart.chart.addSeries(LightweightCharts.HistogramSeries, {
-        priceFormat: { type: 'volume' },
-        priceScaleId: 'oipRSFixed5mVolume',
-        lastValueVisible: false,
-        priceLineVisible: false,
-        crosshairMarkerVisible: false,
-        visible: showVolume
-    });
-    oipRSFixed5mChart.chart.priceScale('oipRSFixed5mVolume').applyOptions({
-        scaleMargins: { top: 0.8, bottom: 0 },
-        visible: false
-    });
-
-    const fixed5mWrap = document.getElementById('oipRSFixed5mChartWrap');
-    if (fixed5mWrap && oipRSFixed5mChart?.chart) {
-        new ResizeObserver(() => {
-            if (fixed5mWrap.clientWidth) oipRSFixed5mChart.chart.applyOptions({ width: fixed5mWrap.clientWidth });
-        }).observe(fixed5mWrap);
-    }
-
-    // Crosshair-hover sync ONLY — this chart still has no pan/zoom link (see
-    // oipRSInitCharts above) and its interval is always hardcoded to 5-minute
-    // regardless of the group; hovering it just mirrors the crosshair onto the
-    // other charts (and vice versa) the same way OI/Opt Prem/Fixed/RS already do.
-    ['mouseenter', 'touchstart'].forEach(evt => {
-        document.getElementById('oipRSFixed5mChart')?.addEventListener(evt, () => { window._oipActiveChartId = 'rsfixed5m'; }, { passive: true });
-    });
-    if (oipRSFixed5mChart?.chart && typeof window._oipSyncCrosshair === 'function') {
-        oipRSFixed5mChart.chart.subscribeCrosshairMove(param => {
-            if (window._oipActiveChartId !== 'rsfixed5m') return;
-            if (oipOIChart && oipOISeries) window._oipSyncCrosshair(oipRSFixed5mChart.chart, oipOIChart, param, oipOISeries);
-            if (oipIntrinsicChart?.chart && oipIntrinsicSeries) window._oipSyncCrosshair(oipRSFixed5mChart.chart, oipIntrinsicChart.chart, param, oipIntrinsicSeries);
-            if (oipCEChart?.chart && oipCESeries) window._oipSyncCrosshair(oipRSFixed5mChart.chart, oipCEChart.chart, param, oipCESeries);
-            if (oipPEChart?.chart && oipPESeries) window._oipSyncCrosshair(oipRSFixed5mChart.chart, oipPEChart.chart, param, oipPESeries);
-            if (oipFixedChart?.chart && oipFixedCeSeries) window._oipSyncCrosshair(oipRSFixed5mChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
-            if (oipRSChart?.chart && oipRSCESeries) window._oipSyncCrosshair(oipRSFixed5mChart.chart, oipRSChart.chart, param, oipRSCESeries);
-        });
-    }
-}
-
-// Fetches candles for the SAME CE/PE strikes as the main chart above, but
-// always at a fixed 5-minute interval. This is the one request this block
-// still makes on its own — the interval differs from the shared request, so
-// it can't ride along there. Called on initial load, strike change, and the
-// "⟳ 5m" button only; never on the poll loop.
-async function oipRSFixed5mLoadCandles(resetZoom = false) {
-    const ceStrike = document.getElementById('oipRSCEStrikeDropdown')?.value;
-    const peStrike = document.getElementById('oipRSPEStrikeDropdown')?.value;
-    if (!ceStrike || !peStrike || !oipRSFixed5mChart) return;
-
-    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=5minute&days=5&opt_days=5&ce_strike=${ceStrike}&pe_strike=${peStrike}&include_30s=false&_t=${Date.now()}`;
-
-    let data;
-    try {
-        const res = await fetch(url);
-        data = await res.json();
-    } catch (e) {
-        console.warn('[RoundStrike/Fixed5m] fetch error:', e);
-        return;
-    }
-    if (!data.success) return;
-
-    const ceData = (data.ce_opt_candles || []).map(c => ({ ...c, type: 'CE' }));
-    const peData = (data.pe_opt_candles || []).map(c => ({ ...c, type: 'PE' }));
-
-    oipRSFixed5mChart.update(ceData, peData, resetZoom);
-
-    if (typeof oipCalculateVWAP === 'function') {
-        oipRSFixed5mVwapCESeries?.setData(oipCalculateVWAP(ceData));
-        oipRSFixed5mVwapPESeries?.setData(oipCalculateVWAP(peData));
-    }
-    if (oipRSFixed5mCESeries) oipRSDrawRefLines(oipRSFixed5mCESeries, oipRSFixed5mCeRefLineObjs, oipRSComputeRefLines(ceData), oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR), oipRSRefVisibilityFromCheckboxes('Ce'));
-    if (oipRSFixed5mPESeries) oipRSDrawRefLines(oipRSFixed5mPESeries, oipRSFixed5mPeRefLineObjs, oipRSComputeRefLines(peData), oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR), oipRSRefVisibilityFromCheckboxes('Pe'));
-
-    if (oipRSFixed5mVolumeSeries) {
-        const futVolMap = new Map((data.future_volume || []).map(v => [Number(v.time), Number(v.volume || 0)]));
-        const upColor = '#1b998180', downColor = '#f2364580';
-        const volPoints = ceData
-            .filter(c => futVolMap.has(Number(c.time)))
-            .map(c => ({ time: Number(c.time), value: futVolMap.get(Number(c.time)), color: Number(c.close) >= Number(c.open) ? upColor : downColor }));
-        oipRSFixed5mVolumeSeries.setData(volPoints);
-    }
-
-    const setFixed5mText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
-    setFixed5mText('oipRSFixed5mLegendCE', `${ceStrike} CE`);
-    setFixed5mText('oipRSFixed5mLegendPE', `${peStrike} PE`);
-    const fVolEl = document.getElementById('oipRSFixed5mVolLegendItem');
-    if (fVolEl) fVolEl.classList.toggle('hidden', !data.future_symbol);
-    setFixed5mText('oipRSFixed5mLegendVolSymbol', data.future_symbol || '--');
-}
-
 // Disarms the ray tool and resets the toolbar button — called after a ray is
 // drawn (single-shot arm, matches Opt Prem's Ray tool behavior). `rayInfo`
 // ({time, price, color, width, lineStyle}) is persisted so the ray survives
@@ -654,7 +466,6 @@ function oipRSRayDisarm(rayInfo) {
     document.getElementById('oipRSRayToolBtn')?.classList.remove('oip-btn--armed');
     document.getElementById('oipRSRayOptionsPopup')?.classList.add('hidden');
     oipRSAddSavedRay(rayInfo);
-    oipRSFixed5mMirrorRay(rayInfo);
 }
 
 // Color/width/style pickers set the look of the NEXT ray only — read fresh
@@ -700,7 +511,6 @@ function oipRSInitRayTool() {
         clearBtn.addEventListener('click', () => {
             oipRSChart?.clearRays();
             oipRSClearSavedRays();
-            oipRSFixed5mClearMirrorRays();
         });
     }
 }
@@ -891,14 +701,8 @@ function oipRSRenderFromMain(data) {
     window._oipDataRefreshing = true;
     if (oipRSChart) oipRSChart.update(oipRSMark5mCloseBorders(ceData), oipRSMark5mCloseBorders(peData), resetZoom);
 
-    if (oipRSVolumeSeries) {
-        const futVolMap = new Map((data.future_volume || []).map(v => [Number(v.time), Number(v.volume || 0)]));
-        const upColor = '#1b998180', downColor = '#f2364580';
-        const volPoints = ceData
-            .filter(c => futVolMap.has(Number(c.time)))
-            .map(c => ({ time: Number(c.time), value: futVolMap.get(Number(c.time)), color: Number(c.close) >= Number(c.open) ? upColor : downColor }));
-        oipRSVolumeSeries.setData(volPoints);
-    }
+    oipSetVolumeBars(oipRSVolumeSeries, data.future_volume, ceData);
+    oipSetVolumeBars(oipRSBnfVolumeSeries, data.banknifty_volume, ceData, 'banknifty');
     const volLegendEl = document.getElementById('oipRSVolLegendItem');
     if (volLegendEl) volLegendEl.classList.toggle('hidden', !data.future_symbol);
     const volSymbolEl = document.getElementById('oipRSLegendVolSymbol');
@@ -917,10 +721,6 @@ function oipRSRenderFromMain(data) {
     setText('oipRSLegendCombinedPE', `${peStrike} PE`);
 
     requestAnimationFrame(() => { window._oipDataRefreshing = false; });
-
-    // NOTE: the Fixed 5m chart is deliberately NOT refreshed here — this runs
-    // on every tick of the main poll loop, and that chart is manual-refresh
-    // only, on its own 5-minute interval (see oipRSFixed5mRefresh).
 
     // Rays are restored once real data exists, so they extend to it correctly.
     if (!oipRSFirstRenderDone) {
@@ -1097,32 +897,12 @@ function oipRSRequestReload() {
     if (typeof oipLoadCandles === 'function') oipLoadCandles(true, false, false);
 }
 
-// Manual refresh for the Fixed 5m chart — it's read for structure, not
-// tick-by-tick price, so it sits out the live loop above and only refetches
-// on demand. Same convention as the Fixed Monthly chart's own ⟳ button.
-// Keeps the current zoom (resetZoom=false) so a refresh doesn't throw away
-// where the user has panned to.
-async function oipRSFixed5mRefresh(btn) {
-    if (oipRSFixed5mIsBusy) return;
-    oipRSFixed5mIsBusy = true;
-    if (btn) btn.disabled = true;
-    try {
-        await oipRSFixed5mLoadCandles(false);
-    } catch (err) {
-        console.warn('[RoundStrike/Fixed5m] Refresh error:', err);
-    } finally {
-        oipRSFixed5mIsBusy = false;
-        if (btn) btn.disabled = false;
-    }
-}
-
 async function oipRSInit() {
     if (!document.getElementById('oipRSCombinedChart')) return; // block not present on this page
     oipRSRestoreIndicatorState(); // before chart/series creation — VWAP's initial visibility reads the checkbox
     oipRSRestoreLineStyleState(); // before first load — CE/PE ref-line color/width/style pickers
     oipRSUpdateCheckboxSpanColors();
     oipRSInitCharts();
-    oipRSFixed5mInitChart();
 
     const { openPrice, strikes } = await oipRSFetchOpenAndStrikes();
     const { ceStrike, peStrike } = oipRSComputeStrikes(openPrice);
@@ -1130,15 +910,11 @@ async function oipRSInit() {
     oipRSPopulateDropdown(document.getElementById('oipRSCEStrikeDropdown'), strikes, ceStrike);
     oipRSPopulateDropdown(document.getElementById('oipRSPEStrikeDropdown'), strikes, peStrike);
 
-    // A strike change reloads BOTH charts — they always show the same strikes.
-    // The main one goes through the shared request (new strikes land in the
-    // URL oi_profile.js builds); the 5m one still fetches on its own.
-    const onStrikeChange = () => { oipRSRequestReload(); oipRSFixed5mLoadCandles(true); };
+    // A strike change reloads the chart through the shared request — the new
+    // strikes land in the URL oi_profile.js builds.
+    const onStrikeChange = () => oipRSRequestReload();
     document.getElementById('oipRSCEStrikeDropdown')?.addEventListener('change', onStrikeChange);
     document.getElementById('oipRSPEStrikeDropdown')?.addEventListener('change', onStrikeChange);
-
-    const fixed5mRefreshBtn = document.getElementById('oipRSFixed5mRefreshBtn');
-    fixed5mRefreshBtn?.addEventListener('click', () => oipRSFixed5mRefresh(fixed5mRefreshBtn));
 
     oipRSInitOrderButtons();
     oipRSInitRayTool();
@@ -1148,7 +924,6 @@ async function oipRSInit() {
     // request went out without them — kick one more off now to pick them up.
     // Rays are restored by the render that follows (see oipRSRenderFromMain).
     oipRSRequestReload();
-    await oipRSFixed5mLoadCandles(true);
 }
 
 document.addEventListener('DOMContentLoaded', () => { oipRSInit(); });

@@ -36,6 +36,13 @@ off), the symbol returns to pending_scan so the next morning's scan can find
 a fresh signal — mirrors the backtest's "scanning for the next signal
 resumes on the very next bar".
 
+Every watching/open symbol is marked to market on each tick (`ltp`, plus
+`unrealized_pnl` while in a position) and a closed trade leaves its
+`last_entry_*` / `last_exit_*` / `last_pnl` behind, so the Symbol Status grid
+can present a paper trade the same way a live one would read: which monthly
+contract it is on (`future_month`), entry/exit times, the future's current
+value and the running P&L.
+
 The daily scan (one per symbol per day, only for symbols not already
 watching/in_position — "only one pending order at a time", same as the
 backtest) runs once each morning off the most recently COMPLETED daily
@@ -56,6 +63,7 @@ This module is PAPER-TRADE ONLY — no real broker orders are ever placed.
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -102,6 +110,18 @@ _FYERS_INDICES = {
 _BSE_UNDERLYINGS = {'SENSEX'}
 
 _instances: Dict[str, 'EmaConfluenceAlgo'] = {}
+
+# Monthly futures contract tail — 'NSE:NHPC26AUGFUT' / 'NFO:NHPC26AUGFUT'.
+# Fyers tokens and Kite tradingsymbols share the {ROOT}{YY}{MMM}FUT shape.
+_CONTRACT_RE = re.compile(r'(\d{2})([A-Z]{3})FUT$')
+
+
+def _contract_month_label(token: Any) -> Optional[str]:
+    """'NSE:NHPC26AUGFUT' -> 'AUG 2026' — which monthly contract the paper
+    trade is on. None when the token isn't a monthly future (the UI then
+    falls back to showing the raw token)."""
+    m = _CONTRACT_RE.search(str(token or '').upper())
+    return f"{m.group(2)} 20{m.group(1)}" if m else None
 
 
 def get_instance(username: str) -> Optional['EmaConfluenceAlgo']:
@@ -264,13 +284,29 @@ class EmaConfluenceAlgo:
             return None, 1
 
     def _ensure_future_token(self, provider: Any, is_fyers: bool, symbol: str, s: Dict[str, Any]) -> Optional[Any]:
-        if s.get('future_token'):
+        today_str = date.today().isoformat()
+        # The cached token names one specific monthly contract, so it goes dead
+        # at that month's expiry — re-resolve once a day so a symbol that is
+        # merely watching always arms against the current front-month future.
+        # An OPEN paper position stays pinned to the contract it was entered
+        # on: rolling mid-trade would re-price the position against a different
+        # instrument than the one the entry was filled on.
+        fresh = s.get('future_resolved_on') == today_str or s.get('phase') == 'in_position'
+        if s.get('future_token') and fresh:
+            # Label a token resolved before this field existed (e.g. a position
+            # already open when the app restarted) off the token itself — a
+            # pinned contract must not be re-resolved just to name its month.
+            if not s.get('future_month'):
+                s['future_month'] = _contract_month_label(s['future_token'])
             return s['future_token']
         token, lot_size = self._resolve_future(provider, is_fyers, symbol)
         if token:
-            s['future_token'] = token
-            s['lot_size'] = lot_size
-        return token
+            s['future_token']        = token
+            s['lot_size']            = lot_size
+            s['future_month']        = _contract_month_label(token)
+            s['future_resolved_on']  = today_str
+        # A failed re-resolution keeps yesterday's token rather than going dark.
+        return token or s.get('future_token')
 
     def _get_future_ltp_batch(self, provider: Any, tokens: Dict[str, Any]) -> Dict[str, float]:
         uniq_tokens = list({t for t in tokens.values() if t})
@@ -387,6 +423,8 @@ class EmaConfluenceAlgo:
         s['qty']           = qty
         s['entry_time']    = datetime.now().isoformat()
         s['phase']         = 'in_position'
+        s['ltp']            = entry_price   # marked to market from the next tick on
+        s['unrealized_pnl'] = 0.0
         self.log.info(
             f"[PAPER] {symbol}: ENTERED {direction.upper()} future @ {entry_price} "
             f"sl={s['sl_level']} tgt={target_level} qty={qty}"
@@ -407,18 +445,31 @@ class EmaConfluenceAlgo:
             'entry_time': s.get('entry_time', ''), 'exit_time': datetime.now().isoformat(),
         }
         self._append_history(record)
+        # Carried through the reset below so the Symbol Status grid can still
+        # show the round trip (entry time / exit time / realised P&L) for a
+        # symbol that has already been in and out.
+        s['last_entry_time']  = s.get('entry_time')
+        s['last_entry_price'] = entry_price
+        s['last_exit_time']   = record['exit_time']
+        s['last_exit_price']  = record['exit_price']
+        s['last_exit_reason'] = reason
+        s['last_pnl']         = record['pnl']
         self.log.info(f"[PAPER] {symbol}: EXIT ({reason}) @ {exit_price}, P&L ₹{record['pnl']}")
 
+    # Survives _reset_for_next_scan: the resolved contract (which doesn't
+    # change intraday, so a same-symbol re-arm needn't re-resolve it) and the
+    # last closed paper trade's audit trail.
+    _KEEP_ON_RESET = (
+        'future_token', 'lot_size', 'future_month', 'future_resolved_on',
+        'last_entry_time', 'last_entry_price', 'last_exit_time',
+        'last_exit_price', 'last_exit_reason', 'last_pnl',
+    )
+
     def _reset_for_next_scan(self, s: Dict[str, Any]) -> None:
-        future_token = s.get('future_token')
-        lot_size = s.get('lot_size')
+        kept = {k: s[k] for k in self._KEEP_ON_RESET if k in s}
         s.clear()
         s['phase'] = 'pending_scan'
-        # Future resolution doesn't change intraday — keep it cached across
-        # a same-symbol re-arm so it's not re-resolved on every new setup.
-        if future_token:
-            s['future_token'] = future_token
-            s['lot_size'] = lot_size
+        s.update(kept)
 
     # ── Main loop ────────────────────────────────────────────────────────
 
@@ -447,6 +498,19 @@ class EmaConfluenceAlgo:
                 tokens[symbol] = token
 
         ltps = self._get_future_ltp_batch(provider, tokens)
+
+        # Mark every armed/open symbol to market before acting on it, so the
+        # status page can show the future's current value and — for an open
+        # paper position — its running P&L, exactly like a live trade would.
+        for symbol, s in {**watching, **inpos}.items():
+            ltp = ltps.get(symbol)
+            if ltp is None:
+                continue
+            s['ltp']      = round(float(ltp), 2)
+            s['ltp_time'] = datetime.now().isoformat()
+            if s.get('phase') == 'in_position' and s.get('entry_price') and s.get('qty'):
+                move = (ltp - s['entry_price']) if s['direction'] == 'Long' else (s['entry_price'] - ltp)
+                s['unrealized_pnl'] = round(move * s['qty'], 2)
 
         for symbol, s in watching.items():
             ltp = ltps.get(symbol)

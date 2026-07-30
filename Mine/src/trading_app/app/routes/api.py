@@ -9148,11 +9148,26 @@ def oi_profile_candles() -> EndpointResponse:
         # and fetch its volume in parallel, to overlay real volume on the chart.
         future_fut_token, future_fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, symbol)
         future_future_vol = executor.submit(fetch_task, future_fut_token, from_date, to_date, fetch_interval) if future_fut_token else None
+        # Bank Nifty's future volume alongside the selected symbol's, so the chart
+        # can overlay both without a second round-trip. When BANKNIFTY *is* the
+        # selected symbol the two resolve to the same contract — reuse the future
+        # above rather than fetching identical candles twice.
+        if symbol == 'BANKNIFTY':
+            bnf_fut_token, bnf_fut_symbol = future_fut_token, future_fut_symbol
+            future_bnf_vol = future_future_vol
+        else:
+            bnf_fut_token, bnf_fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, 'BANKNIFTY')
+            future_bnf_vol = executor.submit(fetch_task, bnf_fut_token, from_date, to_date, fetch_interval) if bnf_fut_token else None
         # Fixed 24000 Monthly's own volume — fetched separately since its candles
         # are always fixed_interval (5-minute), which can differ from the main
         # interval above; reusing future_volume would fail to time-match once
         # they diverge (see fixed_future_volume below).
         future_fixed_vol = executor.submit(fetch_task, future_fut_token, opt_from_date, to_date, fixed_fetch_interval) if future_fut_token else None
+        # Bank Nifty on that same fixed grid, same reuse rule as above.
+        if symbol == 'BANKNIFTY':
+            future_fixed_bnf_vol = future_fixed_vol
+        else:
+            future_fixed_bnf_vol = executor.submit(fetch_task, bnf_fut_token, opt_from_date, to_date, fixed_fetch_interval) if bnf_fut_token else None
         # Also fetch 30-second candles in parallel — needed by the "2nd 30-second
         # candle" box indicator on every timeframe it supports (up to 30min), not
         # just 1-minute; day[1] of a coarser interval is a completely different
@@ -9238,11 +9253,26 @@ def oi_profile_candles() -> EndpointResponse:
             future_vol_candles = format_candles(future_vol_raw, ist_offset, interval)
             future_volume = [{'time': c['time'], 'volume': c['volume']} for c in future_vol_candles]
 
+        # Same shape/time grid as future_volume above — see the BANKNIFTY block
+        # in the fetch section. Identical list when BANKNIFTY is the selected
+        # symbol (same future, same submitted task).
+        banknifty_volume = []
+        if future_bnf_vol is not None:
+            bnf_vol_raw = future_bnf_vol.result()
+            bnf_vol_candles = format_candles(bnf_vol_raw, ist_offset, interval)
+            banknifty_volume = [{'time': c['time'], 'volume': c['volume']} for c in bnf_vol_candles]
+
         fixed_future_volume = []
         if future_fixed_vol is not None:
             fixed_future_vol_raw = future_fixed_vol.result()
             fixed_future_vol_candles = format_candles(fixed_future_vol_raw, ist_offset, fixed_interval)
             fixed_future_volume = [{'time': c['time'], 'volume': c['volume']} for c in fixed_future_vol_candles]
+
+        fixed_banknifty_volume = []
+        if future_fixed_bnf_vol is not None:
+            fixed_bnf_vol_raw = future_fixed_bnf_vol.result()
+            fixed_bnf_vol_candles = format_candles(fixed_bnf_vol_raw, ist_offset, fixed_interval)
+            fixed_banknifty_volume = [{'time': c['time'], 'volume': c['volume']} for c in fixed_bnf_vol_candles]
 
         # Submit DB max_pain query now so it runs in parallel with CE/PE candle collection.
         def _fetch_max_pain_rows(_symbol, _days, _now, _target_dates):
@@ -9460,8 +9490,8 @@ def oi_profile_candles() -> EndpointResponse:
         # ── 6. Update Cache and Return ────────────────────────────────
         # A token was resolved but its candle list still came back empty. Track
         # this per-leg so we neither report false success nor cache the broken
-        # result below (see oipRSLoadCandles / oipRSFixed5mLoadCandles in
-        # oi_profile_round_strike.js, whose empty-candle charts this masked).
+        # result below (see oipRSLoadCandles in oi_profile_round_strike.js,
+        # whose empty-candle charts this masked).
         # FyersDataServiceAdapter.historical_data returns [] rather than raising
         # on every failure path, so the cause comes from _empty_fetch_reasons
         # (populated in fetch_task) instead of being guessed at here.
@@ -9502,6 +9532,8 @@ def oi_profile_candles() -> EndpointResponse:
             'candles': candles,
             'future_volume': future_volume,
             'future_symbol': future_fut_symbol,
+            'banknifty_volume': banknifty_volume,
+            'banknifty_symbol': bnf_fut_symbol,
             'ce_opt_candles': ce_candles,
             'pe_opt_candles': pe_candles,
             'fixed_ce_candles': fixed_ce_candles,
@@ -9509,6 +9541,7 @@ def oi_profile_candles() -> EndpointResponse:
             'fixed_ce_symbol': fixed_ce_symbol,
             'fixed_pe_symbol': fixed_pe_symbol,
             'fixed_future_volume': fixed_future_volume,
+            'fixed_banknifty_volume': fixed_banknifty_volume,
             'rs_ce_candles': rs_ce_candles,
             'rs_pe_candles': rs_pe_candles,
             'rs_ce_symbol': rs_ce_symbol,
@@ -11189,9 +11222,11 @@ def _sm_save_live_configs(configs: list) -> None:
 def _sm_compute_today_rankings(index_name: str):
     """Return today's momentum rankings using avg(3M, 6M, 9M) — same as Swing Trade tab.
 
-    Returns (ranked_list, close_df).  ranked_list is sorted descending by score
-    and each entry has: symbol, yf_sym, score, rank, price.
-    Returns (None, None) on data failure.
+    Returns (ranked_list, close_df, no_data).  ranked_list is sorted descending by
+    score and each entry has: symbol, yf_sym, score, rank, price.  no_data is the
+    set of symbols that had no usable price history this run — they are NOT ranked,
+    and callers must treat them as "unknown", never as "ranked last".
+    Returns (None, None, set()) on data failure.
     """
     import math
     import yfinance as yf
@@ -11203,17 +11238,40 @@ def _sm_compute_today_rankings(index_name: str):
     today = datetime.today().date()
     start = today - timedelta(days=310)
 
-    raw = yf.download(yf_symbols, start=str(start),
-                      end=str(today + timedelta(days=1)),
-                      interval='1d', auto_adjust=True, progress=False, threads=False)
-    if raw is None or raw.empty:
-        return None, None
+    def _download(symbols):
+        raw = yf.download(symbols, start=str(start),
+                          end=str(today + timedelta(days=1)),
+                          interval='1d', auto_adjust=True, progress=False, threads=False)
+        if raw is None or raw.empty:
+            return None
+        return (raw[['Close']].copy().rename(columns={'Close': symbols[0]})
+                if len(symbols) == 1 else raw['Close'].copy())
 
-    close_df = (raw[['Close']].copy().rename(columns={'Close': yf_symbols[0]})
-                if len(yf_symbols) == 1 else raw['Close'].copy())
+    close_df = _download(yf_symbols)
+    if close_df is None:
+        return None, None, set()
     close_df = close_df.dropna(how='all')
     if close_df.empty:
-        return None, None
+        return None, None, set()
+
+    # A batch download of 250–500 tickers intermittently comes back with an empty
+    # column for a handful of them. Retry just those once — otherwise a transient
+    # gap silently drops the stock from the ranking, which shifts every rank below
+    # it and makes a holding look like it lost its rank entirely.
+    missing = [y for y in yf_symbols
+               if y not in close_df.columns or not close_df[y].notna().any()]
+    if missing:
+        retry_df = _download(missing)
+        if retry_df is not None:
+            for y in missing:
+                if y in retry_df.columns and retry_df[y].notna().any():
+                    close_df[y] = retry_df[y]
+            close_df = close_df.sort_index()
+
+    # Carry the last known close forward over short gaps so a symbol that has not
+    # printed today's bar yet (or missed a session) still gets priced off its own
+    # latest close instead of dropping out on a NaN.
+    close_df = close_df.ffill(limit=5)
 
     def _lookup(days_ago):
         tgt  = pd.Timestamp(today - timedelta(days=days_ago))
@@ -11239,14 +11297,17 @@ def _sm_compute_today_rankings(index_name: str):
             return None
         return (pf - bf) / bf * 100
 
-    ranked = []
+    ranked  = []
+    no_data = set()
     for sym, yf_sym in zip(stocks, yf_symbols):
         price = latest.get(yf_sym)
         try:
             pf = float(price)
         except (TypeError, ValueError):
+            no_data.add(sym)
             continue
         if price is None or math.isnan(pf):
+            no_data.add(sym)
             continue
         if pf > 10_000:
             continue
@@ -11257,6 +11318,7 @@ def _sm_compute_today_rankings(index_name: str):
         # Require at least 2 of 3 periods so ranking stays meaningful
         avail = [r for r in (r3, r6, r9) if r is not None]
         if len(avail) < 2:
+            no_data.add(sym)
             continue
         ranked.append({'symbol': sym, 'yf_sym': yf_sym,
                        'score': sum(avail) / len(avail), 'price': round(pf, 2)})
@@ -11265,21 +11327,28 @@ def _sm_compute_today_rankings(index_name: str):
     for i, s in enumerate(ranked):
         s['rank'] = i + 1
 
-    return ranked, close_df
+    if no_data:
+        logger.warning('SM rankings (%s): no usable history for %d symbol(s): %s',
+                       index_name, len(no_data), ', '.join(sorted(no_data)))
+
+    return ranked, close_df, no_data
 
 
-def _sm_rankings_cached(index_name: str):
-    """Return today's rankings, using a 15-min in-memory cache to avoid repeated full downloads."""
+def _sm_rankings_cached(index_name: str, with_no_data: bool = False):
+    """Return today's rankings, using a 15-min in-memory cache to avoid repeated full downloads.
+
+    With with_no_data=True returns (ranked, no_data) so callers can tell a symbol
+    that genuinely fell down the ranking apart from one whose data failed to load.
+    """
     now = _time.monotonic()
     entry = _sm_rankings_cache.get(index_name)
-    if entry:
-        ts, ranked = entry
-        if now - ts < _SM_RANKINGS_TTL:
-            return ranked
-    ranked, _ = _sm_compute_today_rankings(index_name)
-    if ranked:
-        _sm_rankings_cache[index_name] = (now, ranked)
-    return ranked
+    if entry and now - entry[0] < _SM_RANKINGS_TTL:
+        ranked, no_data = entry[1], entry[2]
+    else:
+        ranked, _, no_data = _sm_compute_today_rankings(index_name)
+        if ranked:
+            _sm_rankings_cache[index_name] = (now, ranked, no_data)
+    return (ranked, no_data) if with_no_data else ranked
 
 
 @api_bp.route('/algo/swing-momentum/configs', methods=['GET'])
@@ -11688,7 +11757,7 @@ def sm_live_configs_add():
     investment = float(body.get('investment', 100000))
 
     # Immediately go live using today's momentum rankings (no historical simulation)
-    ranked, _ = _sm_compute_today_rankings(index)
+    ranked, _, _ = _sm_compute_today_rankings(index)
     cash         = investment
     live_entries = []
     for s in (ranked or []):
@@ -11822,14 +11891,22 @@ def _sm_compute_rebalance(config: dict):
     entries   = config.get('live_entries') or []
     exit_rank = config['exit_rank']
 
-    ranked = _sm_rankings_cached(config['index'])
+    ranked, no_data = _sm_rankings_cached(config['index'], with_no_data=True)
     if not ranked:
         return None, None, 'Rankings unavailable — try again in a moment'
     rank_by_sym = {s['symbol']: s for s in ranked}
     held        = {e['symbol'] for e in entries}
 
+    # Only sell on a rank we actually computed. A holding missing from the ranking
+    # has unknown momentum, not bad momentum — selling it would act on a data gap.
     sell_entries = [e for e in entries
-                    if rank_by_sym.get(e['symbol'], {}).get('rank', 9999) > exit_rank]
+                    if e['symbol'] in rank_by_sym
+                    and rank_by_sym[e['symbol']]['rank'] > exit_rank]
+    if no_data:
+        stale = sorted(no_data & held)
+        if stale:
+            logger.warning('SM rebalance %s: skipping %s — no momentum data today',
+                           config.get('id'), ', '.join(stale))
     if not sell_entries:
         return [], [], None
 
@@ -12083,7 +12160,7 @@ def sm_live_go_live(config_id):
         today   = datetime.today().date()
         top_n   = config['top_n']
 
-        ranked, _ = _sm_compute_today_rankings(config['index'])
+        ranked, _, _ = _sm_compute_today_rankings(config['index'])
         if not ranked:
             return jsonify({'success': False, 'error': 'No price data returned for index'}), 502
 
@@ -12321,12 +12398,15 @@ def sm_live_rankings(config_id):
         rank_by_sym = {s['symbol']: s for s in (ranked or [])}
         held_syms   = {e['symbol'] for e in live_entries}
 
-        # Rank + momentum score per holding
+        # Rank + momentum score per holding. unranked=True means the momentum data
+        # for that symbol failed to load — the UI shows that rather than a bare dash,
+        # and it is deliberately kept out of the sell preview.
         holding_ranks = {
             e['symbol']: {
                 'current_rank':   rank_by_sym.get(e['symbol'], {}).get('rank'),
-                'momentum_score': round(rank_by_sym.get(e['symbol'], {}).get('score', 0), 2)
+                'momentum_score': round(rank_by_sym[e['symbol']]['score'], 2)
                                   if e['symbol'] in rank_by_sym else None,
+                'unranked':       e['symbol'] not in rank_by_sym,
             }
             for e in live_entries
         }
@@ -12334,13 +12414,15 @@ def sm_live_rankings(config_id):
         sell_preview = [
             {
                 'symbol':       e['symbol'],
-                'current_rank': rank_by_sym.get(e['symbol'], {}).get('rank', '?'),
-                'score':        round(rank_by_sym.get(e['symbol'], {}).get('score', 0), 2),
+                'current_rank': rank_by_sym[e['symbol']]['rank'],
+                'score':        round(rank_by_sym[e['symbol']]['score'], 2),
                 'qty':          e['qty'],
             }
             for e in live_entries
-            if rank_by_sym.get(e['symbol'], {}).get('rank', 9999) > exit_rank
+            if e['symbol'] in rank_by_sym
+            and rank_by_sym[e['symbol']]['rank'] > exit_rank
         ]
+        unranked_holdings = sorted(held_syms - set(rank_by_sym)) if ranked else []
         buy_preview = [
             {
                 'symbol':       s['symbol'],
@@ -12353,11 +12435,12 @@ def sm_live_rankings(config_id):
         ][:top_n]
 
         return jsonify({
-            'success':          True,
-            'holding_ranks':    holding_ranks,
-            'sell_preview':     sell_preview,
-            'buy_preview':      buy_preview,
-            'rebalance_needed': bool(sell_preview or buy_preview),
+            'success':            True,
+            'holding_ranks':      holding_ranks,
+            'sell_preview':       sell_preview,
+            'buy_preview':        buy_preview,
+            'unranked_holdings':  unranked_holdings,
+            'rebalance_needed':   bool(sell_preview or buy_preview),
         })
     except Exception as e:
         logger.exception(f'SM rankings error for config {config_id}: {e}')

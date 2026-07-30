@@ -111,7 +111,14 @@ function _tmfRenderStocks() {
     if (!body) return;
     const showAll = document.getElementById('tmfShowAllStocks')?.checked;
 
-    let rows = Object.entries(_tmfStocksData).map(([symbol, s]) => ({ symbol, ...s }));
+    let rows = Object.entries(_tmfStocksData).map(([symbol, s]) => ({
+        symbol, ...s,
+        // Live mark while the trade is open; once it has closed, the price it
+        // went out at — so entry, value and P&L on a finished row reconcile.
+        value_disp: s.ltp ?? s.exit_price ?? null,
+        // Running P&L while the position is open, realised once it has closed.
+        live_pnl: s.phase === 'in_position' ? s.unrealized_pnl : s.realized_pnl,
+    }));
     if (!showAll) {
         rows = rows.filter(r => !_TMF_QUIET_PHASES.has(r.phase));
     }
@@ -134,7 +141,15 @@ function _tmfRenderStocks() {
             { key: 'sl_level', label: 'SL', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
             { key: 'entry_price', label: 'Entry', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
             { key: 'target_level', label: 'Target', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
+            { key: 'value_disp', label: 'Current Value', align: 'right',
+              format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
+            { key: 'live_pnl', label: 'Current P&L', align: 'right', strong: true,
+              format: v => v == null ? '—' : DataGrid.inr(v), tone: DataGrid.sign },
             { key: 'qty', label: 'Qty', align: 'right', format: v => v ?? '—' },
+            { key: 'entry_time', label: 'Entry Time', format: v => v ? _tmfFmtTime(v) : '—' },
+            { key: 'exit_time', label: 'Exit Time',
+              format: (v, r) => v ? _tmfFmtTime(v) : (r.phase === 'in_position' ? 'Open' : '—'),
+              tone: (v, r) => r.phase === 'in_position' ? 'warn' : undefined },
             { key: 'exit_reason', label: 'Reason', format: v => v || '—' },
         ],
     });

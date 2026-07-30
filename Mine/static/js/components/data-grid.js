@@ -38,6 +38,8 @@
               options above can't express — caller must escape its own
               interpolations. Skips format/tone/badge.
      cellClass Extra class(es) on the <td>, or (value, row) => string.
+     title    Tooltip on the <td>, or (value, row) => string. Escaped. Applies
+              to `render` cells too — it sits on the cell, not its contents.
      thClass  Extra class(es) on this column's <th> — for a page accenting
               one header (a "LAST price" column, say). Static string only:
               headers render once per grid, not per row.
@@ -170,9 +172,14 @@
         const extra = resolve(col.cellClass, value, row, i);
         if (extra) cls.push(extra);
 
+        // Tooltip belongs to the cell, so it is applied ahead of the render/
+        // format split and survives both.
+        const tip   = resolve(col.title, value, row, i);
+        const title = tip ? ` title="${escape(tip)}"` : '';
+
         // `render` bypasses the formatting pipeline entirely.
         if (col.render) {
-            return `<td class="${cls.join(' ')}">${col.render(value, row, i)}</td>`;
+            return `<td class="${cls.join(' ')}"${title}>${col.render(value, row, i)}</td>`;
         }
 
         const text = col.format
@@ -184,13 +191,13 @@
             const inner = isBlank(value)
                 ? EM_DASH
                 : badgeHtml(text, resolve(col.badge, value, row, i));
-            return `<td class="${cls.join(' ')}">${inner}</td>`;
+            return `<td class="${cls.join(' ')}"${title}>${inner}</td>`;
         }
 
         const tone = resolve(col.tone, value, row, i);
         if (tone) cls.push('dg-' + (tone === 'muted' ? 'muted' : tone === 'warn' ? 'warn' : tone));
 
-        return `<td class="${cls.join(' ')}">${escape(text)}</td>`;
+        return `<td class="${cls.join(' ')}"${title}>${escape(text)}</td>`;
     }
 
     // ── Footer ───────────────────────────────────────────────────────

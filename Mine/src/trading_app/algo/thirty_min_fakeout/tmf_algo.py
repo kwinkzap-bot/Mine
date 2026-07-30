@@ -50,6 +50,14 @@ Gating (see env/Mine.env):
   TMF_EXIT_HOUR / TMF_EXIT_MINUTE      — cutoff for the Time Exit square-off
                                           (default 15 / 18, same as backtest).
 
+Every stock with something live on it (watching / pending_entry /
+in_position) is marked to market on each tick — `ltp` plus `unrealized_pnl`
+across the open broker legs — and a closed leg leaves `exit_time`,
+`exit_price`, `exit_reason` and a running `realized_pnl` on the stock's own
+state, so the Stock Status grid can show a trade end to end. Those numbers
+are display only: entries and exits are driven by the real broker orders,
+never by them.
+
 Known live/backtest divergence: the backtest checks a bar's High/Low for
 SL/Target/trigger crossings (catches any touch within the bar); the live
 watch loop instead polls last-traded-price every _POLL_SECS seconds — a
@@ -473,7 +481,34 @@ class TMFAlgo:
             'sl_order_id': bp.get('sl_order_id'), 'target_order_id': bp.get('target_order_id'),
         }
         self._append_history(record)
+        # Mirror the closed leg onto the stock's own state too (the history file
+        # is a separate grid) so Stock Status can show the exit time, the price
+        # it went out at, and the realised P&L — summed, because a stock can be
+        # traded across several broker slots and each leg closes on its own.
+        s['exit_time']    = record['exit_time']
+        s['exit_price']   = record['exit_price']
+        s['exit_reason']  = reason
+        s['realized_pnl'] = round(float(s.get('realized_pnl') or 0) + record['pnl'], 2)
+        if not any(bp.get('filled') and not bp.get('closed')
+                   for bp in s.get('broker_positions', [])):
+            s.pop('unrealized_pnl', None)   # nothing left open to mark
         logger.info(f"[TMF] {symbol}: closed ({reason}) @ {exit_price}, P&L ₹{record['pnl']}")
+
+    def _mark_to_market(self, s: Dict[str, Any], ltp: float) -> None:
+        """Stamp the stock's current traded price on its state — and, while a
+        position is actually open, the running P&L across every live broker leg
+        — so the Stock Status grid can show an open trade the way the broker's
+        own position book would. Display only: exits stay driven by the real
+        SL/Target orders sitting at the broker, never by this number."""
+        s['ltp']      = round(float(ltp), 2)
+        s['ltp_time'] = datetime.now().isoformat()
+        legs = [bp for bp in s.get('broker_positions', [])
+                if bp.get('filled') and not bp.get('closed')]
+        if s.get('phase') == 'in_position' and legs:
+            sign = -1 if s.get('direction') == 'short' else 1
+            s['unrealized_pnl'] = round(sum(
+                sign * (ltp - bp['entry_price']) * bp['filled_qty'] for bp in legs
+            ), 2)
 
     def _get_ltp_one(self, svc: Any, symbol: str) -> Optional[float]:
         try:
@@ -709,8 +744,24 @@ class TMFAlgo:
                     logger.warning(f"[TMF] {symbol}: scan failed: {e}")
 
         watching_syms = [sym for sym, s in stocks.items() if s['phase'] == 'watching']
+        pending_syms  = [sym for sym, s in stocks.items() if s['phase'] == 'pending_entry']
+        inpos_syms    = [sym for sym, s in stocks.items() if s['phase'] == 'in_position']
+
+        # One batched LTP call covering every stock with something live on it.
+        # `watching` needs it for the trigger/SL checks below; pending_entry and
+        # in_position need it purely so Stock Status can show the stock's current
+        # value and the running P&L on an open position.
+        mark_syms = watching_syms + pending_syms + inpos_syms
+        ltps = self._get_ltp_batch(provider, mark_syms, is_fyers) if mark_syms else {}
+        for symbol in mark_syms:
+            ltp = ltps.get(symbol)
+            if ltp is not None:
+                try:
+                    self._mark_to_market(stocks[symbol], ltp)
+                except Exception as e:
+                    logger.warning(f"[TMF] {symbol}: mark-to-market failed: {e}")
+
         if watching_syms and now_mins < cutoff_mins:
-            ltps = self._get_ltp_batch(provider, watching_syms, is_fyers)
             for symbol in watching_syms:
                 ltp = ltps.get(symbol)
                 if ltp is None:
@@ -730,6 +781,9 @@ class TMFAlgo:
                 except Exception as e:
                     logger.warning(f"[TMF] {symbol}: trigger check failed: {e}")
 
+        # Recomputed, not reused from above: the trigger loop just moved any
+        # stock that fired into pending_entry, and its fill has to be checked
+        # in this same tick rather than only on the next one.
         pending_syms = [sym for sym, s in stocks.items() if s['phase'] == 'pending_entry']
         inpos_syms   = [sym for sym, s in stocks.items() if s['phase'] == 'in_position']
         if (pending_syms or inpos_syms) and self._broker_list:

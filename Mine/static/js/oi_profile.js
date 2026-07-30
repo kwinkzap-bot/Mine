@@ -8,12 +8,14 @@
 /* ── State ────────────────────────────────────────────────── */
 let oipOIChart = null;
 let oipOISeries = null;
-let oipVolumeSeries = null;
+let oipVolumeSeries = null, oipBnfVolumeSeries = null;
 // Future-volume histograms on the Opt Prem charts — created in oi_profile_init.js
 // (oipInitSecondaryCharts), populated in oipRefreshLocalView/oipUpdateFixedChart
-// below, visibility driven by the Opt Indicator popup's single "Volume (Fut)"
-// checkbox (see oipSyncOptVolumeVisibility).
+// below, visibility driven by the Opt Indicator popup's single "Nifty Vol Fut"
+// checkbox (see oipSyncOptVolumeVisibility). The Bnf* twins are the Banknifty
+// overlay — same charts, same price scales, own checkbox and colour pair.
 let oipIntrinsicVolumeSeries = null, oipCEVolumeSeries = null, oipPEVolumeSeries = null, oipFixedVolumeSeries = null;
+let oipIntrinsicBnfVolumeSeries = null, oipCEBnfVolumeSeries = null, oipPEBnfVolumeSeries = null, oipFixedBnfVolumeSeries = null;
 let oipOIRayTool = null;
 let oipIntrinsicChart = null;
 let oipIntrinsicSeries = null;
@@ -208,6 +210,7 @@ function oipInitElems() {
     oipElems.showCpr = document.getElementById('oipShowCpr');
     oipElems.showEMA = document.getElementById('oipShowEMA');
     oipElems.showVolume = document.getElementById('oipShowVolume');
+    oipElems.showBnfVolume = document.getElementById('oipShowBnfVolume');
     oipElems.autoHL = document.getElementById('oipAutoHL');
     oipElems.chartWrap = document.getElementById('oipChartWrap');
     oipElems.canvas = document.getElementById('oipOICanvas');
@@ -328,33 +331,27 @@ function oipSyncVwapVisibility() {
     ].forEach(s => { try { s?.applyOptions({ visible: optVwap }); } catch (e) {} });
 }
 
+// Main OI chart's two volume overlays. Same ordering workaround as
+// oipSyncVwapVisibility: oipInitCharts runs BEFORE the popup restores persisted
+// checkbox state, so the series are created with default visibility and have to
+// be re-synced once the real checkbox values are in. Without this a Banknifty
+// overlay left switched on would come back invisible after a reload.
+function oipSyncMainVolumeVisibility() {
+    try { oipVolumeSeries?.applyOptions({ visible: oipElems.showVolume?.checked ?? true }); } catch (e) {}
+    try { oipBnfVolumeSeries?.applyOptions({ visible: oipElems.showBnfVolume?.checked ?? false }); } catch (e) {}
+}
+
 // Future-volume histograms on the Opt Prem charts (Combined/Intrinsic, CE Only,
 // PE Only, Fixed 24000 Monthly) — all four driven by ONE checkbox in the Opt
 // Indicator popup, same "single checkbox, multiple charts" pattern as VWAP above.
+// Nifty and Banknifty are separate overlays with a checkbox each.
 function oipSyncOptVolumeVisibility() {
     const optVolume = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
     [oipIntrinsicVolumeSeries, oipCEVolumeSeries, oipPEVolumeSeries, oipFixedVolumeSeries]
         .forEach(s => { try { s?.applyOptions({ visible: optVolume }); } catch (e) {} });
-}
-
-// Builds {time, value, color} histogram points from the backend's future_volume
-// array, tinted by refCandles' own up/down direction (the option/index candles
-// actually shown on that chart) — refCandles and futureVolume share the same
-// interval-driven time-bucket grid, so matching by exact time key is safe.
-// Bars are only emitted where refCandles has a REAL (non-whitespace) candle,
-// so gaps don't render a misleading zero-volume bar.
-function _oipVolPointsFromFutureVolume(futureVolume, refCandles) {
-    const futVolMap = new Map((futureVolume || []).map(v => [Number(v.time), Number(v.volume || 0)]));
-    if (!futVolMap.size) return [];
-    const upColor = '#1b998180', downColor = '#f2364580';
-    const points = [];
-    (refCandles || []).forEach(c => {
-        if (!c || c.open === undefined || c.close === undefined) return; // skip whitespace-only bars
-        const t = Number(c.time);
-        if (!futVolMap.has(t)) return;
-        points.push({ time: t, value: futVolMap.get(t), color: Number(c.close) >= Number(c.open) ? upColor : downColor });
-    });
-    return points;
+    const optBnfVolume = document.getElementById('oipShowBnfVolumeOpt')?.checked ?? false;
+    [oipIntrinsicBnfVolumeSeries, oipCEBnfVolumeSeries, oipPEBnfVolumeSeries, oipFixedBnfVolumeSeries]
+        .forEach(s => { try { s?.applyOptions({ visible: optBnfVolume }); } catch (e) {} });
 }
 
 // Fixed 24000-strike chart's own reference lines — each has its own checkbox
@@ -376,6 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Charts are built before the popup restores persisted checkbox state, so the
     // VWAP/CVWAP/PVWAP series are created with stale (default) visibility. Re-sync now.
     oipSyncVwapVisibility();
+    oipSyncMainVolumeVisibility();
     oipSyncOptVolumeVisibility();
     oipSyncFixedChartVisibility();
     oipUpdateOptEmaVisibility();
@@ -510,6 +508,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     oipElems.showVolume?.addEventListener('change', (e) => {
         oipVolumeSeries?.applyOptions({ visible: e.target.checked });
+    });
+
+    oipElems.showBnfVolume?.addEventListener('change', (e) => {
+        oipBnfVolumeSeries?.applyOptions({ visible: e.target.checked });
     });
 
     [oipElems.showEma9, oipElems.showEma20, oipElems.showEma50, oipElems.showEma100, oipElems.showEma200].forEach(el => {
@@ -771,22 +773,16 @@ function oipInitCharts() {
         });
         lwBringToFront(oipOISeries);
 
-        // Volume histogram — index itself has no real traded volume, so this
-        // is sourced from the current-expiry NIFTY future (see future_volume
-        // in the /api/oi-profile/candles response). Own price scale pinned to
-        // the bottom of the same pane so it never competes with candle prices.
-        oipVolumeSeries = oipOIChart.addSeries(LightweightCharts.HistogramSeries, {
-            priceFormat: { type: 'volume' },
-            priceScaleId: 'oipVolume',
-            lastValueVisible: false,
-            priceLineVisible: false,
-            crosshairMarkerVisible: false,
-            visible: oipElems.showVolume?.checked ?? true
-        });
-        oipOIChart.priceScale('oipVolume').applyOptions({
-            scaleMargins: { top: 0.8, bottom: 0 },
-            visible: false
-        });
+        // Volume histograms — the index itself has no real traded volume, so
+        // these come from futures: the selected symbol's own current-expiry
+        // contract, plus BANKNIFTY's as an optional comparison overlay (see
+        // future_volume / banknifty_volume in the /api/oi-profile/candles
+        // response). Banknifty is off by default — a comparison aid, not part
+        // of the chart's default read.
+        [oipVolumeSeries, oipBnfVolumeSeries] = oipAddVolumeSeriesPair(
+            oipOIChart, 'oipVolume',
+            oipElems.showVolume?.checked ?? true,
+            oipElems.showBnfVolume?.checked ?? false);
 
         // Horizontal Ray drawing tool — `timeframe` is a getter (not the plain
         // string the Opt Prem charts pass) because oipInterval can change via
@@ -1212,7 +1208,8 @@ function oipUpdateFixedChart(data) {
         if (oipFixedCeHL2Series) oipFixedCeHL2Series.setData(ceAvgData);
         if (oipFixedPeHL2Series) oipFixedPeHL2Series.setData(peAvgData);
         if (oipFixedCloseAvgSeries) oipFixedCloseAvgSeries.setData(cePeAvgData);
-        if (oipFixedVolumeSeries) oipFixedVolumeSeries.setData(_oipVolPointsFromFutureVolume(data.fixed_future_volume, ceRaw));
+        oipSetVolumeBars(oipFixedVolumeSeries, data.fixed_future_volume, ceRaw);
+        oipSetVolumeBars(oipFixedBnfVolumeSeries, data.fixed_banknifty_volume, ceRaw, 'banknifty');
     } catch (e) { console.warn('[OIP] Fixed chart update err:', e); }
 
     const ceLbl = document.getElementById('oipLegendFixedCE');
@@ -1358,14 +1355,8 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
                     if (oipAvg3VwapSeries) oipAvg3VwapSeries.setData(oipCalculateAvg3VWAP(validCandles));
                     oipUpdateVwapBiasCard(validCandles);
 
-                    if (oipVolumeSeries) {
-                        const futVolMap = new Map((data.future_volume || []).map(v => [Number(v.time), Number(v.volume || 0)]));
-                        const upColor = '#1b998180', downColor = '#f2364580';
-                        const volPoints = validCandles
-                            .filter(c => futVolMap.has(c.time))
-                            .map(c => ({ time: c.time, value: futVolMap.get(c.time), color: c.close >= c.open ? upColor : downColor }));
-                        oipVolumeSeries.setData(volPoints);
-                    }
+                    oipSetVolumeBars(oipVolumeSeries, data.future_volume, validCandles);
+                    oipSetVolumeBars(oipBnfVolumeSeries, data.banknifty_volume, validCandles, 'banknifty');
                     if (oipElems.hdrVolSymbol) oipElems.hdrVolSymbol.textContent = data.future_symbol || '--';
                     if (oipElems.hdrVolCard) oipElems.hdrVolCard.classList.toggle('hidden', !data.future_symbol);
                 } catch (e) { console.warn('[OIP] SetData Err:', e); }
@@ -1907,7 +1898,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         oipIntrinsicChart.update(masterData, null, resetZoom);
         oipIntChartReady = true;  // Intrinsic chart now has data — safe to sync
         const idxCandles = masterData.filter(d => d.open !== undefined);
-        if (oipIntrinsicVolumeSeries) oipIntrinsicVolumeSeries.setData(_oipVolPointsFromFutureVolume(oipOIData.future_volume, idxCandles));
+        oipSetVolumeBars(oipIntrinsicVolumeSeries, oipOIData.future_volume, idxCandles);
+        oipSetVolumeBars(oipIntrinsicBnfVolumeSeries, oipOIData.banknifty_volume, idxCandles, 'banknifty');
         if (oipVwapIntSeries) oipVwapIntSeries.setData(oipCalculateVWAP(idxCandles));
         if (oipVwapIntPeSeries) oipVwapIntPeSeries.setData([]);
         if (oipCvwapIntSeries) oipCvwapIntSeries.setData(oipCalculateCVWAP(idxCandles));
@@ -2030,7 +2022,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         // Volume histogram — colored by CE's direction in combined/CE views,
         // PE's in the PE-only view (same instrument-direction convention used
         // for Round Strike/Fixed Monthly's combined volume bars).
-        if (oipIntrinsicVolumeSeries) oipIntrinsicVolumeSeries.setData(_oipVolPointsFromFutureVolume(oipOIData.future_volume, view === 'pe' ? peData : ceData));
+        oipSetVolumeBars(oipIntrinsicVolumeSeries, oipOIData.future_volume, view === 'pe' ? peData : ceData);
+        oipSetVolumeBars(oipIntrinsicBnfVolumeSeries, oipOIData.banknifty_volume, view === 'pe' ? peData : ceData, 'banknifty');
 
         oipIntChartReady = true;
         oipCEChartReady = true;
@@ -2042,7 +2035,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         // Update Individual CE Only Chart
         if (oipCEChart) {
             oipCEChart.update(ceData, null, resetZoom);
-            if (oipCEVolumeSeries) oipCEVolumeSeries.setData(_oipVolPointsFromFutureVolume(oipOIData.future_volume, ceData));
+            oipSetVolumeBars(oipCEVolumeSeries, oipOIData.future_volume, ceData);
+            oipSetVolumeBars(oipCEBnfVolumeSeries, oipOIData.banknifty_volume, ceData, 'banknifty');
             // EMAs — single pass for all 3 CE periods
             if (oipCEEma9Series || oipCEEma20Series || oipCEEma50Series) {
                 const ceEmas = oipCalculate3EMAs(ceRaw);
@@ -2065,7 +2059,8 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
         // Update Individual PE Only Chart
         if (oipPEChart) {
             oipPEChart.update(peData, null, resetZoom);
-            if (oipPEVolumeSeries) oipPEVolumeSeries.setData(_oipVolPointsFromFutureVolume(oipOIData.future_volume, peData));
+            oipSetVolumeBars(oipPEVolumeSeries, oipOIData.future_volume, peData);
+            oipSetVolumeBars(oipPEBnfVolumeSeries, oipOIData.banknifty_volume, peData, 'banknifty');
             // EMAs — single pass for all 3 PE periods
             if (oipPEEma9Series || oipPEEma20Series || oipPEEma50Series) {
                 const peEmas = oipCalculate3EMAs(peRaw);

@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-07-29",
+  "last_scan_date": "2026-07-30",
   "stocks": {
     "NIFTY": {
       "phase": "no_setup"
@@ -251,14 +251,22 @@
       "phase": "no_setup"
     },
     "NHPC": {
-      "phase": "watching",
+      "phase": "in_position",
       "direction": "Short",
       "trigger_level": 77.85,
       "sl_level": 79.55,
       "target_pct": 8,
       "signal_date": "2026-07-28",
       "future_token": "NSE:NHPC26AUGFUT",
-      "lot_size": 6950
+      "lot_size": 6950,
+      "entry_price": 77.83,
+      "target_level": 71.6,
+      "qty": 6950,
+      "entry_time": "2026-07-30T09:18:36.996531",
+      "future_month": "AUG 2026",
+      "ltp": 78.17,
+      "ltp_time": "2026-07-30T14:47:17.374788",
+      "unrealized_pnl": -2363.0
     },
     "NMDC": {
       "phase": "no_setup"
@@ -273,14 +281,22 @@
       "phase": "no_setup"
     },
     "OIL": {
-      "phase": "watching",
+      "phase": "in_position",
       "direction": "Long",
       "trigger_level": 458.0,
       "sl_level": 435.4,
       "target_pct": 8,
       "signal_date": "2026-07-28",
       "future_token": "NSE:OIL26AUGFUT",
-      "lot_size": 1400
+      "lot_size": 1400,
+      "entry_price": 458.0,
+      "target_level": 494.64,
+      "qty": 1400,
+      "entry_time": "2026-07-30T09:52:33.286268",
+      "future_month": "AUG 2026",
+      "ltp": 456.3,
+      "ltp_time": "2026-07-30T14:47:17.374794",
+      "unrealized_pnl": -2380.0
     },
     "ONGC": {
       "phase": "no_setup"

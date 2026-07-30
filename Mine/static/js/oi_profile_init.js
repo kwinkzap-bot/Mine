@@ -41,23 +41,15 @@ window.oipInitSecondaryCharts = function() {
         oipIntrinsicSeries = oipIntrinsicChart.ceSeries || oipIntrinsicChart.series;
         oipIntrinsicPeSeries = oipIntrinsicChart.peSeries;
 
-        // Future-volume histogram — one of the 4 Opt Prem charts controlled by
-        // the Opt Indicator popup's single "Volume (Fut)" checkbox (see
-        // oipSyncOptVolumeVisibility in oi_profile.js). Own price scale pinned
-        // to the bottom of the pane, same recipe as the main chart's oipVolumeSeries.
+        // Future-volume histograms — one of the 4 Opt Prem charts, driven by the
+        // Opt Indicator popup's "Nifty Vol Fut" / "Banknifty Vol Fut" checkboxes
+        // (see oipSyncOptVolumeVisibility in oi_profile.js). Both overlays share
+        // one hidden price scale pinned to the bottom of the pane — same recipe
+        // as the main chart's pair (see oipAddVolumeSeriesPair).
         const showOptVolumeInt = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
-        oipIntrinsicVolumeSeries = oipIntrinsicChart.chart.addSeries(LightweightCharts.HistogramSeries, {
-            priceFormat: { type: 'volume' },
-            priceScaleId: 'oipIntVolume',
-            lastValueVisible: false,
-            priceLineVisible: false,
-            crosshairMarkerVisible: false,
-            visible: showOptVolumeInt
-        });
-        oipIntrinsicChart.chart.priceScale('oipIntVolume').applyOptions({
-            scaleMargins: { top: 0.8, bottom: 0 },
-            visible: false
-        });
+        const showOptBnfVolumeInt = document.getElementById('oipShowBnfVolumeOpt')?.checked ?? false;
+        [oipIntrinsicVolumeSeries, oipIntrinsicBnfVolumeSeries] = oipAddVolumeSeriesPair(
+            oipIntrinsicChart.chart, 'oipIntVolume', showOptVolumeInt, showOptBnfVolumeInt);
 
         // Plain VWAP (green/purple) + CVWAP/PVWAP/3-AVG_VWAP on the Options Premium
         // (Combined) chart — one of the 3 "option charts" controlled by the Opt
@@ -107,18 +99,9 @@ window.oipInitSecondaryCharts = function() {
         oipCESeries = oipCEChart.series;
 
         const showOptVolumeCE = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
-        oipCEVolumeSeries = oipCEChart.chart.addSeries(LightweightCharts.HistogramSeries, {
-            priceFormat: { type: 'volume' },
-            priceScaleId: 'oipCEVolume',
-            lastValueVisible: false,
-            priceLineVisible: false,
-            crosshairMarkerVisible: false,
-            visible: showOptVolumeCE
-        });
-        oipCEChart.chart.priceScale('oipCEVolume').applyOptions({
-            scaleMargins: { top: 0.8, bottom: 0 },
-            visible: false
-        });
+        const showOptBnfVolumeCE = document.getElementById('oipShowBnfVolumeOpt')?.checked ?? false;
+        [oipCEVolumeSeries, oipCEBnfVolumeSeries] = oipAddVolumeSeriesPair(
+            oipCEChart.chart, 'oipCEVolume', showOptVolumeCE, showOptBnfVolumeCE);
 
         // Initialize Individual PE Chart
         oipPEChart = TradingViewChart.create({
@@ -130,18 +113,9 @@ window.oipInitSecondaryCharts = function() {
         oipPESeries = oipPEChart.series;
 
         const showOptVolumePE = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
-        oipPEVolumeSeries = oipPEChart.chart.addSeries(LightweightCharts.HistogramSeries, {
-            priceFormat: { type: 'volume' },
-            priceScaleId: 'oipPEVolume',
-            lastValueVisible: false,
-            priceLineVisible: false,
-            crosshairMarkerVisible: false,
-            visible: showOptVolumePE
-        });
-        oipPEChart.chart.priceScale('oipPEVolume').applyOptions({
-            scaleMargins: { top: 0.8, bottom: 0 },
-            visible: false
-        });
+        const showOptBnfVolumePE = document.getElementById('oipShowBnfVolumeOpt')?.checked ?? false;
+        [oipPEVolumeSeries, oipPEBnfVolumeSeries] = oipAddVolumeSeriesPair(
+            oipPEChart.chart, 'oipPEVolume', showOptVolumePE, showOptBnfVolumePE);
 
         // Fixed 24000 strike / monthly expiry combined chart — independent of
         // the ATM-relative strike selection above; not part of the shared
@@ -156,18 +130,9 @@ window.oipInitSecondaryCharts = function() {
         oipFixedPeSeries = oipFixedChart.peSeries;
 
         const showOptVolumeFixed = document.getElementById('oipShowVolumeOpt')?.checked ?? true;
-        oipFixedVolumeSeries = oipFixedChart.chart.addSeries(LightweightCharts.HistogramSeries, {
-            priceFormat: { type: 'volume' },
-            priceScaleId: 'oipFixedVolume',
-            lastValueVisible: false,
-            priceLineVisible: false,
-            crosshairMarkerVisible: false,
-            visible: showOptVolumeFixed
-        });
-        oipFixedChart.chart.priceScale('oipFixedVolume').applyOptions({
-            scaleMargins: { top: 0.8, bottom: 0 },
-            visible: false
-        });
+        const showOptBnfVolumeFixed = document.getElementById('oipShowBnfVolumeOpt')?.checked ?? false;
+        [oipFixedVolumeSeries, oipFixedBnfVolumeSeries] = oipAddVolumeSeriesPair(
+            oipFixedChart.chart, 'oipFixedVolume', showOptVolumeFixed, showOptBnfVolumeFixed);
 
         // Previous-day reference lines: CE (H+L)/2, PE (H+L)/2, (CE close + PE close)/2 —
         // all flat lines using the PRIOR trading day's values, drawn across the current session.
@@ -373,7 +338,6 @@ window.oipInitSecondaryCharts = function() {
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipOIChart, oipPEChart.chart, param, oipPESeries);
                 if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipOIChart, oipFixedChart.chart, param, oipFixedCeSeries);
                 if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipOIChart, oipRSChart.chart, param, oipRSCESeries);
-                if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) syncCrosshair(oipOIChart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
             });
         }
         if (oipIntrinsicChart?.chart) {
@@ -384,7 +348,6 @@ window.oipInitSecondaryCharts = function() {
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipIntrinsicChart.chart, oipPEChart.chart, param, oipPESeries);
                 if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipIntrinsicChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
                 if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipIntrinsicChart.chart, oipRSChart.chart, param, oipRSCESeries);
-                if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) syncCrosshair(oipIntrinsicChart.chart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
             });
         }
         if (oipCEChart?.chart) {
@@ -395,7 +358,6 @@ window.oipInitSecondaryCharts = function() {
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipCEChart.chart, oipPEChart.chart, param, oipPESeries);
                 if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipCEChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
                 if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipCEChart.chart, oipRSChart.chart, param, oipRSCESeries);
-                if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) syncCrosshair(oipCEChart.chart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
             });
         }
         if (oipPEChart?.chart) {
@@ -406,7 +368,6 @@ window.oipInitSecondaryCharts = function() {
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipPEChart.chart, oipCEChart.chart, param, oipCESeries);
                 if (oipFixedChart?.chart && oipFixedCeSeries) syncCrosshair(oipPEChart.chart, oipFixedChart.chart, param, oipFixedCeSeries);
                 if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipPEChart.chart, oipRSChart.chart, param, oipRSCESeries);
-                if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) syncCrosshair(oipPEChart.chart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
             });
         }
         if (oipFixedChart?.chart) {
@@ -417,7 +378,6 @@ window.oipInitSecondaryCharts = function() {
                 if (oipCEChart?.chart && oipCESeries) syncCrosshair(oipFixedChart.chart, oipCEChart.chart, param, oipCESeries);
                 if (oipPEChart?.chart && oipPESeries) syncCrosshair(oipFixedChart.chart, oipPEChart.chart, param, oipPESeries);
                 if (oipRSChart?.chart && oipRSCESeries) syncCrosshair(oipFixedChart.chart, oipRSChart.chart, param, oipRSCESeries);
-                if (oipRSFixed5mChart?.chart && oipRSFixed5mCESeries) syncCrosshair(oipFixedChart.chart, oipRSFixed5mChart.chart, param, oipRSFixed5mCESeries);
             });
         }
 

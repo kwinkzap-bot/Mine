@@ -991,57 +991,18 @@ body.ocean-theme .sm-gl-overlay {
     letter-spacing: .3px;
 }
 
-.sm-signal-holdings-scroll { overflow-x: auto; border-radius: 8px; border: 1px solid var(--ag-border); }
+/* ── Live holdings grid ──────────────────────────────────────────
+   The table itself is the shared DataGrid (css/components/data-grid.css) —
+   the rules here are only the Swing-Momentum-specific accents on top of it:
+   the editable cells, the rank pill and the highlighted "Today" column.
+   ---------------------------------------------------------------- */
+.sm-holdings-grid {
+    border: 1px solid var(--ag-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
 
-.sm-signal-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.78rem;
-}
-.sm-signal-table th {
-    background: var(--ag-border-sub);
-    color: var(--ag-text-2);
-    font-weight: 700;
-    padding: 8px 10px;
-    text-align: left;
-    border-bottom: 2px solid var(--ag-border);
-    white-space: nowrap;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-}
-.sm-signal-table td {
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--ag-border-sub);
-    color: var(--ag-text);
-}
-/* Neutralize the global white tr:nth-child(even) zebra so the faint hover tint
-   (--ag-row-hover) never exposes a white row underneath in dark themes. */
-.sm-signal-table tbody tr,
-.sm-signal-table tbody tr:nth-child(even) { background: transparent; }
-.sm-signal-table tr:hover td { background: var(--ag-row-hover); }
-.sm-signal-table tr:last-child td { border-bottom: none; }
-.sm-signal-table tbody tr:nth-child(even) td { background: var(--ag-border-sub); }
-.sm-signal-table tbody tr:nth-child(even):hover td { background: var(--ag-row-hover); }
-
-/* ── Holdings table — rank & score columns ──────────────────────── */
-.sm-holdings-table .sm-th-rank,
-.sm-holdings-table .sm-th-score {
-    background: var(--ag-accent-dim);
-    color: var(--ag-accent);
-    border-bottom-color: var(--ag-accent);
-}
-.sm-holdings-table .sm-th-score { border-left: 1px solid var(--ag-border); }
-
-.sm-td-rank { text-align: center; padding: 5px 8px !important; }
-.sm-td-score {
-    font-weight: 700;
-    font-size: 0.8rem;
-    text-align: right;
-    border-left: 1px solid var(--ag-border);
-    padding-right: 14px !important;
-}
-.sm-td-date { color: var(--ag-text-2); font-size: 0.75rem; }
+.sm-td-date { color: var(--ag-text-2); }
 
 .sm-rank-pill {
     display: inline-block;
@@ -1057,14 +1018,26 @@ body.ocean-theme .sm-gl-overlay {
     letter-spacing: .3px;
 }
 
-.sm-score-pos { color: var(--ag-pos) !important; }
-.sm-score-neg { color: var(--ag-neg) !important; }
-.sm-pnl-abs   { font-weight: 700; }
-.sm-pnl-pct   { font-weight: 700; }
-.sm-th-today  { background: var(--ag-accent-dim) !important; }
-.sm-td-today  { font-weight: 700; background: var(--ag-accent-dim); }
+/* Momentum data missing for this symbol — muted, so it never reads as a real rank */
+.sm-rank-pill-nodata {
+    background: transparent;
+    color: var(--ag-text-3);
+    border-color: var(--ag-border);
+    border-style: dashed;
+    font-weight: 700;
+    cursor: help;
+}
+
+.sm-score-nodata { color: var(--ag-text-3) !important; font-style: italic; cursor: help; }
+
+/* "Today" is the column the user scans first — tinted in both header and body.
+   Held at .dg-table specificity so it beats the grid's own header background,
+   which is itself !important (see the note in components/data-grid.css). */
+.dg-table .dg-th.sm-th-today { background: var(--ag-accent-dim) !important; color: var(--ag-accent) !important; }
+.dg-table .dg-td.sm-td-today { background: var(--ag-accent-dim); }
+.dg-table tbody tr:hover .dg-td.sm-td-today { background: var(--ag-row-hover); }
+
 /* Merged value + % cells (Today / Total) — inline: value (percentage) */
-.sm-td-today, .sm-pnl-abs { white-space: nowrap; }
 .sm-cell-pct { font-size: 10.5px; font-weight: 600; opacity: .8; }
 
 .sm-signal-error {
@@ -1084,7 +1057,6 @@ body.ocean-theme .sm-gl-overlay {
     font-style: italic;
 }
 
-.sm-col-num { text-align: right; }
 .sm-col-sym { white-space: nowrap; }
 .sm-pos { color: var(--ag-pos) !important; }
 .sm-neg { color: var(--ag-neg) !important; }
@@ -1098,6 +1070,16 @@ body.ocean-theme .sm-gl-overlay {
     border-radius: 10px;
     overflow: hidden;
     box-shadow: var(--ag-shadow);
+}
+
+.sm-rebal-warning {
+    padding: 8px 14px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: var(--ag-warning, #b45309);
+    background: rgba(245, 158, 11, .12);
+    border-bottom: 1px solid var(--ag-border);
+    cursor: help;
 }
 
 .sm-rebal-header {
@@ -1744,8 +1726,11 @@ body.ocean-theme .sm-gl-overlay {
 
 /* ── Per-stock Buy/Sell row menu + order popup ─────────────────── */
 .sm-th-action, .sm-td-action { width: 34px; text-align: center; }
-/* Inline-editable holding cells */
+/* Inline-editable holding cells. Held above .dg-table's own row-hover rule
+   (0,3,2) so the per-cell "you can edit this" tint still shows through the
+   grid's whole-row hover. */
 .sm-editable { cursor: text; position: relative; }
+.dg-table .dg-td.sm-editable:hover,
 .sm-editable:hover { background: var(--ag-accent-dim, rgba(59,130,246,.08)); box-shadow: inset 0 0 0 1px var(--ag-border, #e2e8f0); }
 .sm-edit-input {
     width: 100%; box-sizing: border-box; height: 24px; padding: 0 5px;

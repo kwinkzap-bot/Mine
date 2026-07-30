@@ -4565,29 +4565,17 @@ function _smLiveExpandToggle(id) {
 function _smApplyRankings(id, d) {
     const ranks = d.holding_ranks || {};
 
-    Object.entries(ranks).forEach(([sym, info]) => {
-        const row = document.querySelector(`#sm-signal-${id} tr[data-sym="${sym}"]`);
-        if (!row) return;
-        row.dataset.score = info.momentum_score ?? -9999;
-        const rankCell  = row.querySelector('.sm-rank-cell');
-        const scoreCell = row.querySelector('.sm-score-cell');
-        if (rankCell) rankCell.textContent = info.current_rank ?? '—';
-        if (scoreCell) {
-            const score = info.momentum_score;
-            scoreCell.textContent = score != null
-                ? (score >= 0 ? '+' : '') + score.toFixed(1) + '%' : '—';
-            scoreCell.className = 'sm-td-score sm-score-cell ' +
-                (score != null ? (score >= 0 ? 'sm-score-pos' : 'sm-score-neg') : '');
-        }
+    // Merge the ranks in and re-paint. Re-mounting (rather than DataGrid.refresh)
+    // re-points the grid at whatever holdings array is current — the SIP/SWP popup
+    // swaps _smHoldingsData[id].holdings for a fresh one — and mountSortable keeps
+    // the sort the user picked, since it keys that off the container element.
+    const holdings = (_smHoldingsData[id] || {}).holdings || [];
+    holdings.forEach(h => {
+        const info = ranks[h.symbol] || {};
+        h.rank           = info.current_rank ?? null;
+        h.momentum_score = info.momentum_score ?? null;
     });
-
-    // Re-sort by momentum score descending
-    const tbody = document.querySelector(`#sm-signal-${id} .sm-holdings-table tbody`);
-    if (tbody) {
-        const rows = Array.from(tbody.querySelectorAll('tr'));
-        rows.sort((a, b) => parseFloat(b.dataset.score || -9999) - parseFloat(a.dataset.score || -9999));
-        rows.forEach(r => tbody.appendChild(r));
-    }
+    _smMountHoldingsGrid(id, holdings);
 
     // Fill rebalance preview
     const wrap = document.getElementById(`sm-rebal-preview-${id}`);
@@ -4634,48 +4622,6 @@ function _smRenderLiveMode(id, panel, d) {
     const totalSip   = d.total_sip_added || 0;
     _smSipLogs[id]   = sipLog;
 
-    const holdingsHtml = holdings.length
-        ? `<div class="sm-signal-holdings-scroll">
-            <table class="sm-signal-table sm-holdings-table">
-                <thead><tr>
-                    <th class="sm-th-rank">Rank</th>
-                    <th class="sm-th-score">Avg (3M+6M+9M)/3</th>
-                    <th>Symbol</th><th>Qty</th><th>Entry Date</th>
-                    <th>Entry ₹</th><th>Curr ₹</th>
-                    <th>Invested</th><th>Curr Value</th>
-                    <th class="sm-th-today">Today</th>
-                    <th>Total</th>
-                    <th class="sm-th-action"></th>
-                </tr></thead>
-                <tbody>
-                ${holdings.map((h) => {
-                    const tCls   = (h.today_pct || 0) >= 0 ? 'sm-pos' : 'sm-neg';
-                    const tSign  = (h.today_abs || 0) >= 0 ? '+₹' : '-₹';
-                    const tPct   = ((h.today_pct || 0) >= 0 ? '+' : '') + (h.today_pct || 0).toFixed(1) + '%';
-                    const pCls   = h.pnl_pct >= 0 ? 'sm-pos' : 'sm-neg';
-                    const pSign  = h.pnl_abs >= 0 ? '+₹' : '-₹';
-                    const pPct   = (h.pnl_pct >= 0 ? '+' : '') + h.pnl_pct.toFixed(1) + '%';
-                    return `<tr data-sym="${h.symbol}">
-                        <td class="sm-td-rank"><span class="sm-rank-pill sm-rank-cell">—</span></td>
-                        <td class="sm-td-score sm-score-cell" style="color:var(--ag-text-3)">…</td>
-                        <td class="sm-col-sym"><strong>${h.symbol}</strong></td>
-                        <td class="sm-col-num sm-editable" title="Double-click to edit" ondblclick="_smEditHolding(this,'${id}','${h.symbol}','qty')">${h.qty}</td>
-                        <td class="sm-td-date sm-editable" title="Double-click to edit" ondblclick="_smEditHolding(this,'${id}','${h.symbol}','entry_date')">${h.entry_date || '—'}</td>
-                        <td class="sm-editable" title="Double-click to edit" ondblclick="_smEditHolding(this,'${id}','${h.symbol}','entry_price')">₹${Number(h.entry_price).toFixed(2)}</td>
-                        <td>₹${Number(h.current_price).toFixed(2)}</td>
-                        <td class="sm-editable" title="Double-click to edit" ondblclick="_smEditHolding(this,'${id}','${h.symbol}','invested')">₹${Number(h.buy_value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
-                        <td>₹${Number(h.current_value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
-                        <td class="${tCls} sm-td-today">${tSign}${Math.abs(h.today_abs || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })} <span class="sm-cell-pct">(${tPct})</span></td>
-                        <td class="${pCls} sm-pnl-abs">${pSign}${Math.abs(h.pnl_abs).toLocaleString('en-IN', { maximumFractionDigits: 0 })} <span class="sm-cell-pct">(${pPct})</span></td>
-                        <td class="sm-td-action">
-                            <button class="sm-row-menu-btn" title="Buy / Sell" onclick="_smRowMenu(event, '${id}', '${h.symbol}')">⋯</button>
-                        </td>
-                    </tr>`;
-                }).join('')}
-                </tbody>
-            </table></div>`
-        : '<div class="ag-empty">No live holdings</div>';
-
     // Stash holdings + meta so the SIP/SWP popup can compute allocations client-side
     _smHoldingsData[id] = { holdings, broker: d.broker || null, configuredInvestment: cfgInv };
 
@@ -4704,11 +4650,95 @@ function _smRenderLiveMode(id, panel, d) {
     <span class="sm-live-dot-xs"></span>
     Live Holdings &mdash; ${holdings.length} stocks &mdash; ${d.live_since || ''}
 </div>
-${holdingsHtml}
+<div id="sm-holdings-grid-${id}" class="sm-holdings-grid"></div>
 
 <div id="sm-rebal-preview-${id}" class="sm-rebal-preview-wrap">
     <div class="sm-signal-loading" style="font-size:0.78rem;padding:8px 0">Loading momentum rankings…</div>
 </div>`;
+
+    _smMountHoldingsGrid(id, holdings);
+}
+
+// ── Live holdings grid (shared DataGrid) ──────────────────────────────────────
+// Rank/score arrive on the slower /rankings call, so the rows carry `rank` and
+// `momentum_score` as null on first paint and _smApplyRankings fills them in and
+// re-paints. Sorting is the component's, which is why the old hand-rolled
+// "re-sort the <tr>s by data-score" pass is gone: the grid opens on momentum
+// score descending and the user can sort by any other column from there.
+function _smMountHoldingsGrid(id, holdings) {
+    const grid = document.getElementById(`sm-holdings-grid-${id}`);
+    if (!grid) return;
+
+    const NO_RANK_TIP = 'Not ranked today — no usable momentum data for this symbol, or it is outside the ranking universe. It is excluded from the rebalance sell list rather than treated as last-ranked.';
+    const esc     = DataGrid.escape;
+    const inr0    = v => '₹' + Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const signed0 = v => (Number(v || 0) >= 0 ? '+₹' : '-₹') +
+                         Math.abs(Number(v || 0)).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const pct1    = v => (Number(v || 0) >= 0 ? '+' : '') + Number(v || 0).toFixed(1) + '%';
+
+    // Value + (percent) in one cell, the way the old table read.
+    const pnlCell = (abs, pct) =>
+        `${esc(signed0(abs))} <span class="sm-cell-pct">(${esc(pct1(pct))})</span>`;
+
+    // Double-click editing is delegated (see below) rather than an inline
+    // ondblclick: a `render` callback owns the cell's contents, not the <td>,
+    // and _smEditHolding needs the <td> itself to swap in its input.
+    const editable = field => ({
+        cellClass: `sm-editable sm-edit--${field}`,
+        title:     'Double-click to edit',
+    });
+
+    DataGrid.mountSortable(grid, {
+        rows:  holdings,
+        empty: 'No live holdings',
+        defaultSort: { key: 'momentum_score', dir: 'desc' },
+        rowAttrs: h => `data-sym="${esc(h.symbol)}"`,
+        columns: [
+            { key: 'rank', label: 'Rank', align: 'center', sortable: true,
+              render: (v) => v == null
+                  ? `<span class="sm-rank-pill sm-rank-pill-nodata" title="${esc(NO_RANK_TIP)}">n/a</span>`
+                  : `<span class="sm-rank-pill">${esc(v)}</span>` },
+            { key: 'momentum_score', label: 'Avg (3M+6M+9M)/3', align: 'right', sortable: true,
+              cellClass: v => v == null ? 'sm-score-nodata' : (v >= 0 ? 'dg-pos' : 'dg-neg'),
+              format: v => v == null ? 'no data' : pct1(v) },
+            { key: 'symbol', label: 'Symbol', strong: true, sortable: true },
+            { key: 'qty', label: 'Qty', align: 'right', sortable: true, ...editable('qty') },
+            { key: 'entry_date', label: 'Entry Date', sortable: true, ...editable('entry_date'),
+              cellClass: 'sm-editable sm-edit--entry_date sm-td-date' },
+            { key: 'entry_price', label: 'Entry ₹', align: 'right', sortable: true,
+              ...editable('entry_price'), format: DataGrid.rupees },
+            { key: 'current_price', label: 'Curr ₹', align: 'right', sortable: true,
+              format: DataGrid.rupees },
+            { key: 'buy_value', label: 'Invested', align: 'right', sortable: true,
+              ...editable('invested'), format: inr0 },
+            { key: 'current_value', label: 'Curr Value', align: 'right', sortable: true,
+              format: inr0 },
+            { key: 'today_abs', label: 'Today', align: 'right', sortable: true,
+              thClass: 'sm-th-today',
+              cellClass: (_, h) => 'sm-td-today ' + ((h.today_pct || 0) >= 0 ? 'dg-pos' : 'dg-neg'),
+              render: (_, h) => pnlCell(h.today_abs, h.today_pct) },
+            { key: 'pnl_abs', label: 'Total', align: 'right', sortable: true,
+              cellClass: (_, h) => (h.pnl_pct || 0) >= 0 ? 'dg-pos' : 'dg-neg',
+              render: (_, h) => pnlCell(h.pnl_abs, h.pnl_pct) },
+            { label: '', align: 'center', thClass: 'sm-th-action', cellClass: 'sm-td-action',
+              render: (_, h) =>
+                  `<button class="sm-row-menu-btn" title="Buy / Sell" onclick="_smRowMenu(event, '${esc(id)}', '${esc(h.symbol)}')">⋯</button>` },
+        ],
+    });
+
+    // One delegated listener per grid container — mountSortable replaces the
+    // container's innerHTML on every sort and refresh, so a per-cell handler
+    // would not survive.
+    if (!grid.dataset.smEditWired) {
+        grid.dataset.smEditWired = '1';
+        grid.addEventListener('dblclick', (e) => {
+            const td = e.target.closest('td.sm-editable');
+            if (!td || !grid.contains(td)) return;
+            const field = (td.className.match(/sm-edit--(\w+)/) || [])[1];
+            const sym   = td.closest('tr')?.dataset.sym;
+            if (field && sym) _smEditHolding(td, id, sym, field);
+        });
+    }
 }
 
 function _smShowSipHistory(id) {
@@ -5347,6 +5377,7 @@ function _smSubmitPlaceOrders(id) {
 function _smRebalPreviewHtml(d, id) {
     const sellList = d.sell_preview || [];
     const buyList  = d.buy_preview  || [];
+    const unranked = d.unranked_holdings || [];
 
     const statusCls  = d.rebalance_needed ? 'sm-rebal-status-due' : 'sm-rebal-status-ok';
     const statusTxt  = d.rebalance_needed
@@ -5379,8 +5410,15 @@ function _smRebalPreviewHtml(d, id) {
           }).join('')
         : '<div class="sm-no-action">No new entries</div>';
 
+    const unrankedHtml = unranked.length
+        ? `<div class="sm-rebal-warning" title="A missing rank is unknown momentum, not bad momentum — these are excluded from the sell list instead of being treated as last-ranked.">
+             ⚠ Not ranked today: ${unranked.join(', ')} — held, but excluded from the sell list.
+           </div>`
+        : '';
+
     return `
 <div class="sm-rebal-section">
+    ${unrankedHtml}
     <div class="sm-rebal-header">
         <div class="sm-rebal-header-left">
             <span class="sm-rebal-header-title">Next Rebalance Preview</span>

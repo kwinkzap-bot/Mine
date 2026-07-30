@@ -35,6 +35,19 @@ const _EMAC_QUIET_PHASES = new Set(['pending_scan', 'no_setup']);
 const _EMAC_CFG_DIR_LABEL = { long: 'BUY Only', short: 'Sell Only', both: 'Both' };
 const _EMAC_CFG_DIR_TONE  = { long: 'pos', short: 'neg' };
 
+// Local (IST) date as YYYY-MM-DD — matched against the local-time ISO
+// timestamps the algo writes, so toISOString()'s UTC shift is not usable here.
+function _emacTodayStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// A token the algo couldn't parse a contract month out of still says more than
+// a dash — show it without its exchange prefix.
+function _emacFutureFallback(token) {
+    return token ? String(token).split(':').pop() : '—';
+}
+
 function _emacClearTimers() {
     clearTimeout(_emacStatusTimer);
     clearTimeout(_emacHistoryTimer);
@@ -109,12 +122,39 @@ function _emacRenderStocks() {
     // Join each symbol's configured Direction/Target% (EMA_SYMBOL_DEFAULTS)
     // onto its live state. A symbol dropped from the table but held open to
     // its exit has no config left — those render as '—'.
+    const todayStr = _emacTodayStr();
     let rows = Object.entries(_emacStocksData).map(([symbol, s]) => {
-        const cfg = _emacDefaults[symbol] || {};
-        return { symbol, ...s, cfg_direction: cfg.direction, cfg_target_pct: cfg.target_pct };
+        const cfg   = _emacDefaults[symbol] || {};
+        const open  = s.phase === 'in_position';
+        const armed = s.phase === 'watching';
+        // A symbol that has been in and out keeps showing that round trip
+        // instead of blanking out the moment it closes — but only while it has
+        // no live setup of its own. Once it re-arms, the row describes the NEW
+        // setup; mixing the finished trade's entry/P&L into it would read as
+        // one trade when it is two (the closed one is in the history grid).
+        const showLast = !open && !armed;
+        return {
+            symbol, ...s,
+            cfg_direction: cfg.direction, cfg_target_pct: cfg.target_pct,
+            show_last:        showLast,
+            entry_time_disp:  s.entry_time || (showLast ? s.last_entry_time : null),
+            exit_time_disp:   open ? null : (showLast ? s.last_exit_time : null),
+            entry_price_disp: s.entry_price ?? (showLast ? s.last_entry_price : null),
+            // Live mark while the future is being tracked; on a finished row,
+            // the price the trade was closed at — so entry, value and P&L
+            // there still reconcile with each other.
+            value_disp: s.ltp ?? (showLast ? s.last_exit_price : null),
+            // What the "Current P&L" column reads: unrealised while the paper
+            // position is open, the realised figure once it has closed.
+            live_pnl: open ? s.unrealized_pnl : (showLast ? s.last_pnl : null),
+            closed_today: !!(s.last_exit_time && String(s.last_exit_time).slice(0, 10) === todayStr),
+        };
     });
     if (!showAll) {
-        rows = rows.filter(r => !_EMAC_QUIET_PHASES.has(r.phase));
+        // Today's closed paper trades stay visible even though the symbol has
+        // already fallen back to a quiet phase — otherwise a round trip would
+        // vanish from view the instant it completed.
+        rows = rows.filter(r => !_EMAC_QUIET_PHASES.has(r.phase) || r.closed_today);
     }
     // Most "active" phases first, alphabetical within a phase.
     const order = { in_position: 0, watching: 1, no_setup: 2, pending_scan: 3 };
@@ -130,17 +170,36 @@ function _emacRenderStocks() {
               tone: v => _EMAC_CFG_DIR_TONE[v] },
             { key: 'cfg_target_pct', label: 'Target %', align: 'right',
               format: v => v == null ? '—' : Number(v) + '%' },
+            // A row that closed a paper trade today has fallen back to a quiet
+            // phase, but "No setup" alone would make its entry/exit/P&L cells
+            // look unexplained — say the trade closed, and how.
             { key: 'phase', label: 'Status',
-              badge: v => _EMAC_PHASE_TONE[v] || 'neutral',
-              format: v => _EMAC_PHASE_LABEL[v] || v },
+              badge: (v, r) => r.closed_today && r.show_last
+                  ? (Number(r.last_pnl) >= 0 ? 'pos' : 'neg')
+                  : (_EMAC_PHASE_TONE[v] || 'neutral'),
+              format: (v, r) => r.closed_today && r.show_last
+                  ? 'Closed' + (r.last_exit_reason ? ' · ' + r.last_exit_reason : '')
+                  : (_EMAC_PHASE_LABEL[v] || v) },
             { key: 'direction', label: 'Signal',
               format: v => v ? (v === 'Short' ? 'SELL' : 'BUY') : '—',
               tone: v => v === 'Short' ? 'neg' : (v === 'Long' ? 'pos' : undefined) },
+            // Which monthly contract the paper trade is on — resolved by the
+            // algo, so it's the same future the fills are marked against.
+            { key: 'future_month', label: 'Future',
+              format: (v, r) => v || _emacFutureFallback(r.future_token) },
             { key: 'trigger_level', label: 'Trigger', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
             { key: 'sl_level', label: 'SL', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
-            { key: 'entry_price', label: 'Entry', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
+            { key: 'entry_price_disp', label: 'Entry', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
             { key: 'target_level', label: 'Target', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
+            { key: 'value_disp', label: 'Current Value', align: 'right',
+              format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
+            { key: 'live_pnl', label: 'Current P&L', align: 'right', strong: true,
+              format: v => v == null ? '—' : DataGrid.inr(v), tone: DataGrid.sign },
             { key: 'qty', label: 'Qty', align: 'right', format: v => v ?? '—' },
+            { key: 'entry_time_disp', label: 'Entry Time', format: v => v ? _emacFmtDateTime(v) : '—' },
+            { key: 'exit_time_disp', label: 'Exit Time',
+              format: (v, r) => v ? _emacFmtDateTime(v) : (r.phase === 'in_position' ? 'Open' : '—'),
+              tone: (v, r) => r.phase === 'in_position' ? 'warn' : undefined },
             { key: 'signal_date', label: 'Signal Candle', format: v => v || '—' },
         ],
     });

@@ -5,12 +5,684 @@
 {{ super() }}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}?v={{ sv('css/oi_profile.css') }}">
 <script src="https://unpkg.com/lightweight-charts@5/dist/lightweight-charts.standalone.production.js"></script>
-<script src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
+<script
+    src="{{ url_for('static', filename='js/components/tradingview-chart.js') }}?v={{ sv('js/components/tradingview-chart.js') }}"></script>
 {% endblock %}
 
 {% block content %}
 <div class="oip-page">
+
+    <!-- Round Strike block — CE/PE strikes auto-selected from today's session-open
+         price (rounded to the nearest psychologically-significant 100), independent
+         of the ATM-relative strike selection used by the Opt Prem block above. -->
+    <div class="oip-container" id="oipRSBlock">
+        <div class="oip-header oip-header--compact">
+            <div class="oip-hdr-top">
+                <div class="oip-title oip-title--sm">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M12 7v5l3 3" />
+                    </svg>
+                    Round Strike
+                </div>
+
+                <div class="oip-prem-toolbar">
+                    <!-- CE / PE strike dropdowns — default to the auto-computed round
+                         strikes, editable like Opt Prem's "CE & PE" mode. -->
+                    <div class="oip-prem-group">
+                        <span class="oip-label">CE</span>
+                        <select id="oipRSCEStrikeDropdown" class="oip-select oip-select--xs" title="CE Strike"></select>
+                        <span class="oip-label">PE</span>
+                        <select id="oipRSPEStrikeDropdown" class="oip-select oip-select--xs" title="PE Strike"></select>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- Indicators popup -->
+                    <div class="oip-prem-group" style="position:relative;">
+                        <button id="oipRSIndicatorsBtn" class="oip-btn" type="button" title="Toggle Indicators">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                            </svg>
+                            Indicators
+                        </button>
+
+                        <div id="oipRSIndicatorsPopup" class="oip-ind-popup hidden">
+                            <div class="oip-ind-popup-header">Indicators</div>
+                            <div class="oip-ind-section">
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowVwap" checked><span>VWAP</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowVolume" checked><span>Nifty Vol Fut</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volUp"
+                                            title="Volume bar color on an up candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volDn"
+                                            title="Volume bar color on a down candle">
+                                    </span>
+                                </label>
+                                <label class="oip-ind-item"
+                                    title="BANKNIFTY current-expiry future volume, on the same scale as Nifty Vol Fut">
+                                    <input type="checkbox" id="oipRSShowBnfVolume"><span>Banknifty Vol Fut</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolUp"
+                                            title="Volume bar color on an up candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolDn"
+                                            title="Volume bar color on a down candle">
+                                    </span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShow5mClose" checked><span>5m Close Border</span>
+                                </label>
+                                <div class="oip-ind-item">
+                                    <span>Color</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRS5mCloseColorInp" class="oip-ray-color-inp"
+                                            value="#fbbf24"
+                                            title="Border color of the candle that closes each 5-minute block (1m / 30s only — candle borders have no width or style option)">
+                                    </span>
+                                </div>
+                                <div class="oip-ind-section-title">CE Line Style</div>
+                                <div class="oip-ind-item">
+                                    <span>Color</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRSCeLineColorInp" class="oip-ray-color-inp"
+                                            value="#16a34a" title="CE reference-line color (applies to all CE lines)">
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Width</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSCeLineWidthSel" class="oip-ray-width-sel"
+                                            title="CE reference-line width">
+                                            <option value="1" selected>1px</option>
+                                            <option value="2">2px</option>
+                                            <option value="3">3px</option>
+                                            <option value="4">4px</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Style</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSCeLineStyleSel" class="oip-ray-style-sel"
+                                            title="CE reference-line style">
+                                            <option value="0" selected>Solid</option>
+                                            <option value="1">Dotted</option>
+                                            <option value="2">Dashed</option>
+                                        </select>
+                                    </span>
+                                </div>
+
+                                <div class="oip-ind-section-title">PE Line Style</div>
+                                <div class="oip-ind-item">
+                                    <span>Color</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRSPeLineColorInp" class="oip-ray-color-inp"
+                                            value="#2563eb" title="PE reference-line color (applies to all PE lines)">
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Width</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSPeLineWidthSel" class="oip-ray-width-sel"
+                                            title="PE reference-line width">
+                                            <option value="1" selected>1px</option>
+                                            <option value="2">2px</option>
+                                            <option value="3">3px</option>
+                                            <option value="4">4px</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Style</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSPeLineStyleSel" class="oip-ray-style-sel"
+                                            title="PE reference-line style">
+                                            <option value="0" selected>Solid</option>
+                                            <option value="1">Dotted</option>
+                                            <option value="2">Dashed</option>
+                                        </select>
+                                    </span>
+                                </div>
+
+                                <div class="oip-ind-section-title">Reference Lines</div>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowCePdh" checked><span style="color:#16a34a">CE
+                                        PDH</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowCePdl" checked><span style="color:#16a34a">CE
+                                        PDL</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowCeOpen" checked><span style="color:#16a34a">CE
+                                        Open</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowCe5mHi" checked><span style="color:#16a34a">CE
+                                        5m High</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowCe5mLo" checked><span style="color:#16a34a">CE
+                                        5m Low</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowPePdh" checked><span style="color:#2563eb">PE
+                                        PDH</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowPePdl" checked><span style="color:#2563eb">PE
+                                        PDL</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowPeOpen" checked><span style="color:#2563eb">PE
+                                        Open</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowPe5mHi" checked><span style="color:#2563eb">PE
+                                        5m High</span>
+                                </label>
+                                <label class="oip-ind-item">
+                                    <input type="checkbox" id="oipRSShowPe5mLo" checked><span style="color:#2563eb">PE
+                                        5m Low</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- Horizontal Ray drawing tool -->
+                    <div class="oip-prem-group" style="position:relative;">
+                        <button id="oipRSRayToolBtn" class="oip-btn" type="button"
+                            title="Draw Horizontal Ray — click the chart to place, right-click a ray to remove it">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="4" cy="12" r="2" fill="currentColor" stroke="none" />
+                                <line x1="8" y1="12" x2="22" y2="12" stroke-dasharray="3 3" />
+                            </svg>
+                            Ray
+                        </button>
+                        <button id="oipRSRayClearBtn" class="oip-btn oip-btn--icon" type="button"
+                            title="Clear all ray lines">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                                <path d="M10 11v6" />
+                                <path d="M14 11v6" />
+                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                            </svg>
+                        </button>
+
+                        <div id="oipRSRayOptionsPopup" class="oip-ind-popup hidden">
+                            <div class="oip-ind-popup-header">Ray Style</div>
+                            <div class="oip-ind-section">
+                                <div class="oip-ind-item">
+                                    <span>Color</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRSRayColorInp" class="oip-ray-color-inp"
+                                            value="#f59e0b" title="Ray color">
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Width</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSRayWidthSel" class="oip-ray-width-sel" title="Ray width">
+                                            <option value="1">1px</option>
+                                            <option value="2" selected>2px</option>
+                                            <option value="3">3px</option>
+                                            <option value="4">4px</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Style</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSRayStyleSel" class="oip-ray-style-sel" title="Ray style">
+                                            <option value="0">Solid</option>
+                                            <option value="1">Dotted</option>
+                                            <option value="2" selected>Dashed</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-hint">Click the chart to place the ray</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- Order controls -->
+                    <div class="oip-prem-group">
+                        <select id="oipRSOrderMode" class="oip-select oip-select--xs" title="Order Mode">
+                            <option value="broker" selected>Broker</option>
+                            <option value="mine">Mine</option>
+                        </select>
+                        <input type="number" id="oipRSLimitPrice" class="oip-input oip-input--price"
+                            placeholder="Price ₹" step="0.05" title="Limit / SL Trigger Price">
+                        <div class="oip-order-side-group oip-order-side-group--ce">
+                            <button class="oip-rs-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B
+                                CE</button>
+                            <button class="oip-rs-order-btn ce-sell" data-side="CE" data-action="SELL" title="Sell CE">S
+                                CE</button>
+                            <button id="oipRSSLCE" class="oip-rs-order-btn sl-btn" disabled
+                                title="Place SL order for CE">SL CE</button>
+                        </div>
+                        <div class="oip-order-side-group oip-order-side-group--pe">
+                            <button class="oip-rs-order-btn pe-buy" data-side="PE" data-action="BUY" title="Buy PE">B
+                                PE</button>
+                            <button class="oip-rs-order-btn pe-sell" data-side="PE" data-action="SELL" title="Sell PE">S
+                                PE</button>
+                            <button id="oipRSSLPE" class="oip-rs-order-btn sl-btn" disabled
+                                title="Place SL order for PE">SL PE</button>
+                        </div>
+                        <div class="oip-prem-sep"></div>
+                        <button id="oipRSExitAll" class="oip-rs-order-btn exit-all"
+                            title="Exit All Positions & Cancel Orders">EXIT</button>
+                    </div>
+                </div>
+            </div>
+            <!-- Stats strip — wrapping pill grid -->
+            <div class="oip-status-row boxed oip-status-row--compact">
+                <div class="oip-hdr-metric">
+                    <span class="oip-hdr-lbl">Price</span>
+                    <span id="hdrPrice" class="oip-hdr-val">--</span>
+                </div>
+                <div class="oip-hdr-metric">
+                    <span class="oip-hdr-lbl">CE OI</span>
+                    <span id="hdrCeOI" class="oip-hdr-val red">--</span>
+                </div>
+                <div class="oip-hdr-metric">
+                    <span class="oip-hdr-lbl">PE OI</span>
+                    <span id="hdrPeOI" class="oip-hdr-val grn">--</span>
+                </div>
+                <div class="oip-hdr-metric">
+                    <span class="oip-hdr-lbl">ATM</span>
+                    <span id="hdrAtm" class="oip-hdr-val">--</span>
+                </div>
+                <div id="hdrCprCard" class="oip-hdr-metric oip-hdr-metric--clickable"
+                    title="CPR day-range type (Narrow/Medium/Wide) — click to toggle Index vs Future">
+                    <span class="oip-hdr-lbl">CPR <span id="hdrCprSrc" class="oip-hdr-lbl-badge">IDX</span></span>
+                    <span id="hdrCpr" class="oip-hdr-val">--</span>
+                </div>
+                <div class="oip-hdr-metric"
+                    title="3-day Avg VWAP vs today's open — avg above open means Down bias, else Up">
+                    <span class="oip-hdr-lbl">VWAP Bias</span>
+                    <span id="hdrVwapBias" class="oip-hdr-val">--</span>
+                </div>
+                <div class="oip-hdr-metric"
+                    title="Price vs the two 9:18 ATM CE OI lines — below both means Down, above both means Up">
+                    <span class="oip-hdr-lbl">9:18 Bias</span>
+                    <span id="hdrAtmCeOiBias" class="oip-hdr-val">--</span>
+                </div>
+                <div id="hdrPcrCard" class="oip-hdr-metric">
+                    <span class="oip-hdr-lbl">PCR</span>
+                    <span id="hdrPcr" class="oip-hdr-val">--</span>
+                </div>
+                <div class="oip-hdr-metric">
+                    <span class="oip-hdr-lbl">Lot</span>
+                    <span id="hdrLotSize" class="oip-hdr-val">--</span>
+                </div>
+                <div class="oip-hdr-metric">
+                    <span class="oip-hdr-lbl">Trend</span>
+                    <span id="hdrTrend" class="oip-hdr-val">--</span>
+                </div>
+                <div class="oip-hdr-metric oip-ivp-metric" title="IV Percentile: High values mean expensive premiums">
+                    <span class="oip-hdr-lbl">IVP</span>
+                    <div class="oip-ivp-container">
+                        <span id="hdrIVP" class="oip-hdr-val">--</span>
+                        <div class="oip-ivp-gauge-bg">
+                            <div id="ivpGaugeBar" class="oip-ivp-gauge-bar" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="oip-chart-wrap" id="oipRSCombinedChartWrap">
+            <div class="oip-chart-legend">
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
+                        id="oipRSLegendCombinedCE">--</span></div>
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
+                        id="oipRSLegendCombinedPE">--</span></div>
+            </div>
+            <div id="oipRSCombinedChart"></div>
+        </div>
+    </div>
+
+        <!-- New Box: Combined Strike Selector & Intrinsic Levels -->
     <div class="oip-container">
+
+        <div class="oip-header oip-header--compact">
+            <!-- Hidden inputs for state -->
+            <input type="hidden" id="oipIntrinsicView" value="combined">
+            <input type="hidden" id="oipStep" value="50">
+            <input type="hidden" id="oipMultiplier" value="3">
+            <div class="oip-hdr-top">
+                <!-- Title -->
+                <div class="oip-title oip-title--sm">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2 2 7l10 5 10-5-10-5Z" />
+                        <path d="m2 17 10 5 10-5" />
+                        <path d="m2 12 10 5 10-5" />
+                    </svg>
+                    Opt Prem
+                </div>
+
+                <!-- Compact single-row controls -->
+                <div class="oip-prem-toolbar">
+
+                    <!-- Toggles group (Hidden but checked by default) -->
+                    <div class="oip-prem-group" style="display:none">
+                        <label class="oip-checkbox" title="VWAP">
+                            <input type="checkbox" id="oipShowVwapInt" checked><span>VWAP</span>
+                        </label>
+                    </div>
+
+                    <div class="oip-prem-sep" style="display:none"></div>
+
+                    <!-- Strike group: hidden compat checkboxes + mode dropdown -->
+                    <input type="checkbox" id="oipFirst5mATM" style="display:none">
+                    <input type="checkbox" id="oipCustomStrikeCheck" checked style="display:none">
+                    <div class="oip-prem-group">
+                        <span class="oip-label"></span>
+                        <select id="oipStrikeMode" class="oip-select oip-select--xs" title="Strike selection mode">
+                            <option value="atm" selected>Prem. Str.</option>
+                            <option value="custom">Custom</option>
+                            <option value="ce_pe">CE &amp; PE</option>
+                        </select>
+                        <!-- Extra strike-diff widen: visible for mode=atm only -->
+                        <select id="oipPremExtraDropdown" class="oip-select oip-select--xs"
+                            title="Extra strike diff (x100)">
+                            <option value="0" selected>0</option>
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                        </select>
+                        <!-- Shared strike: visible for mode=custom -->
+                        <select id="oipCustomStrikeDropdown" class="oip-select oip-select--xs"></select>
+                        <!-- CE strike: visible for mode=ce_pe -->
+                        <select id="oipCEStrikeDropdown" class="oip-select oip-select--xs" style="display:none"
+                            title="CE Strike"></select>
+                        <!-- PE strike: visible for mode=ce_pe -->
+                        <select id="oipPEStrikeDropdown" class="oip-select oip-select--xs" style="display:none"
+                            title="PE Strike"></select>
+                        <div class="oip-prem-group" style="position:relative;">
+                            <button id="oipOptIndicatorsBtn" class="oip-btn" type="button"
+                                title="Toggle Option Indicators">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                                </svg>
+                                Opt Indicator
+                            </button>
+
+                            <div id="oipOptIndicatorsPopup" class="oip-ind-popup hidden">
+                                <div class="oip-ind-popup-header">Option Indicators</div>
+                                <div class="oip-ind-section">
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowSynthetic" checked><span>Synthetic
+                                            value</span>
+                                    </label>
+                                    <div class="oip-ind-section-title">Lines</div>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShow2ndCandle30sOpt" checked><span
+                                            style="color:#FFC800">2nd 30Sec candle</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShow2nd5mCandleOpt" checked><span
+                                            style="color:#00D2FF">2nd 5Min candle</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowVwapOpt" checked><span>VWAP</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowVolumeOpt" checked><span>Nifty Vol Fut</span>
+                                        <span class="oip-line-props">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="volUp"
+                                                title="Volume bar color on an up candle">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="volDn"
+                                                title="Volume bar color on a down candle">
+                                        </span>
+                                    </label>
+                                    <label class="oip-ind-item"
+                                        title="BANKNIFTY current-expiry future volume, on the same scale as Nifty Vol Fut">
+                                        <input type="checkbox" id="oipShowBnfVolumeOpt"><span>Banknifty Vol Fut</span>
+                                        <span class="oip-line-props">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="bnfVolUp"
+                                                title="Volume bar color on an up candle">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="bnfVolDn"
+                                                title="Volume bar color on a down candle">
+                                        </span>
+                                    </label>
+                                    <label class="oip-ind-item"
+                                        title="Recolors the border of the candle that closes each 5-minute block on the Combined / CE Only / PE Only charts — 1m / 30s timeframes only">
+                                        <input type="checkbox" id="oipShowOpt5mClose" checked><span>5m Close
+                                            Border</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowPremium" checked><span>Premium
+                                            (Entry/Current/Target)</span>
+                                    </label>
+                                    <div class="oip-ind-section-title">EMA (CE Only / PE Only)</div>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma9Opt" checked><span
+                                            style="color:#22c55e">EMA 9</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma20Opt" checked><span
+                                            style="color:#f97316">EMA 20</span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowEma50Opt" checked><span
+                                            style="color:#ef4444">EMA 50</span>
+                                    </label>
+                                    <div class="oip-ind-section-title">Fixed Chart Lines</div>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowFixedCeAvg" checked><span
+                                            style="color:#16a34a">CE Avg</span>
+                                        <span class="oip-line-props">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedCeAvg"
+                                                title="Line color">
+                                            <select class="oip-line-width-sel" data-width-key="fixedCeAvg"
+                                                title="Line width">
+                                                <option value="1">1px</option>
+                                                <option value="2">2px</option>
+                                                <option value="3">3px</option>
+                                                <option value="4">4px</option>
+                                            </select>
+                                            <select class="oip-line-style-sel" data-style-key="fixedCeAvg"
+                                                title="Line style">
+                                                <option value="0">Solid</option>
+                                                <option value="1">Dotted</option>
+                                                <option value="2">Dashed</option>
+                                            </select>
+                                        </span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowFixedPeAvg" checked><span
+                                            style="color:#7c3aed">PE Avg</span>
+                                        <span class="oip-line-props">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedPeAvg"
+                                                title="Line color">
+                                            <select class="oip-line-width-sel" data-width-key="fixedPeAvg"
+                                                title="Line width">
+                                                <option value="1">1px</option>
+                                                <option value="2">2px</option>
+                                                <option value="3">3px</option>
+                                                <option value="4">4px</option>
+                                            </select>
+                                            <select class="oip-line-style-sel" data-style-key="fixedPeAvg"
+                                                title="Line style">
+                                                <option value="0">Solid</option>
+                                                <option value="1">Dotted</option>
+                                                <option value="2">Dashed</option>
+                                            </select>
+                                        </span>
+                                    </label>
+                                    <label class="oip-ind-item">
+                                        <input type="checkbox" id="oipShowFixedCePeAvg" checked><span
+                                            style="color:#000000">CE & PE Avg</span>
+                                        <span class="oip-line-props">
+                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedCePeAvg"
+                                                title="Line color">
+                                            <select class="oip-line-width-sel" data-width-key="fixedCePeAvg"
+                                                title="Line width">
+                                                <option value="1">1px</option>
+                                                <option value="2">2px</option>
+                                                <option value="3">3px</option>
+                                                <option value="4">4px</option>
+                                            </select>
+                                            <select class="oip-line-style-sel" data-style-key="fixedCePeAvg"
+                                                title="Line style">
+                                                <option value="0">Solid</option>
+                                                <option value="1">Dotted</option>
+                                                <option value="2">Dashed</option>
+                                            </select>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- Horizontal Ray drawing tool -->
+                    <div class="oip-prem-group" style="position:relative;">
+                        <button id="oipRayToolBtn" class="oip-btn" type="button"
+                            title="Draw Horizontal Ray — click a chart to place, right-click a ray to remove it">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="4" cy="12" r="2" fill="currentColor" stroke="none" />
+                                <line x1="8" y1="12" x2="22" y2="12" stroke-dasharray="3 3" />
+                            </svg>
+                            Ray
+                        </button>
+                        <button id="oipRayClearBtn" class="oip-btn oip-btn--icon" type="button"
+                            title="Clear all ray lines">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                                <path d="M10 11v6" />
+                                <path d="M14 11v6" />
+                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                            </svg>
+                        </button>
+
+                        <div id="oipRayOptionsPopup" class="oip-ind-popup hidden">
+                            <div class="oip-ind-popup-header">Ray Style</div>
+                            <div class="oip-ind-section">
+                                <div class="oip-ind-item">
+                                    <span>Color</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRayColorInp" class="oip-ray-color-inp"
+                                            value="#f59e0b" title="Ray color">
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Width</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRayWidthSel" class="oip-ray-width-sel" title="Ray width">
+                                            <option value="1">1px</option>
+                                            <option value="2" selected>2px</option>
+                                            <option value="3">3px</option>
+                                            <option value="4">4px</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Style</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRayStyleSel" class="oip-ray-style-sel" title="Ray style">
+                                            <option value="0">Solid</option>
+                                            <option value="1">Dotted</option>
+                                            <option value="2" selected>Dashed</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-hint">Click a chart to place the ray</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
+
+                    <!-- Order controls -->
+                    <div class="oip-prem-group">
+                        <select id="oipOrderMode" class="oip-select oip-select--xs" title="Order Mode">
+                            <option value="broker" selected>Broker</option>
+                            <option value="mine">Mine</option>
+                        </select>
+                        <input type="number" id="oipLimitPrice" class="oip-input oip-input--price" placeholder="Price ₹"
+                            step="0.05" title="Limit / SL Trigger Price">
+                        <div class="oip-order-side-group oip-order-side-group--ce">
+                            <button class="oip-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B
+                                CE</button>
+                            <button class="oip-order-btn ce-sell" data-side="CE" data-action="SELL" title="Sell CE">S
+                                CE</button>
+                            <button id="oipSLCE" class="oip-order-btn sl-btn" disabled title="Place SL order for CE">SL
+                                CE</button>
+                        </div>
+                        <div class="oip-order-side-group oip-order-side-group--pe">
+                            <button class="oip-order-btn pe-buy" data-side="PE" data-action="BUY" title="Buy PE">B
+                                PE</button>
+                            <button class="oip-order-btn pe-sell" data-side="PE" data-action="SELL" title="Sell PE">S
+                                PE</button>
+                            <button id="oipSLPE" class="oip-order-btn sl-btn" disabled title="Place SL order for PE">SL
+                                PE</button>
+                        </div>
+                        <div class="oip-prem-sep"></div>
+                        <button id="oipExitAll" class="oip-order-btn exit-all"
+                            title="Exit All Positions & Cancel Orders">EXIT</button>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <div class="oip-chart-wrap" id="oipIntrinsicChartWrap">
+            <div class="oip-chart-legend">
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
+                        id="oipLegendCE">--</span></div>
+                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
+                        id="oipLegendPE">--</span></div>
+            </div>
+            <div id="oipIntrinsicChart"></div>
+        </div>
+
+        <div class="oip-charts-row">
+            <!-- CE Individual Chart -->
+            <div class="oip-chart-wrap" id="oipCEChartWrap">
+                <div class="oip-chart-legend">
+                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span><span
+                            id="oipLegendCEOnly">--</span></div>
+                </div>
+                <div id="oipCEChart"></div>
+            </div>
+
+            <!-- PE Individual Chart -->
+            <div class="oip-chart-wrap" id="oipPEChartWrap">
+                <div class="oip-chart-legend">
+                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span><span
+                            id="oipLegendPEOnly">--</span></div>
+                </div>
+                <div id="oipPEChart"></div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="oip-container" style="margin-top: 10px;">
         <!-- Original OI Profile Block -->
         <div class="oip-header oip-header--compact">
             <div class="oip-hdr-top">
@@ -28,14 +700,8 @@
                 <!-- Compact single-row controls -->
                 <div class="oip-prem-toolbar">
 
-                    <!-- Symbol + TF -->
+                    <!-- TF (symbol is fixed to NIFTY) -->
                     <div class="oip-prem-group">
-                        <span class="oip-label">Sym</span>
-                        <div class="search-container">
-                            <input type="text" id="symbolSelect" class="oip-input oip-input--sym symbol-dropdown"
-                                placeholder="NIFTY" value="NIFTY" autocomplete="off">
-                            <ul id="symbolDropdownList" class="custom-dropdown-list hidden"></ul>
-                        </div>
                         <span class="oip-label">TF</span>
                         <select id="oipInterval" class="oip-select oip-select--xs">
                             <option value="30second">30s</option>
@@ -58,8 +724,8 @@
                     <div class="oip-prem-group" style="position:relative;">
                         <button id="oipIndicatorsBtn" class="oip-btn" type="button" title="Toggle Indicators">
                             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                             </svg>
                             Indicators
                         </button>
@@ -73,9 +739,26 @@
                                     <input type="checkbox" id="oipShowOIBars" checked><span>OI Bars</span>
                                 </label>
                                 <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowVolume" checked><span>Volume (Fut)</span>
+                                    <input type="checkbox" id="oipShowVolume" checked><span>Nifty Vol Fut</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volUp"
+                                            title="Volume bar color on an up candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="volDn"
+                                            title="Volume bar color on a down candle">
+                                    </span>
                                 </label>
-                                <label class="oip-ind-item" title="Recolors the border of the candle that closes each 5-minute block — 1m / 30s timeframes only">
+                                <label class="oip-ind-item"
+                                    title="BANKNIFTY current-expiry future volume, on the same scale as Nifty Vol Fut">
+                                    <input type="checkbox" id="oipShowBnfVolume"><span>Banknifty Vol Fut</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolUp"
+                                            title="Volume bar color on an up candle">
+                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolDn"
+                                            title="Volume bar color on a down candle">
+                                    </span>
+                                </label>
+                                <label class="oip-ind-item"
+                                    title="Recolors the border of the candle that closes each 5-minute block — 1m / 30s timeframes only">
                                     <input type="checkbox" id="oipShow5mClose" checked><span>5m Close Border</span>
                                 </label>
                                 <div class="oip-ind-cpr-group">
@@ -86,13 +769,16 @@
                                     </div>
                                     <div class="oip-ind-cpr-sub hidden" id="oipVwapSub">
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipShowCVWAP" checked><span style="color:#3b82f6">CVWAP</span>
+                                            <input type="checkbox" id="oipShowCVWAP" checked><span
+                                                style="color:#3b82f6">CVWAP</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipShowPVWAP" checked><span style="color:#fdba74">PVWAP</span>
+                                            <input type="checkbox" id="oipShowPVWAP" checked><span
+                                                style="color:#fdba74">PVWAP</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipShow3AvgVWAP" checked><span style="color:#ef4444">3-AVG_VWAP</span>
+                                            <input type="checkbox" id="oipShow3AvgVWAP" checked><span
+                                                style="color:#ef4444">3-AVG_VWAP</span>
                                         </label>
                                     </div>
                                 </div>
@@ -104,19 +790,24 @@
                                     </div>
                                     <div class="oip-ind-cpr-sub hidden" id="oipCprSub">
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowPrevHL" checked><span style="color:#ef07f9">Prev H / L</span>
+                                            <input type="checkbox" id="oipCprShowPrevHL" checked><span
+                                                style="color:#ef07f9">Prev H / L</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowBand" checked><span style="color:#00008B">PP / BC / TC</span>
+                                            <input type="checkbox" id="oipCprShowBand" checked><span
+                                                style="color:#00008B">PP / BC / TC</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowResistance" checked><span style="color:#006400">R1 – R4</span>
+                                            <input type="checkbox" id="oipCprShowResistance" checked><span
+                                                style="color:#006400">R1 – R4</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowSupport" checked><span style="color:#ff0000">S1 – S4</span>
+                                            <input type="checkbox" id="oipCprShowSupport" checked><span
+                                                style="color:#ff0000">S1 – S4</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipCprShowCumR3S3" checked><span style="color:#a020f0">Cum. R3 / S3</span>
+                                            <input type="checkbox" id="oipCprShowCumR3S3" checked><span
+                                                style="color:#a020f0">Cum. R3 / S3</span>
                                         </label>
                                     </div>
                                 </div>
@@ -128,23 +819,28 @@
                                     </div>
                                     <div class="oip-ind-cpr-sub hidden" id="oipMultiCprSub">
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr15m" checked><span style="color:#f97316">15 Min</span>
+                                            <input type="checkbox" id="oipMultiCpr15m" checked><span
+                                                style="color:#f97316">15 Min</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr30m" checked><span style="color:#06b6d4">30 Min</span>
+                                            <input type="checkbox" id="oipMultiCpr30m" checked><span
+                                                style="color:#06b6d4">30 Min</span>
                                         </label>
                                         <label class="oip-ind-item oip-ind-sub-item">
-                                            <input type="checkbox" id="oipMultiCpr1h" checked><span style="color:#9c28b0">1 Hour</span>
+                                            <input type="checkbox" id="oipMultiCpr1h" checked><span
+                                                style="color:#9c28b0">1 Hour</span>
                                         </label>
                                     </div>
                                 </div>
                                 <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowAtmCeOi" checked><span style="color:#000000">9:18 ATM CE OI Lines</span>
+                                    <input type="checkbox" id="oipShowAtmCeOi" checked><span style="color:#000000">9:18
+                                        ATM CE OI Lines</span>
                                 </label>
                             </div>
 
                             <div class="oip-ind-section">
-                                <div class="oip-ind-section-title oip-ind-cpr-header" id="oipEmaHeader" style="cursor:pointer; justify-content:space-between;">
+                                <div class="oip-ind-section-title oip-ind-cpr-header" id="oipEmaHeader"
+                                    style="cursor:pointer; justify-content:space-between;">
                                     Moving Averages (EMA)
                                     <span class="oip-cpr-expand" id="oipEmaExpandBtn">&#9658;</span>
                                 </div>
@@ -175,38 +871,48 @@
                             <div class="oip-ind-section">
                                 <div class="oip-ind-section-title">Lines</div>
                                 <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowMaxPain" checked><span style="color:#2563eb">Max Pain</span>
+                                    <input type="checkbox" id="oipShowMaxPain" checked><span style="color:#2563eb">Max
+                                        Pain</span>
                                 </label>
                                 <div class="oip-ind-reversal-wrap">
                                     <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShow30mReversalLines"><span style="color:#f97316">30m Reversal</span>
+                                        <input type="checkbox" id="oipShow30mReversalLines"><span
+                                            style="color:#f97316">30m Reversal</span>
                                     </label>
                                     <div class="oip-ind-reversal-inputs">
                                         <span class="oip-ind-mini-lbl">Count</span>
-                                        <input type="number" id="oipReversal30mCount" class="oip-ind-mini-inp" value="10" min="1" max="30" step="1">
+                                        <input type="number" id="oipReversal30mCount" class="oip-ind-mini-inp"
+                                            value="10" min="1" max="30" step="1">
                                         <span class="oip-ind-mini-lbl">Range</span>
-                                        <input type="number" id="oipReversal30mRange" class="oip-ind-mini-inp" value="50" min="5" max="500" step="5">
+                                        <input type="number" id="oipReversal30mRange" class="oip-ind-mini-inp"
+                                            value="50" min="5" max="500" step="5">
                                     </div>
                                 </div>
                                 <div class="oip-ind-reversal-wrap">
                                     <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShow1DReversalLines"><span style="color:#8b5cf6">1D Reversal</span>
+                                        <input type="checkbox" id="oipShow1DReversalLines"><span
+                                            style="color:#8b5cf6">1D Reversal</span>
                                     </label>
                                     <div class="oip-ind-reversal-inputs">
                                         <span class="oip-ind-mini-lbl">Count</span>
-                                        <input type="number" id="oipReversal1DCount" class="oip-ind-mini-inp" value="10" min="1" max="30" step="1">
+                                        <input type="number" id="oipReversal1DCount" class="oip-ind-mini-inp" value="10"
+                                            min="1" max="30" step="1">
                                         <span class="oip-ind-mini-lbl">Range</span>
-                                        <input type="number" id="oipReversal1DRange" class="oip-ind-mini-inp" value="30" min="1" max="500" step="1">
+                                        <input type="number" id="oipReversal1DRange" class="oip-ind-mini-inp" value="30"
+                                            min="1" max="500" step="1">
                                     </div>
                                 </div>
                                 <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShow2ndCandle30s" checked><span style="color:#FFC800">2nd 30Sec Candle</span>
+                                    <input type="checkbox" id="oipShow2ndCandle30s" checked><span
+                                        style="color:#FFC800">2nd 30Sec Candle</span>
                                 </label>
                                 <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShow2nd5mCandle" checked><span style="color:#00D2FF">2nd 5Min Candle</span>
+                                    <input type="checkbox" id="oipShow2nd5mCandle" checked><span
+                                        style="color:#00D2FF">2nd 5Min Candle</span>
                                 </label>
                                 <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipShowMondayBox"><span style="color:#d4ed0b">Monday H/L Box</span>
+                                    <input type="checkbox" id="oipShowMondayBox"><span style="color:#d4ed0b">Monday H/L
+                                        Box</span>
                                 </label>
                             </div>
                         </div>
@@ -217,20 +923,21 @@
                         <button id="oipOIRayToolBtn" class="oip-btn" type="button"
                             title="Draw Horizontal Ray — click the chart to place, right-click a ray to remove it">
                             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <circle cx="4" cy="12" r="2" fill="currentColor" stroke="none"/>
-                                <line x1="8" y1="12" x2="22" y2="12" stroke-dasharray="3 3"/>
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="4" cy="12" r="2" fill="currentColor" stroke="none" />
+                                <line x1="8" y1="12" x2="22" y2="12" stroke-dasharray="3 3" />
                             </svg>
                             Ray
                         </button>
-                        <button id="oipOIRayClearBtn" class="oip-btn oip-btn--icon" type="button" title="Clear all ray lines">
+                        <button id="oipOIRayClearBtn" class="oip-btn oip-btn--icon" type="button"
+                            title="Clear all ray lines">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="3 6 5 6 21 6"/>
-                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                                <path d="M10 11v6"/>
-                                <path d="M14 11v6"/>
-                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                                <path d="M10 11v6" />
+                                <path d="M14 11v6" />
+                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
                             </svg>
                         </button>
 
@@ -240,7 +947,8 @@
                                 <div class="oip-ind-item">
                                     <span>Color</span>
                                     <span class="oip-line-props">
-                                        <input type="color" id="oipOIRayColorInp" class="oip-ray-color-inp" value="#f59e0b" title="Ray color">
+                                        <input type="color" id="oipOIRayColorInp" class="oip-ray-color-inp"
+                                            value="#f59e0b" title="Ray color">
                                     </span>
                                 </div>
                                 <div class="oip-ind-item">
@@ -286,67 +994,14 @@
                     <!-- OI Bar button -->
                     <button id="oipOIBarBtn" class="oip-btn" type="button" title="Open Interest Bar">
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                             stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="12" y1="20" x2="12" y2="10"/>
-                            <line x1="18" y1="20" x2="18" y2="4"/>
-                            <line x1="6" y1="20" x2="6" y2="16"/>
+                            stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="20" x2="12" y2="10" />
+                            <line x1="18" y1="20" x2="18" y2="4" />
+                            <line x1="6" y1="20" x2="6" y2="16" />
                         </svg>
                         OI Bar
                     </button>
 
-                </div>
-            </div>
-
-            <!-- Stats strip — wrapping pill grid -->
-            <div class="oip-status-row boxed oip-status-row--compact">
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">Price</span>
-                    <span id="hdrPrice" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">CE OI</span>
-                    <span id="hdrCeOI" class="oip-hdr-val red">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">PE OI</span>
-                    <span id="hdrPeOI" class="oip-hdr-val grn">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">ATM</span>
-                    <span id="hdrAtm" class="oip-hdr-val">--</span>
-                </div>
-                <div id="hdrCprCard" class="oip-hdr-metric oip-hdr-metric--clickable" title="CPR day-range type (Narrow/Medium/Wide) — click to toggle Index vs Future">
-                    <span class="oip-hdr-lbl">CPR <span id="hdrCprSrc" class="oip-hdr-lbl-badge">IDX</span></span>
-                    <span id="hdrCpr" class="oip-hdr-val">--</span>
-                </div>
-                 <div class="oip-hdr-metric" title="3-day Avg VWAP vs today's open — avg above open means Down bias, else Up">
-                    <span class="oip-hdr-lbl">VWAP Bias</span>
-                    <span id="hdrVwapBias" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric" title="Price vs the two 9:18 ATM CE OI lines — below both means Down, above both means Up">
-                    <span class="oip-hdr-lbl">9:18 Bias</span>
-                    <span id="hdrAtmCeOiBias" class="oip-hdr-val">--</span>
-                </div>
-                <div id="hdrPcrCard" class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">PCR</span>
-                    <span id="hdrPcr" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">Lot</span>
-                    <span id="hdrLotSize" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric">
-                    <span class="oip-hdr-lbl">Trend</span>
-                    <span id="hdrTrend" class="oip-hdr-val">--</span>
-                </div>
-                <div class="oip-hdr-metric oip-ivp-metric" title="IV Percentile: High values mean expensive premiums">
-                    <span class="oip-hdr-lbl">IVP</span>
-                    <div class="oip-ivp-container">
-                        <span id="hdrIVP" class="oip-hdr-val">--</span>
-                        <div class="oip-ivp-gauge-bg">
-                            <div id="ivpGaugeBar" class="oip-ivp-gauge-bar" style="width: 0%"></div>
-                        </div>
-                    </div>
                 </div>
             </div>
 
@@ -377,537 +1032,9 @@
                 <button id="oipOIBarModalClose" class="oip-modal-close" type="button" title="Close">&times;</button>
             </div>
             <div class="oip-modal-body">
-                <iframe id="oipOIBarFrame" class="oip-modal-iframe" data-src="/open-interest?embed=1" title="Open Interest"></iframe>
+                <iframe id="oipOIBarFrame" class="oip-modal-iframe" data-src="/open-interest?embed=1"
+                    title="Open Interest"></iframe>
             </div>
-        </div>
-    </div>
-
-    <!-- New Box: Combined Strike Selector & Intrinsic Levels -->
-    <div class="oip-container" style="margin-top: 10px;">
-
-        <div class="oip-charts-row">
-            <!-- CE Individual Chart -->
-            <div class="oip-chart-wrap" id="oipCEChartWrap">
-                <div class="oip-chart-legend">
-                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span><span id="oipLegendCEOnly">--</span></div>
-                </div>
-                <div id="oipCEChart"></div>
-            </div>
-
-            <!-- PE Individual Chart -->
-            <div class="oip-chart-wrap" id="oipPEChartWrap">
-                <div class="oip-chart-legend">
-                    <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span><span id="oipLegendPEOnly">--</span></div>
-                </div>
-                <div id="oipPEChart"></div>
-            </div>
-        </div>
-
-        <div class="oip-header oip-header--compact">
-            <!-- Hidden inputs for state -->
-            <input type="hidden" id="oipIntrinsicView" value="combined">
-            <input type="hidden" id="oipStep" value="50">
-            <input type="hidden" id="oipMultiplier" value="3">
-            <div class="oip-hdr-top">
-                <!-- Title -->
-                <div class="oip-title oip-title--sm">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 2 2 7l10 5 10-5-10-5Z" />
-                        <path d="m2 17 10 5 10-5" />
-                        <path d="m2 12 10 5 10-5" />
-                    </svg>
-                    Opt Prem
-                </div>
-
-                <!-- Compact single-row controls -->
-                <div class="oip-prem-toolbar">
-
-                    <!-- Toggles group (Hidden but checked by default) -->
-                    <div class="oip-prem-group" style="display:none">
-                        <label class="oip-checkbox" title="VWAP">
-                            <input type="checkbox" id="oipShowVwapInt" checked><span>VWAP</span>
-                        </label>
-                    </div>
-
-                    <div class="oip-prem-sep" style="display:none"></div>
-
-                    <!-- Strike group: hidden compat checkboxes + mode dropdown -->
-                    <input type="checkbox" id="oipFirst5mATM" style="display:none">
-                    <input type="checkbox" id="oipCustomStrikeCheck" checked style="display:none">
-                    <div class="oip-prem-group">
-                        <span class="oip-label"></span>
-                        <select id="oipStrikeMode" class="oip-select oip-select--xs" title="Strike selection mode">
-                            <option value="atm" selected>Prem. Str.</option>
-                            <option value="custom">Custom</option>
-                            <option value="ce_pe">CE &amp; PE</option>
-                        </select>
-                        <!-- Extra strike-diff widen: visible for mode=atm only -->
-                        <select id="oipPremExtraDropdown" class="oip-select oip-select--xs" title="Extra strike diff (x100)">
-                            <option value="0" selected>0</option>
-                            <option value="1">1</option>
-                            <option value="2">2</option>
-                            <option value="3">3</option>
-                            <option value="4">4</option>
-                            <option value="5">5</option>
-                        </select>
-                        <!-- Shared strike: visible for mode=custom -->
-                        <select id="oipCustomStrikeDropdown" class="oip-select oip-select--xs"></select>
-                        <!-- CE strike: visible for mode=ce_pe -->
-                        <select id="oipCEStrikeDropdown" class="oip-select oip-select--xs" style="display:none" title="CE Strike"></select>
-                        <!-- PE strike: visible for mode=ce_pe -->
-                        <select id="oipPEStrikeDropdown" class="oip-select oip-select--xs" style="display:none" title="PE Strike"></select>
-                        <div class="oip-prem-group" style="position:relative;">
-                            <button id="oipOptIndicatorsBtn" class="oip-btn" type="button" title="Toggle Option Indicators">
-                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                     stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-                                </svg>
-                                Opt Indicator
-                            </button>
-
-                            <div id="oipOptIndicatorsPopup" class="oip-ind-popup hidden">
-                                <div class="oip-ind-popup-header">Option Indicators</div>
-                                <div class="oip-ind-section">
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowSynthetic" checked><span>Synthetic value</span>
-                                    </label>
-                                    <div class="oip-ind-section-title">Lines</div>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShow2ndCandle30sOpt" checked><span style="color:#FFC800">2nd 30Sec candle</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShow2nd5mCandleOpt" checked><span style="color:#00D2FF">2nd 5Min candle</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowVwapOpt" checked><span>VWAP</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowVolumeOpt" checked><span>Volume (Fut)</span>
-                                    </label>
-                                    <label class="oip-ind-item" title="Recolors the border of the candle that closes each 5-minute block on the Combined / CE Only / PE Only charts — 1m / 30s timeframes only">
-                                        <input type="checkbox" id="oipShowOpt5mClose" checked><span>5m Close Border</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowPremium" checked><span>Premium (Entry/Current/Target)</span>
-                                    </label>
-                                    <div class="oip-ind-section-title">EMA (CE Only / PE Only)</div>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma9Opt" checked><span style="color:#22c55e">EMA 9</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma20Opt" checked><span style="color:#f97316">EMA 20</span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowEma50Opt" checked><span style="color:#ef4444">EMA 50</span>
-                                    </label>
-                                    <div class="oip-ind-section-title">Fixed Chart Lines</div>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowFixedCeAvg" checked><span style="color:#16a34a">CE Avg</span>
-                                        <span class="oip-line-props">
-                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedCeAvg" title="Line color">
-                                            <select class="oip-line-width-sel" data-width-key="fixedCeAvg" title="Line width">
-                                                <option value="1">1px</option><option value="2">2px</option><option value="3">3px</option><option value="4">4px</option>
-                                            </select>
-                                            <select class="oip-line-style-sel" data-style-key="fixedCeAvg" title="Line style">
-                                                <option value="0">Solid</option>
-                                                <option value="1">Dotted</option>
-                                                <option value="2">Dashed</option>
-                                            </select>
-                                        </span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowFixedPeAvg" checked><span style="color:#7c3aed">PE Avg</span>
-                                        <span class="oip-line-props">
-                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedPeAvg" title="Line color">
-                                            <select class="oip-line-width-sel" data-width-key="fixedPeAvg" title="Line width">
-                                                <option value="1">1px</option><option value="2">2px</option><option value="3">3px</option><option value="4">4px</option>
-                                            </select>
-                                            <select class="oip-line-style-sel" data-style-key="fixedPeAvg" title="Line style">
-                                                <option value="0">Solid</option>
-                                                <option value="1">Dotted</option>
-                                                <option value="2">Dashed</option>
-                                            </select>
-                                        </span>
-                                    </label>
-                                    <label class="oip-ind-item">
-                                        <input type="checkbox" id="oipShowFixedCePeAvg" checked><span style="color:#000000">CE & PE Avg</span>
-                                        <span class="oip-line-props">
-                                            <input type="color" class="oip-line-color-inp" data-color-key="fixedCePeAvg" title="Line color">
-                                            <select class="oip-line-width-sel" data-width-key="fixedCePeAvg" title="Line width">
-                                                <option value="1">1px</option><option value="2">2px</option><option value="3">3px</option><option value="4">4px</option>
-                                            </select>
-                                            <select class="oip-line-style-sel" data-style-key="fixedCePeAvg" title="Line style">
-                                                <option value="0">Solid</option>
-                                                <option value="1">Dotted</option>
-                                                <option value="2">Dashed</option>
-                                            </select>
-                                        </span>
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="oip-prem-sep"></div>
-
-                    <!-- Horizontal Ray drawing tool -->
-                    <div class="oip-prem-group" style="position:relative;">
-                        <button id="oipRayToolBtn" class="oip-btn" type="button"
-                            title="Draw Horizontal Ray — click a chart to place, right-click a ray to remove it">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <circle cx="4" cy="12" r="2" fill="currentColor" stroke="none"/>
-                                <line x1="8" y1="12" x2="22" y2="12" stroke-dasharray="3 3"/>
-                            </svg>
-                            Ray
-                        </button>
-                        <button id="oipRayClearBtn" class="oip-btn oip-btn--icon" type="button" title="Clear all ray lines">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="3 6 5 6 21 6"/>
-                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                                <path d="M10 11v6"/>
-                                <path d="M14 11v6"/>
-                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                            </svg>
-                        </button>
-
-                        <div id="oipRayOptionsPopup" class="oip-ind-popup hidden">
-                            <div class="oip-ind-popup-header">Ray Style</div>
-                            <div class="oip-ind-section">
-                                <div class="oip-ind-item">
-                                    <span>Color</span>
-                                    <span class="oip-line-props">
-                                        <input type="color" id="oipRayColorInp" class="oip-ray-color-inp" value="#f59e0b" title="Ray color">
-                                    </span>
-                                </div>
-                                <div class="oip-ind-item">
-                                    <span>Width</span>
-                                    <span class="oip-line-props">
-                                        <select id="oipRayWidthSel" class="oip-ray-width-sel" title="Ray width">
-                                            <option value="1">1px</option>
-                                            <option value="2" selected>2px</option>
-                                            <option value="3">3px</option>
-                                            <option value="4">4px</option>
-                                        </select>
-                                    </span>
-                                </div>
-                                <div class="oip-ind-item">
-                                    <span>Style</span>
-                                    <span class="oip-line-props">
-                                        <select id="oipRayStyleSel" class="oip-ray-style-sel" title="Ray style">
-                                            <option value="0">Solid</option>
-                                            <option value="1">Dotted</option>
-                                            <option value="2" selected>Dashed</option>
-                                        </select>
-                                    </span>
-                                </div>
-                                <div class="oip-ind-hint">Click a chart to place the ray</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="oip-prem-sep"></div>
-
-                    <!-- Order controls -->
-                    <div class="oip-prem-group">
-                        <select id="oipOrderMode" class="oip-select oip-select--xs" title="Order Mode">
-                            <option value="broker" selected>Broker</option>
-                            <option value="mine">Mine</option>
-                        </select>
-                        <input type="number" id="oipLimitPrice" class="oip-input oip-input--price" placeholder="Price ₹"
-                            step="0.05" title="Limit / SL Trigger Price">
-                        <div class="oip-order-side-group oip-order-side-group--ce">
-                            <button class="oip-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B CE</button>
-                            <button class="oip-order-btn ce-sell" data-side="CE" data-action="SELL" title="Sell CE">S CE</button>
-                            <button id="oipSLCE" class="oip-order-btn sl-btn" disabled title="Place SL order for CE">SL CE</button>
-                        </div>
-                        <div class="oip-order-side-group oip-order-side-group--pe">
-                            <button class="oip-order-btn pe-buy" data-side="PE" data-action="BUY" title="Buy PE">B PE</button>
-                            <button class="oip-order-btn pe-sell" data-side="PE" data-action="SELL" title="Sell PE">S PE</button>
-                            <button id="oipSLPE" class="oip-order-btn sl-btn" disabled title="Place SL order for PE">SL PE</button>
-                        </div>
-                        <div class="oip-prem-sep"></div>
-                        <button id="oipExitAll" class="oip-order-btn exit-all"
-                            title="Exit All Positions & Cancel Orders">EXIT</button>
-                    </div>
-
-                </div>
-            </div>
-        </div>
-
-        <div class="oip-chart-wrap" id="oipIntrinsicChartWrap">
-            <div class="oip-chart-legend">
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
-                        id="oipLegendCE">--</span></div>
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
-                        id="oipLegendPE">--</span></div>
-            </div>
-            <div id="oipIntrinsicChart"></div>
-        </div>
-
-    </div>
-
-    <!-- Round Strike block — CE/PE strikes auto-selected from today's session-open
-         price (rounded to the nearest psychologically-significant 100), independent
-         of the ATM-relative strike selection used by the Opt Prem block above. -->
-    <div class="oip-container" style="margin-top: 10px;" id="oipRSBlock">
-        <div class="oip-header oip-header--compact">
-            <div class="oip-hdr-top">
-                <div class="oip-title oip-title--sm">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="9" />
-                        <path d="M12 7v5l3 3" />
-                    </svg>
-                    Round Strike
-                </div>
-
-                <div class="oip-prem-toolbar">
-                    <!-- CE / PE strike dropdowns — default to the auto-computed round
-                         strikes, editable like Opt Prem's "CE & PE" mode. -->
-                    <div class="oip-prem-group">
-                        <span class="oip-label">CE</span>
-                        <select id="oipRSCEStrikeDropdown" class="oip-select oip-select--xs" title="CE Strike"></select>
-                        <span class="oip-label">PE</span>
-                        <select id="oipRSPEStrikeDropdown" class="oip-select oip-select--xs" title="PE Strike"></select>
-                        <button id="oipRSFixed5mRefreshBtn" class="oip-btn" type="button" title="Fetch the latest data for the 5m (Fixed) chart below — it is not auto-refreshed live, unlike the chart above">⟳ 5m</button>
-                    </div>
-
-                    <div class="oip-prem-sep"></div>
-
-                    <!-- Indicators popup -->
-                    <div class="oip-prem-group" style="position:relative;">
-                        <button id="oipRSIndicatorsBtn" class="oip-btn" type="button" title="Toggle Indicators">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-                            </svg>
-                            Indicators
-                        </button>
-
-                        <div id="oipRSIndicatorsPopup" class="oip-ind-popup hidden">
-                            <div class="oip-ind-popup-header">Indicators</div>
-                            <div class="oip-ind-section">
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowVwap" checked><span>VWAP</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowVolume" checked><span>Volume (Fut)</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShow5mClose" checked><span>5m Close Border</span>
-                                </label>
-                                <div class="oip-ind-item">
-                                    <span>Color</span>
-                                    <span class="oip-line-props">
-                                        <input type="color" id="oipRS5mCloseColorInp" class="oip-ray-color-inp" value="#fbbf24" title="Border color of the candle that closes each 5-minute block (1m / 30s only — candle borders have no width or style option)">
-                                    </span>
-                                </div>
-                                <div class="oip-ind-section-title">CE Line Style</div>
-                                <div class="oip-ind-item">
-                                    <span>Color</span>
-                                    <span class="oip-line-props">
-                                        <input type="color" id="oipRSCeLineColorInp" class="oip-ray-color-inp" value="#16a34a" title="CE reference-line color (applies to all CE lines)">
-                                    </span>
-                                </div>
-                                <div class="oip-ind-item">
-                                    <span>Width</span>
-                                    <span class="oip-line-props">
-                                        <select id="oipRSCeLineWidthSel" class="oip-ray-width-sel" title="CE reference-line width">
-                                            <option value="1" selected>1px</option>
-                                            <option value="2">2px</option>
-                                            <option value="3">3px</option>
-                                            <option value="4">4px</option>
-                                        </select>
-                                    </span>
-                                </div>
-                                <div class="oip-ind-item">
-                                    <span>Style</span>
-                                    <span class="oip-line-props">
-                                        <select id="oipRSCeLineStyleSel" class="oip-ray-style-sel" title="CE reference-line style">
-                                            <option value="0" selected>Solid</option>
-                                            <option value="1">Dotted</option>
-                                            <option value="2">Dashed</option>
-                                        </select>
-                                    </span>
-                                </div>
-
-                                <div class="oip-ind-section-title">PE Line Style</div>
-                                <div class="oip-ind-item">
-                                    <span>Color</span>
-                                    <span class="oip-line-props">
-                                        <input type="color" id="oipRSPeLineColorInp" class="oip-ray-color-inp" value="#2563eb" title="PE reference-line color (applies to all PE lines)">
-                                    </span>
-                                </div>
-                                <div class="oip-ind-item">
-                                    <span>Width</span>
-                                    <span class="oip-line-props">
-                                        <select id="oipRSPeLineWidthSel" class="oip-ray-width-sel" title="PE reference-line width">
-                                            <option value="1" selected>1px</option>
-                                            <option value="2">2px</option>
-                                            <option value="3">3px</option>
-                                            <option value="4">4px</option>
-                                        </select>
-                                    </span>
-                                </div>
-                                <div class="oip-ind-item">
-                                    <span>Style</span>
-                                    <span class="oip-line-props">
-                                        <select id="oipRSPeLineStyleSel" class="oip-ray-style-sel" title="PE reference-line style">
-                                            <option value="0" selected>Solid</option>
-                                            <option value="1">Dotted</option>
-                                            <option value="2">Dashed</option>
-                                        </select>
-                                    </span>
-                                </div>
-
-                                <div class="oip-ind-section-title">Reference Lines</div>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowCePdh" checked><span style="color:#16a34a">CE PDH</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowCePdl" checked><span style="color:#16a34a">CE PDL</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowCeOpen" checked><span style="color:#16a34a">CE Open</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowCe5mHi" checked><span style="color:#16a34a">CE 5m High</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowCe5mLo" checked><span style="color:#16a34a">CE 5m Low</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowPePdh" checked><span style="color:#2563eb">PE PDH</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowPePdl" checked><span style="color:#2563eb">PE PDL</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowPeOpen" checked><span style="color:#2563eb">PE Open</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowPe5mHi" checked><span style="color:#2563eb">PE 5m High</span>
-                                </label>
-                                <label class="oip-ind-item">
-                                    <input type="checkbox" id="oipRSShowPe5mLo" checked><span style="color:#2563eb">PE 5m Low</span>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="oip-prem-sep"></div>
-
-                    <!-- Horizontal Ray drawing tool -->
-                    <div class="oip-prem-group" style="position:relative;">
-                        <button id="oipRSRayToolBtn" class="oip-btn" type="button"
-                            title="Draw Horizontal Ray — click the chart to place, right-click a ray to remove it">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <circle cx="4" cy="12" r="2" fill="currentColor" stroke="none"/>
-                                <line x1="8" y1="12" x2="22" y2="12" stroke-dasharray="3 3"/>
-                            </svg>
-                            Ray
-                        </button>
-                        <button id="oipRSRayClearBtn" class="oip-btn oip-btn--icon" type="button" title="Clear all ray lines">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="3 6 5 6 21 6"/>
-                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                                <path d="M10 11v6"/>
-                                <path d="M14 11v6"/>
-                                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                            </svg>
-                        </button>
-
-                        <div id="oipRSRayOptionsPopup" class="oip-ind-popup hidden">
-                            <div class="oip-ind-popup-header">Ray Style</div>
-                            <div class="oip-ind-section">
-                                <div class="oip-ind-item">
-                                    <span>Color</span>
-                                    <span class="oip-line-props">
-                                        <input type="color" id="oipRSRayColorInp" class="oip-ray-color-inp" value="#f59e0b" title="Ray color">
-                                    </span>
-                                </div>
-                                <div class="oip-ind-item">
-                                    <span>Width</span>
-                                    <span class="oip-line-props">
-                                        <select id="oipRSRayWidthSel" class="oip-ray-width-sel" title="Ray width">
-                                            <option value="1">1px</option>
-                                            <option value="2" selected>2px</option>
-                                            <option value="3">3px</option>
-                                            <option value="4">4px</option>
-                                        </select>
-                                    </span>
-                                </div>
-                                <div class="oip-ind-item">
-                                    <span>Style</span>
-                                    <span class="oip-line-props">
-                                        <select id="oipRSRayStyleSel" class="oip-ray-style-sel" title="Ray style">
-                                            <option value="0">Solid</option>
-                                            <option value="1">Dotted</option>
-                                            <option value="2" selected>Dashed</option>
-                                        </select>
-                                    </span>
-                                </div>
-                                <div class="oip-ind-hint">Click the chart to place the ray</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="oip-prem-sep"></div>
-
-                    <!-- Order controls -->
-                    <div class="oip-prem-group">
-                        <select id="oipRSOrderMode" class="oip-select oip-select--xs" title="Order Mode">
-                            <option value="broker" selected>Broker</option>
-                            <option value="mine">Mine</option>
-                        </select>
-                        <input type="number" id="oipRSLimitPrice" class="oip-input oip-input--price" placeholder="Price ₹"
-                            step="0.05" title="Limit / SL Trigger Price">
-                        <div class="oip-order-side-group oip-order-side-group--ce">
-                            <button class="oip-rs-order-btn ce-buy" data-side="CE" data-action="BUY" title="Buy CE">B CE</button>
-                            <button class="oip-rs-order-btn ce-sell" data-side="CE" data-action="SELL" title="Sell CE">S CE</button>
-                            <button id="oipRSSLCE" class="oip-rs-order-btn sl-btn" disabled title="Place SL order for CE">SL CE</button>
-                        </div>
-                        <div class="oip-order-side-group oip-order-side-group--pe">
-                            <button class="oip-rs-order-btn pe-buy" data-side="PE" data-action="BUY" title="Buy PE">B PE</button>
-                            <button class="oip-rs-order-btn pe-sell" data-side="PE" data-action="SELL" title="Sell PE">S PE</button>
-                            <button id="oipRSSLPE" class="oip-rs-order-btn sl-btn" disabled title="Place SL order for PE">SL PE</button>
-                        </div>
-                        <div class="oip-prem-sep"></div>
-                        <button id="oipRSExitAll" class="oip-rs-order-btn exit-all"
-                            title="Exit All Positions & Cancel Orders">EXIT</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="oip-chart-wrap" id="oipRSCombinedChartWrap">
-            <div class="oip-chart-legend">
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
-                        id="oipRSLegendCombinedCE">--</span></div>
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
-                        id="oipRSLegendCombinedPE">--</span></div>
-            </div>
-            <div id="oipRSCombinedChart"></div>
-        </div>
-
-        <!-- Static 5-minute Combined chart — tracks the SAME CE/PE strikes as the
-             Round Strike chart above, but always fetched at a fixed 5-minute
-             interval, independent of the main TF dropdown. Lightweight: candles
-             + future-volume only, no VWAP/ref lines/ray tool/order buttons. -->
-        <div class="oip-chart-wrap" id="oipRSFixed5mChartWrap" style="margin-top:10px;">
-            <div class="oip-chart-legend">
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #1b9981;"></span> CE: <span
-                        id="oipRSFixed5mLegendCE">--</span></div>
-                <div class="oip-legend-item"><span class="oip-legend-dot" style="background: #8b5cf6;"></span> PE: <span
-                        id="oipRSFixed5mLegendPE">--</span></div>
-                <div class="oip-legend-item" title="Always 5-minute, independent of the TF dropdown above. Not live — use the ⟳ 5m button in the header to fetch the latest data">5m (Fixed, manual ⟳)</div>
-            </div>
-            <div id="oipRSFixed5mChart"></div>
         </div>
     </div>
 
@@ -928,9 +1055,12 @@
                     <span id="oipFixedStrikeTitle">Fixed 24000 Monthly</span>
                 </div>
                 <div class="oip-prem-group">
-                    <select id="oipFixedStrikeDropdown" class="oip-select oip-select--xs" title="Fixed monthly strike"></select>
-                    <button id="oipFixedStrikeUpdateBtn" class="oip-btn" type="button" title="Apply and save this strike as the default">Update</button>
-                    <button id="oipFixedStrikeRefreshBtn" class="oip-btn" type="button" title="Fetch the latest data for this chart (not auto-refreshed live)">⟳</button>
+                    <select id="oipFixedStrikeDropdown" class="oip-select oip-select--xs"
+                        title="Fixed monthly strike"></select>
+                    <button id="oipFixedStrikeUpdateBtn" class="oip-btn" type="button"
+                        title="Apply and save this strike as the default">Update</button>
+                    <button id="oipFixedStrikeRefreshBtn" class="oip-btn" type="button"
+                        title="Fetch the latest data for this chart (not auto-refreshed live)">⟳</button>
                 </div>
             </div>
         </div>
@@ -955,5 +1085,6 @@
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile.js') }}?v={{ sv('js/oi_profile.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_init.js') }}?v={{ sv('js/oi_profile_init.js') }}"></script>
-<script src="{{ url_for('static', filename='js/oi_profile_round_strike.js') }}?v={{ sv('js/oi_profile_round_strike.js') }}"></script>
+<script
+    src="{{ url_for('static', filename='js/oi_profile_round_strike.js') }}?v={{ sv('js/oi_profile_round_strike.js') }}"></script>
 {% endblock %}

@@ -23,7 +23,7 @@ let oipRSIMarkers = [];
 
 /* ── Indicator state persistence ─────────────────────────── */
 const _OIP_IND_IDS = [
-    'oipShowOIBars', 'oipShowVolume', 'oipShowVwapInt', 'oipShowVwapGroup', 'oipShowCVWAP', 'oipShowPVWAP', 'oipShow3AvgVWAP',
+    'oipShowOIBars', 'oipShowVolume', 'oipShowBnfVolume', 'oipShowVwapInt', 'oipShowVwapGroup', 'oipShowCVWAP', 'oipShowPVWAP', 'oipShow3AvgVWAP',
     'oipShowCpr', 'oipCprShowPrevHL', 'oipCprShowBand', 'oipCprShowResistance', 'oipCprShowSupport', 'oipCprShowCumR3S3',
     'oipShowSignals', 'oipShowRSI', 'oipShowAtmCeOi',
     'oipShowEma9', 'oipShowEma20', 'oipShowEma50', 'oipShowEma100', 'oipShowEma200',
@@ -32,7 +32,7 @@ const _OIP_IND_IDS = [
     'oipShow1DReversalLines',  'oipReversal1DCount',  'oipReversal1DRange',
     'oipShowMultiCpr', 'oipMultiCpr15m', 'oipMultiCpr30m', 'oipMultiCpr1h',
     'oipShow5mClose', 'oipShowOpt5mClose',
-    'oipShowSynthetic', 'oipShow2ndCandle30sOpt', 'oipShow2nd5mCandleOpt', 'oipShowVwapOpt', 'oipShowVolumeOpt',
+    'oipShowSynthetic', 'oipShow2ndCandle30sOpt', 'oipShow2nd5mCandleOpt', 'oipShowVwapOpt', 'oipShowVolumeOpt', 'oipShowBnfVolumeOpt',
     'oipShowFixedCeAvg', 'oipShowFixedPeAvg', 'oipShowFixedCePeAvg',
     'oipShowEma9Opt', 'oipShowEma20Opt', 'oipShowEma50Opt'
 ];
@@ -108,7 +108,24 @@ const _OIP_LINE_DEFAULTS = {
     mondayBox: { color: '#34ed0b', width: 1 },
     fixedCeAvg: { color: '#16a34a', width: 1 }, fixedPeAvg: { color: '#7c3aed', width: 1 }, fixedCePeAvg: { color: '#000000', width: 1 },
     fiveMClose: { color: '#fbbf24', width: 1 }, fiveMCloseOpt: { color: '#fbbf24', width: 1 },
+    volUp: { color: '#1b9981' }, volDn: { color: '#f23645' },
+    // Banknifty's overlay defaults to the PE chart's candle colours (violet up,
+    // dark down), which also keeps it clear of the green/red pair above — the
+    // two histograms share a price scale and overlap. PE's down colour is
+    // theme-dependent, so this default is a function: it re-resolves per read,
+    // and a user-picked colour still overrides it outright.
+    bnfVolUp: { color: '#8b5cf6' }, bnfVolDn: { color: () => _oipPeDownColor() },
 };
+
+// The PE candle series' down colour — black on light themes, grey on dark.
+// Mirrors the rule in tradingview-chart.js (both the initial `isLightTheme`
+// branch and its 'themechanged' handler); keep the two in step.
+const _OIP_LIGHT_THEMES = new Set(['light', 'cream', 'ocean']);
+function _oipPeDownColor() {
+    let theme = 'dark';
+    try { theme = window.AppTheme?.getActiveTheme() || 'dark'; } catch (e) {}
+    return _OIP_LIGHT_THEMES.has(theme) ? '#1f2937' : '#6b7280';
+}
 // Keys that only get a style dropdown (no color/width — see comment above).
 const _OIP_NO_COLOR_KEYS = new Set(['rsi', 'reversal1d']);
 // Keys that get ONLY a color input — no width, no style. The 5m Close Border
@@ -127,7 +144,14 @@ function _oipLoadLineColorsWidths() {
 }
 function _oipSaveLineColors() { try { localStorage.setItem(_OIP_LINE_COLOR_STORAGE_KEY, JSON.stringify(oipLineColors)); } catch(e) {} }
 function _oipSaveLineWidths() { try { localStorage.setItem(_OIP_LINE_WIDTH_STORAGE_KEY, JSON.stringify(oipLineWidths)); } catch(e) {} }
-function oipGetLineColor(key) { return oipLineColors[key] ?? _OIP_LINE_DEFAULTS[key]?.color ?? '#000000'; }
+// A default may be a plain hex or a function (re-resolved per read, for the
+// theme-dependent ones — see bnfVolDn). A user-picked colour always wins.
+function oipGetLineColor(key) {
+    const saved = oipLineColors[key];
+    if (saved != null) return saved;
+    const def = _OIP_LINE_DEFAULTS[key]?.color;
+    return (typeof def === 'function' ? def() : def) ?? '#000000';
+}
 function oipGetLineWidth(key) { return oipLineWidths[key] ?? _OIP_LINE_DEFAULTS[key]?.width ?? 1; }
 
 // Background fill opacity (0-1) — box30s / box5m only, see _OIP_FILL_OPACITY_KEYS.
@@ -139,6 +163,111 @@ function _oipLoadLineOpacities() {
 }
 function _oipSaveLineOpacities() { try { localStorage.setItem(_OIP_LINE_OPACITY_STORAGE_KEY, JSON.stringify(oipLineOpacities)); } catch(e) {} }
 function oipGetLineOpacity(key) { return oipLineOpacities[key] ?? _OIP_LINE_DEFAULTS[key]?.opacity ?? 0.09; }
+
+/* ── Vol Fut histogram bars (Nifty + Banknifty) ───────────────────────────
+   The index and the options carry no real traded volume of their own, so
+   every volume histogram on the page (main OI chart, the four Opt Prem
+   charts, both Round Strike charts) plots FUTURES volume, tinted by the
+   direction of whatever candles that chart draws.
+
+   Two independent overlays, each with its own up/down colour pair: 'nifty'
+   (the selected symbol's own current-expiry future) and 'banknifty' (always
+   BANKNIFTY's — `banknifty_volume` in the /api/oi-profile/candles response;
+   when BANKNIFTY *is* the selected symbol the backend returns the same data
+   for both). One colour pair drives that overlay on every chart, same "one
+   control, every chart" pattern as the checkboxes that toggle them.
+
+   Both share their chart's single volume price scale so bar heights stay
+   directly comparable, and both paint at 50% alpha so candles — and the
+   other overlay — stay readable through them. */
+const _OIP_VOL_BAR_ALPHA = '80';
+const _OIP_VOL_COLOR_KEYS = {
+    nifty:     ['volUp', 'volDn'],
+    banknifty: ['bnfVolUp', 'bnfVolDn'],
+};
+const _OIP_VOL_COLOR_KEY_SET = new Set(Object.values(_OIP_VOL_COLOR_KEYS).flat());
+function oipVolumeBarColors(kind) {
+    const [upKey, dnKey] = _OIP_VOL_COLOR_KEYS[kind] || _OIP_VOL_COLOR_KEYS.nifty;
+    return { up: oipGetLineColor(upKey) + _OIP_VOL_BAR_ALPHA,
+             down: oipGetLineColor(dnKey) + _OIP_VOL_BAR_ALPHA };
+}
+
+// Creates one chart's pair of volume histograms. Both sit on the SAME hidden
+// price scale, pinned to the bottom 20% of the pane, so the two are comparable
+// by bar height and neither competes with candle prices. Banknifty is added
+// second so it draws on top of Nifty; at 50% alpha each, the overlap reads as a
+// blend rather than one hiding the other. `chart` is the raw LightweightCharts
+// object (i.e. `X.chart` for TradingViewChart wrappers). Returns
+// [niftySeries, banknNiftySeries].
+function oipAddVolumeSeriesPair(chart, priceScaleId, showNifty = true, showBnf = false) {
+    const base = {
+        priceFormat: { type: 'volume' },
+        priceScaleId,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+    };
+    const nifty = chart.addSeries(LightweightCharts.HistogramSeries, { ...base, visible: showNifty });
+    const bnf   = chart.addSeries(LightweightCharts.HistogramSeries, { ...base, visible: showBnf });
+    chart.priceScale(priceScaleId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, visible: false });
+    return [nifty, bnf];
+}
+
+// series -> {kind, bars:[{time, value, up}]} last pushed to it. Direction is
+// baked into a histogram point's `color`, so without this cache a colour
+// change couldn't tell an up bar from a down one after the fact — and
+// refetching candles just to repaint would be wasteful. `kind` rides along so
+// a repaint knows which colour pair the series belongs to.
+const _oipVolBarCache = new Map();
+
+function _oipPaintVolumeBars(series, kind, bars) {
+    const { up, down } = oipVolumeBarColors(kind);
+    try {
+        series.setData(bars.map(b => ({ time: b.time, value: b.value, color: b.up ? up : down })));
+    } catch (e) {}
+}
+
+// Builds and pushes one chart's volume bars. `futureVolume` is the backend's
+// array (future_volume / banknifty_volume / their fixed_* twins); `refCandles`
+// are the candles actually drawn on that chart — they share the same
+// interval-driven time-bucket grid, so matching by exact time key is safe.
+// Bars are emitted only where refCandles has a REAL (non-whitespace) candle,
+// so gaps don't render a misleading zero-volume bar. `kind` picks the colour
+// pair — see _OIP_VOL_COLOR_KEYS.
+function oipSetVolumeBars(series, futureVolume, refCandles, kind = 'nifty') {
+    if (!series) return;
+    const futVolMap = new Map((futureVolume || []).map(v => [Number(v.time), Number(v.volume || 0)]));
+    const bars = [];
+    if (futVolMap.size) {
+        (refCandles || []).forEach(c => {
+            if (!c || c.open === undefined || c.close === undefined) return; // skip whitespace-only bars
+            const t = Number(c.time);
+            if (!futVolMap.has(t)) return;
+            bars.push({ time: t, value: futVolMap.get(t), up: Number(c.close) >= Number(c.open) });
+        });
+    }
+    _oipVolBarCache.set(series, { kind, bars });
+    _oipPaintVolumeBars(series, kind, bars);
+}
+
+// Re-tints every already-drawn histogram in place — no refetch, no redraw of
+// anything else. Called when any of the four volume colour pickers changes;
+// each series repaints from its own cached `kind`, so only the overlay that
+// actually changed ends up looking different.
+function oipRepaintAllVolumeBars() {
+    _oipVolBarCache.forEach(({ kind, bars }, series) => _oipPaintVolumeBars(series, kind, bars));
+}
+
+// The PE candle colour this overlay defaults to flips with the theme, so follow
+// it: repaint the bars and refresh the swatches. No-op once the user has picked
+// their own colour — an explicit choice shouldn't move when the theme does.
+window.addEventListener('themechanged', () => {
+    if (oipLineColors.bnfVolDn != null) return;
+    const c = oipGetLineColor('bnfVolDn');
+    document.querySelectorAll('.oip-line-color-inp[data-color-key="bnfVolDn"]')
+        .forEach(inp => { inp.value = c; });
+    oipRepaintAllVolumeBars();
+});
 
 // key -> checkbox id whose <label class="oip-ind-item"> gets the dropdown appended.
 const _OIP_LINE_STYLE_ITEMS = [
@@ -221,6 +350,11 @@ function _oipWireColorInput(inp) {
         e.stopPropagation();
         oipLineColors[key] = inp.value;
         _oipSaveLineColors();
+        // A key can have more than one swatch on the page — the volume colours
+        // are repeated in all three Indicator popups (see volUp/volDn). Keep
+        // the other copies in step so they don't show a stale colour.
+        document.querySelectorAll(`.oip-line-color-inp[data-color-key="${key}"]`)
+            .forEach(other => { if (other !== inp) other.value = inp.value; });
         oipApplyLineStyleChange(key);
     });
 }
@@ -401,6 +535,9 @@ function oipApplyAllLineStyles() {
 }
 
 function oipApplyLineStyleChange(key) {
+    // Volume bars aren't a line series — colour lives in the data points, so
+    // repaint them from the cache rather than going through applyOptions.
+    if (_OIP_VOL_COLOR_KEY_SET.has(key)) { oipRepaintAllVolumeBars(); return; }
     const seriesMap = _oipLineStyleSeriesMap();
     if (key in seriesMap) {
         (seriesMap[key] || []).forEach(s => _oipApplyLineProps(s, key));
@@ -1180,8 +1317,11 @@ function oipApplyZOrder() {
     const fills = [];
     const lines = [];
 
-    // Future-sourced volume histogram sits at the very bottom of the stack.
+    // Future-sourced volume histograms sit at the very bottom of the stack.
+    // Nifty first so Banknifty stays on top of it, matching the order they were
+    // created in (see oipAddVolumeSeriesPair).
     if (typeof oipVolumeSeries !== 'undefined' && oipVolumeSeries) fills.push(oipVolumeSeries);
+    if (typeof oipBnfVolumeSeries !== 'undefined' && oipBnfVolumeSeries) fills.push(oipBnfVolumeSeries);
 
     // CPR levels: box_* are fills, line_* are lines.
     Object.keys(oipCprSeriesMap).forEach(k => {
@@ -1360,8 +1500,10 @@ function oipInitIndicatorsPopup(storageKey) {
     // premium charts).
     document.getElementById('oipShow5mClose')?.addEventListener('change', () => oipRedraw5mCloseMain());
     document.getElementById('oipShowOpt5mClose')?.addEventListener('change', () => oipRedraw5mCloseOpt());
-    document.getElementById('oipShowVolumeOpt')?.addEventListener('change', () => {
-        if (typeof oipSyncOptVolumeVisibility === 'function') oipSyncOptVolumeVisibility();
+    ['oipShowVolumeOpt', 'oipShowBnfVolumeOpt'].forEach(id => {
+        document.getElementById(id)?.addEventListener('change', () => {
+            if (typeof oipSyncOptVolumeVisibility === 'function') oipSyncOptVolumeVisibility();
+        });
     });
 
     // Fixed 24000-strike chart's own reference lines — each has its own checkbox.
