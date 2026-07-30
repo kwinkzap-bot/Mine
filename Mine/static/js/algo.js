@@ -5023,37 +5023,76 @@ function _smSaveInv(id) {
 // id → { holdings: [...], broker: {...}|null } captured at render time
 const _smHoldingsData = {};
 
-// Build the SIP/SWP plan: equal-₹ split across holdings.
-// For a SIP, the amount actually split = entered SIP + any idle (undeployed) cash,
-// where idle cash = original investment − currently deployed value (clamped ≥ 0).
-// This way the leftover base capital that never got deployed is also put to work,
-// instead of splitting only the freshly entered SIP amount.
+// Build the SIP/SWP plan.
+//
+// SIP — the budget is the entered amount plus whatever idle cash the group is
+//       already sitting on, so leftover base capital gets put to work too.
+// SWP — idle cash is paid out first and only the shortfall is raised by selling.
+//
+// Sizing runs in two passes. Pass 1 is the plain equal-₹ split (budget / n,
+// floored by price). On a basket with a wide price spread that alone strands
+// most of the money: at ₹962 a stock nothing priced above ₹962 can buy a single
+// share, and every per-stock remainder is dropped on the floor independently.
+// Pass 2 pools those remainders and keeps buying one share at a time — always
+// the holding that ends up smallest, which also pulls the book back toward the
+// equal weight the strategy wants — until no share fits in what is left. SWP
+// mirrors it, selling from the largest holding first and never overshooting the
+// requested withdrawal.
 function _smFlowPlan(holdings, mode, amount, configuredInvestment = 0) {
     const n = holdings.length;
-    const empty = { allocs: [], sipAmount: amount, idle: 0, deployedBase: 0, splitAmount: 0 };
+    const empty = { allocs: [], sipAmount: amount, idle: 0, fromCash: 0,
+                    deployedBase: 0, splitAmount: 0, leftover: 0 };
     if (!n || !(amount > 0)) return empty;
 
-    let idle = 0, deployedBase = 0;
-    if (mode === 'sip') {
-        // Deployed value = cost basis currently sitting in the holdings.
-        deployedBase = holdings.reduce((s, h) => {
-            const bv = Number(h.buy_value);
-            return s + (Number.isFinite(bv) ? bv
-                        : (Number(h.entry_price) || 0) * (Number(h.qty) || 0));
-        }, 0);
-        idle = Math.max(0, (Number(configuredInvestment) || 0) - deployedBase);
+    // Deployed value = cost basis currently sitting in the holdings.
+    const deployedBase = holdings.reduce((s, h) => {
+        const bv = Number(h.buy_value);
+        return s + (Number.isFinite(bv) ? bv
+                    : (Number(h.entry_price) || 0) * (Number(h.qty) || 0));
+    }, 0);
+    const idle = Math.max(0, (Number(configuredInvestment) || 0) - deployedBase);
+
+    const isSip       = mode === 'sip';
+    const fromCash    = isSip ? 0 : Math.min(idle, amount);
+    const splitAmount = isSip ? amount + idle : amount - fromCash;
+
+    const allocs = holdings.map(h => ({
+        symbol: h.symbol,
+        price:  Number(h.current_price) || 0,
+        qty:    0,
+        held:   Number(h.qty) || 0,
+        entry:  Number(h.entry_price) || 0,
+    }));
+
+    // Pass 1 — equal-₹ split.
+    const perStock = splitAmount / n;
+    allocs.forEach(a => {
+        if (a.price <= 0) return;
+        a.qty = Math.floor(perStock / a.price);
+        if (!isSip) a.qty = Math.min(a.qty, a.held);
+    });
+
+    // Pass 2 — spend the pooled remainder, one whole share at a time.
+    // Pass 1 leaves under one share price per holding, so this terminates in
+    // roughly sum(prices)/min(price) steps; the guard is only a runaway stop.
+    let left = splitAmount - allocs.reduce((s, a) => s + a.qty * a.price, 0);
+    for (let guard = 0; guard < 100000; guard++) {
+        let best = null, bestScore = Infinity;
+        for (const a of allocs) {
+            if (a.price <= 0 || a.price > left) continue;
+            if (!isSip && a.qty >= a.held) continue;      // can't sell what isn't held
+            // SIP: smallest resulting position first. SWP: largest remaining first.
+            const score = isSip ? (a.held + a.qty + 1) * a.price
+                                : -(a.held - a.qty - 1) * a.price;
+            if (score < bestScore) { best = a; bestScore = score; }
+        }
+        if (!best) break;
+        best.qty += 1;
+        left     -= best.price;
     }
 
-    const splitAmount = amount + idle;
-    const perStock    = splitAmount / n;
-    const allocs = holdings.map(h => {
-        const price = Number(h.current_price) || 0;
-        let qty = price > 0 ? Math.floor(perStock / price) : 0;
-        if (mode === 'swp') qty = Math.min(qty, Number(h.qty) || 0);
-        return { symbol: h.symbol, price, qty, held: Number(h.qty) || 0,
-                 entry: Number(h.entry_price) || 0 };
-    });
-    return { allocs, sipAmount: amount, idle, deployedBase, splitAmount };
+    return { allocs, sipAmount: amount, idle, fromCash, deployedBase,
+             splitAmount, leftover: Math.max(0, left) };
 }
 
 function _smOpenFlowModal(id, mode) {
@@ -5162,14 +5201,22 @@ function _smRenderFlowTable(id, mode) {
         </tr>`;
     }).join('');
 
-    const splitFor   = isSip ? plan.splitAmount : amount;
-    const breakdown  = (isSip && plan.idle > 0)
-        ? `<span class="sm-flow-sub"> · SIP ${fmt(amount)} + idle cash ${fmt(plan.idle)} = ${fmt(plan.splitAmount)} to split</span>`
-        : '';
+    // "deployed" is the value moving through the market; for a SWP the payout is
+    // that plus whatever came straight out of idle cash without selling anything.
+    const headline = isSip ? deployed : plan.fromCash + deployed;
+    const breakdown = isSip
+        ? (plan.idle > 0
+            ? `<span class="sm-flow-sub"> · SIP ${fmt(amount)} + idle cash ${fmt(plan.idle)} = ${fmt(plan.splitAmount)} to split</span>`
+            : '')
+        : (plan.fromCash > 0
+            ? `<span class="sm-flow-sub"> · ${fmt(plan.fromCash)} from idle cash + ${fmt(deployed)} from sales</span>`
+            : '');
     document.getElementById('flowSummary').innerHTML =
-        `${isSip ? 'Total to deploy' : 'Total to withdraw'}: <strong>${fmt(deployed)}</strong>` +
+        `${isSip ? 'Total to deploy' : 'Total to withdraw'}: <strong>${fmt(headline)}</strong>` +
         breakdown +
-        `<span class="sm-flow-sub"> · ${allocs.filter(a => a.qty > 0).length}/${holdings.length} stocks · idle cash ${fmt(Math.max(0, splitFor - deployed))}</span>`;
+        `<span class="sm-flow-sub"> · ${allocs.filter(a => a.qty > 0).length}/${holdings.length} stocks` +
+        (plan.leftover >= 1 ? ` · ${fmt(plan.leftover)} left over` : '') +
+        `</span>`;
 }
 
 function _smSubmitFlow(id, mode) {
