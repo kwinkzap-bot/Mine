@@ -4547,6 +4547,8 @@ function _smLiveBuildCard(c) {
         <span class="sm-meta-item sm-meta-pnl" id="sm-meta-total-${c.id}">Total —</span>
         <span class="sm-meta-sep">·</span>
         <span class="sm-meta-item sm-meta-pnl" id="sm-meta-cagr-${c.id}">CAGR —</span>
+        <span class="sm-meta-sep" id="sm-meta-xirr-sep-${c.id}" style="display:none">·</span>
+        <span class="sm-meta-item sm-meta-pnl" id="sm-meta-xirr-${c.id}" style="display:none">XIRR —</span>
         <span class="sm-meta-sep">·</span>
         <span class="sm-meta-item" id="sm-meta-reb-${c.id}">Rebal —</span>
         <span class="sm-meta-sep">·</span>
@@ -4638,6 +4640,24 @@ function _smUpdateMetaRow(id, d) {
         const cagr = d.cagr_pct || 0;
         cagrEl.textContent = 'CAGR ' + (cagr >= 0 ? '+' : '') + cagr.toFixed(1) + '%';
         cagrEl.className   = 'sm-meta-item sm-meta-pnl ' + (cagr >= 0 ? 'sm-meta-pos' : 'sm-meta-neg');
+    }
+
+    // XIRR is null until the flows can support one (needs a week of history and
+    // a sign change) — hide the chip rather than show a misleading 0%.
+    const xirrEl  = document.getElementById(`sm-meta-xirr-${id}`);
+    const xirrSep = document.getElementById(`sm-meta-xirr-sep-${id}`);
+    if (xirrEl) {
+        const xirr = d.xirr_pct;
+        const show = xirr !== null && xirr !== undefined && Number.isFinite(Number(xirr));
+        xirrEl.style.display = show ? '' : 'none';
+        if (xirrSep) xirrSep.style.display = show ? '' : 'none';
+        if (show) {
+            xirrEl.textContent = 'XIRR ' + (xirr >= 0 ? '+' : '') + Number(xirr).toFixed(1) + '%';
+            xirrEl.className   = 'sm-meta-item sm-meta-pnl ' + (xirr >= 0 ? 'sm-meta-pos' : 'sm-meta-neg');
+            xirrEl.title       = 'Money-weighted return — every SIP and SWP discounted from its own '
+                               + 'date, and idle cash counted in the closing value. CAGR next to it '
+                               + 'ignores when the money arrived.';
+        }
     }
     if (reb) reb.textContent = 'Rebal ' + (d.next_rebalance || '—');
 

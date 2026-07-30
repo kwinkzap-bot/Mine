@@ -11298,6 +11298,56 @@ def _sm_plan_split(entries: list, prices: dict, mode: str, budget: float) -> lis
     return [(r['e'], r['qty'], r['px']) for r in rows if r['qty'] > 0]
 
 
+def _xirr(flows: list, min_days: int = 7):
+    """Annualised money-weighted return for dated cash flows.
+
+    `flows` is [(date, amount)] with money paid in negative and the closing
+    value positive. Returns a fraction (0.18 → 18%/yr) or None when the flows
+    can't yield one: fewer than two, no sign change, or too short a span to
+    annualise without the number exploding.
+
+    Solved by bisection rather than Newton — it converges more slowly but
+    cannot diverge on the irregular, lumpy flows a SIP produces, and the
+    bracket below spans −99.99% to +1000% a year.
+    """
+    if len(flows) < 2:
+        return None
+    flows = sorted(flows, key=lambda f: f[0])
+    t0    = flows[0][0]
+    days  = [(d - t0).days for d, _ in flows]
+    amts  = [float(a) for _, a in flows]
+    if days[-1] < min_days:
+        return None
+    if not (any(a > 0 for a in amts) and any(a < 0 for a in amts)):
+        return None
+
+    def npv(rate):
+        base = 1.0 + rate
+        return sum(a / base ** (t / 365.0) for a, t in zip(amts, days))
+
+    lo, hi = -0.9999, 10.0
+    try:
+        f_lo, f_hi = npv(lo), npv(hi)
+    except (OverflowError, ZeroDivisionError):
+        return None
+    if f_lo * f_hi > 0:
+        return None
+
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        try:
+            f_mid = npv(mid)
+        except (OverflowError, ZeroDivisionError):
+            return None
+        if abs(f_mid) < 1e-7 or (hi - lo) < 1e-10:
+            return mid
+        if f_lo * f_mid < 0:
+            hi = mid
+        else:
+            lo, f_lo = mid, f_mid
+    return (lo + hi) / 2
+
+
 def _sm_compute_today_rankings(index_name: str):
     """Return today's momentum rankings using avg(3M, 6M, 9M) — same as Swing Trade tab.
 
@@ -12469,6 +12519,31 @@ def sm_live_signal(config_id):
         monthly_log = config.get('monthly_investment_log', [])
         total_sip   = sum(e.get('amount', 0) for e in monthly_log if e.get('amount', 0) > 0)
         total_swp   = sum(-e.get('amount', 0) for e in monthly_log if e.get('amount', 0) < 0)
+        cash_bal    = _sm_cash_balance(config)
+
+        # Money-weighted return. CAGR above compares closing value to cost basis
+        # over calendar time, so it can't see *when* each SIP arrived — money put
+        # in last month is credited with the same holding period as the original
+        # capital. XIRR discounts every contribution from its own date.
+        xirr_pct = None
+        try:
+            flows  = []
+            since  = config.get('live_since')
+            if since:
+                flows.append((datetime.strptime(since, '%Y-%m-%d').date(),
+                              -float(config.get('investment', 0) or 0)))
+            for entry in monthly_log:
+                amt = float(entry.get('amount', 0) or 0)
+                if not amt or not entry.get('date'):
+                    continue          # rebalances log 0 — internal, no external cash
+                flows.append((datetime.strptime(entry['date'], '%Y-%m-%d').date(), -amt))
+            # Idle cash is still the group's money. Excluding it would read as a
+            # loss rather than as the drag on returns that it actually is.
+            flows.append((today, total_curr_val + cash_bal))
+            rate = _xirr(flows)
+            xirr_pct = round(rate * 100, 2) if rate is not None else None
+        except Exception:
+            xirr_pct = None
 
         return jsonify({
             'success':                True,
@@ -12488,13 +12563,14 @@ def sm_live_signal(config_id):
             'last_rebalance':         config.get('live_since'),
             'rebalance_needed':       False,
             'configured_investment':  config.get('investment', 100000),
-            'cash_balance':           _sm_cash_balance(config),
+            'cash_balance':           cash_bal,
             'monthly_add':            config.get('monthly_add', 0),
             'monthly_add_type':       config.get('monthly_add_type', 'static'),
             'monthly_investment_log': monthly_log,
             'total_sip_added':        round(total_sip, 2),
             'total_swp_taken':        round(total_swp, 2),
             'cagr_pct':               cagr_pct,
+            'xirr_pct':               xirr_pct,
             'broker':                 config.get('broker'),
             'rankings_pending':       True,
         })
