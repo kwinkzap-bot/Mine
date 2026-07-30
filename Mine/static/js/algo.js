@@ -35,10 +35,11 @@ const _ALGO_TABS = ['active', 'rtp', 'sc', 'intrinsic', 'tmf', 'ema-confluence',
 const _ALGO_RTP_SUBTABS = ['rtp30s', 'rtp', 'rtp2m', 'rtp3m', 'rtp5m'];
 let _algoRtpActiveSub = 'rtp30s';
 
-// Round-trip brokerage charged per lot (1 lot = 65 qty). The performance
-// dashboards express ₹ P&L on a single-lot basis (opt_pnl_pts × lot_size), so
-// exactly one lot's brokerage is deducted from each completed trade.
-const _ALGO_BROKERAGE_PER_LOT = 135;
+// Round-trip charges are computed per trade from its own premium turnover
+// (ZerodhaCharges, static/js/algo_charges.js) — a ₹250 option and a ₹40 one do
+// not cost the same, which the old flat ₹135-a-lot figure could not express.
+// The performance dashboards express ₹ P&L on a single-lot basis
+// (opt_pnl_pts × lot_size), so charges are worked out on one lot to match.
 
 // NIFTY lot size — fallback when a trade record has no lot_size field.
 const _NIFTY_LOT_SIZE = 65;
@@ -67,10 +68,64 @@ function _algoOptTiles(trade, live) {
     ];
 }
 
-// Realised ₹ for a completed trade, net of round-trip brokerage.
+// Which pair of price fields a trade books its ₹ P&L on: the option tabs
+// (RTP ×5, 2nd Candle) trade a bought option; Intrinsic Range books the same
+// way against premium fields with different names.
+function _algoTradeLegs(t) {
+    if (!t) return null;
+    if (t.opt_pnl_inr != null || t.opt_entry_price != null) {
+        return { inr: t.opt_pnl_inr, entry: t.opt_entry_price, exit: t.opt_exit_price };
+    }
+    if (t.premium_pnl_inr != null || t.entry_premium != null) {
+        return { inr: t.premium_pnl_inr, entry: t.entry_premium, exit: t.exit_premium };
+    }
+    return null;
+}
+
+// Round-trip Zerodha charges (₹) for one completed trade, on the single-lot
+// basis the ₹ P&L itself uses. Both entry and exit are option legs, always
+// bought first (CE for a BUY signal, PE for a SELL), so entry is the buy leg.
+function _algoCharges(t) {
+    const legs = _algoTradeLegs(t);
+    if (!legs) return 0;
+    return ZerodhaCharges.forTrade({
+        segment: 'option',
+        entry:   legs.entry,
+        exit:    legs.exit,
+        qty:     (t.lot_size ?? _NIFTY_LOT_SIZE),
+    });
+}
+
+// Realised ₹ for a completed trade, net of those charges.
 function _algoNetInr(t) {
-    if (!t || t.opt_pnl_inr == null) return 0;
-    return (Number(t.opt_pnl_inr) || 0) - _ALGO_BROKERAGE_PER_LOT;
+    const legs = _algoTradeLegs(t);
+    if (!legs || legs.inr == null) return 0;
+    return (Number(legs.inr) || 0) - _algoCharges(t);
+}
+
+// Total charges across a set of completed trades — the dashboards' Charges tile.
+function _algoChargesTotal(trades) {
+    return (trades || []).reduce((sum, t) => sum + _algoCharges(t), 0);
+}
+
+// "+₹1,908 (-₹79)" — net P&L with the charge that came out of it in brackets,
+// the shape every executed-trade grid in the app now uses.
+function _algoNetInrCell(t) {
+    const legs = _algoTradeLegs(t);
+    if (!legs || legs.inr == null) return '—';
+    const chg = _algoCharges(t);
+    return DataGrid.inr(_algoNetInr(t)) +
+           (chg ? ` (-₹${Math.round(chg).toLocaleString('en-IN')})` : '');
+}
+
+// Hover text for that cell: the gross figure and what it lost.
+function _algoNetInrTip(t) {
+    const legs = _algoTradeLegs(t);
+    if (!legs || legs.inr == null) return '';
+    const chg = _algoCharges(t);
+    if (!chg) return '';
+    return `Gross ${DataGrid.inr(legs.inr)} − charges ₹${chg.toFixed(2)} ` +
+           `(Zerodha options, 1 lot: brokerage, STT, txn, GST, stamp duty, SEBI)`;
 }
 
 // ── Active Trade tab (all live option algos consolidated) ─────────────────────
@@ -226,7 +281,7 @@ function _activeRenderPnl(rows, todayTrades) {
         { label: 'Wins',               value: wins,   cls: 'ag-pos' },
         { label: 'Losses',             value: losses, cls: 'ag-neg' },
         { label: 'Open Trades',        value: rows.length },
-        { label: 'Brokerage (₹)',      value: done.length ? '-₹' + (done.length * _ALGO_BROKERAGE_PER_LOT).toLocaleString('en-IN') : '—', cls: done.length ? 'ag-neg' : '' },
+        { label: 'Charges (₹)',        value: done.length ? '-₹' + Math.round(_algoChargesTotal(done)).toLocaleString('en-IN') : '—', cls: done.length ? 'ag-neg' : '' },
     ];
 
     statsEl.innerHTML = tiles.map(t =>
@@ -280,8 +335,10 @@ function _activeRenderHistory(trades) {
             { label: 'Opt Pts', strong: true,
               format: (_, t) => DataGrid.points(optPts(t)),
               tone:   (_, t) => DataGrid.sign(optPts(t)) },
-            { key: 'opt_pnl_inr', label: 'Opt P&L (₹)', strong: true,
-              format: DataGrid.inr, tone: DataGrid.sign },
+            { key: 'opt_pnl_inr', label: 'Net Opt P&L (Bro)', strong: true,
+              format: (_, t) => _algoNetInrCell(t),
+              tone:   (_, t) => t.opt_pnl_inr == null ? '' : DataGrid.sign(_algoNetInr(t)),
+              title:  (_, t) => _algoNetInrTip(t) },
             { key: 'reason', label: 'Reason',
               format: r => (r || '').replace(/_/g, ' '),
               badge:  r => _ALGO_REASON_TONE[r] || 'neutral' },
@@ -352,8 +409,12 @@ function _algoHistoryGrid(trades, { onDelete, shape = 'option' } = {}) {
             { label: L.pts, strong: true,
               format: (_, t) => DataGrid.points(pts(t)),
               tone:   (_, t) => DataGrid.sign(pts(t)) },
-            { key: f.inr, label: L.inr, strong: true,
-              format: DataGrid.inr, tone: DataGrid.sign },
+            // Net of Zerodha charges — no separate brokerage column, the cost
+            // comes out of the P&L itself and shows in brackets after it.
+            { key: f.inr, label: 'Net ' + L.inr + ' (Bro)', strong: true,
+              format: (_, t) => _algoNetInrCell(t),
+              tone:   (_, t) => t[f.inr] == null ? '' : DataGrid.sign(_algoNetInr(t)),
+              title:  (_, t) => _algoNetInrTip(t) },
             { key: 'reason', label: 'Reason',
               format: r => (r || '').replace(/_/g, ' '),
               badge:  r => _ALGO_REASON_TONE[r] || 'neutral' },
@@ -362,6 +423,109 @@ function _algoHistoryGrid(trades, { onDelete, shape = 'option' } = {}) {
                   ` onclick="${onDelete}('${(t.entry_time || '').replace(/"/g, '&quot;')}')">&#128465;</button>` },
         ],
     });
+}
+
+// ── Trade History Summary — shared by any tab without a Live Performance
+//    dashboard of its own (Intrinsic Range today). Aggregates exactly the rows
+//    its Executed Trade History grid shows, on the same net-of-charges basis:
+//    a trade that only won before Zerodha's cut counts as a loss here, so Win
+//    Rate and Profit Factor describe money kept, not price moves. ──────────
+function _algoRenderTradeSummary(prefix, trades) {
+    const card = document.getElementById(prefix + 'PerfCard');
+    if (!card) return;
+    const done = (trades || []).filter(t => {
+        const legs = _algoTradeLegs(t);
+        return legs && legs.inr != null;
+    });
+    if (!done.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+
+    let wins = 0, losses = 0, winSum = 0, lossSum = 0;
+    let gross = 0, charges = 0, net = 0;
+    let best = -Infinity, worst = Infinity;
+    const reasons = {};
+    const days = new Set();
+
+    done.forEach(t => {
+        const n = _algoNetInr(t);
+        gross   += Number(_algoTradeLegs(t).inr) || 0;
+        charges += _algoCharges(t);
+        net     += n;
+        if (n >= 0) { wins++;   winSum  += n; }
+        else        { losses++; lossSum += Math.abs(n); }
+        if (n > best)  best  = n;
+        if (n < worst) worst = n;
+        const r = String(t.reason || '').toUpperCase();
+        if (r) reasons[r] = (reasons[r] || 0) + 1;
+        const day = t.date || (t.entry_time ? String(t.entry_time).slice(0, 10) : null);
+        if (day) days.add(day);
+    });
+
+    const total   = done.length;
+    const winRate = total ? (wins / total * 100) : 0;
+    const pf      = lossSum > 0 ? (winSum / lossSum) : (winSum > 0 ? Infinity : 0);
+    const maxDD   = _algoMaxDrawdown(done);
+    const perDay  = days.size ? net / days.size : net;
+
+    const cls  = v => v >= 0 ? 'ag-pos' : 'ag-neg';
+    const inrF = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    const negF = v => '-₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+
+    const tiles = [
+        { label: 'Total Trades',  value: total },
+        { label: 'Wins',          value: wins,   cls: 'ag-pos' },
+        { label: 'Losses',        value: losses, cls: 'ag-neg' },
+        { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
+        { label: 'Net P&L (₹)',   value: inrF(net),   cls: cls(net) },
+        { label: 'Gross P&L (₹)', value: inrF(gross), cls: cls(gross) },
+        { label: 'Charges (₹)',   value: negF(charges), cls: 'ag-neg' },
+        { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
+        { label: 'Avg Win (₹)',   value: wins   ? inrF(winSum / wins)    : '—', cls: wins   ? 'ag-pos' : '' },
+        { label: 'Avg Loss (₹)',  value: losses ? negF(lossSum / losses) : '—', cls: losses ? 'ag-neg' : '' },
+        { label: 'Best Trade',    value: inrF(best),  cls: cls(best) },
+        { label: 'Worst Trade',   value: inrF(worst), cls: cls(worst) },
+        { label: 'Max Drawdown',  value: negF(maxDD), cls: 'ag-neg' },
+        { label: 'Trading Days',  value: days.size || '—' },
+        { label: 'Avg / Day (₹)', value: inrF(perDay), cls: cls(perDay) },
+        // Exit reasons the algo actually used, in the grid's own wording.
+        ...Object.keys(reasons).sort().map(r => ({
+            label: r.replace(/_/g, ' '),
+            value: reasons[r],
+            cls: _ALGO_REASON_TONE[r] === 'pos' ? 'ag-pos'
+               : _ALGO_REASON_TONE[r] === 'neg' ? 'ag-neg' : '',
+        })),
+    ];
+
+    const stats = document.getElementById(prefix + 'PerfStats');
+    if (stats) {
+        stats.innerHTML = tiles.map(t =>
+            `<div class="ag-stat">
+                <span class="ag-stat-label">${t.label}</span>
+                <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+            </div>`
+        ).join('');
+    }
+
+    const metaEl = document.getElementById(prefix + 'PerfMeta');
+    if (metaEl) metaEl.textContent = `${total} trade${total > 1 ? 's' : ''} · net of ₹${Math.round(charges).toLocaleString('en-IN')} charges`;
+
+    const netEl = document.getElementById(prefix + 'PerfNet');
+    if (netEl) {
+        netEl.textContent = inrF(net);
+        netEl.style.color = net >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+}
+
+// Deepest peak-to-trough dip of the running net P&L, in entry order (≤ 0).
+function _algoMaxDrawdown(trades) {
+    const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    let cum = 0, peak = 0, maxDD = 0;
+    sorted.forEach(t => {
+        cum += _algoNetInr(t);
+        if (cum > peak) peak = cum;
+        if (cum - peak < maxDD) maxDD = cum - peak;
+    });
+    return maxDD;
 }
 
 function algoLoad() {
@@ -676,7 +840,7 @@ function _rtpRenderDashboard(trades) {
     const avgWin  = wins   ? winPts  / wins   : null;
     const avgLoss = losses ? lossPts / losses : null;
     const maxDD   = _rtpMaxDrawdown(done);   // ₹, ≤ 0
-    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
+    const brokTot = _algoChargesTotal(done);   // ₹ Zerodha charges deducted
 
     const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
     const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
@@ -688,7 +852,7 @@ function _rtpRenderDashboard(trades) {
         { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
         { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtpPnlCls(netInr) },
         { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtpPnlCls(netPts) },
-        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Charges (₹)',   value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
         { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
         { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
         { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
@@ -1243,7 +1407,7 @@ function _rtp30sRenderDashboard(trades) {
     const avgWin  = wins   ? winPts  / wins   : null;
     const avgLoss = losses ? lossPts / losses : null;
     const maxDD   = _rtp30sMaxDrawdown(done);   // ₹, ≤ 0
-    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
+    const brokTot = _algoChargesTotal(done);   // ₹ Zerodha charges deducted
 
     const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
     const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
@@ -1255,7 +1419,7 @@ function _rtp30sRenderDashboard(trades) {
         { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
         { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtp30sPnlCls(netInr) },
         { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtp30sPnlCls(netPts) },
-        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Charges (₹)',   value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
         { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
         { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
         { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
@@ -1811,7 +1975,7 @@ function _rtp3mRenderDashboard(trades) {
     const avgWin  = wins   ? winPts  / wins   : null;
     const avgLoss = losses ? lossPts / losses : null;
     const maxDD   = _rtp3mMaxDrawdown(done);   // ₹, ≤ 0
-    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
+    const brokTot = _algoChargesTotal(done);   // ₹ Zerodha charges deducted
 
     const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
     const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
@@ -1823,7 +1987,7 @@ function _rtp3mRenderDashboard(trades) {
         { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
         { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtp3mPnlCls(netInr) },
         { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtp3mPnlCls(netPts) },
-        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Charges (₹)',   value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
         { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
         { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
         { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
@@ -2379,7 +2543,7 @@ function _rtp2mRenderDashboard(trades) {
     const avgWin  = wins   ? winPts  / wins   : null;
     const avgLoss = losses ? lossPts / losses : null;
     const maxDD   = _rtp2mMaxDrawdown(done);   // ₹, ≤ 0
-    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
+    const brokTot = _algoChargesTotal(done);   // ₹ Zerodha charges deducted
 
     const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
     const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
@@ -2391,7 +2555,7 @@ function _rtp2mRenderDashboard(trades) {
         { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
         { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtp2mPnlCls(netInr) },
         { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtp2mPnlCls(netPts) },
-        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Charges (₹)',   value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
         { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
         { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
         { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
@@ -2947,7 +3111,7 @@ function _rtp5mRenderDashboard(trades) {
     const avgWin  = wins   ? winPts  / wins   : null;
     const avgLoss = losses ? lossPts / losses : null;
     const maxDD   = _rtp5mMaxDrawdown(done);   // ₹, ≤ 0
-    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
+    const brokTot = _algoChargesTotal(done);   // ₹ Zerodha charges deducted
 
     const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
     const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
@@ -2959,7 +3123,7 @@ function _rtp5mRenderDashboard(trades) {
         { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
         { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtp5mPnlCls(netInr) },
         { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtp5mPnlCls(netPts) },
-        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Charges (₹)',   value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
         { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
         { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
         { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
@@ -3537,7 +3701,7 @@ function _scRenderDashboard(trades) {
     const avgWin  = wins   ? winPts  / wins   : null;
     const avgLoss = losses ? lossPts / losses : null;
     const maxDD   = _rtpMaxDrawdown(done);
-    const brokTot = total * _ALGO_BROKERAGE_PER_LOT;   // ₹ brokerage deducted
+    const brokTot = _algoChargesTotal(done);   // ₹ Zerodha charges deducted
 
     const inrFmt = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
     const ptsFmt = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + ' pts';
@@ -3549,7 +3713,7 @@ function _scRenderDashboard(trades) {
         { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
         { label: 'Net P&L (₹)',   value: inrFmt(netInr), cls: _rtpPnlCls(netInr) },
         { label: 'Net Opt Pts',   value: ptsFmt(netPts), cls: _rtpPnlCls(netPts) },
-        { label: 'Brokerage (₹)', value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
+        { label: 'Charges (₹)',   value: '-₹' + Math.round(brokTot).toLocaleString('en-IN'), cls: 'ag-neg' },
         { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
         { label: 'Avg Win (opt)', value: ptsFmt(avgWin),  cls: 'ag-pos' },
         { label: 'Avg Loss (opt)',value: ptsFmt(avgLoss), cls: 'ag-neg' },
@@ -4039,6 +4203,7 @@ function _intrinsicRenderHistory(trades) {
 
     if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
 
+    _algoRenderTradeSummary('intrinsic', trades);
     body.innerHTML = _algoHistoryGrid(trades, { onDelete: '_intrinsicDeleteTrade', shape: 'premium' });
 }
 

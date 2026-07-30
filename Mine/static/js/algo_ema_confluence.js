@@ -226,8 +226,38 @@ const _EMAC_REASON_TONE = {
     'SL':     'neg',
 };
 
+// ── Zerodha charges — F&O futures ───────────────────────────────────────────
+// These are paper fills on a futures contract, so the P&L is only meaningful
+// net of what the round trip would cost. Rates live in ZerodhaCharges
+// (algo_charges.js), charged per trade off its own turnover. NSE rates are
+// used throughout — a BSE (SENSEX) leg is fractionally cheaper on the
+// transaction charge, so this errs on the conservative side.
+function _emacCharges(t) {
+    return ZerodhaCharges.forTrade({
+        segment: 'future',
+        entry:   t.entry_price,
+        exit:    t.exit_price,
+        qty:     t.qty,
+        short:   String(t.direction || '').toUpperCase() === 'SELL',
+    });
+}
+
+// What the trade is worth after those charges — used by the grid, the equity
+// curve, the P&L breakdown and the summary alike.
+function _emacNetPnl(t) {
+    return (Number(t.pnl) || 0) - _emacCharges(t);
+}
+
+function _emacPnlTip(t) {
+    const chg = _emacCharges(t);
+    if (!chg) return '';
+    return `Gross ${DataGrid.inr(t.pnl)} − charges ₹${chg.toFixed(2)} ` +
+           `(Zerodha futures: brokerage, STT, txn, GST, stamp duty, SEBI)`;
+}
+
 function _emacRenderHistory(trades) {
     _emacHistoryTrades = trades || [];
+    _emacRenderSummary(_emacHistoryTrades);
     _emacRenderEquityCurve(_emacHistoryTrades);
     const activePeriod = document.querySelector('#emacPeriodTabs .period-tab.active')?.dataset.period || 'monthly';
     _emacRenderPeriodBreakdown(_emacHistoryTrades, activePeriod);
@@ -251,13 +281,119 @@ function _emacRenderHistory(trades) {
             { key: 'exit_price', label: 'Exit', format: DataGrid.rupees },
             { key: 'sl_price', label: 'SL', format: v => v == null ? '—' : DataGrid.rupees(v) },
             { key: 'target_price', label: 'Target', format: v => v == null ? '—' : DataGrid.rupees(v) },
-            { key: 'pnl', label: 'P&L (₹)', strong: true, format: DataGrid.inr, tone: DataGrid.sign },
+            // Net of Zerodha charges, with the charge in brackets after it —
+            // no separate brokerage column.
+            { key: 'pnl', label: 'NET P&L (Bro)', strong: true,
+              format: (_, t) => {
+                  const chg = _emacCharges(t);
+                  return DataGrid.inr(_emacNetPnl(t)) +
+                         (chg ? ` (-₹${Math.round(chg).toLocaleString('en-IN')})` : '');
+              },
+              tone:  (_, t) => DataGrid.sign(_emacNetPnl(t)),
+              title: (_, t) => _emacPnlTip(t) },
             { key: 'reason', label: 'Reason', badge: v => _EMAC_REASON_TONE[v] || 'neutral' },
             { label: '', cellClass: 'ag-hist-td-del',
               render: (_, t) => `<button class="ag-hist-del-btn" title="Delete record"` +
                   ` onclick="_emacDeleteTrade('${(t.entry_time || '').replace(/"/g, '&quot;')}')">&#128465;</button>` },
         ],
     });
+}
+
+// ── Trade History Summary ────────────────────────────────────────────────────
+// Aggregates the rows the Executed Trade History grid shows, on the same
+// net-of-charges basis — so Wins / Win Rate / Profit Factor describe money
+// kept, not price moves.
+
+function _emacRenderSummary(trades) {
+    const card = document.getElementById('emacPerfCard');
+    if (!card) return;
+    const done = (trades || []).filter(t => t.pnl != null);
+    if (!done.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+
+    let wins = 0, losses = 0, winSum = 0, lossSum = 0;
+    let gross = 0, charges = 0, net = 0;
+    let best = -Infinity, worst = Infinity;
+    const reasons = {};
+    const days = new Set();
+
+    done.forEach(t => {
+        const n = _emacNetPnl(t);
+        gross   += Number(t.pnl) || 0;
+        charges += _emacCharges(t);
+        net     += n;
+        if (n >= 0) { wins++;   winSum  += n; }
+        else        { losses++; lossSum += Math.abs(n); }
+        if (n > best)  best  = n;
+        if (n < worst) worst = n;
+        const r = String(t.reason || '').toUpperCase();
+        if (r) reasons[r] = (reasons[r] || 0) + 1;
+        const day = t.date || (t.entry_time ? String(t.entry_time).slice(0, 10) : null);
+        if (day) days.add(day);
+    });
+
+    const total   = done.length;
+    const winRate = total ? (wins / total * 100) : 0;
+    const pf      = lossSum > 0 ? (winSum / lossSum) : (winSum > 0 ? Infinity : 0);
+    const maxDD   = _emacMaxDrawdown(done);
+
+    const cls  = v => v >= 0 ? 'ag-pos' : 'ag-neg';
+    const inrF = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    const negF = v => '-₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+
+    const tiles = [
+        { label: 'Total Trades',  value: total },
+        { label: 'Wins',          value: wins,   cls: 'ag-pos' },
+        { label: 'Losses',        value: losses, cls: 'ag-neg' },
+        { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
+        { label: 'Net P&L (₹)',   value: inrF(net),   cls: cls(net) },
+        { label: 'Gross P&L (₹)', value: inrF(gross), cls: cls(gross) },
+        { label: 'Charges (₹)',   value: negF(charges), cls: 'ag-neg' },
+        { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
+        { label: 'Avg Win (₹)',   value: wins   ? inrF(winSum / wins)    : '—', cls: wins   ? 'ag-pos' : '' },
+        { label: 'Avg Loss (₹)',  value: losses ? negF(lossSum / losses) : '—', cls: losses ? 'ag-neg' : '' },
+        { label: 'Best Trade',    value: inrF(best),  cls: cls(best) },
+        { label: 'Worst Trade',   value: inrF(worst), cls: cls(worst) },
+        { label: 'Max Drawdown',  value: negF(maxDD), cls: 'ag-neg' },
+        { label: 'Trading Days',  value: days.size || '—' },
+        ...Object.keys(reasons).sort().map(r => ({
+            label: r.replace(/_/g, ' '),
+            value: reasons[r],
+            cls: _EMAC_REASON_TONE[r] === 'pos' ? 'ag-pos'
+               : _EMAC_REASON_TONE[r] === 'neg' ? 'ag-neg' : '',
+        })),
+    ];
+
+    const stats = document.getElementById('emacPerfStats');
+    if (stats) {
+        stats.innerHTML = tiles.map(t =>
+            `<div class="ag-stat">
+                <span class="ag-stat-label">${t.label}</span>
+                <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+            </div>`
+        ).join('');
+    }
+
+    const metaEl = document.getElementById('emacPerfMeta');
+    if (metaEl) metaEl.textContent = `${total} trade${total > 1 ? 's' : ''} · net of ₹${Math.round(charges).toLocaleString('en-IN')} charges`;
+
+    const netEl = document.getElementById('emacPerfNet');
+    if (netEl) {
+        netEl.textContent = inrF(net);
+        netEl.style.color = net >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+}
+
+// Deepest peak-to-trough dip of the running net P&L, in entry order (≤ 0).
+function _emacMaxDrawdown(trades) {
+    const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    let cum = 0, peak = 0, maxDD = 0;
+    sorted.forEach(t => {
+        cum += _emacNetPnl(t);
+        if (cum > peak) peak = cum;
+        if (cum - peak < maxDD) maxDD = cum - peak;
+    });
+    return maxDD;
 }
 
 function _emacFmtDateTime(iso) {
@@ -302,7 +438,7 @@ function _emacRenderEquityCurve(trades) {
 
     let portfolio = _emacStartingEquity;
     sorted.forEach((t, idx) => {
-        const pnl = t.pnl || 0;
+        const pnl = _emacNetPnl(t);   // net of Zerodha charges, same as the grid
         portfolio += pnl;
         labels.push('T' + (idx + 1));
         chartData.push(Math.round(portfolio));
@@ -414,9 +550,11 @@ function _emacGroupByPeriod(trades, period) {
         else if (period === 'halfyearly') key = `${d.getFullYear()}-H${d.getMonth() < 6 ? 1 : 2}`;
         else                            key = `${d.getFullYear()}`;
         if (!groups[key]) groups[key] = { pnl: 0, wins: 0, losses: 0 };
-        groups[key].pnl += (t.pnl || 0);
-        if ((t.pnl || 0) > 0) groups[key].wins++;
-        else                  groups[key].losses++;
+        // Net P&L throughout — a trade that only won before charges is a loss.
+        const net = _emacNetPnl(t);
+        groups[key].pnl += net;
+        if (net > 0) groups[key].wins++;
+        else         groups[key].losses++;
     });
     return groups;
 }

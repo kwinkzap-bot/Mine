@@ -1167,6 +1167,11 @@ class RTPAlgo:
         kite_ts   = inst.get('tradingsymbol', '')
 
         broker_entries: List[Dict] = []
+        if not self._broker_map:
+            self.log.info(
+                f"No broker enabled for {self.cfg.broker_tag} — paper entry only"
+                f" (signal, strike, levels and P&L still tracked)"
+            )
         for idx, (broker_type, svc) in self._broker_map.items():
             lots     = max(1, int(self._uvar(f'BROKER_{idx}_{self.cfg.broker_tag}_LOTS', '1') or '1'))
             quantity = lots * self._lot_size
@@ -1206,6 +1211,12 @@ class RTPAlgo:
         except Exception as _e:
             self.log.warning(f"Could not fetch option entry LTP: {_e}")
 
+        # Traded symbol and size live on the trade itself, not only inside
+        # broker_entries: with the per-broker RTP flag off there are no broker
+        # entries at all, and the exit LTP / live option P&L must still resolve.
+        total_qty = sum(int(e.get('quantity', 0) or 0) for e in broker_entries) \
+                    or int(self._lot_size)
+
         state = self._load_state()
         state['active_trade'] = {
             'direction':       direction,
@@ -1218,15 +1229,19 @@ class RTPAlgo:
             'lot_size':        self._lot_size,
             'expiry':          str(self._expiry),
             'broker_entries':  broker_entries,
+            'fyers_sym':       fyers_sym,
+            'tradingsymbol':   kite_ts,
+            'total_quantity':  total_qty,
             'opt_entry_price': opt_entry_price,
             'strike_mode':     strike_mode,
+            'paper':           not broker_entries,
         }
         self._save_state(state)
         self.log.info(
             f"ENTERED {direction}: spot={spot} {int(strike)}{opt_type}"
             f" opt_ltp={opt_entry_price} mode={strike_mode}"
             f" sl={sl_level} tgt={tgt_level} expiry={self._expiry}"
-            f" brokers={len(broker_entries)}"
+            f" brokers={len(broker_entries)}{' (paper)' if not broker_entries else ''}"
         )
 
     def _exit_trade(self, reason: str, spot: float, square_off: bool = True) -> None:
@@ -1249,7 +1264,13 @@ class RTPAlgo:
         try:
             provider = getattr(self, '_provider', None)
             if provider:
-                fyers_sym = trade.get('broker_entries', [{}])[0].get('fyers_sym', '') if trade.get('broker_entries') else ''
+                # Prefer the symbol stored on the trade — broker_entries is empty
+                # when the per-broker RTP flag is off (paper mode), and the exit
+                # premium / P&L must still be recorded.
+                fyers_sym = trade.get('fyers_sym') or next(
+                    (e.get('fyers_sym') for e in (trade.get('broker_entries') or [])
+                     if e.get('fyers_sym')), ''
+                )
                 if fyers_sym:
                     ltp_data = provider.ltp([fyers_sym])
                     raw = ltp_data.get(fyers_sym, {}).get('last_price', 0)

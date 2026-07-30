@@ -89,11 +89,24 @@
         </div>
     </div>
 
+    <!-- ── Trade History Summary (net of charges) ───────────────── -->
+    <div class="ag-card" id="emacPerfCard" style="display:none">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Trade History Summary</span>
+            <span id="emacPerfMeta" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+            <span id="emacPerfNet" style="font-size:12px;font-weight:800"></span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="emacPerfStats"></div>
+        </div>
+    </div>
+
     <!-- ── Executed Trade History ──────────────────────────────── -->
     <div class="ag-card">
         <div class="ag-card-hdr">
             <span class="ag-card-title">Executed Trade History (Paper)</span>
-            <span id="emacHistCount" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+            <span style="margin-left:auto;font-size:11px;color:var(--ag-text-3)">P&amp;L is net of Zerodha futures charges</span>
+            <span id="emacHistCount" style="font-size:11px;color:var(--ag-text-3)"></span>
             <button class="ag-hist-delall-btn" onclick="_emacDeleteAllTrades()" title="Delete ALL trade history records">&#128465; Delete All</button>
         </div>
         <div id="emacHistBody">

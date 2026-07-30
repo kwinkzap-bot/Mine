@@ -773,11 +773,24 @@
         </div>
     </div>
 
+    <!-- ── Trade History Summary (net of charges) ───────────────── -->
+    <div class="ag-card" id="intrinsicPerfCard" style="display:none">
+        <div class="ag-card-hdr">
+            <span class="ag-card-title">Trade History Summary</span>
+            <span id="intrinsicPerfMeta" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+            <span id="intrinsicPerfNet" style="font-size:12px;font-weight:800"></span>
+        </div>
+        <div class="ag-card-body">
+            <div class="ag-grid" id="intrinsicPerfStats"></div>
+        </div>
+    </div>
+
     <!-- ── Executed Trade History ──────────────────────────────── -->
     <div class="ag-card">
         <div class="ag-card-hdr">
             <span class="ag-card-title">Executed Trade History (Paper)</span>
-            <span id="intrinsicHistCount" style="margin-left:auto;font-size:11px;color:var(--ag-text-3)"></span>
+            <span style="margin-left:auto;font-size:11px;color:var(--ag-text-3)">P&amp;L is net of Zerodha option charges</span>
+            <span id="intrinsicHistCount" style="font-size:11px;color:var(--ag-text-3)"></span>
             <button class="ag-hist-delall-btn" onclick="_intrinsicDeleteAllTrades()" title="Delete ALL trade history records">&#128465; Delete All</button>
         </div>
         <div id="intrinsicHistBody">
@@ -824,6 +837,7 @@
 </div><!-- .algo-inner -->
 </div><!-- .algo-page -->
 
+<script src="{{ url_for('static', filename='js/algo_charges.js') }}?v={{ sv('js/algo_charges.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_tmf.js') }}?v={{ sv('js/algo_tmf.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_ema_confluence.js') }}?v={{ sv('js/algo_ema_confluence.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo.js') }}?v={{ sv('js/algo.js') }}"></script>

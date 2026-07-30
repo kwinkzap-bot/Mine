@@ -136,7 +136,11 @@ def _algo_option_live(trade: dict, provider) -> dict:
     result: dict = {'opt_entry_price': trade.get('opt_entry_price')}
     try:
         broker_entries = trade.get('broker_entries', []) or []
-        fyers_sym = next((e['fyers_sym'] for e in broker_entries if e.get('fyers_sym')), '')
+        # broker_entries is empty when the algo's per-broker flag is off (paper
+        # mode) — fall back to the symbol/size recorded on the trade itself so
+        # the live premium and P&L still resolve.
+        fyers_sym = next((e['fyers_sym'] for e in broker_entries if e.get('fyers_sym')), '') \
+            or trade.get('fyers_sym') or ''
         if not fyers_sym:
             return result
         ltp_data = provider.ltp([fyers_sym])
@@ -146,7 +150,8 @@ def _algo_option_live(trade: dict, provider) -> dict:
         opt_entry = result['opt_entry_price']
         if opt_entry is not None and opt_cur is not None:
             opt_pnl_pts = round(opt_cur - float(opt_entry), 2)
-            total_qty   = sum(float(e.get('quantity', 0) or 0) for e in broker_entries)
+            total_qty   = sum(float(e.get('quantity', 0) or 0) for e in broker_entries) \
+                or float(trade.get('total_quantity') or trade.get('lot_size') or 0)
             result['opt_pnl_pts'] = opt_pnl_pts
             result['opt_pnl_inr'] = round(opt_pnl_pts * total_qty, 2) if total_qty else None
     except Exception as _e:

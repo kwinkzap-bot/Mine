@@ -253,7 +253,6 @@
 .stat-val-red   { color: #ef4444 !important; }
 
 .equity-curve-container {
-    margin-top: 8px;
     background: var(--dg-surface);
     border-radius: 6px;
     border: 1px solid var(--oip-border);
@@ -584,7 +583,6 @@
 
 /* ── Period Breakdown ───────────────────────────────── */
 .period-breakdown {
-    margin-top: 8px;
     background: var(--dg-surface);
     border-radius: 6px;
     border: 1px solid var(--oip-border);

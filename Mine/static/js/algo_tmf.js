@@ -179,45 +179,18 @@ const _TMF_REASON_TONE = {
 
 // ── Zerodha charges — NSE equity intraday (MIS) ─────────────────────────────
 // Every TMF trade is a real MIS equity round trip, so the raw price P&L is not
-// what lands in the account. These are Zerodha's published equity-intraday
-// slabs, computed per trade off its own turnover (not a flat per-trade figure
-// like the other algo tabs use) so a 3,114-qty ₹160 trade and an 829-qty ₹603
-// trade are each charged what they actually cost.
-const _TMF_ZERODHA = {
-    brokeragePct: 0.0003,     // 0.03% of the leg's turnover…
-    brokerageCap: 20,         // …capped at ₹20 per executed order
-    sttPct:       0.00025,    // 0.025% — sell leg only, intraday
-    txnPct:       0.0000297,  // NSE transaction charge, both legs
-    sebiPct:      0.000001,   // ₹10 per crore, both legs
-    stampPct:     0.00003,    // 0.003% — buy leg only
-    gstPct:       0.18,       // on brokerage + transaction + SEBI
-};
-
-// Round-trip charges (₹) for one completed trade. `direction` decides which
-// leg was the buy, so STT (sell side) and stamp duty (buy side) are applied to
-// the right price on a SELL trade too.
+// what lands in the account. Rates live in ZerodhaCharges (algo_charges.js),
+// shared with every other live-algo tab; here it is charged per trade off its
+// own turnover, so a 3,114-qty ₹160 trade and an 829-qty ₹603 trade each cost
+// what they actually cost.
 function _tmfCharges(t) {
-    const qty   = Number(t.qty)         || 0;
-    const entry = Number(t.entry_price) || 0;
-    const exit  = Number(t.exit_price)  || 0;
-    if (!qty || !entry || !exit) return 0;
-
-    const isShort = String(t.direction || '').toUpperCase() === 'SELL';
-    const buyVal   = qty * (isShort ? exit  : entry);
-    const sellVal  = qty * (isShort ? entry : exit);
-    const turnover = buyVal + sellVal;
-    const Z = _TMF_ZERODHA;
-
-    const brokerage = Math.min(buyVal  * Z.brokeragePct, Z.brokerageCap) +
-                      Math.min(sellVal * Z.brokeragePct, Z.brokerageCap);
-    const txn   = turnover * Z.txnPct;
-    const sebi  = turnover * Z.sebiPct;
-    const gst   = (brokerage + txn + sebi) * Z.gstPct;
-    // STT and stamp duty are levied in whole rupees, same as the contract note.
-    const stt   = Math.round(sellVal * Z.sttPct);
-    const stamp = Math.round(buyVal  * Z.stampPct);
-
-    return brokerage + txn + sebi + gst + stt + stamp;
+    return ZerodhaCharges.forTrade({
+        segment: 'equity_intraday',
+        entry:   t.entry_price,
+        exit:    t.exit_price,
+        qty:     t.qty,
+        short:   String(t.direction || '').toUpperCase() === 'SELL',
+    });
 }
 
 // What the trade is actually worth: price P&L less every charge on it. This is
@@ -236,6 +209,7 @@ function _tmfPnlTip(t) {
 
 function _tmfRenderHistory(trades) {
     _tmfHistoryTrades = trades || [];
+    _tmfRenderSummary(_tmfHistoryTrades);
     _tmfRenderEquityCurve(_tmfHistoryTrades);
     const activePeriod = document.querySelector('#tmfPeriodTabs .period-tab.active')?.dataset.period || 'monthly';
     _tmfRenderPeriodBreakdown(_tmfHistoryTrades, activePeriod);
@@ -260,9 +234,14 @@ function _tmfRenderHistory(trades) {
             { key: 'sl_price', label: 'SL', format: DataGrid.rupees },
             { key: 'target_price', label: 'Target', format: v => v == null ? '—' : DataGrid.rupees(v) },
             // Net of Zerodha charges — no separate brokerage column, the cost
-            // is taken out of the P&L itself (hover for the gross split).
-            { key: 'pnl', label: 'P&L (₹)', strong: true,
-              format: (_, t) => DataGrid.inr(_tmfNetPnl(t)),
+            // is taken out of the P&L itself and shown in brackets after it
+            // (hover for the full gross split).
+            { key: 'pnl', label: 'NET P&L (Bro)', strong: true,
+              format: (_, t) => {
+                  const chg = _tmfCharges(t);
+                  return DataGrid.inr(_tmfNetPnl(t)) +
+                         (chg ? ` (-₹${Math.round(chg).toLocaleString('en-IN')})` : '');
+              },
               tone:   (_, t) => DataGrid.sign(_tmfNetPnl(t)),
               title:  (_, t) => _tmfPnlTip(t) },
             { key: 'reason', label: 'Reason', badge: v => _TMF_REASON_TONE[v] || 'neutral' },
@@ -271,6 +250,103 @@ function _tmfRenderHistory(trades) {
                   ` onclick="_tmfDeleteTrade('${(t.entry_time || '').replace(/"/g, '&quot;')}')">&#128465;</button>` },
         ],
     });
+}
+
+// ── Trade History Summary ────────────────────────────────────────────────────
+// Aggregates the same rows the Executed Trade History grid shows, on the same
+// net-of-charges basis — a trade that only won before Zerodha's cut counts as a
+// loss here, so Wins/Win Rate/Profit Factor describe the money, not the prices.
+
+function _tmfRenderSummary(trades) {
+    const card = document.getElementById('tmfPerfCard');
+    if (!card) return;
+    const done = (trades || []).filter(t => t.pnl != null);
+    if (!done.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+
+    let wins = 0, losses = 0, winSum = 0, lossSum = 0;
+    let gross = 0, charges = 0, net = 0;
+    let best = -Infinity, worst = Infinity;
+    let cntTgt = 0, cntSl = 0, cntTime = 0;
+    const days = new Set();
+
+    done.forEach(t => {
+        const n = _tmfNetPnl(t);
+        gross   += Number(t.pnl) || 0;
+        charges += _tmfCharges(t);
+        net     += n;
+        if (n >= 0) { wins++;   winSum  += n; }
+        else        { losses++; lossSum += Math.abs(n); }
+        if (n > best)  best  = n;
+        if (n < worst) worst = n;
+        const reason = String(t.reason || '');
+        if      (reason === 'Target Hit') cntTgt++;
+        else if (reason === 'SL Hit')     cntSl++;
+        else if (reason === 'Time Exit')  cntTime++;
+        if (t.date) days.add(t.date);
+    });
+
+    const total   = done.length;
+    const winRate = total ? (wins / total * 100) : 0;
+    const pf      = lossSum > 0 ? (winSum / lossSum) : (winSum > 0 ? Infinity : 0);
+    const maxDD   = _tmfMaxDrawdown(done);   // ₹, ≤ 0
+    const perDay  = days.size ? net / days.size : net;
+
+    const cls   = v => v >= 0 ? 'ag-pos' : 'ag-neg';
+    const inrF  = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
+    const negF  = v => '-₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
+
+    const tiles = [
+        { label: 'Total Trades',   value: total },
+        { label: 'Wins',           value: wins,   cls: 'ag-pos' },
+        { label: 'Losses',         value: losses, cls: 'ag-neg' },
+        { label: 'Win Rate',       value: winRate.toFixed(1) + '%' },
+        { label: 'Net P&L (₹)',    value: inrF(net),   cls: cls(net) },
+        { label: 'Gross P&L (₹)',  value: inrF(gross), cls: cls(gross) },
+        { label: 'Charges (₹)',    value: negF(charges), cls: 'ag-neg' },
+        { label: 'Profit Factor',  value: pf === Infinity ? '∞' : pf.toFixed(2) },
+        { label: 'Avg Win (₹)',    value: wins   ? inrF(winSum / wins)    : '—', cls: wins   ? 'ag-pos' : '' },
+        { label: 'Avg Loss (₹)',   value: losses ? negF(lossSum / losses) : '—', cls: losses ? 'ag-neg' : '' },
+        { label: 'Best Trade',     value: inrF(best),  cls: cls(best) },
+        { label: 'Worst Trade',    value: inrF(worst), cls: cls(worst) },
+        { label: 'Max Drawdown',   value: negF(maxDD), cls: 'ag-neg' },
+        { label: 'Trading Days',   value: days.size || '—' },
+        { label: 'Avg / Day (₹)',  value: inrF(perDay), cls: cls(perDay) },
+        { label: 'Target Hit',     value: cntTgt,  cls: 'ag-pos' },
+        { label: 'SL Hit',         value: cntSl,   cls: 'ag-neg' },
+        { label: 'Time Exit',      value: cntTime, cls: 'ag-warn' },
+    ];
+
+    const stats = document.getElementById('tmfPerfStats');
+    if (stats) {
+        stats.innerHTML = tiles.map(t =>
+            `<div class="ag-stat">
+                <span class="ag-stat-label">${t.label}</span>
+                <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
+            </div>`
+        ).join('');
+    }
+
+    const metaEl = document.getElementById('tmfPerfMeta');
+    if (metaEl) metaEl.textContent = `${total} trade${total > 1 ? 's' : ''} · net of ₹${Math.round(charges).toLocaleString('en-IN')} charges`;
+
+    const netEl = document.getElementById('tmfPerfNet');
+    if (netEl) {
+        netEl.textContent = inrF(net);
+        netEl.style.color = net >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
+    }
+}
+
+// Deepest peak-to-trough dip of the running net P&L, in trade order (≤ 0).
+function _tmfMaxDrawdown(trades) {
+    const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
+    let cum = 0, peak = 0, maxDD = 0;
+    sorted.forEach(t => {
+        cum += _tmfNetPnl(t);
+        if (cum > peak) peak = cum;
+        if (cum - peak < maxDD) maxDD = cum - peak;
+    });
+    return maxDD;
 }
 
 function _tmfFmtTime(iso) {
