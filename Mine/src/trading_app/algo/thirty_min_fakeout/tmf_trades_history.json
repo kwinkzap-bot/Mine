@@ -1,5 +1,23 @@
 [
   {
+    "symbol": "PERSISTENT",
+    "direction": "SELL",
+    "qty": 88,
+    "entry_price": 5651.3,
+    "exit_price": 5519.579545454546,
+    "sl_price": 5698.0,
+    "target_price": 5468.4,
+    "pnl": 11591.4,
+    "reason": "Time Exit",
+    "entry_time": "2026-07-30T10:48:15.393396",
+    "exit_time": "2026-07-30T15:18:11.557312",
+    "broker_idx": 1,
+    "entry_order_id": "2082697257526157312",
+    "sl_order_id": "2082697522685861888",
+    "target_order_id": "2082697523411476480",
+    "date": "2026-07-30"
+  },
+  {
     "symbol": "ICICIGI",
     "direction": "BUY",
     "qty": 44,

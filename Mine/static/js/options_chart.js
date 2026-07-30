@@ -1352,7 +1352,7 @@ const OptionsChartApp = (function () {
             } catch (error) {
                 console.error('Auto-update error:', error);
             }
-        }, 1000); // Update every 1 second for tick-by-tick feel
+        }, 2000); // Update every 2 seconds for tick-by-tick feel
     }
 
 

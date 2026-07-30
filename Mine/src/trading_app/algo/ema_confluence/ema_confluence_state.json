@@ -264,9 +264,9 @@
       "qty": 6950,
       "entry_time": "2026-07-30T09:18:36.996531",
       "future_month": "AUG 2026",
-      "ltp": 78.17,
-      "ltp_time": "2026-07-30T14:47:17.374788",
-      "unrealized_pnl": -2363.0
+      "ltp": 78.45,
+      "ltp_time": "2026-07-30T15:29:52.565289",
+      "unrealized_pnl": -4309.0
     },
     "NMDC": {
       "phase": "no_setup"
@@ -294,9 +294,9 @@
       "qty": 1400,
       "entry_time": "2026-07-30T09:52:33.286268",
       "future_month": "AUG 2026",
-      "ltp": 456.3,
-      "ltp_time": "2026-07-30T14:47:17.374794",
-      "unrealized_pnl": -2380.0
+      "ltp": 458.3,
+      "ltp_time": "2026-07-30T15:29:52.565298",
+      "unrealized_pnl": 420.0
     },
     "ONGC": {
       "phase": "no_setup"

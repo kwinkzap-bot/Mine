@@ -1,6 +1,6 @@
 {
   "date": "2026-07-30",
-  "eod_handled": false,
+  "eod_handled": true,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
@@ -387,7 +387,7 @@
       "phase": "no_setup"
     },
     "PERSISTENT": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "short",
       "trigger": 5651.3,
       "sl_level": 5698.0,
@@ -401,14 +401,18 @@
           "entry_price": 5651.3,
           "filled_qty": 88,
           "sl_order_id": "2082697522685861888",
-          "target_order_id": "2082697523411476480"
+          "target_order_id": "2082697523411476480",
+          "closed": true
         }
       ],
       "entry_price": 5651.3,
       "target_level": 5468.4,
-      "ltp": 5537.8,
-      "ltp_time": "2026-07-30T14:47:27.120807",
-      "unrealized_pnl": 9988.0
+      "ltp": 5525.9,
+      "ltp_time": "2026-07-30T15:18:10.801162",
+      "exit_time": "2026-07-30T15:18:11.557312",
+      "exit_price": 5519.579545454546,
+      "exit_reason": "Time Exit",
+      "realized_pnl": 11591.4
     },
     "PETRONET": {
       "phase": "no_setup"

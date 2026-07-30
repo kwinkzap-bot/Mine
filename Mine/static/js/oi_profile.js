@@ -639,9 +639,9 @@ document.addEventListener('DOMContentLoaded', () => {
         oipLoadCandles(true, false, true);
     });
 
-    // Fixed 24000 Monthly chart is excluded from the live 1s poll (see
+    // Fixed 24000 Monthly chart is excluded from the live 2s poll (see
     // oipCandleLoop) to avoid hammering the broker for slow-moving monthly
-    // option data every second. This button is the only way to pull its
+    // option data on every tick. This button is the only way to pull its
     // latest candles without changing the selected strike.
     oipElems.fixedStrikeRefreshBtn?.addEventListener('click', () => {
         oipLoadCandles(true, false, true);
@@ -1082,7 +1082,7 @@ async function oipFullRefresh(resetZoom = false) {
         // 5. Start recurring background loops
         console.log('[OIP] Initial load complete. Starting background timers.');
         oipScheduleOILoop(30000);
-        oipScheduleCandleLoop(oipIsMarketOpen() ? 1000 : 300000);
+        oipScheduleCandleLoop(oipIsMarketOpen() ? 2000 : 300000);
     }
 }
 
@@ -1126,7 +1126,7 @@ async function oipCandleLoop() {
     finally {
         oipIsBusyCandles = false;
         if (!oipIsBusyOI) setRefreshBtn(false);
-        const delay = isMarketOpen ? (success ? 1000 : 2000) : 300000;
+        const delay = isMarketOpen ? (success ? 2000 : 4000) : 300000;
         oipScheduleCandleLoop(delay);
     }
 }
@@ -1457,7 +1457,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
             // Sync secondary charts to OI's visible range only on first load or when the
             // user explicitly resets zoom (symbol/date/timeframe change). Periodic candle
             // refreshes use resetZoom=false and must NOT sync — that would snap the chart
-            // back to the right edge every second, fighting the user's manual scroll.
+            // back to the right edge on every poll tick, fighting the user's manual scroll.
             if (resetZoom || !_oipChartsSyncedOnce) {
                 if (resetZoom) _oipChartsSyncedOnce = false;
                 setTimeout(() => {

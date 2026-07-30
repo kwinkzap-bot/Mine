@@ -177,6 +177,63 @@ const _TMF_REASON_TONE = {
     'Time Exit':  'neutral',
 };
 
+// ── Zerodha charges — NSE equity intraday (MIS) ─────────────────────────────
+// Every TMF trade is a real MIS equity round trip, so the raw price P&L is not
+// what lands in the account. These are Zerodha's published equity-intraday
+// slabs, computed per trade off its own turnover (not a flat per-trade figure
+// like the other algo tabs use) so a 3,114-qty ₹160 trade and an 829-qty ₹603
+// trade are each charged what they actually cost.
+const _TMF_ZERODHA = {
+    brokeragePct: 0.0003,     // 0.03% of the leg's turnover…
+    brokerageCap: 20,         // …capped at ₹20 per executed order
+    sttPct:       0.00025,    // 0.025% — sell leg only, intraday
+    txnPct:       0.0000297,  // NSE transaction charge, both legs
+    sebiPct:      0.000001,   // ₹10 per crore, both legs
+    stampPct:     0.00003,    // 0.003% — buy leg only
+    gstPct:       0.18,       // on brokerage + transaction + SEBI
+};
+
+// Round-trip charges (₹) for one completed trade. `direction` decides which
+// leg was the buy, so STT (sell side) and stamp duty (buy side) are applied to
+// the right price on a SELL trade too.
+function _tmfCharges(t) {
+    const qty   = Number(t.qty)         || 0;
+    const entry = Number(t.entry_price) || 0;
+    const exit  = Number(t.exit_price)  || 0;
+    if (!qty || !entry || !exit) return 0;
+
+    const isShort = String(t.direction || '').toUpperCase() === 'SELL';
+    const buyVal   = qty * (isShort ? exit  : entry);
+    const sellVal  = qty * (isShort ? entry : exit);
+    const turnover = buyVal + sellVal;
+    const Z = _TMF_ZERODHA;
+
+    const brokerage = Math.min(buyVal  * Z.brokeragePct, Z.brokerageCap) +
+                      Math.min(sellVal * Z.brokeragePct, Z.brokerageCap);
+    const txn   = turnover * Z.txnPct;
+    const sebi  = turnover * Z.sebiPct;
+    const gst   = (brokerage + txn + sebi) * Z.gstPct;
+    // STT and stamp duty are levied in whole rupees, same as the contract note.
+    const stt   = Math.round(sellVal * Z.sttPct);
+    const stamp = Math.round(buyVal  * Z.stampPct);
+
+    return brokerage + txn + sebi + gst + stt + stamp;
+}
+
+// What the trade is actually worth: price P&L less every charge on it. This is
+// the figure the history grid, equity curve and P&L breakdown all use.
+function _tmfNetPnl(t) {
+    return (Number(t.pnl) || 0) - _tmfCharges(t);
+}
+
+// Hover text for the P&L cell — the gross figure and the charge it lost.
+function _tmfPnlTip(t) {
+    const chg = _tmfCharges(t);
+    if (!chg) return '';
+    return `Gross ${DataGrid.inr(t.pnl)} − charges ₹${chg.toFixed(2)} ` +
+           `(Zerodha intraday: brokerage, STT, txn, GST, stamp duty, SEBI)`;
+}
+
 function _tmfRenderHistory(trades) {
     _tmfHistoryTrades = trades || [];
     _tmfRenderEquityCurve(_tmfHistoryTrades);
@@ -202,7 +259,12 @@ function _tmfRenderHistory(trades) {
             { key: 'exit_price', label: 'Exit', format: DataGrid.rupees },
             { key: 'sl_price', label: 'SL', format: DataGrid.rupees },
             { key: 'target_price', label: 'Target', format: v => v == null ? '—' : DataGrid.rupees(v) },
-            { key: 'pnl', label: 'P&L (₹)', strong: true, format: DataGrid.inr, tone: DataGrid.sign },
+            // Net of Zerodha charges — no separate brokerage column, the cost
+            // is taken out of the P&L itself (hover for the gross split).
+            { key: 'pnl', label: 'P&L (₹)', strong: true,
+              format: (_, t) => DataGrid.inr(_tmfNetPnl(t)),
+              tone:   (_, t) => DataGrid.sign(_tmfNetPnl(t)),
+              title:  (_, t) => _tmfPnlTip(t) },
             { key: 'reason', label: 'Reason', badge: v => _TMF_REASON_TONE[v] || 'neutral' },
             { label: '', cellClass: 'ag-hist-td-del',
               render: (_, t) => `<button class="ag-hist-del-btn" title="Delete record"` +
@@ -253,7 +315,7 @@ function _tmfRenderEquityCurve(trades) {
 
     let portfolio = _tmfCapitalPerTrade;
     sorted.forEach((t, idx) => {
-        const pnl = t.pnl || 0;
+        const pnl = _tmfNetPnl(t);   // net of Zerodha charges, same as the grid
         portfolio += pnl;
         labels.push('T' + (idx + 1));
         chartData.push(Math.round(portfolio));
@@ -364,10 +426,12 @@ function _tmfGroupByPeriod(trades, period) {
         else if (period === 'quarterly')  key = `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
         else if (period === 'halfyearly') key = `${d.getFullYear()}-H${d.getMonth() < 6 ? 1 : 2}`;
         else                            key = `${d.getFullYear()}`;
+        // Net P&L throughout — a trade that only won before charges is a loss.
+        const net = _tmfNetPnl(t);
         if (!groups[key]) groups[key] = { pnl: 0, wins: 0, losses: 0 };
-        groups[key].pnl += (t.pnl || 0);
-        if ((t.pnl || 0) > 0) groups[key].wins++;
-        else                  groups[key].losses++;
+        groups[key].pnl += net;
+        if (net > 0) groups[key].wins++;
+        else         groups[key].losses++;
     });
     return groups;
 }
