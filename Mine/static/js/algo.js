@@ -25,12 +25,8 @@ let _scStatusTimer     = null;
 let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;
 let _scLastActiveFlag  = false;
-let _intrinsicStatusTimer    = null;
-let _intrinsicHistoryTimer   = null;
-let _intrinsicLastEntryTime  = null;
-let _intrinsicLastActiveFlag = false;
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'rtp', 'sc', 'intrinsic', 'tmf', 'ema-confluence', 'swing-momentum'];
+const _ALGO_TABS = ['active', 'rtp', 'sc', 'tmf', 'ema-confluence', 'swing-momentum'];
 // Sub-tabs nested inside the 'rtp' (EMA RTP) tab — 30s / 1m / 2m / 3m / 5m candles.
 const _ALGO_RTP_SUBTABS = ['rtp30s', 'rtp', 'rtp2m', 'rtp3m', 'rtp5m'];
 let _algoRtpActiveSub = 'rtp30s';
@@ -68,16 +64,12 @@ function _algoOptTiles(trade, live) {
     ];
 }
 
-// Which pair of price fields a trade books its ₹ P&L on: the option tabs
-// (RTP ×5, 2nd Candle) trade a bought option; Intrinsic Range books the same
-// way against premium fields with different names.
+// Which pair of price fields a trade books its ₹ P&L on: every option tab
+// (RTP ×5, 2nd Candle) trades a bought option.
 function _algoTradeLegs(t) {
     if (!t) return null;
     if (t.opt_pnl_inr != null || t.opt_entry_price != null) {
         return { inr: t.opt_pnl_inr, entry: t.opt_entry_price, exit: t.opt_exit_price };
-    }
-    if (t.premium_pnl_inr != null || t.entry_premium != null) {
-        return { inr: t.premium_pnl_inr, entry: t.entry_premium, exit: t.exit_premium };
     }
     return null;
 }
@@ -148,7 +140,6 @@ const _ACTIVE_SOURCES = [
     { label: 'EMA RTP 3m',     url: '/api/algo/rtp3m/status',  histUrl: '/api/algo/rtp3m/history',  mode: 'live'  },
     { label: 'EMA RTP 5m',     url: '/api/algo/rtp5m/status',  histUrl: '/api/algo/rtp5m/history',  mode: 'live'  },
     { label: '2nd 30s Candle', url: '/api/algo/sc/status',     histUrl: '/api/algo/sc/history',     mode: 'live'  },
-    { label: 'Intrinsic Range', url: '/api/algo/intrinsic-range/status', histUrl: '/api/algo/intrinsic-range/history', mode: 'paper' },
 ];
 
 
@@ -368,35 +359,14 @@ const _ALGO_REASON_TONE = {
 };
 
 // ── Executed-trade history grid — shared by every algo tab ────────────────────
-// The seven tabs (RTP 30s/1m/2m/3m/5m, 2nd Candle, Intrinsic Range) each carried
-// a byte-identical copy of this table. They differed in exactly two things, so
-// those are the parameters: which delete handler the row button calls, and —
-// for Intrinsic Range — that it books a premium against spot rather than an
-// option price, which changes the wording and the field names but not the grid.
-const _ALGO_HIST_SHAPES = {
-    option: {
-        entry: 'opt_entry_price', exit: 'opt_exit_price',
-        pts: 'opt_pnl_pts', inr: 'opt_pnl_inr',
-        labels: { entry: 'Opt Entry', exit: 'Opt Exit', spotEntry: 'N Entry',
-                  spotExit: 'N Exit', spotPts: 'N Pts', pts: 'Opt Pts', inr: 'Opt P&L' },
-    },
-    premium: {
-        entry: 'entry_premium', exit: 'exit_premium',
-        pts: 'premium_pnl_pts', inr: 'premium_pnl_inr',
-        labels: { entry: 'Premium Entry', exit: 'Premium Exit', spotEntry: 'Entry Spot',
-                  spotExit: 'Exit Spot', spotPts: 'Spot Pts', pts: 'Premium Pts', inr: 'Premium P&L' },
-    },
-};
-
-function _algoHistoryGrid(trades, { onDelete, shape = 'option' } = {}) {
-    const f = _ALGO_HIST_SHAPES[shape];
-    const L = f.labels;
-
-    // Newer option trades store points; older rows only carry the two prices.
-    // Premium trades always store theirs, so there is nothing to fall back to.
-    const pts = t => t[f.pts] ?? (
-        shape === 'option' && t[f.exit] != null && t[f.entry] != null
-            ? +(t[f.exit] - t[f.entry]).toFixed(2) : null);
+// The six tabs (RTP 30s/1m/2m/3m/5m, 2nd Candle) each carried a byte-identical
+// copy of this table. They differ in exactly one thing, so that is the only
+// parameter: which delete handler the row button calls.
+function _algoHistoryGrid(trades, { onDelete } = {}) {
+    // Newer trades store points; older rows only carry the two prices.
+    const pts = t => t.opt_pnl_pts ?? (
+        t.opt_exit_price != null && t.opt_entry_price != null
+            ? +(t.opt_exit_price - t.opt_entry_price).toFixed(2) : null);
 
     return DataGrid.render({
         rows: trades,
@@ -408,23 +378,23 @@ function _algoHistoryGrid(trades, { onDelete, shape = 'option' } = {}) {
             { key: 'exit_time',  label: 'Exit Time',  format: v => v ? _fmtTimeOnly(v) : '—' },
             { label: 'Strike',
               format: (_, t) => `${t.strike ?? '—'} ${t.option_type ?? ''}`.trim() },
-            { key: f.entry, label: L.entry, format: DataGrid.rupees },
-            { key: f.exit,  label: L.exit,  format: DataGrid.rupees },
-            { key: 'entry_spot', label: L.spotEntry, format: v => '₹' + _num(v) },
-            { key: 'exit_spot',  label: L.spotExit,  format: v => '₹' + _num(v) },
-            { key: 'pnl_pts', label: L.spotPts, strong: true,
+            { key: 'opt_entry_price', label: 'Opt Entry', format: DataGrid.rupees },
+            { key: 'opt_exit_price',  label: 'Opt Exit',  format: DataGrid.rupees },
+            { key: 'entry_spot', label: 'N Entry', format: v => '₹' + _num(v) },
+            { key: 'exit_spot',  label: 'N Exit',  format: v => '₹' + _num(v) },
+            { key: 'pnl_pts', label: 'N Pts', strong: true,
               format: v => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toFixed(1) + ' pts',
               // Matches the original `(pnl_pts || 0) >= 0` — a missing value
               // shows a dash but still reads as non-negative.
               tone: v => (v || 0) >= 0 ? 'pos' : 'neg' },
-            { label: L.pts, strong: true,
+            { label: 'Opt Pts', strong: true,
               format: (_, t) => DataGrid.points(pts(t)),
               tone:   (_, t) => DataGrid.sign(pts(t)) },
             // Net of Zerodha charges — no separate brokerage column, the cost
             // comes out of the P&L itself and shows in brackets after it.
-            { key: f.inr, label: 'Net ' + L.inr + ' (Bro)', strong: true,
+            { key: 'opt_pnl_inr', label: 'Net Opt P&L (Bro)', strong: true,
               format: (_, t) => _algoNetInrCell(t),
-              tone:   (_, t) => t[f.inr] == null ? '' : DataGrid.sign(_algoNetInr(t)),
+              tone:   (_, t) => t.opt_pnl_inr == null ? '' : DataGrid.sign(_algoNetInr(t)),
               title:  (_, t) => _algoNetInrTip(t) },
             { key: 'reason', label: 'Reason',
               format: r => (r || '').replace(/_/g, ' '),
@@ -434,109 +404,6 @@ function _algoHistoryGrid(trades, { onDelete, shape = 'option' } = {}) {
                   ` onclick="${onDelete}('${(t.entry_time || '').replace(/"/g, '&quot;')}')">&#128465;</button>` },
         ],
     });
-}
-
-// ── Trade History Summary — shared by any tab without a Live Performance
-//    dashboard of its own (Intrinsic Range today). Aggregates exactly the rows
-//    its Executed Trade History grid shows, on the same net-of-charges basis:
-//    a trade that only won before Zerodha's cut counts as a loss here, so Win
-//    Rate and Profit Factor describe money kept, not price moves. ──────────
-function _algoRenderTradeSummary(prefix, trades) {
-    const card = document.getElementById(prefix + 'PerfCard');
-    if (!card) return;
-    const done = (trades || []).filter(t => {
-        const legs = _algoTradeLegs(t);
-        return legs && legs.inr != null;
-    });
-    if (!done.length) { card.style.display = 'none'; return; }
-    card.style.display = '';
-
-    let wins = 0, losses = 0, winSum = 0, lossSum = 0;
-    let gross = 0, charges = 0, net = 0;
-    let best = -Infinity, worst = Infinity;
-    const reasons = {};
-    const days = new Set();
-
-    done.forEach(t => {
-        const n = _algoNetInr(t);
-        gross   += Number(_algoTradeLegs(t).inr) || 0;
-        charges += _algoCharges(t);
-        net     += n;
-        if (n >= 0) { wins++;   winSum  += n; }
-        else        { losses++; lossSum += Math.abs(n); }
-        if (n > best)  best  = n;
-        if (n < worst) worst = n;
-        const r = String(t.reason || '').toUpperCase();
-        if (r) reasons[r] = (reasons[r] || 0) + 1;
-        const day = t.date || (t.entry_time ? String(t.entry_time).slice(0, 10) : null);
-        if (day) days.add(day);
-    });
-
-    const total   = done.length;
-    const winRate = total ? (wins / total * 100) : 0;
-    const pf      = lossSum > 0 ? (winSum / lossSum) : (winSum > 0 ? Infinity : 0);
-    const maxDD   = _algoMaxDrawdown(done);
-    const perDay  = days.size ? net / days.size : net;
-
-    const cls  = v => v >= 0 ? 'ag-pos' : 'ag-neg';
-    const inrF = v => (v >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(v)).toLocaleString('en-IN');
-    const negF = v => '-₹' + Math.abs(Math.round(v)).toLocaleString('en-IN');
-
-    const tiles = [
-        { label: 'Total Trades',  value: total },
-        { label: 'Wins',          value: wins,   cls: 'ag-pos' },
-        { label: 'Losses',        value: losses, cls: 'ag-neg' },
-        { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
-        { label: 'Net P&L (₹)',   value: inrF(net),   cls: cls(net) },
-        { label: 'Gross P&L (₹)', value: inrF(gross), cls: cls(gross) },
-        { label: 'Charges (₹)',   value: negF(charges), cls: 'ag-neg' },
-        { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
-        { label: 'Avg Win (₹)',   value: wins   ? inrF(winSum / wins)    : '—', cls: wins   ? 'ag-pos' : '' },
-        { label: 'Avg Loss (₹)',  value: losses ? negF(lossSum / losses) : '—', cls: losses ? 'ag-neg' : '' },
-        { label: 'Best Trade',    value: inrF(best),  cls: cls(best) },
-        { label: 'Worst Trade',   value: inrF(worst), cls: cls(worst) },
-        { label: 'Max Drawdown',  value: negF(maxDD), cls: 'ag-neg' },
-        { label: 'Trading Days',  value: days.size || '—' },
-        { label: 'Avg / Day (₹)', value: inrF(perDay), cls: cls(perDay) },
-        // Exit reasons the algo actually used, in the grid's own wording.
-        ...Object.keys(reasons).sort().map(r => ({
-            label: r.replace(/_/g, ' '),
-            value: reasons[r],
-            cls: _ALGO_REASON_TONE[r] === 'pos' ? 'ag-pos'
-               : _ALGO_REASON_TONE[r] === 'neg' ? 'ag-neg' : '',
-        })),
-    ];
-
-    const stats = document.getElementById(prefix + 'PerfStats');
-    if (stats) {
-        stats.innerHTML = tiles.map(t =>
-            `<div class="ag-stat">
-                <span class="ag-stat-label">${t.label}</span>
-                <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
-            </div>`
-        ).join('');
-    }
-
-    const metaEl = document.getElementById(prefix + 'PerfMeta');
-    if (metaEl) metaEl.textContent = `${total} trade${total > 1 ? 's' : ''} · net of ₹${Math.round(charges).toLocaleString('en-IN')} charges`;
-
-    const netEl = document.getElementById(prefix + 'PerfNet');
-    if (netEl) {
-        netEl.textContent = inrF(net);
-        netEl.style.color = net >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
-    }
-}
-
-// Deepest peak-to-trough dip of the running net P&L, in entry order (≤ 0).
-function _algoMaxDrawdown(trades) {
-    const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
-    let cum = 0, peak = 0, maxDD = 0;
-    sorted.forEach(t => {
-        cum += _algoNetInr(t);
-        if (cum > peak) peak = cum;
-        if (cum - peak < maxDD) maxDD = cum - peak;
-    });
-    return maxDD;
 }
 
 function algoLoad() {
@@ -619,8 +486,6 @@ function algoSwitch(tab) {
     clearTimeout(_rtp5mHistoryTimer);
     clearTimeout(_scStatusTimer);
     clearTimeout(_scHistoryTimer);
-    clearTimeout(_intrinsicStatusTimer);
-    clearTimeout(_intrinsicHistoryTimer);
     clearTimeout(_activeTimer);
     if (typeof _tmfClearTimers === 'function') _tmfClearTimers();
     if (typeof _emacClearTimers === 'function') _emacClearTimers();
@@ -632,9 +497,6 @@ function algoSwitch(tab) {
         scLoadSettings();
         _scFetchStatus();
         _scFetchHistory();
-    } else if (tab === 'intrinsic') {
-        _intrinsicFetchStatus();
-        _intrinsicFetchHistory();
     } else if (tab === 'tmf') {
         _tmfFetchStatus();
         _tmfFetchHistory();
@@ -4058,254 +3920,6 @@ function scFetchDeltaStrikes(btn) {
             panel.innerHTML = `<span style="color:#c62828;font-size:12px;">⚠ Request failed: ${e}</span>`;
             panel.style.display = 'block';
         });
-}
-
-// ── Intrinsic ATM Range Breakout (PAPER TRADE) ─────────────────────────────────
-
-function _intrinsicFetchStatus() {
-    fetch('/api/algo/intrinsic-range/status')
-        .then(r => r.json())
-        .then(data => {
-            _intrinsicRenderStatus(data);
-            const newEntryTime = data.state && data.state.active_trade
-                ? data.state.active_trade.entry_time : null;
-            const newActive = !!data.active;
-            const tradeChanged = newEntryTime !== _intrinsicLastEntryTime ||
-                                 newActive !== _intrinsicLastActiveFlag;
-            _intrinsicLastEntryTime  = newEntryTime;
-            _intrinsicLastActiveFlag = newActive;
-            if (tradeChanged) {
-                clearTimeout(_intrinsicHistoryTimer);
-                _intrinsicFetchHistory();
-            }
-            clearTimeout(_intrinsicStatusTimer);
-            _intrinsicStatusTimer = setTimeout(_intrinsicFetchStatus, newActive ? 5000 : 30000);
-        })
-        .catch(() => {
-            clearTimeout(_intrinsicStatusTimer);
-            _intrinsicStatusTimer = setTimeout(_intrinsicFetchStatus, 30000);
-        });
-}
-
-function _intrinsicRenderStatus(data) {
-    const state  = data.state || {};
-    const setup  = state.daily_setup;
-    const trade  = state.active_trade;
-    const live   = data.live || null;
-    const active = !!data.active;
-
-    // Badge
-    const badge = document.getElementById('intrinsicBadge');
-    badge.className = 'ag-badge ' + (active ? 'active' : 'inactive');
-    document.getElementById('intrinsicBadgeText').textContent =
-        active ? (trade.direction + ' ' + trade.option_type) : 'No Trade';
-
-    document.getElementById('intrinsicLastUpd').textContent =
-        new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-    // Today's Range Setup card
-    const setupGrid = document.getElementById('intrinsicSetupGrid');
-    if (!setup) {
-        setupGrid.innerHTML = '<div class="ag-empty">Setup not computed yet — waiting for the daily setup step (after 9:16 AM)</div>';
-    } else {
-        const setupTiles = [
-            { label: 'Prev Close Spot', value: '₹' + _num(setup.prev_close_spot) },
-            { label: 'ATM Strike',      value: setup.atm_strike },
-            { label: 'CE Prev Close',   value: '₹' + _num(setup.ce_prev_close) },
-            { label: 'PE Prev Close',   value: '₹' + _num(setup.pe_prev_close) },
-            { label: 'Common ATM',      value: '₹' + _num(setup.common_atm) },
-            { label: 'Range Lower',     value: '₹' + _num(setup.lower_bound), cls: 'ag-neg' },
-            { label: 'Range Upper',     value: '₹' + _num(setup.upper_bound), cls: 'ag-pos' },
-            { label: 'Total Range',     value: _num(setup.total_range) + ' pts' },
-        ];
-        // Gap-day wide range + boundary-option day-low reclaim levels
-        const ar = state.active_range;
-        if (ar && ar.range_mult > 1) {
-            setupTiles.push({
-                label: 'Active Range (gap ' + (ar.gap_side || '?') + ')',
-                value: _num(ar.lower_bound) + '–' + _num(ar.upper_bound),
-                cls: 'ag-warn',
-            });
-        }
-        if (state.low_reclaim_level != null) {
-            setupTiles.push({ label: 'Low Reclaim Lvl',  value: '₹' + _num(state.low_reclaim_level),  cls: 'ag-pos' });
-        }
-        if (state.high_reclaim_level != null) {
-            setupTiles.push({ label: 'High Reclaim Lvl', value: '₹' + _num(state.high_reclaim_level), cls: 'ag-neg' });
-        }
-        // 14-Jul video levels: seller panic band, straddle band (control
-        // area) and the wide range with its boundary intrinsics.
-        if (setup.panic_lower != null) {
-            setupTiles.push({ label: 'Seller Panic Band', value: _num(setup.panic_lower) + '–' + _num(setup.panic_upper) });
-        }
-        if (setup.straddle_lower != null) {
-            setupTiles.push({ label: 'Straddle Band', value: _num(setup.straddle_lower) + '–' + _num(setup.straddle_upper) });
-        }
-        if (setup.wide_lower != null) {
-            setupTiles.push({
-                label: 'Wide Range (CE ' + _num(setup.ce_wide_intrinsic) + ' / PE ' + _num(setup.pe_wide_intrinsic) + ')',
-                value: _num(setup.wide_lower) + '–' + _num(setup.wide_upper),
-            });
-        }
-        if (state.fc_high != null && state.fc_low != null) {
-            setupTiles.push({
-                label: 'First 5m Candle' + (state.fc_is_big ? ' (BIG)' : ''),
-                value: _num(state.fc_low) + '–' + _num(state.fc_high),
-                cls: state.fc_is_big ? 'ag-warn' : '',
-            });
-        }
-        setupGrid.innerHTML = setupTiles.map(t =>
-            `<div class="ag-stat">
-                <span class="ag-stat-label">${t.label}</span>
-                <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
-            </div>`
-        ).join('');
-    }
-
-    // Active trade grid
-    const grid = document.getElementById('intrinsicActiveGrid');
-    if (!active || !trade) {
-        grid.innerHTML = '<div class="ag-empty">No active trade</div>';
-        return;
-    }
-
-    const spotStr = live ? '₹' + _num(live.spot) : '…';
-
-    const tiles = [
-        { label: 'Direction',    value: trade.direction,
-          cls: trade.direction === 'BUY' ? 'ag-pos' : 'ag-neg' },
-        { label: 'Entry Kind',   value: trade.entry_kind || 'BREAKOUT' },
-        { label: 'Option',       value: trade.option_type + ' ' + trade.strike },
-        { label: 'Entry Spot',   value: '₹' + _num(trade.entry_spot) },
-        { label: 'Live Spot',    value: spotStr },
-        { label: 'SL Level',     value: '₹' + _num(trade.sl_level),     cls: 'ag-warn' },
-        { label: 'Target Level', value: '₹' + _num(trade.target_level), cls: 'ag-pos' },
-        ..._algoOptTiles(trade, live),
-        { label: 'Entry Time',   value: trade.entry_time ? _fmtTime(trade.entry_time) : '—' },
-    ];
-
-    grid.innerHTML = tiles.map(t =>
-        `<div class="ag-stat">
-            <span class="ag-stat-label">${t.label}</span>
-            <span class="ag-stat-value ${t.cls || ''}">${t.value}</span>
-        </div>`
-    ).join('');
-}
-
-// ── Intrinsic Range history ─────────────────────────────────────────────────────
-
-function _intrinsicFetchHistory() {
-    fetch('/api/algo/intrinsic-range/history')
-        .then(r => r.json())
-        .then(data => {
-            _intrinsicRenderHistory(data.trades || []);
-            clearTimeout(_intrinsicHistoryTimer);
-            _intrinsicHistoryTimer = setTimeout(_intrinsicFetchHistory, 30000);
-        })
-        .catch(() => {
-            clearTimeout(_intrinsicHistoryTimer);
-            _intrinsicHistoryTimer = setTimeout(_intrinsicFetchHistory, 30000);
-        });
-}
-
-function _intrinsicRenderHistory(trades) {
-    const countEl = document.getElementById('intrinsicHistCount');
-    const body    = document.getElementById('intrinsicHistBody');
-
-    if (countEl) countEl.textContent = trades.length ? trades.length + ' trade' + (trades.length > 1 ? 's' : '') : '';
-
-    _algoRenderTradeSummary('intrinsic', trades);
-    body.innerHTML = _algoHistoryGrid(trades, { onDelete: '_intrinsicDeleteTrade', shape: 'premium' });
-}
-
-function _intrinsicDeleteAllTrades() {
-    if (!confirm('Delete ALL Intrinsic Range paper-trade history records? This clears the entire Executed Trade History and cannot be undone.')) return;
-    fetch('/api/algo/intrinsic-range/history', {
-        method:  'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ all: true }),
-    })
-        .then(r => r.json())
-        .then(d => {
-            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
-            clearTimeout(_intrinsicHistoryTimer);
-            _intrinsicFetchHistory();
-        })
-        .catch(e => alert('Request failed: ' + e));
-}
-
-function _intrinsicDeleteTrade(entryTime) {
-    if (!confirm('Delete this trade record? This cannot be undone.')) return;
-    fetch('/api/algo/intrinsic-range/history', {
-        method:  'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ entry_time: entryTime }),
-    })
-        .then(r => r.json())
-        .then(d => {
-            if (!d.success) { alert('Delete failed: ' + (d.error || 'Unknown error')); return; }
-            clearTimeout(_intrinsicHistoryTimer);
-            _intrinsicFetchHistory();
-        })
-        .catch(e => alert('Request failed: ' + e));
-}
-
-// ── Intrinsic Range Strategy Logic popup ───────────────────────────────────────
-
-function intrinsicShowLogic() {
-    document.getElementById('intrinsicLogicModal')?.remove();
-
-    const modal = document.createElement('div');
-    modal.id = 'intrinsicLogicModal';
-    modal.className = 'sm-modal-overlay';
-    modal.innerHTML = `
-<div class="sm-modal-box rtp-logic-modal">
-
-    <div class="sm-modal-hdr">
-        <div class="sm-modal-icon-wrap">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><polyline points="4 15 9 9 13 13 20 5"/></svg>
-        </div>
-        <div class="sm-modal-hdr-text">
-            <span class="sm-modal-title">Intrinsic ATM Range Breakout</span>
-            <span class="sm-modal-subtitle">Paper trade — how it enters &amp; exits</span>
-        </div>
-        <button class="sm-modal-close" onclick="document.getElementById('intrinsicLogicModal').remove()" aria-label="Close">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-    </div>
-
-    <div class="rtp-logic-body">
-
-        <div class="rtp-tf"><span class="rtp-tf-lbl">Mode</span><span class="rtp-tf-val">Paper trade only</span><span class="rtp-tf-sub">no broker orders — simulated fills off live LTP</span></div>
-
-        <p class="rtp-idea">Every morning, find the strike where <b>CE and PE premiums (previous close) are closest</b> — the "common ATM". Average those two premiums, round to the nearest strike step, and use it as a <b>symmetric range</b> around that ATM strike — yesterday's intrinsic-value / expected-move zone.</p>
-
-        <div class="rtp-blk-lbl entry">Entry — breakout confirmed 3 ways</div>
-        <div class="rtp-duo">
-            <div class="rtp-duo-card buy">
-                <div class="rtp-duo-hd">▲ BUY (CE)</div>
-                <div class="rtp-duo-row">Spot closes <b>above upper bound</b></div>
-                <div class="rtp-duo-row">Lower-strike CE premium &ge; total range</div>
-            </div>
-            <div class="rtp-duo-card sell">
-                <div class="rtp-duo-hd">▼ SELL (PE)</div>
-                <div class="rtp-duo-row">Spot closes <b>below lower bound</b></div>
-                <div class="rtp-duo-row">Upper-strike PE premium &ge; total range</div>
-            </div>
-        </div>
-        <div class="rtp-mode-note">Both directions also require the live common-ATM premium <b>and</b> India VIX to be expanding vs. the day's opening reading — separates a real trend day from range-bound noise. Trade buys the current-spot ATM option in the breakout direction.</div>
-
-        <div class="rtp-blk-lbl exit">Exit — whichever hits first</div>
-        <div class="rtp-chips">
-            <div class="rtp-chip"><span class="rtp-chip-ic tgt">◎</span><div><b>Target</b><span>default: day's range/2</span></div></div>
-            <div class="rtp-chip"><span class="rtp-chip-ic sl">✕</span><div><b>Stop Loss</b><span>default: day's range/4</span></div></div>
-            <div class="rtp-chip"><span class="rtp-chip-ic eod">↩</span><div><b>Range Reclaim</b><span>spot re-enters the range</span></div></div>
-            <div class="rtp-chip rtp-chip-wide"><span class="rtp-chip-ic eod">⏱</span><div><b>EOD 3:20 PM</b><span>force exit · no overnight hold</span></div></div>
-        </div>
-    </div>
-</div>`;
-    document.body.appendChild(modal);
-    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

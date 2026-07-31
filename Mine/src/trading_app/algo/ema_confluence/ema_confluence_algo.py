@@ -54,8 +54,7 @@ Gating (see env/Mine.env):
                                           thread always scans/logs regardless
                                           (same convention as TMF/RTP).
   EMA_CONFLUENCE_MODE   = paper (default) | live (not implemented — falls
-                                          back to paper, same scaffold as
-                                          intrinsic_range_algo.py).
+                                          back to paper).
   EMA_CONFLUENCE_LOTS   = 1             — paper lot count per entry.
 
 This module is PAPER-TRADE ONLY — no real broker orders are ever placed.
