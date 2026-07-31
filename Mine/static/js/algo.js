@@ -85,15 +85,20 @@ function _algoTradeLegs(t) {
 // Round-trip Zerodha charges (₹) for one completed trade, on the single-lot
 // basis the ₹ P&L itself uses. Both entry and exit are option legs, always
 // bought first (CE for a BUY signal, PE for a SELL), so entry is the buy leg.
-function _algoCharges(t) {
+function _algoChargeParts(t) {
     const legs = _algoTradeLegs(t);
-    if (!legs) return 0;
-    return ZerodhaCharges.forTrade({
+    if (!legs) return null;
+    return ZerodhaCharges.breakdownForTrade({
         segment: 'option',
         entry:   legs.entry,
         exit:    legs.exit,
         qty:     (t.lot_size ?? _NIFTY_LOT_SIZE),
     });
+}
+
+function _algoCharges(t) {
+    const parts = _algoChargeParts(t);
+    return parts ? parts.total : 0;
 }
 
 // Realised ₹ for a completed trade, net of those charges.
@@ -118,14 +123,20 @@ function _algoNetInrCell(t) {
            (chg ? ` (-₹${Math.round(chg).toLocaleString('en-IN')})` : '');
 }
 
-// Hover text for that cell: the gross figure and what it lost.
+// Hover text for that cell: the gross figure, then the charge itemised the way
+// the contract note itemises it, so a figure here can be reconciled line by
+// line against the real note rather than taken on trust.
 function _algoNetInrTip(t) {
     const legs = _algoTradeLegs(t);
     if (!legs || legs.inr == null) return '';
-    const chg = _algoCharges(t);
-    if (!chg) return '';
-    return `Gross ${DataGrid.inr(legs.inr)} − charges ₹${chg.toFixed(2)} ` +
-           `(Zerodha options, 1 lot: brokerage, STT, txn, GST, stamp duty, SEBI)`;
+    const p = _algoChargeParts(t);
+    if (!p || !p.total) return '';
+    const qty = t.lot_size ?? _NIFTY_LOT_SIZE;
+    return `Gross ${DataGrid.inr(legs.inr)} − charges ₹${p.total.toFixed(2)}\n` +
+           `Buy ${legs.entry} · Sell ${legs.exit} · Qty ${qty}\n` +
+           `Brokerage ₹${p.brokerage.toFixed(2)} · STT ₹${p.stt.toFixed(2)} · ` +
+           `Txn ₹${p.txn.toFixed(2)} · GST ₹${p.gst.toFixed(2)} · ` +
+           `Stamp ₹${p.stamp.toFixed(2)} · SEBI ₹${p.sebi.toFixed(2)}`;
 }
 
 // ── Active Trade tab (all live option algos consolidated) ─────────────────────

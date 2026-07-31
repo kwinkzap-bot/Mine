@@ -9,9 +9,27 @@
    so a P&L shown anywhere in the app is the money that actually
    lands.
 
-   Rates are Zerodha's published slabs per segment. Components and
-   their rounding follow the brokerage calculator, so a figure here
+   Rates are Zerodha's slabs per segment. Components and their
+   rounding follow the brokerage calculator, so a figure here
    reconciles with the contract note rather than approximating it.
+
+   The option rates are calibrated against Zerodha's sample contract
+   note — NSE F&O options, buy 240.70, sell 277.05, qty 65 — which
+   itemises brokerage 40.00, txn 11.96, STT 27.00, GST 9.36, stamp
+   0.47, SEBI 0.03, total 88.82. Every component below is a rate on
+   buy/sell/qty, not a copied figure, so any other premium and lot
+   size scales off the same card. Note that the sample's STT and txn
+   are heavier than Zerodha's currently published option rates (0.1%
+   of sell premium and 0.03503% of turnover, which would total 79.15
+   on that row) — these follow the note.
+
+   The equity_intraday rates are calibrated the same way, against
+   Zerodha's sample intraday-equity note — NSE, buy 5519.58, sell
+   5651.30, qty 88 — which itemises brokerage 40.00, txn 30.18, stamp
+   14.57, STT 124.00, GST 12.81, SEBI 0.98, total 222.54. This is the
+   card the 30-Min Fakeout trades on: cash-market MIS, not options, so
+   brokerage is 0.03% capped at ₹20 an order rather than a flat ₹20,
+   and STT is 0.025% of the sell leg rather than 0.15% of premium.
 
        ZerodhaCharges.roundTrip('option', buyValue, sellValue)
            → { brokerage, stt, txn, sebi, stamp, gst, total }
@@ -19,6 +37,9 @@
        ZerodhaCharges.forTrade({ segment, entry, exit, qty, short })
            → total ₹, with the buy/sell legs worked out from
              `short` (true when the position was entered by selling)
+
+       ZerodhaCharges.breakdownForTrade({ … same … })
+           → the full component split for that trade
 
    `buyValue` / `sellValue` are turnover on each leg — price × qty —
    not the price. A long option bought at ₹250 and sold at ₹224 on a
@@ -34,7 +55,13 @@
             brokeragePct: 0.0003,     // 0.03% of the leg…
             brokerageCap: 20,         // …capped at ₹20 per executed order
             sttPct:       0.00025,    // 0.025% — sell leg only
-            txnPct:       0.0000297,  // NSE 0.00297%
+            // 0.00307% of turnover. Zerodha's published NSE cash txn charge is
+            // 0.00297%, but their calculator's "Exchange txn charge" line folds
+            // the ₹10-per-crore SEBI turnover fee (0.0001%) into it while still
+            // listing SEBI separately — 0.00297 + 0.0001 = 0.00307. Following
+            // the note here, otherwise this line, GST and the total all read
+            // light against a real contract note.
+            txnPct:       0.0000307,
             sebiPct:      0.000001,   // ₹10 per crore
             stampPct:     0.00003,    // 0.003% — buy leg only
             gstPct:       0.18,
@@ -43,8 +70,8 @@
         // the cash market, which is why the old flat per-lot figure drifted.
         option: {
             brokerageFlat: 20,        // ₹20 per executed order, no percentage
-            sttPct:       0.001,      // 0.1% of premium — sell leg only
-            txnPct:       0.0003503,  // NSE 0.03503% of premium
+            sttPct:       0.0015,     // 0.15% of premium — sell leg only
+            txnPct:       0.0003554,  // 0.03554% of premium
             sebiPct:      0.000001,
             stampPct:     0.00003,    // 0.003% — buy leg only
             gstPct:       0.18,
@@ -80,9 +107,11 @@
         const txn       = turnover * cfg.txnPct;
         const sebi      = turnover * cfg.sebiPct;
         const gst       = (brokerage + txn + sebi) * cfg.gstPct;
-        // STT and stamp duty are levied in whole rupees, as on the contract note.
+        // STT is levied in whole rupees. Stamp duty is not — the contract note
+        // carries it to paise (₹0.47 on a ₹15,645 buy leg), so rounding it the
+        // same way was quietly zeroing it on anything under ₹16,700 of premium.
         const stt       = Math.round(sellValue * cfg.sttPct);
-        const stamp     = Math.round(buyValue  * cfg.stampPct);
+        const stamp     = buyValue * cfg.stampPct;
 
         return {
             brokerage, stt, txn, sebi, stamp, gst,
@@ -93,13 +122,18 @@
     // Convenience for a trade record: entry/exit price + qty. `short` flips
     // which leg was the buy, so STT (sell) and stamp duty (buy) land correctly
     // on a sold-first position.
-    function forTrade({ segment, entry, exit, qty, short = false }) {
+    function breakdownForTrade({ segment, entry, exit, qty, short = false }) {
         const e = Number(entry), x = Number(exit), q = Number(qty);
-        if (!(q > 0) || !(e > 0) || !(x > 0)) return 0;
+        const zero = { brokerage: 0, stt: 0, txn: 0, sebi: 0, stamp: 0, gst: 0, total: 0 };
+        if (!(q > 0) || !(e > 0) || !(x > 0)) return zero;
         const buyValue  = q * (short ? x : e);
         const sellValue = q * (short ? e : x);
-        return roundTrip(segment, buyValue, sellValue).total;
+        return roundTrip(segment, buyValue, sellValue);
     }
 
-    global.ZerodhaCharges = { roundTrip, forTrade, SEGMENTS };
+    function forTrade(trade) {
+        return breakdownForTrade(trade).total;
+    }
+
+    global.ZerodhaCharges = { roundTrip, forTrade, breakdownForTrade, SEGMENTS };
 })(window);

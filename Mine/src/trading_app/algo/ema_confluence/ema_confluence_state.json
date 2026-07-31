@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-07-30",
+  "last_scan_date": "2026-07-31",
   "stocks": {
     "NIFTY": {
       "phase": "no_setup"
@@ -264,9 +264,9 @@
       "qty": 6950,
       "entry_time": "2026-07-30T09:18:36.996531",
       "future_month": "AUG 2026",
-      "ltp": 78.45,
-      "ltp_time": "2026-07-30T15:29:52.565289",
-      "unrealized_pnl": -4309.0
+      "ltp": 78.97,
+      "ltp_time": "2026-07-31T15:29:54.668390",
+      "unrealized_pnl": -7923.0
     },
     "NMDC": {
       "phase": "no_setup"
@@ -294,9 +294,9 @@
       "qty": 1400,
       "entry_time": "2026-07-30T09:52:33.286268",
       "future_month": "AUG 2026",
-      "ltp": 458.3,
-      "ltp_time": "2026-07-30T15:29:52.565298",
-      "unrealized_pnl": 420.0
+      "ltp": 459.55,
+      "ltp_time": "2026-07-31T15:29:54.668398",
+      "unrealized_pnl": 2170.0
     },
     "ONGC": {
       "phase": "no_setup"

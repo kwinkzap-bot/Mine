@@ -11,6 +11,7 @@ let _tmfHistoryTimer = null;
 let _tmfStocksData   = {};   // last-fetched {symbol: {phase, direction, ...}}
 let _tmfCapitalPerTrade = 100000;   // equity-curve starting value, from TMF_CAPITAL_PER_TRADE
 let _tmfHistoryTrades   = [];       // last-fetched trade list, kept for period-tab redraws
+let _tmfDashPeriod      = 'monthly';// active P&L-breakdown period tab
 
 const _TMF_PHASE_LABEL = {
     pending_scan:  'Not scanned yet',
@@ -183,8 +184,8 @@ const _TMF_REASON_TONE = {
 // shared with every other live-algo tab; here it is charged per trade off its
 // own turnover, so a 3,114-qty ₹160 trade and an 829-qty ₹603 trade each cost
 // what they actually cost.
-function _tmfCharges(t) {
-    return ZerodhaCharges.forTrade({
+function _tmfChargeParts(t) {
+    return ZerodhaCharges.breakdownForTrade({
         segment: 'equity_intraday',
         entry:   t.entry_price,
         exit:    t.exit_price,
@@ -193,26 +194,36 @@ function _tmfCharges(t) {
     });
 }
 
+function _tmfCharges(t) {
+    return _tmfChargeParts(t).total;
+}
+
 // What the trade is actually worth: price P&L less every charge on it. This is
 // the figure the history grid, equity curve and P&L breakdown all use.
 function _tmfNetPnl(t) {
     return (Number(t.pnl) || 0) - _tmfCharges(t);
 }
 
-// Hover text for the P&L cell — the gross figure and the charge it lost.
+// Hover text for the P&L cell — the gross figure, then the charge split the way
+// the intraday-equity contract note splits it, so a figure here can be checked
+// line by line against the real note rather than taken on trust.
 function _tmfPnlTip(t) {
-    const chg = _tmfCharges(t);
-    if (!chg) return '';
-    return `Gross ${DataGrid.inr(t.pnl)} − charges ₹${chg.toFixed(2)} ` +
-           `(Zerodha intraday: brokerage, STT, txn, GST, stamp duty, SEBI)`;
+    const p = _tmfChargeParts(t);
+    if (!p.total) return '';
+    const short = String(t.direction || '').toUpperCase() === 'SELL';
+    const buy   = short ? t.exit_price : t.entry_price;
+    const sell  = short ? t.entry_price : t.exit_price;
+    return `Gross ${DataGrid.inr(t.pnl)} − charges ₹${p.total.toFixed(2)}\n` +
+           `Intraday equity · Buy ${buy} · Sell ${sell} · Qty ${t.qty}\n` +
+           `Brokerage ₹${p.brokerage.toFixed(2)} · Exchange txn ₹${p.txn.toFixed(2)} · ` +
+           `Stamp duty ₹${p.stamp.toFixed(2)}\n` +
+           `STT ₹${p.stt.toFixed(2)} · GST ₹${p.gst.toFixed(2)} · ` +
+           `SEBI ₹${p.sebi.toFixed(2)}`;
 }
 
 function _tmfRenderHistory(trades) {
     _tmfHistoryTrades = trades || [];
-    _tmfRenderSummary(_tmfHistoryTrades);
-    _tmfRenderEquityCurve(_tmfHistoryTrades);
-    const activePeriod = document.querySelector('#tmfPeriodTabs .period-tab.active')?.dataset.period || 'monthly';
-    _tmfRenderPeriodBreakdown(_tmfHistoryTrades, activePeriod);
+    _tmfRenderDashboard(_tmfHistoryTrades);
 
     const countEl = document.getElementById('tmfHistCount');
     const body    = document.getElementById('tmfHistBody');
@@ -252,13 +263,15 @@ function _tmfRenderHistory(trades) {
     });
 }
 
-// ── Trade History Summary ────────────────────────────────────────────────────
-// Aggregates the same rows the Executed Trade History grid shows, on the same
-// net-of-charges basis — a trade that only won before Zerodha's cut counts as a
-// loss here, so Wins/Win Rate/Profit Factor describe the money, not the prices.
+// ── Live Performance dashboard ───────────────────────────────────────────────
+// One card — stats, equity curve, P&L breakdown — exactly like every other Live
+// Algo tab. Aggregates the same rows the Executed Trade History grid shows, on
+// the same net-of-charges basis: a trade that only won before Zerodha's cut
+// counts as a loss here, so Wins/Win Rate/Profit Factor describe the money, not
+// the prices.
 
-function _tmfRenderSummary(trades) {
-    const card = document.getElementById('tmfPerfCard');
+function _tmfRenderDashboard(trades) {
+    const card = document.getElementById('tmfDashCard');
     if (!card) return;
     const done = (trades || []).filter(t => t.pnl != null);
     if (!done.length) { card.style.display = 'none'; return; }
@@ -317,7 +330,7 @@ function _tmfRenderSummary(trades) {
         { label: 'Time Exit',      value: cntTime, cls: 'ag-warn' },
     ];
 
-    const stats = document.getElementById('tmfPerfStats');
+    const stats = document.getElementById('tmfDashStats');
     if (stats) {
         stats.innerHTML = tiles.map(t =>
             `<div class="ag-stat">
@@ -327,14 +340,17 @@ function _tmfRenderSummary(trades) {
         ).join('');
     }
 
-    const metaEl = document.getElementById('tmfPerfMeta');
+    const metaEl = document.getElementById('tmfDashMeta');
     if (metaEl) metaEl.textContent = `${total} trade${total > 1 ? 's' : ''} · net of ₹${Math.round(charges).toLocaleString('en-IN')} charges`;
 
-    const netEl = document.getElementById('tmfPerfNet');
+    const netEl = document.getElementById('tmfDashNet');
     if (netEl) {
         netEl.textContent = inrF(net);
         netEl.style.color = net >= 0 ? 'var(--ag-pos)' : 'var(--ag-neg)';
     }
+
+    _tmfRenderEquityCurve(done);
+    _tmfRenderPeriodBreakdown(done, _tmfDashPeriod);
 }
 
 // Deepest peak-to-trough dip of the running net P&L, in trade order (≤ 0).
@@ -357,10 +373,11 @@ function _tmfFmtTime(iso) {
     }
 }
 
-// ── Equity Curve + P&L Breakdown ────────────────────────────────────────────
+// ── Equity Curve + P&L Breakdown (both inside the Live Performance card) ────
 // Same Chart.js approach as the Backtest page's equity curve / period
 // breakdown (static/js/backtest.js), adapted for TMF: every trade is
 // already a real ₹ equity fill (no isRtp/lots/lot-value branching needed).
+// The card itself owns show/hide, so neither renderer touches visibility.
 
 const _TMF_CHART_THEME = {
     light:  { tick: '#374151', grid: 'rgba(15, 23, 42, 0.05)',   gridZero: 'rgba(15, 23, 42, 0.25)' },
@@ -376,11 +393,7 @@ function _tmfChartColors() {
 let _tmfEquityChart = null;
 
 function _tmfRenderEquityCurve(trades) {
-    const section = document.getElementById('tmfEquityCurveSection');
-    if (!section || !trades || trades.length === 0) {
-        if (section) section.style.display = 'none';
-        return;
-    }
+    if (!trades || trades.length === 0 || typeof Chart === 'undefined') return;
     const chartColors = _tmfChartColors();
     const sorted = [...trades].sort((a, b) => new Date(a.entry_time) - new Date(b.entry_time));
 
@@ -405,13 +418,13 @@ function _tmfRenderEquityCurve(trades) {
     const lineColor  = isProfit ? '#2962ff' : '#ff1744';
     const fillColor  = isProfit ? 'rgba(41,98,255,0.07)' : 'rgba(255,23,68,0.06)';
 
-    const finalEl = document.getElementById('tmfEquityCurveFinalPnl');
-    if (finalEl) {
+    const metaEl = document.getElementById('tmfEquityMeta');
+    if (metaEl) {
         const pct = _tmfCapitalPerTrade ? ((diff / _tmfCapitalPerTrade) * 100).toFixed(1) : '0.0';
-        finalEl.textContent =
-            (diff >= 0 ? '+' : '') + '₹' + Math.abs(diff).toLocaleString('en-IN') +
+        metaEl.textContent =
+            (diff >= 0 ? '+₹' : '-₹') + Math.abs(Math.round(diff)).toLocaleString('en-IN') +
             '  (' + (diff >= 0 ? '+' : '') + pct + '%)';
-        finalEl.style.color = isProfit ? '#00c853' : '#ff1744';
+        metaEl.style.color = isProfit ? 'var(--ag-pos)' : 'var(--ag-neg)';
     }
 
     const fmtY = v => {
@@ -421,7 +434,7 @@ function _tmfRenderEquityCurve(trades) {
     };
 
     if (_tmfEquityChart) { _tmfEquityChart.destroy(); _tmfEquityChart = null; }
-    const ctx = document.getElementById('tmfEquityCurveChart');
+    const ctx = document.getElementById('tmfEquityChart');
     if (!ctx) return;
 
     _tmfEquityChart = new Chart(ctx, {
@@ -478,8 +491,6 @@ function _tmfRenderEquityCurve(trades) {
             }
         }
     });
-
-    section.style.display = '';
 }
 
 let _tmfPeriodChart = null;
@@ -541,12 +552,8 @@ const _tmfBarValueLabelPlugin = {
 };
 
 function _tmfRenderPeriodBreakdown(trades, period) {
-    const section = document.getElementById('tmfPeriodBreakdownSection');
+    if (!trades || trades.length === 0 || typeof Chart === 'undefined') return;
     const chartColors = _tmfChartColors();
-    if (!section || !trades || trades.length === 0) {
-        if (section) section.style.display = 'none';
-        return;
-    }
 
     const groups = _tmfGroupByPeriod(trades, period);
     const keys   = Object.keys(groups).sort();
@@ -571,16 +578,9 @@ function _tmfRenderPeriodBreakdown(trades, period) {
     const bgColors  = values.map(v => v >= 0 ? 'rgba(34,197,94,.20)'  : 'rgba(239,68,68,.20)');
     const brdColors = values.map(v => v >= 0 ? 'rgba(34,197,94,.90)'  : 'rgba(239,68,68,.90)');
 
-    const canvas = document.getElementById('tmfPeriodBreakdownChart');
+    const canvas = document.getElementById('tmfBreakdownChart');
     if (!canvas) return;
     if (_tmfPeriodChart) { _tmfPeriodChart.destroy(); _tmfPeriodChart = null; }
-
-    const inner = document.getElementById('tmfPeriodChartInner');
-    if (inner) {
-        const MIN_BAR_PX = 34;
-        const wrapWidth  = inner.parentElement.clientWidth;
-        inner.style.minWidth = Math.max(wrapWidth, keys.length * MIN_BAR_PX) + 'px';
-    }
 
     _tmfPeriodChart = new Chart(canvas.getContext('2d'), {
         type: 'bar',
@@ -647,48 +647,29 @@ function _tmfRenderPeriodBreakdown(trades, period) {
             }
         }
     });
-    section.style.display = '';
 }
 
-document.querySelectorAll('#tmfPeriodTabs .period-tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-        document.querySelectorAll('#tmfPeriodTabs .period-tab').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        _tmfRenderPeriodBreakdown(_tmfHistoryTrades, btn.dataset.period);
-    });
-});
+// Period tabs — same signature the other tabs expose (scSetPeriod etc.), wired
+// from the buttons' onclick so the card needs no extra bootstrapping.
+function tmfSetPeriod(period) {
+    _tmfDashPeriod = period;
+    document.querySelectorAll('#tmfPeriodTabs .rtp-period-tab').forEach(b =>
+        b.classList.toggle('active', b.dataset.period === period));
+    _tmfRenderPeriodBreakdown(_tmfDashTrades(), period);
+}
+
+// Only completed trades feed the charts — same filter the stats grid uses.
+function _tmfDashTrades() {
+    return (_tmfHistoryTrades || []).filter(t => t.pnl != null);
+}
 
 window.addEventListener('themechanged', () => {
-    if (_tmfHistoryTrades.length) {
-        _tmfRenderEquityCurve(_tmfHistoryTrades);
-        const activePeriod = document.querySelector('#tmfPeriodTabs .period-tab.active')?.dataset.period || 'monthly';
-        _tmfRenderPeriodBreakdown(_tmfHistoryTrades, activePeriod);
+    const done = _tmfDashTrades();
+    if (done.length) {
+        _tmfRenderEquityCurve(done);
+        _tmfRenderPeriodBreakdown(done, _tmfDashPeriod);
     }
 });
-
-// Minimal version of backtest.js's initCollapsibles — click a
-// [data-collapse] header to toggle its target's visibility (chevron ▾/▸).
-function _tmfInitCollapsibles() {
-    document.querySelectorAll('#algo-tmf-panel [data-collapse]').forEach(h => {
-        if (h._collapseWired) return;
-        h._collapseWired = true;
-        const sel = h.dataset.collapse;
-        const target = (h.parentElement && h.parentElement.querySelector(sel)) || document.querySelector(sel);
-        const chev = document.createElement('span');
-        chev.className = 'collapse-chev';
-        chev.style.marginRight = '6px';
-        chev.textContent = '▾';
-        const anchor = h.querySelector('h2, h3, h4, h5') || h;
-        anchor.insertBefore(chev, anchor.firstChild);
-        h.addEventListener('click', (e) => {
-            if (e.target.closest('button, a, input, select')) return;
-            if (!target) return;
-            const collapsed = target.classList.toggle('collapsed-hide');
-            chev.textContent = collapsed ? '▸' : '▾';
-        });
-    });
-}
-_tmfInitCollapsibles();
 
 function _tmfDeleteAllTrades() {
     if (!confirm('Delete ALL 30-Min Fakeout trade history records? This clears the entire Executed Trade History and cannot be undone.')) return;
