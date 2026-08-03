@@ -110,7 +110,7 @@
       "sl_risk": 2749.2,
       "ltp": 2068.6,
       "ltp_time": "2026-08-03T13:13:47.109646",
-      "qty": 73,
+      "qty": 237,
       "entry_time": "2026-08-03T10:48:23.619103",
       "entry_placed_ts": 1785734303.619104,
       "broker_positions": [
@@ -119,7 +119,7 @@
           "entry_order_id": "2084146843671257088",
           "filled": true,
           "entry_price": 2105.0,
-          "filled_qty": 73,
+          "filled_qty": 237,
           "sl_order_id": "2084183361215455232",
           "target_order_id": "2084183361878155264",
           "closed": true
@@ -130,7 +130,7 @@
       "exit_time": "2026-08-03T13:13:47.297583",
       "exit_price": 2070.6,
       "exit_reason": "Target Hit",
-      "realized_pnl": 2511.2
+      "realized_pnl": 8152.8
     },
     "CONCOR": {
       "phase": "no_setup"
@@ -170,9 +170,9 @@
       "entry_price": 1829.0,
       "target_level": 1795.0,
       "exit_time": "2026-08-03T15:18:04.518720",
-      "exit_price": 1845.5,
-      "exit_reason": "Time Exit",
-      "realized_pnl": -4504.5
+      "exit_price": 1828.87,
+      "exit_reason": "Time Exit (broker auto square-off)",
+      "realized_pnl": 35.9
     },
     "DIVISLAB": {
       "phase": "no_setup"
@@ -285,7 +285,7 @@
       "sl_risk": 2391.2,
       "ltp": 1280.1,
       "ltp_time": "2026-08-03T15:18:03.673336",
-      "qty": 392,
+      "qty": 15,
       "entry_time": "2026-08-03T10:46:37.098957",
       "entry_placed_ts": 1785734197.0989592,
       "broker_positions": [
@@ -303,9 +303,9 @@
       "entry_price": 1274.8,
       "target_level": 1294.7,
       "exit_time": "2026-08-03T15:18:05.114740",
-      "exit_price": 1267.3,
-      "exit_reason": "Time Exit",
-      "realized_pnl": -112.5
+      "exit_price": 1281.5,
+      "exit_reason": "Time Exit (broker auto square-off)",
+      "realized_pnl": 100.5
     },
     "KAYNES": {
       "phase": "no_setup"
@@ -543,24 +543,6 @@
     },
     "ZYDUSLIFE": {
       "phase": "no_setup"
-    },
-    "NIFTY2680424750PE": {
-      "direction": "long",
-      "entry_time": "2026-08-03T10:55:38.462767",
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "RECONCILED",
-          "filled": true,
-          "entry_price": 170.31578947368422,
-          "filled_qty": 2600,
-          "closed": false
-        }
-      ],
-      "entry_price": 170.31578947368422,
-      "qty": 2600,
-      "phase": "in_position",
-      "target_level": null
     }
   }
 }

@@ -7180,7 +7180,15 @@ def algo_tmf_status() -> EndpointResponse:
         except Exception:
             state = {'date': None, 'eod_handled': False, 'stocks': {}}
 
-        stocks = state.get('stocks') or {}
+        # Only this strategy's own stocks reach the grid. The live algo no
+        # longer writes anything else into its state (its reconciliation
+        # sweep is scoped to TMF_STOCK_UNIVERSE), but a state file written
+        # before that fix can still carry another strategy's instrument —
+        # e.g. the OI-profile algo's NIFTY option leg, which showed up here
+        # as a 30-Min Fakeout position on 2026-08-03.
+        from trading_app.Backtest.tmf_symbol_universe import TMF_STOCK_UNIVERSE
+        stocks = {sym: s for sym, s in (state.get('stocks') or {}).items()
+                  if sym in TMF_STOCK_UNIVERSE}
         summary = {'pending_scan': 0, 'no_setup': 0, 'watching': 0, 'pending_entry': 0, 'in_position': 0, 'done': 0}
         for s in stocks.values():
             phase = s.get('phase', 'pending_scan')

@@ -47,8 +47,15 @@ Gating (see env/Mine.env):
                                           brokers).
   TMF_CAPITAL_PER_TRADE=100000         — capital per trade (same default as
                                           the backtest).
-  TMF_EXIT_HOUR / TMF_EXIT_MINUTE      — cutoff for the Time Exit square-off
-                                          (default 15 / 18, same as backtest).
+  TMF_EXIT_HOUR / TMF_EXIT_MINUTE      — cutoff for the Time Exit square-off.
+                                          Defaults to 15:05, EARLIER than the
+                                          backtest's 15:18: Zerodha rejects
+                                          fresh MIS orders after 15:10, so a
+                                          15:18 square-off cannot be placed at
+                                          all (2026-08-03: every one rejected).
+                                          The few minutes of divergence from
+                                          the backtest buy an exit that
+                                          actually executes.
   TMF_USE_SL_RISK_FILTER=true          — skip a setup whose sized rupee stop
   TMF_MAX_SL_RISK=5000                    exceeds the cap, matching the
                                           backtest's use_sl_risk_filter /
@@ -74,8 +81,10 @@ Known live/backtest divergences that remain by nature (not bugs):
     live can only use the session Low/High up to the entry fill, so live
     targets are nearer and its winners are smaller.
   - The backtest fills a gap straight through the trigger at the bar's
-    OPEN; the live entry is a LIMIT resting at the trigger, so it fills at
-    the trigger or better, or (on a hard gap that never returns) not at all.
+    OPEN; the live entry is a LIMIT priced _ENTRY_MARKETABLE_PAD through
+    the last traded price, so it fills immediately at up to that much
+    beyond the trigger — never a market order, but not the exact trigger
+    price the backtest books either.
   - A late app start means the trigger cross has already happened, so the
     stock sits in `watching` and never enters — the backtest, replaying the
     whole day, always takes it.
@@ -124,6 +133,20 @@ _RECONCILE_SECS = 30     # how often to cross-check real broker positions agains
 # 11:40) is a completely different trade from the one the backtest scored.
 # Whatever filled inside the window is kept and managed; the rest is dropped.
 _ENTRY_ORDER_TTL_SECS = 120
+
+# How far THROUGH the last traded price the entry LIMIT is priced so it is
+# immediately marketable. A LIMIT resting exactly AT the trigger is, by the
+# very definition of the trigger, on the wrong side of the market: a short's
+# trigger fires once price has already fallen below it, so a SELL LIMIT at
+# the trigger sits above the market and only fills if price climbs back.
+# That is why VOLTAS (2026-08-03, trigger 1334.4 with price at 1331.2 and
+# falling) sat unfilled for its whole 120s life and was cancelled, and why
+# JSWSTEEL the same day filled just 15 of the 392 shares it was sized for.
+# Padding past the last price makes the order marketable — it fills at once,
+# at the touch-or-better price the backtest assumes — while still being a
+# LIMIT order (never a market order), so this pad is also the hard cap on
+# how far through the book a single fill can slip.
+_ENTRY_MARKETABLE_PAD = 0.002   # 0.2%
 
 _DEFAULT_TICK_SIZE = 0.05  # fallback when the broker's tick map is unavailable
 
@@ -439,12 +462,25 @@ class TMFAlgo:
             return
 
         transaction = 'SELL' if direction == 'short' else 'BUY'
+        # Priced through the last traded price so the LIMIT is marketable —
+        # see _ENTRY_MARKETABLE_PAD. `ltp` is the price this same tick just
+        # marked (the crossing price); the trigger is only the fallback for
+        # the rare tick where the batch LTP call came back empty.
+        ref  = float(s.get('ltp') or trigger)
+        tick = self._tick_size_for(symbol)
+        if direction == 'short':
+            limit_price = _round_to_tick(min(ref, trigger) * (1 - _ENTRY_MARKETABLE_PAD), tick, 'down')
+        else:
+            limit_price = _round_to_tick(max(ref, trigger) * (1 + _ENTRY_MARKETABLE_PAD), tick, 'up')
+        s['entry_limit_price'] = limit_price
+
         broker_positions = []
         for idx, svc in self._broker_list:
-            result = svc.place_equity_order(symbol, transaction, qty, price=trigger, product='MIS')
+            result = svc.place_equity_order(symbol, transaction, qty, price=limit_price, product='MIS')
             if result.get('success'):
                 broker_positions.append({'broker_idx': idx, 'entry_order_id': str(result['order_id']), 'filled': False})
-                logger.info(f"[TMF] {symbol}: entry {transaction} LIMIT x{qty} @ {trigger} placed via broker {idx} — order_id={result['order_id']}")
+                logger.info(f"[TMF] {symbol}: entry {transaction} LIMIT x{qty} @ {limit_price} "
+                            f"(marketable, trigger {trigger}, ltp {ref}) placed via broker {idx} — order_id={result['order_id']}")
             else:
                 logger.error(f"[TMF] {symbol}: entry order FAILED via broker {idx}: {result.get('error')}")
 
@@ -601,15 +637,27 @@ class TMFAlgo:
         bp['closed'] = True
         self._record_exit(symbol, s, bp, exit_price, reason)
 
-    def _record_exit(self, symbol: str, s: Dict[str, Any], bp: Dict[str, Any], exit_price: float, reason: str) -> None:
+    def _record_exit(self, symbol: str, s: Dict[str, Any], bp: Dict[str, Any], exit_price: float,
+                      reason: str, qty: Optional[int] = None, pnl: Optional[float] = None) -> None:
+        """Book one exit against a leg. `qty` defaults to the leg's whole
+        filled quantity (the normal, all-at-once exit); pass it explicitly to
+        book the portion of a leg that went out on its own — a partially
+        filled SL/Target order — so that quantity's P&L reaches the history
+        instead of being dropped when the leg is later resized.
+
+        `pnl` overrides the derived entry/exit arithmetic, for the one case
+        where the broker states the realised figure itself: its own average
+        prices are rounded to 2 decimals, so recomputing from them lands a
+        few rupees off what the account actually settled."""
         direction   = s['direction']
         entry_price = bp['entry_price']
-        qty         = bp['filled_qty']
-        pnl = (entry_price - exit_price) * qty if direction == 'short' else (exit_price - entry_price) * qty
+        qty         = int(bp['filled_qty'] if qty is None else qty)
+        if pnl is None:
+            pnl = (entry_price - exit_price) * qty if direction == 'short' else (exit_price - entry_price) * qty
         record = {
             'symbol': symbol, 'direction': 'SELL' if direction == 'short' else 'BUY',
             'qty': qty, 'entry_price': entry_price, 'exit_price': exit_price,
-            'sl_price': s['sl_level'], 'target_price': s.get('target_level'),
+            'sl_price': s.get('sl_level'), 'target_price': s.get('target_level'),
             'pnl': round(pnl, 2), 'reason': reason,
             'entry_time': s.get('entry_time', ''), 'exit_time': datetime.now().isoformat(),
             'broker_idx': bp['broker_idx'], 'entry_order_id': bp.get('entry_order_id'),
@@ -675,9 +723,19 @@ class TMFAlgo:
         """Time Exit: cancel the still-open SL/Target legs, then close the
         position with a marketable Intraday LIMIT (padded off the last
         traded price so it fills like a market order without actually
-        being one, matching the user's 'LIMIT order only' requirement)."""
+        being one, matching the user's 'LIMIT order only' requirement).
+
+        A leg is only booked as exited if the broker ACCEPTED the closing
+        order. If it was rejected the position is still open, and saying
+        otherwise invents a trade: on 2026-08-03 the 15:18 cutoff fell past
+        Zerodha's 15:10 deadline for fresh MIS orders, every square-off was
+        rejected, and the requested (never-traded) padded price was booked
+        anyway — DALBHARAT went into the history at -₹4,504 on a fill that
+        never happened. Keep the cutoff before 15:10 (TMF_EXIT_MINUTE) so
+        this stays theoretical."""
         direction = s['direction']
         exit_txn  = 'BUY' if direction == 'short' else 'SELL'
+        all_closed = True
         for bp in s.get('broker_positions', []):
             if not bp.get('filled') or bp.get('closed'):
                 continue
@@ -698,39 +756,61 @@ class TMFAlgo:
             # traded price on the stock, so use that before the stop.
             ltp = self._get_ltp_one(svc, symbol)
             if ltp is None:
-                ltp = s.get('ltp')
+                ltp = s.get('ltp') or s.get('sl_level')
                 logger.warning(f"[TMF] {symbol}: broker LTP unavailable at square-off — "
-                                f"pricing off last marked {ltp or s['sl_level']}")
-            ltp = ltp or s['sl_level']
+                                f"pricing off last marked {ltp}")
+            if not ltp:
+                # No live price, no marked price and no SL to fall back on
+                # (an orphan recovered with no setup behind it) — there is no
+                # honest price to send a LIMIT at. Crashing here on a missing
+                # 'sl_level' key is what aborted the whole 2026-08-03 EOD
+                # sweep, leaving the rest of the day's positions unhandled.
+                all_closed = False
+                s['exit_reason'] = 'Square-off skipped — no price reference available'
+                logger.error(f"[TMF] {symbol}: no usable price for the square-off LIMIT — "
+                              f"position left OPEN at broker {bp['broker_idx']}")
+                continue
             pad = 1.01 if exit_txn == 'BUY' else 0.99
             price = round(ltp * pad, 1)
             res = svc.place_equity_order(symbol, exit_txn, qty, price=price, product='MIS')
-            exit_price = price
-            if res.get('success'):
-                # This is a padded LIMIT order (fills at price-or-better, often
-                # noticeably better) — recording the *requested* price instead
-                # of the real fill silently corrupts the P&L history, so poll
-                # for the actual average_price rather than assuming they match.
-                exit_price = self._poll_fill_price(svc, res['order_id'], fallback=price)
-                logger.info(f"[TMF] {symbol}: EOD square-off {exit_txn} x{qty} requested @ {price}, "
-                            f"filled @ {exit_price} (broker {bp['broker_idx']}) order={res.get('order_id')}")
-            else:
-                logger.error(f"[TMF] {symbol}: EOD square-off FAILED (broker {bp['broker_idx']}): {res.get('error')}")
+            if not res.get('success'):
+                # The position is still open at the broker. Booking the
+                # requested price as an exit would put a trade that never
+                # happened into the P&L history.
+                all_closed = False
+                s['exit_reason'] = f"Square-off REJECTED — still open at broker ({res.get('error')})"
+                logger.error(f"[TMF] {symbol}: EOD square-off FAILED (broker {bp['broker_idx']}): {res.get('error')} "
+                              f"— leg left OPEN and NOT booked as exited")
+                continue
 
+            # This is a padded LIMIT order (fills at price-or-better, often
+            # noticeably better) — recording the *requested* price instead
+            # of the real fill silently corrupts the P&L history, so poll
+            # for the actual average_price rather than assuming they match.
+            exit_price = self._poll_fill_price(svc, res['order_id'], fallback=price)
+            logger.info(f"[TMF] {symbol}: EOD square-off {exit_txn} x{qty} requested @ {price}, "
+                        f"filled @ {exit_price} (broker {bp['broker_idx']}) order={res.get('order_id')}")
             bp['closed'] = True
             self._record_exit(symbol, s, bp, exit_price, 'Time Exit')
-        s['phase'] = 'done'
+        if all_closed:
+            s['phase'] = 'done'
 
     def _handle_eod(self, state: Dict[str, Any]) -> None:
+        # Per-symbol isolation: one stock failing to square off must not
+        # abandon every stock after it in the dict (2026-08-03, where a
+        # KeyError on the first one skipped the rest of the sweep entirely).
         for symbol, s in state['stocks'].items():
-            if s['phase'] == 'in_position':
-                self._square_off(symbol, s)
-            elif s['phase'] == 'pending_entry':
-                for bp in s.get('broker_positions', []):
-                    if not bp.get('filled') and not bp.get('dead'):
-                        self._cancel_broker_order(bp['broker_idx'], bp['entry_order_id'])
-                s['phase'] = 'done'
-                s['exit_reason'] = 'Entry never filled (EOD)'
+            try:
+                if s['phase'] == 'in_position':
+                    self._square_off(symbol, s)
+                elif s['phase'] == 'pending_entry':
+                    for bp in s.get('broker_positions', []):
+                        if not bp.get('filled') and not bp.get('dead'):
+                            self._cancel_broker_order(bp['broker_idx'], bp['entry_order_id'])
+                    s['phase'] = 'done'
+                    s['exit_reason'] = 'Entry never filled (EOD)'
+            except Exception as e:
+                logger.error(f"[TMF] {symbol}: EOD handling failed: {e}", exc_info=True)
         logger.info("[TMF] EOD handling complete — open positions squared off, pending orders cancelled")
 
         # Final safety sweep: cross-check every broker's REAL open MIS
@@ -750,13 +830,29 @@ class TMFAlgo:
     def _get_broker_mis_positions(self, svc: Any) -> Dict[str, Dict[str, Any]]:
         """Real open MIS (intraday) equity positions at the broker right
         now — ground truth, independent of anything this app's own state
-        tracking believes."""
+        tracking believes.
+
+        Scoped to THIS strategy's own instruments: NSE cash-market scrips
+        that are in TMF_STOCK_UNIVERSE. The broker's position book is
+        account-wide, so without that scope the reconciliation sweep adopts
+        every other strategy's position as a TMF "orphan" — on 2026-08-03 it
+        took over the OI-profile algo's NIFTY2680424750PE option leg, showed
+        it as a TMF position, re-armed it on every 30s tick as that strategy
+        traded in and out, and (at EOD) tried to square off a position it
+        does not own. Index options/futures are NFO/BFO, so the exchange
+        check alone drops them; the universe check additionally leaves any
+        manually-traded NSE stock alone."""
+        from trading_app.Backtest.tmf_symbol_universe import TMF_STOCK_UNIVERSE
         try:
             positions = svc.kite.positions() or {}
             net = positions.get('net', []) or []
             result: Dict[str, Dict[str, Any]] = {}
             for p in net:
                 if p.get('product') != 'MIS':
+                    continue
+                if (p.get('exchange') or '').upper() != 'NSE':
+                    continue
+                if p.get('tradingsymbol') not in TMF_STOCK_UNIVERSE:
                     continue
                 qty = int(p.get('quantity', 0) or 0)
                 if qty == 0:
@@ -769,6 +865,159 @@ class TMFAlgo:
         except Exception as e:
             logger.warning(f"[TMF] positions() fetch failed: {e}")
             return {}
+
+    def _exit_leg_fills(self, svc: Any, bp: Dict[str, Any]) -> List[Tuple[str, int, Optional[float]]]:
+        """(reason, filled_qty, average_price) for each of the leg's exit
+        orders that has traded any quantity — including one that is still
+        only PARTIALLY filled, which the orderbook status check
+        (_check_position_exit, which waits for 'COMPLETE') never sees."""
+        out: List[Tuple[str, int, Optional[float]]] = []
+        for key, reason in (('sl_order_id', 'SL Hit'), ('target_order_id', 'Target Hit')):
+            order_id = bp.get(key)
+            if not order_id:
+                continue
+            try:
+                st = svc.get_order_status(order_id)
+            except Exception as e:
+                logger.warning(f"[TMF] exit order {order_id}: status lookup failed: {e}")
+                continue
+            if not st.get('success'):
+                continue
+            filled = int(st.get('filled_quantity') or 0)
+            if filled > 0:
+                out.append((reason, filled, float(st['average_price']) if st.get('average_price') else None))
+        return out
+
+    def _record_partial_exit(self, symbol: str, s: Dict[str, Any], bp: Dict[str, Any], svc: Any,
+                              idx: int, real_qty: int, tracked_qty: int) -> None:
+        """Book the quantity that has left the position but was never
+        recorded — the broker shows fewer shares open than this app has
+        tracked as filled. The broker's own number is the ground truth for
+        HOW MUCH went out; the exit orders' fills say at what price and
+        why. Call this with the exit legs already cancelled, so the fills it
+        reads are final."""
+        exited = tracked_qty - real_qty
+        fills  = self._exit_leg_fills(svc, bp)
+        logger.error(
+            f"[TMF] RECONCILE: {symbol} broker {idx} real qty ({real_qty}) < tracked qty "
+            f"({tracked_qty}) — {exited} shares have already exited. Booking them "
+            f"(exit-leg fills: {[(r, q, p) for r, q, p in fills]})."
+        )
+        for reason, filled_qty, avg in fills:
+            if exited <= 0:
+                break
+            part  = min(filled_qty, exited)
+            level = s.get('sl_level') if reason == 'SL Hit' else s.get('target_level')
+            price = avg or level
+            if price is None:
+                continue
+            self._record_exit(symbol, s, bp, float(price), f'{reason} (partial)', qty=part)
+            exited -= part
+        if exited > 0:
+            # Nothing this app placed accounts for it — the position was
+            # reduced outside the algo (closed by hand in Kite, or a broker
+            # square-off). Book it at the last marked price rather than
+            # letting the quantity vanish from the P&L entirely.
+            price = s.get('ltp') or bp.get('entry_price')
+            if price is not None:
+                self._record_exit(symbol, s, bp, float(price), 'Closed outside the algo', qty=exited)
+                logger.warning(f"[TMF] RECONCILE: {symbol} {exited} shares closed outside the algo — "
+                                f"booked at the last marked price {price} (estimate, not a real fill)")
+        bp['filled_qty'] = real_qty
+        s['qty']         = real_qty
+        if real_qty <= 0:
+            bp['closed'] = True
+            for key in ('sl_order_id', 'target_order_id'):
+                if bp.get(key):
+                    self._cancel_broker_order(idx, bp[key])
+            if all(b.get('closed') for b in s.get('broker_positions', []) if b.get('filled')):
+                s['phase'] = 'done'
+
+    def _rearm_exit_legs(self, symbol: str, s: Dict[str, Any], bp: Dict[str, Any], svc: Any, idx: int,
+                          qty: int, provider: Any = None, is_fyers: bool = False) -> None:
+        """Cancel the leg's SL/Target orders and place them again for `qty` —
+        used whenever the real open quantity has moved away from what the
+        existing orders are sized for (entry still filling, or part of the
+        position already exited), since an over-sized SL would flip the
+        position the wrong way and an under-sized one leaves shares naked."""
+        direction = s['direction']
+        exit_txn  = 'BUY' if direction == 'short' else 'SELL'
+        for key in ('sl_order_id', 'target_order_id'):
+            if bp.get(key):
+                self._cancel_broker_order(idx, bp[key])
+        bp['filled_qty'] = qty
+        s['qty']         = qty
+        if s.get('sl_level'):
+            sl_res = svc.place_equity_sl_order(symbol, exit_txn, qty, trigger_price=s['sl_level'], product='MIS')
+            bp['sl_order_id'] = str(sl_res['order_id']) if sl_res.get('success') else None
+        if s.get('target_level') is None and provider is not None:
+            s['target_level'] = self._compute_target(provider, is_fyers, symbol, direction, bp['entry_price'])
+        if s.get('target_level') is not None:
+            tgt_res = svc.place_equity_order(symbol, exit_txn, qty, price=s['target_level'], product='MIS')
+            bp['target_order_id'] = str(tgt_res['order_id']) if tgt_res.get('success') else None
+        else:
+            bp['target_order_id'] = None
+        logger.info(f"[TMF] RECONCILE: {symbol} re-armed x{qty} — SL={s.get('sl_level')} order={bp.get('sl_order_id')}, "
+                    f"Target={s.get('target_level')} order={bp.get('target_order_id')}")
+
+    def _raw_broker_position(self, svc: Any, symbol: str) -> Optional[Dict[str, Any]]:
+        """The broker's raw MIS position row for one scrip, INCLUDING a flat
+        one (quantity 0). _get_broker_mis_positions drops those — it looks
+        for what is still open — but a flat row is exactly what proves a
+        position has been closed, and it carries the buy/sell averages and
+        the realised P&L of that round trip."""
+        try:
+            for p in (svc.kite.positions() or {}).get('net', []) or []:
+                if (p.get('tradingsymbol') == symbol and p.get('product') == 'MIS'
+                        and (p.get('exchange') or '').upper() == 'NSE'):
+                    return p
+        except Exception as e:
+            logger.warning(f"[TMF] {symbol}: positions() fetch failed: {e}")
+        return None
+
+    def _book_closed_at_broker(self, state: Dict[str, Any]) -> None:
+        """Book any leg this app still holds open but the broker has already
+        flattened — using the broker's own numbers.
+
+        This is the other half of not inventing an exit when a square-off
+        order is rejected. On 2026-08-03 the rejected square-offs left
+        DALBHARAT and JSWSTEEL to Zerodha's own 15:20 MIS auto square-off:
+        real closes, at real prices, that this app knew nothing about. The
+        thread is still alive until 15:30, so it can watch the position go
+        flat and record what actually settled (DALBHARAT: +₹35.90 on a buy
+        back at 1,828.87, not the -₹4,504 the invented 1,845.50 exit had
+        booked) instead of leaving the trade permanently open in history."""
+        for symbol, s in state['stocks'].items():
+            open_legs = [bp for bp in s.get('broker_positions', [])
+                         if bp.get('filled') and not bp.get('closed')]
+            if not open_legs:
+                continue
+            for bp in open_legs:
+                svc = self._svc_for(bp['broker_idx'])
+                if svc is None:
+                    continue
+                pos = self._raw_broker_position(svc, symbol)
+                if pos is None or int(pos.get('quantity', 0) or 0) != 0:
+                    continue   # still open at the broker — nothing to book yet
+                buy_qty  = int(pos.get('buy_quantity', 0) or 0)
+                sell_qty = int(pos.get('sell_quantity', 0) or 0)
+                if buy_qty <= 0 or buy_qty != sell_qty:
+                    continue   # flat but not a completed round trip
+                # The closing side is the opposite of the entry.
+                exit_price = float((pos.get('buy_price') if s['direction'] == 'short'
+                                    else pos.get('sell_price')) or 0)
+                if not exit_price:
+                    continue
+                bp['closed'] = True
+                self._record_exit(symbol, s, bp, round(exit_price, 2),
+                                   'Time Exit (broker auto square-off)',
+                                   qty=bp['filled_qty'],
+                                   pnl=float(pos.get('pnl')) if pos.get('pnl') is not None else None)
+                logger.warning(f"[TMF] {symbol}: this app's square-off never went through — the broker "
+                                f"closed the position itself. Booked from its position book: "
+                                f"exit {exit_price}, realised ₹{pos.get('pnl')}")
+            if all(bp.get('closed') for bp in s.get('broker_positions', []) if bp.get('filled')):
+                s['phase'] = 'done'
 
     def _reconcile_orphaned_positions(self, state: Dict[str, Any], force_square_off: bool,
                                        provider: Any = None, is_fyers: bool = False,
@@ -807,40 +1056,51 @@ class TMFAlgo:
                     continue
 
                 if tracked_bp is not None:
-                    # Already tracked — but if the entry order was still filling
-                    # incrementally when this sweep first caught it (a LIMIT
-                    # order doesn't fill atomically), the SL/Target armed back
-                    # then are sized for a stale partial quantity while more of
-                    # the position keeps filling at the broker. Re-sync now
-                    # rather than silently leaving the difference unprotected.
-                    real_qty = abs(pos['quantity'])
-                    if not force_square_off and real_qty != tracked_bp.get('filled_qty'):
-                        old_qty = tracked_bp.get('filled_qty')
+                    real_qty    = abs(pos['quantity'])
+                    tracked_qty = int(tracked_bp.get('filled_qty') or 0)
+                    if not force_square_off and real_qty > tracked_qty:
+                        # The entry order was still filling incrementally when
+                        # this sweep first caught it (a LIMIT order doesn't fill
+                        # atomically), so the SL/Target armed back then are sized
+                        # for a stale partial quantity while more of the position
+                        # keeps filling. Re-sync rather than silently leaving the
+                        # difference unprotected.
                         logger.error(
-                            f"[TMF] RECONCILE: {symbol} broker {idx} real qty ({real_qty}) != "
-                            f"tracked qty ({old_qty}) — entry order filled further after this app "
+                            f"[TMF] RECONCILE: {symbol} broker {idx} real qty ({real_qty}) > "
+                            f"tracked qty ({tracked_qty}) — entry order filled further after this app "
                             f"first caught it. Re-arming SL/Target for the corrected quantity."
                         )
-                        direction = s['direction']
-                        exit_txn = 'BUY' if direction == 'short' else 'SELL'
-                        if tracked_bp.get('sl_order_id'):
-                            self._cancel_broker_order(idx, tracked_bp['sl_order_id'])
-                        if tracked_bp.get('target_order_id'):
-                            self._cancel_broker_order(idx, tracked_bp['target_order_id'])
-                        tracked_bp['filled_qty']  = real_qty
                         tracked_bp['entry_price'] = pos['average_price']
-                        s['qty']         = real_qty
-                        s['entry_price'] = pos['average_price']
-                        if s.get('sl_level'):
-                            sl_res = svc.place_equity_sl_order(symbol, exit_txn, real_qty, trigger_price=s['sl_level'], product='MIS')
-                            tracked_bp['sl_order_id'] = str(sl_res['order_id']) if sl_res.get('success') else None
-                        if s.get('target_level') is None and provider is not None:
-                            s['target_level'] = self._compute_target(provider, is_fyers, symbol, direction, pos['average_price'])
-                        if s.get('target_level') is not None:
-                            tgt_res = svc.place_equity_order(symbol, exit_txn, real_qty, price=s['target_level'], product='MIS')
-                            tracked_bp['target_order_id'] = str(tgt_res['order_id']) if tgt_res.get('success') else None
-                        logger.info(f"[TMF] RECONCILE: {symbol} re-armed SL={s.get('sl_level')} order={tracked_bp.get('sl_order_id')}, "
-                                    f"Target={s.get('target_level')} order={tracked_bp.get('target_order_id')}")
+                        s['entry_price']          = pos['average_price']
+                        self._rearm_exit_legs(symbol, s, tracked_bp, svc, idx, real_qty,
+                                               provider=provider, is_fyers=is_fyers)
+                    elif not force_square_off and real_qty < tracked_qty:
+                        # The opposite case, and it is NOT an entry problem: part
+                        # of the position has already GONE OUT — an exit leg
+                        # filled only partially (a LIMIT Target doesn't fill
+                        # atomically either), or it was closed by hand in Kite.
+                        # Reading that as "the entry filled further" is what cost
+                        # COLPAL (2026-08-03) most of its trade: 164 of 237 shares
+                        # had already exited on the Target leg, this sweep
+                        # cancelled that partially-filled order, re-armed for the
+                        # remaining 73 and never recorded the 164 — so the app
+                        # booked ₹2,511 on a trade Kite shows as ₹8,152.80.
+                        # Account for the portion that exited, then re-arm the
+                        # legs (which are now over-sized) for what is still open.
+                        # Cancel FIRST and only then re-read the position: a leg
+                        # left live could fill further between the snapshot above
+                        # and the re-arm, and re-arming against a stale quantity
+                        # would leave orders standing for shares no longer held.
+                        for key in ('sl_order_id', 'target_order_id'):
+                            if tracked_bp.get(key):
+                                self._cancel_broker_order(idx, tracked_bp[key])
+                        fresh = self._get_broker_mis_positions(svc).get(symbol)
+                        open_qty = abs(fresh['quantity']) if fresh else 0
+                        self._record_partial_exit(symbol, s, tracked_bp, svc, idx,
+                                                   open_qty, tracked_qty)
+                        if open_qty > 0:
+                            self._rearm_exit_legs(symbol, s, tracked_bp, svc, idx, open_qty,
+                                                   provider=provider, is_fyers=is_fyers)
                     continue
 
                 qty = abs(pos['quantity'])
@@ -976,7 +1236,11 @@ class TMFAlgo:
         # this app's own tracking missed (whatever the cause) long before
         # EOD, instead of only finding out at the cutoff with no time left
         # to react. See _reconcile_orphaned_positions' docstring.
-        if self._broker_list:
+        # Not once the EOD sweep has run: past the cutoff there is nothing
+        # left to protect, and a position the broker rejected the square-off
+        # for would otherwise be re-armed with fresh (equally rejected)
+        # MIS orders every 30 seconds until the thread stops.
+        if self._broker_list and not state.get('eod_handled'):
             now_ts = time.time()
             if now_ts - self._last_reconcile_ts >= _RECONCILE_SECS:
                 self._last_reconcile_ts = now_ts
@@ -993,6 +1257,15 @@ class TMFAlgo:
             except Exception as e:
                 logger.error(f"[TMF] EOD handling failed: {e}", exc_info=True)
             state['eod_handled'] = True
+        elif state.get('eod_handled') and self._broker_list:
+            # Anything the EOD sweep could not close (a rejected square-off
+            # order) is still open at the broker, which will square it off
+            # itself at 15:20. The thread lives until 15:30 precisely so it
+            # can see that happen and book the real fill.
+            try:
+                self._book_closed_at_broker(state)
+            except Exception as e:
+                logger.error(f"[TMF] post-EOD booking failed: {e}", exc_info=True)
 
     def _monitor_loop(self) -> None:
         try:
@@ -1022,7 +1295,9 @@ class TMFAlgo:
 
             capital_per_trade = float(self._uvar('TMF_CAPITAL_PER_TRADE', '100000') or 100000)
             exit_hour   = int(self._uvar('TMF_EXIT_HOUR', '15') or 15)
-            exit_minute = int(self._uvar('TMF_EXIT_MINUTE', '18') or 18)
+            # 15:05, not the backtest's 15:18 — Zerodha blocks fresh MIS
+            # orders after 15:10, so a later cutoff cannot square off.
+            exit_minute = int(self._uvar('TMF_EXIT_MINUTE', '5') or 5)
             cutoff_mins = exit_hour * 60 + exit_minute
             algo_active = self._uvar('TMF_ALGO_ACTIVE', 'false').lower() == 'true'
             # Mirrors the backtest's use_sl_risk_filter / sl_risk_max (both
