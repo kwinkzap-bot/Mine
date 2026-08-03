@@ -288,9 +288,9 @@
       "qty": 1400,
       "entry_time": "2026-07-30T09:52:33.286268",
       "future_month": "AUG 2026",
-      "ltp": 455.35,
-      "ltp_time": "2026-08-03T14:10:31.515326",
-      "unrealized_pnl": -3710.0
+      "ltp": 452.5,
+      "ltp_time": "2026-08-03T15:29:58.526324",
+      "unrealized_pnl": -7700.0
     },
     "ONGC": {
       "phase": "no_setup"

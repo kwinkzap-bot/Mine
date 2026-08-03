@@ -1,6 +1,6 @@
 {
   "date": "2026-08-03",
-  "eod_handled": false,
+  "eod_handled": true,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
@@ -145,13 +145,13 @@
       "phase": "no_setup"
     },
     "DALBHARAT": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "short",
       "trigger": 1829.0,
       "sl_level": 1846.6,
       "sl_risk": 4804.8,
-      "ltp": 1834.1,
-      "ltp_time": "2026-08-03T14:10:39.132386",
+      "ltp": 1827.2,
+      "ltp_time": "2026-08-03T15:18:03.673296",
       "qty": 273,
       "entry_time": "2026-08-03T11:19:28.088807",
       "entry_placed_ts": 1785736168.0888078,
@@ -163,12 +163,16 @@
           "entry_price": 1829.0,
           "filled_qty": 273,
           "sl_order_id": "2084154761791594496",
-          "target_order_id": "2084154762273939456"
+          "target_order_id": "2084154762273939456",
+          "closed": true
         }
       ],
       "entry_price": 1829.0,
       "target_level": 1795.0,
-      "unrealized_pnl": -1392.3
+      "exit_time": "2026-08-03T15:18:04.518720",
+      "exit_price": 1845.5,
+      "exit_reason": "Time Exit",
+      "realized_pnl": -4504.5
     },
     "DIVISLAB": {
       "phase": "no_setup"
@@ -274,13 +278,13 @@
       "phase": "no_setup"
     },
     "JSWSTEEL": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "long",
       "trigger": 1274.8,
       "sl_level": 1268.7,
       "sl_risk": 2391.2,
-      "ltp": 1282.8,
-      "ltp_time": "2026-08-03T14:10:39.132838",
+      "ltp": 1280.1,
+      "ltp_time": "2026-08-03T15:18:03.673336",
       "qty": 392,
       "entry_time": "2026-08-03T10:46:37.098957",
       "entry_placed_ts": 1785734197.0989592,
@@ -292,12 +296,16 @@
           "entry_price": 1274.8,
           "filled_qty": 15,
           "sl_order_id": "2084146920338939904",
-          "target_order_id": "2084146920997445632"
+          "target_order_id": "2084146920997445632",
+          "closed": true
         }
       ],
       "entry_price": 1274.8,
       "target_level": 1294.7,
-      "unrealized_pnl": 120.0
+      "exit_time": "2026-08-03T15:18:05.114740",
+      "exit_price": 1267.3,
+      "exit_reason": "Time Exit",
+      "realized_pnl": -112.5
     },
     "KAYNES": {
       "phase": "no_setup"
