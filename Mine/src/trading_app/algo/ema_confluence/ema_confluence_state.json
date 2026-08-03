@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-07-31",
+  "last_scan_date": "2026-08-03",
   "stocks": {
     "NIFTY": {
       "phase": "no_setup"
@@ -251,22 +251,16 @@
       "phase": "no_setup"
     },
     "NHPC": {
-      "phase": "in_position",
-      "direction": "Short",
-      "trigger_level": 77.85,
-      "sl_level": 79.55,
-      "target_pct": 8,
-      "signal_date": "2026-07-28",
+      "phase": "no_setup",
       "future_token": "NSE:NHPC26AUGFUT",
       "lot_size": 6950,
-      "entry_price": 77.83,
-      "target_level": 71.6,
-      "qty": 6950,
-      "entry_time": "2026-07-30T09:18:36.996531",
       "future_month": "AUG 2026",
-      "ltp": 78.97,
-      "ltp_time": "2026-07-31T15:29:54.668390",
-      "unrealized_pnl": -7923.0
+      "last_entry_time": "2026-07-30T09:18:36.996531",
+      "last_entry_price": 77.83,
+      "last_exit_time": "2026-08-03T09:28:53.837240",
+      "last_exit_price": 79.55,
+      "last_exit_reason": "SL",
+      "last_pnl": -11954.0
     },
     "NMDC": {
       "phase": "no_setup"
@@ -294,9 +288,9 @@
       "qty": 1400,
       "entry_time": "2026-07-30T09:52:33.286268",
       "future_month": "AUG 2026",
-      "ltp": 459.55,
-      "ltp_time": "2026-07-31T15:29:54.668398",
-      "unrealized_pnl": 2170.0
+      "ltp": 455.35,
+      "ltp_time": "2026-08-03T14:10:31.515326",
+      "unrealized_pnl": -3710.0
     },
     "ONGC": {
       "phase": "no_setup"

@@ -8884,16 +8884,22 @@ def oi_profile_candles() -> EndpointResponse:
                 # Lightweight Charts (candlestick) throws "Value is null" if any OHLC is None/NaN
                 if any(x is None for x in [c.get('open'), c.get('high'), c.get('low'), c.get('close')]):
                     continue
-                temp.append({
+                bar = {
                     'time':   int(c['date'].timestamp()) + ist_offset,
                     'open':   c['open'], 'high':   c['high'], 'low':    c['low'],
                     'close':  c['close'], 'volume': c.get('volume', 0)
-                })
+                }
+                # Carried through so the chart can mark the stretch that was
+                # rebuilt locally (Fyers intraday history empty for today)
+                # rather than passing it off as exchange data.
+                if c.get('synthetic'):
+                    bar['synthetic'] = True
+                temp.append(bar)
             
             if requested_interval == '2minute':
                 def merge_batch(batch):
                     if not batch: return None
-                    return {
+                    merged = {
                         'time':   batch[0]['time'],
                         'open':   batch[0]['open'],
                         'high':   max(x['high'] for x in batch),
@@ -8901,6 +8907,9 @@ def oi_profile_candles() -> EndpointResponse:
                         'close':  batch[-1]['close'],
                         'volume': sum(x['volume'] for x in batch)
                     }
+                    if any(x.get('synthetic') for x in batch):
+                        merged['synthetic'] = True
+                    return merged
                 
                 aggregated = []
                 batch = []
@@ -8931,7 +8940,12 @@ def oi_profile_candles() -> EndpointResponse:
                     # Use Fyers data provider for historical data
                     from_str = from_dt.strftime('%Y-%m-%d')
                     to_str = to_dt.strftime('%Y-%m-%d')
-                    res = _data_provider.historical_data(str(token), from_str, to_str, inter, use_cache=False)
+                    # allow_synthetic: this is the chart, not an order path. When
+                    # Fyers' intraday history has nothing for today, rebuild
+                    # today's bars from the OI snapshots + quote feed rather than
+                    # drawing a chart that stops at the previous session's close.
+                    res = _data_provider.historical_data(str(token), from_str, to_str, inter,
+                                                         use_cache=False, allow_synthetic=True)
                     if not res:
                         # Must be read on the fetching thread — it is thread-local.
                         reason = getattr(_data_provider, 'last_history_error', lambda: None)()

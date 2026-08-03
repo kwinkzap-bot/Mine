@@ -594,6 +594,56 @@ function oipMark5mCloseBorders(candles, enabled, color) {
     });
 }
 
+// Bars the backend rebuilt locally because Fyers' intraday history had nothing
+// for today (their store went empty on 2026-08-03 while quotes stayed live) are
+// flagged `synthetic` by /api/oi-profile/candles. They come from ~60s OI
+// snapshots plus the quote poll, not from an exchange feed, so a 1-minute bar
+// there is often a single sample with open == high == low == close.
+//
+// Tint their wicks so it is obvious on the chart exactly where real candles
+// stop and the reconstruction begins — reading a flat-wicked stretch as real
+// price structure would be badly misleading.
+const _OIP_SYNTHETIC_WICK = '#f59e0b';
+
+function oipMarkSynthetic(candles) {
+    if (!Array.isArray(candles)) return candles;
+    return candles.map(c => (c && c.synthetic)
+        ? { ...c, wickColor: _OIP_SYNTHETIC_WICK }
+        : c);
+}
+
+// True if any bar in the set was locally rebuilt — drives the chart banner.
+function oipHasSynthetic(candles) {
+    return Array.isArray(candles) && candles.some(c => c && c.synthetic);
+}
+
+// Shows/hides a banner above the OI Profile chart explaining that the newest
+// bars are reconstructed. Created on demand so no template change is needed.
+function oipSetSyntheticBanner(show) {
+    let el = document.getElementById('oipSyntheticBanner');
+    if (!show) {
+        if (el) el.style.display = 'none';
+        return;
+    }
+    if (!el) {
+        const wrap = document.getElementById('oipChartWrap');
+        if (!wrap) return;
+        el = document.createElement('div');
+        el.id = 'oipSyntheticBanner';
+        el.style.cssText = [
+            'padding:4px 10px', 'margin:0 0 4px', 'border-radius:4px',
+            'font-size:11px', 'font-weight:600', 'line-height:1.4',
+            `background:${_OIP_SYNTHETIC_WICK}22`, `color:${_OIP_SYNTHETIC_WICK}`,
+            `border:1px solid ${_OIP_SYNTHETIC_WICK}66`,
+        ].join(';');
+        el.textContent = "⚠ Fyers has no intraday candles for today — the amber-wicked bars "
+            + "are rebuilt from OI snapshots and the quote feed (~60s sampling), not exchange data. "
+            + "Live algos are unaffected: they ignore these bars.";
+        wrap.parentNode.insertBefore(el, wrap);
+    }
+    el.style.display = '';
+}
+
 // Removes a previously applied tag. Needed where candles are read back OUT of
 // a series that already has them tagged (oipOISeries.data() feeding the Opt
 // Prem index view) and must be re-tagged under a different popup's settings.

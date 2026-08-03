@@ -1,0 +1,19 @@
+[
+  {
+    "symbol": "NHPC",
+    "direction": "SELL",
+    "mode": "paper",
+    "qty": 6950,
+    "lot_size": 6950,
+    "entry_price": 77.83,
+    "exit_price": 79.55,
+    "sl_price": 79.55,
+    "target_price": 71.6,
+    "pnl": -11954.0,
+    "reason": "SL",
+    "signal_date": "2026-07-28",
+    "entry_time": "2026-07-30T09:18:36.996531",
+    "exit_time": "2026-08-03T09:28:53.837240",
+    "date": "2026-08-03"
+  }
+]

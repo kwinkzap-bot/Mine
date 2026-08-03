@@ -115,6 +115,43 @@ _GLOBAL_FYERS_HIST_LOCK = threading.Semaphore(4)
 # reused worker thread can never report a previous fetch's error.
 _FYERS_HIST_ERROR = threading.local()
 
+# Kite instrument tokens / Kite index names -> Fyers index symbols. Module level
+# so historical_data() can resolve the symbol before its cache lookup (the
+# synthetic today-fill needs the real Fyers symbol, not the alias the caller
+# happened to pass).
+_KITE_TO_FYERS_INDICES = {
+    '256265': 'NSE:NIFTY50-INDEX',
+    '260105': 'NSE:NIFTYBANK-INDEX',
+    '257801': 'NSE:FINNIFTY-INDEX',
+    '288009': 'NSE:MIDCPNIFTY-INDEX',
+    '264969': 'NSE:INDIAVIX-INDEX',
+    'NSE:NIFTY 50': 'NSE:NIFTY50-INDEX',
+    'NSE:NIFTY BANK': 'NSE:NIFTYBANK-INDEX',
+    'NSE:NIFTY FIN SERVICE': 'NSE:FINNIFTY-INDEX',
+    'NSE:NIFTY MID SELECT': 'NSE:MIDCPNIFTY-INDEX',
+    '266249': 'NSE:NIFTYMIDCAP150-INDEX',
+    '263433': 'NSE:NIFTYAUTO-INDEX',
+    '267017': 'NSE:NIFTYSMLCAP100-INDEX',
+    '261897': 'NSE:NIFTYFMCG-INDEX',
+    '263689': 'NSE:NIFTYMETAL-INDEX',
+    '262409': 'NSE:NIFTYPHARMA-INDEX',
+    '262921': 'NSE:NIFTYPSUBANK-INDEX',
+    '259849': 'NSE:NIFTYIT-INDEX',
+    'NSE:NIFTY MIDCAP 150': 'NSE:NIFTYMIDCAP150-INDEX',
+    'NSE:NIFTY AUTO':      'NSE:NIFTYAUTO-INDEX',
+    'NSE:NIFTY SMALLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
+    'NSE:NIFTY SMLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
+    'NSE:NIFTY FMCG':      'NSE:NIFTYFMCG-INDEX',
+    'NSE:NIFTY METAL':     'NSE:NIFTYMETAL-INDEX',
+    'NSE:NIFTY PHARMA':    'NSE:NIFTYPHARMA-INDEX',
+    'NSE:NIFTY PHARAMA':   'NSE:NIFTYPHARMA-INDEX',
+    'NSE:NIFTY PSU BANK':  'NSE:NIFTYPSUBANK-INDEX',
+    'NSE:NIFTY IT':        'NSE:NIFTYIT-INDEX',
+}
+
+# "symbol:interval" -> monotonic time of the last synthetic-fill log line.
+_SYNTHETIC_LOG_AT: Dict[str, float] = {}
+
 # Monkeypatch Fyers V3 SDK - Disabled as api-t1 is currently active and working
 # try:
 #     from fyers_apiv3.fyersModel import Config
@@ -627,8 +664,20 @@ class FyersDataServiceAdapter:
         to_date: str,
         interval: str,
         oi: bool = False,
-        use_cache: bool = True
+        use_cache: bool = True,
+        allow_synthetic: bool = False
     ) -> List[Dict[str, Any]]:
+        """
+        allow_synthetic: when Fyers' history API holds no candles for *today*
+        (their intraday store went empty on 2026-08-03 while quotes and daily
+        bars stayed live), rebuild today's bars locally from the OI snapshots
+        and the quote feed instead of returning a range that stops at the last
+        session. Those bars carry 'synthetic': True.
+
+        Defaults to False so this only reaches callers that opted in — the
+        chart/display endpoints. The live algos keep the default: they place
+        real orders, and must never do so off reconstructed prices.
+        """
         _FYERS_HIST_ERROR.msg = None
         try:
             _kite_to_fyers = {
@@ -671,6 +720,79 @@ class FyersDataServiceAdapter:
                 except ValueError:
                     td = None
                 
+            # Resolved before the cache lookup (it used to sit just above the
+            # fetch loop) so the cache key and the synthetic-tail fill below
+            # both see the real Fyers symbol rather than a Kite token alias.
+            str_token = str(instrument_token)
+            if str_token in _KITE_TO_FYERS_INDICES:
+                instrument_token = _KITE_TO_FYERS_INDICES[str_token]
+                logger.debug(f"[FyersAdapter] Translated Kite token {str_token} to {instrument_token}")
+
+            def _with_live_tail(candles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                """Append today's locally rebuilt bars when Fyers returned none.
+
+                Fyers' intraday history has been answering 'no_data' for the
+                current day while quotes and daily bars stay live, which leaves
+                every intraday chart stopping at the previous session's close.
+                """
+                if not allow_synthetic:
+                    return candles
+                try:
+                    from trading_app.service import live_candle_fallback as _lcf
+                except Exception:
+                    return candles
+                if not _lcf.is_intraday(interval):
+                    return candles
+                today = datetime.now(_lcf.IST).date()
+                # Only fill when the caller actually asked for today.
+                req_to = td.date() if isinstance(td, datetime) else td
+                if req_to is not None and req_to < today:
+                    return candles
+                last_real = None
+                for bar in reversed(candles):
+                    stamp = bar.get('date')
+                    if isinstance(stamp, datetime):
+                        last_real = stamp
+                        break
+
+                # Fill only the stretch Fyers is actually missing.
+                #
+                # Three cases. Nothing for today at all (the 2026-08-03 outage)
+                # -> rebuild the whole session. Fyers current -> append nothing,
+                # which is how this switches itself off the moment their feed
+                # recovers. Fyers serving today but stalled -> top up just the
+                # tail past its last real bar, so a lagging feed still shows
+                # current price action instead of flatlining.
+                #
+                # The staleness threshold has to clear normal operation: the
+                # newest bar is always one interval old (it is still forming),
+                # and Fyers itself runs a minute or two behind. STALE_AFTER is
+                # generous enough that a healthy feed never trips it.
+                after = None
+                if last_real is not None and last_real.date() >= today:
+                    STALE_AFTER = max(300.0, _lcf.INTERVAL_SECONDS.get(interval, 60) * 3)
+                    age = (datetime.now(_lcf.IST) - last_real).total_seconds()
+                    if age < STALE_AFTER:
+                        return candles  # Fyers is current — leave it alone.
+                    after = last_real
+                try:
+                    extra = _lcf.fill_today(self, str(instrument_token), interval, after=after)
+                except Exception as e:
+                    logger.debug(f"[FyersAdapter] synthetic fill failed for {instrument_token}: {e}")
+                    return candles
+                if not extra:
+                    return candles
+                # Every open chart re-polls each leg every ~4s, so logging each
+                # fill would put ~90 identical lines a minute into the live log.
+                # One line per symbol per 5 minutes is enough to see it running.
+                now_mono = time.monotonic()
+                key = f"{instrument_token}:{interval}"
+                if now_mono - _SYNTHETIC_LOG_AT.get(key, 0.0) >= 300:
+                    _SYNTHETIC_LOG_AT[key] = now_mono
+                    logger.info(f"[FyersAdapter] Fyers has no {interval} candles for {instrument_token} "
+                                f"today — appended {len(extra)} locally rebuilt bars (synthetic)")
+                return list(candles) + extra
+
             cache_key = f"{instrument_token}:{from_date_str}:{to_date_str}:{f_res}"
             if use_cache:
                 with _FYERS_HIST_LOCK:
@@ -679,7 +801,7 @@ class FyersDataServiceAdapter:
                         cache_ttl = 300 if f_res in ['D', 'W', 'M'] else 15.0
                         if (datetime.now() - ts).total_seconds() < cache_ttl:
                             logger.debug(f"[FyersAdapter] Returning cached historical data for {cache_key}")
-                            return data
+                            return _with_live_tail(data)
 
             max_days = 364 if f_res in ['D', '1D', 'W', 'M'] else 99
             
@@ -692,40 +814,6 @@ class FyersDataServiceAdapter:
                     cur_from = cur_to + timedelta(days=1)
             else:
                 chunks = [(from_date_str, to_date_str)]
-
-            kite_to_fyers_indices = {
-                '256265': 'NSE:NIFTY50-INDEX',
-                '260105': 'NSE:NIFTYBANK-INDEX',
-                '257801': 'NSE:FINNIFTY-INDEX',
-                '288009': 'NSE:MIDCPNIFTY-INDEX',
-                '264969': 'NSE:INDIAVIX-INDEX',
-                'NSE:NIFTY 50': 'NSE:NIFTY50-INDEX',
-                'NSE:NIFTY BANK': 'NSE:NIFTYBANK-INDEX',
-                'NSE:NIFTY FIN SERVICE': 'NSE:FINNIFTY-INDEX',
-                'NSE:NIFTY MID SELECT': 'NSE:MIDCPNIFTY-INDEX',
-                '266249': 'NSE:NIFTYMIDCAP150-INDEX',
-                '263433': 'NSE:NIFTYAUTO-INDEX',
-                '267017': 'NSE:NIFTYSMLCAP100-INDEX',
-                '261897': 'NSE:NIFTYFMCG-INDEX',
-                '263689': 'NSE:NIFTYMETAL-INDEX',
-                '262409': 'NSE:NIFTYPHARMA-INDEX',
-                '262921': 'NSE:NIFTYPSUBANK-INDEX',
-                '259849': 'NSE:NIFTYIT-INDEX',
-                'NSE:NIFTY MIDCAP 150': 'NSE:NIFTYMIDCAP150-INDEX',
-                'NSE:NIFTY AUTO':      'NSE:NIFTYAUTO-INDEX',
-                'NSE:NIFTY SMALLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
-                'NSE:NIFTY SMLCAP 100': 'NSE:NIFTYSMLCAP100-INDEX',
-                'NSE:NIFTY FMCG':      'NSE:NIFTYFMCG-INDEX',
-                'NSE:NIFTY METAL':     'NSE:NIFTYMETAL-INDEX',
-                'NSE:NIFTY PHARMA':    'NSE:NIFTYPHARMA-INDEX',
-                'NSE:NIFTY PHARAMA':   'NSE:NIFTYPHARMA-INDEX',
-                'NSE:NIFTY PSU BANK':  'NSE:NIFTYPSUBANK-INDEX',
-                'NSE:NIFTY IT':        'NSE:NIFTYIT-INDEX',
-            }
-            str_token = str(instrument_token)
-            if str_token in kite_to_fyers_indices:
-                instrument_token = kite_to_fyers_indices[str_token]
-                logger.debug(f"[FyersAdapter] Translated Kite token {str_token} to {instrument_token}")
 
             all_candles = []
             import random
@@ -772,6 +860,19 @@ class FyersDataServiceAdapter:
                         time.sleep(8.0)
                     else:
                         break
+
+                # 's': 'no_data' is Fyers answering successfully (HTTP 200, empty
+                # message) that the window simply holds no candles — a stale
+                # intraday feed, a holiday, or a range that lands on non-trading
+                # days. It is not a failure, but it fell into the branch below and
+                # surfaced as ERROR "unknown error" (the empty message hitting the
+                # `or 'unknown error'` fallback), which buried real errors in noise.
+                if response.get('s') == 'no_data':
+                    logger.info(f"[FyersAdapter] No candles available for {instrument_token} "
+                                f"[{c_from}-{c_to}] at resolution {f_res}")
+                    _FYERS_HIST_ERROR.msg = (f"Fyers has no {f_res} candles for {instrument_token} "
+                                             f"between {c_from} and {c_to}")
+                    continue
 
                 if response.get('s') != 'ok':
                     api_msg = str(response.get('message') or 'unknown error')
@@ -835,8 +936,34 @@ class FyersDataServiceAdapter:
                     # Limit cache size
                     if len(_FYERS_HIST_CACHE) > 500:
                         _FYERS_HIST_CACHE.pop(next(iter(_FYERS_HIST_CACHE)))
-                    
-            return all_candles
+                # Cache the real candles only, then append the synthetic tail on
+                # the way out — so a cache hit within the TTL still picks up bars
+                # recorded since, instead of freezing today's tail for 15s.
+                return _with_live_tail(all_candles)
+
+            # Nothing came back — every chunk exhausted its retries. Returning []
+            # here caches nothing, so the caller's next poll (~4s for the OI
+            # Profile charts) refetches from scratch, burns another 5 attempts
+            # with 1-6s rate-limit sleeps, and keeps the limiter saturated: once
+            # you fall behind the Fyers history cap you never catch up, and the
+            # charts blank out on every failed tick.
+            #
+            # Serve the last good candles for this exact key instead, ignoring
+            # the TTL. Same stale-cache fallback the quote path already uses; the
+            # key pins symbol/range/resolution, so this is the identical query,
+            # only older. last_history_error() still reports why it went stale.
+            if use_cache:
+                with _FYERS_HIST_LOCK:
+                    cached = _FYERS_HIST_CACHE.get(cache_key)
+                if cached:
+                    data, ts = cached
+                    age = (datetime.now() - ts).total_seconds()
+                    logger.warning(
+                        f"[FyersAdapter] history() came back empty for {instrument_token} — "
+                        f"serving {len(data)} cached candles ({age:.0f}s stale)")
+                    return _with_live_tail(data)
+
+            return _with_live_tail(all_candles)
 
         except Exception as e:
             logger.error(f"[FyersAdapter] historical_data() error for {instrument_token}: {e}")

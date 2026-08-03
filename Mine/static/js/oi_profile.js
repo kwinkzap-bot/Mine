@@ -1342,7 +1342,9 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
                     // re-applied on a toggle/colour change without a refetch.
                     oipOILastCandles = validCandles;
                     const _fm = oip5mCloseSettings('main');
-                    oipOISeries.setData(oipMark5mCloseBorders(validCandles, _fm.enabled, _fm.color));
+                    oipSetSyntheticBanner(oipHasSynthetic(validCandles));
+                    oipOISeries.setData(
+                        oipMarkSynthetic(oipMark5mCloseBorders(validCandles, _fm.enabled, _fm.color)));
                     oipOIChartReady = true;
 
                     if (resetZoom) {

@@ -685,11 +685,23 @@ function oipRSRenderFromMain(data) {
     const resetZoom = oipRSPendingResetZoom;
     oipRSPendingResetZoom = false;
 
+    // A leg whose Fyers history call was rate-limited into failure comes back as
+    // [] (the adapter returns an empty list rather than raising), which would
+    // otherwise setData() the chart to blank on that poll and repaint it on the
+    // next one — the "candles disappear" flicker. Keep the last good candles
+    // instead, but ONLY while the strike is unchanged: after a strike switch the
+    // parked data belongs to a different contract and must not be shown.
+    const sameStrikes = (ceStrike === oipRSCurrentCEStrike && peStrike === oipRSCurrentPEStrike);
+
     oipRSCurrentCEStrike = ceStrike;
     oipRSCurrentPEStrike = peStrike;
 
-    const ceData = (data.rs_ce_candles || []).map(c => ({ ...c, type: 'CE' }));
-    const peData = (data.rs_pe_candles || []).map(c => ({ ...c, type: 'PE' }));
+    let ceData = (data.rs_ce_candles || []).map(c => ({ ...c, type: 'CE' }));
+    let peData = (data.rs_pe_candles || []).map(c => ({ ...c, type: 'PE' }));
+    if (sameStrikes) {
+        if (!ceData.length && oipRSLastCeData?.length) ceData = oipRSLastCeData;
+        if (!peData.length && oipRSLastPeData?.length) peData = oipRSLastPeData;
+    }
     // Parked untagged so the 5m Close Border indicator can be re-applied on a
     // checkbox/colour change without waiting for the next poll (oipRSOn5mCloseChange).
     oipRSLastCeData = ceData;

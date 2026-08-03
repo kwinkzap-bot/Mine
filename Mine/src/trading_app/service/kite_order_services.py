@@ -24,6 +24,16 @@ _global_instruments_cache: Dict[str, Any] = {
     # 'fyers': { ... }
 }
 
+# NSE cash-market tick size per tradingsymbol. Most scrips are ₹0.05, but a
+# sizable minority are ₹0.10 (and a few ₹0.01) — a LIMIT/SL price that isn't a
+# multiple of the scrip's own tick is rejected outright by the exchange
+# ("Tick size for this script is 0.10"). Kept in its own day-cached global map
+# rather than folded into _global_instruments_cache so an existing (pruned,
+# tick-less) instruments pickle keeps loading unchanged.
+_global_tick_size_cache: Dict[str, Any] = {'lock': threading.Lock()}
+
+DEFAULT_NSE_TICK_SIZE = 0.05
+
 # ── RATE LIMITING ────────────────────────────────────────────────────────
 class GlobalRateLimiter:
     """Thread-safe global rate limiter for Kite API (3 requests/second)."""
@@ -424,6 +434,37 @@ class KiteService:
                 }
             logging.info(f"[KiteService] Memory-efficient {p_type} cache built: {len(self._instrument_tokens_by_symbol)} items")
         except Exception as e: logging.error(f"Instrument fetch error: {e}")
+
+    def get_tick_size(self, symbol: str, exchange: str = 'NSE') -> float:
+        """The exchange's real tick size for one cash-market scrip, so a
+        computed (buffer-adjusted) LIMIT/SL price can be snapped to a price
+        the exchange will actually accept. Most NSE scrips are ₹0.05, but a
+        ₹0.10-tick scrip rejects an 0.05-multiple price outright, which is
+        how live orders were being lost while the backtest happily took the
+        trade. The whole exchange's tick map is fetched once per day and
+        shared across every KiteService instance; anything not found falls
+        back to DEFAULT_NSE_TICK_SIZE."""
+        today = date.today()
+        with _global_tick_size_cache['lock']:
+            entry = _global_tick_size_cache.get(exchange)
+            if entry and entry.get('cache_date') == today:
+                return float(entry['ticks'].get(symbol) or DEFAULT_NSE_TICK_SIZE)
+
+        ticks: Dict[str, float] = {}
+        try:
+            for i in (self.kite.instruments(exchange) or []):
+                s, t = i.get('tradingsymbol'), i.get('tick_size')
+                if s and t:
+                    ticks[s] = float(t)
+            logging.info(f"[KiteService] {exchange} tick-size map built: {len(ticks)} scrips")
+        except Exception as e:
+            # Cached empty for the day anyway — retrying the full dump on every
+            # single price rounding would be far worse than falling back.
+            logging.error(f"[KiteService] {exchange} tick-size fetch failed: {e}")
+
+        with _global_tick_size_cache['lock']:
+            _global_tick_size_cache[exchange] = {'ticks': ticks, 'cache_date': today}
+        return float(ticks.get(symbol) or DEFAULT_NSE_TICK_SIZE)
 
     def get_instrument_token(self, symbol: str) -> Optional[Union[int, str]]:
         if not self._instrument_tokens_by_symbol: self._load_instruments_from_cache_or_api()

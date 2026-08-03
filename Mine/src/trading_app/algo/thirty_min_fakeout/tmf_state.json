@@ -1,6 +1,6 @@
 {
-  "date": "2026-07-31",
-  "eod_handled": true,
+  "date": "2026-08-03",
+  "eod_handled": false,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
@@ -50,10 +50,11 @@
     "BAJAJHLDNG": {
       "phase": "done",
       "direction": "short",
-      "trigger": 11194.0,
-      "sl_level": 11299.0,
-      "ltp": 11317.0,
-      "ltp_time": "2026-07-31T11:43:52.964419",
+      "trigger": 11424.0,
+      "sl_level": 11457.0,
+      "sl_risk": 1419.0,
+      "ltp": 11457.0,
+      "ltp_time": "2026-08-03T10:57:36.578717",
       "exit_reason": "Invalidated (SL hit before entry)"
     },
     "BAJFINANCE": {
@@ -69,15 +70,7 @@
       "phase": "no_setup"
     },
     "BDL": {
-      "phase": "done",
-      "direction": "short",
-      "trigger": 1258.25,
-      "sl_level": 1264.8,
-      "ltp": 1258.2,
-      "ltp_time": "2026-07-31T10:47:57.999203",
-      "qty": 397,
-      "entry_time": "2026-07-31T10:47:57.999222",
-      "exit_reason": "Entry order placement failed"
+      "phase": "no_setup"
     },
     "BHARATFORG": {
       "phase": "no_setup"
@@ -110,7 +103,34 @@
       "phase": "no_setup"
     },
     "COLPAL": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 2105.0,
+      "sl_level": 2116.6,
+      "sl_risk": 2749.2,
+      "ltp": 2068.6,
+      "ltp_time": "2026-08-03T13:13:47.109646",
+      "qty": 73,
+      "entry_time": "2026-08-03T10:48:23.619103",
+      "entry_placed_ts": 1785734303.619104,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2084146843671257088",
+          "filled": true,
+          "entry_price": 2105.0,
+          "filled_qty": 73,
+          "sl_order_id": "2084183361215455232",
+          "target_order_id": "2084183361878155264",
+          "closed": true
+        }
+      ],
+      "entry_price": 2105.0,
+      "target_level": 2070.6,
+      "exit_time": "2026-08-03T13:13:47.297583",
+      "exit_price": 2070.6,
+      "exit_reason": "Target Hit",
+      "realized_pnl": 2511.2
     },
     "CONCOR": {
       "phase": "no_setup"
@@ -125,7 +145,30 @@
       "phase": "no_setup"
     },
     "DALBHARAT": {
-      "phase": "no_setup"
+      "phase": "in_position",
+      "direction": "short",
+      "trigger": 1829.0,
+      "sl_level": 1846.6,
+      "sl_risk": 4804.8,
+      "ltp": 1834.1,
+      "ltp_time": "2026-08-03T14:10:39.132386",
+      "qty": 273,
+      "entry_time": "2026-08-03T11:19:28.088807",
+      "entry_placed_ts": 1785736168.0888078,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2084154663829430272",
+          "filled": true,
+          "entry_price": 1829.0,
+          "filled_qty": 273,
+          "sl_order_id": "2084154761791594496",
+          "target_order_id": "2084154762273939456"
+        }
+      ],
+      "entry_price": 1829.0,
+      "target_level": 1795.0,
+      "unrealized_pnl": -1392.3
     },
     "DIVISLAB": {
       "phase": "no_setup"
@@ -179,7 +222,14 @@
       "phase": "no_setup"
     },
     "HDFCAMC": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 2611.1,
+      "sl_level": 2596.5,
+      "sl_risk": 2788.6,
+      "ltp": 2596.5,
+      "ltp_time": "2026-08-03T11:12:32.623586",
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "HDFCBANK": {
       "phase": "no_setup"
@@ -197,32 +247,7 @@
       "phase": "no_setup"
     },
     "IDEA": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 13.0,
-      "sl_level": 12.76,
-      "ltp": 13.03,
-      "ltp_time": "2026-07-31T12:03:31.209446",
-      "qty": 38461,
-      "entry_time": "2026-07-31T12:02:37.968812",
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2083078362934730752",
-          "filled": true,
-          "entry_price": 13.0,
-          "filled_qty": 38461,
-          "sl_order_id": "2083078386808709120",
-          "target_order_id": "2083078387442049024",
-          "closed": true
-        }
-      ],
-      "entry_price": 13.0,
-      "target_level": 13.03,
-      "exit_time": "2026-07-31T12:03:31.363928",
-      "exit_price": 13.03,
-      "exit_reason": "Target Hit",
-      "realized_pnl": 1153.83
+      "phase": "no_setup"
     },
     "IDFCFIRSTB": {
       "phase": "no_setup"
@@ -246,44 +271,36 @@
       "phase": "no_setup"
     },
     "JIOFIN": {
-      "phase": "done",
-      "direction": "short",
-      "trigger": 250.05,
-      "sl_level": 251.95,
-      "ltp": 251.95,
-      "ltp_time": "2026-07-31T11:06:02.979400",
-      "exit_reason": "Invalidated (SL hit before entry)"
-    },
-    "JSWSTEEL": {
       "phase": "no_setup"
     },
-    "KAYNES": {
-      "phase": "done",
-      "direction": "short",
-      "trigger": 3788.1,
-      "sl_level": 3844.0,
-      "ltp": 3841.9,
-      "ltp_time": "2026-07-31T11:47:34.416656",
-      "qty": 131,
-      "entry_time": "2026-07-31T10:57:07.148926",
+    "JSWSTEEL": {
+      "phase": "in_position",
+      "direction": "long",
+      "trigger": 1274.8,
+      "sl_level": 1268.7,
+      "sl_risk": 2391.2,
+      "ltp": 1282.8,
+      "ltp_time": "2026-08-03T14:10:39.132838",
+      "qty": 392,
+      "entry_time": "2026-08-03T10:46:37.098957",
+      "entry_placed_ts": 1785734197.0989592,
       "broker_positions": [
         {
           "broker_idx": 1,
-          "entry_order_id": "RECONCILED",
+          "entry_order_id": "2084146396910772224",
           "filled": true,
-          "entry_price": 3788.1,
-          "filled_qty": 131,
-          "closed": true,
-          "sl_order_id": "2083063188202905600",
-          "target_order_id": "2083063188978851840"
+          "entry_price": 1274.8,
+          "filled_qty": 15,
+          "sl_order_id": "2084146920338939904",
+          "target_order_id": "2084146920997445632"
         }
       ],
-      "entry_price": 3788.1,
-      "target_level": 3622.2,
-      "exit_time": "2026-07-31T11:47:34.590708",
-      "exit_price": 3844.0,
-      "exit_reason": "SL Hit",
-      "realized_pnl": -7322.9
+      "entry_price": 1274.8,
+      "target_level": 1294.7,
+      "unrealized_pnl": 120.0
+    },
+    "KAYNES": {
+      "phase": "no_setup"
     },
     "KEI": {
       "phase": "no_setup"
@@ -328,32 +345,7 @@
       "phase": "no_setup"
     },
     "MAZDOCK": {
-      "phase": "done",
-      "direction": "short",
-      "trigger": 2378.8,
-      "sl_level": 2401.8,
-      "ltp": 2381.8,
-      "ltp_time": "2026-07-31T15:18:05.679675",
-      "qty": 210,
-      "entry_time": "2026-07-31T10:46:48.177294",
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "RECONCILED",
-          "filled": true,
-          "entry_price": 2378.8,
-          "filled_qty": 210,
-          "closed": true,
-          "sl_order_id": "2083060393441681408",
-          "target_order_id": "2083060394037272577"
-        }
-      ],
-      "entry_price": 2378.8,
-      "target_level": 2328.8,
-      "exit_time": "2026-07-31T15:18:06.321252",
-      "exit_price": 2383.075238095238,
-      "exit_reason": "Time Exit",
-      "realized_pnl": -897.8
+      "phase": "no_setup"
     },
     "MCX": {
       "phase": "no_setup"
@@ -416,32 +408,7 @@
       "phase": "no_setup"
     },
     "PGEL": {
-      "phase": "done",
-      "direction": "short",
-      "trigger": 623.2,
-      "sl_level": 627.45,
-      "ltp": 613.75,
-      "ltp_time": "2026-07-31T14:09:55.771674",
-      "qty": 802,
-      "entry_time": "2026-07-31T10:48:55.970701",
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2083059815902797824",
-          "filled": true,
-          "entry_price": 623.2,
-          "filled_qty": 802,
-          "sl_order_id": "2083063878811836416",
-          "target_order_id": "2083063879428399104",
-          "closed": true
-        }
-      ],
-      "entry_price": 623.2,
-      "target_level": 614.3,
-      "exit_time": "2026-07-31T14:09:55.948621",
-      "exit_price": 614.3,
-      "exit_reason": "Target Hit",
-      "realized_pnl": 7137.8
+      "phase": "no_setup"
     },
     "PHOENIXLTD": {
       "phase": "no_setup"
@@ -543,13 +510,49 @@
       "phase": "no_setup"
     },
     "VOLTAS": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 1334.4,
+      "sl_level": 1343.6,
+      "sl_risk": 3440.8,
+      "ltp": 1331.2,
+      "ltp_time": "2026-08-03T11:24:30.325574",
+      "qty": 374,
+      "entry_time": "2026-08-03T11:22:27.102514",
+      "entry_placed_ts": 1785736347.102516,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2084155414664372224",
+          "filled": false,
+          "dead": true
+        }
+      ],
+      "exit_reason": "Entry never filled (unfilled after 120s)"
     },
     "YESBANK": {
       "phase": "no_setup"
     },
     "ZYDUSLIFE": {
       "phase": "no_setup"
+    },
+    "NIFTY2680424750PE": {
+      "direction": "long",
+      "entry_time": "2026-08-03T10:55:38.462767",
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "RECONCILED",
+          "filled": true,
+          "entry_price": 170.31578947368422,
+          "filled_qty": 2600,
+          "closed": false
+        }
+      ],
+      "entry_price": 170.31578947368422,
+      "qty": 2600,
+      "phase": "in_position",
+      "target_level": null
     }
   }
 }

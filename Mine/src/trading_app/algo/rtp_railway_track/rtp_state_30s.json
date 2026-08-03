@@ -1,5 +1,22 @@
 {
-  "active_trade": null,
+  "active_trade": {
+    "direction": "BUY",
+    "entry_spot": 24566.6,
+    "entry_time": "2026-08-03T10:42:01.730191",
+    "sl_level": 24536.6,
+    "target_level": 24656.6,
+    "strike": 24350,
+    "option_type": "CE",
+    "lot_size": 65,
+    "expiry": "2026-08-04",
+    "broker_entries": [],
+    "fyers_sym": "NSE:NIFTY2680424350CE",
+    "tradingsymbol": "",
+    "total_quantity": 65,
+    "opt_entry_price": 244.0,
+    "strike_mode": "premium250",
+    "paper": true
+  },
   "buy_needs_reset": true,
   "sell_needs_reset": false,
   "last_exit": {

@@ -49,6 +49,12 @@ Gating (see env/Mine.env):
                                           the backtest).
   TMF_EXIT_HOUR / TMF_EXIT_MINUTE      — cutoff for the Time Exit square-off
                                           (default 15 / 18, same as backtest).
+  TMF_USE_SL_RISK_FILTER=true          — skip a setup whose sized rupee stop
+  TMF_MAX_SL_RISK=5000                    exceeds the cap, matching the
+                                          backtest's use_sl_risk_filter /
+                                          sl_risk_max (same defaults). Without
+                                          it, live takes trades the backtest
+                                          never scored.
 
 Every stock with something live on it (watching / pending_entry /
 in_position) is marked to market on each tick — `ltp` plus `unrealized_pnl`
@@ -58,11 +64,21 @@ state, so the Stock Status grid can show a trade end to end. Those numbers
 are display only: entries and exits are driven by the real broker orders,
 never by them.
 
-Known live/backtest divergence: the backtest checks a bar's High/Low for
-SL/Target/trigger crossings (catches any touch within the bar); the live
-watch loop instead polls last-traded-price every _POLL_SECS seconds — a
-brief intra-poll spike through a level could be missed, the same tolerance
-RTP already accepts for its own per-second spot polling.
+Known live/backtest divergences that remain by nature (not bugs):
+  - The backtest checks a bar's High/Low for SL/Target/trigger crossings
+    (catches any touch within the bar); the live watch loop instead polls
+    last-traded-price every _POLL_SECS seconds — a brief intra-poll spike
+    through a level can be missed, the same tolerance RTP already accepts
+    for its own per-second spot polling.
+  - The backtest's Target is the day's FULL session Low/High (hindsight);
+    live can only use the session Low/High up to the entry fill, so live
+    targets are nearer and its winners are smaller.
+  - The backtest fills a gap straight through the trigger at the bar's
+    OPEN; the live entry is a LIMIT resting at the trigger, so it fills at
+    the trigger or better, or (on a hard gap that never returns) not at all.
+  - A late app start means the trigger cross has already happened, so the
+    stock sits in `watching` and never enters — the backtest, replaying the
+    whole day, always takes it.
 """
 import json
 import logging
@@ -101,19 +117,32 @@ _POLL_SECS = 5           # how often the monitor loop ticks
 _HARD_STOP_MIN = 15 * 60 + 30   # thread exits for the day at/after 15:30 IST
 _RECONCILE_SECS = 30     # how often to cross-check real broker positions against state
 
-_NSE_TICK_SIZE = 0.05    # NSE cash-market tick size — LIMIT order prices not a
-                         # multiple of this are rejected by the exchange
+# How long an unfilled entry LIMIT order is allowed to sit at the trigger
+# price before the remainder is cancelled. The backtest assumes the entry
+# fills the instant price crosses the trigger; a LIMIT order that rests for
+# half an hour and then fills (KFINTECH, 2026-07-27: placed 11:08, filled
+# 11:40) is a completely different trade from the one the backtest scored.
+# Whatever filled inside the window is kept and managed; the rest is dropped.
+_ENTRY_ORDER_TTL_SECS = 120
+
+_DEFAULT_TICK_SIZE = 0.05  # fallback when the broker's tick map is unavailable
 
 
-def _round_to_tick(price: float, direction: str) -> float:
-    """Snap a computed (buffer-adjusted) price to a valid NSE tick, rounding
-    away from the raw candle level so the trigger keeps meaning "cleared the
-    level by at least the buffer" — up for a long (buy-side) trigger, down
-    for a short (sell-side) one. Raw candle prices (sl_level, entry fills,
-    session high/low) are already exchange-tick-aligned and don't need this."""
-    ticks = price / _NSE_TICK_SIZE
-    ticks = math.ceil(ticks) if direction == 'long' else math.floor(ticks)
-    return round(ticks * _NSE_TICK_SIZE, 2)
+def _round_to_tick(price: float, tick: float, mode: str) -> float:
+    """Snap a computed price to a valid exchange tick for that scrip. `tick`
+    is the scrip's REAL tick size (see KiteService.get_tick_size) — assuming
+    0.05 for everything is what got GVT&D (2026-07-28) and BDL (2026-07-31)
+    rejected outright with "Tick size for this script is 0.10", losing two
+    trades the backtest counted. mode='up' rounds away from zero to the next
+    tick, mode='down' to the previous one; callers pick whichever direction
+    keeps the price's meaning intact (a trigger rounds so it still clears
+    the level by at least the buffer, an SL rounds so it can't sit tighter
+    than the candle level it came from)."""
+    if not tick or tick <= 0:
+        tick = _DEFAULT_TICK_SIZE
+    ticks = price / tick
+    ticks = math.ceil(ticks) if mode == 'up' else math.floor(ticks)
+    return round(ticks * tick, 2)
 
 
 def _thirty_min_engine():
@@ -249,6 +278,19 @@ class TMFAlgo:
                 logger.error(f"[TMF] Broker {i} (zerodha) init failed: {e}")
         return result
 
+    def _tick_size_for(self, symbol: str) -> float:
+        """The scrip's real NSE tick size, via whichever broker is wired up
+        (the map is exchange-wide and day-cached inside KiteService, so this
+        is a dict lookup after the first call). Falls back to 0.05 when no
+        broker is configured — scan-only mode places no orders, so nothing
+        can be rejected for it."""
+        for _, svc in self._broker_list:
+            try:
+                return float(svc.get_tick_size(symbol))
+            except Exception as e:
+                logger.warning(f"[TMF] {symbol}: tick-size lookup failed: {e}")
+        return _DEFAULT_TICK_SIZE
+
     def _svc_for(self, idx: int) -> Optional[Any]:
         for i, svc in self._broker_list:
             if i == idx:
@@ -295,8 +337,9 @@ class TMFAlgo:
 
     # ── Signal detection ─────────────────────────────────────────────────
 
-    def _scan_one(self, provider: Any, is_fyers: bool, symbol: str, s: Dict[str, Any]) -> None:
-        from trading_app.Backtest.tmf_symbol_universe import TMF_SYMBOL_DEFAULTS
+    def _scan_one(self, provider: Any, is_fyers: bool, symbol: str, s: Dict[str, Any],
+                   capital_per_trade: float, max_sl_risk: Optional[float]) -> None:
+        from trading_app.Backtest.tmf_symbol_universe import TMF_SYMBOL_DEFAULTS, TMF_EQUITY_LEVERAGE
         _prepare_df, _resample_30min, _detect_setup, _SESSION_START_MIN, _ = _thirty_min_engine()
 
         df = self._fetch_today_candles(provider, is_fyers, symbol)
@@ -321,12 +364,39 @@ class TMFAlgo:
         if setup is None:
             s['phase'] = 'no_setup'
             return
-        s['phase']    = 'watching'
-        s['direction'] = setup['direction']
-        s['trigger']   = _round_to_tick(float(setup['trigger']), setup['direction'])
-        s['sl_level']  = round(float(setup['sl_level']), 2)
-        logger.info(f"[TMF] {symbol}: setup found — {setup['direction'].upper()} "
-                    f"trigger={s['trigger']} sl={s['sl_level']}")
+        direction = setup['direction']
+        tick = self._tick_size_for(symbol)
+        # Trigger rounds away from the candle level (so it still means
+        # "cleared the level by at least the buffer"); the SL rounds away
+        # from the entry, so tick-snapping can never quietly tighten the
+        # stop below the candle high/low the setup actually came from.
+        trigger  = _round_to_tick(float(setup['trigger']), tick, 'up' if direction == 'long' else 'down')
+        sl_level = _round_to_tick(float(setup['sl_level']), tick, 'up' if direction == 'short' else 'down')
+
+        # Same rupee stop-loss cap the backtest applies at sizing time
+        # (use_sl_risk_filter / sl_risk_max, default ₹5,000): the setup is
+        # valid, but at this capital the position it implies risks more per
+        # trade than the strategy is scored on. Skipping it here is what
+        # keeps live position risk matched to the backtested edge.
+        qty = max(1, int((capital_per_trade * TMF_EQUITY_LEVERAGE) // trigger)) if trigger > 0 else 1
+        sl_risk = abs(trigger - sl_level) * qty
+        if max_sl_risk is not None and sl_risk > max_sl_risk:
+            s['phase'] = 'done'
+            s['direction'] = direction
+            s['trigger'] = trigger
+            s['sl_level'] = sl_level
+            s['exit_reason'] = f'Skipped (SL risk ₹{sl_risk:,.0f} > ₹{max_sl_risk:,.0f})'
+            logger.info(f"[TMF] {symbol}: setup found — {direction.upper()} trigger={trigger} "
+                        f"sl={sl_level} — SKIPPED, sized SL risk ₹{sl_risk:,.0f} exceeds ₹{max_sl_risk:,.0f}")
+            return
+
+        s['phase']     = 'watching'
+        s['direction'] = direction
+        s['trigger']   = trigger
+        s['sl_level']  = sl_level
+        s['sl_risk']   = round(sl_risk, 2)
+        logger.info(f"[TMF] {symbol}: setup found — {direction.upper()} "
+                    f"trigger={trigger} sl={sl_level} (tick {tick}, SL risk ₹{sl_risk:,.0f})")
 
     def _compute_target(self, provider: Any, is_fyers: bool, symbol: str,
                          direction: str, entry_price: float) -> Optional[float]:
@@ -338,11 +408,17 @@ class TMFAlgo:
         df = self._fetch_today_candles(provider, is_fyers, symbol)
         if df is None or df.empty:
             return None
+        tick = self._tick_size_for(symbol)
+        # Rounded back toward the entry, never past the session extreme —
+        # a target the market never actually reached is a target that never
+        # fills. (Candle prices are real trades and so already tick-aligned;
+        # this guards against a provider handing back a rounded float that
+        # isn't, which the exchange would reject.)
         if direction == 'short':
-            target = min(float(df['low'].min()), entry_price)
-            return round(target, 2) if target < entry_price else None
-        target = max(float(df['high'].max()), entry_price)
-        return round(target, 2) if target > entry_price else None
+            target = _round_to_tick(min(float(df['low'].min()), entry_price), tick, 'up')
+            return target if target < entry_price else None
+        target = _round_to_tick(max(float(df['high'].max()), entry_price), tick, 'down')
+        return target if target > entry_price else None
 
     # ── Order placement ──────────────────────────────────────────────────
 
@@ -353,6 +429,8 @@ class TMFAlgo:
         qty = max(1, int((capital_per_trade * TMF_EQUITY_LEVERAGE) // trigger)) if trigger > 0 else 1
         s['qty'] = qty
         s['entry_time'] = datetime.now().isoformat()
+        # Start of the entry order's life — see _ENTRY_ORDER_TTL_SECS.
+        s['entry_placed_ts'] = time.time()
 
         if not algo_active or not self._broker_list:
             s['phase'] = 'done'
@@ -377,38 +455,95 @@ class TMFAlgo:
         s['broker_positions'] = broker_positions
         s['phase'] = 'pending_entry'
 
+    def _entry_order_expired(self, s: Dict[str, Any], now_mins: int, cutoff_mins: int) -> Optional[str]:
+        """Why the still-open entry LIMIT order should be given up on, or
+        None to keep waiting. Three reasons, all of them cases where the
+        backtest would no longer be in this trade:
+          - price has reached the SL level while the entry is still unfilled
+            (the backtest calls that setup invalidated — entering now means
+            entering with the stop already hit),
+          - the order has rested longer than _ENTRY_ORDER_TTL_SECS (the
+            backtest fills at the trigger the moment it's crossed; a much
+            later fill is a different trade),
+          - the day's cutoff has arrived."""
+        if now_mins >= cutoff_mins:
+            return 'cutoff reached'
+        ltp = s.get('ltp')
+        if ltp is not None and s.get('sl_level') is not None:
+            if (s['direction'] == 'short' and ltp >= s['sl_level']) or \
+               (s['direction'] == 'long'  and ltp <= s['sl_level']):
+                return 'SL level reached while unfilled'
+        if time.time() - float(s.get('entry_placed_ts') or 0) >= _ENTRY_ORDER_TTL_SECS:
+            return f'unfilled after {_ENTRY_ORDER_TTL_SECS}s'
+        return None
+
+    def _final_fill(self, svc: Any, order_id: str) -> Tuple[int, Optional[float]]:
+        """(filled_quantity, average_price) for an order that has just been
+        cancelled — a cancelled LIMIT can still have filled part of the way,
+        and that part is a real position that must be managed, not written
+        off as 'never filled'."""
+        try:
+            st = svc.get_order_status(order_id)
+            if st.get('success'):
+                return int(st.get('filled_quantity') or 0), (float(st['average_price']) if st.get('average_price') else None)
+        except Exception as e:
+            logger.warning(f"[TMF] order {order_id}: final fill lookup failed: {e}")
+        return 0, None
+
     def _check_entry_fill(self, provider: Any, is_fyers: bool, symbol: str, s: Dict[str, Any],
                            orderbooks: Dict[int, Dict[str, Any]], now_mins: int, cutoff_mins: int) -> None:
+        give_up = self._entry_order_expired(s, now_mins, cutoff_mins)
+
         for bp in s.get('broker_positions', []):
             if bp.get('filled') or bp.get('dead'):
                 continue
             ob = orderbooks.get(bp['broker_idx'], {})
             order = ob.get(bp['entry_order_id'])
-            if not order:
+            if not order and not give_up:
                 continue
-            status = order.get('status')
+            status = (order or {}).get('status')
             if status == 'COMPLETE':
                 bp['filled']      = True
                 bp['entry_price'] = float(order.get('average_price') or s['trigger'])
                 bp['filled_qty']  = int(order.get('filled_quantity') or s['qty'])
             elif status in ('CANCELLED', 'REJECTED'):
-                bp['dead'] = True
+                # Cancelled/rejected still leaves whatever already traded.
+                part_qty = int(order.get('filled_quantity') or 0)
+                if part_qty > 0:
+                    bp['filled']      = True
+                    bp['entry_price'] = float(order.get('average_price') or s['trigger'])
+                    bp['filled_qty']  = part_qty
+                else:
+                    bp['dead'] = True
+            elif give_up:
+                # Still open past its life: cancel the remainder and keep
+                # (and protect) whatever quantity actually filled. Leaving
+                # it open is what left ICICIGI (2026-07-30) holding 44 of
+                # the 307 shares it was sized for, with the other 263 still
+                # resting at the broker unmanaged.
+                svc = self._svc_for(bp['broker_idx'])
+                self._cancel_broker_order(bp['broker_idx'], bp['entry_order_id'])
+                part_qty, avg = (self._final_fill(svc, bp['entry_order_id']) if svc else (0, None))
+                if part_qty > 0:
+                    bp['filled']      = True
+                    bp['entry_price'] = float(avg or s['trigger'])
+                    bp['filled_qty']  = part_qty
+                    logger.warning(f"[TMF] {symbol}: entry cancelled ({give_up}) after a PARTIAL fill — "
+                                    f"managing {part_qty} of {s['qty']} shares @ {bp['entry_price']} "
+                                    f"(broker {bp['broker_idx']})")
+                else:
+                    bp['dead'] = True
+                    logger.info(f"[TMF] {symbol}: entry order cancelled unfilled ({give_up}), broker {bp['broker_idx']}")
 
         live_positions    = [bp for bp in s.get('broker_positions', []) if bp.get('filled')]
         pending_positions = [bp for bp in s.get('broker_positions', []) if not bp.get('filled') and not bp.get('dead')]
 
-        if pending_positions and now_mins < cutoff_mins:
-            return  # still waiting for a fill
-
-        # Cutoff reached, or every leg has resolved one way or another —
-        # cancel any entry order still sitting open.
-        for bp in pending_positions:
-            self._cancel_broker_order(bp['broker_idx'], bp['entry_order_id'])
-            bp['dead'] = True
+        if pending_positions:
+            return  # still inside the entry order's life — keep waiting
 
         if not live_positions:
             s['phase'] = 'done'
-            s['exit_reason'] = 'Entry never filled'
+            s['exit_reason'] = (f'Entry never filled ({give_up})' if give_up else 'Entry never filled')
             return
 
         direction   = s['direction']
@@ -514,7 +649,11 @@ class TMFAlgo:
         try:
             ltp = svc.kite.ltp(f'NSE:{symbol}')
             return (ltp.get(f'NSE:{symbol}') or {}).get('last_price')
-        except Exception:
+        except Exception as e:
+            # Was silently swallowed, which is why every observed square-off
+            # quietly priced itself off the SL level instead — log it so the
+            # real cause (rate limit, token, proxy) is visible next time.
+            logger.warning(f"[TMF] {symbol}: broker LTP fetch failed: {e}")
             return None
 
     def _poll_fill_price(self, svc: Any, order_id: str, fallback: float,
@@ -551,7 +690,18 @@ class TMFAlgo:
                 self._cancel_broker_order(bp['broker_idx'], bp['target_order_id'])
 
             qty = bp['filled_qty']
-            ltp = self._get_ltp_one(svc, symbol) or s['sl_level']
+            # The padded limit has to be padded off the MARKET. Falling
+            # straight back to the SL level when the broker LTP call fails
+            # priced every observed square-off off the stop instead of the
+            # live price (PERSISTENT/MAZDOCK, 2026-07-30 and -31, both
+            # exactly sl x 1.01) — the tick loop already stamps a fresh
+            # traded price on the stock, so use that before the stop.
+            ltp = self._get_ltp_one(svc, symbol)
+            if ltp is None:
+                ltp = s.get('ltp')
+                logger.warning(f"[TMF] {symbol}: broker LTP unavailable at square-off — "
+                                f"pricing off last marked {ltp or s['sl_level']}")
+            ltp = ltp or s['sl_level']
             pad = 1.01 if exit_txn == 'BUY' else 0.99
             price = round(ltp * pad, 1)
             res = svc.place_equity_order(symbol, exit_txn, qty, price=price, product='MIS')
@@ -621,7 +771,8 @@ class TMFAlgo:
             return {}
 
     def _reconcile_orphaned_positions(self, state: Dict[str, Any], force_square_off: bool,
-                                       provider: Any = None, is_fyers: bool = False) -> None:
+                                       provider: Any = None, is_fyers: bool = False,
+                                       now_mins: int = 0, cutoff_mins: int = 0) -> None:
         """Cross-check every active broker's REAL open MIS positions
         against this app's own state. Anything the broker shows as open
         that state has NOT marked in_position (with a live, unclosed
@@ -642,6 +793,18 @@ class TMFAlgo:
                          if bp.get('broker_idx') == idx and bp.get('filled') and not bp.get('closed')),
                         None,
                     )
+
+                # A stock whose entry LIMIT is still inside its life is not an
+                # orphan — it's mid-fill, and _check_entry_fill owns it. Left
+                # unguarded, this sweep grabbed every partially-filled entry a
+                # few seconds after placement and armed SL/Target against a
+                # stale partial quantity, then re-armed on each further fill
+                # (MAZDOCK, 2026-07-31: three SL and three Target orders for
+                # one position). If the entry order outlives its TTL without
+                # _check_entry_fill resolving it, this sweep still takes over.
+                if (not force_square_off and s is not None and s.get('phase') == 'pending_entry'
+                        and self._entry_order_expired(s, now_mins, cutoff_mins) is None):
+                    continue
 
                 if tracked_bp is not None:
                     # Already tracked — but if the entry order was still filling
@@ -693,8 +856,17 @@ class TMFAlgo:
                     s = {'direction': direction, 'entry_time': datetime.now().isoformat()}
                     stocks[symbol] = s
 
+                # Keep the real entry order id when this app already had one
+                # for that broker — overwriting it with 'RECONCILED' left the
+                # original (possibly still-open) entry LIMIT untrackable and
+                # so never cancelled.
+                prior_order_id = next(
+                    (b.get('entry_order_id') for b in (s.get('broker_positions') or [])
+                     if b.get('broker_idx') == idx and b.get('entry_order_id')),
+                    'RECONCILED',
+                )
                 bp = {
-                    'broker_idx': idx, 'entry_order_id': 'RECONCILED', 'filled': True,
+                    'broker_idx': idx, 'entry_order_id': prior_order_id, 'filled': True,
                     'entry_price': pos['average_price'], 'filled_qty': qty, 'closed': False,
                 }
                 s['broker_positions'] = [b for b in s.get('broker_positions', [])
@@ -730,7 +902,8 @@ class TMFAlgo:
     # ── Main loop ────────────────────────────────────────────────────────
 
     def _tick(self, provider: Any, is_fyers: bool, state: Dict[str, Any], capital_per_trade: float,
-               cutoff_mins: int, algo_active: bool, now_mins: int) -> None:
+               cutoff_mins: int, algo_active: bool, now_mins: int,
+               max_sl_risk: Optional[float] = None) -> None:
         stocks = state['stocks']
         _, _, _, _, third_candle_end_min = _thirty_min_engine()
 
@@ -739,7 +912,7 @@ class TMFAlgo:
                 if s['phase'] != 'pending_scan':
                     continue
                 try:
-                    self._scan_one(provider, is_fyers, symbol, s)
+                    self._scan_one(provider, is_fyers, symbol, s, capital_per_trade, max_sl_risk)
                 except Exception as e:
                     logger.warning(f"[TMF] {symbol}: scan failed: {e}")
 
@@ -809,7 +982,8 @@ class TMFAlgo:
                 self._last_reconcile_ts = now_ts
                 try:
                     self._reconcile_orphaned_positions(state, force_square_off=False,
-                                                         provider=provider, is_fyers=is_fyers)
+                                                         provider=provider, is_fyers=is_fyers,
+                                                         now_mins=now_mins, cutoff_mins=cutoff_mins)
                 except Exception as e:
                     logger.error(f"[TMF] reconciliation failed: {e}", exc_info=True)
 
@@ -851,6 +1025,15 @@ class TMFAlgo:
             exit_minute = int(self._uvar('TMF_EXIT_MINUTE', '18') or 18)
             cutoff_mins = exit_hour * 60 + exit_minute
             algo_active = self._uvar('TMF_ALGO_ACTIVE', 'false').lower() == 'true'
+            # Mirrors the backtest's use_sl_risk_filter / sl_risk_max (both
+            # default on at ₹5,000 in api.py) — set TMF_USE_SL_RISK_FILTER=false
+            # to take every setup regardless of its sized rupee stop.
+            max_sl_risk: Optional[float] = None
+            if self._uvar('TMF_USE_SL_RISK_FILTER', 'true').lower() == 'true':
+                max_sl_risk = float(self._uvar('TMF_MAX_SL_RISK', '5000') or 5000)
+            logger.info(f"[TMF] Config — capital/trade ₹{capital_per_trade:,.0f}, cutoff {exit_hour:02d}:{exit_minute:02d}, "
+                        f"orders {'ON' if algo_active else 'OFF'}, max SL risk "
+                        f"{('₹%s' % format(max_sl_risk, ',.0f')) if max_sl_risk is not None else 'unlimited'}")
 
             while not self._stop_event.is_set():
                 now = datetime.now()
@@ -858,7 +1041,8 @@ class TMFAlgo:
                 if now_mins >= _HARD_STOP_MIN:
                     break
                 try:
-                    self._tick(provider, is_fyers, state, capital_per_trade, cutoff_mins, algo_active, now_mins)
+                    self._tick(provider, is_fyers, state, capital_per_trade, cutoff_mins,
+                                algo_active, now_mins, max_sl_risk)
                 except Exception as e:
                     logger.error(f"[TMF] tick error: {e}", exc_info=True)
                 self._save_state(state)

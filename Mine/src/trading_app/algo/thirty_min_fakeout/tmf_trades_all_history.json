@@ -1,5 +1,23 @@
 [
   {
+    "symbol": "COLPAL",
+    "direction": "SELL",
+    "qty": 73,
+    "entry_price": 2105.0,
+    "exit_price": 2070.6,
+    "sl_price": 2116.6,
+    "target_price": 2070.6,
+    "pnl": 2511.2,
+    "reason": "Target Hit",
+    "entry_time": "2026-08-03T10:48:23.619103",
+    "exit_time": "2026-08-03T13:13:47.297583",
+    "broker_idx": 1,
+    "entry_order_id": "2084146843671257088",
+    "sl_order_id": "2084183361215455232",
+    "target_order_id": "2084183361878155264",
+    "date": "2026-08-03"
+  },
+  {
     "symbol": "MAZDOCK",
     "direction": "SELL",
     "qty": 210,
