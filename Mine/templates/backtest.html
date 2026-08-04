@@ -403,8 +403,11 @@
                 </div>
             </div>
 
-            <!-- EMA Confluence Breakout params — single symbol, picked from
-                 the Future Stocks list in Symbol above. Daily candles only. -->
+            <!-- EMA Confluence Breakout params — one symbol picked from the
+                 Future Stocks list in Symbol above, or its "All Stocks" entry
+                 to run every stock in the per-stock defaults table at once
+                 (Direction/Target then come from that table, per stock, and
+                 the fields below go read-only). Daily candles only. -->
             <div id="emaPullbackParamsRow" class="form-row" style="display:none">
                 <div class="form-group">
                     <label for="emaDirection">Direction</label>
@@ -417,6 +420,10 @@
                 <div class="form-group">
                     <label for="emaTargetPct">Target</label>
                     <input type="number" id="emaTargetPct" value="5" min="1" step="0.5">
+                </div>
+                <div class="form-group form-check-group" id="emaAllStocksNote" style="display:none; grid-column: span 2;">
+                    <input type="checkbox" id="emaUseSymbolDefaults" checked>
+                    <label for="emaUseSymbolDefaults" title="All Stocks only: each stock runs with its OWN Direction and Target % from the per-stock defaults table (the same settings the live algo scans with), and each entry is sized as Lots × that stock's own futures lot size. Uncheck to apply the single Direction/Target set here to every stock instead.">Use Per-Stock Direction / Target</label>
                 </div>
                 <div class="form-group" style="grid-column: span 2;">
                     <label>Rule</label>
@@ -456,9 +463,11 @@
                     <div class="bt-modal-body">
                         <div class="rule-box rule-box--modal">
                             <p class="rule-intro">
-                                Uses <b>DAILY candles</b> only, on the single stock future picked
-                                in <b>Symbol</b> above. Four EMAs are tracked on the close:
-                                <b>EMA 20, 50, 100, 200</b>.
+                                Uses <b>DAILY candles</b> only, on the stock future picked in
+                                <b>Symbol</b> above — or, with <b>All Stocks</b>, on every stock
+                                in the per-stock defaults table at once, each with its own
+                                Direction/Target and sized by its own lot size. Four EMAs are
+                                tracked on the close: <b>EMA 20, 50, 100, 200</b>.
                             </p>
                             <p class="rule-intro">
                                 <b>Signal candle:</b> its daily range must <b>touch all four EMAs at

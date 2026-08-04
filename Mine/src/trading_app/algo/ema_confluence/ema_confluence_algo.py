@@ -18,10 +18,11 @@ accepted elsewhere in this codebase, e.g. TMF_EQUITY_LEVERAGE).
 Per-symbol lifecycle (state persists across days — unlike TMF, this is a
 multi-day SWING strategy, not an intraday one; there is no EOD square-off):
   pending_scan  -> not yet scanned today
-  no_setup      -> scanned, no signal on the most recent completed daily
-                    candle (or the signal's direction isn't enabled for this
-                    symbol — see EMA_SYMBOL_DEFAULTS)
-  watching      -> signal found; trigger/SL armed off the signal candle's own
+  no_setup      -> scanned, no order armed — either no signal candle is
+                    outstanding, or the one that is has already broken out
+                    (see below), or its direction isn't enabled for this
+                    symbol (see EMA_SYMBOL_DEFAULTS)
+  watching      -> an armed order: trigger/SL off the signal candle's own
                     High/Low (exactly like the backtest's "pending" breakout
                     order) — stays armed with NO EXPIRY across any number of
                     days until price breaks the trigger (matches the
@@ -45,9 +46,17 @@ value and the running P&L.
 
 The daily scan (one per symbol per day, only for symbols not already
 watching/in_position — "only one pending order at a time", same as the
-backtest) runs once each morning off the most recently COMPLETED daily
-candle (to_date = yesterday, never today's still-forming candle — no
-look-ahead).
+backtest) runs once each morning against candles up to the most recently
+COMPLETED one (to_date = yesterday, never today's still-forming candle — no
+look-ahead). It REPLAYS the whole strategy over that history and adopts
+whatever order the backtest would have resting right now, rather than asking
+"is the newest candle a signal?". The difference matters: this strategy
+routinely enters weeks after its signal candle, so the newest-candle test made
+a signal visible for exactly one morning — anything that fired before the algo
+first ran, or on a day whose scan came back empty, was invisible forever. The
+replay makes a cold start, a missed day, and a bad data fetch all self-heal.
+A breakout that already fired while nothing was watching is NOT entered late
+(the fill price is gone); it's logged once and re-arms when that move ends.
 
 Gating (see env/Mine.env):
   EMA_CONFLUENCE_ACTIVE = true/false   — gates entries (paper fills); the
@@ -93,7 +102,21 @@ _HARD_STOP_MIN = 15 * 60 + 30   # thread exits for the day at/after 15:30 IST
 # (_EMA_BT_WARMUP_DAYS in routes/api.py): a 200-day EMA keeps drifting toward
 # its true value for hundreds of bars, so a shorter run-up here would have live
 # scanning fire on different EMA values than the backtest that validated it.
+# Only the FALLBACK direct-fetch path uses this — the daily scan normally reads
+# the same full-history store the backtest does (see _daily_history).
 _EMA_LOOKBACK_DAYS = 1200
+
+# History depth requested from the per-stock daily store. Covers the backtest's
+# own span (its form starts at 2017 and fetches a 1200-day warm-up before that),
+# so the live simulation walks the same bars the backtest did.
+_STORE_HISTORY_DAYS = 4800
+
+# The date the live simulation starts trading from — everything before it is
+# EMA warm-up only. Must match the backtest form's default Start Date: the
+# armed order this algo adopts is the end state of a chain of simulated trades,
+# and a different start date can produce a different chain (a position opened
+# earlier blocks later signals), so the two would drift apart.
+_LIVE_SIM_START = '2017-01-01'
 
 # Index symbols resolve to their own instrument token (same map the backtest
 # route uses); every other symbol is an F&O equity, 'NSE:{symbol}-EQ' (Fyers)
@@ -332,10 +355,30 @@ class EmaConfluenceAlgo:
         from trading_app.Backtest.ema_pullback_engine import EmaPullbackEngine
         return EmaPullbackEngine
 
-    def _scan_one(self, provider: Any, is_fyers: bool, symbol: str, cfg: Dict[str, Any],
-                  s: Dict[str, Any], from_date: str, to_date: str) -> None:
-        EmaPullbackEngine = self._ema_engine()
+    def _daily_history(self, provider: Any, is_fyers: bool, symbol: str,
+                       to_date: str) -> Optional[pd.DataFrame]:
+        """Daily bars up to and including `to_date` ('YYYY-MM-DD'), as a frame
+        the engine can consume.
+
+        Primary source is the per-stock daily store the BACKTEST reads
+        (filters/candle_store) — same bars in, same EMAs out, so a signal the
+        backtest sees is a signal this scan sees. It serves locally and only
+        re-contacts the provider for the missing tail. Falls back to a direct
+        _EMA_LOOKBACK_DAYS fetch if the store comes back empty, so a store
+        problem degrades to the old behaviour instead of going dark.
+        """
         token = self._underlying_token(symbol, is_fyers)
+        end_dt = datetime.strptime(to_date, '%Y-%m-%d')
+        try:
+            from trading_app.filters.candle_store import get_daily_history
+            df = get_daily_history(provider, token, symbol, _STORE_HISTORY_DAYS, end_dt)
+            if df is not None and not df.empty:
+                return df.rename_axis('date').reset_index()
+            self.log.warning(f"{symbol}: daily store returned nothing up to {to_date} — trying a direct fetch")
+        except Exception as e:
+            self.log.warning(f"{symbol}: daily store read failed ({e}) — trying a direct fetch")
+
+        from_date = (end_dt - timedelta(days=_EMA_LOOKBACK_DAYS)).date().isoformat()
         try:
             candles = provider.historical_data(
                 instrument_token=token, from_date=from_date, to_date=to_date,
@@ -343,40 +386,99 @@ class EmaConfluenceAlgo:
             )
         except Exception as e:
             self.log.warning(f"{symbol}: daily-candle fetch failed: {e}")
-            s['phase'] = 'no_setup'
-            return
+            return None
         if not candles:
+            self.log.warning(f"{symbol}: provider returned no daily candles for {from_date}..{to_date}")
+            return None
+        return pd.DataFrame(candles)
+
+    def _scan_one(self, provider: Any, is_fyers: bool, symbol: str, cfg: Dict[str, Any],
+                  s: Dict[str, Any], to_date: str) -> Optional[str]:
+        """Re-derive this symbol's CURRENT armed order by replaying the whole
+        strategy over its history, exactly as the backtest does. Returns the
+        date of the newest candle it judged on, or None if it had no data.
+
+        Testing only the newest candle (what this used to do) meant a signal was
+        visible for one morning and then gone forever — the backtest arms an
+        order off ANY signal candle and holds it with no expiry, so it routinely
+        enters weeks after the signal. Any signal candle that landed before this
+        algo first ran, or on a day a scan came back empty, was invisible to it.
+        Replaying instead makes a cold start (or a missed day) self-heal.
+
+        A breakout that ALREADY fired while nothing was watching is deliberately
+        not entered late — the fill price is gone. It's logged once and left to
+        re-arm when the simulated trade closes.
+        """
+        EmaPullbackEngine = self._ema_engine()
+        df = self._daily_history(provider, is_fyers, symbol, to_date)
+        if df is None or df.empty:
             s['phase'] = 'no_setup'
-            return
+            return None
         try:
-            engine = EmaPullbackEngine(daily_df=pd.DataFrame(candles), target_pct=cfg['target_pct'])
+            engine = EmaPullbackEngine(
+                daily_df=df,
+                enable_long=cfg['direction'] != 'short',
+                enable_short=cfg['direction'] != 'long',
+                target_pct=cfg['target_pct'],
+                start_date=_LIVE_SIM_START,
+            )
+            engine.run()
         except Exception as e:
-            self.log.warning(f"{symbol}: EMA prep failed: {e}")
+            self.log.warning(f"{symbol}: EMA replay failed: {e}")
             s['phase'] = 'no_setup'
-            return
+            return None
         if engine.daily_df.empty:
+            self.log.warning(f"{symbol}: no usable daily bars up to {to_date}")
             s['phase'] = 'no_setup'
-            return
-        last = engine.daily_df.iloc[-1]
-        direction = engine._signal_direction(last)
-        if direction is None:
-            s['phase'] = 'no_setup'
-            return
+            return None
 
-        want_long  = cfg['direction'] != 'short'
-        want_short = cfg['direction'] != 'long'
-        if (direction == 'Long' and not want_long) or (direction == 'Short' and not want_short):
-            s['phase'] = 'no_setup'
-            return
+        # What the scan actually looked at — without this, a scan that silently
+        # ran on stale/short data is indistinguishable from one that genuinely
+        # found nothing (which is exactly what made the 2026-07-27 KFINTECH
+        # signal impossible to explain after the fact).
+        scanned_candle = str(engine.daily_df.iloc[-1]['datetime'].date())
+        s['scanned_candle'] = scanned_candle
+        s['scanned_at']     = datetime.now().isoformat()
 
-        s['phase']        = 'watching'
+        pending = engine.pending_order
+        if pending is None:
+            # No order resting — drop any stale armed-signal marker so a later
+            # re-arm is always treated (and logged) as new.
+            s.pop('signal_date', None)
+            open_trade = engine.open_trade
+            if open_trade is None:
+                s.pop('missed_signal_date', None)
+            else:
+                signal_date = str(pd.Timestamp(open_trade['signal_time']).date())
+                # Log once per missed setup, not once per daily scan.
+                if s.get('missed_signal_date') != signal_date:
+                    s['missed_signal_date'] = signal_date
+                    self.log.info(
+                        f"{symbol}: {open_trade['direction'].upper()} setup from {signal_date} already "
+                        f"broke out at {open_trade['entry_price']} while nothing was watching — "
+                        f"not entering late; will re-arm once that move is done"
+                    )
+            s['phase'] = 'no_setup'
+            return scanned_candle
+
+        direction    = pending['direction']
+        signal_date  = str(pd.Timestamp(pending['signal_time']).date())
+        already_seen = s.get('signal_date') == signal_date
+
+        s['phase']         = 'watching'
         s['direction']     = direction
-        s['trigger_level'] = round(float(last['high'] if direction == 'Long' else last['low']), 2)
-        s['sl_level']      = round(float(last['low']  if direction == 'Long' else last['high']), 2)
+        s['trigger_level'] = round(float(pending['trigger_level']), 2)
+        s['sl_level']      = round(float(pending['sl_level']), 2)
         s['target_pct']    = cfg['target_pct']
-        s['signal_date']   = str(last['datetime'].date())
-        self.log.info(f"{symbol}: setup found — {direction.upper()} "
-                       f"trigger={s['trigger_level']} sl={s['sl_level']} (signal candle {s['signal_date']})")
+        s['signal_date']   = signal_date
+        s.pop('missed_signal_date', None)
+        if not already_seen:
+            age = (datetime.strptime(scanned_candle, '%Y-%m-%d')
+                   - datetime.strptime(signal_date, '%Y-%m-%d')).days
+            self.log.info(f"{symbol}: setup found — {direction.upper()} "
+                          f"trigger={s['trigger_level']} sl={s['sl_level']} "
+                          f"(signal candle {signal_date}, {age}d old; scanned up to {scanned_candle})")
+        return scanned_candle
 
     def _run_daily_scan(self, provider: Any, is_fyers: bool, state: Dict[str, Any],
                         only_pending: bool = False) -> None:
@@ -386,11 +488,13 @@ class EmaConfluenceAlgo:
         from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
         today = date.today()
         yesterday = today - timedelta(days=1)
-        from_date = (today - timedelta(days=_EMA_LOOKBACK_DAYS)).isoformat()
         to_date = yesterday.isoformat()  # only fully-closed candles — no look-ahead
 
         stocks = state['stocks']
         scanned = 0
+        armed = 0
+        no_data: List[str] = []
+        judged_on: Dict[str, int] = {}
         for symbol, cfg in EMA_SYMBOL_DEFAULTS.items():
             s = stocks.setdefault(symbol, {'phase': 'pending_scan'})
             if s.get('phase') in ('watching', 'in_position'):
@@ -398,13 +502,30 @@ class EmaConfluenceAlgo:
             if only_pending and s.get('phase') != 'pending_scan':
                 continue
             try:
-                self._scan_one(provider, is_fyers, symbol, cfg, s, from_date, to_date)
+                candle = self._scan_one(provider, is_fyers, symbol, cfg, s, to_date)
                 scanned += 1
+                if s.get('phase') == 'watching':
+                    armed += 1
+                if candle:
+                    judged_on[candle] = judged_on.get(candle, 0) + 1
+                else:
+                    no_data.append(symbol)
             except Exception as e:
                 self.log.warning(f"{symbol}: scan failed: {e}")
                 s['phase'] = 'no_setup'
+                no_data.append(symbol)
+        # Which candle each symbol was actually judged on. A single date means a
+        # clean sweep; a spread means some symbols were judged on older bars
+        # than others, so "no setup" doesn't mean the same thing for all of them.
+        spread = ', '.join(f"{d}×{n}" for d, n in sorted(judged_on.items()))
         label = 'Catch-up scan' if only_pending else 'Daily scan'
-        self.log.info(f"{label} complete — {scanned} symbols scanned for {to_date}")
+        self.log.info(
+            f"{label} complete — {scanned} symbols scanned up to {to_date}, {armed} armed, "
+            f"{len(no_data)} with no data (candles judged: {spread or 'none'})"
+        )
+        if no_data:
+            self.log.warning(f"{label}: no usable candles for {len(no_data)} symbol(s) — "
+                             f"NOT evaluated for {to_date}: {', '.join(sorted(no_data))}")
 
     # ── Paper trade lifecycle ───────────────────────────────────────────
 

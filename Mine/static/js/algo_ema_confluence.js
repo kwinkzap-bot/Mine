@@ -226,23 +226,19 @@ const _EMAC_REASON_TONE = {
     'SL':     'neg',
 };
 
-// ── Zerodha charges — F&O futures ───────────────────────────────────────────
+// ── Brokerage — flat per round trip ─────────────────────────────────────────
 // These are paper fills on a futures contract, so the P&L is only meaningful
-// net of what the round trip would cost. Rates live in ZerodhaCharges
-// (algo_charges.js), charged per trade off its own turnover. NSE rates are
-// used throughout — a BSE (SENSEX) leg is fractionally cheaper on the
-// transaction charge, so this errs on the conservative side.
+// net of what the round trip would cost. This logic uses a flat default of
+// ₹1,000 per completed trade (entry + exit) rather than the itemised Zerodha
+// slab in algo_charges.js — a deliberately conservative single number that
+// stands in for brokerage plus statutory charges.
+const _EMAC_BROKERAGE_PER_TRADE = 1000;
+
 function _emacCharges(t) {
-    return ZerodhaCharges.forTrade({
-        segment: 'future',
-        entry:   t.entry_price,
-        exit:    t.exit_price,
-        qty:     t.qty,
-        short:   String(t.direction || '').toUpperCase() === 'SELL',
-    });
+    return _EMAC_BROKERAGE_PER_TRADE;
 }
 
-// What the trade is worth after those charges — used by the grid, the equity
+// What the trade is worth after brokerage — used by the grid, the equity
 // curve, the P&L breakdown and the summary alike.
 function _emacNetPnl(t) {
     return (Number(t.pnl) || 0) - _emacCharges(t);
@@ -251,8 +247,8 @@ function _emacNetPnl(t) {
 function _emacPnlTip(t) {
     const chg = _emacCharges(t);
     if (!chg) return '';
-    return `Gross ${DataGrid.inr(t.pnl)} − charges ₹${chg.toFixed(2)} ` +
-           `(Zerodha futures: brokerage, STT, txn, GST, stamp duty, SEBI)`;
+    return `Gross ${DataGrid.inr(t.pnl)} − brokerage ₹${chg.toFixed(2)} ` +
+           `(flat per round trip)`;
 }
 
 function _emacRenderHistory(trades) {
@@ -281,7 +277,7 @@ function _emacRenderHistory(trades) {
             { key: 'exit_price', label: 'Exit', format: DataGrid.rupees },
             { key: 'sl_price', label: 'SL', format: v => v == null ? '—' : DataGrid.rupees(v) },
             { key: 'target_price', label: 'Target', format: v => v == null ? '—' : DataGrid.rupees(v) },
-            // Net of Zerodha charges, with the charge in brackets after it —
+            // Net of brokerage, with the brokerage in brackets after it —
             // no separate brokerage column.
             { key: 'pnl', label: 'NET P&L (Bro)', strong: true,
               format: (_, t) => {
@@ -301,7 +297,7 @@ function _emacRenderHistory(trades) {
 
 // ── Trade History Summary ────────────────────────────────────────────────────
 // Aggregates the rows the Executed Trade History grid shows, on the same
-// net-of-charges basis — so Wins / Win Rate / Profit Factor describe money
+// net-of-brokerage basis — so Wins / Win Rate / Profit Factor describe money
 // kept, not price moves.
 
 function _emacRenderSummary(trades) {
@@ -348,7 +344,7 @@ function _emacRenderSummary(trades) {
         { label: 'Win Rate',      value: winRate.toFixed(1) + '%' },
         { label: 'Net P&L (₹)',   value: inrF(net),   cls: cls(net) },
         { label: 'Gross P&L (₹)', value: inrF(gross), cls: cls(gross) },
-        { label: 'Charges (₹)',   value: negF(charges), cls: 'ag-neg' },
+        { label: 'Brokerage (₹)', value: negF(charges), cls: 'ag-neg' },
         { label: 'Profit Factor', value: pf === Infinity ? '∞' : pf.toFixed(2) },
         { label: 'Avg Win (₹)',   value: wins   ? inrF(winSum / wins)    : '—', cls: wins   ? 'ag-pos' : '' },
         { label: 'Avg Loss (₹)',  value: losses ? negF(lossSum / losses) : '—', cls: losses ? 'ag-neg' : '' },
@@ -375,7 +371,7 @@ function _emacRenderSummary(trades) {
     }
 
     const metaEl = document.getElementById('emacPerfMeta');
-    if (metaEl) metaEl.textContent = `${total} trade${total > 1 ? 's' : ''} · net of ₹${Math.round(charges).toLocaleString('en-IN')} charges`;
+    if (metaEl) metaEl.textContent = `${total} trade${total > 1 ? 's' : ''} · net of ₹${Math.round(charges).toLocaleString('en-IN')} brokerage`;
 
     const netEl = document.getElementById('emacPerfNet');
     if (netEl) {
@@ -438,7 +434,7 @@ function _emacRenderEquityCurve(trades) {
 
     let portfolio = _emacStartingEquity;
     sorted.forEach((t, idx) => {
-        const pnl = _emacNetPnl(t);   // net of Zerodha charges, same as the grid
+        const pnl = _emacNetPnl(t);   // net of brokerage, same as the grid
         portfolio += pnl;
         labels.push('T' + (idx + 1));
         chartData.push(Math.round(portfolio));
@@ -550,7 +546,7 @@ function _emacGroupByPeriod(trades, period) {
         else if (period === 'halfyearly') key = `${d.getFullYear()}-H${d.getMonth() < 6 ? 1 : 2}`;
         else                            key = `${d.getFullYear()}`;
         if (!groups[key]) groups[key] = { pnl: 0, wins: 0, losses: 0 };
-        // Net P&L throughout — a trade that only won before charges is a loss.
+        // Net P&L throughout — a trade that only won before brokerage is a loss.
         const net = _emacNetPnl(t);
         groups[key].pnl += net;
         if (net > 0) groups[key].wins++;

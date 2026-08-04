@@ -200,6 +200,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Breakout fields — a display update only (like applyLotValueForSymbol);
     // a symbol missing from the table falls back to Both/5%.
     window.applyEmaDefaultsForSymbol = function(symbol) {
+        // "All Stocks" has no single Direction/Target to preview — every
+        // stock uses its own row of the table server-side.
+        if ((symbol || '').toUpperCase() === 'ALL STOCKS') return;
         const d = _emaSymbolDefaults[(symbol || '').toUpperCase()];
         const dirSel  = document.getElementById('emaDirection');
         const tgtInput = document.getElementById('emaTargetPct');
@@ -230,6 +233,22 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // ── "All Stocks" (EMA Confluence Breakout only) ──────────────────────
+    // A pseudo-symbol offered at the top of the shared Symbol box when EMA
+    // Confluence Breakout is selected. Picking it runs the strategy over
+    // EVERY stock in EMA_SYMBOL_DEFAULTS instead of one, each with its own
+    // Direction/Target and sized off its own lot size server-side — so the
+    // per-symbol form fields go read-only while it's active.
+    const ALL_STOCKS = 'ALL STOCKS';
+    function isEmaStrategy() {
+        return (document.getElementById('strategySelect')?.value || '') === 'ema_pullback';
+    }
+    function isEmaAllMode() {
+        return selectedSymbol === ALL_STOCKS && isEmaStrategy();
+    }
+
+    // Kicked off only after ALL_STOCKS above exists — its completion callback
+    // runs applyLotValueForSymbol(), which reads it.
     fetchSymbols();
 
     // 2. Searchable Dropdown Logic
@@ -238,7 +257,8 @@ document.addEventListener('DOMContentLoaded', function() {
         // Show every matching symbol (not just the first 15) — the list
         // itself scrolls (#symbolList has max-height + overflow-y in CSS),
         // same as the Open Interest page's symbol dropdown.
-        const matches = allSymbols.filter(s => {
+        const pool = isEmaStrategy() ? [ALL_STOCKS, ...allSymbols] : allSymbols;
+        const matches = pool.filter(s => {
             if (!filter) return true;
             return s.includes(filter);
         });
@@ -279,6 +299,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 this.value = selectedSymbol;
                 applyLotValueForSymbol(selectedSymbol);
                 applyEmaDefaultsForSymbol(selectedSymbol);
+                syncEmaAllStocksMode();
                 cancelRtpOptimise(); // stale: results would be for the old symbol
                 cancelScOptimise();
                 this.blur();
@@ -295,6 +316,7 @@ document.addEventListener('DOMContentLoaded', function() {
             symbolList.classList.remove('show');
             applyLotValueForSymbol(selectedSymbol);
             applyEmaDefaultsForSymbol(selectedSymbol);
+            syncEmaAllStocksMode();
             cancelRtpOptimise(); // stale: results would be for the old symbol
             cancelScOptimise();
         }
@@ -308,12 +330,44 @@ document.addEventListener('DOMContentLoaded', function() {
         return lotSizeBySymbol[(symbol || '').toUpperCase()] || 65;
     }
     function applyLotValueForSymbol(symbol) {
+        // "All Stocks" has no lot size of its own — the scan sizes each stock
+        // by its own contract server-side, so leave the field showing whatever
+        // the last real symbol had (it's greyed out in that mode anyway).
+        if ((symbol || '').toUpperCase() === ALL_STOCKS) return;
         const lotValue = lotValueForSymbol(symbol);
         ['rtpLotValue', 'vwapLotValue', 'scLotValue', 'emaLotValue'].forEach(function(id) {
             const el = document.getElementById(id);
             if (el) el.value = lotValue;
         });
     }
+
+    // Reveals the "Use Per-Stock Direction / Target" toggle while "All Stocks"
+    // is selected, and greys out whichever fields that mode takes over:
+    // Direction/Target come from each stock's own EMA_SYMBOL_DEFAULTS row
+    // (unless the toggle is off), and the ₹/pt always from its own lot size.
+    // Find Best Params is a single-symbol sweep, so it hides too.
+    function syncEmaAllStocksMode() {
+        const all      = isEmaAllMode();
+        const perStock = document.getElementById('emaUseSymbolDefaults')?.checked ?? true;
+        const note     = document.getElementById('emaAllStocksNote');
+        const fields = [
+            ['emaDirection', all && perStock, 'Each stock uses its own Direction from the per-stock defaults table'],
+            ['emaTargetPct', all && perStock, 'Each stock uses its own Target % from the per-stock defaults table'],
+            ['emaLotValue',  all,             'Each stock is sized by its own futures lot size'],
+        ];
+        fields.forEach(([id, off, why]) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.disabled = off;
+            el.title    = off ? why : '';
+        });
+        if (note) note.style.display = all ? '' : 'none';
+        const optBtn = document.getElementById('runOptimiseBtn');
+        if (optBtn && isEmaStrategy()) optBtn.style.display = all ? 'none' : '';
+        updateEmaInvestment();
+    }
+    document.getElementById('emaUseSymbolDefaults')?.addEventListener('change', syncEmaAllStocksMode);
+
     // Seed lot values for the symbol selected on initial page load.
     applyLotValueForSymbol(selectedSymbol);
     applyEmaDefaultsForSymbol(selectedSymbol);
@@ -462,6 +516,17 @@ document.addEventListener('DOMContentLoaded', function() {
             if (startDateInput) startDateInput.value = '2017-01-01';
             updateEmaInvestment();
         }
+
+        // "All Stocks" only exists for EMA Confluence Breakout — every other
+        // strategy backtests one symbol, so switching away falls back to the
+        // default rather than posting a symbol the backend can't resolve.
+        if (val !== 'ema_pullback' && selectedSymbol === ALL_STOCKS) {
+            selectedSymbol = 'NIFTY';
+            symbolSearch.value = selectedSymbol;
+            applyLotValueForSymbol(selectedSymbol);
+            applyEmaDefaultsForSymbol(selectedSymbol);
+        }
+        syncEmaAllStocksMode();
     }
 
     // Investment display: ₹50,000 per lot. Defined BEFORE the initial
@@ -497,7 +562,11 @@ document.addEventListener('DOMContentLoaded', function() {
         const lots  = Math.max(1, parseInt(document.getElementById('emaLots')?.value || 1));
         const total = lots * 50000;
         const el = document.getElementById('emaInvestmentDisplay');
-        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+        if (!el) return;
+        // Across All Stocks each entry is lots × THAT stock's lot size ×
+        // its own price, so there's no single figure to show up front —
+        // the results' Net P&L card reports the real average per entry.
+        el.textContent = isEmaAllMode() ? 'varies by stock' : '₹' + total.toLocaleString('en-IN');
     };
 
     if (strategySelect) {
@@ -650,8 +719,16 @@ document.addEventListener('DOMContentLoaded', function() {
             // EMA Confluence Breakout
             if (strat === 'ema_pullback') {
                 endpoint = '/api/backtest/ema-pullback';
+                // With "All Stocks" the backend scans every symbol in
+                // EMA_SYMBOL_DEFAULTS. use_symbol_defaults on (the default)
+                // runs each on its OWN Direction/Target from that table and
+                // leaves the two fields below as the fallback for a symbol
+                // missing from it; off applies those two to every stock. Lots
+                // is what sizes each stock (× its own lot size) into ₹.
                 payload.direction   = document.getElementById('emaDirection')?.value || 'both';
                 payload.target_pct  = Math.max(1, parseFloat(document.getElementById('emaTargetPct')?.value || 5));
+                payload.lots        = Math.max(1, parseInt(document.getElementById('emaLots')?.value || 1));
+                payload.use_symbol_defaults = document.getElementById('emaUseSymbolDefaults')?.checked ?? true;
             }
 
             // Swing Momentum: different endpoint + payload
@@ -872,9 +949,15 @@ document.addEventListener('DOMContentLoaded', function() {
         // already net).
         const isTmf  = strategySelect && strategySelect.value === 'thirty_min_fakeout';
         const isEma  = strategySelect && strategySelect.value === 'ema_pullback';
+        // EMA Confluence Breakout's "All Stocks" run comes back shaped like the
+        // TMF scan — many symbols, each trade already sized to ₹ server-side —
+        // so it takes the same ₹ cards/columns instead of the points ones.
+        const isEmaAll = !!(isEma && summary && summary.multi_symbol);
+        const isMultiSymbol = isTmf || isEmaAll;
         // 2nd-candle / EMA Pullback reuse the VWAP-style ₹ cards, each reading their own lot inputs.
         const moneyLotsId    = isSc ? 'scLots'     : (isEma ? 'emaLots'     : 'vwapLots');
         const moneyLotValId  = isSc ? 'scLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue');
+        lastData.is_multi_symbol = isMultiSymbol;
 
         if (isSM) {
             lastData.is_swing_momentum = true;
@@ -894,14 +977,15 @@ document.addEventListener('DOMContentLoaded', function() {
             ? ((summary.wins / summary.total_trades) * 100).toFixed(1) + '%'
             : '0%';
 
-        // For TMF this is the GROSS figure (before brokerage) — the
-        // dedicated Net P&L (₹) card below is what actually subtracts it.
-        const pnl    = isTmf ? (summary.total_gross_pnl_rupees ?? 0) : (summary.total_pnl ?? 0);
+        // For the multi-symbol scans this is the GROSS figure (before
+        // brokerage) — the dedicated Net P&L (₹) card below is what actually
+        // subtracts it. Points would be meaningless summed across symbols.
+        const pnl    = isMultiSymbol ? (summary.total_gross_pnl_rupees ?? 0) : (summary.total_pnl ?? 0);
         const pnlEl  = document.getElementById('statTotalPnl');
-        pnlEl.textContent = (pnl >= 0 ? '+' : '') + (isTmf ? '₹' + Math.round(pnl).toLocaleString('en-IN') : pnl.toFixed(2));
+        pnlEl.textContent = (pnl >= 0 ? '+' : '') + (isMultiSymbol ? '₹' + Math.round(pnl).toLocaleString('en-IN') : pnl.toFixed(2));
         pnlEl.className   = 'stat-card__val ' + (pnl >= 0 ? 'stat-val-green' : 'stat-val-red');
         const pnlUnitEl = document.getElementById('statTotalPnlUnit');
-        if (pnlUnitEl) pnlUnitEl.textContent = isTmf ? `gross, before brokerage · ${summary.total_trades || 0} entries` : 'points';
+        if (pnlUnitEl) pnlUnitEl.textContent = isMultiSymbol ? `gross, before brokerage · ${summary.total_trades || 0} entries` : 'points';
 
         const outcomeEl = document.getElementById('statOutcome');
         outcomeEl.textContent = pnl >= 0 ? 'PROFIT' : 'LOSS';
@@ -980,7 +1064,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     subtitle.textContent = info;
                 }
             }
-        } else if ((isVwap || isSc || isEma) && rtpRow) {
+        } else if ((isVwap || isSc || (isEma && !isEmaAll)) && rtpRow) {
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -1013,10 +1097,11 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             const netSubEl = document.getElementById('statNetRsSub');
             if (netSubEl) netSubEl.textContent = 'brok: ₹' + totalBrokerage.toLocaleString('en-IN');
-        } else if (isTmf && rtpRow) {
-            // Every field here is already sized server-side (~₹1,00,000
-            // per entry, per-symbol lot size) — no Lots/Lot Value inputs
-            // to read, unlike the isVwap/isSc branch above.
+        } else if (isMultiSymbol && rtpRow) {
+            // Every field here is already sized server-side (TMF: ~₹1,00,000
+            // per entry; EMA All Stocks: Lots × each stock's own lot size) —
+            // no Lots/Lot Value inputs to read, unlike the isVwap/isSc branch
+            // above.
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -1047,7 +1132,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 netEl.className   = 'stat-card__val ' + (netRsTmf >= 0 ? 'stat-val-green' : 'stat-val-red');
             }
             const netSubEl = document.getElementById('statNetRsSub');
-            if (netSubEl) netSubEl.textContent = `brok: ₹${Math.round(totalBrok).toLocaleString('en-IN')} · ~₹${Math.round(summary.capital_per_trade || 100000).toLocaleString('en-IN')}/entry`;
+            if (netSubEl) {
+                let sub = `brok: ₹${Math.round(totalBrok).toLocaleString('en-IN')} · ~₹${Math.round(summary.capital_per_trade || 100000).toLocaleString('en-IN')}/entry`;
+                // The EMA scan's per-entry figure is an average across very
+                // differently priced stocks, so say how many actually traded.
+                if (isEmaAll) sub += ` · ${summary.symbols_with_trades || 0}/${summary.symbols_scanned || 0} stocks`;
+                netSubEl.textContent = sub;
+            }
 
             const cagrEl    = document.getElementById('statCagr');
             const cagrSubEl = document.getElementById('statCagrSub');
@@ -1069,10 +1160,10 @@ document.addEventListener('DOMContentLoaded', function() {
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
         const isMoney     = isRtp || isVwap || isSc || isTmf || isEma;
-        // Each 30-Min Fakeout trade already carries its own sized pnl_rupees
-        // (~₹1,00,000/entry, per-symbol lot size) — renderEquityCurve/
-        // groupByPeriod use that directly when present, ignoring lots2/lotValue2.
-        const investment2 = isTmf ? (summary.capital_per_trade || 100000) : lots2 * 50000;
+        // Each multi-symbol trade already carries its own sized pnl_rupees —
+        // renderEquityCurve/groupByPeriod use that directly when present,
+        // ignoring lots2/lotValue2.
+        const investment2 = isMultiSymbol ? (summary.capital_per_trade || 100000) : lots2 * 50000;
         renderEquityCurve(data.trades, isMoney, lots2, lotValue2, investment2);
 
         // Store for period tab re-renders
@@ -1080,9 +1171,9 @@ document.addEventListener('DOMContentLoaded', function() {
         _periodIsRtp    = isMoney;
         _periodLots     = lots2;
         _periodLotValue = lotValue2;
-        _periodUseDirectRupees = isTmf;
+        _periodUseDirectRupees = isMultiSymbol;
         const activePeriod = document.querySelector('.period-tab.active')?.dataset.period || 'monthly';
-        renderPeriodBreakdown(data.trades, isMoney, lots2, lotValue2, activePeriod, isTmf);
+        renderPeriodBreakdown(data.trades, isMoney, lots2, lotValue2, activePeriod, isMultiSymbol);
 
         renderTable();
         resultsArea.style.display = 'block';
@@ -1487,12 +1578,13 @@ document.addEventListener('DOMContentLoaded', function() {
           format: v => (v || 0).toFixed(2), tone: DataGrid.sign },
     ];
 
-    // 30-Min Fakeout scans every F&O futures stock/index at once, each
-    // entry sized to ~₹1,00,000 (capital_per_trade) — Symbol/Lots columns
-    // the single-symbol strategies don't need, SL/Target Price columns
-    // (the engine already returns sl_price/target_price per trade), and
-    // a ₹-sized P&L instead of the generic raw-points column.
-    const TMF_TRADES_COLS = [
+    // The multi-symbol scans (30-Min Fakeout across every F&O futures
+    // stock/index, EMA Confluence Breakout across All Stocks) size every
+    // entry server-side — Symbol/Quantity columns the single-symbol
+    // strategies don't need, SL/Target Price columns (both engines return
+    // sl_price/target_price per trade), and a ₹-sized P&L instead of the
+    // generic raw-points column.
+    const MULTI_SYMBOL_TRADES_COLS = [
         { key: 'symbol', label: 'Symbol', sortable: true },
         ...TRADES_COLS.slice(0, -1),
         { key: 'sl_price', label: 'SL Price', sortable: true,
@@ -1512,12 +1604,12 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!lastData || !lastData.trades) return;
         if (lastData.is_swing_momentum) { _renderSmTable(lastData.trades); return; }
 
-        const isTmf = strategySelect && strategySelect.value === 'thirty_min_fakeout';
+        const multi = !!lastData.is_multi_symbol;
         DataGrid.mountSortable('tradesGrid', {
             rows: lastData.trades,
-            columns: isTmf ? TMF_TRADES_COLS : TRADES_COLS,
+            columns: multi ? MULTI_SYMBOL_TRADES_COLS : TRADES_COLS,
             empty: 'No trades generated',
-            defaultSort: isTmf ? { key: 'symbol', dir: 'asc' } : { key: 'exit_time', dir: 'desc' },
+            defaultSort: multi ? { key: 'symbol', dir: 'asc' } : { key: 'exit_time', dir: 'desc' },
         });
     }
 
@@ -2088,6 +2180,12 @@ document.addEventListener('DOMContentLoaded', function() {
     async function runEmaOptimise(recalculate) {
         const symbol = symbolSearch.value.trim().toUpperCase();
         if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
+        if (symbol === ALL_STOCKS) {
+            // The sweep ranks one symbol's Direction/Target combos; across the
+            // universe each stock already carries its own best-known combo.
+            window.showNotification('Find Best Params runs on a single symbol — pick one instead of All Stocks.', 'warning');
+            return;
+        }
 
         const panel     = document.getElementById('emaOptimisePanel');
         const recalcBtn = document.getElementById('emaRecalcOptBtn');

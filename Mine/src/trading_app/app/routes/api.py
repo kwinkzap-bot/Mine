@@ -2639,6 +2639,57 @@ def notify_whatsapp() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _fno_lot_sizes():
+    """{symbol: lot_size} for every F&O name in the cached NFO instrument
+    dump, plus the indices that dump never carries.
+
+    For each name the lot size comes from its NEAREST expiry >= today (lot
+    sizes get periodically revised by the exchange — older/expired contracts
+    still sitting in the cache can carry a stale value, so a straight "any
+    entry" pick is unreliable). Falls back to the latest available expiry if
+    every cached contract for that name has already expired.
+
+    Raises FileNotFoundError when the cache hasn't been built yet (the
+    caller decides whether that's fatal or just means "no ₹ sizing").
+    """
+    import json
+    import os
+    from datetime import date as _date
+
+    cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cache', 'nfo_instruments.json')
+    if not os.path.exists(cache_path):
+        raise FileNotFoundError('NFO instruments cache not found. Please login to refresh.')
+
+    with open(cache_path, 'r') as f:
+        instruments = json.load(f)
+
+    today_str = _date.today().isoformat()
+    by_name = {}   # name -> list of (expiry_str, lot_size)
+    for inst in instruments:
+        if inst.get('instrument_type') != 'FUT':
+            continue
+        name = inst.get('name')
+        expiry = inst.get('expiry')
+        lot_size = inst.get('lot_size')
+        if not name or not lot_size:
+            continue
+        by_name.setdefault(name, []).append((expiry or '', lot_size))
+
+    lot_sizes = {}
+    for name, rows in by_name.items():
+        rows.sort(key=lambda r: r[0])
+        upcoming = [r for r in rows if r[0] >= today_str]
+        lot_sizes[name] = (upcoming[0] if upcoming else rows[-1])[1]
+
+    # Known index lot sizes not present in the NFO (equity F&O) cache —
+    # SENSEX trades on BSE/BFO, not NFO, so it never appears above.
+    for idx, fallback_lot in (('NIFTY', 65), ('BANKNIFTY', 30),
+                              ('FINNIFTY', 60), ('MIDCPNIFTY', 120),
+                              ('SENSEX', 20)):
+        lot_sizes.setdefault(idx, fallback_lot)
+    return lot_sizes
+
+
 @api_bp.route('/backtest/symbols', methods=['GET'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -2650,53 +2701,15 @@ def get_backtest_symbols():
     if auth_error:
         return auth_error
     try:
-        import json
-        import os
-        from datetime import date as _date
+        try:
+            lot_sizes = _fno_lot_sizes()
+        except FileNotFoundError as e:
+            return jsonify({'success': False, 'error': str(e)}), 404
 
-        # Path to cached NFO instruments
-        cache_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.cache', 'nfo_instruments.json')
-
-        if not os.path.exists(cache_path):
-            return jsonify({'success': False, 'error': 'NFO instruments cache not found. Please login to refresh.'}), 404
-
-        with open(cache_path, 'r') as f:
-            instruments = json.load(f)
-
-        # Filter unique names for futures, and for each name pick the lot
-        # size of its NEAREST expiry >= today (lot sizes get periodically
-        # revised by the exchange — older/expired contracts still sitting
-        # in the cache can carry a stale value, so a straight "any entry"
-        # pick is unreliable; nearest-upcoming-expiry reflects what's
-        # actually tradable right now). Falls back to the latest available
-        # expiry if every cached contract for that name has already expired.
-        today_str = _date.today().isoformat()
-        by_name = {}   # name -> list of (expiry_str, lot_size)
-        for inst in instruments:
-            if inst.get('instrument_type') != 'FUT':
-                continue
-            name = inst.get('name')
-            expiry = inst.get('expiry')
-            lot_size = inst.get('lot_size')
-            if not name or not lot_size:
-                continue
-            by_name.setdefault(name, []).append((expiry or '', lot_size))
-
-        lot_sizes = {}
-        for name, rows in by_name.items():
-            rows.sort(key=lambda r: r[0])
-            upcoming = [r for r in rows if r[0] >= today_str]
-            lot_sizes[name] = (upcoming[0] if upcoming else rows[-1])[1]
-
-        # Combine and sort
-        all_symbols = sorted(by_name.keys())
         indices = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'SENSEX']
-        # Known index lot sizes not present in the NFO (equity F&O) cache —
-        # SENSEX trades on BSE/BFO, not NFO, so it never appears above.
-        for idx, fallback_lot in (('NIFTY', 65), ('BANKNIFTY', 30),
-                                  ('FINNIFTY', 60), ('MIDCPNIFTY', 120),
-                                  ('SENSEX', 20)):
-            lot_sizes.setdefault(idx, fallback_lot)
+        # The index fallbacks _fno_lot_sizes() adds are not tradable F&O
+        # *stocks*, so they don't belong in the searchable stock list.
+        all_symbols = sorted(s for s in lot_sizes if s not in indices)
 
         return jsonify({
             'success': True,
@@ -3773,6 +3786,184 @@ def _ema_warmup_from(start_date_str: str) -> str:
     return (start - timedelta(days=_EMA_BT_WARMUP_DAYS)).strftime('%Y-%m-%d')
 
 
+def _ema_daily_token(current_kite, symbol: str):
+    """Provider-specific instrument token for `symbol`'s daily SPOT series."""
+    fyers_indices = {
+        'NIFTY':      'NSE:NIFTY50-INDEX',
+        'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
+        'FINNIFTY':   'NSE:FINNIFTY-INDEX',
+        'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
+        'SENSEX':     'BSE:SENSEX-INDEX',
+    }
+    kite_indices = {
+        'NIFTY': 256265, 'BANKNIFTY': 260105,
+        'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
+    }
+    if hasattr(current_kite, 'fyers'):
+        return fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
+    return kite_indices.get(symbol, symbol)
+
+
+# The "All Stocks" selection in the Symbol box — same idea as the 30-Min
+# Fakeout dropdown's empty value, but spelled out because EMA Confluence
+# shares the free-text Symbol search box with every single-symbol strategy.
+_EMA_ALL_SYMBOLS = {'ALL', 'ALL STOCKS', 'ALL_STOCKS'}
+
+# Flat brokerage per round-trip trade, matching EMA_BROKERAGE_PER_TRADE in
+# backtest.js — the single-symbol run applies it in the browser, so the
+# All-Stocks scan (which sizes every trade server-side) uses the same figure.
+_EMA_BROKERAGE_PER_TRADE = 1000
+
+
+def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
+                             lots, direction, target_pct, use_symbol_defaults):
+    """EMA Confluence Breakout across EVERY symbol in EMA_SYMBOL_DEFAULTS.
+
+    Each stock is run with ITS OWN Direction/Target from that table (the same
+    per-stock settings the live algo scans with) unless use_symbol_defaults is
+    off, in which case the form's single Direction/Target applies to all of
+    them. A symbol missing from the table always falls back to the form.
+
+    Points aren't comparable across stocks priced ₹80 and ₹80,000, so every
+    trade is also sized in ₹ here: qty = lots x that symbol's futures lot
+    size, pnl_rupees = pnl x qty - brokerage. That's the same sizing the
+    live algo trades with, and the same arithmetic the single-symbol run
+    does in the browser off the Lots / Lot Value fields.
+
+    Daily history comes from the per-stock disk store (filters/candle_store),
+    not a fresh provider fetch per symbol — 150+ symbols x 13 years of daily
+    bars is a multi-minute download the first time and a local read after.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from trading_app.Backtest.ema_pullback_engine import EmaPullbackEngine, summarize_trades
+    from trading_app.Backtest.ema_symbol_universe import EMA_SYMBOL_DEFAULTS
+    from trading_app.filters.candle_store import get_daily_history
+
+    try:
+        lot_sizes = _fno_lot_sizes()
+    except Exception as e:
+        logger.warning('[EMA Confluence Breakout scan] lot sizes unavailable (%s) — ₹ sizing falls back to 1/point', e)
+        lot_sizes = {}
+
+    symbols = list(EMA_SYMBOL_DEFAULTS.keys())
+    warmup_from_str = _ema_warmup_from(start_date_str)
+    end_dt    = datetime.strptime(str(end_date_str)[:10], '%Y-%m-%d')
+    warmup_dt = datetime.strptime(str(warmup_from_str)[:10], '%Y-%m-%d')
+    history_days = max(1, (end_dt - warmup_dt).days)
+    is_fyers = hasattr(current_kite, 'fyers')
+    missing_lot_size = []   # appended from worker threads (list.append is atomic)
+
+    def _scan_symbol(symbol):
+        df = get_daily_history(current_kite, _ema_daily_token(current_kite, symbol),
+                               symbol, history_days, end_dt)
+        if df is None or df.empty:
+            return []
+
+        defaults = EMA_SYMBOL_DEFAULTS.get(symbol) if use_symbol_defaults else None
+        sym_direction  = str(defaults['direction']) if defaults else direction
+        sym_target_pct = float(defaults['target_pct']) if defaults else target_pct
+
+        engine = EmaPullbackEngine(
+            # The store indexes by date; the engine reads a 'date' column.
+            daily_df=df.rename_axis('date').reset_index(),
+            enable_long=sym_direction != 'short',
+            enable_short=sym_direction != 'long',
+            target_pct=sym_target_pct,
+            start_date=start_date_str,
+        )
+        trades, _ = engine.run()
+
+        # A symbol the NFO cache doesn't know falls back to 1 share/point
+        # rather than dropping its signals — reported in _debug so a stale
+        # cache shows up as "these stocks' ₹ figures are unsized" instead of
+        # silently shrinking the totals.
+        lot_size = int(lot_sizes.get(symbol) or 0)
+        if lot_size <= 0:
+            missing_lot_size.append(symbol)
+            lot_size = 1
+        qty = max(1, lots) * lot_size
+        for t in trades:
+            t['symbol']           = symbol
+            t['lot_size']         = lot_size
+            t['qty']              = qty
+            t['direction_used']   = sym_direction
+            t['target_pct_used']  = sym_target_pct
+            t['capital']          = round(t['entry_price'] * qty, 2)
+            t['brokerage']        = _EMA_BROKERAGE_PER_TRADE
+            t['sl_risk_rupees']   = round(abs(t['entry_price'] - t['sl_price']) * qty, 2)
+            t['gross_pnl_rupees'] = round(t['pnl'] * qty, 2)
+            # Net of the round-trip brokerage — this is the trade's real
+            # result, and what the trades table / equity curve show.
+            t['pnl_rupees']       = round(t['gross_pnl_rupees'] - _EMA_BROKERAGE_PER_TRADE, 2)
+        return trades
+
+    all_trades = []
+    failed = 0
+    workers = 15 if is_fyers else 8
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_scan_symbol, sym): sym for sym in symbols}
+        for future in as_completed(futures):
+            sym = futures[future]
+            try:
+                all_trades.extend(future.result(timeout=600))
+            except Exception as e:
+                failed += 1
+                logger.error(f"[EMA Confluence Breakout scan] {sym} failed: {e}")
+
+    # Chronological, not thread-completion order — the summary's running
+    # peak/drawdown walk is order-sensitive (same fix as the TMF scan).
+    all_trades.sort(key=lambda t: t['entry_time'])
+
+    summary = summarize_trades(all_trades)
+    rupee_summary       = summarize_trades([{**t, 'pnl': t['pnl_rupees']} for t in all_trades])
+    gross_rupee_summary = summarize_trades([{**t, 'pnl': t['gross_pnl_rupees']} for t in all_trades])
+    summary['total_pnl_rupees']       = rupee_summary['total_pnl']
+    summary['total_gross_pnl_rupees'] = gross_rupee_summary['total_pnl']
+    summary['avg_win_rupees']         = rupee_summary['avg_win']
+    summary['avg_loss_rupees']        = rupee_summary['avg_loss']
+    summary['profit_factor_rupees']   = rupee_summary['profit_factor']
+    summary['max_drawdown_rupees']    = rupee_summary['max_drawdown']
+    summary['total_brokerage']        = _EMA_BROKERAGE_PER_TRADE * len(all_trades)
+    summary['multi_symbol']           = True
+    summary['symbols_scanned']        = len(symbols)
+    summary['symbols_with_trades']    = len({t['symbol'] for t in all_trades})
+    summary['lots']                   = lots
+    # Average ₹ actually deployed per entry — the stocks span a huge price
+    # range, so there's no single "capital per trade" the way TMF has one.
+    # It's the base the equity curve starts from and the CAGR below annualizes.
+    avg_capital = (sum(t['capital'] for t in all_trades) / len(all_trades)) if all_trades else 0.0
+    summary['capital_per_trade'] = round(avg_capital, 2)
+
+    cagr_pct = 0.0
+    try:
+        span_days = (end_dt - datetime.strptime(str(start_date_str)[:10], '%Y-%m-%d')).days
+        ending_value = avg_capital + summary['total_pnl_rupees']
+        if span_days > 0 and avg_capital > 0 and ending_value > 0:
+            cagr_pct = round(((ending_value / avg_capital) ** (365.0 / span_days) - 1) * 100, 2)
+    except Exception:
+        cagr_pct = 0.0
+    summary['cagr_pct'] = cagr_pct
+
+    logger.info('[EMA Confluence Breakout scan] %d symbols (%d failed) → %d trades',
+                len(symbols), failed, len(all_trades))
+    if missing_lot_size:
+        logger.warning('[EMA Confluence Breakout scan] no lot size for %d symbols '
+                       '(sized 1/point): %s', len(missing_lot_size), ', '.join(sorted(missing_lot_size)))
+
+    return jsonify({
+        'success': True,
+        'trades':  all_trades,
+        'summary': summary,
+        '_debug': {
+            'symbols_scanned':  len(symbols),
+            'symbols_failed':   failed,
+            'missing_lot_size': sorted(missing_lot_size),
+            'warmup_from':      warmup_from_str,
+        },
+    })
+
+
 @api_bp.route('/backtest/ema-pullback', methods=['POST'], strict_slashes=False)
 @csrf.exempt
 @require_user_auth
@@ -3788,19 +3979,28 @@ def run_ema_pullback_backtest_api():
     through). SL is the signal candle's opposite extreme (High for SELL,
     Low for BUY); Target is target_pct (default 5.0, floor 1.0) of the
     entry price. direction: 'both'|'long'|'short', default 'both'.
+
+    symbol='ALL' (the Symbol box's "All Stocks" entry) runs the same rule
+    over EVERY symbol in EMA_SYMBOL_DEFAULTS instead of one — each with its
+    own Direction/Target from that table, and each trade sized in ₹ off its
+    own futures lot size. See _run_ema_all_stocks_scan.
     """
     auth_error = check_auth()
     if auth_error:
         return auth_error
     try:
         data           = request.get_json()
-        symbol         = data.get('symbol')
+        symbol         = str(data.get('symbol', '') or '').strip().upper()
         start_date_str = data.get('start_date')
         end_date_str   = data.get('end_date')
         direction      = str(data.get('direction', 'both')).lower()
         enable_long    = direction != 'short'
         enable_short   = direction != 'long'
         target_pct     = float(data.get('target_pct', 5.0) or 5.0)
+        lots           = max(1, int(data.get('lots', 1) or 1))
+        # All Stocks only: off means every stock runs the form's single
+        # Direction/Target instead of its own row in EMA_SYMBOL_DEFAULTS.
+        use_symbol_defaults = bool(data.get('use_symbol_defaults', True))
 
         if not symbol or not start_date_str or not end_date_str:
             return jsonify({'success': False, 'error': 'Missing required parameters'}), 400
@@ -3809,21 +4009,14 @@ def run_ema_pullback_backtest_api():
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
-        fyers_indices = {
-            'NIFTY':      'NSE:NIFTY50-INDEX',
-            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
-            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
-            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-            'SENSEX':     'BSE:SENSEX-INDEX',
-        }
-        kite_indices = {
-            'NIFTY': 256265, 'BANKNIFTY': 260105,
-            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
-        }
-        if hasattr(current_kite, 'fyers'):
-            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
-        else:
-            instrument_token = kite_indices.get(symbol, symbol)
+        if symbol in _EMA_ALL_SYMBOLS:
+            return _run_ema_all_stocks_scan(
+                current_kite, start_date_str, end_date_str,
+                lots=lots, direction=direction, target_pct=target_pct,
+                use_symbol_defaults=use_symbol_defaults,
+            )
+
+        instrument_token = _ema_daily_token(current_kite, symbol)
 
         warmup_from_str = _ema_warmup_from(start_date_str)
         daily_candles = current_kite.historical_data(
@@ -3892,13 +4085,20 @@ def run_ema_pullback_optimise():
         return auth_error
     try:
         data           = request.get_json()
-        symbol         = data.get('symbol', 'NIFTY')
+        symbol         = str(data.get('symbol', 'NIFTY') or 'NIFTY').strip().upper()
         start_date_str = data.get('start_date', '2017-01-01')
         end_date_str   = data.get('end_date')
         recalculate    = bool(data.get('recalculate', False))
 
         if not end_date_str:
             end_date_str = datetime.today().strftime('%Y-%m-%d')
+
+        if symbol in _EMA_ALL_SYMBOLS:
+            # The sweep ranks ONE symbol's Direction/Target combos. Across the
+            # whole universe each stock already has its own best-known combo in
+            # EMA_SYMBOL_DEFAULTS — that's what the All Stocks scan runs with.
+            return jsonify({'success': False,
+                            'error': 'Find Best Params runs on a single symbol — pick one instead of All Stocks.'}), 400
 
         # 'v2' retires every entry cached before the EMA warm-up / stale-order
         # fixes — those rankings came from a different engine and are wrong.
@@ -3914,21 +4114,7 @@ def run_ema_pullback_optimise():
         if not current_kite:
             return jsonify({'success': False, 'error': 'Data provider initialization failed'}), 401
 
-        fyers_indices = {
-            'NIFTY':      'NSE:NIFTY50-INDEX',
-            'BANKNIFTY':  'NSE:NIFTYBANK-INDEX',
-            'FINNIFTY':   'NSE:FINNIFTY-INDEX',
-            'MIDCPNIFTY': 'NSE:MIDCPNIFTY-INDEX',
-            'SENSEX':     'BSE:SENSEX-INDEX',
-        }
-        kite_indices = {
-            'NIFTY': 256265, 'BANKNIFTY': 260105,
-            'FINNIFTY': 257801, 'MIDCPNIFTY': 288009,
-        }
-        if hasattr(current_kite, 'fyers'):
-            instrument_token = fyers_indices.get(symbol, f'NSE:{symbol}-EQ')
-        else:
-            instrument_token = kite_indices.get(symbol, symbol)
+        instrument_token = _ema_daily_token(current_kite, symbol)
 
         warmup_from_str = _ema_warmup_from(start_date_str)
         daily_candles = current_kite.historical_data(

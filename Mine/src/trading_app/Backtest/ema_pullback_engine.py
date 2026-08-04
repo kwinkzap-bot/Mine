@@ -173,6 +173,14 @@ class EmaPullbackEngine:
 
     def run(self):
         df = self.daily_df
+        # State left over when the data runs out, for callers that need to know
+        # what this strategy would be HOLDING right now rather than just what it
+        # traded (the live algo adopts `pending_order` so a signal armed days or
+        # weeks ago is still watched — see ema_confluence_algo._scan_one).
+        # Exactly one of the two can be set: no new order is ever armed while a
+        # position is open, and filling an order clears it.
+        self.pending_order = None   # armed breakout order that never filled
+        self.open_trade    = None   # position still open at the last bar
         if df.empty:
             return [], _summarise([])
 
@@ -257,6 +265,12 @@ class EmaPullbackEngine:
             last = df.iloc[-1]
             trades.append(_make_trade(entry, last['datetime'], float(last['close']), 'DATA_END'))
 
+        # The DATA_END close above is a backtest convention (the trade has to be
+        # booked somewhere); in reality that position is still running, which is
+        # what open_trade reports.
+        self.open_trade    = entry
+        self.pending_order = pending
+
         return trades, _summarise(trades)
 
 
@@ -331,6 +345,13 @@ def _summarise(trades):
         'target_exits':   sum(1 for t in trades if t['exit_reason'] == 'TARGET'),
         'data_end_exits': sum(1 for t in trades if t['exit_reason'] == 'DATA_END'),
     }
+
+
+def summarize_trades(trades):
+    """Public alias of the per-run summary, for callers that assemble a trade
+    list themselves — the All-Stocks scan pools many symbols' trades and
+    summarises the pool (and re-summarises it on ₹ P&L)."""
+    return _summarise(trades)
 
 
 # ── Optimiser (Find Best Params) ───────────────────────────────────────────

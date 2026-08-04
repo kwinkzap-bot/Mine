@@ -19210,15 +19210,15 @@
   {
     "date": "2026-07-28",
     "symbol": "NIFTY",
-    "ce_oi": 73687250,
-    "pe_oi": 68327025,
+    "ce_oi": 73636810,
+    "pe_oi": 68169140,
     "open": 23971.25,
     "high": 24041.15,
     "low": 23954.6,
     "close": 23985.35,
     "vwap": 23999.53,
-    "idx_fut_oi": null,
-    "fii_fut_oi": null,
+    "idx_fut_oi": 20244835,
+    "fii_fut_oi": -205601,
     "FII_Index_futures": -2601.31
   },
   {
@@ -19262,5 +19262,19 @@
     "idx_fut_oi": 13783640,
     "fii_fut_oi": -173113,
     "FII_Index_futures": 2150.4
+  },
+  {
+    "date": "2026-08-03",
+    "symbol": "NIFTY",
+    "ce_oi": 131829425,
+    "pe_oi": 207285845,
+    "open": 24572.7,
+    "high": 24774.3,
+    "low": 24515.15,
+    "close": 24774.3,
+    "vwap": 24580.57,
+    "idx_fut_oi": 13158860,
+    "fii_fut_oi": -150816,
+    "FII_Index_futures": 3617.7
   }
 ]

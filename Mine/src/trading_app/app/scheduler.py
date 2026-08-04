@@ -360,13 +360,16 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
-        # 30-Min Opening Fakeout algo: start at 9:15 AM weekdays
+        # 30-Min Opening Fakeout algo: start at 8:30 AM weekdays — 45 minutes
+        # before the open, so the thread is already up and its data provider
+        # proven working by the time the first candle prints, rather than
+        # finding out at 9:15 that something needs a manual fix.
         self.scheduler.add_job(
             self._start_tmf_monitoring,
             CronTrigger(
                 day_of_week='mon-fri',
-                hour=9,
-                minute=15,
+                hour=8,
+                minute=30,
                 second=0,
                 timezone='Asia/Kolkata',
             ),
@@ -376,12 +379,15 @@ class MarketScheduler:
             misfire_grace_time=120,
         )
 
-        # Watchdog: restart the TMF thread if it crashes mid-day
+        # Watchdog: restart the TMF thread if it crashes mid-day. Starts at
+        # 8 so the pre-open stretch is covered too — that is exactly when a
+        # not-yet-refreshed broker token can abort the thread on its first
+        # try, and a 5-minute retry is what turns that into a non-event.
         self.scheduler.add_job(
             self._watchdog_tmf,
             CronTrigger(
                 day_of_week='mon-fri',
-                hour='9-15',
+                hour='8-15',
                 minute='*/5',
                 second=30,
                 timezone='Asia/Kolkata',
@@ -392,13 +398,14 @@ class MarketScheduler:
             misfire_grace_time=60,
         )
 
-        # EMA Confluence Breakout algo (paper trade, futures): start at 9:15 AM weekdays
+        # EMA Confluence Breakout algo (paper trade, futures): start at 8:30 AM
+        # weekdays, same pre-open head start as the 30-Min Fakeout algo.
         self.scheduler.add_job(
             self._start_ema_confluence_monitoring,
             CronTrigger(
                 day_of_week='mon-fri',
-                hour=9,
-                minute=15,
+                hour=8,
+                minute=30,
                 second=0,
                 timezone='Asia/Kolkata',
             ),
@@ -409,11 +416,12 @@ class MarketScheduler:
         )
 
         # Watchdog: restart the EMA Confluence thread if it crashes mid-day
+        # (from 8, covering the pre-open stretch — see the TMF watchdog).
         self.scheduler.add_job(
             self._watchdog_ema_confluence,
             CronTrigger(
                 day_of_week='mon-fri',
-                hour='9-15',
+                hour='8-15',
                 minute='*/5',
                 second=30,
                 timezone='Asia/Kolkata',
@@ -747,7 +755,11 @@ class MarketScheduler:
                 return  # User clicked Stop — stay stopped until they click Start
             now = datetime.now()
             h, m = now.hour, now.minute
-            in_window = (h > 9 or (h == 9 and m >= 15)) and (h < 15 or (h == 15 and m <= 27))
+            # Opens at 8:30, 45 minutes before the market. The thread idles
+            # until 10:45 (it cannot scan before candles 1-3 have closed), so
+            # the head start costs nothing and buys time to notice a dead
+            # provider or an unrefreshed broker token before it matters.
+            in_window = (h > 8 or (h == 8 and m >= 30)) and (h < 15 or (h == 15 and m <= 27))
             if not in_window:
                 return
             from trading_app.algo.thirty_min_fakeout.tmf_algo import TMFAlgo, get_instance
@@ -789,7 +801,8 @@ class MarketScheduler:
                 return  # User clicked Stop — stay stopped until they click Start
             now = datetime.now()
             h, m = now.hour, now.minute
-            in_window = (h > 9 or (h == 9 and m >= 15)) and (h < 15 or (h == 15 and m <= 27))
+            # 8:30, same pre-open head start as TMF (see _ensure_tmf_running).
+            in_window = (h > 8 or (h == 8 and m >= 30)) and (h < 15 or (h == 15 and m <= 27))
             if not in_window:
                 return
             from trading_app.algo.ema_confluence.ema_confluence_algo import EmaConfluenceAlgo, get_instance
