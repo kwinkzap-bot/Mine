@@ -552,6 +552,8 @@ class MarketScheduler:
                 f"[EMA Narrow Prewarm] Done — {stats['done']}/{stats['total']} stocks "
                 f"({stats['failed']} failed) in {stats['elapsed_sec']:.0f}s"
             )
+            # Mark the day done so the startup catch-up doesn't repeat this run.
+            self._set_prewarm_marker_date(datetime.now().date().isoformat())
         except Exception as e:
             logger.error(f"[EMA Narrow Prewarm] Unexpected error: {e}", exc_info=True)
 
@@ -920,6 +922,97 @@ class MarketScheduler:
         except Exception as e:
             logger.error(f"[HistoricOI Catchup] Unexpected error: {e}", exc_info=True)
 
+    def _prewarm_marker_path(self) -> str:
+        """Marker file recording the last date the EMA Narrow prewarm completed.
+        Lives beside the candle store it describes."""
+        import os
+        from trading_app.filters.candle_store import DATA_DIR
+        return os.path.join(DATA_DIR, '.prewarm_date')
+
+    def _prewarm_marker_date(self) -> Optional[str]:
+        try:
+            with open(self._prewarm_marker_path()) as f:
+                return f.read().strip() or None
+        except OSError:
+            return None  # never run, or store dir not created yet
+
+    def _set_prewarm_marker_date(self, day: str) -> None:
+        try:
+            import os
+            path = self._prewarm_marker_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w') as f:
+                f.write(day)
+        except OSError as e:
+            # Non-fatal: worst case the prewarm runs again on the next restart.
+            logger.warning(f"[EOD Catchup] Could not write prewarm marker: {e}")
+
+    def _run_eod_catchup(self):
+        """Startup recovery for the two post-close jobs.
+
+        fii_sector_snapshot (4:00 PM) and ema_narrow_prewarm (4:05 PM) only fire
+        if this process happens to be alive at that exact minute. Start the app
+        at 4:12 PM — or leave it down all day — and the day is silently lost with
+        no retry (this is what left gaps like Jul 31 / Aug 4). On every startup,
+        run whichever of the two is already due but hasn't happened today.
+
+        Runs the two sequentially for the same reason their crons are staggered
+        5 minutes apart: both hit rate-limited external APIs.
+        """
+        try:
+            from zoneinfo import ZoneInfo
+            now_ist = datetime.now(ZoneInfo('Asia/Kolkata'))
+        except Exception:
+            now_ist = datetime.now()
+
+        if now_ist.weekday() >= 5:
+            return
+
+        today = now_ist.date().isoformat()
+
+        # 4:00 PM FII sector snapshot — skip if today's rows already landed.
+        try:
+            if now_ist.time() >= time(16, 0):
+                from trading_app.service.fii_sector_service import FIISectorService
+                if today in set(FIISectorService.get_periods()):
+                    logger.info(f"[EOD Catchup] FII sector already recorded for {today}")
+                else:
+                    logger.info(f"[EOD Catchup] FII sector missing for {today} — running now")
+                    self._run_fii_sector_task()
+        except Exception as e:
+            logger.error(f"[EOD Catchup] FII sector catch-up failed: {e}", exc_info=True)
+
+        # 4:05 PM EMA Narrow prewarm — only once per day. A same-day re-run is
+        # usually a seconds-long tail refresh, but when the store is stale (the
+        # process was down for a day or more) it is a full 2300-stock download
+        # that takes ~10 minutes and gets throttled 429 by the broker. launchd
+        # restarts this process on crash, so without the marker an evening
+        # restart loop would stack overlapping downloads onto that same
+        # rate-limited API.
+        try:
+            if now_ist.time() >= time(16, 5):
+                if self._prewarm_marker_date() == today:
+                    logger.info(f"[EOD Catchup] EMA Narrow prewarm already ran for {today}")
+                else:
+                    logger.info("[EOD Catchup] Running EMA Narrow prewarm refresh")
+                    self._run_ema_narrow_prewarm_task()  # writes the marker on success
+        except Exception as e:
+            logger.error(f"[EOD Catchup] EMA Narrow prewarm catch-up failed: {e}", exc_info=True)
+
+    def _run_startup_catchup(self):
+        """All startup self-heal, on one background thread so a slow NSE fetch
+        never blocks app startup and the catch-ups don't compete for the same
+        rate-limited APIs at once. Each step is isolated so one failure doesn't
+        skip the rest."""
+        try:
+            self._run_historic_oi_catchup()
+        except Exception as e:
+            logger.error(f"[Startup Catchup] Historic OI step failed: {e}", exc_info=True)
+        try:
+            self._run_eod_catchup()
+        except Exception as e:
+            logger.error(f"[Startup Catchup] EOD step failed: {e}", exc_info=True)
+
 
 # Global scheduler instance
 market_scheduler = MarketScheduler()
@@ -936,25 +1029,26 @@ def init_scheduler(app):
         market_scheduler.start()
         # Startup recovery: if the server restarted during market hours the 9:15 AM
         # cron already passed and the algo thread was never launched. Start it now.
-        market_scheduler._ensure_rtp_running(source='Startup', variant='1m')
-        market_scheduler._ensure_rtp_running(source='Startup', variant='30s')
-        market_scheduler._ensure_rtp_running(source='Startup', variant='3m')
-        market_scheduler._ensure_rtp_running(source='Startup', variant='5m')
+        # Every variant that has an rtp*_algo_start job must be listed here —
+        # 2m was missed when it was added, leaving it dormant on restarts.
+        for variant in ('1m', '30s', '2m', '3m', '5m'):
+            market_scheduler._ensure_rtp_running(source='Startup', variant=variant)
         market_scheduler._ensure_sc_running(source='Startup')
         market_scheduler._ensure_tmf_running(source='Startup')
         market_scheduler._ensure_ema_confluence_running(source='Startup')
-        # Historic OI self-heal: backfill any recent trading day whose 8 PM
-        # record was missed while this process was down. Runs off-thread so a
-        # slow NSE bhavcopy fetch never blocks app startup.
+        # Self-heal for the jobs a late start would have missed: the 8 PM
+        # historic OI record, plus the 4:00 PM FII sector snapshot and 4:05 PM
+        # EMA Narrow prewarm. Runs off-thread so a slow NSE fetch never blocks
+        # app startup.
         try:
             import threading
             threading.Thread(
-                target=market_scheduler._run_historic_oi_catchup,
-                name='historic-oi-catchup',
+                target=market_scheduler._run_startup_catchup,
+                name='startup-catchup',
                 daemon=True,
             ).start()
         except Exception as e:
-            logger.error(f"[HistoricOI Catchup] failed to launch startup thread: {e}")
+            logger.error(f"[Startup Catchup] failed to launch startup thread: {e}")
 
     import atexit
     atexit.register(market_scheduler.stop)
