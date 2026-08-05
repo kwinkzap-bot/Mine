@@ -437,6 +437,26 @@ class OpenInterestService:
                 ''')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_atm_iv_symbol_date ON atm_iv_history(symbol, date)')
 
+                # Strike snapshots for expiries OTHER than the nearest one that
+                # oi_history carries. Kept in its own table so the hot
+                # `SELECT * FROM oi_history` paths don't have to read a second
+                # ~20KB JSON blob per row, and so more expiries can be added
+                # later without another schema change.
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS oi_expiry_snapshots (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp DATETIME NOT NULL,
+                        symbol TEXT NOT NULL,
+                        expiry TEXT NOT NULL,
+                        current_price REAL,
+                        strikes TEXT NOT NULL
+                    )
+                ''')
+                cursor.execute(
+                    'CREATE INDEX IF NOT EXISTS idx_oi_expiry_snap '
+                    'ON oi_expiry_snapshots(symbol, expiry, timestamp)'
+                )
+
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS fii_sector_limits (
                         id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -637,6 +657,74 @@ class OpenInterestService:
             logger.error(f"Error detecting IV crush for {symbol}: {e}")
             return False
 
+    @staticmethod
+    def _simplify_strikes(strikes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Trim a live strike chain down to the fields the history tables store."""
+        simple = []
+        for s in strikes:
+            expiry = s.get('expiry_date')
+            simple.append({
+                'strike':   s.get('strike'),
+                'ce_oi':    s.get('ce_oi'),
+                'pe_oi':    s.get('pe_oi'),
+                'ce_change': s.get('ce_change_in_oi'),
+                'pe_change': s.get('pe_change_in_oi'),
+                'ce_iv':    s.get('ce_iv'),
+                'pe_iv':    s.get('pe_iv'),
+                'ce_ltp':   s.get('ce_ltp'),
+                'pe_ltp':   s.get('pe_ltp'),
+                'ce_vega':  s.get('ce_vega'),   # Fyers live Greek (per share, per 1-unit IV)
+                'pe_vega':  s.get('pe_vega'),
+                'expiry':   expiry.isoformat() if hasattr(expiry, 'isoformat') else expiry
+            })
+        return simple
+
+    @staticmethod
+    def chain_expiry(data: Dict[str, Any]) -> Optional[str]:
+        """The expiry (ISO date) a ``get_open_interest_data`` payload is for."""
+        for s in data.get('strikes') or []:
+            e = s.get('expiry_date')
+            if e:
+                return e.isoformat() if hasattr(e, 'isoformat') else str(e)
+        return None
+
+    def save_expiry_snapshot(self, symbol: str, data: Dict[str, Any],
+                             skip_expiry: Optional[str] = None) -> Optional[str]:
+        """Store a non-nearest expiry's strike chain in ``oi_expiry_snapshots``.
+
+        ``data`` is a ``get_open_interest_data`` payload fetched with
+        ``expiry_offset >= 1``. The expiry is read off the chain itself rather
+        than assumed, and ``skip_expiry`` (the chain oi_history already holds)
+        drops the write when the fetch fell back to that same expiry — which is
+        what a CSV fallback with only one listed expiry produces.
+
+        Returns the stored expiry (ISO date) or None when nothing was saved.
+        """
+        try:
+            strikes = data.get('strikes') or []
+            simple_strikes = self._simplify_strikes(strikes)
+            expiry = next((s['expiry'] for s in simple_strikes if s.get('expiry')), None)
+            if not expiry:
+                logger.warning(f"[OI] {symbol}: expiry snapshot has no expiry tag — skipping")
+                return None
+            if skip_expiry and expiry == skip_expiry:
+                logger.info(f"[OI] {symbol}: next-expiry fetch returned the nearest chain "
+                            f"({expiry}) — not duplicating it")
+                return None
+
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute('''
+                    INSERT INTO oi_expiry_snapshots
+                    (timestamp, symbol, expiry, current_price, strikes)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (datetime.now().isoformat(), symbol, expiry,
+                      data.get('current_price', 0), json.dumps(simple_strikes)))
+                conn.commit()
+            return expiry
+        except Exception as e:
+            logger.error(f"Failed to save expiry snapshot for {symbol}: {e}")
+            return None
+
     def save_oi_snapshot(self, symbol: str, data: Dict[str, Any]):
         """
         Save a snapshot of the current OI data to the database.
@@ -663,36 +751,18 @@ class OpenInterestService:
             iv_percentile = data.get('iv_percentile', 0)
             atm_iv = data.get('atm_iv', 0)
             
-            # Extract top active strikes (e.g., closest 10 strikes to ATM)
-            strikes = data.get('strikes', [])
-            active_strikes = []
-            
             # Simple logic: save all strikes for now (or top 20 ATM) to avoid huge DB size
             # For comprehensive history, saving simplified version of strikes
-            simple_strikes = []
-            for s in strikes:
-                simple_strikes.append({
-                    'strike':   s.get('strike'),
-                    'ce_oi':    s.get('ce_oi'),
-                    'pe_oi':    s.get('pe_oi'),
-                    'ce_change': s.get('ce_change_in_oi'),
-                    'pe_change': s.get('pe_change_in_oi'),
-                    'ce_iv':    s.get('ce_iv'),
-                    'pe_iv':    s.get('pe_iv'),
-                    'ce_ltp':   s.get('ce_ltp'),
-                    'pe_ltp':   s.get('pe_ltp'),
-                    'ce_vega':  s.get('ce_vega'),   # Fyers live Greek (per share, per 1-unit IV)
-                    'pe_vega':  s.get('pe_vega'),
-                    'expiry':   s.get('expiry_date').isoformat() if hasattr(s.get('expiry_date'), 'isoformat') else s.get('expiry_date')
-                })
-            
-            active_strikes_json = json.dumps(simple_strikes)
+            active_strikes_json = json.dumps(self._simplify_strikes(data.get('strikes', [])))
 
             # Note: oi_history intentionally stores the CURRENT (nearest) expiry,
-            # including on expiry day — it feeds the dashboard PCR/Vega tabs and
-            # the live /open-interest chain, which track the actively traded
-            # contract. Only the EOD historic recorder (oi_historic_data.py)
-            # rolls to the next expiry, and it does not write to this table.
+            # including on expiry day — it feeds the dashboard PCR tab and the
+            # live /open-interest chain, which track the actively traded
+            # contract. Other expiries go to oi_expiry_snapshots (see
+            # save_expiry_snapshot), which is what lets the Vega block plot a
+            # non-0-DTE series on expiry day. Only the EOD historic recorder
+            # (oi_historic_data.py) rolls to the next expiry, and it does not
+            # write to this table.
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
@@ -898,7 +968,73 @@ class OpenInterestService:
                 opt_type, ltp, spot, K, expiry).get('Vega', 0.0)
         return 0.0
 
-    def get_intraday_vega_history(self, symbol: str, date_str: str) -> List[Dict[str, Any]]:
+    def get_vega_expiries(self, symbol: str, date_str: str) -> List[Dict[str, Any]]:
+        """Expiries that have a stored intraday chain for ``date_str``, nearest first.
+
+        The nearest expiry lives in ``oi_history.active_strikes``; every other
+        expiry the recorder captured lives in ``oi_expiry_snapshots``. Each entry
+        carries the source table so the series loader knows where to read from.
+        """
+        try:
+            session_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            return []
+
+        found: Dict[str, str] = {}   # expiry -> source table
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute('''
+                    SELECT active_strikes FROM oi_history
+                    WHERE symbol = ?
+                      AND date(timestamp) = ?
+                      AND active_strikes IS NOT NULL
+                      AND active_strikes != '[]'
+                    ORDER BY timestamp ASC
+                    LIMIT 1
+                ''', (symbol, date_str)).fetchone()
+                if row:
+                    for s in json.loads(row['active_strikes'] or '[]'):
+                        if s.get('expiry'):
+                            found[s['expiry']] = 'oi_history'
+                            break
+                for r in conn.execute('''
+                    SELECT DISTINCT expiry FROM oi_expiry_snapshots
+                    WHERE symbol = ? AND date(timestamp) = ?
+                ''', (symbol, date_str)).fetchall():
+                    if r['expiry']:
+                        found.setdefault(r['expiry'], 'oi_expiry_snapshots')
+        except Exception as e:
+            logger.error(f'[OI] get_vega_expiries error: {e}')
+            return []
+
+        out = []
+        for expiry, source in found.items():
+            try:
+                dte = (datetime.strptime(expiry, '%Y-%m-%d').date() - session_date).days
+            except (ValueError, TypeError):
+                continue
+            out.append({'expiry': expiry, 'dte': dte, 'source': source})
+        return sorted(out, key=lambda x: x['expiry'])
+
+    @staticmethod
+    def _default_vega_expiry(expiries: List[Dict[str, Any]]) -> Optional[str]:
+        """Nearest expiry with more than a day left to run.
+
+        A 0-DTE (or last-session) chain makes the Vega series incomparable to
+        the reference: vega collapses toward zero into expiry, so the curve
+        reads as noise. Fall back to the furthest stored expiry when every
+        candidate is that close.
+        """
+        if not expiries:
+            return None
+        for e in expiries:
+            if e['dte'] > 1:
+                return e['expiry']
+        return expiries[-1]['expiry']
+
+    def get_intraday_vega_history(self, symbol: str, date_str: str,
+                                  expiry: Optional[str] = None) -> Dict[str, Any]:
         """Return per-minute Call/Put Vega time-series (StockMojo-style Vega Analysis).
 
         Construction — cumulative OI-weighted vega CHANGE from the 9:15 baseline:
@@ -925,33 +1061,71 @@ class OpenInterestService:
 
         SCALE renders the aggregate in ₹ Crore-ish units; tune it to match the
         desired y-axis range without changing the shape of the curves.
+
+        The series is computed for ONE expiry. ``expiry`` (ISO date) picks it;
+        when omitted it defaults to the nearest expiry with more than a day to
+        run, so expiry day plots next week's chain rather than a 0-DTE reading.
+        Returns {'series': [...], 'expiry': <selected>, 'expiries': [...]}.
         """
         SCALE = 5e6  # tuned to StockMojo-style magnitude; shape is scale-invariant
+
+        expiries = self.get_vega_expiries(symbol, date_str)
+        available = [{'expiry': e['expiry'], 'dte': e['dte']} for e in expiries]
+        selected = None
+        if expiry:
+            selected = next((e for e in expiries if e['expiry'] == expiry), None)
+        if selected is None:
+            default_expiry = self._default_vega_expiry(expiries)
+            selected = next((e for e in expiries if e['expiry'] == default_expiry), None)
+        if selected is None:
+            return {'series': [], 'expiry': None, 'expiries': available}
+
+        empty = {'series': [], 'expiry': selected['expiry'], 'expiries': available}
 
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT timestamp, current_price, active_strikes
-                    FROM oi_history
-                    WHERE symbol = ?
-                      AND date(timestamp) = ?
-                      AND time(timestamp) BETWEEN '09:15:00' AND '15:30:00'
-                      AND current_price > 0
-                      AND active_strikes IS NOT NULL
-                      AND active_strikes != '[]'
-                    ORDER BY timestamp ASC
-                ''', (symbol, date_str))
+                if selected['source'] == 'oi_history':
+                    cursor.execute('''
+                        SELECT timestamp, current_price, active_strikes AS strikes
+                        FROM oi_history
+                        WHERE symbol = ?
+                          AND date(timestamp) = ?
+                          AND time(timestamp) BETWEEN '09:15:00' AND '15:30:00'
+                          AND current_price > 0
+                          AND active_strikes IS NOT NULL
+                          AND active_strikes != '[]'
+                        ORDER BY timestamp ASC
+                    ''', (symbol, date_str))
+                else:
+                    cursor.execute('''
+                        SELECT timestamp, current_price, strikes
+                        FROM oi_expiry_snapshots
+                        WHERE symbol = ?
+                          AND expiry = ?
+                          AND date(timestamp) = ?
+                          AND time(timestamp) BETWEEN '09:15:00' AND '15:30:00'
+                          AND current_price > 0
+                          AND strikes IS NOT NULL
+                          AND strikes != '[]'
+                        ORDER BY timestamp ASC
+                    ''', (symbol, selected['expiry'], date_str))
                 rows = cursor.fetchall()
 
             if not rows:
-                return []
+                return empty
 
-            # ── OI baseline from the 9:15 AM first snapshot ───────────────────
+            def _chain(row) -> List[Dict[str, Any]]:
+                """Strikes of the selected expiry only (rows are single-expiry,
+                but a mis-tagged strike must never leak into the aggregate)."""
+                return [s for s in json.loads(row['strikes'] or '[]')
+                        if not s.get('expiry') or s['expiry'] == selected['expiry']]
+
+            # ── OI baseline from the first snapshot of this expiry ────────────
             baseline_ce_oi: dict = {}
             baseline_pe_oi: dict = {}
-            for s in json.loads(rows[0]['active_strikes'] or '[]'):
+            for s in _chain(rows[0]):
                 k = s.get('strike')
                 if k is not None:
                     baseline_ce_oi[k] = s.get('ce_oi') or 0
@@ -968,7 +1142,7 @@ class OpenInterestService:
                     if minute_ts in seen:
                         continue
 
-                    strikes       = json.loads(row['active_strikes'] or '[]')
+                    strikes       = _chain(row)
                     spot          = row['current_price']
                     call_vega_sum = 0.0
                     put_vega_sum  = 0.0
@@ -986,12 +1160,12 @@ class OpenInterestService:
                             continue
 
                         K = float(strike)
-                        expiry = s.get('expiry')
+                        strike_expiry = s.get('expiry') or selected['expiry']
 
                         # ── Per-share vega: live greek → stored IV → LTP inversion
                         if d_ce != 0:
                             ce_v = self._strike_vega(
-                                s, 'CE', 'ce_vega', 'ce_iv', 'ce_ltp', spot, K, expiry)
+                                s, 'CE', 'ce_vega', 'ce_iv', 'ce_ltp', spot, K, strike_expiry)
                             if ce_v > 0:
                                 call_vega_sum += ce_v * d_ce
                             if s.get('ce_vega') is None:
@@ -999,7 +1173,7 @@ class OpenInterestService:
 
                         if d_pe != 0:
                             pe_v = self._strike_vega(
-                                s, 'PE', 'pe_vega', 'pe_iv', 'pe_ltp', spot, K, expiry)
+                                s, 'PE', 'pe_vega', 'pe_iv', 'pe_ltp', spot, K, strike_expiry)
                             if pe_v > 0:
                                 put_vega_sum  += pe_v * d_pe
                             if s.get('pe_vega') is None:
@@ -1018,10 +1192,14 @@ class OpenInterestService:
                 except Exception:
                     continue
 
-            return sorted(seen.values(), key=lambda x: x['time'])
+            return {
+                'series':   sorted(seen.values(), key=lambda x: x['time']),
+                'expiry':   selected['expiry'],
+                'expiries': available,
+            }
         except Exception as e:
             logger.error(f'[OI] get_intraday_vega_history error: {e}')
-            return []
+            return empty
 
     def get_latest_oi_from_db(self, symbol: str, max_age_minutes: int = 5) -> Optional[Dict[str, Any]]:
         """
@@ -1156,21 +1334,33 @@ class OpenInterestService:
             logger.error(f"Failed to retrieve latest OI from DB: {e}")
             return None
     
-    def get_open_interest_data(self, symbol: str = 'NIFTY', use_next_expiry: bool = False) -> Dict[str, Any]:
+    def get_open_interest_data(self, symbol: str = 'NIFTY', use_next_expiry: bool = False,
+                               expiry_offset: int = 0) -> Dict[str, Any]:
         """
         Get open interest data for options strikes.
-        
+
         Fetches current option chain data and processes open interest information.
-        
+
         Args:
             symbol: Trading symbol (NIFTY, BANKNIFTY, FINNIFTY)
-            
+            use_next_expiry: Skip an expiry that falls today (EOD historic recorder)
+            expiry_offset: How many expiries past the one that would otherwise be
+                selected to walk — 0 = nearest (default), 1 = the weekly after it.
+                Used by the OI recorder to snapshot a second chain so the Vega
+                block has a non-0-DTE series on expiry day.
+
         Returns:
             Dictionary with OI data for CE and PE strikes
         """
         try:
             symbol = symbol.strip().upper()
-            
+            expiry_offset = max(0, int(expiry_offset or 0))
+            # Only the nearest, actively traded chain may seed or read the 9:15
+            # opening-OI cache and the option-token cache: both are keyed by
+            # symbol/strike with no expiry dimension, so a farther chain would
+            # overwrite them with the wrong contracts.
+            is_nearest_chain = (expiry_offset == 0 and not use_next_expiry)
+
             if symbol in self.SYMBOL_CONFIG:
                 config = self.SYMBOL_CONFIG[symbol]
                 logger.info(f"Using static config for {symbol}")
@@ -1271,46 +1461,60 @@ class OpenInterestService:
                             if not expiry_dt:
                                 expiry_dt = datetime.now().date()
 
-                            # On expiry day, re-fetch the native chain for the NEXT expiry
-                            # via the optionchain `timestamp` param. The CSV fallback has
-                            # no OI column and quote() enrichment only covers the nearest
-                            # expiry, so the CSV path records all-zero OI on expiry day.
-                            rolled_to_next_expiry = False
-                            if use_next_expiry and expiry_dt <= datetime.now().date():
-                                today_d = datetime.now().date()
-                                next_ts, next_dt = None, None
+                            # Re-fetch the native chain for a farther expiry via the
+                            # optionchain `timestamp` param — the only way to pull a
+                            # non-nearest chain. Needed on expiry day (use_next_expiry)
+                            # and whenever a second chain is wanted (expiry_offset >= 1).
+                            # The CSV fallback has no OI column and quote() enrichment
+                            # only covers the nearest expiry, so the CSV path records
+                            # all-zero OI for these.
+                            today_d = datetime.now().date()
+                            skip_today = use_next_expiry and expiry_dt <= today_d
+                            rolled_to_other_expiry = False
+                            if skip_today or expiry_offset > 0:
+                                dated = []
                                 for ed in (chain_data.get('expiryData') or []):
                                     try:
                                         ts = int(ed.get('expiry'))
-                                        d = datetime.fromtimestamp(ts).date()
+                                        dated.append((ts, datetime.fromtimestamp(ts).date()))
                                     except (TypeError, ValueError):
                                         continue
-                                    if d > today_d:
-                                        next_ts, next_dt = ts, d
-                                        break
-                                options_list = None
-                                if next_ts:
-                                    logger.info(
-                                        f"[OI] {symbol}: expiry is today ({expiry_dt}), "
-                                        f"re-fetching native chain for next expiry {next_dt}"
-                                    )
-                                    next_resp = self.kite.fyers.optionchain(data={
-                                        "symbol": root_token,
-                                        "strikecount": 50,
-                                        "timestamp": str(next_ts),
-                                    })
-                                    if (next_resp and next_resp.get('s') == 'ok'
-                                            and next_resp.get('data', {}).get('optionsChain')):
-                                        options_list = next_resp['data']['optionsChain']
-                                        expiry_dt = next_dt
-                                        rolled_to_next_expiry = True
-                                if not options_list:
-                                    logger.warning(
-                                        f"[OI] {symbol}: next-expiry chain unavailable, "
-                                        f"falling back to CSV (OI may be zero)"
-                                    )
+                                dated.sort(key=lambda x: x[1])
+                                eligible = [(ts, d) for ts, d in dated
+                                            if (d > today_d if skip_today else d >= expiry_dt)]
+                                # Clamp: an offset past the last listed expiry
+                                # takes the furthest one rather than nothing.
+                                target_ts, target_dt = (
+                                    eligible[min(expiry_offset, len(eligible) - 1)]
+                                    if eligible else (None, None))
+                                if target_dt == expiry_dt:
+                                    pass  # default chain already is the wanted expiry
+                                else:
+                                    options_list = None
+                                    if target_ts:
+                                        logger.info(
+                                            f"[OI] {symbol}: re-fetching native chain for "
+                                            f"expiry {target_dt} (default was {expiry_dt}, "
+                                            f"offset={expiry_offset})"
+                                        )
+                                        next_resp = self.kite.fyers.optionchain(data={
+                                            "symbol": root_token,
+                                            "strikecount": 50,
+                                            "timestamp": str(target_ts),
+                                        })
+                                        if (next_resp and next_resp.get('s') == 'ok'
+                                                and next_resp.get('data', {}).get('optionsChain')):
+                                            options_list = next_resp['data']['optionsChain']
+                                            expiry_dt = target_dt
+                                            rolled_to_other_expiry = True
+                                    if not options_list:
+                                        logger.warning(
+                                            f"[OI] {symbol}: chain for expiry {target_dt} "
+                                            f"unavailable, falling back to CSV (OI may be zero)"
+                                        )
                             if options_list:
                                 instruments = []
+                                logged_opt_keys = False
                                 for opt in options_list:
                                     # Map Fyers 'CALL'/'PUT' to internal 'CE'/'PE'
                                     f_type = (opt.get('optionType') or opt.get('option_type') or '').upper()
@@ -1319,12 +1523,19 @@ class OpenInterestService:
                                     # Handle strike price variations
                                     strike = float(opt.get('strikePrice') or opt.get('strike_price') or 0)
 
-                                    # Fyers API v3 exposes live greeks including vega
+                                    # Fyers API v3 is documented to expose live greeks
+                                    # including vega, but the chain has only ever
+                                    # returned ltp/oi fields — every stored ce_vega/
+                                    # pe_vega is null, so the Vega block falls back to
+                                    # Black-Scholes from the inverted IV.
                                     g = opt.get('greeks') or {}
                                     raw_vega = (g.get('vega') if isinstance(g, dict) else None) or opt.get('vega')
-                                    # Debug: log keys on first option to find vega field name
-                                    if not instruments:
-                                        logger.info(f"[OI] Fyers opt keys: {list(opt.keys())} | greeks={g}")
+                                    # Debug: log the first REAL option row — optionsChain[0]
+                                    # is the underlying index, which never carries oi or
+                                    # greeks and so says nothing about the option fields.
+                                    if inst_type in ('CE', 'PE') and not logged_opt_keys:
+                                        logger.info(f"[OI] Fyers option row keys: {list(opt.keys())} | greeks={g}")
+                                        logged_opt_keys = True
                                     instruments.append({
                                         'instrument_token': opt.get('symbol'),
                                         'tradingsymbol':    opt.get('symbol', '').split(':')[-1],
@@ -1346,7 +1557,7 @@ class OpenInterestService:
                                 # option symbols through it via find_option_symbol(). On expiry
                                 # day the recorder's rolled next-expiry chain must not overwrite
                                 # it, or premium charts would plot next week's contracts.
-                                if not rolled_to_next_expiry:
+                                if is_nearest_chain and not rolled_to_other_expiry:
                                     from trading_app.service.fyers_data_service import _FYERS_OPTION_TOKEN_CACHE, _FYERS_OPTION_TOKEN_LOCK
                                     with _FYERS_OPTION_TOKEN_LOCK:
                                         for inst in instruments:
@@ -1384,7 +1595,9 @@ class OpenInterestService:
                         return {'success': False, 'error': f'Failed to get instruments: {str(e)}'}
             
             # Step 4: Get available strikes for symbol
-            strikes_data = self._get_available_strikes(instruments, symbol, current_price, config, use_next_expiry=use_next_expiry)
+            strikes_data = self._get_available_strikes(instruments, symbol, current_price, config,
+                                                       use_next_expiry=use_next_expiry,
+                                                       expiry_offset=expiry_offset)
             
             if not strikes_data:
                 return {
@@ -1396,7 +1609,8 @@ class OpenInterestService:
             
             # Step 4: Fetch quotes for all strike tokens
             try:
-                oi_data = self._fetch_open_interest_data(strikes_data, current_price)
+                oi_data = self._fetch_open_interest_data(strikes_data, current_price,
+                                                         use_opening_oi_cache=is_nearest_chain)
             except Exception as e:
                 logger.error(f"Failed to fetch OI data: {e}", exc_info=True)
                 return {
@@ -1457,7 +1671,8 @@ class OpenInterestService:
     
     def _get_available_strikes(self, instruments: List[Dict[str, Any]], symbol: str,
                               current_price: float, config: Dict[str, Any],
-                              use_next_expiry: bool = False) -> List[Dict[str, Any]]:
+                              use_next_expiry: bool = False,
+                              expiry_offset: int = 0) -> List[Dict[str, Any]]:
         """
         Get available strikes for a symbol similar to KiteDataFetchService.get_available_strikes()
         
@@ -1555,18 +1770,18 @@ class OpenInterestService:
             # Select nearest future expiry - expiry is already a date object
             today = datetime.now().date()
             # When use_next_expiry=True (historic recording on expiry day),
-            # skip today's expiry and pick the next one.
+            # skip today's expiry and pick the next one. expiry_offset then
+            # walks that many expiries further out (1 = the following weekly).
             expiry_threshold = today + timedelta(days=1) if use_next_expiry else today
-            current_expiry = None
+            eligible = [e for e in expiries if e >= expiry_threshold]
 
-            for expiry_date in expiries:
-                if expiry_date >= expiry_threshold:
-                    current_expiry = expiry_date
-                    break
-            
-            if not current_expiry:
+            if len(eligible) > expiry_offset:
+                current_expiry = eligible[expiry_offset]
+            elif eligible:
+                current_expiry = eligible[-1]
+            else:
                 current_expiry = expiries[-1]
-            
+
             logger.info(f"Using expiry: {current_expiry} (type: {type(current_expiry).__name__})")
             
             # Group by strike and collect CE/PE tokens
@@ -1627,15 +1842,20 @@ class OpenInterestService:
             logger.error(f"Error getting available strikes: {e}", exc_info=True)
             return []
     
-    def _fetch_open_interest_data(self, strikes_data: List[Dict[str, Any]], 
-                                 current_price: float) -> Dict[str, Any]:
+    def _fetch_open_interest_data(self, strikes_data: List[Dict[str, Any]],
+                                 current_price: float,
+                                 use_opening_oi_cache: bool = True) -> Dict[str, Any]:
         """
         Fetch OI data from Kite quotes API using pre-collected tokens.
-        
+
         Args:
             strikes_data: List of strikes with CE/PE tokens
             current_price: Current underlying price
-            
+            use_opening_oi_cache: Read/seed the 9:15 opening-OI cache. False for
+                any chain that is not the nearest expiry — the cache is keyed by
+                symbol+strike only, so a farther chain would both read the wrong
+                baseline and overwrite the live chain's opening OI.
+
         Returns:
             Dictionary with OI data organized by strike
         """
@@ -1763,7 +1983,8 @@ class OpenInterestService:
                                 strikes_oi[strike]['ce_oi'] = current_ce_oi
                                 
                                 # Get opening OI from cache for accurate change calculation
-                                cached_opening_oi = opening_oi_cache.get_opening_oi(self._current_symbol, strike, 'CE')
+                                cached_opening_oi = (opening_oi_cache.get_opening_oi(self._current_symbol, strike, 'CE')
+                                                     if use_opening_oi_cache else None)
                                 
                                 # Get opening OI value - try multiple sources
                                 # IMPORTANT: opening_oi should be the OI at market open (9:15 AM)
@@ -1843,7 +2064,8 @@ class OpenInterestService:
                                 strikes_oi[strike]['pe_oi'] = current_pe_oi
                                 
                                 # Get opening OI from cache for accurate change calculation
-                                cached_opening_oi = opening_oi_cache.get_opening_oi(self._current_symbol, strike, 'PE')
+                                cached_opening_oi = (opening_oi_cache.get_opening_oi(self._current_symbol, strike, 'PE')
+                                                     if use_opening_oi_cache else None)
                                 
                                 # Get opening OI value - try multiple sources
                                 # IMPORTANT: opening_oi should be the OI at market open (9:15 AM)
@@ -1946,7 +2168,7 @@ class OpenInterestService:
             market_open = dt_time(9, 15)
             market_open_end = dt_time(9, 20)
             
-            is_cache_window = market_open <= current_time <= market_open_end
+            is_cache_window = use_opening_oi_cache and market_open <= current_time <= market_open_end
             is_already_cached = opening_oi_cache.is_cached_today(self._current_symbol)
             logger.info(f"Cache Status: time={current_time}, window={is_cache_window}, already_cached={is_already_cached}")
             
