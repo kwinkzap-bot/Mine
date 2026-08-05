@@ -904,15 +904,15 @@ class OpenInterestService:
         Construction — cumulative OI-weighted vega CHANGE from the 9:15 baseline:
 
           For each strike:  Δoi_ce = oi_ce_now − oi_ce_0915   (in shares)
-          call_vega = +Σ(vega_ce × Δoi_ce) / SCALE   (green, above zero)
-          put_vega  = −Σ(vega_pe × Δoi_pe) / SCALE   (red,  below zero)
+          call_vega = −Σ(vega_ce × Δoi_ce) / SCALE   (green, below zero)
+          put_vega  = +Σ(vega_pe × Δoi_pe) / SCALE   (red,   above zero)
           diff      =  put_vega − call_vega           (Put − Call Difference)
 
         Sign convention (matches StockMojo "Vega Analysis"):
-          Call side is plotted with its natural sign — call OI building up
-          (Δoi_ce > 0) reads as positive/green; call OI unwinding reads negative.
-          Put side is negated purely for chart layout, so put writing
-          (Δoi_pe > 0) reads as negative/red below zero.
+          The CALL side is negated, so call writing (Δoi_ce > 0) reads as
+          negative — the green curve sits below zero — and call unwinding
+          lifts it above zero. The put side keeps its natural sign, so put
+          writing (Δoi_pe > 0) reads as positive/red above zero.
         Because it is a change-from-open, both call_vega and put_vega start at
         exactly 0.00 at 9:15 AM and either side can be positive or negative.
 
@@ -923,10 +923,21 @@ class OpenInterestService:
           3. Full LTP → implied volatility → Black-Scholes vega inversion.
         Snapshots that rely on 2 or 3 are flagged estimated=True.
 
-        SCALE renders the aggregate in ₹ Crore-ish units; tune it to match the
-        desired y-axis range without changing the shape of the curves.
+        Units: vega is ₹ per share per 1% IV move and ΔOI is in shares, so the
+        raw sum is ₹ per 1% IV move and SCALE = 1e7 makes the series a true
+        ₹ Crore figure — which is what the "Cr" in the block's header claims.
+
+        On matching StockMojo exactly: measured against a StockMojo capture of
+        the same session and expiry (5 Aug 2026, 11 Aug expiry), this formula
+        correlates ~0.51 on the call side and ~0.48 on the put side — the same
+        turning points, not the same numbers. Alternatives were tested against
+        that capture and are worse, not better: vega×OI×ΔIV correlates higher
+        on calls (0.76) but only fits if the two sides take opposite scales,
+        which no single definition can; Δ(vega×OI) gives 0.48/0.56; OI×ΔIV
+        gives 0.83/0.10. Their exact definition is not published, so treat this
+        as a same-shape indicator rather than a reproduction.
         """
-        SCALE = 5e6  # tuned to StockMojo-style magnitude; shape is scale-invariant
+        SCALE = 1e7  # ₹ → ₹ Crore; shape is scale-invariant
 
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -948,7 +959,25 @@ class OpenInterestService:
             if not rows:
                 return []
 
-            # ── OI baseline from the 9:15 AM first snapshot ───────────────────
+            # ── Keep a single expiry's chain ──────────────────────────────────
+            # A day's snapshots are not guaranteed to be one chain: the weekly
+            # roll lands mid-session, and a failed expiry lookup used to stamp
+            # rows with today's date. Two expiries differ in both OI scale and
+            # vega, so blending them produces steps that are pure bookkeeping.
+            # The latest snapshot's expiry is the one being traded now.
+            def _row_expiry(row):
+                for s in json.loads(row['active_strikes'] or '[]'):
+                    if s.get('expiry'):
+                        return s['expiry']
+                return None
+
+            target_expiry = _row_expiry(rows[-1])
+            if target_expiry:
+                rows = [r for r in rows if _row_expiry(r) == target_expiry]
+            if not rows:
+                return []
+
+            # ── OI baseline from the day's first snapshot of that chain ───────
             baseline_ce_oi: dict = {}
             baseline_pe_oi: dict = {}
             for s in json.loads(rows[0]['active_strikes'] or '[]'):
@@ -1005,8 +1034,9 @@ class OpenInterestService:
                             if s.get('pe_vega') is None:
                                 estimated = True
 
-                    call_vega = round(call_vega_sum / SCALE, 2)   # call plotted with natural sign
-                    put_vega  = round(-put_vega_sum / SCALE, 2)   # put negated for chart layout
+                    # + 0.0 normalises the 9:15 baseline away from "-0.00"
+                    call_vega = round(-call_vega_sum / SCALE, 2) + 0.0  # negated → green below zero
+                    put_vega  = round(put_vega_sum / SCALE, 2) + 0.0    # natural sign → red above zero
                     seen[minute_ts] = {
                         'time':      minute_ts,
                         'price':     spot,
@@ -1267,8 +1297,38 @@ class OpenInterestService:
                                     except:
                                         pass
                             
+                            # The real source on Fyers v3: neither the chain root nor
+                            # the individual options carry an expiry (an option dict is
+                            # just ask/bid/ltp/strike_price/option_type/symbol...), so
+                            # both blocks above no-op and this is what actually resolves
+                            # the expiry. `expiryData` is a list of {date, expiry:<unix>}
+                            # ordered nearest-first — the same field the next-expiry roll
+                            # below already reads.
+                            #
+                            # Falling through to today() instead is not a harmless
+                            # default: expiry feeds calculate_time_to_expiry(), so T≈0
+                            # inflates every IV inverted from an LTP (ATM NIFTY read 52%
+                            # against a true 11.9%) and collapses every Black-Scholes
+                            # vega. That is stored into active_strikes and is what the
+                            # Vega Analysis block reads back.
+                            if not expiry_dt:
+                                today_d = datetime.now().date()
+                                for ed in (chain_data.get('expiryData') or []):
+                                    try:
+                                        d = datetime.fromtimestamp(int(ed.get('expiry'))).date()
+                                    except (TypeError, ValueError):
+                                        continue
+                                    if d >= today_d:
+                                        expiry_dt = d
+                                        break
+
                             # If still None, use today as last resort for Native API
                             if not expiry_dt:
+                                logger.warning(
+                                    f"[OI] {symbol}: could not resolve chain expiry from the "
+                                    f"Fyers response (expiryData={chain_data.get('expiryData')!r}); "
+                                    f"falling back to today — IV and vega will be unusable"
+                                )
                                 expiry_dt = datetime.now().date()
 
                             # On expiry day, re-fetch the native chain for the NEXT expiry

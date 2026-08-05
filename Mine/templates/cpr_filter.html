@@ -22,6 +22,9 @@
         <button class="scanner-tab-btn" data-tab="ema-touch-all" onclick="switchScannerTab('ema-touch-all')">
             <span class="tab-icon">🎯</span> EMA Touch All
         </button>
+        <button class="scanner-tab-btn" data-tab="candlestick" onclick="switchScannerTab('candlestick')">
+            <span class="tab-icon">🕯️</span> Candlesticks
+        </button>
     </div>
 
     <!-- Right side: CPR Controls (visible when CPR tab is active) -->
@@ -95,6 +98,23 @@
         </select>
         <input type="date" id="emaTouchAllDateFilter" class="date-picker" title="Select analysis date">
         <button id="ema-touch-all-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
+    </div>
+
+    <!-- Right side: Candlestick Controls (visible when that tab is active) -->
+    <div id="candlestick-header-controls" class="header-controls-container"
+        style="display: none; gap: 8px; align-items: center;">
+        <select id="candleTimeframe" class="date-picker tf-picker" title="Candle timeframe">
+            <option value="daily" selected>Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+        </select>
+        <select id="candlePattern" class="date-picker tf-picker" title="Candlestick pattern">
+            <option value="all" selected>All Patterns</option>
+            <option value="bullish_engulfing">Bullish Engulfing</option>
+            <option value="bearish_engulfing">Bearish Engulfing</option>
+        </select>
+        <input type="date" id="candleDateFilter" class="date-picker" title="Select analysis date">
+        <button id="candlestick-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
     </div>
 </div>
 
@@ -360,6 +380,39 @@
             EMA 20, 50, 100 and 200 within its high–low range.</div>
     </div>
 </div>
+
+<!-- Candlesticks Section — futures watchlist only, one grid with the pattern
+     as a column; the Pattern dropdown narrows it client-side. -->
+<div id="candlestick-scanner-content" style="display: none;">
+    <div class="ema-section-label">
+        <span class="ema-tf-badge daily-badge" id="candle-tf-badge">📆 Daily</span>
+        <span class="ema-section-title">Candlesticks — futures watchlist, latest candle engulfs the
+            previous candle's body (bullish / bearish)</span>
+    </div>
+    <div class="results-row">
+        <div id="candlestickResults" class="results results-hidden results-block">
+            <div class="dg-card">
+                <div class="dg-card-hdr">
+                    <span class="dg-card-title" id="candleCardTitle">🕯️ Daily Engulfing Candles</span>
+                    <span class="dg-card-meta dg-badge dg-badge--neutral" id="candlestickCount">(0)</span>
+                </div>
+                <div id="candlestickGrid"></div>
+                <div id="candlestickLoader"></div>
+            </div>
+        </div>
+    </div>
+    <!-- Coverage note sits OUTSIDE #candlestickResults, which is hidden when
+         there are no matches — exactly when "0 matches, N skipped" matters. -->
+    <div id="candlestickFootnote"></div>
+
+    <!-- Empty State -->
+    <div id="candlestick-empty-state" class="ema-empty-state ema-hidden">
+        <div class="ema-empty-icon">🕯️</div>
+        <div class="ema-empty-title">No engulfing candles found</div>
+        <div class="ema-empty-sub">No symbol on the futures watchlist formed a bullish or bearish
+            engulfing candle on the selected timeframe.</div>
+    </div>
+</div>
 {% endblock %}
 {% block scripts %}
 {{ super() }}
@@ -367,6 +420,7 @@
 <script src="{{ url_for('static', filename='js/ema_rsi_filter.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ema_narrow_filter.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ema_touch_all_filter.js') }}"></script>
+<script src="{{ url_for('static', filename='js/candlestick_filter.js') }}"></script>
 <script>
     /**
      * Premium Tab switcher function for merged scanner page
@@ -381,6 +435,7 @@
             'ema':        { content: 'ema-scanner-content',        controls: 'ema-header-controls' },
             'ema-narrow': { content: 'ema-narrow-scanner-content', controls: 'ema-narrow-header-controls' },
             'ema-touch-all': { content: 'ema-touch-all-scanner-content', controls: 'ema-touch-all-header-controls' },
+            'candlestick':   { content: 'candlestick-scanner-content',   controls: 'candlestick-header-controls' },
         };
         if (!sections[tab]) tab = 'cpr';
 
@@ -399,13 +454,18 @@
         if (tab === 'ema-touch-all' && typeof initEmaTouchAllOnce === 'function') {
             initEmaTouchAllOnce();
         }
+        // Lazy-load Candlestick data on first open
+        if (tab === 'candlestick' && typeof initCandlestickOnce === 'function') {
+            initCandlestickOnce();
+        }
     }
 
     // Auto-detect tab from URL search parameters on load
     document.addEventListener('DOMContentLoaded', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const tabParam = urlParams.get('tab');
-        if (tabParam === 'ema' || tabParam === 'ema-narrow' || tabParam === 'ema-touch-all') {
+        if (tabParam === 'ema' || tabParam === 'ema-narrow' || tabParam === 'ema-touch-all'
+            || tabParam === 'candlestick') {
             switchScannerTab(tabParam);
         } else {
             switchScannerTab('cpr');

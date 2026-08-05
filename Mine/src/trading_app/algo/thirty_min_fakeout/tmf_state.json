@@ -1,6 +1,6 @@
 {
   "date": "2026-08-05",
-  "eod_handled": false,
+  "eod_handled": true,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
@@ -162,13 +162,13 @@
       "phase": "no_setup"
     },
     "HCLTECH": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "long",
       "trigger": 1358.0,
       "sl_level": 1347.4,
       "sl_risk": 3900.8,
-      "ltp": 1362.2,
-      "ltp_time": "2026-08-05T11:03:26.288523",
+      "ltp": 1347.3,
+      "ltp_time": "2026-08-05T12:36:39.768356",
       "qty": 368,
       "entry_time": "2026-08-05T10:55:41.069140",
       "entry_placed_ts": 1785907541.069141,
@@ -181,12 +181,16 @@
           "entry_price": 1359.0,
           "filled_qty": 368,
           "sl_order_id": "2084873476954841088",
-          "target_order_id": "2084873477441380352"
+          "target_order_id": "2084873477441380352",
+          "closed": true
         }
       ],
       "entry_price": 1359.0,
       "target_level": 1375.0,
-      "unrealized_pnl": 1177.6
+      "exit_time": "2026-08-05T12:36:39.936449",
+      "exit_price": 1347.4,
+      "exit_reason": "SL Hit",
+      "realized_pnl": -4268.8
     },
     "HDFCAMC": {
       "phase": "no_setup"
@@ -268,13 +272,14 @@
       "phase": "no_setup"
     },
     "LTM": {
-      "phase": "watching",
+      "phase": "done",
       "direction": "long",
       "trigger": 4570.3,
       "sl_level": 4542.8,
       "sl_risk": 2997.5,
-      "ltp": 4554.8,
-      "ltp_time": "2026-08-05T11:03:26.288498"
+      "ltp": 4541.2,
+      "ltp_time": "2026-08-05T11:24:23.256803",
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "LUPIN": {
       "phase": "no_setup"
@@ -337,13 +342,35 @@
       "phase": "no_setup"
     },
     "NYKAA": {
-      "phase": "watching",
+      "phase": "done",
       "direction": "long",
       "trigger": 331.4,
       "sl_level": 327.65,
       "sl_risk": 5655.0,
-      "ltp": 330.15,
-      "ltp_time": "2026-08-05T11:03:26.288517"
+      "ltp": 335.0,
+      "ltp_time": "2026-08-05T15:05:01.823102",
+      "qty": 1508,
+      "entry_time": "2026-08-05T11:22:56.519095",
+      "entry_placed_ts": 1785909176.519097,
+      "entry_limit_price": 332.15,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2084880313892659200",
+          "filled": true,
+          "entry_price": 331.62141909814324,
+          "filled_qty": 1508,
+          "sl_order_id": "2084880315574575104",
+          "target_order_id": "2084880316249858048",
+          "closed": true
+        }
+      ],
+      "entry_price": 331.62141909814324,
+      "target_level": 348.0,
+      "exit_time": "2026-08-05T15:05:02.463839",
+      "exit_price": 335.0,
+      "exit_reason": "Time Exit",
+      "realized_pnl": 5094.9
     },
     "OBEROIRLTY": {
       "phase": "no_setup"
@@ -409,13 +436,14 @@
       "phase": "no_setup"
     },
     "SBIN": {
-      "phase": "watching",
+      "phase": "done",
       "direction": "short",
       "trigger": 1043.7,
       "sl_level": 1053.2,
       "sl_risk": 4550.5,
-      "ltp": 1051.0,
-      "ltp_time": "2026-08-05T11:03:26.288521"
+      "ltp": 1053.5,
+      "ltp_time": "2026-08-05T12:24:12.169017",
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "SHREECEM": {
       "phase": "no_setup"

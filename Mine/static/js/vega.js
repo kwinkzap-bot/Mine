@@ -10,6 +10,11 @@ let _vegaRawData = [];
 let _vegaInited = false;
 let _vegaRangeSyncing = false;
 
+// Which series are drawn. Put-Call Difference starts off — it is a derived
+// line and the two vega curves are what the block is read for.
+const _vegaVisible = { price: true, call: true, put: true, diff: false };
+let _vegaTableOn = true;
+
 // ── Cleanup ────────────────────────────────────────────────────────────────
 function _vegaCleanup() {
     try { if (_vegaChart) _vegaChart.remove(); } catch (e) {}
@@ -87,7 +92,9 @@ function _vegaInitChart() {
     if (!el.clientWidth) throw new Error('vegaChart not laid out yet (width=0)');
 
     const cfg = _vegaGetTheme();
-    const _fmtPrice = p => p >= 1000 ? (p / 1000).toFixed(1) + 'K' : p.toFixed(0);
+    // Index levels move in tens of points — "24.6K" for every label on the
+    // axis says nothing, so print the level itself.
+    const _fmtPrice = p => Math.round(p).toLocaleString('en-IN');
     const _fmtVega = v => {
         const sign = v < 0 ? '-' : '';
         const abs = Math.abs(v);
@@ -149,32 +156,33 @@ function _vegaInitChart() {
         priceFormat: { type: 'custom', formatter: _fmtPrice, minMove: 0.5 },
     });
 
-    // Put Vega — red baseline series: fills from 0 downward (negative = below zero = red zone)
-    // When put_vega is positive (unusual), it fills above zero with a lighter red.
+    // Put Vega — red baseline series. Put writing reads positive, so the loud
+    // fill is the one ABOVE zero; below zero (put unwinding) stays faint.
     _vegaPutSeries = _vegaChart.addSeries(LightweightCharts.BaselineSeries, {
         priceScaleId: 'right',
         baseValue: { type: 'price', price: 0 },
         topLineColor:    '#ef4444',
-        topFillColor1:   'rgba(239,68,68,0.08)',
-        topFillColor2:   'rgba(239,68,68,0.02)',
+        topFillColor1:   'rgba(239,68,68,0.35)',
+        topFillColor2:   'rgba(239,68,68,0.10)',
         bottomLineColor: '#ef4444',
-        bottomFillColor1:'rgba(239,68,68,0.35)',
-        bottomFillColor2:'rgba(239,68,68,0.10)',
+        bottomFillColor1:'rgba(239,68,68,0.08)',
+        bottomFillColor2:'rgba(239,68,68,0.02)',
         lineWidth: 2,
         lastValueVisible: true, priceLineVisible: true, priceLineColor: '#ef4444',
         priceFormat: { type: 'custom', formatter: _fmtVega, minMove: 0.01 },
     });
 
-    // Call Vega — green baseline series: fills from 0 upward (positive = above zero = green zone)
+    // Call Vega — green baseline series. Call writing reads negative, so the
+    // loud fill is the one BELOW zero; above zero (call unwinding) stays faint.
     _vegaCallSeries = _vegaChart.addSeries(LightweightCharts.BaselineSeries, {
         priceScaleId: 'right',
         baseValue: { type: 'price', price: 0 },
         topLineColor:    '#22c55e',
-        topFillColor1:   'rgba(34,197,94,0.35)',
-        topFillColor2:   'rgba(34,197,94,0.10)',
+        topFillColor1:   'rgba(34,197,94,0.08)',
+        topFillColor2:   'rgba(34,197,94,0.02)',
         bottomLineColor: '#22c55e',
-        bottomFillColor1:'rgba(34,197,94,0.08)',
-        bottomFillColor2:'rgba(34,197,94,0.02)',
+        bottomFillColor1:'rgba(34,197,94,0.35)',
+        bottomFillColor2:'rgba(34,197,94,0.10)',
         lineWidth: 2,
         lastValueVisible: true, priceLineVisible: true, priceLineColor: '#22c55e',
         priceFormat: { type: 'custom', formatter: _fmtVega, minMove: 0.01 },
@@ -206,6 +214,47 @@ function _vegaInitChart() {
     window.addEventListener('themechanged', e => {
         if (e.detail && e.detail.theme) _vegaApplyTheme(e.detail.theme);
     });
+
+    _vegaWireControls();
+    _vegaApplyVisibility();
+}
+
+// ── Legend switches + table show/hide ─────────────────────────────────────
+function _vegaWireControls() {
+    document.querySelectorAll('.vega-toggle').forEach(btn => {
+        if (btn.dataset.vegaWired) return;
+        btn.dataset.vegaWired = '1';
+        btn.addEventListener('click', () => {
+            const key = btn.dataset.vegaSeries;
+            _vegaVisible[key] = !_vegaVisible[key];
+            btn.classList.toggle('is-off', !_vegaVisible[key]);
+            _vegaApplyVisibility();
+        });
+    });
+
+    const viewBtn = document.getElementById('vegaViewToggle');
+    if (viewBtn && !viewBtn.dataset.vegaWired) {
+        viewBtn.dataset.vegaWired = '1';
+        viewBtn.addEventListener('click', () => {
+            _vegaTableOn = !_vegaTableOn;
+            document.getElementById('vegaTablePane')?.classList.toggle('hidden', !_vegaTableOn);
+            viewBtn.classList.toggle('is-off', !_vegaTableOn);
+            // The chart pane just changed width; autoSize needs a nudge.
+            requestAnimationFrame(() => { try { _vegaChart?.timeScale().fitContent(); } catch (e) {} });
+        });
+    }
+}
+
+function _vegaApplyVisibility() {
+    const pairs = [
+        [_vegaPriceSeries, 'price'],
+        [_vegaCallSeries,  'call'],
+        [_vegaPutSeries,   'put'],
+        [_vegaDiffSeries,  'diff'],
+    ];
+    pairs.forEach(([series, key]) => {
+        try { if (series) series.applyOptions({ visible: _vegaVisible[key] }); } catch (e) {}
+    });
 }
 
 // ── Render ─────────────────────────────────────────────────────────────────
@@ -234,6 +283,8 @@ function _vegaRender(data) {
             console.error('[Vega] setData error', e);
             return;
         }
+        _vegaRenderTable(data);
+
         requestAnimationFrame(() => {
             try { if (_vegaChart) _vegaChart.timeScale().fitContent(); } catch (e) {}
             const last = data[data.length - 1];
@@ -253,6 +304,45 @@ function _vegaRender(data) {
                 if (hdr) hdr.after(note);
             }
         });
+    });
+}
+
+// ── Data table ─────────────────────────────────────────────────────────────
+// Same minutes the chart plots, newest first, so the last few prints can be
+// read exactly instead of eyeballed off the curve.
+function _vegaHHMM(ts) {
+    const d = new Date(ts * 1000);
+    return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
+}
+
+function _vegaRenderTable(data) {
+    const host = document.getElementById('vegaTable');
+    if (!host || typeof DataGrid === 'undefined') return;
+
+    const latestTs = data.length ? data[data.length - 1].time : null;
+    const rows = data.map(d => ({
+        time:      d.time,
+        call_vega: d.call_vega,
+        put_vega:  d.put_vega,
+        diff:      d.diff != null ? d.diff : (d.put_vega - d.call_vega),
+    }));
+
+    const num = v => (v == null ? '—' : Number(v).toFixed(2));
+
+    DataGrid.mountSortable(host, {
+        rows,
+        empty: 'No vega data yet',
+        defaultSort: { key: 'time', dir: 'desc' },
+        rowClass: row => (row.time === latestTs ? 'vega-row-latest' : ''),
+        columns: [
+            { key: 'time', label: 'Time', sortable: true, format: _vegaHHMM },
+            { key: 'call_vega', label: 'Call Vega', sortable: true, align: 'right',
+              format: num, cellClass: 'vega-c-call' },
+            { key: 'put_vega', label: 'Put Vega', sortable: true, align: 'right',
+              format: num, cellClass: 'vega-c-put' },
+            { key: 'diff', label: 'Difference', sortable: true, align: 'right',
+              format: num, strong: true },
+        ],
     });
 }
 

@@ -429,8 +429,14 @@
       <div class="pcr-section-header">
         <div class="pcr-section-title">Vega Analysis</div>
         <div class="pcr-legend">
-          <span class="pcr-legend-item"><span class="pcr-dot pcr-dot--dash"></span>Synth Future</span>
-          <span class="pcr-legend-item"><span class="pcr-dot pcr-dot--dot"></span>Put-Call Difference</span>
+          <button type="button" class="pcr-legend-item vega-toggle" data-vega-series="price">
+            <span class="vega-eye">👁</span><span class="pcr-dot pcr-dot--dash"></span>Synth Future</button>
+          <button type="button" class="pcr-legend-item vega-toggle" data-vega-series="call">
+            <span class="vega-eye">👁</span><span class="pcr-dot" style="background:#22c55e"></span>Call Vega</button>
+          <button type="button" class="pcr-legend-item vega-toggle" data-vega-series="put">
+            <span class="vega-eye">👁</span><span class="pcr-dot" style="background:#ef4444"></span>Put Vega</button>
+          <button type="button" class="pcr-legend-item vega-toggle is-off" data-vega-series="diff">
+            <span class="vega-eye">👁</span><span class="pcr-dot pcr-dot--dot"></span>Put-Call Difference</button>
           <div class="pcr-oi-metrics">
             <span class="pcr-oi-metric">
               <span class="pcr-dot" style="background:#ef4444"></span>
@@ -440,12 +446,19 @@
               <span class="pcr-dot" style="background:#22c55e"></span>
               <span id="vegaCallVal" class="pcr-oi-val" style="color:#22c55e"></span>
             </span>
+            <button type="button" id="vegaViewToggle" class="vega-view-btn" title="Show / hide the data table">
+              ▦ Table</button>
           </div>
         </div>
       </div>
-      <div class="pcr-chart-wrap" id="vegaChartWrap">
-        <div id="vegaChart"></div>
-        <div id="vegaTooltip" class="pcr-tooltip hidden"></div>
+      <div class="pcr-chart-wrap vega-split" id="vegaChartWrap">
+        <div class="vega-chart-pane">
+          <div id="vegaChart"></div>
+          <div id="vegaTooltip" class="pcr-tooltip hidden"></div>
+        </div>
+        <div class="vega-table-pane" id="vegaTablePane">
+          <div id="vegaTable"></div>
+        </div>
       </div>
     </div>
 

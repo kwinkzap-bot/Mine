@@ -249,6 +249,48 @@ TOUCH_ALL_INDEX_MAP = {
 }
 
 
+# Candlestick pattern scanner: runs over the SAME fixed futures watchlist as
+# the EMA Touch All scanner (TOUCH_ALL_SYMBOLS), so the universe is exactly the
+# F&O names the user configured — no equity-wide scan here. The pattern is
+# checked on the latest candle of the selected timeframe against the one before
+# it. Daily bars are the only thing fetched; weekly/monthly are resampled from
+# them, same as the EMA Narrow scanner does.
+CANDLE_PATTERN_LABELS = {
+    "bullish_engulfing": "Bullish Engulfing",
+    "bearish_engulfing": "Bearish Engulfing",
+}
+CANDLE_PATTERN_SIGNAL = {
+    "bullish_engulfing": "BUY",
+    "bearish_engulfing": "SELL",
+}
+CANDLE_TIMEFRAMES = {
+    "daily":   {"resample": None, "fetch_days": 120},
+    "weekly":  {"resample": "W",  "fetch_days": 400},
+    "monthly": {"resample": "M",  "fetch_days": 1100},
+}
+CANDLE_DEFAULT_TIMEFRAME = "daily"
+
+
+def _detect_engulfing(po: float, pc: float, o: float, c: float) -> Optional[str]:
+    """Engulfing pattern for the latest candle, or None.
+
+    Bullish: a down candle followed by an up candle whose body covers it
+    (open <= prev close, close >= prev open); bearish is the mirror image.
+    Bodies are compared with >=/<= so a candle opening exactly at the previous
+    close still counts. A previous doji (open == close) is rejected outright —
+    a zero-height body is covered by anything, which would otherwise mark
+    almost every candle as engulfing."""
+    prev_body = abs(pc - po)
+    body      = abs(c - o)
+    if prev_body <= 0 or body < prev_body:
+        return None
+    if c > o and pc < po and o <= pc and c >= po:
+        return "bullish_engulfing"
+    if c < o and pc > po and o >= pc and c <= po:
+        return "bearish_engulfing"
+    return None
+
+
 def _touch_all_signal(symbol: str, status: str, close: float) -> Dict:
     """Apply a symbol's configured defaults to a matched candle.
 
@@ -924,6 +966,180 @@ class EmaRsiFilterService:
 
         final = _snapshot()
         logger.info(f"EMA Touch All filter → {len(final['results'])} matches "
+                    f"from {final['scanned']}/{total} scanned"
+                    + (f", skipped: {', '.join(final['skipped'])}" if final['skipped'] else ""))
+        return final
+
+    # ------------------------------------------------------------------
+    # Candlestick patterns (engulfing) on the futures watchlist
+    # ------------------------------------------------------------------
+
+    def _analyse_candlestick(self, symbol: str, current_price: float,
+                             df: Optional[pd.DataFrame],
+                             resample: Optional[str] = None) -> Optional[Dict]:
+        """Latest candle vs. the one before it — engulfing or not.
+
+        Returns a row for every symbol with at least two candles (`pattern` is
+        None and `matched` False when nothing fires), or None when there isn't
+        enough data to judge, so the caller can report it as skipped."""
+        if df is None or len(df) < 2:
+            return None
+
+        if resample == 'W':
+            df = _weekly_resample(df)
+        elif resample == 'M':
+            df = _monthly_resample(df)
+        if len(df) < 2:
+            return None
+
+        prev = df.iloc[-2]
+        last = df.iloc[-1]
+        try:
+            po, pc = float(prev["open"]), float(prev["close"])
+            ph, pl = float(prev["high"]), float(prev["low"])
+            o, h   = float(last["open"]), float(last["high"])
+            l, c   = float(last["low"]),  float(last["close"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if o <= 0 or po <= 0 or l <= 0:
+            return None
+
+        pattern    = _detect_engulfing(po, pc, o, c)
+        prev_body  = abs(pc - po)
+        body       = abs(c - o)
+
+        def _vol(row) -> Optional[float]:
+            try:
+                return float(row["volume"])
+            except (KeyError, TypeError, ValueError):
+                return None
+
+        volume, prev_volume = _vol(last), _vol(prev)
+
+        return {
+            "symbol":         symbol,
+            "pattern":        pattern,
+            "pattern_label":  CANDLE_PATTERN_LABELS.get(pattern) if pattern else None,
+            "signal":         CANDLE_PATTERN_SIGNAL.get(pattern) if pattern else None,
+            "current_price":  float(current_price),
+            "open":           round(o, 2),
+            "high":           round(h, 2),
+            "low":            round(l, 2),
+            "close":          round(c, 2),
+            "prev_open":      round(po, 2),
+            "prev_close":     round(pc, 2),
+            "prev_high":      round(ph, 2),
+            "prev_low":       round(pl, 2),
+            "change_pct":     round((c - o) / o * 100, 2),
+            "body_pct":       round(body / o * 100, 2),
+            # How much bigger this body is than the one it swallowed — the
+            # practical "strength" of the engulfing, and what results sort on.
+            "engulf_ratio":   round(body / prev_body, 2) if prev_body > 0 else None,
+            "range_pct":      round((h - l) / l * 100, 2),
+            "volume":         volume,
+            "volume_ratio":   (round(volume / prev_volume, 2)
+                               if volume and prev_volume else None),
+            "candle_date":    str(df.index[-1].date()) if hasattr(df.index[-1], "date") else str(df.index[-1]),
+            "matched":        bool(pattern),
+        }
+
+    def run_candlestick_filter(self, root_date: Optional[datetime] = None,
+                               timeframe: str = CANDLE_DEFAULT_TIMEFRAME,
+                               progress_cb=None) -> Dict:
+        """Scan the futures watchlist (TOUCH_ALL_SYMBOLS) for bullish/bearish
+        engulfing candles on the selected timeframe (daily/weekly/monthly).
+
+        Same background-job shape as run_ema_touch_all_filter: symbols are
+        processed in batches and progress_cb(done, total, partial) is invoked
+        after each batch with a snapshot of the matches so far. `skipped` lists
+        watchlist entries the provider couldn't resolve or that lack two
+        candles on the timeframe."""
+        tf_cfg = CANDLE_TIMEFRAMES.get(timeframe) or CANDLE_TIMEFRAMES[CANDLE_DEFAULT_TIMEFRAME]
+        stocks = list(TOUCH_ALL_SYMBOLS)
+        logger.info(f"Candlestick filter: scanning {len(stocks)} futures watchlist "
+                    f"symbols for engulfing patterns on {timeframe}...")
+
+        # Quote keys differ per instrument (indices aren't NSE:<symbol>), so keep
+        # a reverse map to get back to the plain watchlist name.
+        quote_keys = {self._touch_all_quote_symbol(s): s for s in stocks}
+        price_map: Dict[str, float] = {}
+        keys = list(quote_keys)
+        quote_batch = 500
+        for i in range(0, len(keys), quote_batch):
+            batch = keys[i: i + quote_batch]
+            try:
+                quotes = self.kite.quote(batch)
+                for sym, data in quotes.items():
+                    plain = quote_keys.get(sym) or sym.replace("NSE:", "")
+                    price_map[plain] = float(data.get("last_price", 0))
+            except Exception as e:
+                logger.warning(f"Batch quote failed: {e}")
+
+        results: List[Dict] = []
+        all_results: List[Dict] = []
+        skipped: List[str] = []
+
+        def process_stock(symbol: str):
+            price = price_map.get(symbol, 0.0)
+            token = self._touch_all_token(symbol)
+            if not token:
+                return symbol, None
+            df = self._fetch_hist(symbol, days=tf_cfg["fetch_days"],
+                                  interval="day", end_date=root_date, token=token)
+            return symbol, self._analyse_candlestick(symbol, price, df, tf_cfg["resample"])
+
+        workers_count = self.MAX_WORKERS
+        if self.kite.__class__.__name__ == 'FyersDataServiceAdapter':
+            workers_count = 5
+
+        done_count = 0
+        total = len(stocks)
+        batch_size = 50
+
+        def _snapshot() -> Dict:
+            """Sorted copy of everything found so far (strongest engulfing first)."""
+            return {
+                "results": sorted(results, key=lambda r: -(r.get("engulf_ratio") or 0)),
+                "scanned": len(all_results),
+                "total":   total,
+                "skipped": sorted(skipped),
+            }
+
+        def _report():
+            if progress_cb:
+                try:
+                    progress_cb(done_count, total, _snapshot())
+                except Exception:
+                    pass
+
+        _report()
+
+        for i in range(0, total, batch_size):
+            chunk = stocks[i: i + batch_size]
+            with ThreadPoolExecutor(max_workers=workers_count) as executor:
+                futures = {executor.submit(process_stock, s): s for s in chunk}
+                for future in as_completed(futures):
+                    try:
+                        sym, res = future.result(timeout=300)
+                        if res:
+                            all_results.append(res)
+                            if res.get("matched"):
+                                results.append(res)
+                        else:
+                            # Unresolvable symbol or fewer than two candles on
+                            # this timeframe — surfaced so a typo in the
+                            # watchlist doesn't silently read as "no match".
+                            skipped.append(sym)
+                    except Exception as e:
+                        futures_sym = futures[future]
+                        skipped.append(futures_sym)
+                        logger.warning(f"Candlestick processing error ({futures_sym}): "
+                                       f"{e.__class__.__name__}: {e}")
+            done_count = min(i + batch_size, total)
+            _report()
+
+        final = _snapshot()
+        logger.info(f"Candlestick filter ({timeframe}) → {len(final['results'])} matches "
                     f"from {final['scanned']}/{total} scanned"
                     + (f", skipped: {', '.join(final['skipped'])}" if final['skipped'] else ""))
         return final

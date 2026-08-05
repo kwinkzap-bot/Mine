@@ -2610,6 +2610,130 @@ def get_ema_touch_all_filter_results() -> EndpointResponse:
     })
 
 
+# Candlestick (engulfing) scanner — futures watchlist only, so it is much
+# shorter than the equity-wide scans, but it uses the same background-job +
+# poll contract so the UI code and the throttling behave identically.
+_candlestick_jobs: dict = {}
+_candlestick_jobs_lock = threading.Lock()
+
+
+@api_bp.route('/candlestick-filter', methods=['GET'])
+@limiter.exempt
+def get_candlestick_filter_results() -> EndpointResponse:
+    """Scan the futures watchlist for bullish/bearish engulfing candles on the
+    selected timeframe (daily default, weekly, monthly).
+
+    The first call starts a background scan and returns {'status': 'running',
+    'progress': {...}}; poll the same URL until {'status': 'done'} arrives with
+    results. Finished scans are cached for 6 hours; pass refresh=1 to force a
+    fresh scan. Pattern filtering is done client-side — the payload always
+    carries both patterns."""
+    auth_error = check_auth()
+    if auth_error:
+        return auth_error
+
+    current_kite = get_data_provider()
+    if not current_kite:
+        return jsonify({'success': False, 'error': 'Data Provider initialization failed.'}), 401
+
+    from trading_app.filters.ema_rsi_filter import CANDLE_TIMEFRAMES, CANDLE_DEFAULT_TIMEFRAME
+
+    date_str = request.args.get('date')
+    force_refresh = request.args.get('refresh') == '1'
+    timeframe = request.args.get('timeframe', CANDLE_DEFAULT_TIMEFRAME)
+    if timeframe not in CANDLE_TIMEFRAMES:
+        return jsonify({'success': False,
+                        'error': f"Invalid timeframe. Use one of: {', '.join(CANDLE_TIMEFRAMES)}"}), 400
+
+    target_date = None
+    if date_str:
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+    from trading_app.app.utils.cache import cpr_filter_cache  # reuse same cache backend
+    cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
+    job_key    = f"{cache_date}:{timeframe}"
+    cache_key  = f"candlestick_v1:{job_key}"
+
+    with _candlestick_jobs_lock:
+        job = _candlestick_jobs.get(job_key)
+
+        # A scan for this exact key is already running — never start a duplicate.
+        if job and job['status'] == 'running':
+            partial = job.get('partial') or {}
+            return jsonify({
+                'success':    True,
+                'status':     'running',
+                'progress':   job.get('progress', {}),
+                'started_at': job.get('started_at'),
+                'results':    partial.get('results', []),
+            })
+
+        # Previous run failed — report it once, then allow a retry
+        if job and job['status'] == 'error':
+            _candlestick_jobs.pop(job_key, None)
+            return jsonify({'success': False, 'status': 'error', 'error': job.get('error', 'Scan failed')}), 500
+
+        if not force_refresh:
+            cached = cpr_filter_cache.get(cache_key)
+            if cached is not None:
+                return jsonify(cached)
+            if job and job['status'] == 'done' and job.get('result'):
+                return jsonify(job['result'])
+
+        job = {
+            'status':     'running',
+            'progress':   {'done': 0, 'total': 0},
+            'started_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        _candlestick_jobs[job_key] = job
+
+    def _run_scan(kite_ref, job_ref):
+        try:
+            from trading_app.filters.ema_rsi_filter import EmaRsiFilterService
+            svc = EmaRsiFilterService(kite_instance=kite_ref)
+
+            def on_progress(done, total, partial=None):
+                job_ref['progress'] = {'done': done, 'total': total}
+                if partial is not None:
+                    job_ref['partial'] = partial
+
+            result = svc.run_candlestick_filter(root_date=target_date,
+                                                timeframe=timeframe,
+                                                progress_cb=on_progress)
+            payload = {
+                'success':      True,
+                'status':       'done',
+                'results':      result.get('results', []),
+                'scanned':      result.get('scanned', 0),
+                'total':        result.get('total', 0),
+                'skipped':      result.get('skipped', []),
+                'timeframe':    timeframe,
+                'date':         cache_date,
+                'generated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            cpr_filter_cache.set(cache_key, payload, timeout=6 * 3600)
+            job_ref['result'] = payload
+            job_ref['status'] = 'done'
+        except Exception as e:
+            logger.error(f"Candlestick scan error: {type(e).__name__}: {e}", exc_info=True)
+            job_ref['error'] = str(e)
+            job_ref['status'] = 'error'
+
+    threading.Thread(target=_run_scan, args=(current_kite, job),
+                     name=f"candlestick-{job_key}", daemon=True).start()
+
+    return jsonify({
+        'success':    True,
+        'status':     'running',
+        'progress':   job['progress'],
+        'started_at': job['started_at'],
+        'results':    [],
+    })
+
+
 @api_bp.route('/notify-whatsapp', methods=['POST'])
 @csrf.exempt
 def notify_whatsapp() -> EndpointResponse:
