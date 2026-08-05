@@ -9,6 +9,10 @@ let _vegaDiffSeries = null;
 let _vegaRawData = [];
 let _vegaInited = false;
 let _vegaRangeSyncing = false;
+// Expiry the series is plotted for. null = let the server pick its default
+// (nearest expiry with more than a day to run, so expiry day is not 0-DTE).
+let _vegaExpiry = null;
+let _vegaExpirySymbol = null;
 
 // Which series are drawn. Put-Call Difference starts off — it is a derived
 // line and the two vega curves are what the block is read for.
@@ -42,14 +46,55 @@ function vegaLoad() {
 function vegaRefresh() {
     if (!_vegaChart) { vegaLoad(); return; }
     const symbol = document.getElementById('pcrSymbol')?.value || 'NIFTY';
-    fetch('/api/vega/history?symbol=' + encodeURIComponent(symbol))
+    // A symbol switch invalidates the picked expiry — expiries differ per index.
+    if (_vegaExpirySymbol && _vegaExpirySymbol !== symbol) _vegaExpiry = null;
+    _vegaExpirySymbol = symbol;
+
+    let url = '/api/vega/history?symbol=' + encodeURIComponent(symbol);
+    if (_vegaExpiry) url += '&expiry=' + encodeURIComponent(_vegaExpiry);
+    fetch(url)
         .then(r => r.json())
         .then(d => {
             if (!d.success) { console.warn('[Vega]', d.error); return; }
+            _vegaExpiry = d.expiry || null;
+            _vegaFillExpiries(d.expiries || [], d.expiry);
             _vegaRawData = d.data || [];
             _vegaRender(_vegaRawData);
         })
         .catch(e => console.error('[Vega] fetch error', e));
+}
+
+// ── Expiry selector ────────────────────────────────────────────────────────
+function vegaExpiryChanged() {
+    const sel = document.getElementById('vegaExpiry');
+    _vegaExpiry = sel && sel.value ? sel.value : null;
+    vegaRefresh();
+}
+
+function _vegaExpiryLabel(e) {
+    const parts = String(e.expiry).split('-');
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const mi = parseInt(parts[1], 10) - 1;
+    const label = parts.length === 3 && months[mi] ? (parts[2] + ' ' + months[mi]) : e.expiry;
+    return label + ' (' + e.dte + 'd)';
+}
+
+function _vegaFillExpiries(expiries, selected) {
+    const sel = document.getElementById('vegaExpiry');
+    if (!sel) return;
+    const wanted = expiries.map(e => e.expiry).join('|');
+    if (sel.dataset.keys !== wanted) {
+        sel.innerHTML = '';
+        expiries.forEach(e => {
+            const opt = document.createElement('option');
+            opt.value = e.expiry;
+            opt.textContent = _vegaExpiryLabel(e);
+            sel.appendChild(opt);
+        });
+        sel.dataset.keys = wanted;
+    }
+    if (selected) sel.value = selected;
+    sel.style.display = expiries.length > 1 ? '' : 'none';
 }
 
 // ── Chart creation ─────────────────────────────────────────────────────────
@@ -259,7 +304,19 @@ function _vegaApplyVisibility() {
 
 // ── Render ─────────────────────────────────────────────────────────────────
 function _vegaRender(data) {
-    if (!data.length || !_vegaPriceSeries) return;
+    if (!_vegaPriceSeries) return;
+    if (!data.length) {
+        // Selected expiry has no stored chain for this day — blank the chart
+        // rather than leaving the previous expiry's curves on screen.
+        [_vegaPriceSeries, _vegaPutSeries, _vegaCallSeries, _vegaDiffSeries].forEach(s => {
+            try { if (s) s.setData([]); } catch (e) {}
+        });
+        const callEl = document.getElementById('vegaCallVal');
+        if (callEl) callEl.textContent = '--';
+        const putEl = document.getElementById('vegaPutVal');
+        if (putEl) putEl.textContent = '--';
+        return;
+    }
 
     const seen = new Map();
     data.forEach(d => seen.set(d.time, d));

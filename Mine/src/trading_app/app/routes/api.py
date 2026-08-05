@@ -8993,15 +8993,27 @@ def pcr_history() -> EndpointResponse:
 @limiter.exempt
 @require_user_auth
 def vega_history() -> EndpointResponse:
-    """Return intraday Call/Put Vega time-series computed from stored active_strikes IV data."""
+    """Return the intraday Call/Put Vega time-series for one expiry.
+
+    `expiry` (ISO date) selects the chain; omitted it defaults to the nearest
+    expiry with more than a day to run, so expiry day plots the next weekly
+    instead of a 0-DTE series. The response also lists the expiries that have a
+    stored chain for the day, for the dashboard's expiry selector.
+    """
     try:
         from datetime import date as _date
         symbol = request.args.get('symbol', 'NIFTY').upper()
         date_str = request.args.get('date', _date.today().isoformat())
+        expiry = request.args.get('expiry') or None
         from trading_app.service.open_interest_service import OpenInterestService
         svc = OpenInterestService(None)
-        data = svc.get_intraday_vega_history(symbol, date_str)
-        return jsonify({'success': True, 'symbol': symbol, 'date': date_str, 'data': data})
+        result = svc.get_intraday_vega_history(symbol, date_str, expiry=expiry)
+        return jsonify({
+            'success': True, 'symbol': symbol, 'date': date_str,
+            'data': result.get('series', []),
+            'expiry': result.get('expiry'),
+            'expiries': result.get('expiries', []),
+        })
     except Exception as e:
         logger.error(f'[vega/history] {e}', exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500

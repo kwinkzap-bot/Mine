@@ -492,19 +492,40 @@ class MarketScheduler:
             for symbol in symbols:
                 try:
                     logger.info(f"OI Persistence: Fetching data for {symbol}...")
-                    # CURRENT (nearest) expiry, even on expiry day: these rows feed
-                    # the dashboard PCR/Vega tabs and the live /open-interest chain,
-                    # which must all track the actively traded (expiring) contract.
-                    # Only the EOD historic recorder (dashboard/oi_historic_data.py)
-                    # rolls to the next expiry (use_next_expiry=True).
+                    # CURRENT (nearest) expiry, even on expiry day: these oi_history
+                    # rows feed the dashboard PCR tab and the live /open-interest
+                    # chain, which must track the actively traded (expiring)
+                    # contract. The next expiry is captured separately below into
+                    # oi_expiry_snapshots — it never touches oi_history.
                     data = oi_service.get_open_interest_data(symbol)
-                    
+
                     if data.get('success'):
                         oi_service.save_oi_snapshot(symbol, data)
                         logger.info(f"✅ OI Persistence: Saved snapshot for {symbol}")
                     else:
                         logger.warning(f"⚠️ OI Persistence: Failed to fetch {symbol}: {data.get('error')}")
-                        
+
+                    # Second chain: the expiry after the one above, stored in
+                    # oi_expiry_snapshots. On expiry day the nearest chain is
+                    # 0-DTE and its Vega series is not comparable to the
+                    # reference, so the dashboard needs a live series for the
+                    # following weekly too. Failures here must not cost us the
+                    # primary snapshot, hence the separate try block.
+                    try:
+                        next_data = oi_service.get_open_interest_data(symbol, expiry_offset=1)
+                        if next_data.get('success'):
+                            saved_expiry = oi_service.save_expiry_snapshot(
+                                symbol, next_data,
+                                skip_expiry=oi_service.chain_expiry(data) if data.get('success') else None)
+                            if saved_expiry:
+                                logger.info(f"✅ OI Persistence: Saved {symbol} next-expiry "
+                                            f"snapshot ({saved_expiry})")
+                        else:
+                            logger.warning(f"⚠️ OI Persistence: next-expiry fetch failed for "
+                                           f"{symbol}: {next_data.get('error')}")
+                    except Exception as next_e:
+                        logger.error(f"❌ OI Persistence: next-expiry error for {symbol}: {next_e}")
+
                 except Exception as inner_e:
                     logger.error(f"❌ OI Persistence: Error processing {symbol}: {inner_e}", exc_info=True)
                     
