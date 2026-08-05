@@ -9749,6 +9749,90 @@ def _tiered_strike_diff(premium: float) -> int:
     return int(math.ceil(premium / 100.0) * 100)
 
 
+def _prem_snapshot_base(symbol: str, step: int, date_str: Optional[str] = None):
+    """Locate the "small diff strike" from the day's ~09:18 OI snapshot.
+
+    The triangle setup is anchored on the day's *opening* option chain, not on
+    previous-day closes: ATM comes from the snapshot spot, and the base strike
+    is the one whose CE and PE LTPs sit closest together (04-08-2026 reference:
+    spot 24607.7 -> ATM 24600, CE 50.8 / PE 47.8, diff 3.0 -> base 24600).
+
+    Returns ``(base_strike, ce_ltp, pe_ltp, snap_price, snap_ts)`` or ``None``
+    when the day has no usable snapshot (non-index symbols, or before 09:18).
+    """
+    import sqlite3
+    try:
+        from trading_app.service.open_interest_service import OpenInterestService
+        db_path = OpenInterestService(None).db_path
+        now = datetime.now()
+        target = date_str or now.strftime('%Y-%m-%d')
+        # Pre-open snapshots carry the *previous* session's LTPs, which would
+        # anchor the whole day on a stale chain. Before 09:18 on the live day
+        # there is nothing usable yet — let the caller fall back instead.
+        is_live_day = (target == now.strftime('%Y-%m-%d'))
+        if is_live_day and now.strftime('%H:%M:%S') < '09:18:00':
+            return None
+
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            # First snapshot at/after 09:18, same anchor the ATM CE OI lines use.
+            cur.execute('''
+                SELECT timestamp, current_price, active_strikes
+                  FROM oi_history
+                 WHERE symbol = ? AND date(timestamp) = ?
+                   AND time(timestamp) >= '09:18:00' AND current_price > 0
+              ORDER BY timestamp ASC LIMIT 1
+            ''', (symbol, target))
+            row = cur.fetchone()
+            if row is None:
+                # Partial-data days: fall back to the earliest snapshot present.
+                cur.execute('''
+                    SELECT timestamp, current_price, active_strikes
+                      FROM oi_history
+                     WHERE symbol = ? AND date(timestamp) = ? AND current_price > 0
+                  ORDER BY timestamp ASC LIMIT 1
+                ''', (symbol, target))
+                row = cur.fetchone()
+
+        if row is None:
+            return None
+
+        price = float(row['current_price'])
+        try:
+            strikes = json.loads(row['active_strikes']) or []
+        except (TypeError, ValueError):
+            return None
+
+        ltp_map = {}
+        for s in strikes:
+            try:
+                ce, pe = s.get('ce_ltp'), s.get('pe_ltp')
+                if ce is None or pe is None:
+                    continue
+                ce, pe = float(ce), float(pe)
+                # Zero LTPs mean the row never traded (weekend/stale snapshot);
+                # they would otherwise win the min-diff comparison outright.
+                if ce <= 0 or pe <= 0:
+                    continue
+                ltp_map[int(round(float(s['strike']) / step) * step)] = (ce, pe)
+            except (TypeError, ValueError, KeyError):
+                continue
+
+        atm = int(round(price / step) * step)
+        cands = [atm + i * step for i in range(-2, 3) if atm + i * step in ltp_map]
+        if not cands:
+            return None
+
+        # Smallest |CE - PE| wins; ties break toward the strike nearest spot.
+        base = min(cands, key=lambda s: (abs(ltp_map[s][0] - ltp_map[s][1]), abs(s - price)))
+        ce_ltp, pe_ltp = ltp_map[base]
+        return base, ce_ltp, pe_ltp, price, row['timestamp']
+    except Exception as exc:
+        logger.warning(f'[PremStrikes] OI-snapshot base lookup failed for {symbol}: {exc}')
+        return None
+
+
 @api_bp.route('/oi-profile/premium-strikes', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -9756,19 +9840,31 @@ def oi_profile_premium_strikes() -> EndpointResponse:
     """
     Compute optimal CE/PE strikes for the 'Prem. Str.' mode in OI Profile.
 
-    Algorithm:
-    1. Get previous-day index close → round to nearest step = ATM.
-    2. For ATM ± 2 steps (5 candidates), fetch previous-day CE and PE closes in parallel.
-    3. Pick the candidate closest to ATM where |CE_close - PE_close| <= max_diff (default 25).
-    4. CE_strike = round_to_step(base_strike - CE_close)
-       PE_strike = round_to_step(base_strike + PE_close)
-    5. Fetch prev-day closes for CE_strike{CE,PE} and PE_strike{CE,PE} in parallel.
+    Algorithm (triangle setup, anchored on the day's opening option chain):
+    1. Base ("small diff") strike: from the ~09:18 OI snapshot, take ATM =
+       round(snapshot_spot / step) and pick the candidate in ATM ± 2 steps whose
+       CE and PE LTPs are closest together.
+    2. Common premium = (CE_ltp + PE_ltp) / 2 at that strike.
+    3. Offset = ceil(common / 100) * 100 — one *common* distance applied to both
+       legs, so the CE and PE strikes sit symmetrically around the base strike.
+    4. CE_strike = base - offset,  PE_strike = base + offset  (total range 2x).
+    5. Fetch prev-day closes for CE_strike{CE,PE} and PE_strike{CE,PE} in parallel
+       (these feed the PDC / C-P price lines, not the strike selection).
     6. Return everything needed for the frontend to auto-select strikes and draw lines.
+
+    Worked reference, 04-08-2026 NIFTY: snapshot spot 24607.7 -> ATM 24600;
+    24600 CE 50.8 / PE 47.8 (diff 3.0) -> base 24600; common 49.3 -> offset 100
+    -> CE 24500 / PE 24700, a 200-wide range.
+
+    When no OI snapshot exists for the day (non-index symbols, or a request
+    before 09:18), it falls back to the previous-day-close chain using the same
+    min-diff + common-offset rules.
     """
     try:
         symbol   = request.args.get('symbol', 'NIFTY').upper()
         step     = request.args.get('step', 50, type=int) or 50
         max_diff = request.args.get('max_diff', 25, type=float)
+        date_str = request.args.get('date') or None
         # Manual extra widen: dropdown value N adds N*100 to the total
         # strike_diff, split evenly across both legs (50 per leg per step).
         extra    = request.args.get('extra', 0, type=int) or 0
@@ -9813,131 +9909,163 @@ def oi_profile_premium_strikes() -> EndpointResponse:
                 logger.warning(f'[PremStrikes] prev-close fetch failed for {token}: {exc}')
             return None
 
-        # ── 1. Previous-day index close ────────────────────────────────
-        # Kite resolves the index via integer instrument token; Fyers needs its
-        # own index symbol (e.g. NSE:NIFTY50-INDEX), so branch on provider.
-        # Well-known Kite index tokens (indices are not reliably resolvable via
-        # KiteService.get_instrument_token, which returned None here and caused
-        # the "Could not fetch previous-day close" error).
-        _KITE_INDEX_TOKENS = {
-            'NIFTY': 256265, 'BANKNIFTY': 260105, 'FINNIFTY': 257801,
-            'MIDCPNIFTY': 288009, 'NIFTY MIDCAP 150': 266249, 'NIFTY AUTO': 263433,
-            'NIFTY Smallcap 100': 267017, 'NIFTY SMLCAP 100': 267017,
-            'NIFTY FMCG': 261897, 'NIFTY METAL': 263689, 'NIFTY PHARAMA': 262409,
-            'NIFTY PHARMA': 262409, 'NIFTY PSU BANK': 262921, 'NIFTY IT': 259849,
-        }
-        idx_close = None
-        if _is_fyers and _data_provider:
-            idx_token = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-INDEX'
-            idx_close = _fetch_prev_close(idx_token)
-        else:
-            idx_close = kite_svc.get_previous_trading_day_close(symbol)
-            if not idx_close:
-                # Fallback: resolve the index via the known Kite token directly.
-                kite_tok = _KITE_INDEX_TOKENS.get(symbol) or kite_svc.get_instrument_token(symbol)
-                if kite_tok:
-                    idx_close = _fetch_prev_close(kite_tok)
+        # ── 1. Base ("small diff") strike from the day's ~09:18 OI snapshot ──
+        base_strike = base_ce_close = base_pe_close = None
+        source      = 'oi_snapshot'
+        snap_price  = None
+        snap_ts     = None
 
-        logger.info(
-            f'[PremStrikes] idx_close resolution: symbol={symbol}, '
-            f'provider={"fyers" if _is_fyers else "kite"}, idx_close={idx_close}'
-        )
-        if not idx_close:
-            # Previous-day close unavailable (e.g. Fyers /history rate-limited).
-            # Degrade gracefully: derive ATM from the current spot and return the
-            # ATM strike for both the CE and PE legs instead of erroring out.
-            spot = None
-            try:
-                if _is_fyers and _data_provider:
-                    fsym = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-INDEX'
-                    q = _data_provider.ltp([fsym]) or {}
-                    spot = (q.get(fsym) or {}).get('last_price')
-                else:
-                    spot = kite_svc.get_current_ltp(symbol)
-            except Exception as exc:
-                logger.warning(f'[PremStrikes] spot fallback failed for {symbol}: {exc}')
-
-            if not spot:
-                return jsonify({'success': False, 'error': 'Could not fetch previous-day close for index'}), 500
-
-            atm_fb = int(round(spot / step) * step)
+        snap = _prem_snapshot_base(symbol, step, date_str)
+        if snap:
+            base_strike, base_ce_close, base_pe_close, snap_price, snap_ts = snap
             logger.info(
-                f'[PremStrikes] {symbol}: prev-close unavailable, ATM fallback '
-                f'from spot={spot} -> ATM={atm_fb} (returning ATM for both CE & PE)'
+                f'[PremStrikes] {symbol}: snapshot {snap_ts} spot={snap_price:.2f} '
+                f'-> base={base_strike}, CE={base_ce_close:.2f}, PE={base_pe_close:.2f}, '
+                f'diff={abs(base_ce_close - base_pe_close):.2f}'
             )
-            return jsonify({
-                'success':        True,
-                'symbol':         symbol,
-                'atm_fallback':   True,
-                'base_strike':    atm_fb,
-                'base_ce_close':  None,
-                'base_pe_close':  None,
-                'ce_strike':      atm_fb,
-                'pe_strike':      atm_fb,
-                'strike_diff':    0,
-                'ce_strike_data': {'ce_close': None, 'pe_close': None},
-                'pe_strike_data': {'ce_close': None, 'pe_close': None},
-            })
+        else:
+            # ── Fallback chain: previous-day closes ────────────────────
+            source = 'prev_close'
+            # Kite resolves the index via integer instrument token; Fyers needs its
+            # own index symbol (e.g. NSE:NIFTY50-INDEX), so branch on provider.
+            # Well-known Kite index tokens (indices are not reliably resolvable via
+            # KiteService.get_instrument_token, which returned None here and caused
+            # the "Could not fetch previous-day close" error).
+            _KITE_INDEX_TOKENS = {
+                'NIFTY': 256265, 'BANKNIFTY': 260105, 'FINNIFTY': 257801,
+                'MIDCPNIFTY': 288009, 'NIFTY MIDCAP 150': 266249, 'NIFTY AUTO': 263433,
+                'NIFTY Smallcap 100': 267017, 'NIFTY SMLCAP 100': 267017,
+                'NIFTY FMCG': 261897, 'NIFTY METAL': 263689, 'NIFTY PHARAMA': 262409,
+                'NIFTY PHARMA': 262409, 'NIFTY PSU BANK': 262921, 'NIFTY IT': 259849,
+            }
+            idx_close = None
+            if _is_fyers and _data_provider:
+                idx_token = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-INDEX'
+                idx_close = _fetch_prev_close(idx_token)
+            else:
+                idx_close = kite_svc.get_previous_trading_day_close(symbol)
+                if not idx_close:
+                    # Fallback: resolve the index via the known Kite token directly.
+                    kite_tok = _KITE_INDEX_TOKENS.get(symbol) or kite_svc.get_instrument_token(symbol)
+                    if kite_tok:
+                        idx_close = _fetch_prev_close(kite_tok)
 
-        atm = int(round(idx_close / step) * step)
+            logger.info(
+                f'[PremStrikes] no OI snapshot for {symbol}; idx_close resolution: '
+                f'provider={"fyers" if _is_fyers else "kite"}, idx_close={idx_close}'
+            )
+            if not idx_close:
+                # Previous-day close unavailable (e.g. Fyers /history rate-limited).
+                # Degrade gracefully: derive ATM from the current spot and return the
+                # ATM strike for both the CE and PE legs instead of erroring out.
+                spot = None
+                try:
+                    if _is_fyers and _data_provider:
+                        fsym = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-INDEX'
+                        q = _data_provider.ltp([fsym]) or {}
+                        spot = (q.get(fsym) or {}).get('last_price')
+                    else:
+                        spot = kite_svc.get_current_ltp(symbol)
+                except Exception as exc:
+                    logger.warning(f'[PremStrikes] spot fallback failed for {symbol}: {exc}')
 
-        # ── 2. Candidate strikes (5) sorted by distance from idx_close ─
-        candidates = sorted(
-            [atm + i * step for i in range(-2, 3)],
-            key=lambda s: abs(s - idx_close)
-        )
+                if not spot:
+                    return jsonify({'success': False, 'error': 'Could not fetch previous-day close for index'}), 500
 
-        # ── 3. Resolve tokens and fetch CE/PE closes for all candidates in parallel ─
-        tok_map = {}  # strike -> {ce: token, pe: token}
-        for s in candidates:
-            ce_tok, _ = _get_cached_strike_token(kite_svc, _data_provider, _is_fyers, symbol, s, 'CE')
-            pe_tok, _ = _get_cached_strike_token(kite_svc, _data_provider, _is_fyers, symbol, s, 'PE')
-            tok_map[s] = {'ce': ce_tok, 'pe': pe_tok}
+                atm_fb = int(round(spot / step) * step)
+                logger.info(
+                    f'[PremStrikes] {symbol}: prev-close unavailable, ATM fallback '
+                    f'from spot={spot} -> ATM={atm_fb} (returning ATM for both CE & PE)'
+                )
+                return jsonify({
+                    'success':         True,
+                    'symbol':          symbol,
+                    'source':          'atm_fallback',
+                    'atm_fallback':    True,
+                    'base_strike':     atm_fb,
+                    'base_ce_close':   None,
+                    'base_pe_close':   None,
+                    'common_premium':  None,
+                    'strike_offset':   0,
+                    'ce_strike':       atm_fb,
+                    'pe_strike':       atm_fb,
+                    'strike_diff':     0,
+                    'ce_strike_data':  {'ce_close': None, 'pe_close': None},
+                    'pe_strike_data':  {'ce_close': None, 'pe_close': None},
+                })
 
-        futures1 = {}
-        for s, toks in tok_map.items():
-            if toks['ce']: futures1[(s, 'ce')] = _api_executor.submit(_fetch_prev_close, toks['ce'])
-            if toks['pe']: futures1[(s, 'pe')] = _api_executor.submit(_fetch_prev_close, toks['pe'])
+            atm = int(round(idx_close / step) * step)
 
-        close1 = {}
-        for key, fut in futures1.items():
-            try:
-                close1[key] = fut.result(timeout=12)
-            except Exception:
-                close1[key] = None
+            # Candidate strikes (5) around ATM
+            candidates = sorted(
+                [atm + i * step for i in range(-2, 3)],
+                key=lambda s: abs(s - idx_close)
+            )
 
-        # ── 4. Find base strike ────────────────────────────────────────
-        base_strike = None
-        base_ce_close = None
-        base_pe_close = None
-        for s in candidates:
-            ce_c = close1.get((s, 'ce'))
-            pe_c = close1.get((s, 'pe'))
-            if ce_c is not None and pe_c is not None and abs(ce_c - pe_c) <= max_diff:
-                base_strike, base_ce_close, base_pe_close = s, ce_c, pe_c
-                break
+            # Resolve tokens and fetch CE/PE closes for all candidates in parallel
+            tok_map = {}  # strike -> {ce: token, pe: token}
+            for s in candidates:
+                ce_tok, _ = _get_cached_strike_token(kite_svc, _data_provider, _is_fyers, symbol, s, 'CE')
+                pe_tok, _ = _get_cached_strike_token(kite_svc, _data_provider, _is_fyers, symbol, s, 'PE')
+                tok_map[s] = {'ce': ce_tok, 'pe': pe_tok}
 
-        if base_strike is None:
-            # Fallback: use ATM even if the condition is not met
-            base_strike   = atm
-            base_ce_close = close1.get((atm, 'ce'))
-            base_pe_close = close1.get((atm, 'pe'))
+            futures1 = {}
+            for s, toks in tok_map.items():
+                if toks['ce']: futures1[(s, 'ce')] = _api_executor.submit(_fetch_prev_close, toks['ce'])
+                if toks['pe']: futures1[(s, 'pe')] = _api_executor.submit(_fetch_prev_close, toks['pe'])
 
-        # ── 5. Compute CE/PE strikes ───────────────────────────────────
-        ce_val   = base_ce_close or 0
-        pe_val   = base_pe_close or 0
-        # Strike distance from base is the tiered ladder value covering the
-        # premium (200 -> 300 -> 400 -> ...), not a plain round to `step` —
-        # a fixed step under-shoots on gap days when the premium itself is
-        # already bigger than that step (see _tiered_strike_diff). `extra_leg`
-        # is the manual widen from the UI dropdown, split evenly per leg.
-        ce_strike = int(base_strike - _tiered_strike_diff(ce_val) - extra_leg)
-        pe_strike = int(base_strike + _tiered_strike_diff(pe_val) + extra_leg)
+            close1 = {}
+            for key, fut in futures1.items():
+                try:
+                    close1[key] = fut.result(timeout=12)
+                except Exception:
+                    close1[key] = None
+
+            # Same "small diff strike" rule as the snapshot path: the candidate
+            # whose CE and PE prices are closest together wins, ties breaking
+            # toward the strike nearest the index close.
+            usable = [
+                s for s in candidates
+                if close1.get((s, 'ce')) is not None and close1.get((s, 'pe')) is not None
+            ]
+            if usable:
+                base_strike = min(
+                    usable,
+                    key=lambda s: (abs(close1[(s, 'ce')] - close1[(s, 'pe')]), abs(s - idx_close))
+                )
+                base_ce_close = close1[(base_strike, 'ce')]
+                base_pe_close = close1[(base_strike, 'pe')]
+                spread = abs(base_ce_close - base_pe_close)
+                if spread > max_diff:
+                    logger.info(
+                        f'[PremStrikes] {symbol}: best CE/PE spread {spread:.2f} at '
+                        f'{base_strike} exceeds max_diff={max_diff}; using it anyway'
+                    )
+            else:
+                # Nothing usable — fall back to ATM with whatever data exists.
+                base_strike   = atm
+                base_ce_close = close1.get((atm, 'ce'))
+                base_pe_close = close1.get((atm, 'pe'))
+
+            logger.info(
+                f'[PremStrikes] {symbol}: idx_close={idx_close:.2f}, ATM={atm}, base={base_strike}'
+            )
+
+        # ── 2. Common premium → one symmetric offset for both legs ─────
+        # The two legs share a single distance: average the base strike's CE and
+        # PE prices and ladder that up to the next 100 (see _tiered_strike_diff).
+        # Using each leg's own premium instead would push the strikes out
+        # asymmetrically and break the equal-range triangle the setup relies on.
+        # `extra_leg` is the manual widen from the UI dropdown, added per leg.
+        common_premium = ((base_ce_close or 0) + (base_pe_close or 0)) / 2.0
+        strike_offset  = _tiered_strike_diff(common_premium) + extra_leg
+        ce_strike = int(base_strike - strike_offset)
+        pe_strike = int(base_strike + strike_offset)
 
         logger.info(
-            f'[PremStrikes] {symbol}: idx_close={idx_close:.2f}, ATM={atm}, '
-            f'base={base_strike}, CE_close={ce_val:.2f}, PE_close={pe_val:.2f} '
-            f'-> CE_strike={ce_strike}, PE_strike={pe_strike}'
+            f'[PremStrikes] {symbol} [{source}]: base={base_strike}, '
+            f'CE={base_ce_close}, PE={base_pe_close}, common={common_premium:.2f} '
+            f'-> offset={strike_offset} -> CE_strike={ce_strike}, PE_strike={pe_strike}'
         )
 
         # ── 6. Fetch prev-day closes for CE_strike and PE_strike ───────
@@ -9973,9 +10101,14 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         return jsonify({
             'success':        True,
             'symbol':         symbol,
+            'source':         source,
+            'snapshot_price': snap_price,
+            'snapshot_time':  snap_ts,
             'base_strike':    base_strike,
             'base_ce_close':  base_ce_close,
             'base_pe_close':  base_pe_close,
+            'common_premium': round(common_premium, 2),
+            'strike_offset':  strike_offset,
             'ce_strike':      ce_strike,
             'pe_strike':      pe_strike,
             'strike_diff':    abs(pe_strike - ce_strike),
@@ -11400,6 +11533,22 @@ def _xirr(flows: list, min_days: int = 7):
     return (lo + hi) / 2
 
 
+def _sm_period_return(flows: list):
+    """Un-annualised money-weighted return, for spans _xirr can't annualise.
+
+    A config in its first week has no span to annualise over — on day 0 there
+    isn't one at all, and the rate is mathematically undefined. Rather than show
+    nothing, fall back to plain (closing value / money in) − 1, the same thing
+    CAGR does below its own one-week threshold. Timing is ignored, which over a
+    handful of days moves the answer by less than the rounding.
+    """
+    paid_in = sum(-a for _, a in flows if a < 0)
+    closing = sum(a for _, a in flows if a > 0)
+    if paid_in <= 0:
+        return None
+    return closing / paid_in - 1.0
+
+
 def _sm_compute_today_rankings(index_name: str):
     """Return today's momentum rankings using avg(3M, 6M, 9M) — same as Swing Trade tab.
 
@@ -12577,7 +12726,8 @@ def sm_live_signal(config_id):
         # over calendar time, so it can't see *when* each SIP arrived — money put
         # in last month is credited with the same holding period as the original
         # capital. XIRR discounts every contribution from its own date.
-        xirr_pct = None
+        xirr_pct        = None
+        xirr_annualised = True
         try:
             flows  = []
             since  = config.get('live_since')
@@ -12593,9 +12743,15 @@ def sm_live_signal(config_id):
             # loss rather than as the drag on returns that it actually is.
             flows.append((today, total_curr_val + cash_bal))
             rate = _xirr(flows)
+            if rate is None:
+                # Too new (or too flat) to annualise — show the period return so
+                # a config has a figure from the day it goes live.
+                rate            = _sm_period_return(flows)
+                xirr_annualised = False
             xirr_pct = round(rate * 100, 2) if rate is not None else None
         except Exception:
-            xirr_pct = None
+            xirr_pct        = None
+            xirr_annualised = True
 
         return jsonify({
             'success':                True,
@@ -12623,6 +12779,7 @@ def sm_live_signal(config_id):
             'total_swp_taken':        round(total_swp, 2),
             'cagr_pct':               cagr_pct,
             'xirr_pct':               xirr_pct,
+            'xirr_annualised':        xirr_annualised,
             'broker':                 config.get('broker'),
             'rankings_pending':       True,
         })

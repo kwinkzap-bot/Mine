@@ -3997,6 +3997,12 @@ function _smLiveRenderConfigs(configs) {
 
     empty.style.display  = configs.length === 0 ? '' : 'none';
 
+    // Ids backing the header "refresh all" button
+    _smConfigIds.length = 0;
+    configs.forEach(c => _smConfigIds.push(c.id));
+    const refreshAllBtn = document.getElementById('smLiveRefreshAll');
+    if (refreshAllBtn) refreshAllBtn.style.display = configs.length === 0 ? 'none' : '';
+
     // ── Group configs by the broker chosen at Go Live ──────────────────────────
     // Each broker becomes its own group; configs with no broker fall into a
     // separate "None — track only" group rendered last.
@@ -4023,23 +4029,61 @@ function _smLiveRenderConfigs(configs) {
     const groupArr = Array.from(groups.values()).sort((a, b) =>
         a.isNone !== b.isNone ? (a.isNone ? 1 : -1) : a.label.localeCompare(b.label));
 
-    container.innerHTML = groupArr.map(g => {
-        const cards   = g.configs.map(c => _smLiveBuildCard(c)).join('');
-        const cnt     = g.configs.length;
+    const cntLbl = n => `${n} config${n > 1 ? 's' : ''}`;
+
+    // A broker group: its own header with per-broker total, nested in the
+    // "Brokers" section.
+    const brokerGroupHtml = g => {
         const typeStr = g.type ? `<span class="sm-broker-group-type">${g.type.toUpperCase()}</span>` : '';
-        const cntLbl  = `${cnt} config${cnt > 1 ? 's' : ''}`;
         return `
-<div class="sm-broker-group ${g.isNone ? 'sm-broker-group-none' : 'sm-broker-group-live'}">
+<div class="sm-broker-group sm-broker-group-live">
     <div class="sm-broker-group-hdr">
-        <span class="sm-broker-group-icon">${g.isNone ? '📋' : '🏦'}</span>
-        <span class="sm-broker-group-name">${g.isNone ? 'None — track only' : g.label}</span>
+        <span class="sm-broker-group-icon">🏦</span>
+        <span class="sm-broker-group-name">${g.label}</span>
         ${typeStr}
         <span class="sm-broker-group-pnl" id="sm-grp-pnl-${g.gid}"></span>
-        <span class="sm-broker-group-count">${cntLbl}</span>
+        <span class="sm-broker-group-count">${cntLbl(g.configs.length)}</span>
     </div>
-    <div class="sm-broker-group-cards">${cards}</div>
+    <div class="sm-broker-group-cards">${g.configs.map(c => _smLiveBuildCard(c)).join('')}</div>
 </div>`;
-    }).join('');
+    };
+
+    // Two top-level sections: every broker under "Brokers", and the
+    // no-broker configs under "None — track only". The track-only section holds
+    // one implicit group, so its cards hang straight off the section header
+    // rather than repeating the same label twice.
+    const sectionHtml = (sid, icon, name, cnt, body, extra = '') => `
+<div class="sm-section sm-section-${sid}">
+    <div class="sm-section-hdr">
+        <span class="sm-section-icon">${icon}</span>
+        <span class="sm-section-name">${name}</span>
+        ${extra}
+        <span class="sm-section-pnl" id="sm-sec-pnl-${sid}"></span>
+        <span class="sm-section-count">${cntLbl(cnt)}</span>
+    </div>
+    <div class="sm-section-body">${body}</div>
+</div>`;
+
+    // The lock lives on the Brokers header — it guards real broker money only.
+    // Track-only cards are never locked, so the section gets no toggle.
+    const lockBtnHtml = `
+        <button id="smLiveActionsToggle" class="sm-actions-lock-btn"
+                onclick="_smToggleCardActions()">Enable</button>`;
+
+    const brokerGroups = groupArr.filter(g => !g.isNone);
+    const noneGroup    = groupArr.find(g => g.isNone);
+    const brokerCount  = brokerGroups.reduce((n, g) => n + g.configs.length, 0);
+
+    let html = '';
+    if (brokerGroups.length) {
+        html += sectionHtml('live', '🏦', 'Brokers', brokerCount,
+            brokerGroups.map(brokerGroupHtml).join(''), lockBtnHtml);
+    }
+    if (noneGroup) {
+        html += sectionHtml('none', '📋', 'None — track only', noneGroup.configs.length,
+            `<div class="sm-broker-group-cards">${noneGroup.configs.map(c => _smLiveBuildCard(c)).join('')}</div>`);
+    }
+    container.innerHTML = html;
 
     _smUpdateGroupPnls();
 
@@ -4047,15 +4091,13 @@ function _smLiveRenderConfigs(configs) {
         btn.addEventListener('click', e => { e.stopPropagation(); _smLiveRemove(btn.dataset.id); }));
     container.querySelectorAll('.sm-live-toggle-btn').forEach(btn =>
         btn.addEventListener('click', e => { e.stopPropagation(); _smLiveToggle(btn.dataset.id, btn); }));
-    container.querySelectorAll('.sm-live-refresh-btn').forEach(btn =>
-        btn.addEventListener('click', e => {
-            e.stopPropagation();
-            _smLiveLoadSignal(btn.dataset.id);
-        }));
     container.querySelectorAll('.sm-live-reinit-btn').forEach(btn =>
         btn.addEventListener('click', e => { e.stopPropagation(); _smLiveReinit(btn.dataset.id); }));
     container.querySelectorAll('.sm-live-card-hdr').forEach(hdr =>
         hdr.addEventListener('click', () => _smLiveExpandToggle(hdr.dataset.id)));
+
+    // Fresh cards render enabled — re-apply whatever the header lock says.
+    _smApplyCardActionsLock();
 
     document.getElementById('smLiveLastUpd').textContent =
         new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -4072,37 +4114,77 @@ const _SM_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Per-config P&L map for header total
 const _smPnlByConfig = {};
+// Ids of every rendered config, in render order — drives the header refresh-all
+const _smConfigIds = [];
+
+// Guard for the destructive per-card actions (Re-init / Pause / ✕) on BROKER
+// cards only — those move real money, so they start locked and the toggle on the
+// Brokers section header unlocks them. Label shows the action the click
+// performs, so "Enable" == still locked. Track-only cards are never touched:
+// nothing there can reach a broker, so their buttons stay live.
+let _smCardActionsEnabled = false;
+
+const _SM_GUARDED_BTNS = '.sm-live-reinit-btn, .sm-live-toggle-btn, .sm-live-remove-btn';
+
+function _smApplyCardActionsLock() {
+    const btn = document.getElementById('smLiveActionsToggle');
+    if (btn) {
+        btn.textContent = _smCardActionsEnabled ? 'Disable' : 'Enable';
+        btn.classList.toggle('sm-actions-unlocked', _smCardActionsEnabled);
+        btn.title = _smCardActionsEnabled
+            ? 'Lock the Re-init / Pause / ✕ buttons on the broker cards'
+            : 'Unlock the Re-init / Pause / ✕ buttons on the broker cards';
+    }
+    document.querySelectorAll(
+        `#smLiveConfigsContainer .sm-section-live :is(${_SM_GUARDED_BTNS})`
+    ).forEach(b => { b.disabled = !_smCardActionsEnabled; });
+}
+
+function _smToggleCardActions() {
+    _smCardActionsEnabled = !_smCardActionsEnabled;
+    _smApplyCardActionsLock();
+}
 // config id → broker-group id (gid), rebuilt on every render
 const _smGroupOfConfig = {};
 
-// Aggregate per-config P&L into each broker group's header chip.
+// Aggregate per-config P&L into each broker group's header chip, and roll the
+// groups up into the two section headers (Brokers / None — track only).
 function _smUpdateGroupPnls() {
-    const sums = {};   // gid → { today, total, has }
+    const sums     = {};   // gid → { today, total, has }
+    const secSums  = {};   // 'live' | 'none' → { today, total, has }
     Object.keys(_smPnlByConfig).forEach(id => {
         const gid = _smGroupOfConfig[id];
         if (!gid) return;
-        const p = _smPnlByConfig[id];
-        const s = sums[gid] || (sums[gid] = { today: 0, total: 0, has: false });
-        s.today += p.today || 0;
-        s.total += p.total || 0;
-        s.has = true;
+        const p   = _smPnlByConfig[id];
+        const sid = gid === 'none' ? 'none' : 'live';
+        [sums[gid]    || (sums[gid]       = { today: 0, total: 0, has: false }),
+         secSums[sid] || (secSums[sid]    = { today: 0, total: 0, has: false })
+        ].forEach(s => {
+            s.today += p.today || 0;
+            s.total += p.total || 0;
+            s.has = true;
+        });
     });
     const fmtVal = (v) => (v >= 0 ? '+₹' : '-₹') +
         Math.abs(v).toLocaleString('en-IN', { maximumFractionDigits: 0 });
-    document.querySelectorAll('.sm-broker-group-pnl').forEach(el => {
-        const gid = el.id.replace('sm-grp-pnl-', '');
-        const s   = sums[gid];
-        if (!s || !s.has) { el.className = 'sm-broker-group-pnl'; el.innerHTML = ''; return; }
-        el.className = 'sm-broker-group-pnl sm-broker-group-pnl-loaded';
+    const paint = (el, s, base, itemCls, labelCls, sepCls) => {
+        if (!s || !s.has) { el.className = base; el.innerHTML = ''; return; }
+        el.className = `${base} ${base}-loaded`;
         el.innerHTML = `
-            <span class="sm-grp-pnl-item ${s.today >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
-                <span class="sm-grp-pnl-label">Today</span>${fmtVal(s.today)}
+            <span class="${itemCls} ${s.today >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
+                <span class="${labelCls}">Today</span>${fmtVal(s.today)}
             </span>
-            <span class="sm-grp-pnl-sep">|</span>
-            <span class="sm-grp-pnl-item ${s.total >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
-                <span class="sm-grp-pnl-label">Total</span>${fmtVal(s.total)}
+            <span class="${sepCls}">|</span>
+            <span class="${itemCls} ${s.total >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
+                <span class="${labelCls}">Total</span>${fmtVal(s.total)}
             </span>`;
-    });
+    };
+    document.querySelectorAll('.sm-broker-group-pnl').forEach(el =>
+        paint(el, sums[el.id.replace('sm-grp-pnl-', '')], 'sm-broker-group-pnl',
+              'sm-grp-pnl-item', 'sm-grp-pnl-label', 'sm-grp-pnl-sep'));
+    document.querySelectorAll('.sm-section-pnl').forEach(el =>
+        paint(el, secSums[el.id.replace('sm-sec-pnl-', '')], 'sm-section-pnl',
+              'sm-sec-pnl-item', 'sm-sec-pnl-label', 'sm-sec-pnl-sep'));
 }
 
 function _smUpdateTotalPnl() {
@@ -4153,7 +4235,6 @@ function _smLiveBuildCard(c) {
         </div>
         <span class="sm-live-inv-chip">₹${inv}</span>
         <div class="sm-live-hdr-actions">
-            <button class="ag-btn ag-btn-strikes ag-btn-icon-only sm-live-refresh-btn" data-id="${c.id}" title="Refresh signal">↻</button>
             <button class="ag-btn ag-btn-strikes sm-live-reinit-btn" data-id="${c.id}" title="Re-initialize live entries with today's rankings">⟳ Re-init</button>
             <span class="sm-actions-divider"></span>
             <button class="ag-btn ag-btn-preview sm-live-toggle-btn" data-id="${c.id}">${toggleLbl}</button>
@@ -4267,8 +4348,9 @@ function _smUpdateMetaRow(id, d) {
         cagrEl.className   = 'sm-meta-item sm-meta-pnl ' + (cagr >= 0 ? 'sm-meta-pos' : 'sm-meta-neg');
     }
 
-    // XIRR is null until the flows can support one (needs a week of history and
-    // a sign change) — hide the chip rather than show a misleading 0%.
+    // A config younger than a week has no span to annualise over, so the server
+    // sends the plain period return with xirr_annualised false — shown from day
+    // one, flagged so the number isn't read as an annual rate.
     const xirrEl  = document.getElementById(`sm-meta-xirr-${id}`);
     const xirrSep = document.getElementById(`sm-meta-xirr-sep-${id}`);
     if (xirrEl) {
@@ -4277,11 +4359,17 @@ function _smUpdateMetaRow(id, d) {
         xirrEl.style.display = show ? '' : 'none';
         if (xirrSep) xirrSep.style.display = show ? '' : 'none';
         if (show) {
-            xirrEl.textContent = 'XIRR ' + (xirr >= 0 ? '+' : '') + Number(xirr).toFixed(1) + '%';
+            const ann = d.xirr_annualised !== false;
+            xirrEl.textContent = 'XIRR ' + (xirr >= 0 ? '+' : '') + Number(xirr).toFixed(1) + '%'
+                               + (ann ? '' : '*');
             xirrEl.className   = 'sm-meta-item sm-meta-pnl ' + (xirr >= 0 ? 'sm-meta-pos' : 'sm-meta-neg');
-            xirrEl.title       = 'Money-weighted return — every SIP and SWP discounted from its own '
-                               + 'date, and idle cash counted in the closing value. CAGR next to it '
-                               + 'ignores when the money arrived.';
+            xirrEl.title       = ann
+                ? 'Money-weighted return — every SIP and SWP discounted from its own '
+                + 'date, and idle cash counted in the closing value. CAGR next to it '
+                + 'ignores when the money arrived.'
+                : '* Return so far, not annualised — this config is under a week old, '
+                + 'so there is no span to project a yearly rate from. Becomes a true '
+                + 'annualised XIRR once it has a week of history.';
         }
     }
     if (reb) reb.textContent = 'Rebal ' + (d.next_rebalance || '—');
@@ -4409,6 +4497,23 @@ function _smLiveLoadSignal(id) {
             _smCache[id].rankings.then(r => { if (r?.success) _smApplyRankings(id, r); });
         });
     }
+}
+
+// Header refresh: re-fetch the signal for every rendered config at once, so the
+// header/group totals and each card's meta row all repaint from one click.
+function _smLiveRefreshAll() {
+    const btn = document.getElementById('smLiveRefreshAll');
+    if (btn) { btn.disabled = true; btn.classList.add('sm-refreshing'); }
+
+    _smConfigIds.forEach(id => _smLiveLoadSignal(id));
+
+    const done = Promise.all(_smConfigIds.map(id => _smCache[id]?.signal).filter(Boolean));
+    done.finally(() => {
+        if (btn) { btn.disabled = false; btn.classList.remove('sm-refreshing'); }
+        const upd = document.getElementById('smLiveLastUpd');
+        if (upd) upd.textContent = new Date().toLocaleTimeString('en-IN',
+            { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    });
 }
 
 function _smLiveRenderSignal(id, d) {

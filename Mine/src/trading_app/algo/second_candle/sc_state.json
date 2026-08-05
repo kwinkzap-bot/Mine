@@ -1,7 +1,7 @@
 {
   "active_trade": null,
   "traded_today": true,
-  "trade_date": "2026-08-03",
+  "trade_date": "2026-08-05",
   "params": {
     "candle_index": 2,
     "rr_ratio": 3.0,
@@ -11,8 +11,8 @@
     "enable_short": false
   },
   "last_exit": {
-    "reason": "EOD",
-    "spot": 24573.35,
-    "time": "2026-08-03T15:28:03.347526"
+    "reason": "SL",
+    "spot": 24620.3,
+    "time": "2026-08-05T09:26:02.180866"
   }
 }

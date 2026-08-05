@@ -248,6 +248,60 @@ body.ocean-theme .sm-gl-overlay {
     margin-right: 3px;
 }
 .sm-tp-sep { color: var(--ag-border); font-weight: 400; }
+
+/* ── Refresh-all icon beside the header total ── */
+.sm-refresh-all-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    font-size: 0.9rem;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 50%;
+    border: 1px solid var(--ag-border);
+    background: var(--ag-accent-dim);
+    color: var(--ag-text-2);
+    transition: color .15s, border-color .15s, background .15s;
+}
+.sm-refresh-all-btn:hover:not(:disabled) {
+    color: var(--ag-text);
+    border-color: var(--ag-text-3);
+}
+.sm-refresh-all-btn:disabled { cursor: default; opacity: .7; }
+.sm-refresh-all-btn.sm-refreshing { animation: sm-spin .8s linear infinite; }
+@keyframes sm-spin { to { transform: rotate(360deg); } }
+
+/* ── Lock toggle for the per-card destructive actions ── */
+.sm-actions-lock-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 11px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: .3px;
+    line-height: 1.5;
+    cursor: pointer;
+    border-radius: 20px;
+    border: 1px solid var(--ag-border);
+    background: var(--ag-accent-dim);
+    color: var(--ag-text-3);
+    transition: color .15s, border-color .15s, background .15s;
+}
+.sm-actions-lock-btn:hover { color: var(--ag-text); border-color: var(--ag-text-3); }
+/* Sits on the Brokers section header, just after the label */
+.sm-section-hdr .sm-actions-lock-btn {
+    margin-left: 4px;
+    flex-shrink: 0;
+    background: var(--ag-surface);
+}
+.sm-actions-lock-btn.sm-actions-unlocked {
+    color: var(--ag-neg);
+    border-color: var(--ag-neg);
+    background: transparent;
+}
 .sm-tp-item.sm-tpnl-pos { color: var(--ag-pos); }
 .sm-tp-item.sm-tpnl-neg { color: var(--ag-neg); }
 
@@ -709,6 +763,80 @@ body.ocean-theme .sm-gl-overlay {
 }
 
 
+/* ── Swing Momentum Live Watch — top-level sections ─────────────── */
+/* Two sections: "Brokers" (holding one group per broker) and
+   "None — track only" (cards hang straight off the section). */
+.sm-section { margin-bottom: 22px; }
+.sm-section:last-child { margin-bottom: 0; }
+
+.sm-section-hdr {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    border: 1px solid var(--ag-border);
+    border-left: 3px solid var(--ag-accent);
+    border-radius: 8px;
+    background: var(--ag-accent-dim);
+}
+.sm-section-none .sm-section-hdr {
+    border-left-color: var(--ag-text-3);
+    background: var(--ag-surface);
+}
+
+.sm-section-icon { font-size: 1rem; line-height: 1; }
+
+.sm-section-name {
+    font-size: 0.86rem;
+    font-weight: 800;
+    letter-spacing: .6px;
+    text-transform: uppercase;
+    color: var(--ag-text);
+}
+.sm-section-none .sm-section-name { color: var(--ag-text-2); }
+
+.sm-section-pnl {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--ag-border);
+    background: var(--ag-surface);
+    opacity: 0;
+    transition: opacity .3s;
+    white-space: nowrap;
+}
+.sm-section-none .sm-section-pnl { background: var(--ag-accent-dim); }
+.sm-section-pnl.sm-section-pnl-loaded { opacity: 1; }
+.sm-section-pnl:empty { display: none; }
+.sm-sec-pnl-label {
+    font-size: 0.58rem;
+    font-weight: 700;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+    color: var(--ag-text-3);
+    margin-right: 3px;
+}
+.sm-sec-pnl-sep { color: var(--ag-border); font-weight: 400; }
+.sm-sec-pnl-item.sm-tpnl-pos { color: var(--ag-pos); }
+.sm-sec-pnl-item.sm-tpnl-neg { color: var(--ag-neg); }
+
+.sm-section-pnl-loaded + .sm-section-count { margin-left: 10px; }
+.sm-section-count {
+    margin-left: auto;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--ag-text-3);
+}
+
+/* Nested broker groups sit inset from the section header */
+.sm-section-live .sm-section-body { padding-left: 14px; }
+
 /* ── Swing Momentum Live Watch — broker groups ──────────────────── */
 .sm-broker-group {
     margin-bottom: 18px;
@@ -733,8 +861,6 @@ body.ocean-theme .sm-gl-overlay {
     color: var(--ag-text);
     letter-spacing: .2px;
 }
-.sm-broker-group-none .sm-broker-group-name { color: var(--ag-text-2); }
-
 .sm-broker-group-type {
     font-size: 0.62rem;
     font-weight: 700;
@@ -919,9 +1045,6 @@ body.ocean-theme .sm-gl-overlay {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-}
-.sm-live-hdr-actions .ag-btn-icon-only {
-    padding: 4px 7px;
 }
 .sm-actions-divider {
     width: 1px;
