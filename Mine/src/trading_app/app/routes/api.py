@@ -4366,11 +4366,15 @@ def run_thirty_min_fakeout_backtest_api():
     x lot_size)), rounded down to at least 1 lot. pnl (points) is
     unchanged; pnl_rupees = pnl x lots x lot_size, net of a flat ₹300
     brokerage per trade (round-trip), is the sized P&L. use_sl_risk_filter
-    (bool, default True) then drops any trade whose sized SL risk (|entry -
+    (bool) then drops any trade whose sized SL risk (|entry -
     SL| x qty) exceeds sl_risk_max (float, default ₹5,000 — user-editable)
     — the setup fired but the position size at this capital makes the
     rupee stop-loss too large to take; that trade never enters the
-    results. The returned summary's totals/averages/drawdown are
+    results. The UI's checkbox loads UNCHECKED and always sends an explicit
+    boolean, so the effective default for a Backtest-page run is OFF (the
+    True fallback here only applies to a caller that omits the field
+    entirely); the live TMF algo's TMF_USE_SL_RISK_FILTER matches that and
+    also defaults off. The returned summary's totals/averages/drawdown are
     computed on the surviving trades' pnl_rupees so stocks of very
     different prices are comparable.
     """

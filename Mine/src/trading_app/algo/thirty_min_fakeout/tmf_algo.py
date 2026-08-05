@@ -56,12 +56,16 @@ Gating (see env/Mine.env):
                                           The few minutes of divergence from
                                           the backtest buy an exit that
                                           actually executes.
-  TMF_USE_SL_RISK_FILTER=true          — skip a setup whose sized rupee stop
-  TMF_MAX_SL_RISK=5000                    exceeds the cap, matching the
-                                          backtest's use_sl_risk_filter /
-                                          sl_risk_max (same defaults). Without
-                                          it, live takes trades the backtest
-                                          never scored.
+  TMF_USE_SL_RISK_FILTER=false         — skip a setup whose sized rupee stop
+  TMF_MAX_SL_RISK=5000                    exceeds the cap. OFF by default,
+                                          matching the Backtest page's own
+                                          default (its "SL Risk Filter"
+                                          checkbox loads unchecked), so live
+                                          takes exactly the trade set the
+                                          default backtest scores. Turning it
+                                          on caps per-trade rupee risk but
+                                          makes live SKIP setups the backtest
+                                          counted.
 
 Every stock with something live on it (watching / pending_entry /
 in_position) is marked to market on each tick — `ltp` plus `unrealized_pnl`
@@ -396,11 +400,13 @@ class TMFAlgo:
         trigger  = _round_to_tick(float(setup['trigger']), tick, 'up' if direction == 'long' else 'down')
         sl_level = _round_to_tick(float(setup['sl_level']), tick, 'up' if direction == 'short' else 'down')
 
-        # Same rupee stop-loss cap the backtest applies at sizing time
-        # (use_sl_risk_filter / sl_risk_max, default ₹5,000): the setup is
-        # valid, but at this capital the position it implies risks more per
-        # trade than the strategy is scored on. Skipping it here is what
-        # keeps live position risk matched to the backtested edge.
+        # The backtest's optional rupee stop-loss cap (use_sl_risk_filter /
+        # sl_risk_max) — OFF by default on both sides, so max_sl_risk is
+        # normally None and every valid setup is taken. When it IS enabled,
+        # the setup is valid but the position at this capital risks more per
+        # trade than the cap allows, so it's dropped. Note this sizes off the
+        # TRIGGER, not a fill: the entry hasn't happened yet, so the check has
+        # to run on the level the order will be placed at.
         qty = max(1, int((capital_per_trade * TMF_EQUITY_LEVERAGE) // trigger)) if trigger > 0 else 1
         sl_risk = abs(trigger - sl_level) * qty
         if max_sl_risk is not None and sl_risk > max_sl_risk:
@@ -1300,11 +1306,12 @@ class TMFAlgo:
             exit_minute = int(self._uvar('TMF_EXIT_MINUTE', '5') or 5)
             cutoff_mins = exit_hour * 60 + exit_minute
             algo_active = self._uvar('TMF_ALGO_ACTIVE', 'false').lower() == 'true'
-            # Mirrors the backtest's use_sl_risk_filter / sl_risk_max (both
-            # default on at ₹5,000 in api.py) — set TMF_USE_SL_RISK_FILTER=false
-            # to take every setup regardless of its sized rupee stop.
+            # The backtest's use_sl_risk_filter / sl_risk_max. Default OFF to
+            # match the Backtest page's unchecked "SL Risk Filter" checkbox —
+            # set TMF_USE_SL_RISK_FILTER=true to cap the sized rupee stop at
+            # TMF_MAX_SL_RISK, which then skips setups the backtest scored.
             max_sl_risk: Optional[float] = None
-            if self._uvar('TMF_USE_SL_RISK_FILTER', 'true').lower() == 'true':
+            if self._uvar('TMF_USE_SL_RISK_FILTER', 'false').lower() == 'true':
                 max_sl_risk = float(self._uvar('TMF_MAX_SL_RISK', '5000') or 5000)
             logger.info(f"[TMF] Config — capital/trade ₹{capital_per_trade:,.0f}, cutoff {exit_hour:02d}:{exit_minute:02d}, "
                         f"orders {'ON' if algo_active else 'OFF'}, max SL risk "
