@@ -85,8 +85,8 @@
       "lot_size": 100,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 7456.0,
-      "ltp_time": "2026-08-05T09:36:27.744453"
+      "ltp": 7566.5,
+      "ltp_time": "2026-08-05T11:03:23.708566"
     },
     "AMBUJACEM": {
       "phase": "no_setup",
@@ -167,8 +167,8 @@
       "lot_size": 1425,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 392.5,
-      "ltp_time": "2026-08-05T09:36:27.744460"
+      "ltp": 390.65,
+      "ltp_time": "2026-08-05T11:03:23.708577"
     },
     "BHARTIARTL": {
       "phase": "watching",
@@ -183,8 +183,8 @@
       "lot_size": 475,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 1975.9,
-      "ltp_time": "2026-08-05T09:36:27.744462"
+      "ltp": 1978.5,
+      "ltp_time": "2026-08-05T11:03:23.708581"
     },
     "BIOCON": {
       "phase": "watching",
@@ -199,8 +199,8 @@
       "lot_size": 2500,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 427.8,
-      "ltp_time": "2026-08-05T09:36:27.744464"
+      "ltp": 427.0,
+      "ltp_time": "2026-08-05T11:03:23.708584"
     },
     "BLUESTARCO": {
       "phase": "no_setup",
@@ -272,8 +272,8 @@
       "lot_size": 2075,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 470.8,
-      "ltp_time": "2026-08-05T09:36:27.744465"
+      "ltp": 470.4,
+      "ltp_time": "2026-08-05T11:03:23.708598"
     },
     "DMART": {
       "phase": "watching",
@@ -288,8 +288,8 @@
       "lot_size": 150,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 3998.0,
-      "ltp_time": "2026-08-05T09:36:27.744467"
+      "ltp": 3993.7,
+      "ltp_time": "2026-08-05T11:03:23.708601"
     },
     "DRREDDY": {
       "phase": "no_setup",
@@ -339,8 +339,8 @@
       "lot_size": 250,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 3165.0,
-      "ltp_time": "2026-08-05T09:36:27.744468"
+      "ltp": 3218.0,
+      "ltp_time": "2026-08-05T11:03:23.708667"
     },
     "HAL": {
       "phase": "watching",
@@ -355,8 +355,8 @@
       "lot_size": 150,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 4668.3,
-      "ltp_time": "2026-08-05T09:36:27.744469"
+      "ltp": 4639.9,
+      "ltp_time": "2026-08-05T11:03:23.708672"
     },
     "HAVELLS": {
       "phase": "no_setup",
@@ -381,13 +381,13 @@
       "lot_size": 300,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-04",
-      "ltp": 2581.0,
-      "ltp_time": "2026-08-05T09:36:27.744490",
+      "ltp": 2580.3,
+      "ltp_time": "2026-08-05T11:03:23.708722",
       "entry_price": 2562.1,
       "target_level": 2459.62,
       "qty": 300,
       "entry_time": "2026-08-04T11:38:16.248597",
-      "unrealized_pnl": -5670.0
+      "unrealized_pnl": -5460.0
     },
     "HDFCLIFE": {
       "phase": "no_setup",
@@ -438,8 +438,8 @@
       "lot_size": 1000,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 866.0,
-      "ltp_time": "2026-08-05T09:36:27.744471"
+      "ltp": 861.0,
+      "ltp_time": "2026-08-05T11:03:23.708679"
     },
     "INDUSINDBK": {
       "phase": "watching",
@@ -454,8 +454,8 @@
       "lot_size": 700,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 1035.9,
-      "ltp_time": "2026-08-05T09:36:27.744472"
+      "ltp": 1029.4,
+      "ltp_time": "2026-08-05T11:03:23.708682"
     },
     "INFY": {
       "phase": "no_setup",
@@ -537,8 +537,8 @@
       "lot_size": 225,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 2416.1,
-      "ltp_time": "2026-08-05T09:36:27.744473"
+      "ltp": 2398.0,
+      "ltp_time": "2026-08-05T11:03:23.708685"
     },
     "MFSL": {
       "phase": "no_setup",
@@ -609,9 +609,9 @@
       "qty": 1400,
       "entry_time": "2026-07-30T09:52:33.286268",
       "future_month": "AUG 2026",
-      "ltp": 439.3,
-      "ltp_time": "2026-08-05T09:36:27.744495",
-      "unrealized_pnl": -26180.0
+      "ltp": 442.9,
+      "ltp_time": "2026-08-05T11:03:23.708734",
+      "unrealized_pnl": -21140.0
     },
     "ONGC": {
       "phase": "watching",
@@ -626,8 +626,8 @@
       "lot_size": 2250,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 241.47,
-      "ltp_time": "2026-08-05T09:36:27.744475"
+      "ltp": 240.19,
+      "ltp_time": "2026-08-05T11:03:23.708687"
     },
     "PAGEIND": {
       "phase": "no_setup",
@@ -652,8 +652,8 @@
       "lot_size": 1300,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 420.5,
-      "ltp_time": "2026-08-05T09:36:27.744477"
+      "ltp": 417.4,
+      "ltp_time": "2026-08-05T11:03:23.708690"
     },
     "PIIND": {
       "phase": "no_setup",
@@ -739,8 +739,8 @@
       "lot_size": 350,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 1948.1,
-      "ltp_time": "2026-08-05T09:36:27.744478"
+      "ltp": 1962.1,
+      "ltp_time": "2026-08-05T11:03:23.708695"
     },
     "SUPREMEIND": {
       "phase": "no_setup",
@@ -765,8 +765,8 @@
       "lot_size": 1450,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 383.4,
-      "ltp_time": "2026-08-05T09:36:27.744480"
+      "ltp": 381.6,
+      "ltp_time": "2026-08-05T11:03:23.708700"
     },
     "TCS": {
       "phase": "no_setup",
@@ -807,8 +807,8 @@
       "lot_size": 225,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 3138.0,
-      "ltp_time": "2026-08-05T09:36:27.744482"
+      "ltp": 3134.4,
+      "ltp_time": "2026-08-05T11:03:23.708703"
     },
     "TVSMOTOR": {
       "phase": "no_setup",
@@ -834,8 +834,8 @@
       "lot_size": 1355,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 582.6,
-      "ltp_time": "2026-08-05T09:36:27.744483"
+      "ltp": 583.7,
+      "ltp_time": "2026-08-05T11:03:23.708705"
     },
     "VOLTAS": {
       "phase": "no_setup",
@@ -875,13 +875,13 @@
       "lot_size": 350,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-04",
-      "ltp": 1920.0,
-      "ltp_time": "2026-08-05T09:36:27.744497",
+      "ltp": 1936.2,
+      "ltp_time": "2026-08-05T11:03:23.708739",
       "entry_price": 1965.0,
       "target_level": 2033.77,
       "qty": 350,
       "entry_time": "2026-08-04T09:15:03.765597",
-      "unrealized_pnl": -15750.0
+      "unrealized_pnl": -10080.0
     },
     "CROMPTON": {
       "phase": "no_setup",
@@ -901,8 +901,8 @@
       "lot_size": 100,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 7984.0,
-      "ltp_time": "2026-08-05T09:36:27.744487"
+      "ltp": 7994.0,
+      "ltp_time": "2026-08-05T11:03:23.708708"
     },
     "ICICIPRULI": {
       "phase": "no_setup",
@@ -942,8 +942,8 @@
       "lot_size": 1725,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-05",
-      "ltp": 287.9,
-      "ltp_time": "2026-08-05T09:36:27.744489"
+      "ltp": 287.0,
+      "ltp_time": "2026-08-05T11:03:23.708711"
     },
     "M&M": {
       "phase": "no_setup",

@@ -3,9 +3,9 @@
   "buy_needs_reset": false,
   "sell_needs_reset": false,
   "last_exit": {
-    "reason": "EOD",
-    "spot": 24573.35,
-    "time": "2026-08-03T15:28:02.043269"
+    "reason": "SL",
+    "spot": 24583.7,
+    "time": "2026-08-05T10:28:25.031698"
   },
   "pending_signal": null
 }
