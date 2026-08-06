@@ -34,7 +34,12 @@ def get_kite(user: Optional[str] = None, instance: Optional[int] = None) -> Opti
         if not api_key or not access_token:
             return None
 
-        kite = KiteConnect(api_key=api_key)
+        # kiteconnect's own default is 7s, which is far too tight for an order
+        # POST at 09:15-09:16 — api.kite.trade routinely takes longer than that
+        # under market-open load, and a read timeout there loses the entry
+        # (see KiteService._safe_place_order for how a timed-out POST is
+        # reconciled). Matches KiteService._create_kite_instance.
+        kite = KiteConnect(api_key=api_key, timeout=30)
         apply_kite_proxy(kite)
         kite.set_access_token(access_token)
         return kite

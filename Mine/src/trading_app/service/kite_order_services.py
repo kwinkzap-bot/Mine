@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 import re
 import threading
 import time
+import uuid
 import pickle
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -845,7 +846,43 @@ class KiteService:
         msg = str(exc).lower()
         return any(k in msg for k in ('socks', 'connect timeout', 'connectionerror', 'proxies', 'proxyerror', 'connect timed out'))
 
+    @staticmethod
+    def _is_read_timeout(exc: Exception) -> bool:
+        """A *read* timeout — request sent, reply never arrived. Unlike a
+        connect timeout this says nothing about whether the order was accepted,
+        so it must never be blind-retried."""
+        msg = str(exc).lower()
+        return 'read timed out' in msg or 'read timeout' in msg
+
+    def _find_order_by_tag(self, tag: str, attempts: int = 3) -> Tuple[bool, Optional[str]]:
+        """Search today's order book for the order carrying `tag`.
+
+        Returns (book_was_read, order_id). A False first element means the book
+        itself could not be fetched — the caller must treat the placement as
+        UNKNOWN and must not retry, or it risks doubling the position."""
+        time.sleep(1)  # give a timed-out POST a moment to surface in the book
+        for i in range(attempts):
+            try:
+                orders = self.kite.orders() or []
+            except Exception as e:
+                logging.warning(
+                    f"[KiteService] order-book check for tag {tag} failed "
+                    f"({i + 1}/{attempts}): {e}"
+                )
+                time.sleep(1)
+                continue
+            for o in orders:
+                if str(o.get('tag') or '') == tag:
+                    return True, str(o.get('order_id'))
+            return True, None
+        return False, None
+
     def _safe_place_order(self, variety: str, exchange: str, tradingsymbol: str, transaction_type: str, quantity: int, product: str, order_type: str, price: Optional[float] = None, trigger_price: Optional[float] = None, tag: Optional[str] = None, market_protection: Optional[int] = -1) -> Any:
+        # Kite's order tag doubles as our idempotency key: when the POST times
+        # out mid-flight we can't tell from the exception whether the order
+        # reached the exchange, so we look this tag up in the order book before
+        # deciding to retry. Max 20 chars, alphanumeric.
+        tag = tag or f"mn{uuid.uuid4().hex[:12]}"
         params = {
             "variety": variety,
             "exchange": exchange,
@@ -889,6 +926,29 @@ class KiteService:
                     if ensure_ssh_tunnel():
                         apply_kite_proxy(self.kite)
                     time.sleep(1)
+                    continue
+                if attempt < 2 and self._is_read_timeout(exc):
+                    book_read, existing = self._find_order_by_tag(tag)
+                    if existing:
+                        logging.warning(
+                            f"[KiteService] Order POST timed out but {tradingsymbol} "
+                            f"reached the exchange (order_id={existing}, tag={tag}) — "
+                            f"not retrying: {exc}"
+                        )
+                        return existing
+                    if not book_read:
+                        # Can't confirm either way. Failing here loses the entry;
+                        # retrying could double it. Losing it is the cheaper error.
+                        logging.error(
+                            f"[KiteService] Order POST timed out for {tradingsymbol} and "
+                            f"the order book is unreachable — status UNKNOWN, not retrying. "
+                            f"CHECK THE BROKER MANUALLY (tag={tag}): {exc}"
+                        )
+                        raise
+                    logging.warning(
+                        f"[KiteService] Order POST timed out for {tradingsymbol}, tag {tag} "
+                        f"absent from the order book — retrying (attempt {attempt + 2}/3): {exc}"
+                    )
                     continue
                 raise
 
