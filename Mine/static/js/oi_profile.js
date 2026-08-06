@@ -25,6 +25,13 @@ let oipOptionData = null;
 // Last candles pushed to oipOISeries, kept UNTAGGED (no 5m Close Border) so the
 // indicator can be re-applied on a toggle/colour change without a refetch.
 let oipOILastCandles = null;
+// Latest index candles that came back from /api/oi-profile/candles, whether or
+// not this tick painted them. The OI Profile (NIFTY Index) chart is deliberately
+// excluded from the live 2s poll and only repaints on its header ⟳ button (see
+// oipElems.indexRefreshBtn), but the Opt Prem charts align their bars to the
+// index timeline (oipRefreshLocalView) — so they read the live timeline from
+// here rather than from the frozen oipOISeries.
+let oipLatestIndexCandles = null;
 let oipVwapIntSeries = null;
 let oipVwapIntPeSeries = null;
 // CVWAP (current-session) / PVWAP (previous-session) — main index chart + premium chart
@@ -185,7 +192,8 @@ const oipElems = {
     showEma9: null, showEma20: null, showEma50: null, showEma100: null, showEma200: null,
     exitAll: null,
     slPrice: null, slCEBtn: null, slPEBtn: null,
-    fixedStrikeDropdown: null, fixedStrikeUpdateBtn: null
+    fixedStrikeDropdown: null, fixedStrikeUpdateBtn: null,
+    indexRefreshBtn: null
 };
 
 
@@ -258,6 +266,7 @@ function oipInitElems() {
     oipElems.fixedStrikeDropdown = document.getElementById('oipFixedStrikeDropdown');
     oipElems.fixedStrikeUpdateBtn = document.getElementById('oipFixedStrikeUpdateBtn');
     oipElems.fixedStrikeRefreshBtn = document.getElementById('oipFixedStrikeRefreshBtn');
+    oipElems.indexRefreshBtn = document.getElementById('oipIndexRefreshBtn');
 
     // IVP & Alerts
     oipElems.hdrIVP = document.getElementById('hdrIVP');
@@ -645,6 +654,20 @@ document.addEventListener('DOMContentLoaded', () => {
     // latest candles without changing the selected strike.
     oipElems.fixedStrikeRefreshBtn?.addEventListener('click', () => {
         oipLoadCandles(true, false, true);
+    });
+
+    // The OI Profile (NIFTY Index) chart is likewise excluded from the live 2s
+    // poll — oipCandleLoop passes paintIndex=false, so the index candles and
+    // everything computed off them (VWAPs, EMAs, CPR, Monday box, reversal
+    // lines) hold their last painted state. This button is the only thing that
+    // pulls fresh index candles and paints them. The OI bars / max-pain overlay
+    // stay on their own 30s loop (oipOILoop) and are unaffected.
+    oipElems.indexRefreshBtn?.addEventListener('click', async () => {
+        const btn = oipElems.indexRefreshBtn;
+        btn.classList.add('spin');
+        btn.disabled = true;
+        try { await oipLoadCandles(true, false, false, true); }
+        finally { btn.classList.remove('spin'); btn.disabled = false; }
     });
 
     oipElems.targetDistance?.addEventListener('change', () => {
@@ -1120,7 +1143,11 @@ async function oipCandleLoop() {
         // Fixed 24000 Monthly chart is excluded from the recurring live poll —
         // it only refreshes on initial load, Update, or the chart's own
         // Refresh button (see oipElems.fixedStrikeRefreshBtn below).
-        await oipLoadCandles(true, false, false);
+        // The OI Profile (NIFTY Index) chart is excluded the same way
+        // (paintIndex=false): the fetch still runs — its response carries the
+        // Opt Prem and Round Strike legs — but the index chart is not repainted
+        // until the user clicks its own ⟳ button.
+        await oipLoadCandles(true, false, false, false);
         success = true;
     } catch (err) { console.error('[OIP] Candle Loop Err:', err); }
     finally {
@@ -1223,7 +1250,13 @@ function oipUpdateFixedChart(data) {
     oipUpdateFixedStrikeTitle();
 }
 
-async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed = true) {
+// paintIndex=false leaves the OI Profile (NIFTY Index) chart untouched: the
+// request still goes out and its Opt Prem / Round Strike / fixed-chart legs are
+// rendered as usual, but the index candles are only parked (oipLatestIndexCandles)
+// instead of being pushed to the chart. The live poll is the only caller that
+// passes false — every user-driven path (symbol/interval/strike change, the ⟳
+// button) paints.
+async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed = true, paintIndex = true) {
     try {
 
         const h = parseFloat(oipElems.spotHigh?.value || 0);
@@ -1336,7 +1369,12 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
             // callback would try to sync all other charts to a stale/auto-fitted position.
             window._oipDataRefreshing = true;
 
-            if (validCandles.length) {
+            // Park the fresh candles even on a tick that won't paint them — the
+            // Opt Prem charts align their bars to this timeline and must keep
+            // advancing while the index chart itself is frozen.
+            if (validCandles.length) oipLatestIndexCandles = validCandles;
+
+            if (paintIndex && validCandles.length) {
                 try {
                     // Parked untagged so the 5m Close Border indicator can be
                     // re-applied on a toggle/colour change without a refetch.
@@ -1362,21 +1400,28 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
                     if (oipElems.hdrVolSymbol) oipElems.hdrVolSymbol.textContent = data.future_symbol || '--';
                     if (oipElems.hdrVolCard) oipElems.hdrVolCard.classList.toggle('hidden', !data.future_symbol);
                 } catch (e) { console.warn('[OIP] SetData Err:', e); }
+            } else if (oipOILastCandles?.length) {
+                // Frozen tick — the chart still holds the last painted candles,
+                // so keep it flagged ready or the cross-chart sync below would
+                // treat it as an unloaded chart.
+                oipOIChartReady = true;
             }
 
-            // Fixed EMAs — single-pass over candles for all 5 periods
-            if (oipEma9Series || oipEma20Series || oipEma50Series || oipEma100Series || oipEma200Series) {
-                const allEmas = oipCalculateAllEMAs(validCandles);
-                if (oipEma9Series) oipEma9Series.setData(allEmas.ema9);
-                if (oipEma20Series) oipEma20Series.setData(allEmas.ema20);
-                if (oipEma50Series) oipEma50Series.setData(allEmas.ema50);
-                if (oipEma100Series) oipEma100Series.setData(allEmas.ema100);
-                if (oipEma200Series) oipEma200Series.setData(allEmas.ema200);
-            }
+            if (paintIndex) {
+                // Fixed EMAs — single-pass over candles for all 5 periods
+                if (oipEma9Series || oipEma20Series || oipEma50Series || oipEma100Series || oipEma200Series) {
+                    const allEmas = oipCalculateAllEMAs(validCandles);
+                    if (oipEma9Series) oipEma9Series.setData(allEmas.ema9);
+                    if (oipEma20Series) oipEma20Series.setData(allEmas.ema20);
+                    if (oipEma50Series) oipEma50Series.setData(allEmas.ema50);
+                    if (oipEma100Series) oipEma100Series.setData(allEmas.ema100);
+                    if (oipEma200Series) oipEma200Series.setData(allEmas.ema200);
+                }
 
-            oipUpdateEmaVisibility();
-            oipDrawCpr(validCandles);
-            oipDrawMultiCPR(validCandles);
+                oipUpdateEmaVisibility();
+                oipDrawCpr(validCandles);
+                oipDrawMultiCPR(validCandles);
+            }
 
             // 9:18 ATM CE OI lines — always compute & cache (kept ready);
             // oipDrawAtmCeOiLines() only renders when the checkbox is on.
@@ -1401,9 +1446,15 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
                 // No option data in index view — draw OI-chart boxes only
                 oipDraw2ndCandle30sBox(validCandles);
                 oipDraw2nd5mCandleBox(validCandles);
-                oipDrawMondayBox(validCandles);
-                oipDraw30mReversalLines(validCandles);
-                oipDraw1DReversalLines(validCandles);
+                // Monday box and both reversal-line sets live on the index
+                // chart alone, so they follow its paint gate. The 2nd-candle
+                // boxes above are day-anchored and also drawn on the (still
+                // live) option charts, so they refresh either way.
+                if (paintIndex) {
+                    oipDrawMondayBox(validCandles);
+                    oipDraw30mReversalLines(validCandles);
+                    oipDraw1DReversalLines(validCandles);
+                }
             } else {
 
                 const ceStrike = data.intrinsic?.itm_ce_strike, peStrike = data.intrinsic?.itm_pe_strike;
@@ -1434,9 +1485,13 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
                 // Draw boxes after oipOptionData is refreshed so CE/PE charts use the new strike's candles
                 oipDraw2ndCandle30sBox(validCandles);
                 oipDraw2nd5mCandleBox(validCandles);
-                oipDrawMondayBox(validCandles);
-                oipDraw30mReversalLines(validCandles);
-                oipDraw1DReversalLines(validCandles);
+                // Index-chart-only overlays — gated with its paint (see the
+                // index-view branch above for the reasoning).
+                if (paintIndex) {
+                    oipDrawMondayBox(validCandles);
+                    oipDraw30mReversalLines(validCandles);
+                    oipDraw1DReversalLines(validCandles);
+                }
             }
 
             // After every overlay/box has been (re)added, enforce the full z-policy
@@ -1870,8 +1925,14 @@ function oipRedraw5mCloseOpt() {
 function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
     if (!oipOIData || !oipIntrinsicChart) return;
 
+    // Master timeline for the Opt Prem charts. Read from the latest fetched
+    // index candles rather than off oipOISeries — the index chart only repaints
+    // on its ⟳ button, and aligning to its frozen bars would stall these charts
+    // with it. Falls back to the series when no fetch has landed yet.
+    let masterData = oipLatestIndexCandles?.length
+        ? oipLatestIndexCandles
+        : ((typeof oipOISeries !== 'undefined' && oipOISeries) ? oipOISeries.data() : []);
     // Use full cached data if in replay mode
-    let masterData = (typeof oipOISeries !== 'undefined' && oipOISeries) ? oipOISeries.data() : [];
     if (window.oipReplayMode && oipFullCandles) {
         masterData = oipFullCandles;
     }

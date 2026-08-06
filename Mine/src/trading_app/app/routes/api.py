@@ -9916,8 +9916,9 @@ def oi_profile_premium_strikes() -> EndpointResponse:
 
     Algorithm (triangle setup):
     1. Base ("small diff") strike: ATM = round(prev-day index close / step); pick
-       the candidate in ATM ± 2 steps whose CE and PE prev-day closes are closest
-       together.
+       the candidate in ATM ± 4 steps whose CE and PE prev-day closes are closest
+       together (the window is wide because that strike tracks the future, not
+       the index the ATM is derived from).
     2. Common premium = (CE_close + PE_close) / 2 at that strike.
     3. Offset = round(common / step) * step — one *common* distance applied to
        both legs, so CE and PE sit symmetrically around the base strike.
@@ -10018,9 +10019,18 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         if idx_close:
             atm = int(round(idx_close / step) * step)
 
-            # Candidate strikes (5) around ATM
+            # Candidate strikes (9) around ATM. The window is centred on the
+            # *index* close, but the strike where CE and PE meet tracks the
+            # *future* — and the basis between them has been running ~100 points
+            # (05-Aug-2026: index 24614 vs future 24510). At +/-2 steps the
+            # winning strike landed exactly on the window edge on consecutive
+            # days (24500, then 24600), so one more step of basis would have put
+            # the right strike outside the window and silently handed the base
+            # to a neighbour. +/-4 keeps headroom. Widening cannot change the
+            # answer when the true minimum is already inside: |CE-PE| is V-shaped
+            # in the strike, so extra candidates only ever sit further up the V.
             candidates = sorted(
-                [atm + i * step for i in range(-2, 3)],
+                [atm + i * step for i in range(-4, 5)],
                 key=lambda s: abs(s - idx_close)
             )
 
