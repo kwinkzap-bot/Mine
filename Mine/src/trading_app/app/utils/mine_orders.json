@@ -63172,5 +63172,37 @@
     ],
     "id": "75bc2b4d-f2ca-49ce-acad-a1400211961b",
     "created_at": 1785990075692
+  },
+  {
+    "mode": "broker",
+    "symbol": "NIFTY",
+    "strike": 24700,
+    "option_type": "PE",
+    "action": "BUY",
+    "strategy": "intrinsic",
+    "order_type": "LIMIT",
+    "type": "LIMIT",
+    "instrument": "NFO",
+    "price": 139.0,
+    "status": "EXECUTED",
+    "username": "Mine",
+    "executed_at": 1785995599101,
+    "broker_order_ids": [
+      {
+        "broker": "zerodha_1",
+        "instance": 1,
+        "result": {
+          "success": true,
+          "order_id": "2085242795647754240",
+          "price": 139.0,
+          "response": {
+            "order_id": "2085242795647754240"
+          }
+        },
+        "status": 200
+      }
+    ],
+    "id": "05936c2b-4d15-4a1e-9fd5-bfacaefb25c1",
+    "created_at": 1785995599120
   }
 ]

@@ -77,9 +77,9 @@ window.TradingViewChart = (function () {
         // when the caller's toolbar (color/width/style pickers) arms the tool, so
         // each new ray can use different settings without touching rays already drawn.
         let rayStyle = {
-            color: opts.rayColor || '#f59e0b',
+            color: opts.rayColor || '#f33968',
             width: 2,
-            lineStyle: LightweightCharts.LineStyle.Dashed
+            lineStyle: LightweightCharts.LineStyle.Dotted
         };
 
         // Creates one ray line series and tracks it. Shared by the click

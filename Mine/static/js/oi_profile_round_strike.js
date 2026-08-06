@@ -19,10 +19,11 @@
  * price, and never racing Opt Prem's own fetch timing.
  *
  * Reuses shared globals/helpers already defined in oi_profile.js /
- * oi_indicators.js (oipSymbol, oipInterval, _oipTodayCandles,
- * oipCalculateVWAP, showNotification) — all plain top-level declarations in
- * classic <script> tags loaded earlier on this page, so they're visible
- * here too.
+ * oi_indicators.js (oipSymbol, _oipTodayCandles, oipCalculateVWAP,
+ * showNotification) — all plain top-level declarations in classic <script>
+ * tags loaded earlier on this page, so they're visible here too. The
+ * timeframe is NOT shared: this block has its own dropdown and its own
+ * oipRSInterval (see below).
  *
  * Order buttons deliberately use their OWN class (.oip-rs-order-btn, not
  * .oip-order-btn) and their own state (oipRSCurrentCEStrike/PEStrike, own
@@ -37,12 +38,16 @@
  * green, PE in blue — recomputed from that leg's own candles on every load
  * (see oipRSComputeRefLines / oipRSDrawRefLines).
  *
- * The chart (follows the TF dropdown) stays live, but issues no request of
- * its own: it needs the same symbol/interval/window as Opt Prem's chart and
- * differs only in strike, so its legs ride along on that request as
- * rs_ce_strike/rs_pe_strike and come back as rs_ce_candles/rs_pe_candles —
- * see oipRSStrikeParams (appended by oi_profile.js's oipLoadCandles) and
- * oipRSRenderFromMain (called by it once the response lands).
+ * This block owns ALL of its data end to end: everything it draws — the CE/PE
+ * candles, both volume overlays, and every pill in the stats strip above the
+ * chart (Price, CE OI, PE OI, ATM, CPR, VWAP Bias, 9:18 Bias, PCR, Lot, Trend,
+ * IVP) — comes from ONE request to /api/oi-profile/round-strike, polled every
+ * 1 second while the market is open (see oipRSLoadData / oipRSScheduleLoop).
+ * It rode along on oi_profile.js's shared candle request before; the stats
+ * strip then updated on that file's slower /api/open-interest loop, which is
+ * why those pills lagged the chart. Nothing here reads oi_profile.js's request
+ * any more, and oi_profile.js in turn leaves the strip alone (it checks
+ * window._oipRSOwnsHeader).
  *
  * Indicator show/hide and drawn Ray lines persist across a page refresh via
  * localStorage (see the "Persistence" block below — oipRSSaveIndicatorState/
@@ -56,6 +61,14 @@ let oipRSChart = null, oipRSCESeries = null, oipRSPESeries = null;
 let oipRSVwapCESeries = null, oipRSVwapPESeries = null;
 let oipRSVolumeSeries = null, oipRSBnfVolumeSeries = null;
 let oipRSCurrentCEStrike = null, oipRSCurrentPEStrike = null;
+
+// This block's OWN timeframe (#oipRSInterval in its header) — deliberately not
+// oi_profile.js's oipInterval, which drives every other chart on the page from
+// the Opt Prem header. The two are independent: this block is the live 1-second
+// view and tends to sit on a fast timeframe, while the rest of the page only
+// reloads on Refresh All and defaults to 5m. Must match the <option selected>
+// on that dropdown.
+let oipRSInterval = 'minute';
 
 // ── Persistence (localStorage) — indicator show/hide + drawn rays survive a
 // page refresh. Indicator state is restored before charts/series are
@@ -221,22 +234,6 @@ function oipRSOnPeStyleChange() {
 // inside it (matters for coarser intervals like 15m/30m).
 const OIP_RS_BAR_MINUTES = { '30second': 0.5, minute: 1, '2minute': 2, '3minute': 3, '5minute': 5, '15minute': 15, '30minute': 30 };
 
-// Session-open price for strike rounding. Walks backward from the most
-// recent day with candles: if today has no candle yet (before market open,
-// holiday, etc.) or its open is missing/zero, falls back to the nearest
-// PREVIOUS day that has a valid open instead of defaulting to 0.
-function oipRSOpenPriceWithFallback(candles) {
-    if (typeof _oipGroupCandlesByDay !== 'function' || !candles || !candles.length) return 0;
-    const { map, order } = _oipGroupCandlesByDay(candles);
-    for (let i = order.length - 1; i >= 0; i--) {
-        const dayCandles = map[order[i]];
-        if (!dayCandles || !dayCandles.length) continue;
-        const open = Number(dayCandles[0].open);
-        if (!isNaN(open) && open > 0) return open;
-    }
-    return 0;
-}
-
 function oipRSComputeStrikes(openPrice) {
     const near50 = Math.round(openPrice / 50) * 50;
     if (near50 % 100 === 0) {
@@ -270,7 +267,7 @@ function oipRSComputeRefLines(candles) {
     // First 5-min candle (09:15–09:20 IST) — the classic Opening Range.
     // "Fake IST Epoch" timestamps, so UTC getHours/getMinutes already read
     // as IST clock time (same convention _oipGroupCandlesByDay relies on).
-    const barMin = OIP_RS_BAR_MINUTES[oipInterval] || 1;
+    const barMin = OIP_RS_BAR_MINUTES[oipRSInterval] || 1;
     const WIN_START = 9 * 60 + 15, WIN_END = 9 * 60 + 20;
     const w = todayCandles.filter(c => {
         const d = new Date(c.time * 1000);
@@ -362,42 +359,30 @@ function oipRSInitCharts() {
 
     oipRSChart = TradingViewChart.create({
         containerId: 'oipRSCombinedChart', data: [], type: 'COMBINED',
-        // Getter (not a plain string) — oipInterval can change via the main
-        // TF dropdown after this chart is created (see oi_profile.js), and
-        // the ray tool's reach needs the CURRENT interval, not the one at
-        // attach time (same reasoning as the main OI chart's ray tool).
-        isCombined: true, timeframe: () => oipInterval, options: { height: 575 },
+        // Getter (not a plain string) — oipRSInterval changes via this block's
+        // own TF dropdown after the chart is created, and the ray tool's reach
+        // needs the CURRENT interval, not the one at attach time (same
+        // reasoning as the main OI chart's ray tool).
+        isCombined: true, timeframe: () => oipRSInterval, options: { height: 575 },
         onRayDrawn: oipRSRayDisarm,
         onRayRemoved: oipRSRemoveSavedRay
     });
     oipRSCESeries = oipRSChart.ceSeries || oipRSChart.series;
     oipRSPESeries = oipRSChart.peSeries;
 
-    // Join the shared cross-chart pan/zoom sync web (OI Profile, Opt Prem) —
-    // registered here rather than oi_profile_init.js because oipRSChart
-    // doesn't exist until this function runs. Reuses that file's
-    // window._oipActiveChartId / window._oipSyncRange / window._oipSyncDepth
-    // so a pan/zoom started from any of these charts propagates to all of them.
-    // Fixed 24000 Monthly is deliberately NOT part of this web — it is always
-    // fixed to a 5-minute interval regardless of what the others are doing, so
-    // its bar grid won't line up (it still joins the separate crosshair-sync
-    // web, which doesn't care about bar grid alignment — see below).
+    // This chart is deliberately NOT part of the shared pan/zoom sync web that
+    // the OI Profile and Opt Prem charts form (see oi_profile_init.js). That web
+    // syncs LOGICAL ranges — bar indices — which only means the same thing when
+    // every chart is on the same bar grid. This block has its own TF dropdown
+    // now, so a pan here would scroll the others to the wrong place whenever the
+    // two timeframes differ. Same reason Fixed 24000 Monthly stays out of it.
+    //
+    // It does join the crosshair-sync web below: that one matches on TIME, so it
+    // works across mismatched bar grids.
     ['mouseenter', 'touchstart'].forEach(evt => {
         document.getElementById('oipRSCombinedChart')?.addEventListener(evt, () => { window._oipActiveChartId = 'rs'; }, { passive: true });
     });
-    if (oipRSChart?.chart && typeof window._oipSyncRange === 'function') {
-        const RS_OPTION_ADJ = 15; // CE Only/PE Only use rightOffset=5 vs this chart's default 20
-        oipRSChart.chart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
-            if (window._oipDataRefreshing || window._oipActiveChartId !== 'rs') return;
-            window._oipSyncRange(oipRSChart.chart, [
-                oipOIChart,
-                oipIntrinsicChart?.chart,
-                { chart: oipCEChart?.chart, adj: -RS_OPTION_ADJ },
-                { chart: oipPEChart?.chart, adj: -RS_OPTION_ADJ }
-            ]);
-        });
-    }
-    // Same shared web for crosshair hover — reuses oi_profile_init.js's
+    // Crosshair hover — reuses oi_profile_init.js's
     // syncCrosshair via window._oipSyncCrosshair. oipRSCESeries is this
     // chart's anchor series for price lookup (same role oipIntrinsicSeries
     // plays for Intrinsic).
@@ -474,9 +459,9 @@ function oipRSRayDisarm(rayInfo) {
 // on each arm, so changing them mid-session doesn't touch rays already drawn.
 function oipRSRayStyleFromPickers() {
     return {
-        color: document.getElementById('oipRSRayColorInp')?.value || '#f59e0b',
+        color: document.getElementById('oipRSRayColorInp')?.value || '#f33968',
         width: parseInt(document.getElementById('oipRSRayWidthSel')?.value, 10) || 2,
-        lineStyle: parseInt(document.getElementById('oipRSRayStyleSel')?.value, 10) ?? 2
+        lineStyle: parseInt(document.getElementById('oipRSRayStyleSel')?.value, 10) ?? 1
     };
 }
 
@@ -553,30 +538,45 @@ function oipRSInitIndicatorsPopup() {
     document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.addEventListener('input', oipRSOn5mCloseChange);
 }
 
-// Fetches today's session-open price + the tradable strike list directly
-// (its own call, not borrowed from Opt Prem's state) so the CE/PE default
-// is always computed from the day's OPEN — never a live/current price, and
-// never racing Opt Prem's own load timing.
-async function oipRSFetchOpenAndStrikes() {
-    const _daysForInterval = { day: 365, week: 1095, month: 3650 };
-    const days = _daysForInterval[oipInterval] ?? 5;
-    const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${days}&include_30s=false&_t=${Date.now()}`;
+// ── Data layer — /api/oi-profile/round-strike ────────────────────────────────
+// One request per tick carries this block's whole picture: CE/PE candles, both
+// volume overlays and the stats strip. Strikes are optional on it — the very
+// first call goes out without them precisely to LEARN which pair to ask for
+// (session_open + strikes), and the option legs come back empty until it does.
 
+function oipRSApiUrl(withStrikes = true) {
+    const _daysForInterval = { day: 365, week: 1095, month: 3650 };
+    const days = _daysForInterval[oipRSInterval] ?? 5;
+    const step = (typeof oipStrikeStep !== 'undefined' && oipStrikeStep) || 50;
+    let url = `/api/oi-profile/round-strike?symbol=${oipSymbol}&interval=${oipRSInterval}&days=${days}&step=${step}`;
+    if (withStrikes) {
+        const ce = document.getElementById('oipRSCEStrikeDropdown')?.value;
+        const pe = document.getElementById('oipRSPEStrikeDropdown')?.value;
+        if (ce && pe) url += `&ce_strike=${ce}&pe_strike=${pe}`;
+    }
+    return `${url}&_t=${Date.now()}`;
+}
+
+// First call — no strikes yet. Returns the day's OPEN (never a live/current
+// price, so the round-strike default is stable through the session) plus the
+// tradable strike list for the two dropdowns.
+async function oipRSFetchOpenAndStrikes() {
     try {
-        const res = await fetch(url);
+        const res = await fetch(oipRSApiUrl(false));
         const data = await res.json();
         if (!data.success) return { openPrice: 0, strikes: [] };
 
-        const openPrice = oipRSOpenPriceWithFallback(data.candles || []);
+        // The stats strip can already be painted from this first response —
+        // no reason to leave it on '--' until the strikes resolve.
+        oipRSApplyHeader(data.header);
 
         // strikes come back as {strike: number} objects — extract, dedupe, sort
         // (same shape/handling as Opt Prem's own dropdown population).
-        const rawStrikes = data.strikes || [];
-        const strikes = [...new Set(rawStrikes.map(s => parseFloat(s.strike)))]
+        const strikes = [...new Set((data.strikes || []).map(s => parseFloat(s.strike)))]
             .filter(n => !isNaN(n))
             .sort((a, b) => a - b);
 
-        return { openPrice, strikes };
+        return { openPrice: Number(data.session_open) || 0, strikes };
     } catch (e) {
         console.warn('[RoundStrike] open-price fetch error:', e);
         return { openPrice: 0, strikes: [] };
@@ -604,18 +604,8 @@ function oipRSPopulateDropdown(sel, strikes, selected) {
     });
 }
 
-// The strike pair this block wants appended to oi_profile.js's main candle
-// request (see oipLoadCandles). Returning '' — no strikes picked yet, or the
-// block isn't on this page — makes the backend skip those legs entirely.
-function oipRSStrikeParams() {
-    const ceStrike = document.getElementById('oipRSCEStrikeDropdown')?.value;
-    const peStrike = document.getElementById('oipRSPEStrikeDropdown')?.value;
-    if (!ceStrike || !peStrike) return '';
-    return `&rs_ce_strike=${ceStrike}&rs_pe_strike=${peStrike}`;
-}
-
 // Set by the callers that need the NEXT render to re-fit the chart (initial
-// load, strike change). The render itself is driven by oi_profile.js's poll
+// load, strike change). The render itself is driven by this block's own poll
 // loop, which has no idea a strike just changed, so the intent is parked here
 // and consumed by the first render that follows.
 let oipRSPendingResetZoom = false;
@@ -624,16 +614,14 @@ let oipRSFirstRenderDone = false;
 // changes can re-tag and redraw them without a refetch — see oipRSOn5mCloseChange.
 let oipRSLastCeData = null, oipRSLastPeData = null;
 
-// For callers that already trigger their own reload (e.g. the main TF
-// dropdown) and just need this block's next render to re-fit.
-function oipRSMarkResetZoom() { oipRSPendingResetZoom = true; }
-
 // ── 5m Close Border indicator ────────────────────────────────────────────────
 // This block's own instance of the marker shared with the main OI Profile and
 // Opt Prem charts — see oipMark5mCloseBorders in oi_indicators.js for what it
-// does and why. Only the toggle/colour source differs: this block keeps its
-// own local pickers (the OIP_RS_* convention used throughout this file) rather
-// than the generic oipGetLineColor store the two popups above use.
+// does and why. Two things differ: this block keeps its own toggle/colour
+// pickers (the OIP_RS_* convention used throughout this file) rather than the
+// generic oipGetLineColor store the two popups above use, and it marks against
+// its OWN timeframe — which bar closes a 5-minute block depends on the bar
+// width, and oipRSInterval is independent of the page's oipInterval.
 //
 // There is deliberately NO width or style picker here (unlike the CE/PE Line
 // Style sections): lightweight-charts' candlestick renderer only accepts a
@@ -646,13 +634,14 @@ function oipRSMark5mCloseBorders(candles) {
     return oipMark5mCloseBorders(
         candles,
         document.getElementById('oipRSShow5mClose')?.checked ?? true,
-        document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.value || OIP_RS_5M_CLOSE_DEFAULT
+        document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.value || OIP_RS_5M_CLOSE_DEFAULT,
+        oipRSInterval
     );
 }
 
 // Re-applies the marker to the ALREADY-loaded candles so toggling the checkbox
 // or dragging the colour picker takes effect immediately, instead of waiting
-// for the next tick of oi_profile.js's poll loop. Re-uses the raw (untagged)
+// for the next tick of this block's poll loop. Re-uses the raw (untagged)
 // arrays parked by the last render — no refetch. `refresh=false` so the user's
 // current pan/zoom survives.
 let oipRS5mCloseRedrawPending = false;
@@ -673,16 +662,18 @@ function oipRSOn5mCloseChange() {
     });
 }
 
-// Renders this block's main chart from the SHARED candle response fetched by
-// oi_profile.js (rs_ce_candles / rs_pe_candles — see oipRSStrikeParams). This
-// block deliberately issues no candle request of its own: it needs the same
-// symbol, interval and window as the main chart and only differs in strike,
-// so a separate fetch would duplicate an identical request every poll tick.
-function oipRSRenderFromMain(data) {
+// Renders this block's chart from its own /api/oi-profile/round-strike
+// response (see oipRSLoadData). The stats strip is painted separately by
+// oipRSApplyHeader from the `header` object on that same response.
+function oipRSRenderChart(data) {
     if (!data || !data.success) return;
     const ceStrike = document.getElementById('oipRSCEStrikeDropdown')?.value;
     const peStrike = document.getElementById('oipRSPEStrikeDropdown')?.value;
     if (!ceStrike || !peStrike) return;
+    // A response that raced ahead of a strike change carries the OLD contract's
+    // candles — charting them under the new labels would show the wrong strike
+    // for a tick. Drop it; the request for the new pair is already in flight.
+    if (String(data.ce_strike) !== String(ceStrike) || String(data.pe_strike) !== String(peStrike)) return;
 
     const resetZoom = oipRSPendingResetZoom;
     oipRSPendingResetZoom = false;
@@ -698,8 +689,8 @@ function oipRSRenderFromMain(data) {
     oipRSCurrentCEStrike = ceStrike;
     oipRSCurrentPEStrike = peStrike;
 
-    let ceData = (data.rs_ce_candles || []).map(c => ({ ...c, type: 'CE' }));
-    let peData = (data.rs_pe_candles || []).map(c => ({ ...c, type: 'PE' }));
+    let ceData = (data.ce_candles || []).map(c => ({ ...c, type: 'CE' }));
+    let peData = (data.pe_candles || []).map(c => ({ ...c, type: 'PE' }));
     if (sameStrikes) {
         if (!ceData.length && oipRSLastCeData?.length) ceData = oipRSLastCeData;
         if (!peData.length && oipRSLastPeData?.length) peData = oipRSLastPeData;
@@ -716,7 +707,13 @@ function oipRSRenderFromMain(data) {
     if (oipRSChart) oipRSChart.update(oipRSMark5mCloseBorders(ceData), oipRSMark5mCloseBorders(peData), resetZoom);
 
     oipSetVolumeBars(oipRSVolumeSeries, data.future_volume, ceData);
-    oipSetVolumeBars(oipRSBnfVolumeSeries, data.banknifty_volume, ceData, 'banknifty');
+    // Banknifty deliberately uses the NIFTY colour pair here. Everywhere else the
+    // two histograms share one scale and overlap, so Banknifty needs its own
+    // colours to stay distinguishable; on this chart it hangs from its own top
+    // band (bnfOnTop), so the same up/down pair reads consistently across both
+    // bands instead of introducing a second colour language. The Banknifty
+    // swatches are omitted from this block's Indicator popup for that reason.
+    oipSetVolumeBars(oipRSBnfVolumeSeries, data.banknifty_volume, ceData);
     const volLegendEl = document.getElementById('oipRSVolLegendItem');
     if (volLegendEl) volLegendEl.classList.toggle('hidden', !data.future_symbol);
     const volSymbolEl = document.getElementById('oipRSLegendVolSymbol');
@@ -740,6 +737,141 @@ function oipRSRenderFromMain(data) {
     if (!oipRSFirstRenderDone) {
         oipRSFirstRenderDone = true;
         oipRSRestoreSavedRays();
+    }
+}
+
+// ── Stats strip ──────────────────────────────────────────────────────────────
+// Every pill above the chart, straight off the `header` object in this block's
+// own response. oi_profile.js used to write these from /api/open-interest on a
+// 30-second loop; it now stands down (window._oipRSOwnsHeader) so the two can't
+// fight over the same nodes with data of different ages.
+//
+// A missing value LEAVES THE PILL AS IT IS rather than blanking it: the OI
+// snapshot behind half of these is written about once a minute, so on the ticks
+// in between there is genuinely nothing new to say — and a number that flickers
+// to '--' 20 times a minute is worse than one that simply holds.
+function oipRSApplyHeader(h) {
+    if (!h) return;
+    const setVal = (id, text, cls) => {
+        const el = document.getElementById(id);
+        if (!el || text == null) return;
+        el.textContent = text;
+        if (cls !== undefined) el.className = 'oip-hdr-val' + (cls ? ' ' + cls : '');
+    };
+    const fmtOI = (typeof fmtL === 'function') ? fmtL : (v => v == null ? '--' : String(v));
+
+    if (h.price) setVal('hdrPrice', Number(h.price).toLocaleString('en-IN', { minimumFractionDigits: 2 }));
+    if (h.ce_oi != null) setVal('hdrCeOI', fmtOI(h.ce_oi), 'red');
+    if (h.pe_oi != null) setVal('hdrPeOI', fmtOI(h.pe_oi), 'grn');
+    if (h.atm != null) setVal('hdrAtm', h.atm);
+    if (h.lot_size) setVal('hdrLotSize', h.lot_size);
+    if (h.trend) setVal('hdrTrend', h.trend, h.trend === 'Bullish' ? 'grn' : (h.trend === 'Bearish' ? 'red' : ''));
+    if (h.vwap_bias) setVal('hdrVwapBias', h.vwap_bias, h.vwap_bias === 'DOWN' ? 'red' : 'grn');
+    if (h.atm_ce_oi_bias) setVal('hdrAtmCeOiBias', h.atm_ce_oi_bias, h.atm_ce_oi_bias === 'DOWN' ? 'red' : 'grn');
+
+    // PCR carries its own card background at the extremes (the same >=1.7 /
+    // <=0.7 thresholds the header has always used), so it needs more than setVal.
+    if (h.pcr != null) {
+        const pcr = Number(h.pcr);
+        setVal('hdrPcr', pcr.toFixed(2));
+        const card = document.getElementById('hdrPcrCard');
+        if (card) {
+            const dark = pcr >= 1.7 || pcr <= 0.7;
+            card.style.background = pcr >= 1.7 ? '#7f1d1d' : (pcr <= 0.7 ? '#14532d' : '');
+            card.querySelectorAll('.oip-hdr-lbl, .oip-hdr-val')
+                .forEach(el => { el.style.color = dark ? '#ffffff' : ''; });
+        }
+    }
+
+    if (typeof h.iv_percentile === 'number') {
+        setVal('hdrIVP', h.iv_percentile.toFixed(1) + '%');
+        if (typeof oipUpdateIVPGauge === 'function') oipUpdateIVPGauge(h.iv_percentile);
+    }
+    document.getElementById('ivCrushAlert')?.classList.toggle('hidden', !h.iv_crush_alert);
+
+    // CPR keeps oi_profile.js's renderer: the card's Index/Future toggle lives
+    // there and reads the same oipCprData, so feeding it here keeps one code
+    // path for both the click and the poll.
+    if (h.cpr && (h.cpr.index || h.cpr.future) && typeof oipRenderCprCard === 'function') {
+        oipCprData = h.cpr;
+        oipRenderCprCard();
+    }
+}
+
+// ── Poll loop ────────────────────────────────────────────────────────────────
+// 1 second while the market is open, 5 minutes when it is closed (nothing
+// moves), and paused entirely while the tab is hidden — a background tab
+// polling a broker API 60 times a minute earns nothing but rate-limit pressure.
+// Self-rescheduling rather than setInterval, so a slow tick can never stack a
+// second request on top of the one still in flight: if a tick takes longer than
+// the interval, the next one simply starts when it lands.
+//
+// This is the ONLY live feed on the page. Every other chart here is static
+// until the Refresh All button is pressed (see oipFullRefresh in oi_profile.js),
+// so the whole page's broker traffic is this loop.
+const OIP_RS_POLL_MS = 1000;
+const OIP_RS_POLL_MS_CLOSED = 300000;
+const OIP_RS_POLL_MS_HIDDEN = 10000;   // re-check for tab visibility, no request
+const OIP_RS_POLL_MS_ERROR = 3000;     // back off on failure rather than pile on
+let oipRSPollTimer = null;
+let oipRSIsLoading = false;
+// Set when a reload is asked for while one is already in flight (a strike or TF
+// change lands mid-request): that response is about to be discarded as stale,
+// so the loop goes straight round again instead of waiting out a full tick.
+let oipRSReloadPending = false;
+
+function oipRSScheduleLoop(delay) {
+    if (window.oipReplayMode) return;
+    if (oipRSPollTimer) clearTimeout(oipRSPollTimer);
+    oipRSPollTimer = setTimeout(() => {
+        if (document.hidden) { oipRSScheduleLoop(OIP_RS_POLL_MS_HIDDEN); return; }
+        oipRSPollTick();
+    }, delay);
+}
+
+async function oipRSPollTick() {
+    // Another tick is still waiting on the network — it schedules the next one
+    // itself when it lands, so this one bows out rather than spinning. The flag
+    // marks that response as already superseded (this tick was woken by a
+    // strike/TF change), which sends the loop straight round again.
+    if (oipRSIsLoading) { oipRSReloadPending = true; return; }
+
+    const marketOpen = (typeof oipIsMarketOpen !== 'function') || oipIsMarketOpen();
+    let ok = false;
+    try {
+        ok = await oipRSLoadData();
+    } finally {
+        if (oipRSReloadPending) {
+            oipRSReloadPending = false;
+            oipRSScheduleLoop(0);
+        } else {
+            oipRSScheduleLoop(!marketOpen ? OIP_RS_POLL_MS_CLOSED
+                : (ok ? OIP_RS_POLL_MS : OIP_RS_POLL_MS_ERROR));
+        }
+    }
+}
+
+// One request → chart + stats strip. Returns whether it succeeded, so the loop
+// above can back off instead of hammering a broker that is already struggling.
+async function oipRSLoadData() {
+    if (oipRSIsLoading) {          // a tick is still in flight — not an error
+        oipRSReloadPending = true;
+        return true;
+    }
+    oipRSIsLoading = true;
+    try {
+        const res = await fetch(oipRSApiUrl(true));
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'request failed');
+        if (data.fetch_error) console.warn('[RoundStrike]', data.fetch_error);
+        oipRSApplyHeader(data.header);
+        oipRSRenderChart(data);
+        return true;
+    } catch (e) {
+        console.warn('[RoundStrike] load error:', e);
+        return false;
+    } finally {
+        oipRSIsLoading = false;
     }
 }
 
@@ -899,23 +1031,34 @@ async function oipRSExitAllOrders(btn) {
     }
 }
 
-// Asks oi_profile.js to refetch now, so this block's strikes reach the backend
-// without waiting for the next poll tick. resetZoom stays false — the main
-// chart shouldn't jump because a Round Strike dropdown changed; this block's
-// own re-fit rides on oipRSPendingResetZoom instead.
-// includeFixed=false: the Fixed Monthly chart has its own Update/Refresh
-// buttons and is deliberately kept off routine reloads, so a Round Strike
-// dropdown change shouldn't drag its fetch along.
+// Refetches NOW instead of waiting out the rest of the current 1-second tick —
+// used when the user changes something this block's request depends on (a
+// strike, the TF dropdown). The next render re-fits the chart, since the bars
+// it is about to draw belong to a different contract or timeframe.
 function oipRSRequestReload() {
     oipRSPendingResetZoom = true;
-    if (typeof oipLoadCandles === 'function') oipLoadCandles(true, false, false);
+    oipRSScheduleLoop(0);
 }
 
 async function oipRSInit() {
     if (!document.getElementById('oipRSCombinedChart')) return; // block not present on this page
+    // Tells oi_profile.js to leave the stats strip alone — this block repaints
+    // it from its own request every second (see oipRSApplyHeader).
+    window._oipRSOwnsHeader = true;
     oipRSRestoreIndicatorState(); // before chart/series creation — VWAP's initial visibility reads the checkbox
     oipRSRestoreLineStyleState(); // before first load — CE/PE ref-line color/width/style pickers
     oipRSUpdateCheckboxSpanColors();
+
+    // This block's own TF — read before the chart is built (its ray tool and the
+    // 5m reference-line window both key off the interval) and independent of the
+    // Opt Prem TF dropdown that drives every other chart on the page.
+    const tfSel = document.getElementById('oipRSInterval');
+    if (tfSel?.value) oipRSInterval = tfSel.value;
+    tfSel?.addEventListener('change', e => {
+        oipRSInterval = e.target.value;
+        oipRSRequestReload();   // re-fit and re-request at the new bar width
+    });
+
     oipRSInitCharts();
 
     const { openPrice, strikes } = await oipRSFetchOpenAndStrikes();
@@ -924,8 +1067,7 @@ async function oipRSInit() {
     oipRSPopulateDropdown(document.getElementById('oipRSCEStrikeDropdown'), strikes, ceStrike);
     oipRSPopulateDropdown(document.getElementById('oipRSPEStrikeDropdown'), strikes, peStrike);
 
-    // A strike change reloads the chart through the shared request — the new
-    // strikes land in the URL oi_profile.js builds.
+    // A strike change re-aims this block's own request at the new pair.
     const onStrikeChange = () => oipRSRequestReload();
     document.getElementById('oipRSCEStrikeDropdown')?.addEventListener('change', onStrikeChange);
     document.getElementById('oipRSPEStrikeDropdown')?.addEventListener('change', onStrikeChange);
@@ -934,10 +1076,17 @@ async function oipRSInit() {
     oipRSInitRayTool();
     oipRSInitIndicatorsPopup();
 
-    // The strikes above were only just resolved, so oi_profile.js's first
-    // request went out without them — kick one more off now to pick them up.
-    // Rays are restored by the render that follows (see oipRSRenderFromMain).
-    oipRSRequestReload();
+    // First real tick — the strikes only just resolved, so the call above went
+    // out without them. Rays are restored by the render that follows (see
+    // oipRSRenderChart), and every tick after this one is scheduled by the loop.
+    oipRSPendingResetZoom = true;
+    oipRSScheduleLoop(0);
+
+    // A tab that comes back to the foreground should show current data at once
+    // rather than up to OIP_RS_POLL_MS_HIDDEN of staleness.
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) oipRSScheduleLoop(0);
+    });
 }
 
 document.addEventListener('DOMContentLoaded', () => { oipRSInit(); });

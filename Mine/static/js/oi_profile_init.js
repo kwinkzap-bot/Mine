@@ -204,10 +204,6 @@ window.oipInitSecondaryCharts = function() {
         // syncing scroll position between the two groups.
         const _OIP_OPTION_RIGHT_ADJ = 15;
 
-        // Global (not function-local) — Round Strike's own listener (registered
-        // later, from oi_profile_round_strike.js once oipRSChart exists) reuses
-        // this exact counter + routine via window._oipSyncRange below, so a sync
-        // triggered from either file correctly blocks reverse/nested syncs.
         window._oipSyncDepth = window._oipSyncDepth || 0;
         // targetCharts may be plain chart instances or {chart, adj} wrapper objects.
         // Wrappers are identified by a numeric `adj` property (never present on LC instances).
@@ -237,31 +233,29 @@ window.oipInitSecondaryCharts = function() {
             });
             window._oipSyncDepth--;
         };
-        window._oipSyncRange = syncRange; // exposed for Round Strike's own listener
 
         // Link charts (synchronize panning and zooming).
         // window._oipDataRefreshing is set true in oi_profile.js while setData calls are
         // in flight; callbacks that fire from those setData calls must not trigger a sync
         // (the chart may be mid-update with an auto-fitted or stale range).
         if (oipOIChart && oipIntrinsicChart && oipIntrinsicChart.chart) {
-            // "20-group" (default rightOffset=20): OI, Intrinsic, Round Strike —
-            // adj=0 between any pair of these. CE Only/PE Only ("5-group",
-            // rightOffset=5) need ± _OIP_OPTION_RIGHT_ADJ crossing groups.
-            // Fixed 24000 Monthly is NOT part of this pan/zoom web — its candles
-            // are always fixed_interval (5-minute, independent of the shared
-            // oipInterval), so its bar grid won't line up with the others' (it
-            // still joins the separate crosshair-sync web below, which doesn't
-            // care about bar grid alignment). oipRSChart is declared in
-            // oi_profile_round_strike.js (loaded after this file), but these
-            // callbacks only run on user interaction — well after that script
-            // has assigned it — so referencing it here is safe.
+            // "20-group" (default rightOffset=20): OI, Intrinsic — adj=0 between
+            // any pair of these. CE Only/PE Only ("5-group", rightOffset=5) need
+            // ± _OIP_OPTION_RIGHT_ADJ crossing groups.
+            //
+            // Two charts are deliberately NOT in this pan/zoom web, for the same
+            // reason: it syncs LOGICAL ranges (bar indices), which only line up
+            // when every chart shares a bar grid. Fixed 24000 Monthly is always
+            // fixed_interval (5-minute), and Round Strike has its own TF dropdown
+            // (oipRSInterval) independent of the oipInterval these four follow.
+            // Both still join the crosshair-sync web below, which matches on TIME
+            // and so works across mismatched bar grids.
             oipOIChart.timeScale().subscribeVisibleLogicalRangeChange(_range => {
                 if (window._oipDataRefreshing || window._oipActiveChartId !== 'index' || !oipOIChartReady || !oipIntChartReady) return;
                 syncRange(oipOIChart, [
                     oipIntrinsicChart?.chart,
                     { chart: oipCEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
-                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
-                    oipRSChart?.chart
+                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ }
                 ]);
             });
 
@@ -270,8 +264,7 @@ window.oipInitSecondaryCharts = function() {
                 syncRange(oipIntrinsicChart.chart, [
                     oipOIChart,
                     { chart: oipCEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
-                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ },
-                    oipRSChart?.chart
+                    { chart: oipPEChart?.chart, adj: -_OIP_OPTION_RIGHT_ADJ }
                 ]);
             });
 
@@ -280,8 +273,7 @@ window.oipInitSecondaryCharts = function() {
                 syncRange(oipCEChart.chart, [
                     { chart: oipOIChart, adj: _OIP_OPTION_RIGHT_ADJ },
                     { chart: oipIntrinsicChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ },
-                    oipPEChart?.chart,
-                    { chart: oipRSChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ }
+                    oipPEChart?.chart
                 ]);
             });
 
@@ -290,8 +282,7 @@ window.oipInitSecondaryCharts = function() {
                 syncRange(oipPEChart.chart, [
                     { chart: oipOIChart, adj: _OIP_OPTION_RIGHT_ADJ },
                     { chart: oipIntrinsicChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ },
-                    oipCEChart?.chart,
-                    { chart: oipRSChart?.chart, adj: _OIP_OPTION_RIGHT_ADJ }
+                    oipCEChart?.chart
                 ]);
             });
         }
@@ -395,9 +386,9 @@ window.oipInitSecondaryCharts = function() {
         const oipRayClearBtn = document.getElementById('oipRayClearBtn');
         const oipRayPopup = document.getElementById('oipRayOptionsPopup');
         const oipRayStyleFromPickers = () => ({
-            color: document.getElementById('oipRayColorInp')?.value || '#f59e0b',
+            color: document.getElementById('oipRayColorInp')?.value || '#f33968',
             width: parseInt(document.getElementById('oipRayWidthSel')?.value, 10) || 2,
-            lineStyle: parseInt(document.getElementById('oipRayStyleSel')?.value, 10) ?? 2
+            lineStyle: parseInt(document.getElementById('oipRayStyleSel')?.value, 10) ?? 1
         });
         if (oipRayBtn) {
             oipRayBtn.addEventListener('click', (e) => {

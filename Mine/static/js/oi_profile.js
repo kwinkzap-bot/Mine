@@ -25,12 +25,10 @@ let oipOptionData = null;
 // Last candles pushed to oipOISeries, kept UNTAGGED (no 5m Close Border) so the
 // indicator can be re-applied on a toggle/colour change without a refetch.
 let oipOILastCandles = null;
-// Latest index candles that came back from /api/oi-profile/candles, whether or
-// not this tick painted them. The OI Profile (NIFTY Index) chart is deliberately
-// excluded from the live 2s poll and only repaints on its header ⟳ button (see
-// oipElems.indexRefreshBtn), but the Opt Prem charts align their bars to the
-// index timeline (oipRefreshLocalView) — so they read the live timeline from
-// here rather than from the frozen oipOISeries.
+// Latest index candles that came back from /api/oi-profile/candles. The Opt Prem
+// charts align their bars to the index timeline (oipRefreshLocalView) and read it
+// from here, so a view re-render that never touches oipOISeries still has the
+// timeline to align against.
 let oipLatestIndexCandles = null;
 let oipVwapIntSeries = null;
 let oipVwapIntPeSeries = null;
@@ -155,17 +153,19 @@ let oipSymbol = 'NIFTY';
 let oipCprData = null;
 let oipCprShowFuture = false;
 let oipLotSize = 50, oipStrikeStep = 50;
-let oipInterval = 'minute';
+// Timeframe for every chart on this page EXCEPT Round Strike, which has its own
+// dropdown and its own oipRSInterval (see oi_profile_round_strike.js). Must match
+// the <option selected> on #oipInterval in the Opt Prem header.
+let oipInterval = '5minute';
 let oipStrikeCount = 15;
 let oipMode = 'off';
-let oipIsBusy = false;
-let oipIsBusyCandles = false;
-let oipIsBusyOI = false;
 let oipRafId = null;
-let oipCandleTimer = null;
-let oipOITimer = null;
-let oipHasLoadedCandles = false;
-let oipHasLoadedOI = false;
+// Refresh All is the only data trigger on this page (Round Strike aside) — one
+// click can be several broker round-trips, so it is guarded rather than queued.
+let oipIsRefreshing = false;
+// Set for the duration of a Refresh All so the candle request opts out of the
+// backend's response cache — see oipRefreshAll / the `force` param.
+let oipForceNextFetch = false;
 let oipCustomStrikeSetOnLoad = false;
 let oipOIChartReady = false;   // true after OI chart receives first data
 let oipIntChartReady = false;  // true after Intrinsic chart receives first data
@@ -193,7 +193,7 @@ const oipElems = {
     exitAll: null,
     slPrice: null, slCEBtn: null, slPEBtn: null,
     fixedStrikeDropdown: null, fixedStrikeUpdateBtn: null,
-    indexRefreshBtn: null
+    refreshAllBtn: null
 };
 
 
@@ -265,8 +265,7 @@ function oipInitElems() {
     oipElems.fetchRange = document.getElementById('oipFetchRange');
     oipElems.fixedStrikeDropdown = document.getElementById('oipFixedStrikeDropdown');
     oipElems.fixedStrikeUpdateBtn = document.getElementById('oipFixedStrikeUpdateBtn');
-    oipElems.fixedStrikeRefreshBtn = document.getElementById('oipFixedStrikeRefreshBtn');
-    oipElems.indexRefreshBtn = document.getElementById('oipIndexRefreshBtn');
+    oipElems.refreshAllBtn = document.getElementById('oipRefreshAllBtn');
 
     // IVP & Alerts
     oipElems.hdrIVP = document.getElementById('hdrIVP');
@@ -459,14 +458,13 @@ document.addEventListener('DOMContentLoaded', () => {
     fetch('/api/symbols').then(r => r.json()).then(d => { if (d.success) oipAllSymbols = d.symbols; }).catch(console.warn);
 
     // Toolbar Listeners
+    // Opt Prem's TF dropdown — drives every chart on this page except Round
+    // Strike, which has its own (#oipRSInterval) and is deliberately left alone
+    // here so the two blocks can sit on different timeframes.
     oipElems.interval?.addEventListener('change', e => {
         oipInterval = e.target.value;
         if (window.oipReplayMode) oipResetReplay();
         else oipLoadCandles();
-        // Round Strike renders from this same response, so the reload above
-        // already carries the new interval to it — it only needs to re-fit its
-        // own zoom for the new bar width.
-        if (typeof oipRSMarkResetZoom === 'function') oipRSMarkResetZoom();
     });
 
     oipElems.days?.addEventListener('change', () => {
@@ -645,30 +643,12 @@ document.addEventListener('DOMContentLoaded', () => {
         oipFixedStrike = val;
         try { localStorage.setItem(OIP_FIXED_STRIKE_KEY, String(val)); } catch (e) {}
         oipUpdateFixedStrikeTitle();
-        oipLoadCandles(true, false, true);
+        oipLoadCandles(true, false);
     });
 
-    // Fixed 24000 Monthly chart is excluded from the live 2s poll (see
-    // oipCandleLoop) to avoid hammering the broker for slow-moving monthly
-    // option data on every tick. This button is the only way to pull its
-    // latest candles without changing the selected strike.
-    oipElems.fixedStrikeRefreshBtn?.addEventListener('click', () => {
-        oipLoadCandles(true, false, true);
-    });
-
-    // The OI Profile (NIFTY Index) chart is likewise excluded from the live 2s
-    // poll — oipCandleLoop passes paintIndex=false, so the index candles and
-    // everything computed off them (VWAPs, EMAs, CPR, Monday box, reversal
-    // lines) hold their last painted state. This button is the only thing that
-    // pulls fresh index candles and paints them. The OI bars / max-pain overlay
-    // stay on their own 30s loop (oipOILoop) and are unaffected.
-    oipElems.indexRefreshBtn?.addEventListener('click', async () => {
-        const btn = oipElems.indexRefreshBtn;
-        btn.classList.add('spin');
-        btn.disabled = true;
-        try { await oipLoadCandles(true, false, false, true); }
-        finally { btn.classList.remove('spin'); btn.disabled = false; }
-    });
+    // The page's single data trigger — see oipRefreshAll. Everything except
+    // Round Strike (live on its own 1s feed) reloads from here.
+    oipElems.refreshAllBtn?.addEventListener('click', () => oipRefreshAll());
 
     oipElems.targetDistance?.addEventListener('change', () => {
         oipRefreshLocalView(oipElems.view?.value);
@@ -723,9 +703,9 @@ function oipOIRayDisarm() {
 // on each arm, so changing them mid-session doesn't touch rays already drawn.
 function oipOIRayStyleFromPickers() {
     return {
-        color: document.getElementById('oipOIRayColorInp')?.value || '#f59e0b',
+        color: document.getElementById('oipOIRayColorInp')?.value || '#f33968',
         width: parseInt(document.getElementById('oipOIRayWidthSel')?.value, 10) || 2,
-        lineStyle: parseInt(document.getElementById('oipOIRayStyleSel')?.value, 10) ?? 2
+        lineStyle: parseInt(document.getElementById('oipOIRayStyleSel')?.value, 10) ?? 1
     };
 }
 
@@ -1048,17 +1028,22 @@ function oipFilterStrikes(strikes, price, n) {
 
 // oipCalculateFixedEMA, oipCalculateAllEMAs, oipCalculate3EMAs, oipCalculateVWAP — defined in oi_indicators.js
 
-/* ── Refresh Logic ────────────────────────────────────────── */
+/* ── Refresh Logic ──────────────────────────────────────────
+ * Nothing on this page polls any more except the Round Strike block, which
+ * runs on its own 1-second feed (/api/oi-profile/round-strike). Every other
+ * chart here — OI Profile index, Opt Prem CE/PE/Combined, the intrinsic
+ * levels and Fixed Monthly — is painted by oipFullRefresh and then left
+ * alone until something asks for it again: the Refresh All button, a
+ * symbol/interval/strike change, or the initial page load.
+ *
+ * This is the single entry point for all of that. It fetches in ONE pass:
+ * symbol metadata -> OI chain -> (premium strikes, in Prem. Str. mode) ->
+ * candles for every remaining chart, the fixed monthly leg included.
+ */
 async function oipFullRefresh(resetZoom = false) {
     console.log(`[OIP] Starting Full Refresh (resetZoom=${resetZoom})...`);
 
-    // 0. Cleanup existing timers
-    if (oipCandleTimer) clearTimeout(oipCandleTimer);
-    if (oipOITimer) clearTimeout(oipOITimer);
-
     if (resetZoom) {
-        oipHasLoadedCandles = false;
-        oipHasLoadedOI = false;
         oipCustomStrikeSetOnLoad = false;
         oipPremiumStrikeData = null; // Reset so strikes are re-computed for new symbol/session
     }
@@ -1087,96 +1072,43 @@ async function oipFullRefresh(resetZoom = false) {
         } catch (e) { console.warn('[OIP] Metadata fetch failed:', e); }
 
         // 3. Load OI (Blocks until success to get ATM strike)
-        console.log(`[OIP] Loading initial OI for ${oipSymbol}...`);
+        console.log(`[OIP] Loading OI for ${oipSymbol}...`);
         await oipLoadOI();
 
         // 4. Load Candles — if Prem. Str. mode is active, compute premium strikes first
-        console.log(`[OIP] Loading initial Candles for ${oipSymbol}...`);
+        console.log(`[OIP] Loading candles for ${oipSymbol}...`);
         if (oipElems.strikeMode?.value === 'atm' && !oipPremiumStrikeData) {
+            // oipFetchAndApplyPremiumStrikes calls oipLoadCandles itself.
             await oipFetchAndApplyPremiumStrikes(resetZoom);
-            // oipFetchAndApplyPremiumStrikes calls oipLoadCandles internally, so return here
             return;
         }
         await oipLoadCandles(true, resetZoom);
 
     } catch (err) {
-        console.error('[OIP] Full Refresh Initialization Err:', err);
-    } finally {
-        // 5. Start recurring background loops
-        console.log('[OIP] Initial load complete. Starting background timers.');
-        oipScheduleOILoop(30000);
-        oipScheduleCandleLoop(oipIsMarketOpen() ? 2000 : 300000);
+        console.error('[OIP] Full Refresh Err:', err);
     }
 }
 
-function oipScheduleOILoop(delay) {
-    if (window.oipReplayMode) return;
-    if (oipOITimer) clearTimeout(oipOITimer);
-    oipOITimer = setTimeout(() => {
-        if (!document.hidden) oipOILoop();
-        else oipScheduleOILoop(10000);
-    }, delay);
-}
-
-function oipScheduleCandleLoop(delay) {
-    if (window.oipReplayMode) return;
-    if (oipCandleTimer) clearTimeout(oipCandleTimer);
-    oipCandleTimer = setTimeout(() => {
-        if (!document.hidden) oipCandleLoop();
-        else oipScheduleCandleLoop(10000);
-    }, delay);
-}
-
-async function oipCandleLoop() {
-    if (oipIsBusyCandles) return;
-
-    const isMarketOpen = oipIsMarketOpen();
-    if (oipHasLoadedCandles && !isMarketOpen) {
-        oipScheduleCandleLoop(60000);
-        return;
-    }
-
-    oipIsBusyCandles = true;
+// The Refresh All button — the page's one and only data trigger for every
+// chart except Round Strike. Guarded against double-clicks (a full refresh is
+// several broker round-trips) and spins its icon while it runs.
+async function oipRefreshAll() {
+    if (oipIsRefreshing) return;
+    oipIsRefreshing = true;
     setRefreshBtn(true);
-    let success = false;
+    if (oipElems.refreshAllBtn) oipElems.refreshAllBtn.disabled = true;
     try {
-        // Fixed 24000 Monthly chart is excluded from the recurring live poll —
-        // it only refreshes on initial load, Update, or the chart's own
-        // Refresh button (see oipElems.fixedStrikeRefreshBtn below).
-        // The OI Profile (NIFTY Index) chart is excluded the same way
-        // (paintIndex=false): the fetch still runs — its response carries the
-        // Opt Prem and Round Strike legs — but the index chart is not repainted
-        // until the user clicks its own ⟳ button.
-        await oipLoadCandles(true, false, false, false);
-        success = true;
-    } catch (err) { console.error('[OIP] Candle Loop Err:', err); }
-    finally {
-        oipIsBusyCandles = false;
-        if (!oipIsBusyOI) setRefreshBtn(false);
-        const delay = isMarketOpen ? (success ? 2000 : 4000) : 300000;
-        oipScheduleCandleLoop(delay);
-    }
-}
-
-async function oipOILoop() {
-    if (oipIsBusyOI) return;
-
-    const isMarketOpen = oipIsMarketOpen();
-    if (oipHasLoadedOI && !isMarketOpen) {
-        oipScheduleOILoop(300000);
-        return;
-    }
-
-    oipIsBusyOI = true;
-    let success = false;
-    try {
-        await oipLoadOI();
-        success = true;
-    } catch (err) { console.error('[OIP] OI Loop Err:', err); }
-    finally {
-        oipIsBusyOI = false;
-        const delay = isMarketOpen ? (success ? 30000 : 2000) : 300000;
-        oipScheduleOILoop(delay);
+        // force=true so the click always reaches the broker: /oi-profile/candles
+        // caches responses for 0.5 s live and a full hour once the market shuts,
+        // and a refresh button that silently replays a cached response is just a
+        // button that does nothing.
+        oipForceNextFetch = true;
+        await oipFullRefresh(false);
+    } finally {
+        oipForceNextFetch = false;
+        oipIsRefreshing = false;
+        setRefreshBtn(false);
+        if (oipElems.refreshAllBtn) oipElems.refreshAllBtn.disabled = false;
     }
 }
 
@@ -1250,13 +1182,19 @@ function oipUpdateFixedChart(data) {
     oipUpdateFixedStrikeTitle();
 }
 
-// paintIndex=false leaves the OI Profile (NIFTY Index) chart untouched: the
-// request still goes out and its Opt Prem / Round Strike / fixed-chart legs are
-// rendered as usual, but the index candles are only parked (oipLatestIndexCandles)
-// instead of being pushed to the chart. The live poll is the only caller that
-// passes false — every user-driven path (symbol/interval/strike change, the ⟳
-// button) paints.
-async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed = true, paintIndex = true) {
+// Fetches and paints every chart on this page bar Round Strike: the OI Profile
+// index chart, the Opt Prem CE/PE/Combined charts, the intrinsic levels and the
+// Fixed Monthly chart, all off one /api/oi-profile/candles response.
+//
+// It used to take paintIndex/includeFixed flags so the old 2-second poll could
+// fetch the option legs while leaving the index and monthly charts frozen.
+// There is no poll any more — every caller is a user action (Refresh All, a
+// symbol/interval/strike change) and every caller wants the whole page — so
+// both flags are gone and this always paints everything.
+//
+// forceFetch=false short-circuits to a local re-render (oipRefreshLocalView)
+// when the data already in hand is enough, e.g. flipping between chart views.
+async function oipLoadCandles(forceFetch = true, resetZoom = false) {
     try {
 
         const h = parseFloat(oipElems.spotHigh?.value || 0);
@@ -1300,29 +1238,17 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
         if (!forceFetch && oipOIData && !needsOptionData) { oipRefreshLocalView(view, resetZoom); return; }
 
         // Fixed strike / monthly expiry — requested alongside the main
-        // (ATM-relative) data, independent of the page's strike-mode
-        // controls. Only the weekly (nearest-expiry) charts above track the
-        // user's strike selection; this fixed chart's strike (oipFixedStrike)
-        // is set separately via its own header dropdown+Update/Refresh
-        // buttons. Deliberately NOT included on the recurring live-poll loop
-        // (oipCandleLoop passes includeFixed=false) — the backend skips the
-        // fixed CE/PE fetch entirely when these params are omitted, so it
-        // only re-fetches on initial load, Update (strike change), or the
-        // Refresh button click.
+        // (ATM-relative) data, independent of the page's strike-mode controls.
+        // Only the weekly (nearest-expiry) charts above track the user's strike
+        // selection; this chart's strike (oipFixedStrike) is set separately via
+        // its own header dropdown + Update button.
         // fixed_interval is hardcoded to 5minute — the Fixed 24000 Monthly
         // chart always shows 5-minute candles regardless of the main TF
-        // dropdown (oipInterval), same "always this interval" treatment as
-        // Round Strike's 5m Fixed chart.
-        const fixedParams = includeFixed
-            ? `&fixed_strike=${oipFixedStrike}&fixed_expiry=monthly&fixed_interval=5minute`
-            : '';
-        // Round Strike's CE/PE pair rides along on this request — same symbol,
-        // interval and window, only the strikes differ, so a second identical
-        // fetch every poll tick would be pure duplication. Empty string when
-        // that block isn't on the page (or hasn't picked its strikes yet), and
-        // the backend then skips those legs entirely.
-        const rsParams = (typeof oipRSStrikeParams === 'function') ? oipRSStrikeParams() : '';
-        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=false&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${fixedParams}${rsParams}${dateRangeParams}&_t=${Date.now()}`;
+        // dropdown (oipInterval).
+        const fixedParams = `&fixed_strike=${oipFixedStrike}&fixed_expiry=monthly&fixed_interval=5minute`;
+        // Only a Refresh All sets this — see oipRefreshAll.
+        const forceParam = oipForceNextFetch ? '&force=true' : '';
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=false&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${fixedParams}${forceParam}${dateRangeParams}&_t=${Date.now()}`;
 
         const res = await fetch(url);
         const data = await res.json();
@@ -1332,15 +1258,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
         if (data.fetch_error) showNotification(`Data fetch error: ${data.fetch_error}`, 'error');
 
         oipOIData = Object.assign(oipOIData || {}, data);
-        // Only touch the Fixed 24000 Monthly chart when this fetch actually
-        // requested its data — otherwise data.fixed_ce_candles/etc. are
-        // absent and would wipe the chart back to empty on every live poll.
-        if (includeFixed) oipUpdateFixedChart(data);
-        // Round Strike's main chart renders from this same response (see
-        // rsParams above). Guarded the same way as the fixed chart: only when
-        // its legs were actually requested, so a response without them can't
-        // wipe that chart back to empty.
-        if (rsParams && typeof oipRSRenderFromMain === 'function') oipRSRenderFromMain(data);
+        oipUpdateFixedChart(data);
         const indexCandles = data.candles || [];
         let validCandles = [];
 
@@ -1369,12 +1287,11 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
             // callback would try to sync all other charts to a stale/auto-fitted position.
             window._oipDataRefreshing = true;
 
-            // Park the fresh candles even on a tick that won't paint them — the
-            // Opt Prem charts align their bars to this timeline and must keep
-            // advancing while the index chart itself is frozen.
+            // Parked for the Opt Prem charts, which align their bars to this
+            // timeline (see oipRefreshLocalView).
             if (validCandles.length) oipLatestIndexCandles = validCandles;
 
-            if (paintIndex && validCandles.length) {
+            if (validCandles.length) {
                 try {
                     // Parked untagged so the 5m Close Border indicator can be
                     // re-applied on a toggle/colour change without a refetch.
@@ -1401,27 +1318,25 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
                     if (oipElems.hdrVolCard) oipElems.hdrVolCard.classList.toggle('hidden', !data.future_symbol);
                 } catch (e) { console.warn('[OIP] SetData Err:', e); }
             } else if (oipOILastCandles?.length) {
-                // Frozen tick — the chart still holds the last painted candles,
-                // so keep it flagged ready or the cross-chart sync below would
-                // treat it as an unloaded chart.
+                // The response carried no usable index candles, but the chart
+                // still holds the last painted set — keep it flagged ready or
+                // the cross-chart sync below would treat it as unloaded.
                 oipOIChartReady = true;
             }
 
-            if (paintIndex) {
-                // Fixed EMAs — single-pass over candles for all 5 periods
-                if (oipEma9Series || oipEma20Series || oipEma50Series || oipEma100Series || oipEma200Series) {
-                    const allEmas = oipCalculateAllEMAs(validCandles);
-                    if (oipEma9Series) oipEma9Series.setData(allEmas.ema9);
-                    if (oipEma20Series) oipEma20Series.setData(allEmas.ema20);
-                    if (oipEma50Series) oipEma50Series.setData(allEmas.ema50);
-                    if (oipEma100Series) oipEma100Series.setData(allEmas.ema100);
-                    if (oipEma200Series) oipEma200Series.setData(allEmas.ema200);
-                }
-
-                oipUpdateEmaVisibility();
-                oipDrawCpr(validCandles);
-                oipDrawMultiCPR(validCandles);
+            // Fixed EMAs — single-pass over candles for all 5 periods
+            if (oipEma9Series || oipEma20Series || oipEma50Series || oipEma100Series || oipEma200Series) {
+                const allEmas = oipCalculateAllEMAs(validCandles);
+                if (oipEma9Series) oipEma9Series.setData(allEmas.ema9);
+                if (oipEma20Series) oipEma20Series.setData(allEmas.ema20);
+                if (oipEma50Series) oipEma50Series.setData(allEmas.ema50);
+                if (oipEma100Series) oipEma100Series.setData(allEmas.ema100);
+                if (oipEma200Series) oipEma200Series.setData(allEmas.ema200);
             }
+
+            oipUpdateEmaVisibility();
+            oipDrawCpr(validCandles);
+            oipDrawMultiCPR(validCandles);
 
             // 9:18 ATM CE OI lines — always compute & cache (kept ready);
             // oipDrawAtmCeOiLines() only renders when the checkbox is on.
@@ -1446,15 +1361,9 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
                 // No option data in index view — draw OI-chart boxes only
                 oipDraw2ndCandle30sBox(validCandles);
                 oipDraw2nd5mCandleBox(validCandles);
-                // Monday box and both reversal-line sets live on the index
-                // chart alone, so they follow its paint gate. The 2nd-candle
-                // boxes above are day-anchored and also drawn on the (still
-                // live) option charts, so they refresh either way.
-                if (paintIndex) {
-                    oipDrawMondayBox(validCandles);
-                    oipDraw30mReversalLines(validCandles);
-                    oipDraw1DReversalLines(validCandles);
-                }
+                oipDrawMondayBox(validCandles);
+                oipDraw30mReversalLines(validCandles);
+                oipDraw1DReversalLines(validCandles);
             } else {
 
                 const ceStrike = data.intrinsic?.itm_ce_strike, peStrike = data.intrinsic?.itm_pe_strike;
@@ -1485,13 +1394,10 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
                 // Draw boxes after oipOptionData is refreshed so CE/PE charts use the new strike's candles
                 oipDraw2ndCandle30sBox(validCandles);
                 oipDraw2nd5mCandleBox(validCandles);
-                // Index-chart-only overlays — gated with its paint (see the
-                // index-view branch above for the reasoning).
-                if (paintIndex) {
-                    oipDrawMondayBox(validCandles);
-                    oipDraw30mReversalLines(validCandles);
-                    oipDraw1DReversalLines(validCandles);
-                }
+                // Index-chart-only overlays.
+                oipDrawMondayBox(validCandles);
+                oipDraw30mReversalLines(validCandles);
+                oipDraw1DReversalLines(validCandles);
             }
 
             // After every overlay/box has been (re)added, enforce the full z-policy
@@ -1552,6 +1458,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
 // VWAP Bias card — 3-day avg VWAP (same value as the chart's 3-AVG_VWAP line)
 // vs today's opening candle: avg above today's open => Down bias, else Up.
 function oipUpdateVwapBiasCard(candles) {
+    if (window._oipRSOwnsHeader) return;   // Round Strike paints this pill — see oipRSApplyHeader
     if (!oipElems.hdrVwapBias) return;
     if (!candles || !candles.length) { oipElems.hdrVwapBias.textContent = '--'; oipElems.hdrVwapBias.className = 'oip-hdr-val'; return; }
     const dateOf = (t) => {
@@ -1576,6 +1483,7 @@ function oipUpdateVwapBiasCard(candles) {
 // populated by oipFetchAtmCeOiStrikes): below both lines => Down, above both => Up,
 // between them => compared against their midpoint.
 function oipUpdateAtmCeOiBiasCard(price) {
+    if (window._oipRSOwnsHeader) return;   // Round Strike paints this pill — see oipRSApplyHeader
     if (!oipElems.hdrAtmCeOiBias) return;
     const strikes = (oipAtmCeOiData?.selected || []).map(s => s.strike).filter(v => v != null && !isNaN(v));
     if (!price || strikes.length < 2) {
@@ -1590,6 +1498,11 @@ function oipUpdateAtmCeOiBiasCard(price) {
 }
 
 function oipUpdateHeader(data) {
+    // The stats strip lives inside the Round Strike block, which repaints it
+    // from its own 1-second request (oipRSApplyHeader). Writing it here too
+    // would overwrite live values with the /api/open-interest snapshot this
+    // page only re-reads when you press Refresh All.
+    if (window._oipRSOwnsHeader) return;
     const p = data.current_price || 0, pcr = data.pcr_oi || 0, mp = data.max_pain || '--';
     const ivp = data.iv_percentile != null ? data.iv_percentile : '--';
     const ce = data.ce_summary || {}, pe = data.pe_summary || {}, strikes = data.strikes || [];
@@ -1625,11 +1538,6 @@ function oipUpdateHeader(data) {
     }
 
 
-    // Mark candles as loaded at least once AFTER all initialization logic (like zoom) is done
-    if (!oipHasLoadedCandles) {
-        oipHasLoadedCandles = true;
-        console.log('[OIP] Candles first load complete');
-    }
     if (oipElems.hdrCeOI) oipElems.hdrCeOI.textContent = fmtL(ce.total_oi);
     if (oipElems.hdrPeOI) oipElems.hdrPeOI.textContent = fmtL(pe.total_oi);
 
@@ -2688,6 +2596,10 @@ async function oipSelectSymbol(s) {
 async function oipFetchCprWidth(symbol) {
     oipCprData = null;
     oipRenderCprCard();
+    // Round Strike's own request already carries both CPR bands (see
+    // oipRSApplyHeader), so with that block on the page the clear above is all
+    // this does — the new symbol's bands land on the next 1-second tick.
+    if (window._oipRSOwnsHeader) return;
     try {
         const res = await fetch(`/api/oi-profile/cpr-width?symbol=${symbol}`);
         const data = await res.json();

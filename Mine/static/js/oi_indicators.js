@@ -600,11 +600,17 @@ function oipApplyLineStyleChange(key) {
 // Pure function (no DOM reads) so each block can resolve its own toggle and
 // colour: the main chart and Opt Prem use the indicator popups' own checkboxes
 // + oipGetLineColor keys, Round Strike uses its own local pickers.
+//
+// `interval` must likewise be passed in rather than read off the global — which
+// bar closes a 5-minute block depends entirely on the bar width, and Round
+// Strike runs on its own timeframe (oipRSInterval) now, independent of the
+// oipInterval the rest of the page follows. Defaults to oipInterval for the
+// callers that are on it.
 const _OIP_5M_CLOSE_BAR_SECONDS = { '30second': 30, 'minute': 60 };
 
-function oipMark5mCloseBorders(candles, enabled, color) {
+function oipMark5mCloseBorders(candles, enabled, color, interval) {
     if (!Array.isArray(candles) || !enabled) return candles;
-    const barSec = _OIP_5M_CLOSE_BAR_SECONDS[oipInterval];
+    const barSec = _OIP_5M_CLOSE_BAR_SECONDS[interval ?? oipInterval];
     if (!barSec) return candles;
     // Timestamps are epoch seconds already shifted to IST (see the charts'
     // Etc/UTC formatter); the shift is 19800s, a whole multiple of 300, so a

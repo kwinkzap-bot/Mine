@@ -178,24 +178,18 @@ const _TMF_REASON_TONE = {
     'Time Exit':  'neutral',
 };
 
-// ── Zerodha charges — NSE equity intraday (MIS) ─────────────────────────────
+// ── Brokerage — flat ₹600 a round trip ──────────────────────────────────────
 // Every TMF trade is a real MIS equity round trip, so the raw price P&L is not
-// what lands in the account. Rates live in ZerodhaCharges (algo_charges.js),
-// shared with every other live-algo tab; here it is charged per trade off its
-// own turnover, so a 3,114-qty ₹160 trade and an 829-qty ₹603 trade each cost
-// what they actually cost.
-function _tmfChargeParts(t) {
-    return ZerodhaCharges.breakdownForTrade({
-        segment: 'equity_intraday',
-        entry:   t.entry_price,
-        exit:    t.exit_price,
-        qty:     t.qty,
-        short:   String(t.direction || '').toUpperCase() === 'SELL',
-    });
-}
+// what lands in the account. Rather than itemising the contract note off each
+// trade's turnover, every entry is costed at the same flat figure — the number
+// to change if the real cost per round trip moves.
+const _TMF_BROKERAGE_PER_TRADE = 600;
 
+// Charged once per completed round trip. An incomplete record (no exit yet)
+// costs nothing, so a still-open row never shows a phantom deduction.
 function _tmfCharges(t) {
-    return _tmfChargeParts(t).total;
+    return (Number(t.entry_price) > 0 && Number(t.exit_price) > 0)
+        ? _TMF_BROKERAGE_PER_TRADE : 0;
 }
 
 // What the trade is actually worth: price P&L less every charge on it. This is
@@ -204,21 +198,17 @@ function _tmfNetPnl(t) {
     return (Number(t.pnl) || 0) - _tmfCharges(t);
 }
 
-// Hover text for the P&L cell — the gross figure, then the charge split the way
-// the intraday-equity contract note splits it, so a figure here can be checked
-// line by line against the real note rather than taken on trust.
+// Hover text for the P&L cell — the gross figure, then the flat round-trip cost
+// taken off it, so the net in the cell can be checked in one line.
 function _tmfPnlTip(t) {
-    const p = _tmfChargeParts(t);
-    if (!p.total) return '';
+    const chg = _tmfCharges(t);
+    if (!chg) return '';
     const short = String(t.direction || '').toUpperCase() === 'SELL';
     const buy   = short ? t.exit_price : t.entry_price;
     const sell  = short ? t.entry_price : t.exit_price;
-    return `Gross ${DataGrid.inr(t.pnl)} − charges ₹${p.total.toFixed(2)}\n` +
+    return `Gross ${DataGrid.inr(t.pnl)} − brokerage ₹${chg.toFixed(2)}\n` +
            `Intraday equity · Buy ${buy} · Sell ${sell} · Qty ${t.qty}\n` +
-           `Brokerage ₹${p.brokerage.toFixed(2)} · Exchange txn ₹${p.txn.toFixed(2)} · ` +
-           `Stamp duty ₹${p.stamp.toFixed(2)}\n` +
-           `STT ₹${p.stt.toFixed(2)} · GST ₹${p.gst.toFixed(2)} · ` +
-           `SEBI ₹${p.sebi.toFixed(2)}`;
+           `Flat ₹${_TMF_BROKERAGE_PER_TRADE} per round trip`;
 }
 
 function _tmfRenderHistory(trades) {

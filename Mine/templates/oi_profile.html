@@ -25,6 +25,7 @@
                         <path d="M12 7v5l3 3" />
                     </svg>
                     Round Strike
+                    <span class="oip-title-badge">Live 1s</span>
                 </div>
 
                 <div class="oip-prem-toolbar">
@@ -64,15 +65,11 @@
                                             title="Volume bar color on a down candle">
                                     </span>
                                 </label>
+                                <!-- Hangs from its own band at the top of this pane and reuses the
+                                     Nifty Vol Fut colours above, so it carries no swatches of its own. -->
                                 <label class="oip-ind-item"
-                                    title="BANKNIFTY current-expiry future volume, on the same scale as Nifty Vol Fut">
+                                    title="BANKNIFTY current-expiry future volume, in its own band at the top of the pane">
                                     <input type="checkbox" id="oipRSShowBnfVolume"><span>Banknifty Vol Fut</span>
-                                    <span class="oip-line-props">
-                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolUp"
-                                            title="Volume bar color on an up candle">
-                                        <input type="color" class="oip-line-color-inp" data-color-key="bnfVolDn"
-                                            title="Volume bar color on a down candle">
-                                    </span>
                                 </label>
                                 <label class="oip-ind-item">
                                     <input type="checkbox" id="oipRSShow5mClose" checked><span>5m Close Border</span>
@@ -194,10 +191,14 @@
                         </div>
                     </div>
 
-                    <!-- TF (symbol is fixed to NIFTY) -->
+                    <!-- TF for THIS block only (symbol is fixed to NIFTY). Every
+                         other chart on the page follows the separate TF dropdown in
+                         the Opt Prem header, so the two can sit on different
+                         timeframes — this one is the live 1-second view. -->
                     <div class="oip-prem-group">
                         <span class="oip-label">TF</span>
-                        <select id="oipInterval" class="oip-select oip-select--xs">
+                        <select id="oipRSInterval" class="oip-select oip-select--xs"
+                            title="Round Strike timeframe (this block only)">
                             <option value="30second">30s</option>
                             <option value="minute" selected>1m</option>
                             <option value="2minute">2m</option>
@@ -244,7 +245,7 @@
                                     <span>Color</span>
                                     <span class="oip-line-props">
                                         <input type="color" id="oipRSRayColorInp" class="oip-ray-color-inp"
-                                            value="#f59e0b" title="Ray color">
+                                            value="#f33968" title="Ray color">
                                     </span>
                                 </div>
                                 <div class="oip-ind-item">
@@ -263,8 +264,8 @@
                                     <span class="oip-line-props">
                                         <select id="oipRSRayStyleSel" class="oip-ray-style-sel" title="Ray style">
                                             <option value="0">Solid</option>
-                                            <option value="1">Dotted</option>
-                                            <option value="2" selected>Dashed</option>
+                                            <option value="1" selected>Dotted</option>
+                                            <option value="2">Dashed</option>
                                         </select>
                                     </span>
                                 </div>
@@ -395,6 +396,41 @@
 
                 <!-- Compact single-row controls -->
                 <div class="oip-prem-toolbar">
+
+                    <!-- TF for every chart on this page EXCEPT Round Strike, which
+                         has its own dropdown in its own header: these charts (Opt
+                         Prem CE/PE/Combined, OI Profile index, intrinsic levels)
+                         only reload on Refresh All, so a slower default than Round
+                         Strike's live 1m is the sensible starting point. -->
+                    <div class="oip-prem-group">
+                        <span class="oip-label">TF</span>
+                        <select id="oipInterval" class="oip-select oip-select--xs"
+                            title="Timeframe for every chart except Round Strike">
+                            <option value="30second">30s</option>
+                            <option value="minute">1m</option>
+                            <option value="2minute">2m</option>
+                            <option value="3minute">3m</option>
+                            <option value="5minute" selected>5m</option>
+                            <option value="15minute">15m</option>
+                            <option value="30minute">30m</option>
+                            <option value="60minute">1h</option>
+                            <option value="day">1D</option>
+                            <option value="week">1W</option>
+                            <option value="month">1M</option>
+                        </select>
+                    </div>
+
+                    <!-- The one refresh control for all of those charts. Round
+                         Strike is excluded — it is live on its own 1-second feed. -->
+                    <div class="oip-prem-group">
+                        <button id="oipRefreshAllBtn" class="oip-btn" type="button"
+                            title="Refresh every chart on this page except Round Strike (which is always live)">
+                            <span id="oipRefreshIcon" class="oip-refresh-icon">⟳</span>
+                            Refresh All
+                        </button>
+                    </div>
+
+                    <div class="oip-prem-sep"></div>
 
                     <!-- Toggles group (Hidden but checked by default) -->
                     <div class="oip-prem-group" style="display:none">
@@ -604,7 +640,7 @@
                                     <span>Color</span>
                                     <span class="oip-line-props">
                                         <input type="color" id="oipRayColorInp" class="oip-ray-color-inp"
-                                            value="#f59e0b" title="Ray color">
+                                            value="#f33968" title="Ray color">
                                     </span>
                                 </div>
                                 <div class="oip-ind-item">
@@ -623,8 +659,8 @@
                                     <span class="oip-line-props">
                                         <select id="oipRayStyleSel" class="oip-ray-style-sel" title="Ray style">
                                             <option value="0">Solid</option>
-                                            <option value="1">Dotted</option>
-                                            <option value="2" selected>Dashed</option>
+                                            <option value="1" selected>Dotted</option>
+                                            <option value="2">Dashed</option>
                                         </select>
                                     </span>
                                 </div>
@@ -712,7 +748,7 @@
                         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                     </svg>
                     OI Profile
-                    <span class="oip-title-badge">Live</span>
+                    <span class="oip-title-badge oip-title-badge--manual">On Refresh</span>
                 </div>
 
                 <!-- Compact single-row controls -->
@@ -948,7 +984,7 @@
                                     <span>Color</span>
                                     <span class="oip-line-props">
                                         <input type="color" id="oipOIRayColorInp" class="oip-ray-color-inp"
-                                            value="#f59e0b" title="Ray color">
+                                            value="#f33968" title="Ray color">
                                     </span>
                                 </div>
                                 <div class="oip-ind-item">
@@ -967,8 +1003,8 @@
                                     <span class="oip-line-props">
                                         <select id="oipOIRayStyleSel" class="oip-ray-style-sel" title="Ray style">
                                             <option value="0">Solid</option>
-                                            <option value="1">Dotted</option>
-                                            <option value="2" selected>Dashed</option>
+                                            <option value="1" selected>Dotted</option>
+                                            <option value="2">Dashed</option>
                                         </select>
                                     </span>
                                 </div>
@@ -1001,14 +1037,6 @@
                         </svg>
                         OI Bar
                     </button>
-
-                    <div class="oip-prem-sep"></div>
-
-                    <!-- NIFTY Index candles on this chart are NOT auto-refreshed
-                         (see paintIndex in oi_profile.js) — this button is the
-                         only thing that pulls and paints their latest data. -->
-                    <button id="oipIndexRefreshBtn" class="oip-btn" type="button"
-                        title="Fetch the latest index candles for this chart (not auto-refreshed live)">⟳</button>
 
                 </div>
             </div>
@@ -1065,10 +1093,10 @@
                 <div class="oip-prem-group">
                     <select id="oipFixedStrikeDropdown" class="oip-select oip-select--xs"
                         title="Fixed monthly strike"></select>
+                    <!-- Strike change only — data for this chart arrives with
+                         everything else on the page's single Refresh All button. -->
                     <button id="oipFixedStrikeUpdateBtn" class="oip-btn" type="button"
                         title="Apply and save this strike as the default">Update</button>
-                    <button id="oipFixedStrikeRefreshBtn" class="oip-btn" type="button"
-                        title="Fetch the latest data for this chart (not auto-refreshed live)">⟳</button>
                 </div>
             </div>
         </div>

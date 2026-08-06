@@ -4,8 +4,8 @@
   "sell_needs_reset": false,
   "last_exit": {
     "reason": "SL",
-    "spot": 24606.35,
-    "time": "2026-08-06T10:06:02.116520"
+    "spot": 24612.5,
+    "time": "2026-08-06T13:15:13.235198"
   },
   "pending_signal": null
 }

@@ -9035,6 +9035,66 @@ def vega_history() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _oip_format_candles(raw_data, ist_offset, requested_interval):
+    """Broker OHLC rows -> lightweight-charts bars on the 'Fake IST Epoch' grid.
+
+    Shared by /oi-profile/candles and /oi-profile/round-strike so both emit an
+    identical bar shape (and identical 2-minute aggregation) for the same
+    underlying data.
+    """
+    if not raw_data:
+        return []
+
+    temp = []
+    for c in raw_data:
+        # Lightweight Charts (candlestick) throws "Value is null" if any OHLC is None/NaN
+        if any(x is None for x in [c.get('open'), c.get('high'), c.get('low'), c.get('close')]):
+            continue
+        bar = {
+            'time':   int(c['date'].timestamp()) + ist_offset,
+            'open':   c['open'], 'high':   c['high'], 'low':    c['low'],
+            'close':  c['close'], 'volume': c.get('volume', 0)
+        }
+        # Carried through so the chart can mark the stretch that was
+        # rebuilt locally (Fyers intraday history empty for today)
+        # rather than passing it off as exchange data.
+        if c.get('synthetic'):
+            bar['synthetic'] = True
+        temp.append(bar)
+
+    if requested_interval == '2minute':
+        def merge_batch(batch):
+            if not batch:
+                return None
+            merged = {
+                'time':   batch[0]['time'],
+                'open':   batch[0]['open'],
+                'high':   max(x['high'] for x in batch),
+                'low':    min(x['low'] for x in batch),
+                'close':  batch[-1]['close'],
+                'volume': sum(x['volume'] for x in batch)
+            }
+            if any(x.get('synthetic') for x in batch):
+                merged['synthetic'] = True
+            return merged
+
+        aggregated = []
+        batch = []
+        last_day = None
+        for c in temp:
+            current_day = datetime.fromtimestamp(c['time'] - ist_offset).date()
+            if last_day and current_day != last_day and batch:
+                aggregated.append(merge_batch(batch)); batch = []
+            last_day = current_day
+            batch.append(c)
+            if len(batch) == 2:
+                aggregated.append(merge_batch(batch)); batch = []
+        if batch:
+            aggregated.append(merge_batch(batch))
+        return aggregated
+    return temp
+
+
 @api_bp.route('/oi-profile/candles', methods=['GET'])
 @csrf.exempt
 @limiter.exempt
@@ -9071,21 +9131,13 @@ def oi_profile_candles() -> EndpointResponse:
         multiplier = request.args.get('multiplier', 2, type=int)
         auto_hl    = request.args.get('auto_hl', 'false').lower() == 'true'
         first_5m_atm = request.args.get('first_5m_atm', 'false').lower() == 'true'
-        # Callers that never render the "2nd 30-second candle" indicator (e.g.
-        # the Round Strike block) can skip its 3 extra parallel Fyers history
-        # calls per request — one less source of rate-limit contention for
-        # this endpoint's main option-candle fetch.
+        # Callers that never render the "2nd 30-second candle" indicator can skip
+        # its 3 extra parallel Fyers history calls per request — one less source
+        # of rate-limit contention for this endpoint's main option-candle fetch.
         include_30s = request.args.get('include_30s', 'true').lower() != 'false'
         custom_strike = request.args.get('custom_strike', type=int)
         ce_strike = request.args.get('ce_strike', type=int)
         pe_strike = request.args.get('pe_strike', type=int)
-        # Round Strike block's own CE/PE pair (oi_profile_round_strike.js). Same
-        # symbol/interval/window as the main ce_strike/pe_strike above — only the
-        # strikes differ — so it rides along on THIS request rather than firing a
-        # second identical one every poll tick. Omitted by callers that don't
-        # render that block, in which case its legs are skipped entirely.
-        rs_ce_strike = request.args.get('rs_ce_strike', type=int)
-        rs_pe_strike = request.args.get('rs_pe_strike', type=int)
         start_date_str = request.args.get('start_date')
         end_date_str   = request.args.get('end_date')
         # Independent, always-on secondary chart (fixed EXPIRY — e.g. monthly —
@@ -9122,18 +9174,27 @@ def oi_profile_candles() -> EndpointResponse:
         # include_30s belongs in the key too: it decides whether second_30s_* come
         # back populated or empty, so without it a caller that opted out could
         # serve its stripped response to one that needs those candles.
-        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval, rs_ce_strike, rs_pe_strike, include_30s)
-        
+        cache_key = (symbol, interval, days, opt_days, spot_high, spot_low, auto_hl, first_5m_atm, custom_strike, ce_strike, pe_strike, start_date_str, end_date_str, fixed_ce_strike, fixed_pe_strike, fixed_expiry, fixed_interval, include_30s)
+
+        # The OI Profile page no longer polls this endpoint — every call is now a
+        # user action (its single Refresh All button, a symbol/interval/strike
+        # change). `force` is how that button says "I pressed refresh, go to the
+        # broker": without it the caches below would hand a manual refresh a
+        # response up to an hour old outside market hours, which reads as a
+        # button that does nothing. Everything else still shares the caches.
+        force_refresh = request.args.get('force', 'false').lower() == 'true'
+
         # Request Coalescing: Only one thread fetches for this key at a time
         req_lock = _get_request_lock(cache_key)
         with req_lock:
             with _candle_cache_lock:
-                if cache_key in _candle_response_cache:
+                if not force_refresh and cache_key in _candle_response_cache:
                     data, ts = _candle_response_cache[cache_key]
-                    # Reduced cache to 0.5s to allow for high-frequency (1s) price updates
+                    # Short window — just enough to coalesce a double-click or two
+                    # charts asking for the same thing at once.
                     if datetime.now().timestamp() - ts < 0.5:
                         return jsonify(data)
-                
+
                 # Prune cache if it exceeds max size
                 if len(_candle_response_cache) > _MAX_CACHE_ENTRIES:
                     entries_to_remove = len(_candle_response_cache) - (_MAX_CACHE_ENTRIES // 2)
@@ -9143,9 +9204,9 @@ def oi_profile_candles() -> EndpointResponse:
 
         # ── 2. Market Hours Check ──────────────
         market_is_open = _cached_market_hours()
-        
+
         # If market is closed, we can use a much longer cache (1 hour)
-        if not market_is_open:
+        if not market_is_open and not force_refresh:
             with _candle_cache_lock:
                 if cache_key in _candle_response_cache:
                     data, ts = _candle_response_cache[cache_key]
@@ -9225,56 +9286,9 @@ def oi_profile_candles() -> EndpointResponse:
 
         logger.info(f"[OI-Profile/Candles] Provider={'Fyers' if _is_fyers_provider else 'Kite'}, token={token}")
 
-        # Shared aggregation/formatting logic
-        def format_candles(raw_data, ist_offset, requested_interval):
-            if not raw_data: return []
-            
-            temp = []
-            for c in raw_data:
-                # Lightweight Charts (candlestick) throws "Value is null" if any OHLC is None/NaN
-                if any(x is None for x in [c.get('open'), c.get('high'), c.get('low'), c.get('close')]):
-                    continue
-                bar = {
-                    'time':   int(c['date'].timestamp()) + ist_offset,
-                    'open':   c['open'], 'high':   c['high'], 'low':    c['low'],
-                    'close':  c['close'], 'volume': c.get('volume', 0)
-                }
-                # Carried through so the chart can mark the stretch that was
-                # rebuilt locally (Fyers intraday history empty for today)
-                # rather than passing it off as exchange data.
-                if c.get('synthetic'):
-                    bar['synthetic'] = True
-                temp.append(bar)
-            
-            if requested_interval == '2minute':
-                def merge_batch(batch):
-                    if not batch: return None
-                    merged = {
-                        'time':   batch[0]['time'],
-                        'open':   batch[0]['open'],
-                        'high':   max(x['high'] for x in batch),
-                        'low':    min(x['low'] for x in batch),
-                        'close':  batch[-1]['close'],
-                        'volume': sum(x['volume'] for x in batch)
-                    }
-                    if any(x.get('synthetic') for x in batch):
-                        merged['synthetic'] = True
-                    return merged
-                
-                aggregated = []
-                batch = []
-                last_day = None
-                for c in temp:
-                    current_day = datetime.fromtimestamp(c['time'] - ist_offset).date()
-                    if last_day and current_day != last_day and batch:
-                        aggregated.append(merge_batch(batch)); batch = []
-                    last_day = current_day
-                    batch.append(c)
-                    if len(batch) == 2:
-                        aggregated.append(merge_batch(batch)); batch = []
-                if batch: aggregated.append(merge_batch(batch))
-                return aggregated
-            return temp
+        # Shared aggregation/formatting logic (module-level so the Round Strike
+        # endpoint emits identical bars — see _oip_format_candles).
+        format_candles = _oip_format_candles
 
         _fetch_errors = []
         # Why a given token's fetch came back empty, keyed by str(token). The
@@ -9332,23 +9346,6 @@ def oi_profile_candles() -> EndpointResponse:
                 kite_service, _data_provider, _is_fyers_provider, symbol, fixed_pe_strike, 'PE', expiry_type=fixed_expiry)
             if fixed_pe_token:
                 future_fixed_pe = executor.submit(fetch_task, fixed_pe_token, opt_from_date, to_date, fixed_fetch_interval)
-
-        # Round Strike block's CE/PE legs — nearest expiry and the same
-        # `fetch_interval`/window as the main ce_strike/pe_strike pair (only the
-        # strikes differ), submitted here so they run in the same parallel batch
-        # instead of arriving as a separate HTTP request.
-        rs_ce_token = rs_pe_token = rs_ce_symbol = rs_pe_symbol = None
-        future_rs_ce = future_rs_pe = None
-        if rs_ce_strike:
-            rs_ce_token, rs_ce_symbol = _get_cached_strike_token(
-                kite_service, _data_provider, _is_fyers_provider, symbol, rs_ce_strike, 'CE')
-            if rs_ce_token:
-                future_rs_ce = executor.submit(fetch_task, rs_ce_token, opt_from_date, to_date, fetch_interval)
-        if rs_pe_strike:
-            rs_pe_token, rs_pe_symbol = _get_cached_strike_token(
-                kite_service, _data_provider, _is_fyers_provider, symbol, rs_pe_strike, 'PE')
-            if rs_pe_token:
-                future_rs_pe = executor.submit(fetch_task, rs_pe_token, opt_from_date, to_date, fetch_interval)
 
         # 1. Start fetching index intraday and index daily
         future_index = executor.submit(fetch_task, token, from_date, to_date, fetch_interval)
@@ -9651,14 +9648,6 @@ def oi_profile_candles() -> EndpointResponse:
         fixed_ce_candles = format_candles(fixed_ce_raw, ist_offset, fixed_interval)
         fixed_pe_candles = format_candles(fixed_pe_raw, ist_offset, fixed_interval)
 
-        # Round Strike legs — same `interval` as the main CE/PE pair, so the
-        # caller can reuse this response's `future_volume` for that block's
-        # volume overlay without re-matching timestamps.
-        rs_ce_raw = future_rs_ce.result() if future_rs_ce else []
-        rs_pe_raw = future_rs_pe.result() if future_rs_pe else []
-        rs_ce_candles = format_candles(rs_ce_raw, ist_offset, interval)
-        rs_pe_candles = format_candles(rs_pe_raw, ist_offset, interval)
-
         # ── Intrinsic Levels ─────────────────────────────────────────
         intrinsic_data = None
         if spot_high is not None and spot_low is not None and itm_ce_strike is not None and itm_pe_strike is not None:
@@ -9699,8 +9688,7 @@ def oi_profile_candles() -> EndpointResponse:
         # ── 6. Update Cache and Return ────────────────────────────────
         # A token was resolved but its candle list still came back empty. Track
         # this per-leg so we neither report false success nor cache the broken
-        # result below (see oipRSLoadCandles in oi_profile_round_strike.js,
-        # whose empty-candle charts this masked).
+        # result below.
         # FyersDataServiceAdapter.historical_data returns [] rather than raising
         # on every failure path, so the cause comes from _empty_fetch_reasons
         # (populated in fetch_task) instead of being guessed at here.
@@ -9709,8 +9697,6 @@ def oi_profile_candles() -> EndpointResponse:
             ('PE', pe_token, pe_candles),
             ('fixed CE', fixed_ce_token, fixed_ce_candles),
             ('fixed PE', fixed_pe_token, fixed_pe_candles),
-            ('round-strike CE', rs_ce_token, rs_ce_candles),
-            ('round-strike PE', rs_pe_token, rs_pe_candles),
         ) if tok and not cds]
         fetch_error_msg = _fetch_errors[0] if _fetch_errors and not candles else None
         opt_fetch_failed = bool(empty_legs)
@@ -9751,10 +9737,6 @@ def oi_profile_candles() -> EndpointResponse:
             'fixed_pe_symbol': fixed_pe_symbol,
             'fixed_future_volume': fixed_future_volume,
             'fixed_banknifty_volume': fixed_banknifty_volume,
-            'rs_ce_candles': rs_ce_candles,
-            'rs_pe_candles': rs_pe_candles,
-            'rs_ce_symbol': rs_ce_symbol,
-            'rs_pe_symbol': rs_pe_symbol,
             'second_30s_candle_oi': second_30s_oi,
             'second_30s_candle_ce': second_30s_ce,
             'second_30s_candle_pe': second_30s_pe,
@@ -10193,6 +10175,507 @@ def oi_profile_atm_ce_oi_strikes() -> EndpointResponse:
 
     except Exception as exc:
         logger.error(f'[ATM-CE-OI] Error: {exc}', exc_info=True)
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+# ── Round Strike block — one self-contained endpoint ────────────────────────
+# Everything the Round Strike block on the OI Profile page shows comes from
+# /oi-profile/round-strike: its CE/PE premium candles, the two future-volume
+# overlays, and every pill in its stats strip (Price, CE OI, PE OI, ATM, CPR,
+# VWAP Bias, 9:18 Bias, PCR, Lot, Trend, IVP). It is the only live feed on that
+# page — every other chart there is static until its Refresh All button is
+# pressed — and the block polls it once a second while the market is open, so
+# the inputs that physically cannot move that fast are served from their own
+# short-TTL caches rather than being recomputed per tick:
+#
+#   index candles (VWAP Bias + session open)   10 s
+#   OI chain snapshot (OI/PCR/ATM/IVP/Trend)   10 s  (recorder writes ~1/min)
+#   strike list + lot size                     10 min
+#   9:18 ATM CE OI strikes                      5 min (fixed once 09:18 passes)
+#   CPR bands                                  whole day (_cpr_width_cache)
+#
+# Fetched on every tick: the two option legs, the two volume overlays, and one
+# LTP quote for the Price pill (which nobody wants served off a cache).
+_rs_section_cache: Dict[Tuple, Tuple[Any, float]] = {}
+_rs_section_lock = threading.Lock()
+_RS_SECTION_MAX = 200
+_rs_response_cache = LruCache(max_size=20)
+# Must stay under the block's 1-second poll interval, or a tick would be served
+# the previous tick's answer and the chart would advance at half speed. It only
+# needs to be long enough to coalesce two near-simultaneous callers.
+_RS_RESPONSE_TTL = 0.6
+_RS_RESPONSE_TTL_CLOSED = 60.0
+
+
+def _rs_cached(key: Tuple, ttl: float, producer):
+    """Memoize `producer()` under `key` for `ttl` seconds.
+
+    Concurrent callers for the same key coalesce onto one producer run, and a
+    producer that raises serves the previous value instead of a hole — a stats
+    pill that keeps its last number reads far better than one that blinks to
+    '--' whenever the broker hiccups on a single 1-second tick.
+    """
+    now_ts = _time.time()
+    with _rs_section_lock:
+        hit = _rs_section_cache.get(key)
+        if hit and now_ts - hit[1] < ttl:
+            return hit[0]
+
+    with _get_request_lock(('rs-section', key)):
+        with _rs_section_lock:
+            hit = _rs_section_cache.get(key)
+            if hit and _time.time() - hit[1] < ttl:
+                return hit[0]
+        try:
+            value = producer()
+        except Exception as exc:
+            logger.warning(f'[RoundStrike] section {key[0] if key else "?"} failed: {exc}')
+            with _rs_section_lock:
+                hit = _rs_section_cache.get(key)
+            return hit[0] if hit else None
+        with _rs_section_lock:
+            if len(_rs_section_cache) > _RS_SECTION_MAX:
+                _rs_section_cache.clear()
+            _rs_section_cache[key] = (value, _time.time())
+        return value
+
+
+def _rs_day_vwap_bias(candles: list) -> Optional[str]:
+    """3-day average VWAP vs today's open: average above the open => DOWN.
+
+    Mirrors oipCalculateAvg3VWAP + oipUpdateVwapBiasCard in the frontend — the
+    same value the chart's 3-AVG_VWAP line draws — so the card reads identically
+    whether it is fed from here or from the page's own chart data.
+    """
+    if not candles:
+        return None
+
+    def day_of(bar):
+        # 'Fake IST Epoch' bars: read in UTC, the clock fields are already IST.
+        return _time.strftime('%Y-%m-%d', _time.gmtime(bar['time']))
+
+    final_vwap: Dict[str, Optional[float]] = {}
+    day_order: list = []
+    cum_pv = cum_v = 0.0
+    last_day = None
+    last_vwap = None
+    for c in candles:
+        day = day_of(c)
+        if day != last_day:
+            if last_day is not None:
+                final_vwap[last_day] = last_vwap
+            cum_pv = cum_v = 0.0
+            last_vwap = None
+            last_day = day
+            day_order.append(day)
+        vol = c.get('volume') or 0
+        if vol <= 0:
+            continue
+        cum_pv += ((c['high'] + c['low'] + c['close']) / 3.0) * vol
+        cum_v += vol
+        if cum_v:
+            last_vwap = cum_pv / cum_v
+    if last_day is not None:
+        final_vwap[last_day] = last_vwap
+
+    if len(day_order) < 4:
+        return None
+    today = day_order[-1]
+    prev3 = [final_vwap.get(d) for d in day_order[-4:-1]]
+    if any(v is None for v in prev3):
+        return None
+    today_open = next((c['open'] for c in candles if day_of(c) == today), None)
+    if today_open is None:
+        return None
+    return 'DOWN' if (sum(prev3) / 3.0) > today_open else 'UP'
+
+
+def _rs_session_open(candles: list) -> float:
+    """Today's opening index price — or the most recent day that has one.
+
+    Before the open (and on holidays) today's bars don't exist yet; falling back
+    to the previous session's open keeps the block's round-strike defaults on a
+    real open rather than collapsing them to 0.
+    """
+    if not candles:
+        return 0.0
+    by_day: Dict[str, list] = {}
+    order: list = []
+    for c in candles:
+        day = _time.strftime('%Y-%m-%d', _time.gmtime(c['time']))
+        if day not in by_day:
+            by_day[day] = []
+            order.append(day)
+        by_day[day].append(c)
+    for day in reversed(order):
+        try:
+            open_px = float(by_day[day][0]['open'])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if open_px > 0:
+            return open_px
+    return 0.0
+
+
+def _rs_trim_days(bars: list, days: int) -> list:
+    """Keep only the last `days` TRADING days of `bars`.
+
+    The fetch window is calendar days with slack (weekends/holidays), so without
+    this the chart would show a few sessions more than asked for — and each
+    extra session is dead weight on a 1-second poll.
+    """
+    if not bars or days <= 0:
+        return bars
+    day_of = lambda b: _time.strftime('%Y-%m-%d', _time.gmtime(b['time']))
+    all_days = sorted({day_of(b) for b in bars})
+    if len(all_days) <= days:
+        return bars
+    keep = set(all_days[-days:])
+    return [b for b in bars if day_of(b) in keep]
+
+
+def _rs_trend_from_pcr(pcr: Optional[float]) -> str:
+    """PCR -> Bullish / Bearish / Neutral (same thresholds the header has always used)."""
+    if pcr is None:
+        return 'Neutral'
+    if pcr >= 1.25:
+        return 'Bullish'
+    if pcr <= 0.6:
+        return 'Bearish'
+    return 'Neutral'
+
+
+def _rs_oi_snapshot(symbol: str) -> Optional[Dict[str, Any]]:
+    """Latest OI-chain snapshot for the stats strip (OI totals, PCR, max pain, IVP).
+
+    DB-first, exactly like /open-interest: the scheduler writes a snapshot about
+    once a minute, so a 1-second poll must never trigger a live chain fetch of
+    its own. The live fallback is kept for the case where the recorder is behind,
+    but throttled to one attempt per 30 seconds per symbol.
+    """
+    from trading_app.service.open_interest_service import OpenInterestService
+
+    provider = get_data_provider()
+    if not provider:
+        return None
+    oi_service = OpenInterestService(provider)
+
+    db_data = oi_service.get_latest_oi_from_db(symbol, max_age_minutes=2)
+    if db_data:
+        return db_data
+
+    def _live() -> Optional[Dict[str, Any]]:
+        data = oi_service.get_open_interest_data(symbol)
+        if not data.get('success'):
+            return None
+        try:
+            oi_service.save_oi_snapshot(symbol, data)
+        except Exception as save_exc:
+            logger.warning(f'[RoundStrike] OI snapshot save failed: {save_exc}')
+        return data
+
+    live = _rs_cached(('rs-oi-live', symbol), 30.0, _live)
+    if live:
+        return live
+    # Still nothing fresh — show the last snapshot of the day (market closed,
+    # recorder stopped) rather than blanking every pill.
+    return oi_service.get_latest_oi_from_db(symbol, max_age_minutes=1440)
+
+
+@api_bp.route('/oi-profile/round-strike', methods=['GET'])
+@csrf.exempt
+@limiter.exempt
+def oi_profile_round_strike() -> EndpointResponse:
+    """Every piece of data the OI Profile page's Round Strike block renders.
+
+    Query params: symbol, interval, days, ce_strike, pe_strike, step.
+    ce_strike/pe_strike may be omitted on the very first call — the block needs
+    this endpoint's `session_open` and `strikes` to work out which pair to ask
+    for, and the option legs come back empty until it does.
+    """
+    try:
+        symbol    = request.args.get('symbol', 'NIFTY').upper()
+        interval  = request.args.get('interval', 'minute')
+        days      = request.args.get('days', 5, type=int) or 5
+        ce_strike = request.args.get('ce_strike', type=int)
+        pe_strike = request.args.get('pe_strike', type=int)
+        step      = request.args.get('step', 50, type=int) or 50
+
+        valid_intervals = ['30second', 'minute', '2minute', '3minute', '5minute', '10minute',
+                           '15minute', '30minute', '60minute', 'day', 'week', 'month']
+        if interval not in valid_intervals:
+            return jsonify({'success': False, 'error': f'Invalid interval. Use one of {valid_intervals}'}), 400
+        days = min(max(int(days), 1), 10000 if interval in ('day', 'week', 'month') else 500)
+
+        market_is_open = _cached_market_hours()
+        cache_key = (symbol, interval, days, ce_strike, pe_strike, step)
+        ttl = _RS_RESPONSE_TTL if market_is_open else _RS_RESPONSE_TTL_CLOSED
+        if cache_key in _rs_response_cache:
+            cached, cached_ts = _rs_response_cache[cache_key]
+            if datetime.now().timestamp() - cached_ts < ttl:
+                return jsonify(cached)
+
+        kite = get_kite(instance=1)
+        _data_provider = get_data_provider()
+        if not kite and not _data_provider:
+            return jsonify({'success': False, 'error': 'Data provider not connected. Please login.'}), 401
+
+        _is_fyers_provider = isinstance(_data_provider, FyersDataServiceAdapter)
+        effective_instance = _data_provider if _data_provider else kite
+        kite_service = KiteService(kite_instance=effective_instance)
+
+        if _is_fyers_provider:
+            index_token = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-EQ'
+        else:
+            index_token = NSE_INDEX_TOKENS_CPR.get(symbol) or kite_service.get_instrument_token(symbol)
+        if not index_token:
+            return jsonify({'success': False, 'error': f'Invalid or unknown symbol: {symbol}'}), 400
+
+        ist_offset = int(5.5 * 3600)
+        now = datetime.now()
+        from_date = (now - timedelta(days=days + 5)).replace(hour=9, minute=0, second=0, microsecond=0)
+        to_date = now
+        fetch_interval = 'minute' if interval == '2minute' else interval
+
+        fetch_errors: list = []
+        empty_reasons: Dict[str, str] = {}
+
+        def fetch_task(token, inter):
+            try:
+                if _is_fyers_provider and _data_provider:
+                    res = _data_provider.historical_data(
+                        str(token), from_date.strftime('%Y-%m-%d'), to_date.strftime('%Y-%m-%d'),
+                        inter, use_cache=False, allow_synthetic=True)
+                    if not res:
+                        # Must be read on the fetching thread — it is thread-local.
+                        reason = getattr(_data_provider, 'last_history_error', lambda: None)()
+                        if reason:
+                            empty_reasons[str(token)] = reason
+                    return res
+                if kite:
+                    return kite_service._historical_with_retry(
+                        instrument_token=int(token), from_date=from_date, to_date=to_date, interval=inter)
+                return []
+            except Exception as exc:
+                logger.error(f'[RoundStrike] fetch error for token {token}: {exc}')
+                fetch_errors.append(str(exc))
+                return []
+
+        executor = _api_executor
+
+        # ── Per-tick fetches: the two option legs + the two volume overlays ──
+        ce_token = pe_token = ce_symbol = pe_symbol = None
+        future_ce = future_pe = None
+        if ce_strike:
+            ce_token, ce_symbol = _get_cached_strike_token(
+                kite_service, _data_provider, _is_fyers_provider, symbol, ce_strike, 'CE')
+            if ce_token:
+                future_ce = executor.submit(fetch_task, ce_token, fetch_interval)
+        if pe_strike:
+            pe_token, pe_symbol = _get_cached_strike_token(
+                kite_service, _data_provider, _is_fyers_provider, symbol, pe_strike, 'PE')
+            if pe_token:
+                future_pe = executor.submit(fetch_task, pe_token, fetch_interval)
+
+        # The index carries no traded volume — the overlay uses the current-expiry
+        # future, plus Bank Nifty's (identical contract when BANKNIFTY is the
+        # selected symbol, so it is fetched once and shared).
+        fut_token, fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, symbol)
+        future_vol = executor.submit(fetch_task, fut_token, fetch_interval) if fut_token else None
+        if symbol == 'BANKNIFTY':
+            bnf_token, bnf_symbol, future_bnf_vol = fut_token, fut_symbol, future_vol
+        else:
+            bnf_token, bnf_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, 'BANKNIFTY')
+            future_bnf_vol = executor.submit(fetch_task, bnf_token, fetch_interval) if bnf_token else None
+
+        # Price is the one pill nobody wants served off a 10-second cache, and
+        # re-fetching the whole index history every tick just to read its last
+        # close would be an absurd way to get one number — a single LTP quote
+        # does it. Fyers only: Kite's ltp() keys off an exchange-qualified
+        # tradingsymbol this endpoint never resolves, and it falls through to the
+        # index bar / OI snapshot below instead.
+        def _live_ltp():
+            try:
+                quote = _data_provider.ltp([index_token]) or {}
+                return float((quote.get(index_token) or {}).get('last_price') or 0)
+            except Exception as exc:
+                logger.debug(f'[RoundStrike] LTP failed for {index_token}: {exc}')
+                return 0.0
+
+        future_ltp = executor.submit(_live_ltp) if (_is_fyers_provider and _data_provider) else None
+
+        # ── Slow-moving sections (see the TTL table above) ──
+        def _index_derived():
+            raw = fetch_task(index_token, fetch_interval)
+            bars = _rs_trim_days(_oip_format_candles(raw, ist_offset, interval), days)
+            return {
+                'session_open': _rs_session_open(bars),
+                'vwap_bias': _rs_day_vwap_bias(bars),
+                'last_close': float(bars[-1]['close']) if bars else 0.0,
+            }
+
+        def _strike_list():
+            all_inst = kite_service.get_nfo_instruments(symbol)
+            if not all_inst:
+                return []
+            uniq = sorted({float(i['strike']) for i in all_inst
+                           if i.get('strike') is not None and i['strike'] > 0})
+            return [{'strike': s} for s in uniq]
+
+        def _lot_size():
+            provider = _data_provider or kite
+            if provider and hasattr(provider, 'get_lot_size'):
+                return provider.get_lot_size(symbol)
+            return None
+
+        def _atm_ce_oi():
+            from trading_app.service.open_interest_service import OpenInterestService
+            svc = OpenInterestService(_data_provider if _data_provider else kite)
+            return svc.get_atm_ce_oi_strikes(symbol, step, None)
+
+        def _cpr_bands():
+            # Shares /oi-profile/cpr-width's day cache — the previous session's
+            # OHLC is fixed for the whole day, so whichever caller gets there
+            # first spares the other two daily-history fetches.
+            cpr_key = (symbol, today_str)
+            with _cpr_width_cache_lock:
+                shared = _cpr_width_cache.get(cpr_key)
+            if shared:
+                return shared
+            idx_tok = NSE_INDEX_TOKENS_CPR.get(symbol) or kite_service.get_instrument_token(symbol)
+            fut_sym = kite_service.get_future_symbol(symbol)
+            fut_tok = kite_service.get_instrument_token(fut_sym) if fut_sym else None
+            bands = {
+                'success': True,
+                'symbol': symbol,
+                'index': _cpr_band_from_daily(kite_service, idx_tok) if idx_tok else None,
+                'future': _cpr_band_from_daily(kite_service, fut_tok) if fut_tok else None,
+                'future_symbol': fut_sym,
+            }
+            with _cpr_width_cache_lock:
+                if len(_cpr_width_cache) > _CPR_WIDTH_MAX_CACHE:
+                    _cpr_width_cache.clear()
+                _cpr_width_cache[cpr_key] = bands
+            return bands
+
+        # Only the index leg is worth a worker of its own — it is the one cached
+        # section that goes to the broker's history API. The rest are DB/instrument
+        # lookups that answer from their cache on all but the first tick, so they
+        # run inline rather than crowding the shared pool the option legs above
+        # (and the main candles endpoint) are already using.
+        today_str = now.strftime('%Y-%m-%d')
+        f_index = executor.submit(_rs_cached, ('rs-index', symbol, interval, days), 10.0, _index_derived)
+
+        # ── Collect ──
+        ce_candles = _rs_trim_days(_oip_format_candles(future_ce.result() if future_ce else [], ist_offset, interval), days)
+        pe_candles = _rs_trim_days(_oip_format_candles(future_pe.result() if future_pe else [], ist_offset, interval), days)
+
+        def _volume_series(fut):
+            if fut is None:
+                return []
+            bars = _rs_trim_days(_oip_format_candles(fut.result(), ist_offset, interval), days)
+            return [{'time': b['time'], 'volume': b['volume']} for b in bars]
+
+        future_volume = _volume_series(future_vol)
+        banknifty_volume = _volume_series(future_bnf_vol) if symbol != 'BANKNIFTY' else future_volume
+
+        oi_data      = _rs_cached(('rs-oi', symbol), 10.0, lambda: _rs_oi_snapshot(symbol)) or {}
+        strikes_list = _rs_cached(('rs-strikes', symbol, today_str), 600.0, _strike_list) or []
+        lot_size     = _rs_cached(('rs-lot', symbol, today_str), 600.0, _lot_size)
+        atm_ce_oi    = _rs_cached(('rs-atm-ce-oi', symbol, step, today_str), 300.0, _atm_ce_oi) or {}
+        cpr          = _rs_cached(('rs-cpr', symbol, today_str), 86400.0, _cpr_bands) or {}
+        index_derived = f_index.result() or {}
+
+        # Price: live quote first, then the index's own last bar (up to the
+        # 10-second index cache old), then the OI snapshot (up to a minute old).
+        price = (future_ltp.result() if future_ltp else 0) \
+            or index_derived.get('last_close') or oi_data.get('current_price') or 0
+
+        # ATM = the listed strike nearest to that price, taken from the OI chain
+        # (the same rule the stats strip has always used).
+        atm = None
+        chain = oi_data.get('strikes') or []
+        if price and chain:
+            atm = min((s for s in chain if s.get('strike') is not None),
+                      key=lambda s: abs(s['strike'] - price), default={}).get('strike')
+
+        # 9:18 Bias — price against the midpoint of the two 09:18 ATM CE OI
+        # strikes: below => DOWN, above => UP.
+        atm_ce_oi_bias = None
+        bias_strikes = [s.get('strike') for s in (atm_ce_oi.get('selected') or []) if s.get('strike') is not None]
+        if price and len(bias_strikes) >= 2:
+            mid = (min(bias_strikes) + max(bias_strikes)) / 2.0
+            atm_ce_oi_bias = 'DOWN' if price < mid else 'UP'
+
+        pcr = oi_data.get('pcr_oi')
+        ce_summary = oi_data.get('ce_summary') or {}
+        pe_summary = oi_data.get('pe_summary') or {}
+
+        # A resolved token whose candles still came back empty is a failed leg,
+        # not an untraded strike being charted as blank — surface it and keep it
+        # out of the response cache so the next tick retries.
+        empty_legs = [(label, tok) for label, tok, cds in (
+            ('CE', ce_token, ce_candles),
+            ('PE', pe_token, pe_candles),
+        ) if tok and not cds]
+        fetch_error = fetch_errors[0] if fetch_errors else None
+        if not fetch_error and empty_legs:
+            by_reason: Dict[str, list] = {}
+            for label, tok in empty_legs:
+                reason = empty_reasons.get(str(tok))
+                if reason:
+                    by_reason.setdefault(reason, []).append(label)
+            if by_reason:
+                fetch_error = 'Round Strike candles failed — ' + '; '.join(
+                    f"{', '.join(labels)}: {reason}" for reason, labels in by_reason.items()
+                ) + '. Retrying next poll.'
+            else:
+                fetch_error = (f"Broker returned no candles for {', '.join(l for l, _ in empty_legs)} — "
+                               f"strike/expiry may be untraded or wrong. Retrying next poll.")
+
+        response_data = {
+            'success': True,
+            'symbol': symbol,
+            'interval': interval,
+            'ce_strike': ce_strike,
+            'pe_strike': pe_strike,
+            'ce_symbol': ce_symbol,
+            'pe_symbol': pe_symbol,
+            'ce_candles': ce_candles,
+            'pe_candles': pe_candles,
+            'future_volume': future_volume,
+            'future_symbol': fut_symbol,
+            'banknifty_volume': banknifty_volume,
+            'banknifty_symbol': bnf_symbol,
+            'strikes': strikes_list,
+            'session_open': index_derived.get('session_open') or 0,
+            'header': {
+                'price': price,
+                'pcr': pcr,
+                'atm': atm,
+                'max_pain': oi_data.get('max_pain'),
+                'ce_oi': ce_summary.get('total_oi'),
+                'pe_oi': pe_summary.get('total_oi'),
+                'iv_percentile': oi_data.get('iv_percentile'),
+                'iv_crush_alert': oi_data.get('iv_crush_alert', False),
+                'trend': _rs_trend_from_pcr(pcr),
+                'lot_size': lot_size,
+                'vwap_bias': index_derived.get('vwap_bias'),
+                'atm_ce_oi_bias': atm_ce_oi_bias,
+                'cpr': cpr,
+                'oi_timestamp': oi_data.get('timestamp'),
+            },
+            'timestamp': datetime.now().isoformat(),
+            'fetch_error': fetch_error,
+        }
+
+        if not empty_legs:
+            _rs_response_cache[cache_key] = (response_data, datetime.now().timestamp())
+
+        return jsonify(response_data)
+
+    except Exception as exc:
+        logger.error(f'[RoundStrike] fetch error: {exc}', exc_info=True)
         return jsonify({'success': False, 'error': str(exc)}), 500
 
 
