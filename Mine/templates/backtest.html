@@ -421,6 +421,10 @@
                     <label for="emaTargetPct">Target</label>
                     <input type="number" id="emaTargetPct" value="5" min="1" step="0.5">
                 </div>
+                <div class="form-group form-check-group" style="grid-column: span 2;">
+                    <input type="checkbox" id="emaRequireRR">
+                    <label for="emaRequireRR" title="After all four EMAs are touched and the breakout fills, take the trade only when the Target is further from entry than the SL is — i.e. better than 1:1 (SL:Target). SL is the signal candle's own opposite extreme, so a tall signal candle can risk more than the Target pays; those entries are skipped.">Require R:R better than 1:1 (SL:Target)</label>
+                </div>
                 <div class="form-group form-check-group" id="emaAllStocksNote" style="display:none; grid-column: span 2;">
                     <input type="checkbox" id="emaUseSymbolDefaults" checked>
                     <label for="emaUseSymbolDefaults" title="All Stocks only: each stock runs with its OWN Direction and Target % from the per-stock defaults table (the same settings the live algo scans with), and each entry is sized as Lots × that stock's own futures lot size. Uncheck to apply the single Direction/Target set here to every stock instead.">Use Per-Stock Direction / Target</label>
@@ -503,6 +507,7 @@
                                 </div>
                             </div>
                             <ul class="rule-notes">
+                                <li><b>Require R:R better than 1:1</b> (optional): with the checkbox on, a filled breakout is only taken when the Target sits further from entry than the SL does — <b>Target distance &gt; SL distance</b>. SL is the signal candle's own opposite extreme, so a tall signal candle can risk more than the Target pays; those breakouts are skipped and the order is dropped (a later fill would only be a worse price), and the next confluence candle arms the next one.</li>
                                 <li>Only one breakout order is armed at a time — while waiting for a fill, new signal candles are ignored. If price never breaks out, that signal never fills.</li>
                                 <li>SL/Target are confirmed the moment any later daily bar's Low/High touches the level, starting from the breakout (entry) candle itself — SL is checked before Target within the same bar.</li>
                                 <li>If the data ends while still in a trade, it is force-closed at the last available daily close.</li>

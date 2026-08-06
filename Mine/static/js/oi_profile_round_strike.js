@@ -366,7 +366,7 @@ function oipRSInitCharts() {
         // TF dropdown after this chart is created (see oi_profile.js), and
         // the ray tool's reach needs the CURRENT interval, not the one at
         // attach time (same reasoning as the main OI chart's ray tool).
-        isCombined: true, timeframe: () => oipInterval, options: { height: 375 },
+        isCombined: true, timeframe: () => oipInterval, options: { height: 575 },
         onRayDrawn: oipRSRayDisarm,
         onRayRemoved: oipRSRemoveSavedRay
     });
@@ -430,13 +430,15 @@ function oipRSInitCharts() {
     });
 
     // Volume histograms — the same future volumes used on the main OI Profile
-    // chart, matched to this block's own candle timestamps. Both overlays share
-    // one hidden price scale pinned to the bottom of the pane (see
-    // oipAddVolumeSeriesPair in oi_indicators.js).
+    // chart, matched to this block's own candle timestamps. Unlike the other
+    // blocks, this one splits the two: Nifty stays on the bottom-pinned hidden
+    // scale (as everywhere else), while Banknifty gets its own scale pinned to
+    // the TOP of the pane (bnfOnTop) so the two read separately instead of
+    // blending into each other — see oipAddVolumeSeriesPair in oi_indicators.js.
     const showVolume = document.getElementById('oipRSShowVolume')?.checked ?? true;
     const showBnfVolume = document.getElementById('oipRSShowBnfVolume')?.checked ?? false;
     [oipRSVolumeSeries, oipRSBnfVolumeSeries] = oipAddVolumeSeriesPair(
-        oipRSChart.chart, 'oipRSVolume', showVolume, showBnfVolume);
+        oipRSChart.chart, 'oipRSVolume', showVolume, showBnfVolume, true);
 
     document.getElementById('oipRSShowVolume')?.addEventListener('change', (e) => {
         oipRSVolumeSeries?.applyOptions({ visible: e.target.checked });

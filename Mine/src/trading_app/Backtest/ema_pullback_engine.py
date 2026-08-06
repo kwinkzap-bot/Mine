@@ -31,6 +31,13 @@ Daily-candle-only, single-symbol, long and/or short:
      floor 1.0):
        - BUY:  tp_level = entry × (1 + target_pct/100)
        - SELL: tp_level = entry × (1 − target_pct/100)
+     With require_rr on, a breakout that fills is only TAKEN when its
+     reward beats its risk — |tp_level − entry| > |entry − sl_level|,
+     i.e. better than 1:1 (SL:Target). Since SL is the signal candle's own
+     range and Target is a fixed % of entry, a tall signal candle can risk
+     more than the target pays; those setups are skipped (counted in the
+     summary as rr_skipped) and the order is discarded — the level has
+     already broken, so re-entering later would only be a worse price.
      Exit on whichever comes first, checked from the entry (breakout) candle
      onward (SL checked before Target within the same bar):
        - BUY:  LOW drops to/through sl_level   → 'SL'
@@ -66,12 +73,15 @@ class EmaPullbackEngine:
 
     def __init__(self, daily_df: pd.DataFrame,
                 enable_long: bool = True, enable_short: bool = True,
-                target_pct: float = 5.0, start_date=None):
+                target_pct: float = 5.0, require_rr: bool = False,
+                start_date=None):
         self.daily_df = daily_df.copy()
         self.enable_long  = bool(enable_long)
         self.enable_short = bool(enable_short)
         # Default 5%, floor 1% — never let target_pct go below the floor.
         self.target_pct = max(float(target_pct or 5.0), 1.0)
+        # Only take a fill whose Target is further from entry than its SL.
+        self.require_rr = bool(require_rr)
         # Bars before this are warm-up only (EMA history, never traded).
         # None = trade the whole frame.
         self.start_ts = None
@@ -181,8 +191,10 @@ class EmaPullbackEngine:
         # position is open, and filling an order clears it.
         self.pending_order = None   # armed breakout order that never filled
         self.open_trade    = None   # position still open at the last bar
+        # Breakouts that filled but were rejected by the 1:1 R:R gate.
+        self.rr_skipped    = 0
         if df.empty:
-            return [], _summarise([])
+            return [], {**_summarise([]), 'rr_skipped': 0}
 
         trades = []
         entry = None
@@ -210,6 +222,19 @@ class EmaPullbackEngine:
                     elif direction == 'Short' and c['low'] <= trigger:
                         entry_price = float(c['open']) if c['open'] < trigger else trigger
                         filled = True
+
+                    if filled and self.require_rr:
+                        risk   = abs(entry_price - pending['sl_level'])
+                        reward = entry_price * self.target_pct / 100
+                        if reward <= risk:
+                            # Worse than 1:1 (SL:Target) — don't take it, and
+                            # drop the order rather than leaving it armed: the
+                            # level has already broken, so a later fill would
+                            # only be at a worse price. The next confluence
+                            # candle arms the next one.
+                            self.rr_skipped += 1
+                            filled  = False
+                            pending = None
 
                     if filled:
                         if direction == 'Long':
@@ -271,7 +296,9 @@ class EmaPullbackEngine:
         self.open_trade    = entry
         self.pending_order = pending
 
-        return trades, _summarise(trades)
+        summary = _summarise(trades)
+        summary['rr_skipped'] = self.rr_skipped
+        return trades, summary
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -371,11 +398,14 @@ def _opt_score(s: dict) -> float:
 
 
 def optimise_ema_pullback(daily_df: pd.DataFrame, min_trades: int = 3,
-                          start_date=None) -> list:
+                          start_date=None, require_rr: bool = False) -> list:
     """Sweep (direction × target_pct) and return results sorted best-first.
 
     `start_date` is forwarded to the engine so the sweep scores the exact same
     window the backtest run will trade — see the module docstring on warm-up.
+    `require_rr` likewise: the 1:1 gate rejects more setups the smaller the
+    target, so a sweep run without it would rank targets the actual run never
+    trades.
     """
     results = []
     for direction in _DIRECTION_GRID:
@@ -386,7 +416,7 @@ def optimise_ema_pullback(daily_df: pd.DataFrame, min_trades: int = 3,
                 engine = EmaPullbackEngine(
                     daily_df=daily_df, enable_long=enable_long,
                     enable_short=enable_short, target_pct=tp,
-                    start_date=start_date,
+                    require_rr=require_rr, start_date=start_date,
                 )
                 _, summary = engine.run()
                 if summary['total_trades'] < min_trades:

@@ -857,7 +857,7 @@ function creatBaseChart(el) {
     const activeTheme = window.AppTheme.getActiveTheme();
     const cfg = OIP_CHART_THEMES[activeTheme] || OIP_CHART_THEMES['dark'];
     return LightweightCharts.createChart(el, {
-        width: el.clientWidth || 1200, height: 375,
+        width: el.clientWidth || 1200, height: 575,
         layout: { textColor: cfg.text, background: { type: 'solid', color: cfg.bg } },
         grid: { vertLines: { color: cfg.grid }, horzLines: { color: cfg.grid } },
         crosshair: { mode: 0, vertLine: { color: '#9ca3af', style: 3 }, horzLine: { color: '#9ca3af', style: 3, labelBackgroundColor: '#0969da' } },
@@ -1240,15 +1240,15 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
         const needsOptionData = (view !== 'index') && !oipOptionData;
         const autoHL = true;
         const strikeMode = oipElems.strikeMode?.value || 'custom';
-        let first5m = false;
         let customStrike = '', ceStrike = '', peStrike = '';
         if (strikeMode === 'atm') {
-            if (oipPremiumStrikeData) {
-                ceStrike = oipPremiumStrikeData.ce_strike;
-                peStrike = oipPremiumStrikeData.pe_strike;
-            } else {
-                first5m = true; // Fallback until premium strikes are fetched
-            }
+            // Prem. Str. has exactly ONE strike rule: /api/oi-profile/premium-strikes
+            // (prev-day small-diff strike ± common premium). Until it resolves,
+            // chart whatever the CE/PE dropdowns already show — never a *different*
+            // rule such as first-5m-ATM, which would silently plot other strikes
+            // than the ones the mode is defined by.
+            ceStrike = oipPremiumStrikeData?.ce_strike ?? (oipElems.ceStrikeDropdown?.value || '');
+            peStrike = oipPremiumStrikeData?.pe_strike ?? (oipElems.peStrikeDropdown?.value || '');
         } else if (strikeMode === 'custom') {
             customStrike = oipElems.customStrikeDropdown?.value || '';
         } else if (strikeMode === 'ce_pe') {
@@ -1289,7 +1289,7 @@ async function oipLoadCandles(forceFetch = true, resetZoom = false, includeFixed
         // that block isn't on the page (or hasn't picked its strikes yet), and
         // the backend then skips those legs entirely.
         const rsParams = (typeof oipRSStrikeParams === 'function') ? oipRSStrikeParams() : '';
-        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=${first5m}&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${fixedParams}${rsParams}${dateRangeParams}&_t=${Date.now()}`;
+        const url = `/api/oi-profile/candles?symbol=${oipSymbol}&interval=${oipInterval}&days=${days}&opt_days=${optDays}&spot_high=${h}&spot_low=${l}&step=${s}&multiplier=${m}&auto_hl=${autoHL}&first_5m_atm=false&custom_strike=${customStrike}&ce_strike=${ceStrike}&pe_strike=${peStrike}${fixedParams}${rsParams}${dateRangeParams}&_t=${Date.now()}`;
 
         const res = await fetch(url);
         const data = await res.json();
@@ -2053,7 +2053,7 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             const _sm = oipElems.strikeMode?.value;
             let _ceLbl;
             if (_sm === 'ce_pe') _ceLbl = oipElems.ceStrikeDropdown?.value || '--';
-            else if (_sm === 'atm' && oipPremiumStrikeData) _ceLbl = oipPremiumStrikeData.ce_strike;
+            else if (_sm === 'atm') _ceLbl = oipPremiumStrikeData?.ce_strike ?? (oipElems.ceStrikeDropdown?.value || '--');
             else _ceLbl = oipElems.customStrikeDropdown?.value || '--';
             if (document.getElementById('oipLegendCEOnly')) document.getElementById('oipLegendCEOnly').textContent = `${_ceLbl} CE`;
         }
@@ -2077,7 +2077,7 @@ function oipRefreshLocalView(view, resetZoom = false, endIndex = null) {
             const _sm = oipElems.strikeMode?.value;
             let _peLbl;
             if (_sm === 'ce_pe') _peLbl = oipElems.peStrikeDropdown?.value || '--';
-            else if (_sm === 'atm' && oipPremiumStrikeData) _peLbl = oipPremiumStrikeData.pe_strike;
+            else if (_sm === 'atm') _peLbl = oipPremiumStrikeData?.pe_strike ?? (oipElems.peStrikeDropdown?.value || '--');
             else _peLbl = oipElems.customStrikeDropdown?.value || '--';
             if (document.getElementById('oipLegendPEOnly')) document.getElementById('oipLegendPEOnly').textContent = `${_peLbl} PE`;
         }

@@ -34,7 +34,7 @@ window.oipInitSecondaryCharts = function() {
     if (elInt && typeof TradingViewChart !== 'undefined') {
         oipIntrinsicChart = TradingViewChart.create({
             containerId: 'oipIntrinsicChart', data: [], type: 'COMBINED',
-            isCombined: true, timeframe: oipInterval, options: { height: 375 },
+            isCombined: true, timeframe: oipInterval, options: { height: 575 },
             onRayDrawn: oipRayDisarmAll,
             reapplyZOrder: () => { if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder(); }
         });
@@ -92,7 +92,7 @@ window.oipInitSecondaryCharts = function() {
         // Initialize Individual CE Chart
         oipCEChart = TradingViewChart.create({
             containerId: 'oipCEChart', data: [], type: 'CE',
-            timeframe: oipInterval, options: { height: 375, rightOffset: 5 },
+            timeframe: oipInterval, options: { height: 575, rightOffset: 5 },
             onRayDrawn: oipRayDisarmAll,
             reapplyZOrder: () => { if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder(); }
         });
@@ -106,7 +106,7 @@ window.oipInitSecondaryCharts = function() {
         // Initialize Individual PE Chart
         oipPEChart = TradingViewChart.create({
             containerId: 'oipPEChart', data: [], type: 'PE',
-            timeframe: oipInterval, options: { height: 375, rightOffset: 5 },
+            timeframe: oipInterval, options: { height: 575, rightOffset: 5 },
             onRayDrawn: oipRayDisarmAll,
             reapplyZOrder: () => { if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder(); }
         });
@@ -122,7 +122,7 @@ window.oipInitSecondaryCharts = function() {
         // zoom/crosshair sync web (different strike+expiry, own time axis).
         oipFixedChart = TradingViewChart.create({
             containerId: 'oipFixed24000Chart', data: [], type: 'COMBINED',
-            isCombined: true, timeframe: oipInterval, options: { height: 375 },
+            isCombined: true, timeframe: oipInterval, options: { height: 575 },
             onRayDrawn: oipRayDisarmAll,
             reapplyZOrder: () => { if (typeof oipApplyOptionZOrder === 'function') oipApplyOptionZOrder(); }
         });

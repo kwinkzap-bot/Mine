@@ -628,7 +628,7 @@ body.ocean-theme, .oip-page.ocean-theme {
 /* ── Chart ───────────────────────────────────────────────── */
 .oip-chart-wrap {
     position: relative;
-    height: 375px;
+    height: 575px;
     /* fixed — both OI and Premium charts are same height */
     flex-shrink: 0;
     background: var(--oip-bg);
@@ -647,7 +647,7 @@ body.ocean-theme, .oip-page.ocean-theme {
 }
 
 .oip-charts-row .oip-chart-wrap {
-    height: 375px;
+    height: 575px;
     flex: 1;
     min-width: 0;
 }

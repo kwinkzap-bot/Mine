@@ -729,6 +729,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 payload.target_pct  = Math.max(1, parseFloat(document.getElementById('emaTargetPct')?.value || 5));
                 payload.lots        = Math.max(1, parseInt(document.getElementById('emaLots')?.value || 1));
                 payload.use_symbol_defaults = document.getElementById('emaUseSymbolDefaults')?.checked ?? true;
+                // Applies to every stock — the per-stock table carries
+                // Direction/Target only, not this gate.
+                payload.require_rr  = document.getElementById('emaRequireRR')?.checked ?? false;
             }
 
             // Swing Momentum: different endpoint + payload
@@ -774,6 +777,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (data.success) {
                 if (data.warning) window.showNotification(data.warning, 'warning');
+                // Otherwise the gate is invisible: the run just shows fewer
+                // trades with nothing saying why.
+                const rrSkipped = data.summary?.rr_skipped || 0;
+                if (payload.require_rr && rrSkipped) {
+                    window.showNotification(
+                        `R:R filter skipped ${rrSkipped} breakout${rrSkipped === 1 ? '' : 's'} worse than 1:1`,
+                        'info');
+                }
                 displayResults(data);
             } else {
                 window.showNotification(data.error || 'Backtest failed', 'error');
@@ -2204,6 +2215,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     start_date: document.getElementById('startDate').value,
                     end_date:   document.getElementById('endDate').value,
                     recalculate,
+                    // The gate rejects more setups the smaller the target, so
+                    // the sweep has to score under the same rule as the run.
+                    require_rr: document.getElementById('emaRequireRR')?.checked ?? false,
                 })
             });
             const data = await resp.json();

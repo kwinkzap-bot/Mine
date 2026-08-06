@@ -3940,13 +3940,17 @@ _EMA_BROKERAGE_PER_TRADE = 1000
 
 
 def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
-                             lots, direction, target_pct, use_symbol_defaults):
+                             lots, direction, target_pct, use_symbol_defaults,
+                             require_rr=False):
     """EMA Confluence Breakout across EVERY symbol in EMA_SYMBOL_DEFAULTS.
 
     Each stock is run with ITS OWN Direction/Target from that table (the same
     per-stock settings the live algo scans with) unless use_symbol_defaults is
     off, in which case the form's single Direction/Target applies to all of
     them. A symbol missing from the table always falls back to the form.
+    The 1:1 R:R gate (require_rr) is not a per-stock setting — that table
+    holds Direction/Target only — so the form's checkbox applies to every
+    symbol either way.
 
     Points aren't comparable across stocks priced ₹80 and ₹80,000, so every
     trade is also sized in ₹ here: qty = lots x that symbol's futures lot
@@ -3977,6 +3981,7 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
     history_days = max(1, (end_dt - warmup_dt).days)
     is_fyers = hasattr(current_kite, 'fyers')
     missing_lot_size = []   # appended from worker threads (list.append is atomic)
+    rr_skipped       = []   # same — one entry per symbol, summed at the end
 
     def _scan_symbol(symbol):
         df = get_daily_history(current_kite, _ema_daily_token(current_kite, symbol),
@@ -3994,9 +3999,11 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
             enable_long=sym_direction != 'short',
             enable_short=sym_direction != 'long',
             target_pct=sym_target_pct,
+            require_rr=require_rr,
             start_date=start_date_str,
         )
-        trades, _ = engine.run()
+        trades, sym_summary = engine.run()
+        rr_skipped.append(sym_summary.get('rr_skipped', 0))
 
         # A symbol the NFO cache doesn't know falls back to 1 share/point
         # rather than dropping its signals — reported in _debug so a stale
@@ -4049,6 +4056,7 @@ def _run_ema_all_stocks_scan(current_kite, start_date_str, end_date_str,
     summary['profit_factor_rupees']   = rupee_summary['profit_factor']
     summary['max_drawdown_rupees']    = rupee_summary['max_drawdown']
     summary['total_brokerage']        = _EMA_BROKERAGE_PER_TRADE * len(all_trades)
+    summary['rr_skipped']             = sum(rr_skipped)
     summary['multi_symbol']           = True
     summary['symbols_scanned']        = len(symbols)
     summary['symbols_with_trades']    = len({t['symbol'] for t in all_trades})
@@ -4121,6 +4129,8 @@ def run_ema_pullback_backtest_api():
         enable_long    = direction != 'short'
         enable_short   = direction != 'long'
         target_pct     = float(data.get('target_pct', 5.0) or 5.0)
+        # Only take a breakout whose Target is further away than its SL.
+        require_rr     = bool(data.get('require_rr', False))
         lots           = max(1, int(data.get('lots', 1) or 1))
         # All Stocks only: off means every stock runs the form's single
         # Direction/Target instead of its own row in EMA_SYMBOL_DEFAULTS.
@@ -4138,6 +4148,7 @@ def run_ema_pullback_backtest_api():
                 current_kite, start_date_str, end_date_str,
                 lots=lots, direction=direction, target_pct=target_pct,
                 use_symbol_defaults=use_symbol_defaults,
+                require_rr=require_rr,
             )
 
         instrument_token = _ema_daily_token(current_kite, symbol)
@@ -4161,6 +4172,7 @@ def run_ema_pullback_backtest_api():
             enable_long=enable_long,
             enable_short=enable_short,
             target_pct=target_pct,
+            require_rr=require_rr,
             start_date=start_date_str,
         )
         trades, summary = engine.run()
@@ -4213,6 +4225,7 @@ def run_ema_pullback_optimise():
         start_date_str = data.get('start_date', '2017-01-01')
         end_date_str   = data.get('end_date')
         recalculate    = bool(data.get('recalculate', False))
+        require_rr     = bool(data.get('require_rr', False))
 
         if not end_date_str:
             end_date_str = datetime.today().strftime('%Y-%m-%d')
@@ -4226,7 +4239,9 @@ def run_ema_pullback_optimise():
 
         # 'v2' retires every entry cached before the EMA warm-up / stale-order
         # fixes — those rankings came from a different engine and are wrong.
-        cache_key = f"ema_pullback_v2_{symbol}"
+        # The R:R gate changes which setups are tradable, so a gated sweep gets
+        # its own cache slot instead of overwriting the ungated ranking.
+        cache_key = f"ema_pullback_v2_{symbol}" + ('_rr' if require_rr else '')
 
         if not recalculate:
             cache = _load_opt_cache()
@@ -4255,7 +4270,8 @@ def run_ema_pullback_optimise():
         from trading_app.Backtest.ema_pullback_engine import optimise_ema_pullback
 
         results = optimise_ema_pullback(pd.DataFrame(daily_candles),
-                                        start_date=start_date_str)
+                                        start_date=start_date_str,
+                                        require_rr=require_rr)
 
         logger.info('[EMA Confluence Breakout optimise] %d daily bars → %d combos passed filter',
                     len(daily_candles), len(results))
@@ -9872,101 +9888,18 @@ def oi_profile_cpr_width() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(exc)}), 500
 
 
-def _tiered_strike_diff(premium: float) -> int:
-    """Escalating strike-diff ladder (100 -> 200 -> 300 -> ...) for gap-day premiums.
+def _common_premium_offset(premium: float, step: int) -> int:
+    """Round the common ATM premium to the nearest tradable strike step.
 
-    A fixed step (e.g. 50) under-shoots on a gap day: a 240-premium option
-    rounds to only 200 away, but the strike needs to sit at least as far out
-    as its own premium. Ladder in multiples of 100, so the picked strike
-    distance always covers the premium that produced it.
+    The triangle setup takes the common premium at the "small diff" strike and
+    walks that same distance out on both sides, so the offset has to land on a
+    real strike. Rounding to the step (50 on NIFTY) is the whole rule: a common
+    premium of 148 gives an offset of 150, i.e. a 300-point range — not the 400
+    an earlier ceil-to-100 ladder produced. Never returns less than one step.
     """
     if not premium or premium <= 0:
-        return 100
-    return int(math.ceil(premium / 100.0) * 100)
-
-
-def _prem_snapshot_base(symbol: str, step: int, date_str: Optional[str] = None):
-    """Locate the "small diff strike" from the day's ~09:18 OI snapshot.
-
-    Fallback only — Prem. Str. is anchored on previous-day closes (see
-    :func:`oi_profile_premium_strikes`); this path is used solely when those
-    closes cannot be fetched. ATM comes from the snapshot spot, and the base
-    strike is the one whose CE and PE LTPs sit closest together.
-
-    Returns ``(base_strike, ce_ltp, pe_ltp, snap_price, snap_ts)`` or ``None``
-    when the day has no usable snapshot (non-index symbols, or before 09:18).
-    """
-    import sqlite3
-    try:
-        from trading_app.service.open_interest_service import OpenInterestService
-        db_path = OpenInterestService(None).db_path
-        now = datetime.now()
-        target = date_str or now.strftime('%Y-%m-%d')
-        # Pre-open snapshots carry the *previous* session's LTPs, which would
-        # anchor the whole day on a stale chain. Before 09:18 on the live day
-        # there is nothing usable yet — let the caller fall back instead.
-        is_live_day = (target == now.strftime('%Y-%m-%d'))
-        if is_live_day and now.strftime('%H:%M:%S') < '09:18:00':
-            return None
-
-        with sqlite3.connect(db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            # First snapshot at/after 09:18, same anchor the ATM CE OI lines use.
-            cur.execute('''
-                SELECT timestamp, current_price, active_strikes
-                  FROM oi_history
-                 WHERE symbol = ? AND date(timestamp) = ?
-                   AND time(timestamp) >= '09:18:00' AND current_price > 0
-              ORDER BY timestamp ASC LIMIT 1
-            ''', (symbol, target))
-            row = cur.fetchone()
-            if row is None:
-                # Partial-data days: fall back to the earliest snapshot present.
-                cur.execute('''
-                    SELECT timestamp, current_price, active_strikes
-                      FROM oi_history
-                     WHERE symbol = ? AND date(timestamp) = ? AND current_price > 0
-                  ORDER BY timestamp ASC LIMIT 1
-                ''', (symbol, target))
-                row = cur.fetchone()
-
-        if row is None:
-            return None
-
-        price = float(row['current_price'])
-        try:
-            strikes = json.loads(row['active_strikes']) or []
-        except (TypeError, ValueError):
-            return None
-
-        ltp_map = {}
-        for s in strikes:
-            try:
-                ce, pe = s.get('ce_ltp'), s.get('pe_ltp')
-                if ce is None or pe is None:
-                    continue
-                ce, pe = float(ce), float(pe)
-                # Zero LTPs mean the row never traded (weekend/stale snapshot);
-                # they would otherwise win the min-diff comparison outright.
-                if ce <= 0 or pe <= 0:
-                    continue
-                ltp_map[int(round(float(s['strike']) / step) * step)] = (ce, pe)
-            except (TypeError, ValueError, KeyError):
-                continue
-
-        atm = int(round(price / step) * step)
-        cands = [atm + i * step for i in range(-2, 3) if atm + i * step in ltp_map]
-        if not cands:
-            return None
-
-        # Smallest |CE - PE| wins; ties break toward the strike nearest spot.
-        base = min(cands, key=lambda s: (abs(ltp_map[s][0] - ltp_map[s][1]), abs(s - price)))
-        ce_ltp, pe_ltp = ltp_map[base]
-        return base, ce_ltp, pe_ltp, price, row['timestamp']
-    except Exception as exc:
-        logger.warning(f'[PremStrikes] OI-snapshot base lookup failed for {symbol}: {exc}')
-        return None
+        return step
+    return max(step, int(round(premium / float(step))) * step)
 
 
 @api_bp.route('/oi-profile/premium-strikes', methods=['GET'])
@@ -9974,31 +9907,32 @@ def _prem_snapshot_base(symbol: str, step: int, date_str: Optional[str] = None):
 @limiter.exempt
 def oi_profile_premium_strikes() -> EndpointResponse:
     """
-    Compute optimal CE/PE strikes for the 'Prem. Str.' mode in OI Profile.
+    Compute the CE/PE strikes for the 'Prem. Str.' mode in OI Profile.
 
-    Algorithm (triangle setup, anchored on the *previous day's* closes):
+    ONE rule, anchored entirely on the *previous day's* closes — there is no
+    second selection path, no snapshot/spot fallback. If the prev-day closes
+    cannot be resolved the endpoint errors out rather than picking strikes by
+    some other rule that would silently disagree with this one.
+
+    Algorithm (triangle setup):
     1. Base ("small diff") strike: ATM = round(prev-day index close / step); pick
        the candidate in ATM ± 2 steps whose CE and PE prev-day closes are closest
        together.
     2. Common premium = (CE_close + PE_close) / 2 at that strike.
-    3. Offset = ceil(common / 100) * 100 — one *common* distance applied to both
-       legs, so the CE and PE strikes sit symmetrically around the base strike.
+    3. Offset = round(common / step) * step — one *common* distance applied to
+       both legs, so CE and PE sit symmetrically around the base strike.
     4. CE_strike = base - offset,  PE_strike = base + offset  (total range 2x).
     5. Fetch prev-day closes for CE_strike{CE,PE} and PE_strike{CE,PE} in parallel
        (these feed the PDC / C-P price lines, not the strike selection).
-    6. Return everything needed for the frontend to auto-select strikes and draw lines.
 
-    Today's live/opening prices never drive the selection. Only when prev-day
-    closes cannot be resolved at all (Fyers /history outage, rate-limit, no daily
-    option bars) does it fall back — first to the day's ~09:18 OI snapshot chain
-    using the same min-diff + common-offset rules, then to the prev-close ATM,
-    and finally to a spot-derived ATM for both legs.
+    Worked example — NIFTY, 05-08-2026 close 24614: ATM 24600, small-diff strike
+    24500 (CE 153 / PE 143), common premium 148 -> offset 150, so CE 24350 and
+    PE 24650, a 300-point range.
     """
     try:
         symbol   = request.args.get('symbol', 'NIFTY').upper()
         step     = request.args.get('step', 50, type=int) or 50
         max_diff = request.args.get('max_diff', 25, type=float)
-        date_str = request.args.get('date') or None
         # Manual extra widen: dropdown value N adds N*100 to the total
         # strike_diff, split evenly across both legs (50 per leg per step).
         extra    = request.args.get('extra', 0, type=int) or 0
@@ -10047,12 +9981,8 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         # The triangle is anchored on the previous session's chain: ATM comes
         # from the index's prev-day close, and the base strike is the candidate
         # whose CE and PE prev-day closes sit closest together. Today's live /
-        # opening prices are never used for the selection — only as a last-resort
-        # fallback when prev-day data cannot be resolved at all.
+        # opening prices never take part in the selection.
         base_strike = base_ce_close = base_pe_close = None
-        source      = 'prev_close'
-        snap_price  = None
-        snap_ts     = None
         atm         = None
         close1      = {}
 
@@ -10135,90 +10065,34 @@ def oi_profile_premium_strikes() -> EndpointResponse:
                 logger.info(
                     f'[PremStrikes] {symbol}: idx_close={idx_close:.2f}, ATM={atm}, base={base_strike}'
                 )
-            else:
-                logger.info(
-                    f'[PremStrikes] {symbol}: no usable prev-day CE/PE closes around '
-                    f'ATM={atm}; trying the OI snapshot next'
-                )
 
-        # ── 1b. Fallback: the day's ~09:18 OI snapshot ─────────────────
-        # Only reached when prev-day closes are unavailable (Fyers /history
-        # outage, rate-limit, or a symbol with no daily option bars).
+        # No second rule to fall back on: without prev-day CE/PE closes there is
+        # no "small diff" strike, so report the failure instead of selecting
+        # strikes by some other means. The frontend keeps the current dropdown
+        # selection when this returns success=False.
         if base_strike is None:
-            snap = _prem_snapshot_base(symbol, step, date_str)
-            if snap:
-                source = 'oi_snapshot'
-                base_strike, base_ce_close, base_pe_close, snap_price, snap_ts = snap
-                logger.info(
-                    f'[PremStrikes] {symbol}: prev-day closes unusable; snapshot {snap_ts} '
-                    f'spot={snap_price:.2f} -> base={base_strike}, CE={base_ce_close:.2f}, '
-                    f'PE={base_pe_close:.2f}, diff={abs(base_ce_close - base_pe_close):.2f}'
-                )
-
-        # ── 1c. Fallback: prev-day index ATM with whatever closes exist ──
-        if base_strike is None and atm is not None:
-            source        = 'prev_close_atm'
-            base_strike   = atm
-            base_ce_close = close1.get((atm, 'ce'))
-            base_pe_close = close1.get((atm, 'pe'))
-            logger.info(
-                f'[PremStrikes] {symbol}: falling back to prev-close ATM={atm} '
-                f'(CE={base_ce_close}, PE={base_pe_close})'
-            )
-
-        if base_strike is None:
-            # Previous-day close unavailable (e.g. Fyers /history rate-limited)
-            # and no snapshot either. Degrade gracefully: derive ATM from the
-            # current spot and return it for both legs instead of erroring out.
-            spot = None
-            try:
-                if _is_fyers and _data_provider:
-                    fsym = FYERS_INDEX_SYMBOLS.get(symbol) or f'NSE:{symbol}-INDEX'
-                    q = _data_provider.ltp([fsym]) or {}
-                    spot = (q.get(fsym) or {}).get('last_price')
-                else:
-                    spot = kite_svc.get_current_ltp(symbol)
-            except Exception as exc:
-                logger.warning(f'[PremStrikes] spot fallback failed for {symbol}: {exc}')
-
-            if not spot:
-                return jsonify({'success': False, 'error': 'Could not fetch previous-day close for index'}), 500
-
-            atm_fb = int(round(spot / step) * step)
-            logger.info(
-                f'[PremStrikes] {symbol}: prev-close unavailable, ATM fallback '
-                f'from spot={spot} -> ATM={atm_fb} (returning ATM for both CE & PE)'
+            logger.warning(
+                f'[PremStrikes] {symbol}: no usable prev-day CE/PE closes '
+                f'(idx_close={idx_close}, ATM={atm})'
             )
             return jsonify({
-                'success':         True,
-                'symbol':          symbol,
-                'source':          'atm_fallback',
-                'atm_fallback':    True,
-                'base_strike':     atm_fb,
-                'base_ce_close':   None,
-                'base_pe_close':   None,
-                'common_premium':  None,
-                'strike_offset':   0,
-                'ce_strike':       atm_fb,
-                'pe_strike':       atm_fb,
-                'strike_diff':     0,
-                'ce_strike_data':  {'ce_close': None, 'pe_close': None},
-                'pe_strike_data':  {'ce_close': None, 'pe_close': None},
-            })
+                'success': False,
+                'error': 'Could not fetch previous-day closes for the index / option chain',
+            }), 500
 
         # ── 2. Common premium → one symmetric offset for both legs ─────
         # The two legs share a single distance: average the base strike's CE and
-        # PE prices and ladder that up to the next 100 (see _tiered_strike_diff).
-        # Using each leg's own premium instead would push the strikes out
-        # asymmetrically and break the equal-range triangle the setup relies on.
+        # PE prev-day closes and round that to the nearest strike step (see
+        # _common_premium_offset). Using each leg's own premium instead would push
+        # the strikes out asymmetrically and break the equal-range triangle.
         # `extra_leg` is the manual widen from the UI dropdown, added per leg.
-        common_premium = ((base_ce_close or 0) + (base_pe_close or 0)) / 2.0
-        strike_offset  = _tiered_strike_diff(common_premium) + extra_leg
+        common_premium = (base_ce_close + base_pe_close) / 2.0
+        strike_offset  = _common_premium_offset(common_premium, step) + extra_leg
         ce_strike = int(base_strike - strike_offset)
         pe_strike = int(base_strike + strike_offset)
 
         logger.info(
-            f'[PremStrikes] {symbol} [{source}]: base={base_strike}, '
+            f'[PremStrikes] {symbol}: base={base_strike}, '
             f'CE={base_ce_close}, PE={base_pe_close}, common={common_premium:.2f} '
             f'-> offset={strike_offset} -> CE_strike={ce_strike}, PE_strike={pe_strike}'
         )
@@ -10235,17 +10109,15 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         if pe_s_ce_tok: futures2['pe_s_ce'] = _api_executor.submit(_fetch_prev_close, pe_s_ce_tok)
         if pe_s_pe_tok: futures2['pe_s_pe'] = _api_executor.submit(_fetch_prev_close, pe_s_pe_tok)
 
-        # Reuse already-fetched data when computed strike matches the base strike.
-        # Only valid on the prev-close paths — on the snapshot fallback the base
-        # prices are today's LTPs, which must not stand in for prev-day closes.
+        # Reuse already-fetched data when a computed strike matches the base
+        # strike — both are prev-day closes, so they are interchangeable.
         prefill = {}
-        if source.startswith('prev_close'):
-            if ce_strike == base_strike:
-                prefill['ce_s_ce'] = base_ce_close
-                prefill['ce_s_pe'] = base_pe_close
-            if pe_strike == base_strike:
-                prefill['pe_s_ce'] = base_ce_close
-                prefill['pe_s_pe'] = base_pe_close
+        if ce_strike == base_strike:
+            prefill['ce_s_ce'] = base_ce_close
+            prefill['ce_s_pe'] = base_pe_close
+        if pe_strike == base_strike:
+            prefill['pe_s_ce'] = base_ce_close
+            prefill['pe_s_pe'] = base_pe_close
 
         res2 = dict(prefill)
         for k, fut in futures2.items():
@@ -10259,9 +10131,9 @@ def oi_profile_premium_strikes() -> EndpointResponse:
         return jsonify({
             'success':        True,
             'symbol':         symbol,
-            'source':         source,
-            'snapshot_price': snap_price,
-            'snapshot_time':  snap_ts,
+            'source':         'prev_close',
+            'atm':            atm,
+            'index_close':    idx_close,
             'base_strike':    base_strike,
             'base_ce_close':  base_ce_close,
             'base_pe_close':  base_pe_close,

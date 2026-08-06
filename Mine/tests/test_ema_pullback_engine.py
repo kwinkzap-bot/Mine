@@ -105,13 +105,10 @@ def test_ema_matches_sma_seeded_reference(daily):
     np.testing.assert_allclose(got[n - 1:], ref[n - 1:], rtol=1e-12)
 
 
-def test_stale_order_is_replaced_by_the_next_signal():
-    """Hand-built proof of the blocking bug, independent of the fixture.
-
-    A signal fires and arms a level price never returns to, then a second,
-    tradeable signal fires much later. The old engine kept the first order
-    armed forever and took NO trade at all; the second signal must win.
-    """
+def _two_signal_frame():
+    """Hand-built series with exactly one tradeable SELL, independent of the
+    fixture: a first signal arms a level price never returns to, then a second
+    fires much later and fills at 125 with its SL at 135 (risk 10 points)."""
     rows = []
 
     def bar(o, h, low, c):
@@ -140,8 +137,13 @@ def test_stale_order_is_replaced_by_the_next_signal():
 
     df = pd.DataFrame(rows)
     df.insert(0, 'date', pd.bdate_range('2015-01-01', periods=len(df)))
+    return df
 
-    trades, _ = EmaPullbackEngine(daily_df=df, enable_long=False,
+
+def test_stale_order_is_replaced_by_the_next_signal():
+    """Proof of the blocking bug: the old engine kept the first order armed
+    forever and took NO trade at all; the second signal must win."""
+    trades, _ = EmaPullbackEngine(daily_df=_two_signal_frame(), enable_long=False,
                                   enable_short=True, target_pct=15).run()
 
     assert len(trades) == 1, f'expected the later signal to trade, got {trades}'
@@ -149,6 +151,43 @@ def test_stale_order_is_replaced_by_the_next_signal():
     assert t['type'] == 'Short'
     assert t['entry_price'] == pytest.approx(125, abs=0.01)  # Signal B's low
     assert t['sl_price'] == pytest.approx(135, abs=0.01)     # Signal B's high
+
+
+def test_require_rr_keeps_setups_better_than_one_to_one():
+    """Entry 125 / SL 135 risks 10 points; a 15% target pays 18.75, so the
+    gate must leave the trade exactly as it was."""
+    df = _two_signal_frame()
+    gated, summary = EmaPullbackEngine(daily_df=df, enable_long=False,
+                                       enable_short=True, target_pct=15,
+                                       require_rr=True).run()
+    plain, _ = EmaPullbackEngine(daily_df=df, enable_long=False,
+                                 enable_short=True, target_pct=15).run()
+
+    assert gated == plain
+    assert summary['rr_skipped'] == 0
+
+
+def test_require_rr_skips_setups_worse_than_one_to_one():
+    """Same setup, 7% target: 8.75 points of reward against 10 of risk. The
+    trade is taken without the gate and skipped with it."""
+    df = _two_signal_frame()
+    plain, _ = EmaPullbackEngine(daily_df=df, enable_long=False,
+                                 enable_short=True, target_pct=7).run()
+    assert len(plain) == 1, 'the ungated run must still take it'
+
+    gated, summary = EmaPullbackEngine(daily_df=df, enable_long=False,
+                                       enable_short=True, target_pct=7,
+                                       require_rr=True).run()
+    assert gated == []
+    assert summary['rr_skipped'] == 1
+
+
+def test_require_rr_defaults_off(daily):
+    """Existing runs (and the live algo, which never passes the flag) must be
+    byte-identical to before."""
+    trades, summary = _run(daily, '2020-01-01')
+    assert trades
+    assert summary['rr_skipped'] == 0
 
 
 def test_warmup_bars_are_never_traded(daily):

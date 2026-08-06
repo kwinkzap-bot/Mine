@@ -192,14 +192,23 @@ function oipVolumeBarColors(kind) {
              down: oipGetLineColor(dnKey) + _OIP_VOL_BAR_ALPHA };
 }
 
-// Creates one chart's pair of volume histograms. Both sit on the SAME hidden
-// price scale, pinned to the bottom 20% of the pane, so the two are comparable
-// by bar height and neither competes with candle prices. Banknifty is added
-// second so it draws on top of Nifty; at 50% alpha each, the overlap reads as a
-// blend rather than one hiding the other. `chart` is the raw LightweightCharts
-// object (i.e. `X.chart` for TradingViewChart wrappers). Returns
-// [niftySeries, banknNiftySeries].
-function oipAddVolumeSeriesPair(chart, priceScaleId, showNifty = true, showBnf = false) {
+// Creates one chart's pair of volume histograms. By default both sit on the
+// SAME hidden price scale, pinned to the bottom 20% of the pane, so the two are
+// comparable by bar height and neither competes with candle prices. Banknifty is
+// added second so it draws on top of Nifty; at 50% alpha each, the overlap reads
+// as a blend rather than one hiding the other. `chart` is the raw
+// LightweightCharts object (i.e. `X.chart` for TradingViewChart wrappers).
+//
+// With `bnfOnTop`, Banknifty instead gets its OWN hidden scale pinned to the TOP
+// 20% of the pane and hangs DOWNWARD from the top edge — a mirror image of the
+// bottom volume, not a second upright histogram (Nifty stays exactly where it
+// is at the bottom). lightweight-charts histograms always grow up from their
+// base, so the flip is done by plotting NEGATIVE values (see
+// _oipInvertedVolSeries / _oipPaintVolumeBars): autoscale then puts zero at the
+// top of the band and the bars extend down into it. Each band autoscales on its
+// own, so bar heights are comparable inside a band but not across the two.
+// Returns [niftySeries, banknNiftySeries].
+function oipAddVolumeSeriesPair(chart, priceScaleId, showNifty = true, showBnf = false, bnfOnTop = false) {
     const base = {
         priceFormat: { type: 'volume' },
         priceScaleId,
@@ -207,9 +216,14 @@ function oipAddVolumeSeriesPair(chart, priceScaleId, showNifty = true, showBnf =
         priceLineVisible: false,
         crosshairMarkerVisible: false,
     };
+    const bnfScaleId = bnfOnTop ? `${priceScaleId}Top` : priceScaleId;
     const nifty = chart.addSeries(LightweightCharts.HistogramSeries, { ...base, visible: showNifty });
-    const bnf   = chart.addSeries(LightweightCharts.HistogramSeries, { ...base, visible: showBnf });
+    const bnf   = chart.addSeries(LightweightCharts.HistogramSeries, { ...base, priceScaleId: bnfScaleId, visible: showBnf });
     chart.priceScale(priceScaleId).applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, visible: false });
+    if (bnfOnTop) {
+        chart.priceScale(bnfScaleId).applyOptions({ scaleMargins: { top: 0, bottom: 0.8 }, visible: false });
+        _oipInvertedVolSeries.add(bnf);
+    }
     return [nifty, bnf];
 }
 
@@ -220,10 +234,18 @@ function oipAddVolumeSeriesPair(chart, priceScaleId, showNifty = true, showBnf =
 // a repaint knows which colour pair the series belongs to.
 const _oipVolBarCache = new Map();
 
+// Series that hang downward from the top of the pane instead of standing up
+// from the bottom — populated by oipAddVolumeSeriesPair's `bnfOnTop`. The flip
+// is purely a plotting detail (negated values); everything upstream —
+// oipSetVolumeBars' cache, the colour pickers, the checkboxes — keeps working
+// with the real positive volumes.
+const _oipInvertedVolSeries = new WeakSet();
+
 function _oipPaintVolumeBars(series, kind, bars) {
     const { up, down } = oipVolumeBarColors(kind);
+    const sign = _oipInvertedVolSeries.has(series) ? -1 : 1;
     try {
-        series.setData(bars.map(b => ({ time: b.time, value: b.value, color: b.up ? up : down })));
+        series.setData(bars.map(b => ({ time: b.time, value: sign * b.value, color: b.up ? up : down })));
     } catch (e) {}
 }
 
