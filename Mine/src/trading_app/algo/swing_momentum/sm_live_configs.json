@@ -210,7 +210,17 @@
       "investment": 100000.0,
       "monthly_add": 0.0,
       "monthly_add_type": "static",
-      "monthly_investment_log": [],
+      "monthly_investment_log": [
+        {
+          "date": "2026-08-06",
+          "amount": 5000.0,
+          "deployed": 6234.7,
+          "from_cash": 0.0,
+          "cash_after": 157.15,
+          "note": "",
+          "type": "sip"
+        }
+      ],
       "start_date": "2025-01-01",
       "status": "watching",
       "added_at": "2026-07-03 09:21",
@@ -218,8 +228,8 @@
       "live_entries": [
         {
           "symbol": "HFCL",
-          "entry_price": 207.17,
-          "qty": 40,
+          "entry_price": 206.92,
+          "qty": 44,
           "entry_date": "2026-07-03",
           "order": {
             "broker": "Saranya (Dhan)",
@@ -260,8 +270,8 @@
         },
         {
           "symbol": "CEMPRO",
-          "entry_price": 1464.0,
-          "qty": 5,
+          "entry_price": 1403.11,
+          "qty": 7,
           "entry_date": "2026-07-03",
           "order": {
             "broker": "Saranya (Dhan)",
@@ -274,8 +284,8 @@
         },
         {
           "symbol": "KIRLOSENG",
-          "entry_price": 2289.9,
-          "qty": 3,
+          "entry_price": 2281.7,
+          "qty": 4,
           "entry_date": "2026-07-03",
           "order": {
             "broker": "Saranya (Dhan)",
@@ -302,8 +312,8 @@
         },
         {
           "symbol": "EMMVEE",
-          "entry_price": 359.45,
-          "qty": 25,
+          "entry_price": 357.19,
+          "qty": 27,
           "entry_date": "2026-07-03",
           "order": {
             "broker": "Saranya (Dhan)",
@@ -389,7 +399,8 @@
         "instance": 5,
         "broker_type": "dhan",
         "broker_name": "Saranya (Dhan)"
-      }
+      },
+      "cash_balance": 157.15
     },
     {
       "id": "53d3fc6b",

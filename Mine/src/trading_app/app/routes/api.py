@@ -4429,7 +4429,10 @@ def run_expiry_breakout_scan_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-_TMF_BROKERAGE_PER_TRADE = 300  # flat ₹ round-trip brokerage per trade
+_TMF_BROKERAGE_PER_TRADE = 600  # flat ₹ round-trip brokerage per trade —
+                                # same figure the Live Algo tab costs a real
+                                # round trip at (_TMF_BROKERAGE_PER_TRADE in
+                                # static/js/algo_tmf.js); keep the two in step.
 _TMF_MAX_SL_RISK_RUPEES  = 5000  # default for sl_risk_max — user-editable per request
 
 from trading_app.Backtest.tmf_symbol_universe import (
@@ -10193,9 +10196,10 @@ def oi_profile_atm_ce_oi_strikes() -> EndpointResponse:
 #   strike list + lot size                     10 min
 #   9:18 ATM CE OI strikes                      5 min (fixed once 09:18 passes)
 #   CPR bands                                  whole day (_cpr_width_cache)
+#   option legs + the two volume overlays     2.5 s  (_RS_CANDLE_TTL)
 #
-# Fetched on every tick: the two option legs, the two volume overlays, and one
-# LTP quote for the Price pill (which nobody wants served off a cache).
+# Fetched on every tick: one LTP quote for the Price pill (which nobody wants
+# served off a cache).
 _rs_section_cache: Dict[Tuple, Tuple[Any, float]] = {}
 _rs_section_lock = threading.Lock()
 _RS_SECTION_MAX = 200
@@ -10205,6 +10209,28 @@ _rs_response_cache = LruCache(max_size=20)
 # needs to be long enough to coalesce two near-simultaneous callers.
 _RS_RESPONSE_TTL = 0.6
 _RS_RESPONSE_TTL_CLOSED = 60.0
+
+# The four candle legs (CE, PE, NIFTY future, Banknifty future) get their own,
+# longer TTL than the response above, because they are the only expensive part
+# of a tick and the only part that cannot usefully move at 1 Hz.
+#
+# The block polls every second, but on a 1-minute chart that is 60 requests to
+# redraw one forming bar. Four Fyers /history calls per second from this one
+# chart — against a global 8 req/s cap shared with the OI recorder, four live
+# algos and every other page — is what pushed us over the broker's limit: a
+# single session logged 21,795 rate-limit warnings and 19,368 fetches that
+# exhausted all five attempts with 'request limit reached'. Each failure
+# returned [], which blanked the leg, which stopped the response being cached,
+# which sent the next poll straight back at it — the chart's empty candles and
+# empty volume row were us throttling ourselves.
+#
+# Serving the legs from a 2.5 s cache cuts that traffic by roughly two-thirds
+# while the Price pill stays live off its LTP quote, so the block still reads
+# as LIVE 1S. Going through _rs_cached also buys two things for free: identical
+# concurrent callers coalesce onto one fetch, and a producer that raises serves
+# the PREVIOUS good bars rather than a hole — which is why the leg producers
+# below raise on an empty result instead of returning [].
+_RS_CANDLE_TTL = 2.5
 
 
 def _rs_cached(key: Tuple, ttl: float, producer):
@@ -10433,7 +10459,12 @@ def oi_profile_round_strike() -> EndpointResponse:
 
         ist_offset = int(5.5 * 3600)
         now = datetime.now()
-        from_date = (now - timedelta(days=days + 5)).replace(hour=9, minute=0, second=0, microsecond=0)
+        # The +5 is a weekend/holiday buffer, not slack: _rs_trim_days below trims
+        # to `days` TRADING days, so the calendar window has to overshoot to reach
+        # them. Named rather than inlined because the leg cache key includes it —
+        # two requests that differ only in range must not share parked bars.
+        fetch_days = days + 5
+        from_date = (now - timedelta(days=fetch_days)).replace(hour=9, minute=0, second=0, microsecond=0)
         to_date = now
         fetch_interval = 'minute' if interval == '2minute' else interval
 
@@ -10443,9 +10474,15 @@ def oi_profile_round_strike() -> EndpointResponse:
         def fetch_task(token, inter):
             try:
                 if _is_fyers_provider and _data_provider:
+                    # use_cache=True with a short TTL rather than the old
+                    # use_cache=False: the adapter's stale-cache rescue (it
+                    # serves the last good candles when every retry is rate
+                    # limited) is gated on use_cache, so opting out of the cache
+                    # to stay live also opted out of the one thing that kept a
+                    # throttled leg from coming back empty.
                     res = _data_provider.historical_data(
                         str(token), from_date.strftime('%Y-%m-%d'), to_date.strftime('%Y-%m-%d'),
-                        inter, use_cache=False, allow_synthetic=True)
+                        inter, use_cache=True, cache_ttl=2.0, allow_synthetic=True)
                     if not res:
                         # Must be read on the fetching thread — it is thread-local.
                         reason = getattr(_data_provider, 'last_history_error', lambda: None)()
@@ -10463,6 +10500,32 @@ def oi_profile_round_strike() -> EndpointResponse:
 
         executor = _api_executor
 
+        # Every candle leg goes through here rather than calling fetch_task
+        # directly, so all four share the _RS_CANDLE_TTL cache described above.
+        #
+        # The producer RAISES on an empty result instead of returning []. That is
+        # deliberate: _rs_cached answers a raising producer with the previous good
+        # value, so a leg that Fyers just rate-limited keeps drawing its last bars
+        # instead of blanking the chart for a tick and repainting on the next one.
+        # The reason is already recorded in empty_reasons/fetch_errors, so
+        # fetch_error below still tells the UI the data is standing still.
+        stale_legs: Dict[str, str] = {}
+
+        def cached_leg(token, inter):
+            def produce():
+                res = fetch_task(token, inter)
+                if not res:
+                    raise RuntimeError(empty_reasons.get(str(token)) or 'no candles returned')
+                return res
+            before = len(fetch_errors)
+            out = _rs_cached(('rs-leg', symbol, inter, fetch_days, str(token)),
+                             _RS_CANDLE_TTL, produce)
+            # Distinguishes "this tick's fetch failed and you are looking at
+            # parked bars" from a clean cache hit, which records nothing.
+            if str(token) in empty_reasons or len(fetch_errors) > before:
+                stale_legs[str(token)] = empty_reasons.get(str(token)) or 'fetch failed'
+            return out or []
+
         # ── Per-tick fetches: the two option legs + the two volume overlays ──
         ce_token = pe_token = ce_symbol = pe_symbol = None
         future_ce = future_pe = None
@@ -10470,23 +10533,23 @@ def oi_profile_round_strike() -> EndpointResponse:
             ce_token, ce_symbol = _get_cached_strike_token(
                 kite_service, _data_provider, _is_fyers_provider, symbol, ce_strike, 'CE')
             if ce_token:
-                future_ce = executor.submit(fetch_task, ce_token, fetch_interval)
+                future_ce = executor.submit(cached_leg, ce_token, fetch_interval)
         if pe_strike:
             pe_token, pe_symbol = _get_cached_strike_token(
                 kite_service, _data_provider, _is_fyers_provider, symbol, pe_strike, 'PE')
             if pe_token:
-                future_pe = executor.submit(fetch_task, pe_token, fetch_interval)
+                future_pe = executor.submit(cached_leg, pe_token, fetch_interval)
 
         # The index carries no traded volume — the overlay uses the current-expiry
         # future, plus Bank Nifty's (identical contract when BANKNIFTY is the
         # selected symbol, so it is fetched once and shared).
         fut_token, fut_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, symbol)
-        future_vol = executor.submit(fetch_task, fut_token, fetch_interval) if fut_token else None
+        future_vol = executor.submit(cached_leg, fut_token, fetch_interval) if fut_token else None
         if symbol == 'BANKNIFTY':
             bnf_token, bnf_symbol, future_bnf_vol = fut_token, fut_symbol, future_vol
         else:
             bnf_token, bnf_symbol = _get_cached_future_token(kite_service, _data_provider, _is_fyers_provider, 'BANKNIFTY')
-            future_bnf_vol = executor.submit(fetch_task, bnf_token, fetch_interval) if bnf_token else None
+            future_bnf_vol = executor.submit(cached_leg, bnf_token, fetch_interval) if bnf_token else None
 
         # Price is the one pill nobody wants served off a 10-second cache, and
         # re-fetching the whole index history every tick just to read its last
@@ -10611,13 +10674,23 @@ def oi_profile_round_strike() -> EndpointResponse:
         ce_summary = oi_data.get('ce_summary') or {}
         pe_summary = oi_data.get('pe_summary') or {}
 
-        # A resolved token whose candles still came back empty is a failed leg,
-        # not an untraded strike being charted as blank — surface it and keep it
-        # out of the response cache so the next tick retries.
+        # Two different situations, and they want opposite handling.
+        #
+        # `empty_legs` — a resolved token that has NO bars at all, not even parked
+        # ones. Nothing to draw; the strike/expiry is probably untraded or wrong.
+        # Keep it out of the response cache so the next tick retries.
+        #
+        # `stale_legs` — this tick's fetch failed but cached_leg served the
+        # previous good bars, so the chart still has a continuous series. That is
+        # the normal outcome of a broker hiccup now, and it is worth telling the
+        # UI about (the candles are standing still) without forcing a retry
+        # storm: these responses stay cacheable.
         empty_legs = [(label, tok) for label, tok, cds in (
             ('CE', ce_token, ce_candles),
             ('PE', pe_token, pe_candles),
         ) if tok and not cds]
+        leg_labels = {str(ce_token): 'CE', str(pe_token): 'PE',
+                      str(fut_token): 'FUT', str(bnf_token): 'BNF'}
         fetch_error = fetch_errors[0] if fetch_errors else None
         if not fetch_error and empty_legs:
             by_reason: Dict[str, list] = {}
@@ -10632,6 +10705,11 @@ def oi_profile_round_strike() -> EndpointResponse:
             else:
                 fetch_error = (f"Broker returned no candles for {', '.join(l for l, _ in empty_legs)} — "
                                f"strike/expiry may be untraded or wrong. Retrying next poll.")
+        stale_error = None
+        if stale_legs:
+            names = sorted({leg_labels.get(tok, tok) for tok in stale_legs})
+            stale_error = (f"Showing last good bars for {', '.join(names)} — "
+                           f"{next(iter(stale_legs.values()))}")
 
         response_data = {
             'success': True,
@@ -10667,6 +10745,9 @@ def oi_profile_round_strike() -> EndpointResponse:
             },
             'timestamp': datetime.now().isoformat(),
             'fetch_error': fetch_error,
+            # Set when the candles are real but not fresh — the block shows a
+            # "delayed" chip rather than pretending a frozen series is live.
+            'data_stale': stale_error,
         }
 
         if not empty_legs:

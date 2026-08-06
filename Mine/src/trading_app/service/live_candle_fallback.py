@@ -339,6 +339,21 @@ def _resolve_symbol(provider, symbol: str) -> Optional[Tuple[str, Optional[float
         root, strike, opt_type = entry
         if root and strike:
             return root, strike, opt_type
+
+    # Futures (the volume overlays) genuinely cannot be backfilled: oi_history
+    # stores the index spot and per-strike CE/PE LTPs, and nothing else. The
+    # futures price could be approximated from the spot, but the futures leg
+    # exists ONLY to supply traded volume, and oi_history carries no volume at
+    # all — so a backfilled bar would be a made-up price attached to a zero
+    # volume, which is worse than a gap. Futures therefore start from whenever
+    # the sampler first sees them, and the morning is missing if the fallback
+    # engages mid-session. Logged rather than silently skipped, because a
+    # volume row that starts late is otherwise hard to explain.
+    if symbol.upper().endswith('FUT'):
+        logger.debug(f"[LiveCandleFallback] {symbol} is a future — no oi_history backfill "
+                     f"exists for it; bars start from the first sampler tick")
+        return None
+
     logger.debug(f"[LiveCandleFallback] {symbol} not in the option master — no synthetic fill")
     return None
 

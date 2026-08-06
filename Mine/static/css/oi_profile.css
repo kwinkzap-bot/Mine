@@ -159,6 +159,31 @@ body.ocean-theme, .oip-page.ocean-theme {
     border-color: #fde68a;
 }
 
+/* Sits next to Round Strike's green "Live 1s" badge and contradicts it: the
+   broker is refusing candles and the chart is holding its last good bars. Red
+   rather than the amber above because that one describes a design choice, this
+   one describes a fault. Hidden whenever the feed is healthy, which is almost
+   always, so it costs nothing visually in the normal case. */
+.oip-stale-chip {
+    background: #fee2e2;
+    color: #991b1b;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border: 1px solid #fecaca;
+    white-space: nowrap;
+}
+
+body.dark-theme .oip-stale-chip,
+.oip-page.dark-theme .oip-stale-chip {
+    background: #450a0a;
+    color: #fca5a5;
+    border-color: #7f1d1d;
+}
+
 /* Needs to be inline-block for the shared .spin rotation below to have
    anything to rotate (setRefreshBtn toggles .spin while a refresh is running). */
 .oip-refresh-icon {

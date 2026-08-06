@@ -613,6 +613,12 @@ let oipRSFirstRenderDone = false;
 // Last rendered candles, kept UNTAGGED (no 5m-close borderColor) so indicator
 // changes can re-tag and redraw them without a refetch — see oipRSOn5mCloseChange.
 let oipRSLastCeData = null, oipRSLastPeData = null;
+// Same idea for the two volume overlays. The candles had this guard from the
+// start; the volume bars did not, so a rate-limited future leg arrived as [] and
+// oipSetVolumeBars setData([])'d the whole row to nothing for that tick — the
+// empty volume the block was reported for. Parked per interval, since bars from
+// a different timeframe sit on a different time grid and must not be reused.
+let oipRSLastFutVol = null, oipRSLastBnfVol = null, oipRSLastVolInterval = null;
 
 // ── 5m Close Border indicator ────────────────────────────────────────────────
 // This block's own instance of the marker shared with the main OI Profile and
@@ -706,14 +712,30 @@ function oipRSRenderChart(data) {
     window._oipDataRefreshing = true;
     if (oipRSChart) oipRSChart.update(oipRSMark5mCloseBorders(ceData), oipRSMark5mCloseBorders(peData), resetZoom);
 
-    oipSetVolumeBars(oipRSVolumeSeries, data.future_volume, ceData);
+    // Same anti-flicker rule as the candles above: an empty array means the
+    // future leg failed this tick, not that volume went to nothing. Hold the
+    // last good bars — but only while the timeframe is unchanged, since bars
+    // from another interval sit on a different time grid and oipSetVolumeBars
+    // matches them to the candles by exact time key.
+    const sameVolInterval = (oipRSLastVolInterval === oipRSInterval);
+    let futVol = data.future_volume || [];
+    let bnfVol = data.banknifty_volume || [];
+    if (sameVolInterval) {
+        if (!futVol.length && oipRSLastFutVol?.length) futVol = oipRSLastFutVol;
+        if (!bnfVol.length && oipRSLastBnfVol?.length) bnfVol = oipRSLastBnfVol;
+    }
+    oipRSLastFutVol = futVol;
+    oipRSLastBnfVol = bnfVol;
+    oipRSLastVolInterval = oipRSInterval;
+
+    oipSetVolumeBars(oipRSVolumeSeries, futVol, ceData);
     // Banknifty deliberately uses the NIFTY colour pair here. Everywhere else the
     // two histograms share one scale and overlap, so Banknifty needs its own
     // colours to stay distinguishable; on this chart it hangs from its own top
     // band (bnfOnTop), so the same up/down pair reads consistently across both
     // bands instead of introducing a second colour language. The Banknifty
     // swatches are omitted from this block's Indicator popup for that reason.
-    oipSetVolumeBars(oipRSBnfVolumeSeries, data.banknifty_volume, ceData);
+    oipSetVolumeBars(oipRSBnfVolumeSeries, bnfVol, ceData);
     const volLegendEl = document.getElementById('oipRSVolLegendItem');
     if (volLegendEl) volLegendEl.classList.toggle('hidden', !data.future_symbol);
     const volSymbolEl = document.getElementById('oipRSLegendVolSymbol');
@@ -851,6 +873,31 @@ async function oipRSPollTick() {
     }
 }
 
+// Shows/hides the "delayed" chip beside the Live 1s badge.
+//
+// `reason` is the backend's data_stale/fetch_error string, or null when the tick
+// was clean. A single throttled tick is routine and self-healing, so the chip
+// only appears once the problem has survived a couple of polls — otherwise it
+// would blink on and off all session and train the user to ignore it. Recovery
+// clears it immediately: good news should never be delayed.
+const OIP_RS_STALE_TICKS_BEFORE_WARN = 3;
+let oipRSStaleStreak = 0;
+function oipRSSetStaleChip(reason) {
+    const el = document.getElementById('oipRSStaleChip');
+    if (!el) return;
+    if (!reason) {
+        oipRSStaleStreak = 0;
+        el.classList.add('hidden');
+        el.title = '';
+        return;
+    }
+    oipRSStaleStreak++;
+    if (oipRSStaleStreak < OIP_RS_STALE_TICKS_BEFORE_WARN) return;
+    el.textContent = 'Delayed';
+    el.title = reason;          // full broker message on hover
+    el.classList.remove('hidden');
+}
+
 // One request → chart + stats strip. Returns whether it succeeded, so the loop
 // above can back off instead of hammering a broker that is already struggling.
 async function oipRSLoadData() {
@@ -866,9 +913,15 @@ async function oipRSLoadData() {
         if (data.fetch_error) console.warn('[RoundStrike]', data.fetch_error);
         oipRSApplyHeader(data.header);
         oipRSRenderChart(data);
-        return true;
+        oipRSSetStaleChip(data.data_stale || data.fetch_error || null);
+        // A tick the broker refused still parses fine, so it used to return true
+        // and the loop went straight back round at 1s — piling more requests onto
+        // a rate limit we were already over. Report it as a failure so the caller
+        // picks OIP_RS_POLL_MS_ERROR and gives the broker room to recover.
+        return !data.fetch_error;
     } catch (e) {
         console.warn('[RoundStrike] load error:', e);
+        oipRSSetStaleChip('Connection problem — chart not updating');
         return false;
     } finally {
         oipRSIsLoading = false;

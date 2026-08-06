@@ -26,6 +26,11 @@
                     </svg>
                     Round Strike
                     <span class="oip-title-badge">Live 1s</span>
+                    <!-- Shown only while the broker is refusing candles and the
+                         chart is holding its last good bars, so a frozen series
+                         is never mistaken for a quiet market. Filled by
+                         oipRSSetStaleChip. -->
+                    <span class="oip-stale-chip hidden" id="oipRSStaleChip" title=""></span>
                 </div>
 
                 <div class="oip-prem-toolbar">

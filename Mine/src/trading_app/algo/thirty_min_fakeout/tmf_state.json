@@ -1,6 +1,6 @@
 {
   "date": "2026-08-06",
-  "eod_handled": false,
+  "eod_handled": true,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
@@ -105,13 +105,13 @@
       "phase": "no_setup"
     },
     "CUMMINSIND": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "short",
       "trigger": 5409.5,
       "sl_level": 5455.0,
       "sl_risk": 4186.0,
-      "ltp": 5347.5,
-      "ltp_time": "2026-08-06T13:18:46.839610",
+      "ltp": 5365.5,
+      "ltp_time": "2026-08-06T15:05:42.236693",
       "qty": 92,
       "entry_time": "2026-08-06T10:53:51.457530",
       "entry_placed_ts": 1785993831.457531,
@@ -124,12 +124,16 @@
           "entry_price": 5407.510869565218,
           "filled_qty": 92,
           "sl_order_id": "2085235404961144832",
-          "target_order_id": "2085235405594484736"
+          "target_order_id": "2085235405594484736",
+          "closed": true
         }
       ],
       "entry_price": 5407.510869565218,
       "target_level": 5175.0,
-      "unrealized_pnl": 5521.0
+      "exit_reason": "Time Exit (broker auto square-off)",
+      "exit_time": "2026-08-06T15:05:42.389389",
+      "exit_price": 5368.04,
+      "realized_pnl": 3631.0
     },
     "DABUR": {
       "phase": "no_setup"
@@ -159,13 +163,13 @@
       "phase": "no_setup"
     },
     "FORCEMOT": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "short",
       "trigger": 18749.0,
       "sl_level": 18886.0,
       "sl_risk": 3562.0,
-      "ltp": 18704.0,
-      "ltp_time": "2026-08-06T13:18:46.839619",
+      "ltp": 18697.0,
+      "ltp_time": "2026-08-06T15:05:04.087160",
       "qty": 26,
       "entry_time": "2026-08-06T11:18:07.478260",
       "entry_placed_ts": 1785995287.478261,
@@ -178,12 +182,16 @@
           "entry_price": 18739.73076923077,
           "filled_qty": 26,
           "sl_order_id": "2085241492129374208",
-          "target_order_id": "2085241492628496384"
+          "target_order_id": "2085241492628496384",
+          "closed": true
         }
       ],
       "entry_price": 18739.73076923077,
       "target_level": 18331.0,
-      "unrealized_pnl": 929.0
+      "exit_time": "2026-08-06T15:05:05.075556",
+      "exit_price": 18700.0,
+      "exit_reason": "Time Exit",
+      "realized_pnl": 1033.0
     },
     "GAIL": {
       "phase": "no_setup"

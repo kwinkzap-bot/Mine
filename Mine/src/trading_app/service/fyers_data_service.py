@@ -106,6 +106,24 @@ _GLOBAL_FYERS_QUOTE_LOCK = threading.Lock()
 # governs throughput.
 _GLOBAL_FYERS_HIST_LOCK = threading.Semaphore(4)
 
+# Single-flight for identical concurrent history calls: request signature -> Lock.
+#
+# The OI Profile charts poll on a timer and fetch every leg on a thread pool, so
+# two browser tabs (or a chart racing another endpoint) routinely ask for the
+# exact same symbol/range/resolution at the same instant. Both used to queue
+# their own 5-attempt request behind _rate_limiter, doubling the load on the
+# Fyers history cap to produce one answer. Now the second caller waits for the
+# first, then walks straight into the cache the first just populated.
+#
+# Keyed on the caller's arguments rather than the internal cache key, which is
+# only computed after symbol translation deeper in — identical calls still
+# produce identical signatures, which is all the collapsing needs.
+_FYERS_HIST_INFLIGHT: Dict[str, threading.Lock] = {}
+_FYERS_HIST_INFLIGHT_LOCK = threading.Lock()
+# Ceiling on how long a waiter blocks before giving up and fetching itself, so a
+# wedged fetch can never stall a chart indefinitely.
+_HIST_SINGLEFLIGHT_TIMEOUT = 20.0
+
 # historical_data() never raises — every failure path returns [] — so callers
 # could not tell a rate-limited/errored fetch apart from a symbol that genuinely
 # has no candles, and guessed ("likely rate-limited") in the UI. Each call
@@ -634,6 +652,13 @@ class FyersDataServiceAdapter:
                 q = {
                     'last_price': lp,
                     'ohlc': {'open': v.get('open_price', 0.0), 'high': v.get('high_price', 0.0), 'low': v.get('low_price', 0.0), 'close': prev_close},
+                    # Cumulative traded volume for the day. Carried through
+                    # because live_candle_fallback.record_quote() reads it to
+                    # give its rebuilt bars a real volume — without it every
+                    # synthetic bar was volume 0 and the volume overlay drew
+                    # nothing at all whenever Fyers' intraday history went out.
+                    # Indices legitimately report 0 here.
+                    'volume': v.get('volume', 0) or 0,
                     'oi': op_oi or v.get('oi', 0),
                     'change_in_oi': op_oich,
                     'timestamp': datetime.now()
@@ -665,7 +690,50 @@ class FyersDataServiceAdapter:
         interval: str,
         oi: bool = False,
         use_cache: bool = True,
-        allow_synthetic: bool = False
+        allow_synthetic: bool = False,
+        cache_ttl: Optional[float] = None
+    ) -> List[Dict[str, Any]]:
+        """Fetch history, collapsing identical concurrent calls into one.
+
+        See _historical_data_impl for the actual fetch; this wrapper only holds
+        the single-flight lock (_FYERS_HIST_INFLIGHT) so two callers asking for
+        the same symbol/range/resolution at the same moment cost one request
+        instead of two. The waiter's own call then hits the cache the winner
+        just filled.
+        """
+        sig = f"{instrument_token}|{from_date}|{to_date}|{interval}|{oi}"
+        with _FYERS_HIST_INFLIGHT_LOCK:
+            gate = _FYERS_HIST_INFLIGHT.get(sig)
+            if gate is None:
+                gate = threading.Lock()
+                _FYERS_HIST_INFLIGHT[sig] = gate
+            # Unbounded growth would leak a lock per strike per range across a
+            # session; the map only needs the keys currently contended.
+            if len(_FYERS_HIST_INFLIGHT) > 500:
+                for stale in [k for k, lk in list(_FYERS_HIST_INFLIGHT.items())
+                              if k != sig and not lk.locked()]:
+                    _FYERS_HIST_INFLIGHT.pop(stale, None)
+
+        acquired = gate.acquire(timeout=_HIST_SINGLEFLIGHT_TIMEOUT)
+        try:
+            return self._historical_data_impl(
+                instrument_token, from_date, to_date, interval,
+                oi=oi, use_cache=use_cache, allow_synthetic=allow_synthetic,
+                cache_ttl=cache_ttl)
+        finally:
+            if acquired:
+                gate.release()
+
+    def _historical_data_impl(
+        self,
+        instrument_token: Union[int, str],
+        from_date: str,
+        to_date: str,
+        interval: str,
+        oi: bool = False,
+        use_cache: bool = True,
+        allow_synthetic: bool = False,
+        cache_ttl: Optional[float] = None
     ) -> List[Dict[str, Any]]:
         """
         allow_synthetic: when Fyers' history API holds no candles for *today*
@@ -677,6 +745,13 @@ class FyersDataServiceAdapter:
         Defaults to False so this only reaches callers that opted in — the
         chart/display endpoints. The live algos keep the default: they place
         real orders, and must never do so off reconstructed prices.
+
+        cache_ttl: override the built-in cache lifetime (15s intraday / 300s
+        daily) for this call. A chart polling faster than 15s used to pass
+        use_cache=False to stay live, which also switched off the stale-cache
+        rescue below — so a rate-limited fetch returned [] and blanked the
+        chart. Passing a short TTL instead keeps the data fresh *and* keeps the
+        rescue armed. None means the built-in TTL.
         """
         _FYERS_HIST_ERROR.msg = None
         try:
@@ -798,8 +873,9 @@ class FyersDataServiceAdapter:
                 with _FYERS_HIST_LOCK:
                     if cache_key in _FYERS_HIST_CACHE:
                         data, ts = _FYERS_HIST_CACHE[cache_key]
-                        cache_ttl = 300 if f_res in ['D', 'W', 'M'] else 15.0
-                        if (datetime.now() - ts).total_seconds() < cache_ttl:
+                        default_ttl = 300 if f_res in ['D', 'W', 'M'] else 15.0
+                        effective_ttl = default_ttl if cache_ttl is None else float(cache_ttl)
+                        if (datetime.now() - ts).total_seconds() < effective_ttl:
                             logger.debug(f"[FyersAdapter] Returning cached historical data for {cache_key}")
                             return _with_live_tail(data)
 
