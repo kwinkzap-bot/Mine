@@ -183,7 +183,7 @@ const _TMF_REASON_TONE = {
 // what lands in the account. Rather than itemising the contract note off each
 // trade's turnover, every entry is costed at the same flat figure — the number
 // to change if the real cost per round trip moves.
-const _TMF_BROKERAGE_PER_TRADE = 600;
+const _TMF_BROKERAGE_PER_TRADE = 300;
 
 // Charged once per completed round trip. An incomplete record (no exit yet)
 // costs nothing, so a still-open row never shows a phantom deduction.

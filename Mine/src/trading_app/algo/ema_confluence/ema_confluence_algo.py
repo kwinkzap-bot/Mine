@@ -138,6 +138,18 @@ _instances: Dict[str, 'EmaConfluenceAlgo'] = {}
 _CONTRACT_RE = re.compile(r'(\d{2})([A-Z]{3})FUT$')
 
 
+def _is_weekend_signal(signal_date: Any) -> bool:
+    """True for a stored signal_date ('YYYY-MM-DD') that lands on a weekend.
+
+    Only state written before the weekend bars were filtered out can hold one;
+    it's how an already-armed phantom setup gets recognised and re-scanned.
+    """
+    try:
+        return datetime.strptime(str(signal_date), '%Y-%m-%d').weekday() >= 5
+    except (TypeError, ValueError):
+        return False
+
+
 def _contract_month_label(token: Any) -> Optional[str]:
     """'NSE:NHPC26AUGFUT' -> 'AUG 2026' — which monthly contract the paper
     trade is on. None when the token isn't a monthly future (the UI then
@@ -498,7 +510,29 @@ class EmaConfluenceAlgo:
         for symbol, cfg in EMA_SYMBOL_DEFAULTS.items():
             s = stocks.setdefault(symbol, {'phase': 'pending_scan'})
             if s.get('phase') in ('watching', 'in_position'):
-                continue  # only one pending/open setup at a time, same as the backtest
+                # …unless it was armed off a weekend bar. Those aren't real
+                # sessions (see filters/candle_store.drop_weekend_bars) and the
+                # skip below would otherwise pin the phantom trigger/SL here
+                # forever, since a watching symbol is never re-scanned.
+                if _is_weekend_signal(s.get('signal_date')):
+                    if s.get('phase') == 'watching':
+                        self.log.warning(
+                            f"{symbol}: dropping setup armed off non-session candle "
+                            f"{s.get('signal_date')} (trigger={s.get('trigger_level')} "
+                            f"sl={s.get('sl_level')}) — re-scanning on real candles"
+                        )
+                        self._reset_for_next_scan(s)
+                    else:
+                        # An open paper position isn't unwound behind the user's
+                        # back — flag it and let them close it from the UI.
+                        self.log.warning(
+                            f"{symbol}: OPEN paper position came from non-session candle "
+                            f"{s.get('signal_date')} — entry {s.get('entry_price')} is off a "
+                            f"trigger that never traded in a real session; review it manually"
+                        )
+                        continue
+                else:
+                    continue  # one pending/open setup at a time, same as the backtest
             if only_pending and s.get('phase') != 'pending_scan':
                 continue
             try:

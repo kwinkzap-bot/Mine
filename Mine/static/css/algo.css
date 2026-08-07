@@ -825,6 +825,8 @@ body.ocean-theme .sm-gl-overlay {
 .sm-sec-pnl-sep { color: var(--ag-border); font-weight: 400; }
 .sm-sec-pnl-item.sm-tpnl-pos { color: var(--ag-pos); }
 .sm-sec-pnl-item.sm-tpnl-neg { color: var(--ag-neg); }
+/* Invested is capital, not performance — neutral so the P&L colours still read */
+.sm-sec-pnl-item.sm-tpnl-inv { color: var(--ag-text); }
 
 .sm-section-pnl-loaded + .sm-section-count { margin-left: 10px; }
 .sm-section-count {
@@ -900,6 +902,7 @@ body.ocean-theme .sm-gl-overlay {
 .sm-grp-pnl-sep { color: var(--ag-border); font-weight: 400; }
 .sm-grp-pnl-item.sm-tpnl-pos { color: var(--ag-pos); }
 .sm-grp-pnl-item.sm-tpnl-neg { color: var(--ag-neg); }
+.sm-grp-pnl-item.sm-tpnl-inv { color: var(--ag-text); }
 
 /* When the group P&L chip is present it claims the right edge, so the
    count sits next to it instead of pushing to the far right. */

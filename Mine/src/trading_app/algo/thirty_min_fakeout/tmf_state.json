@@ -1,6 +1,6 @@
 {
-  "date": "2026-08-06",
-  "eod_handled": true,
+  "date": "2026-08-07",
+  "eod_handled": false,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
@@ -105,35 +105,7 @@
       "phase": "no_setup"
     },
     "CUMMINSIND": {
-      "phase": "done",
-      "direction": "short",
-      "trigger": 5409.5,
-      "sl_level": 5455.0,
-      "sl_risk": 4186.0,
-      "ltp": 5365.5,
-      "ltp_time": "2026-08-06T15:05:42.236693",
-      "qty": 92,
-      "entry_time": "2026-08-06T10:53:51.457530",
-      "entry_placed_ts": 1785993831.457531,
-      "entry_limit_price": 5397.0,
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2085235382282543104",
-          "filled": true,
-          "entry_price": 5407.510869565218,
-          "filled_qty": 92,
-          "sl_order_id": "2085235404961144832",
-          "target_order_id": "2085235405594484736",
-          "closed": true
-        }
-      ],
-      "entry_price": 5407.510869565218,
-      "target_level": 5175.0,
-      "exit_reason": "Time Exit (broker auto square-off)",
-      "exit_time": "2026-08-06T15:05:42.389389",
-      "exit_price": 5368.04,
-      "realized_pnl": 3631.0
+      "phase": "no_setup"
     },
     "DABUR": {
       "phase": "no_setup"
@@ -163,35 +135,7 @@
       "phase": "no_setup"
     },
     "FORCEMOT": {
-      "phase": "done",
-      "direction": "short",
-      "trigger": 18749.0,
-      "sl_level": 18886.0,
-      "sl_risk": 3562.0,
-      "ltp": 18697.0,
-      "ltp_time": "2026-08-06T15:05:04.087160",
-      "qty": 26,
-      "entry_time": "2026-08-06T11:18:07.478260",
-      "entry_placed_ts": 1785995287.478261,
-      "entry_limit_price": 18701.0,
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2085241490057388032",
-          "filled": true,
-          "entry_price": 18739.73076923077,
-          "filled_qty": 26,
-          "sl_order_id": "2085241492129374208",
-          "target_order_id": "2085241492628496384",
-          "closed": true
-        }
-      ],
-      "entry_price": 18739.73076923077,
-      "target_level": 18331.0,
-      "exit_time": "2026-08-06T15:05:05.075556",
-      "exit_price": 18700.0,
-      "exit_reason": "Time Exit",
-      "realized_pnl": 1033.0
+      "phase": "no_setup"
     },
     "GAIL": {
       "phase": "no_setup"
@@ -233,35 +177,7 @@
       "phase": "no_setup"
     },
     "HINDPETRO": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 394.4,
-      "sl_level": 392.5,
-      "sl_risk": 2407.3,
-      "ltp": 396.65,
-      "ltp_time": "2026-08-06T11:54:28.758517",
-      "qty": 1267,
-      "entry_time": "2026-08-06T10:58:06.038119",
-      "entry_placed_ts": 1785994086.03812,
-      "entry_limit_price": 395.3,
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2085236450051678208",
-          "filled": true,
-          "entry_price": 394.5058405682715,
-          "filled_qty": 1267,
-          "sl_order_id": "2085236451003785217",
-          "target_order_id": "2085236451473547264",
-          "closed": true
-        }
-      ],
-      "entry_price": 394.5058405682715,
-      "target_level": 396.85,
-      "exit_time": "2026-08-06T11:54:28.952601",
-      "exit_price": 396.8500000000001,
-      "exit_reason": "Target Hit",
-      "realized_pnl": 2970.05
+      "phase": "no_setup"
     },
     "ICICIGI": {
       "phase": "no_setup"
@@ -288,10 +204,58 @@
       "phase": "no_setup"
     },
     "JINDALSTEL": {
-      "phase": "no_setup"
+      "phase": "in_position",
+      "direction": "long",
+      "trigger": 1097.1,
+      "sl_level": 1092.0,
+      "sl_risk": 2320.5,
+      "ltp": 1099.4,
+      "ltp_time": "2026-08-07T12:12:34.016565",
+      "qty": 455,
+      "entry_time": "2026-08-07T11:16:10.839239",
+      "entry_placed_ts": 1786081570.8392398,
+      "entry_limit_price": 1099.3,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2085603387973754880",
+          "filled": true,
+          "entry_price": 1097.3334065934064,
+          "filled_qty": 455,
+          "sl_order_id": "2085603400120459264",
+          "target_order_id": "2085603400653135872"
+        }
+      ],
+      "entry_price": 1097.3334065934064,
+      "target_level": 1105.7,
+      "unrealized_pnl": 940.3
     },
     "JIOFIN": {
-      "phase": "no_setup"
+      "phase": "in_position",
+      "direction": "long",
+      "trigger": 260.35,
+      "sl_level": 259.1,
+      "sl_risk": 2400.0,
+      "ltp": 259.35,
+      "ltp_time": "2026-08-07T12:12:34.016580",
+      "qty": 1920,
+      "entry_time": "2026-08-07T11:25:55.086598",
+      "entry_placed_ts": 1786082155.0865989,
+      "entry_limit_price": 261.0,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2085605838571364352",
+          "filled": true,
+          "entry_price": 260.5,
+          "filled_qty": 1920,
+          "sl_order_id": "2085605840588824576",
+          "target_order_id": "2085605841117306880"
+        }
+      ],
+      "entry_price": 260.5,
+      "target_level": 263.35,
+      "unrealized_pnl": -2208.0
     },
     "JSWSTEEL": {
       "phase": "no_setup"
@@ -354,14 +318,7 @@
       "phase": "no_setup"
     },
     "MOTILALOFS": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 874.7,
-      "sl_level": 871.25,
-      "sl_risk": 1969.95,
-      "ltp": 870.95,
-      "ltp_time": "2026-08-06T10:47:31.760616",
-      "exit_reason": "Invalidated (SL hit before entry)"
+      "phase": "no_setup"
     },
     "MPHASIS": {
       "phase": "no_setup"
@@ -448,35 +405,7 @@
       "phase": "no_setup"
     },
     "SAMMAANCAP": {
-      "phase": "done",
-      "direction": "short",
-      "trigger": 163.06,
-      "sl_level": 163.9,
-      "sl_risk": 2575.44,
-      "ltp": 163.74,
-      "ltp_time": "2026-08-06T12:40:22.946876",
-      "qty": 3066,
-      "entry_time": "2026-08-06T10:46:45.921209",
-      "entry_placed_ts": 1785993405.92121,
-      "entry_limit_price": 162.72,
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2085233597560053760",
-          "filled": true,
-          "entry_price": 163.05,
-          "filled_qty": 3066,
-          "sl_order_id": "2085233598478606336",
-          "target_order_id": "2085233599090974720",
-          "closed": true
-        }
-      ],
-      "entry_price": 163.05,
-      "target_level": 160.55,
-      "exit_time": "2026-08-06T12:40:23.157914",
-      "exit_price": 163.9,
-      "exit_reason": "SL Hit",
-      "realized_pnl": -2606.1
+      "phase": "no_setup"
     },
     "SBICARD": {
       "phase": "no_setup"

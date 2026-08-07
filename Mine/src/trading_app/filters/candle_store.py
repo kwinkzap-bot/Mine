@@ -82,6 +82,26 @@ def _save_disk(symbol: str, entry: Dict):
         logger.warning(f"Candle store write failed ({symbol}): {e}")
 
 
+def drop_weekend_bars(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop Saturday/Sunday bars — they are never a regular trading session.
+
+    NSE does run the odd weekend session (disaster-recovery / mock live drills,
+    Muhurat, a Budget Saturday), and the provider hands those back as ordinary
+    daily candles. The drill ones are the dangerous kind: barely any volume and
+    a range several percent wide because a handful of test orders print at silly
+    prices. 2026-07-11 is the example that surfaced this — a Saturday bar whose
+    high/low engulfed all four EMAs on ~390 stocks at once, so every daily
+    strategy reading this store saw a phantom confluence signal and armed
+    breakout levels off prices that never traded in a real session.
+
+    Applied on the way in (new fetches) AND on the way out (files already
+    holding such a bar), so no consumer has to know about it.
+    """
+    if df is None or df.empty:
+        return df
+    return df[pd.DatetimeIndex(df.index).dayofweek < 5]
+
+
 def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     df.index = pd.to_datetime(df.index)
     if getattr(df.index, "tz", None) is not None:
@@ -90,6 +110,7 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=["close"])
+    df = drop_weekend_bars(df)
     return df[~df.index.duplicated(keep="last")].sort_index()
 
 
@@ -192,7 +213,10 @@ def get_daily_history(kite, token, symbol: str, days: int,
         if changed:
             _save_disk(symbol, entry)
 
-        df = entry["df"]
+        # Filtered on the way out too: files written before drop_weekend_bars
+        # existed still hold those bars, and rewriting 2000+ pickles to purge
+        # them would be a far bigger hammer than never handing them out.
+        df = drop_weekend_bars(entry["df"])
         # Include every bar ON the end date (whatever intraday time it's stamped
         # with), but nothing after it — no look-ahead on historical scans.
         end_excl = pd.Timestamp(end.date()) + pd.Timedelta(days=1)

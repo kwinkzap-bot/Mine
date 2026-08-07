@@ -116,6 +116,13 @@ class EmaPullbackEngine:
         # market time). Snap to local midnight so entry_time/exit_time show
         # a clean date instead of that artifact.
         df['datetime'] = df['datetime'].dt.normalize()
+        # A Saturday/Sunday bar is never a regular session — it's one of NSE's
+        # occasional weekend drills, and a drill bar's range is wide enough on
+        # near-zero volume to "touch" all four EMAs and fake a confluence
+        # signal. The daily store filters these too (filters/candle_store);
+        # this covers frames that reach the engine some other way (the live
+        # algo's direct-fetch fallback, a CSV, a test).
+        df = df[df['datetime'].dt.dayofweek < 5]
         return df.reset_index(drop=True)
 
     @staticmethod

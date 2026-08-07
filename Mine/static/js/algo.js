@@ -4147,19 +4147,20 @@ function _smToggleCardActions() {
 // config id → broker-group id (gid), rebuilt on every render
 const _smGroupOfConfig = {};
 
-// Aggregate per-config P&L into each broker group's header chip, and roll the
-// groups up into the two section headers (Brokers / None — track only).
+// Aggregate per-config invested + P&L into each broker group's header chip, and
+// roll the groups up into the two section headers (Brokers / None — track only).
 function _smUpdateGroupPnls() {
-    const sums     = {};   // gid → { today, total, has }
-    const secSums  = {};   // 'live' | 'none' → { today, total, has }
+    const sums     = {};   // gid → { invested, today, total, has }
+    const secSums  = {};   // 'live' | 'none' → { invested, today, total, has }
     Object.keys(_smPnlByConfig).forEach(id => {
         const gid = _smGroupOfConfig[id];
         if (!gid) return;
         const p   = _smPnlByConfig[id];
         const sid = gid === 'none' ? 'none' : 'live';
-        [sums[gid]    || (sums[gid]       = { today: 0, total: 0, has: false }),
-         secSums[sid] || (secSums[sid]    = { today: 0, total: 0, has: false })
+        [sums[gid]    || (sums[gid]    = { invested: 0, today: 0, total: 0, has: false }),
+         secSums[sid] || (secSums[sid] = { invested: 0, today: 0, total: 0, has: false })
         ].forEach(s => {
+            s.invested += p.invested || 0;
             s.today += p.today || 0;
             s.total += p.total || 0;
             s.has = true;
@@ -4171,6 +4172,10 @@ function _smUpdateGroupPnls() {
         if (!s || !s.has) { el.className = base; el.innerHTML = ''; return; }
         el.className = `${base} ${base}-loaded`;
         el.innerHTML = `
+            <span class="${itemCls} sm-tpnl-inv">
+                <span class="${labelCls}">Invested</span>${_smFmtInr(s.invested)}
+            </span>
+            <span class="${sepCls}">|</span>
             <span class="${itemCls} ${s.today >= 0 ? 'sm-tpnl-pos' : 'sm-tpnl-neg'}">
                 <span class="${labelCls}">Today</span>${fmtVal(s.today)}
             </span>
@@ -4374,7 +4379,7 @@ function _smUpdateMetaRow(id, d) {
     }
     if (reb) reb.textContent = 'Rebal ' + (d.next_rebalance || '—');
 
-    _smPnlByConfig[id] = { today: todayAbs, total: totAbs };
+    _smPnlByConfig[id] = { today: todayAbs, total: totAbs, invested: d.total_invested || 0 };
     _smUpdateTotalPnl();
     _smUpdateGroupPnls();
 }

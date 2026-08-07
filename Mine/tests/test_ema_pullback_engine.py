@@ -190,6 +190,40 @@ def test_require_rr_defaults_off(daily):
     assert summary['rr_skipped'] == 0
 
 
+def test_weekend_session_bar_never_arms_a_setup():
+    """NSE's weekend drill sessions print a daily bar with near-zero volume and
+    an absurd range — wide enough to 'touch' all four EMAs and fake a confluence
+    signal. Live showed Saturday 2026-07-11 as the signal candle on ~8 symbols
+    at once, arming triggers at prices no real session ever traded."""
+    rows = []
+    for _ in range(250):
+        rows.append({'open': 100, 'high': 100.2, 'low': 99.8, 'close': 100, 'volume': 1000})
+    df = pd.DataFrame(rows)
+    df.insert(0, 'date', pd.bdate_range('2026-01-01', periods=len(df)))
+
+    saturday = pd.Timestamp(df['date'].iloc[-1])
+    saturday += pd.Timedelta(days=(5 - saturday.dayofweek) % 7 or 7)
+    assert saturday.dayofweek == 5
+    # The drill bar: 10% wide on 3 lots, straddling every EMA sitting at 100.
+    drill = pd.DataFrame([{'date': saturday, 'open': 100, 'high': 110,
+                           'low': 95, 'close': 108, 'volume': 3}])
+
+    with_drill = EmaPullbackEngine(daily_df=pd.concat([df, drill], ignore_index=True),
+                                   target_pct=5, start_date='2026-01-01')
+    with_drill.run()
+    assert with_drill.pending_order is None, 'a weekend bar must not arm an order'
+    assert (with_drill.daily_df['datetime'].dt.dayofweek < 5).all()
+
+    # Same bar on the next trading day IS a real signal — proving the test frame
+    # would otherwise trigger, so the assertion above is about the weekend only.
+    monday = drill.assign(date=saturday + pd.Timedelta(days=2))
+    with_monday = EmaPullbackEngine(daily_df=pd.concat([df, monday], ignore_index=True),
+                                    target_pct=5, start_date='2026-01-01')
+    with_monday.run()
+    assert with_monday.pending_order is not None
+    assert with_monday.pending_order['trigger_level'] == pytest.approx(110)
+
+
 def test_warmup_bars_are_never_traded(daily):
     """Bars before start_date supply EMA history only."""
     trades, _ = _run(daily, '2020-01-01')

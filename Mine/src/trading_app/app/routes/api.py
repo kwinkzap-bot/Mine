@@ -4429,7 +4429,7 @@ def run_expiry_breakout_scan_api():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-_TMF_BROKERAGE_PER_TRADE = 600  # flat ₹ round-trip brokerage per trade —
+_TMF_BROKERAGE_PER_TRADE = 300  # flat ₹ round-trip brokerage per trade —
                                 # same figure the Live Algo tab costs a real
                                 # round trip at (_TMF_BROKERAGE_PER_TRADE in
                                 # static/js/algo_tmf.js); keep the two in step.
