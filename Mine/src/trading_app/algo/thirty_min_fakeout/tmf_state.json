@@ -1,6 +1,6 @@
 {
   "date": "2026-08-07",
-  "eod_handled": false,
+  "eod_handled": true,
   "stocks": {
     "360ONE": {
       "phase": "no_setup"
@@ -204,13 +204,13 @@
       "phase": "no_setup"
     },
     "JINDALSTEL": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "long",
       "trigger": 1097.1,
       "sl_level": 1092.0,
       "sl_risk": 2320.5,
       "ltp": 1099.4,
-      "ltp_time": "2026-08-07T12:12:34.016565",
+      "ltp_time": "2026-08-07T15:05:00.221657",
       "qty": 455,
       "entry_time": "2026-08-07T11:16:10.839239",
       "entry_placed_ts": 1786081570.8392398,
@@ -223,21 +223,25 @@
           "entry_price": 1097.3334065934064,
           "filled_qty": 455,
           "sl_order_id": "2085603400120459264",
-          "target_order_id": "2085603400653135872"
+          "target_order_id": "2085603400653135872",
+          "closed": true
         }
       ],
       "entry_price": 1097.3334065934064,
       "target_level": 1105.7,
-      "unrealized_pnl": 940.3
+      "exit_time": "2026-08-07T15:05:00.798158",
+      "exit_price": 1099.3004395604394,
+      "exit_reason": "Time Exit",
+      "realized_pnl": 895.0
     },
     "JIOFIN": {
-      "phase": "in_position",
+      "phase": "done",
       "direction": "long",
       "trigger": 260.35,
       "sl_level": 259.1,
       "sl_risk": 2400.0,
-      "ltp": 259.35,
-      "ltp_time": "2026-08-07T12:12:34.016580",
+      "ltp": 259.0,
+      "ltp_time": "2026-08-07T12:14:46.444649",
       "qty": 1920,
       "entry_time": "2026-08-07T11:25:55.086598",
       "entry_placed_ts": 1786082155.0865989,
@@ -250,12 +254,16 @@
           "entry_price": 260.5,
           "filled_qty": 1920,
           "sl_order_id": "2085605840588824576",
-          "target_order_id": "2085605841117306880"
+          "target_order_id": "2085605841117306880",
+          "closed": true
         }
       ],
       "entry_price": 260.5,
       "target_level": 263.35,
-      "unrealized_pnl": -2208.0
+      "exit_time": "2026-08-07T12:14:46.632953",
+      "exit_price": 259.0,
+      "exit_reason": "SL Hit",
+      "realized_pnl": -2880.0
     },
     "JSWSTEEL": {
       "phase": "no_setup"
