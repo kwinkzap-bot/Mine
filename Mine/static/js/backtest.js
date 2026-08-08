@@ -24,6 +24,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Same generation-token pattern for the 30-Min Fakeout optimise.
     let _tmfOptRun   = 0;
     let _tmfOptAbort = null;
+    // Same generation-token pattern for the Scalp Pullback optimise.
+    let _spOptRun    = 0;
+    let _spOptAbort  = null;
 
     // ── Live-algo configs (LIVE badges) ──────────────────────────────────
     // Param sets currently running as live algos. Used to flag the backtest
@@ -415,6 +418,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const emaParamsRow  = document.getElementById('emaPullbackParamsRow');
         const emaLotRow     = document.getElementById('emaPullbackLotRow');
         const emaOptPanel   = document.getElementById('emaOptimisePanel');
+        const spParamsRow   = document.getElementById('scalpPullbackParamsRow');
+        const spLotRow      = document.getElementById('scalpPullbackLotRow');
+        const spOptPanel    = document.getElementById('scalpPullbackOptimisePanel');
         if (smParamsRow)   smParamsRow.style.display   = 'none';
         if (vwapParamsRow) vwapParamsRow.style.display = 'none';
         if (vwapLotRow)    vwapLotRow.style.display    = 'none';
@@ -428,6 +434,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (emaParamsRow)  emaParamsRow.style.display  = 'none';
         if (emaLotRow)     emaLotRow.style.display     = 'none';
         if (emaOptPanel)   emaOptPanel.style.display   = 'none';
+        if (spParamsRow)   spParamsRow.style.display   = 'none';
+        if (spLotRow)      spLotRow.style.display      = 'none';
+        if (spOptPanel)    spOptPanel.style.display    = 'none';
         // Restore symbol/date/interval visibility (hidden for some strategies)
         const symFg      = document.getElementById('mainSymbolFg');
         const intFg      = document.getElementById('mainIntervalFg');
@@ -440,7 +449,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const optBtn         = document.getElementById('runOptimiseBtn');
         const smGoLiveBtn    = document.getElementById('smGoLiveBtn');
-        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle' || val === 'thirty_min_fakeout' || val === 'ema_pullback') ? '' : 'none';
+        if (optBtn)       optBtn.style.display       = (val === 'rtp' || val === 'swing_momentum' || val === 'vwap' || val === 'second_candle' || val === 'thirty_min_fakeout' || val === 'ema_pullback' || val === 'scalp_pullback') ? '' : 'none';
         if (smGoLiveBtn)  smGoLiveBtn.style.display  = (val === 'swing_momentum') ? '' : 'none';
 
         // Hide optimise result panels when switching strategies
@@ -515,6 +524,16 @@ document.addEventListener('DOMContentLoaded', function() {
             if (intFg) intFg.style.display = 'none';
             if (startDateInput) startDateInput.value = '2017-01-01';
             updateEmaInvestment();
+
+        } else if (val === 'scalp_pullback') {
+            if (spParamsRow) spParamsRow.style.display = 'grid';
+            if (spLotRow)    spLotRow.style.display    = 'grid';
+            // The video teaches this on 2-minute candles; 3/5 also work, so the
+            // Timeframe picker stays visible.
+            if (intFg) intFg.style.display = '';
+            if (intervalSelect) intervalSelect.value = '2minute';
+            if (startDateInput) startDateInput.value = '2017-01-01';
+            updateSpInvestment();
         }
 
         // "All Stocks" only exists for EMA Confluence Breakout — every other
@@ -554,6 +573,14 @@ document.addEventListener('DOMContentLoaded', function() {
         const lots  = Math.max(1, parseInt(document.getElementById('scLots')?.value || 1));
         const total = lots * 50000;
         const el = document.getElementById('scInvestmentDisplay');
+        if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
+    };
+
+    // 2-Min EMA Scalp Pullback investment display
+    window.updateSpInvestment = function() {
+        const lots  = Math.max(1, parseInt(document.getElementById('spLots')?.value || 1));
+        const total = lots * 50000;
+        const el = document.getElementById('spInvestmentDisplay');
         if (el) el.textContent = '₹' + total.toLocaleString('en-IN');
     };
 
@@ -667,6 +694,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // backtest run, but collapse their grids so the results take focus.
         setCollapsed(document.querySelector('#rtpOptimisePanel .opt-header'), true);
         setCollapsed(document.querySelector('#secondCandleOptimisePanel .opt-header'), true);
+        setCollapsed(document.querySelector('#scalpPullbackOptimisePanel .opt-header'), true);
         if (smOptPanel)     smOptPanel.style.display     = 'none';
         if (vwapOptPanel2)  vwapOptPanel2.style.display  = 'none';
         if (tmfOptPanel2)   tmfOptPanel2.style.display   = 'none';
@@ -695,6 +723,24 @@ document.addEventListener('DOMContentLoaded', function() {
                 const dir = document.getElementById('scDirection')?.value || 'both';
                 payload.enable_long  = dir !== 'short';
                 payload.enable_short = dir !== 'long';
+            }
+
+            // 2-Min EMA Scalp Pullback
+            if (strat === 'scalp_pullback') {
+                endpoint = '/api/backtest/scalp-pullback';
+                payload.interval      = document.getElementById('interval')?.value || '2minute';
+                payload.touch_level   = document.getElementById('spTouchLevel')?.value || 'ema20';
+                payload.rr_ratio      = parseFloat(document.getElementById('spRrRatio')?.value || 2);
+                // 0 is meaningful here — it lifts the stop-width ceiling entirely.
+                payload.max_sl_points = parseFloat(document.getElementById('spMaxSl')?.value ?? 18);
+                payload.max_trades_per_day = parseInt(document.getElementById('spMaxTrades')?.value || 3);
+                payload.entry_cutoff  = document.getElementById('spEntryCutoff')?.value || '11:30';
+                payload.exit_cutoff   = document.getElementById('spExitCutoff')?.value || '15:15';
+                payload.direction     = document.getElementById('spDirection')?.value || 'both';
+                payload.require_sl_hunt = document.getElementById('spRequireSlHunt')?.checked ?? true;
+                payload.first_trade_three_candle = document.getElementById('spFirstThreeCandle')?.checked ?? true;
+                const spTrail = document.getElementById('spTrailSl')?.value;
+                if (spTrail) payload.trail_points = parseFloat(spTrail);
             }
 
             // 30-Min Opening Fakeout breakdown/breakout
@@ -965,9 +1011,12 @@ document.addEventListener('DOMContentLoaded', function() {
         // so it takes the same ₹ cards/columns instead of the points ones.
         const isEmaAll = !!(isEma && summary && summary.multi_symbol);
         const isMultiSymbol = isTmf || isEmaAll;
-        // 2nd-candle / EMA Pullback reuse the VWAP-style ₹ cards, each reading their own lot inputs.
-        const moneyLotsId    = isSc ? 'scLots'     : (isEma ? 'emaLots'     : 'vwapLots');
-        const moneyLotValId  = isSc ? 'scLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue');
+        // Scalp Pullback is single-symbol and points-based like the 2nd-candle
+        // breakout, so it takes the same ₹ cards off its own lot inputs.
+        const isSp   = strategySelect && strategySelect.value === 'scalp_pullback';
+        // 2nd-candle / Scalp Pullback / EMA Pullback reuse the VWAP-style ₹ cards, each reading their own lot inputs.
+        const moneyLotsId    = isSc ? 'scLots'     : (isSp ? 'spLots'     : (isEma ? 'emaLots'     : 'vwapLots'));
+        const moneyLotValId  = isSc ? 'scLotValue' : (isSp ? 'spLotValue' : (isEma ? 'emaLotValue' : 'vwapLotValue'));
         lastData.is_multi_symbol = isMultiSymbol;
 
         if (isSM) {
@@ -1075,7 +1124,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     subtitle.textContent = info;
                 }
             }
-        } else if ((isVwap || isSc || (isEma && !isEmaAll)) && rtpRow) {
+        } else if ((isVwap || isSc || isSp || (isEma && !isEmaAll)) && rtpRow) {
             rtpRow.style.display = '';
 
             document.getElementById('statProfitFactor').textContent =
@@ -1164,13 +1213,13 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // Equity curve + period breakdown
-        const lots2     = (isVwap || isSc || isEma)
+        const lots2     = (isVwap || isSc || isSp || isEma)
             ? Math.max(1, parseInt(document.getElementById(moneyLotsId)?.value      || 1))
             : Math.max(1, parseInt(document.getElementById('rtpLots')?.value       || 1));
-        const lotValue2 = (isVwap || isSc || isEma)
+        const lotValue2 = (isVwap || isSc || isSp || isEma)
             ? Math.max(1, parseFloat(document.getElementById(moneyLotValId)?.value  || 65))
             : Math.max(1, parseFloat(document.getElementById('rtpLotValue')?.value  || 75));
-        const isMoney     = isRtp || isVwap || isSc || isTmf || isEma;
+        const isMoney     = isRtp || isVwap || isSc || isSp || isTmf || isEma;
         // Each multi-symbol trade already carries its own sized pnl_rupees —
         // renderEquityCurve/groupByPeriod use that directly when present,
         // ignoring lots2/lotValue2.
@@ -2414,6 +2463,193 @@ document.addEventListener('DOMContentLoaded', function() {
     const scRecalcBtn = document.getElementById('scRecalcOptBtn');
     if (scRecalcBtn) scRecalcBtn.addEventListener('click', () => runScOptimise(true));
 
+    // ── Scalp Pullback Optimise (Find Best Params) — one grid per timeframe ───
+    // Same shape as the Candle Breakout sweep above. No Live column: this
+    // strategy is backtest-only, with no live algo to badge rows against.
+    function _spOptMoney() {
+        const lots     = Math.max(1, parseInt(document.getElementById('spLots')?.value    || 1));
+        const lotValue = Math.max(1, parseFloat(document.getElementById('spLotValue')?.value || 65));
+        return { lots, lotValue };
+    }
+    function _spOptBrokerage(r, lots) { return calcBrokeragePerTrade(lots) * (r.total_trades || 0); }
+    function _spOptNetRs(r, lots, lotValue) { return (r.total_pnl || 0) * lotValue * lots - _spOptBrokerage(r, lots); }
+
+    const SP_OPT_COLS = [
+        { label: '#',             key: null,            fmt: (r, i) => i + 1 },
+        { label: 'Pullback To',   key: 'touch_level',   fmt: r => r.touch_level === 'ema20' ? '20 EMA' : (r.touch_level === 'ema10' ? '10 EMA' : 'Either') },
+        { label: 'Dir',           key: 'direction',     fmt: r => `<span style="white-space:nowrap">${r.direction}</span>` },
+        { label: 'SL:Target',     key: 'rr_ratio',      fmt: r => `1:${r.rr_ratio}` },
+        { label: 'Max SL',        key: 'max_sl_points', fmt: r => r.max_sl_points ? `${r.max_sl_points} pts` : 'off' },
+        { label: 'SL Hunt',       key: 'require_sl_hunt', fmt: r => r.require_sl_hunt ? 'on' : 'off' },
+        { label: 'Cut-off',       key: 'entry_cutoff',  fmt: r => r.entry_cutoff },
+        { label: 'Trades',        key: 'total_trades',  fmt: r => r.total_trades },
+        { label: 'Win%',          key: 'win_rate',      fmt: r => `${r.total_trades > 0 ? ((r.wins / r.total_trades) * 100).toFixed(0) : '0'}%` },
+        { label: 'Net P&L (pts)', key: 'total_pnl',     fmt: r => `<span class="${r.total_pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(r.total_pnl >= 0 ? '+' : '') + r.total_pnl.toFixed(1)} pts</span>` },
+        { label: 'Net P&L (₹)',   key: 'net_pnl_inr',   fmt: r => { const { lots, lotValue } = _spOptMoney(); const v = _spOptNetRs(r, lots, lotValue); return `<span class="${v >= 0 ? 'pnl-positive' : 'pnl-negative'}">${(v >= 0 ? '+' : '') + '₹' + Math.round(v).toLocaleString('en-IN')}</span>`; } },
+        { label: 'Brokerage (₹)', key: 'brokerage_inr', fmt: r => { const { lots } = _spOptMoney(); const b = _spOptBrokerage(r, lots); return `<span class="pnl-negative">-₹${Math.round(b).toLocaleString('en-IN')}</span>`; } },
+        { label: 'Prof. Factor',  key: 'profit_factor', fmt: r => (r.profit_factor || 0).toFixed(2) },
+        { label: 'Max DD',        key: 'max_drawdown',  fmt: r => `<span class="pnl-negative">${r.max_drawdown != null ? r.max_drawdown.toFixed(1) : '—'}</span>` },
+        { label: '',              key: null,            fmt: () => '' },   // Use button
+    ];
+
+    let _spOptGroupsByTf = {};
+
+    function renderSpOptResults(data) {
+        const panel     = document.getElementById('scalpPullbackOptimisePanel');
+        const container = document.getElementById('spOptGrids');
+        const metaEl    = document.getElementById('spOptMeta');
+        const recalcBtn = document.getElementById('spRecalcOptBtn');
+
+        if (metaEl) {
+            let meta = `${data.total_combos_tested} combos · ${data.symbol} · ${data.interval}`;
+            if (data.from_cache && data.cached_at) meta += ` · cached ${data.cached_at}`;
+            metaEl.textContent = meta;
+        }
+
+        _renderOptTfGrids(container, data.timeframes || [], SP_OPT_COLS, {
+            idPrefix: 'spOptGrid',
+            isLive: () => false,
+            applyFn: applySpOptResult,
+            stateStore: _spOptGroupsByTf,
+            derivedSort: {
+                win_rate: r => r.total_trades ? r.wins / r.total_trades : 0,
+                net_pnl_inr: r => { const { lots, lotValue } = _spOptMoney(); return _spOptNetRs(r, lots, lotValue); },
+                brokerage_inr: r => { const { lots } = _spOptMoney(); return _spOptBrokerage(r, lots); },
+            },
+        });
+
+        if (panel)     panel.style.display     = '';
+        if (recalcBtn) recalcBtn.style.display = '';
+        if (data.best) applySpOptResult(data.best);
+    }
+
+    function cancelSpOptimise() {
+        _spOptRun += 1;
+        if (_spOptAbort) {
+            try { _spOptAbort.abort(); } catch (e) { /* noop */ }
+            _spOptAbort = null;
+        }
+    }
+
+    async function runSpOptimise(recalculate) {
+        const symbol = symbolSearch.value.trim().toUpperCase();
+        if (!symbol) { window.showNotification('Please select a symbol', 'warning'); return; }
+
+        const panel     = document.getElementById('scalpPullbackOptimisePanel');
+        const recalcBtn = document.getElementById('spRecalcOptBtn');
+        const optimBtn  = document.getElementById('runOptimiseBtn');
+        const activeBtn = recalculate ? recalcBtn : optimBtn;
+        const origText  = activeBtn ? activeBtn.textContent : '';
+        if (activeBtn) { activeBtn.textContent = '⏳ Running…'; activeBtn.disabled = true; }
+        if (panel) panel.style.display = 'none';
+
+        cancelSpOptimise();
+        const myRun      = _spOptRun;
+        const controller = new AbortController();
+        _spOptAbort      = controller;
+
+        try {
+            const resp = await fetch('/api/backtest/scalp-pullback/optimise', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
+                body: JSON.stringify({
+                    symbol,
+                    start_date:  document.getElementById('startDate').value,
+                    end_date:    document.getElementById('endDate').value,
+                    // Not part of the swept grid, so the sweep has to score
+                    // under the same values the single run uses. Max SL is
+                    // NOT sent — the grid sweeps it, since the right stop
+                    // width depends on the index's own scale.
+                    exit_cutoff:  document.getElementById('spExitCutoff')?.value || '15:15',
+                    max_trades_per_day: parseInt(document.getElementById('spMaxTrades')?.value || 3),
+                    trail_points: parseFloat(document.getElementById('spTrailSl')?.value) || null,
+                    recalculate: recalculate,
+                })
+            });
+            const data = await resp.json();
+            if (myRun !== _spOptRun) return; // superseded
+            if (!data.success) {
+                window.showNotification(data.error || 'Optimisation failed', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            if (data.from_cache) {
+                _spOptAbort = null;
+                renderSpOptResults(data);
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            _pollSpOptimise(data.task_id, activeBtn, origText, Date.now(), myRun);
+        } catch (err) {
+            if (err && err.name === 'AbortError') return;
+            console.error('Scalp Pullback optimise error:', err);
+            window.showNotification('Optimisation request failed', 'error');
+            if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+        }
+    }
+
+    function _pollSpOptimise(taskId, activeBtn, origText, startMs, myRun) {
+        const MAX_WAIT_MS = 10 * 60 * 1000;
+        function tick() {
+            if (myRun !== _spOptRun) return;
+            const elapsed = Math.round((Date.now() - startMs) / 1000);
+            if (activeBtn) activeBtn.textContent = `⏳ ${elapsed}s…`;
+            if (Date.now() - startMs > MAX_WAIT_MS) {
+                window.showNotification('Optimisation timed out — try a shorter date range', 'error');
+                if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                return;
+            }
+            fetch(`/api/backtest/scalp-pullback/optimise/status/${taskId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (myRun !== _spOptRun) return;
+                    if (data.status === 'running') { setTimeout(tick, 2000); return; }
+                    _spOptAbort = null;
+                    if (activeBtn) { activeBtn.textContent = origText; activeBtn.disabled = false; }
+                    if (!data.success || data.status === 'error') {
+                        window.showNotification(data.error || 'Optimisation failed', 'error');
+                        return;
+                    }
+                    renderSpOptResults(data);
+                })
+                .catch(err => {
+                    if (myRun !== _spOptRun) return;
+                    console.error('Scalp Pullback poll error:', err);
+                    setTimeout(tick, 3000);
+                });
+        }
+        setTimeout(tick, 2000);
+    }
+
+    function applySpOptResult(r) {
+        const touch = document.getElementById('spTouchLevel');
+        const rr    = document.getElementById('spRrRatio');
+        const dir   = document.getElementById('spDirection');
+        const hunt  = document.getElementById('spRequireSlHunt');
+        const cut   = document.getElementById('spEntryCutoff');
+        const maxSl = document.getElementById('spMaxSl');
+        const intervalSel = document.getElementById('interval');
+        if (touch) touch.value = r.touch_level;
+        if (rr)    rr.value    = r.rr_ratio;
+        if (dir)   dir.value   = r.direction;
+        if (hunt)  hunt.checked = !!r.require_sl_hunt;
+        if (cut && r.entry_cutoff) cut.value = r.entry_cutoff;
+        if (maxSl && r.max_sl_points != null) maxSl.value = r.max_sl_points;
+        // Winning timeframe → main interval dropdown, so a follow-up single
+        // backtest reproduces the optimised run.
+        if (intervalSel && r.interval) intervalSel.value = r.interval;
+        if (window.showNotification) {
+            const tfStr = r.tf_label ? `${r.tf_label} · ` : '';
+            window.showNotification(
+                `Applied: ${tfStr}${r.touch_level}  ·  1:${r.rr_ratio}  ·  ${r.direction}  ·  Win% ${((r.wins / r.total_trades) * 100).toFixed(0)}%`, 'success'
+            );
+        }
+    }
+
+    const spRecalcBtn = document.getElementById('spRecalcOptBtn');
+    if (spRecalcBtn) spRecalcBtn.addEventListener('click', () => runSpOptimise(true));
+
     // ── 30-Min Opening Fakeout Optimise ──────────────────────────────────
     // Sweeps Direction × SL/Target-Confirm × the 3 boolean pattern filters
     // (48 combos) across the full F&O stock universe — no per-symbol/
@@ -2617,6 +2853,7 @@ document.addEventListener('DOMContentLoaded', function() {
         else if (strat === 'second_candle') runScOptimise(false);
         else if (strat === 'thirty_min_fakeout') runTmfOptimise(false);
         else if (strat === 'ema_pullback') runEmaOptimise(false);
+        else if (strat === 'scalp_pullback') runSpOptimise(false);
         else                            runOptimise(false);
     });
     if (recalcOptBtn) recalcOptBtn.addEventListener('click', () => runOptimise(true));

@@ -26,6 +26,7 @@
                 <option value="thirty_min_fakeout">⏱️ 30-Min Opening Fakeout</option>
                 <option value="swing_momentum">📊 Swing Momentum Portfolio</option>
                 <option value="ema_pullback" selected>📉 EMA Confluence Breakout</option>
+                <option value="scalp_pullback">⚡ 2-Min EMA Scalp Pullback</option>
             </select>
             <button id="runBacktestBtn" class="btn-run" style="width:auto;margin:0;padding:8px 20px;font-size:12px;letter-spacing:.6px;">BACKTEST</button>
             <button id="runOptimiseBtn" class="btn-optimise" style="display:none;">⚡ Find Best Params</button>
@@ -236,6 +237,86 @@
                 <div class="form-group">
                     <label>Total Investment</label>
                     <div id="scInvestmentDisplay" class="investment-display">₹50,000</div>
+                </div>
+            </div>
+
+            <!-- 2-Min EMA Scalp Pullback params — see
+                 src/trading_app/Backtest/scalp_pullback_engine.py for the rule
+                 list each of these maps onto. -->
+            <div id="scalpPullbackParamsRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="spTouchLevel">Pullback To</label>
+                    <select id="spTouchLevel" title="Which moving average price must come back to. The video's own added filter is to take the trade at the 20 EMA, not the 10.">
+                        <option value="ema20" selected>20 EMA</option>
+                        <option value="ema10">10 EMA</option>
+                        <option value="either">Either EMA</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="spRrRatio">SL : Target</label>
+                    <select id="spRrRatio">
+                        <option value="1">1 : 1</option>
+                        <option value="1.5">1 : 1.5</option>
+                        <option value="2" selected>1 : 2</option>
+                        <option value="2.5">1 : 2.5</option>
+                        <option value="3">1 : 3</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="spMaxSl">Max SL (spot pts)</label>
+                    <input type="number" id="spMaxSl" value="30" min="0" step="1"
+                           title="Skip any setup whose stop is wider than this, in INDEX points. The video's 15–18 points is quoted on the ITM option premium at delta 0.55–0.6, which is ~30 index points on NIFTY — BANKNIFTY/SENSEX need more. Let Find Best Params tune it per symbol. 0 = no ceiling.">
+                </div>
+                <div class="form-group">
+                    <label for="spTrailSl">Trail SL (pts)</label>
+                    <input type="number" id="spTrailSl" placeholder="Off" min="1" step="1"
+                           style="font-style:italic;" oninput="this.style.fontStyle=this.value?'normal':'italic'">
+                </div>
+                <div class="form-group">
+                    <label for="spMaxTrades">Max Trades/Day</label>
+                    <input type="number" id="spMaxTrades" value="3" min="1" max="10" step="1"
+                           title="The video's rule: plan three entries a day, no more.">
+                </div>
+                <div class="form-group">
+                    <label for="spEntryCutoff">Entry Cut-off</label>
+                    <input type="time" id="spEntryCutoff" value="11:30"
+                           title="No new entries at or after this time — scalping past 11:30–12:00 turns into random trades.">
+                </div>
+                <div class="form-group">
+                    <label for="spExitCutoff">Exit Cut-off</label>
+                    <input type="time" id="spExitCutoff" value="15:15">
+                </div>
+                <div class="form-group">
+                    <label for="spDirection">Direction</label>
+                    <select id="spDirection">
+                        <option value="both" selected>Buy &amp; Sell</option>
+                        <option value="long">Buy only</option>
+                        <option value="short">Sell only</option>
+                    </select>
+                </div>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="spRequireSlHunt" checked>
+                    <label for="spRequireSlHunt" title="Only enter after price has swept a prior swing low/high or the 50% level of the recent impulse leg — the video's 'weak money must go first' rule.">SL Hunt</label>
+                </div>
+                <div class="form-group form-check-group">
+                    <input type="checkbox" id="spFirstThreeCandle" checked>
+                    <label for="spFirstThreeCandle" title="Restrict the day's FIRST entry to the 3-candle Morning/Evening Star; later entries may also use a 2-candle engulfing.">3-Candle 1st</label>
+                </div>
+            </div>
+
+            <!-- Scalp Pullback position sizing -->
+            <div id="scalpPullbackLotRow" class="form-row" style="display:none">
+                <div class="form-group">
+                    <label for="spLots">Lots</label>
+                    <input type="number" id="spLots" value="1" min="1" max="50" step="1" oninput="updateSpInvestment()">
+                </div>
+                <div class="form-group">
+                    <label for="spLotValue">Lot Value (₹/pt)</label>
+                    <input type="number" id="spLotValue" value="65" min="1" step="1" oninput="updateSpInvestment()">
+                </div>
+                <div class="form-group">
+                    <label>Total Investment</label>
+                    <div id="spInvestmentDisplay" class="investment-display">₹50,000</div>
                 </div>
             </div>
 
@@ -631,6 +712,19 @@
                 </div>
                 <!-- One sortable grid per timeframe, built by renderScOptResults() -->
                 <div id="scOptGrids"></div>
+            </div>
+
+            <!-- Scalp Pullback Optimise results panel — one grid per timeframe -->
+            <div id="scalpPullbackOptimisePanel" style="display:none;">
+                <div class="opt-header" data-collapse="#spOptGrids">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h4 style="margin:0;">⚡ Scalp Pullback Best Params</h4>
+                        <button id="spRecalcOptBtn" class="btn-recalculate" style="display:none;">↻ Recalculate</button>
+                    </div>
+                    <small id="spOptMeta"></small>
+                </div>
+                <!-- One sortable grid per timeframe, built by renderSpOptResults() -->
+                <div id="spOptGrids"></div>
             </div>
 
             <!-- 30-Min Opening Fakeout Optimise results panel — flat grid, no
