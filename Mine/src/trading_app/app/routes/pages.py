@@ -100,6 +100,13 @@ def oi_profile():
     """OI Profile – NIFTY candlestick chart + OI profile bars."""
     return render_template('oi_profile.html')
 
+@pages_bp.route('/oi-crossover')
+@require_user_auth
+@login_required
+def oi_crossover():
+    """OI Crossover scanner – symbols whose CE/PE OI-change lines crossed today."""
+    return render_template('oi_crossover.html')
+
 @pages_bp.route('/ema-rsi-filter')
 @require_user_auth
 @login_required
@@ -125,14 +132,18 @@ def backtest():
 @require_user_auth
 @login_required
 def contracts():
-    """Active Contracts page."""
+    """Active Contracts — a Dashboard tab; only served standalone when embedded."""
+    if not request.args.get('embed'):
+        return redirect(url_for('pages.dashboard') + '#contracts')
     return render_template('contracts.html')
 
 @pages_bp.route('/historic-oi')
 @require_user_auth
 @login_required
 def historic_oi():
-    """Historic OI page."""
+    """Historic OI — a Dashboard tab; only served standalone when embedded."""
+    if not request.args.get('embed'):
+        return redirect(url_for('pages.dashboard') + '#historic-oi')
     return render_template('historic_oi.html')
 
 @pages_bp.route('/replay')

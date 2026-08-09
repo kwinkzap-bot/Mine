@@ -1,0 +1,454 @@
+/* ================================================================
+   OI Crossover scanner.
+
+   Table styling comes from components/data-grid.css — this file only
+   dresses what the grid doesn't own: the filter bar, the drilldown chart,
+   and the direction accent on each row. Colours resolve through the
+   --pf-* set that .sw-wrap defines per theme, so the page follows the
+   theme switcher without a per-theme block of its own.
+   ================================================================ */
+
+.oix-page {
+    padding-bottom: 24px;
+}
+
+/* ── Topbar extras ────────────────────────────────────────────── */
+
+.oix-search {
+    width: 190px;
+    padding: 5px 10px;
+    font-size: 12px;
+    color: var(--pf-text);
+    background: var(--pf-surface, var(--color-surface));
+    border: 1px solid var(--pf-border);
+    border-radius: 6px;
+    outline: none;
+}
+.oix-search:focus {
+    border-color: var(--pf-accent);
+}
+
+.oix-asof {
+    font-size: 11px;
+    color: var(--pf-text-3);
+    white-space: nowrap;
+}
+
+.oix-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--pf-text-3);
+    flex: 0 0 auto;
+}
+.oix-dot-ok   { background: var(--color-pos); }
+.oix-dot-idle { background: var(--color-warning); }
+.oix-dot-err  { background: var(--color-neg); }
+
+/* ── Filter bar ───────────────────────────────────────────────── */
+
+.oix-filters {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 9px 12px;
+    margin-bottom: 10px;
+    background: var(--pf-row-alt, var(--color-surface));
+    border: 1px solid var(--pf-border);
+    border-radius: 8px;
+}
+
+.oix-flabel {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--pf-text-2);
+}
+
+.oix-select {
+    padding: 5px 8px;
+    font-size: 12px;
+    color: var(--pf-text);
+    background: var(--pf-surface, var(--color-surface));
+    border: 1px solid var(--pf-border);
+    border-radius: 6px;
+    cursor: pointer;
+    outline: none;
+}
+.oix-select:focus {
+    border-color: var(--pf-accent);
+}
+
+.oix-mode {
+    display: inline-flex;
+    border: 1px solid var(--pf-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.oix-mode-btn {
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--pf-text-2);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+.oix-mode-btn.active {
+    color: var(--pf-accent);
+    background: var(--color-accent-dim);
+}
+
+.oix-count {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--pf-text-3);
+}
+
+/* ── Rows ─────────────────────────────────────────────────────── */
+
+/* A left edge in the direction's colour, so a column of BULL/BEAR reads
+   at a glance without the badge having to carry the whole signal. */
+.oix-row > td:first-child {
+    border-left: 3px solid transparent;
+}
+.oix-bull > td:first-child { border-left-color: var(--color-pos); }
+.oix-bear > td:first-child { border-left-color: var(--color-neg); }
+
+.oix-row { cursor: pointer; }
+.oix-row-open { background: var(--color-accent-dim); }
+
+.oix-sym {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+.oix-chart-hint {
+    font-size: 10px;
+    font-style: normal;
+    opacity: 0;
+    transition: opacity .15s;
+}
+.oix-row:hover .oix-chart-hint,
+.oix-row-open .oix-chart-hint { opacity: .65; }
+
+/* ── Drilldown ────────────────────────────────────────────────── */
+
+/* Docked to the bottom of the viewport. Stepping through symbols with ‹ ›
+   keeps the chart in exactly the same place, and the table stays readable
+   above it — an inline panel pushed the page around on every step. */
+.oix-drill {
+    /* The panel is portalled to <body>, so it sits outside .sw-wrap where
+       dashboard.css declares the --pf-* tokens. Redeclare them here from the
+       --color-* set, which theme.css puts on :root and re-points per theme.
+       Only --pf-text-2 needs a literal: .sw-wrap hardcodes it light/dark
+       rather than aliasing a --color-* token. */
+    --pf-surface:    var(--color-surface);
+    --pf-border:     var(--color-border);
+    --pf-text:       var(--color-text);
+    --pf-text-2:     #64748b;
+    --pf-text-3:     var(--color-text-3);
+    --pf-accent:     var(--color-accent);
+    --pf-row-alt:    var(--color-bg);
+
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    background: var(--pf-surface, var(--color-surface));
+    border-top: 1px solid var(--pf-border);
+    border-radius: 10px 10px 0 0;
+    box-shadow: 0 -6px 28px rgba(0, 0, 0, .18);
+}
+/* Mirrors the per-theme --pf-text-2 literals in dashboard.css's .sw-wrap
+   blocks. If those change, these follow. */
+body.dark-theme   .oix-drill { --pf-text-2: #94a3b8; }
+body.forest-theme .oix-drill { --pf-text-2: #6ba88f; }
+body.cream-theme  .oix-drill { --pf-text-2: #9b7a52; }
+body.ocean-theme  .oix-drill { --pf-text-2: #475569; }
+
+/* Room to scroll the last table rows clear of the docked panel. */
+body.oix-drill-open .oix-page { padding-bottom: 430px; }
+
+.oix-drill-hdr {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--pf-border);
+}
+.oix-drill-sym {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--pf-text);
+}
+/* Stand-in for the broker logos the reference shows — we have no logo
+   assets, and a lettered chip is honest rather than a broken image. */
+.oix-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+    font-style: normal;
+    font-weight: 700;
+    color: #fff;
+    background: var(--pf-accent);
+    border-radius: 50%;
+}
+
+.oix-drill-nav {
+    display: inline-flex;
+    margin-left: auto;
+    border: 1px solid var(--pf-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.oix-drill-nav button {
+    padding: 2px 10px;
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--pf-text-2);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+.oix-drill-nav button + button { border-left: 1px solid var(--pf-border); }
+.oix-drill-nav button:disabled { opacity: .3; cursor: default; }
+
+.oix-tabs {
+    display: inline-flex;
+    margin-right: auto;
+    padding: 2px;
+    background: var(--pf-row-alt, var(--color-bg));
+    border: 1px solid var(--pf-border);
+    border-radius: 7px;
+}
+.oix-tabs button {
+    padding: 3px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--pf-text-2);
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+}
+.oix-tabs button.active {
+    color: var(--pf-text);
+    background: var(--pf-surface, var(--color-surface));
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
+}
+.oix-drill-close {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--pf-text-3);
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+/* Positioning context for the crosshair's date tag, which is a real DOM
+   element rather than SVG text so it can size itself to its content. */
+.oix-drill-body {
+    position: relative;
+    padding: 8px 14px 10px;
+}
+
+.oix-drill-empty {
+    padding: 28px 0;
+    font-size: 12px;
+    color: var(--pf-text-3);
+    text-align: center;
+}
+
+.oix-drill-note {
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--pf-text-3);
+}
+
+/* ── Chart legend + crosshair readout ─────────────────────────── */
+
+.oix-legend {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+}
+
+.oix-leg {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px 2px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--pf-text-2);
+    background: transparent;
+    border: 1px solid var(--pf-border);
+    border-radius: 11px;
+    cursor: pointer;
+}
+.oix-leg-key {
+    width: 12px;
+    height: 0;
+    border-top: 2px solid currentColor;
+}
+.oix-leg-price .oix-leg-key { color: var(--pf-text-2); border-top-style: dotted; }
+.oix-leg-ce    .oix-leg-key { color: var(--color-pos); }
+.oix-leg-pe    .oix-leg-key { color: var(--color-neg); }
+.oix-leg-pcr   .oix-leg-key { color: var(--color-special); }
+
+/* Hidden series stay legible — dimmed and struck through, not greyed to
+   the point where you can't read which one you switched off. */
+.oix-leg-off {
+    opacity: .45;
+    text-decoration: line-through;
+}
+
+.oix-eye { font-size: 9px; line-height: 1; }
+
+/* Sized in real pixels by the renderer, so no viewBox stretching and no
+   distorted axis labels. */
+.oix-svg { display: block; }
+
+.oix-line {
+    fill: none;
+    stroke-width: 1.5;
+}
+/* Green calls, red puts — matching the reference. Note this is the opposite
+   of the row badges, where green means BULL: a BULL cross is puts leading,
+   so its green badge sits above a red line. The chart legend names each
+   line, which is what disambiguates it. */
+.oix-line-ce { stroke: var(--color-pos); }
+.oix-line-pe { stroke: var(--color-neg); }
+.oix-line-pcr { stroke: var(--color-special); }
+
+.oix-grid {
+    stroke: var(--pf-border);
+    opacity: .45;
+    stroke-width: 1;
+}
+.oix-frame {
+    fill: none;
+    stroke: var(--pf-border);
+    stroke-width: 1;
+    opacity: .7;
+}
+
+/* Price is context, not the signal — dotted and thin so it reads behind
+   the two OI lines the screen is actually about. Uses --pf-text-2 rather
+   than the dimmer --pf-text-3 the axis labels take: text-3 is #475569 in
+   dark mode, which all but vanishes as a 1px dotted line on #090e17. */
+.oix-line-price {
+    stroke: var(--pf-text-2);
+    stroke-width: 1;
+    stroke-dasharray: 2 2;
+    opacity: .85;
+}
+
+.oix-mark {
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    opacity: .5;
+}
+.oix-mark-bull { stroke: var(--color-pos); }
+.oix-mark-bear { stroke: var(--color-neg); }
+
+.oix-axis {
+    font-size: 10px;
+    fill: var(--pf-text-3);
+}
+.oix-axis-t { font-weight: 600; }
+
+/* Last-value tags: dot on the line, rule across to the axis, value chip. */
+.oix-tag circle { stroke: none; }
+.oix-tag-rule {
+    stroke-width: 1;
+    stroke-dasharray: 4 4;
+    opacity: .5;
+}
+.oix-tag text {
+    font-size: 10px;
+    font-weight: 700;
+    fill: #fff;
+}
+.oix-tag-price circle, .oix-tag-price rect { fill: var(--pf-text-2); }
+.oix-tag-price .oix-tag-rule { stroke: var(--pf-text-2); }
+.oix-tag-ce circle, .oix-tag-ce rect { fill: var(--color-pos); }
+.oix-tag-ce .oix-tag-rule { stroke: var(--color-pos); }
+.oix-tag-pe circle, .oix-tag-pe rect { fill: var(--color-neg); }
+.oix-tag-pe .oix-tag-rule { stroke: var(--color-neg); }
+.oix-tag-pcr circle, .oix-tag-pcr rect { fill: var(--color-special); }
+.oix-tag-pcr .oix-tag-rule { stroke: var(--color-special); }
+
+/* Solid, unlike the dashed crossover markers — the two are on screen at
+   once and must not read as the same thing. */
+.oix-cross-line {
+    stroke: var(--pf-text-2);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+}
+.oix-cross-dot { stroke: var(--pf-surface, #fff); stroke-width: 1.5; }
+.oix-dot-price { fill: var(--pf-text-2); }
+.oix-dot-ce    { fill: var(--color-pos); }
+.oix-dot-pe    { fill: var(--color-neg); }
+.oix-dot-pcr   { fill: var(--color-special); }
+
+/* Transparent capture surface for the crosshair — the lines themselves are
+   too thin to hit reliably with a pointer. */
+.oix-hit {
+    fill: transparent;
+    cursor: crosshair;
+}
+
+/* Date/time tag riding the bottom axis under the crosshair. */
+.oix-tip {
+    position: absolute;
+    bottom: 22px;
+    transform: translateX(-50%);
+    padding: 3px 9px;
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+    color: #fff;
+    background: #111827;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+/* ── About ────────────────────────────────────────────────────── */
+
+.oix-about {
+    margin-top: 16px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--pf-text-2);
+    background: var(--pf-row-alt, var(--color-surface));
+    border: 1px solid var(--pf-border);
+    border-radius: 8px;
+}
+.oix-about summary {
+    font-weight: 600;
+    color: var(--pf-text);
+    cursor: pointer;
+}
+.oix-about p { margin: 10px 0 0; }
+.oix-bull { color: var(--color-pos); }
+.oix-bear { color: var(--color-neg); }
+
+/* ── Narrow screens ───────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+    .oix-search { width: 100%; order: 3; }
+    .oix-count { margin-left: 0; }
+    .oix-svg { height: 200px; }
+}

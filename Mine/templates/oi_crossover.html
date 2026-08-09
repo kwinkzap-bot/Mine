@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}OI Crossover{% endblock %}
+{% block head %}
+{{ super() }}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ sv('css/dashboard.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/oi_crossover.css') }}?v={{ sv('css/oi_crossover.css') }}">
+{% endblock %}
+{% block content %}
+<div class="sw-wrap oix-page">
+
+  <div class="sw-topbar">
+    <span class="sw-title">🔀 OI Crossover</span>
+    <input type="search" id="oixSearch" class="oix-search" placeholder="Search symbol…" autocomplete="off">
+    <button class="sw-refresh-btn" id="oixExport" title="Download CSV">⬇ CSV</button>
+    <span class="oix-asof" id="oixAsOf">—</span>
+    <span class="oix-dot" id="oixDot" title="Scan status"></span>
+  </div>
+
+  <div class="oix-filters">
+    <span class="oix-flabel">Mode:</span>
+    <div class="oix-mode">
+      <button class="oix-mode-btn active" data-mode="live">Live</button>
+      <button class="oix-mode-btn" data-mode="historical">Historical</button>
+    </div>
+    <div class="oix-date-wrap" id="oixDateWrap" hidden>
+      <select id="oixDate" class="oix-select"></select>
+    </div>
+
+    <select id="oixQuality" class="oix-select">
+      <option value="all">All Crossovers</option>
+      <option value="strong">Strong (Both)</option>
+      <option value="aggressive">Aggressive (+OI)</option>
+      <option value="covering">Covering (-OI)</option>
+    </select>
+
+    <select id="oixCrossCount" class="oix-select">
+      <option value="0">Any Cross</option>
+      <option value="1">Single Cross</option>
+      <option value="2">Max 2 Cross</option>
+      <option value="3">Max 3 Cross</option>
+    </select>
+
+    <select id="oixOiChg" class="oix-select">
+      <option value="0">Any OI Chg</option>
+      <option value="1">&gt; 1% OI Chg</option>
+      <option value="2">&gt; 2% OI Chg</option>
+      <option value="5">&gt; 5% OI Chg</option>
+      <option value="10">&gt; 10% OI Chg</option>
+    </select>
+
+    <span class="oix-flabel">Sector:</span>
+    <select id="oixSector" class="oix-select">
+      <option value="all">All</option>
+    </select>
+
+    <span class="oix-count" id="oixCount"></span>
+  </div>
+
+  <div id="oixGrid"></div>
+
+  <!-- Row drilldown. Docked to the bottom of the viewport rather than placed
+       inline, so the table stays visible above it and stepping through
+       symbols with ‹ › doesn't move the page under the pointer. -->
+  <div class="oix-drill" id="oixDrill" hidden>
+    <div class="oix-drill-hdr">
+      <span class="oix-drill-sym" id="oixDrillSym"></span>
+      <div class="oix-drill-nav">
+        <button id="oixPrev" title="Previous symbol (←)">‹</button>
+        <button id="oixNext" title="Next symbol (→)">›</button>
+      </div>
+      <div class="oix-tabs" id="oixTabs">
+        <button data-mode="pcr">PCR</button>
+        <button data-mode="oi_change" class="active">OI Change</button>
+        <button data-mode="total_oi">Total OI</button>
+      </div>
+      <button class="oix-drill-close" id="oixDrillClose" title="Close (Esc)">✕</button>
+    </div>
+    <div class="oix-drill-body" id="oixDrillBody"></div>
+  </div>
+
+  <details class="oix-about">
+    <summary>How this scanner reads a crossover</summary>
+    <p>
+      Each symbol carries two intraday lines, both measured from the 9:15 open:
+      the change in total call OI and the change in total put OI. A crossover is
+      the moment those lines swap places. Puts pulling ahead is
+      <b class="oix-bull">BULL</b> — writers are stacking OI below the market.
+      Calls pulling ahead is <b class="oix-bear">BEAR</b>.
+    </p>
+    <p>
+      This is deliberately not a PCR reading. A symbol can sit at PCR 0.6 —
+      heavily call-dominant — and still print a BULL cross, because the levels
+      describe where the book already was and the change-lines describe where
+      today's money went. <b>Cross Count</b> is how many times the lines have
+      swapped today: a name in double digits is chopping, not trending, and its
+      latest tag is worth very little.
+    </p>
+    <p>
+      <b>Quality</b> grades the two legs. On a BULL cross, puts are the winning
+      leg: fresh put OI is <i>aggressive</i>, call OI leaving is <i>covering</i>,
+      and both at once is <i>strong</i> — new money and exiting money agreeing on
+      direction. Early crosses carry more weight than late-session ones, which
+      are usually unwinds rather than fresh commitment.
+    </p>
+  </details>
+
+</div>
+{% endblock %}
+{% block scripts %}
+{{ super() }}
+<script src="{{ url_for('static', filename='js/oi_crossover.js') }}?v={{ sv('js/oi_crossover.js') }}"></script>
+{% endblock %}

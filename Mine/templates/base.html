@@ -87,22 +87,22 @@
         {% if not request.args.get('embed') %}
         <div class="navigation-bar">
             <!-- <a href="/" class="nav-link home-link" title="Home">🏠</a> -->
-            <a href="/dashboard" class="nav-link {% if request.path in ['/dashboard', '/replay', '/trading'] %}active{% endif %}">📊
+            <a href="/dashboard" class="nav-link {% if request.path in ['/dashboard', '/replay', '/trading', '/contracts', '/historic-oi'] %}active{% endif %}">📊
                 Dashboard</a>
             <a href="/trend-detection"
                 class="nav-link {% if request.path == '/trend-detection' %}active{% endif %}">📈
                 Trend</a>
             <a href="/backtest" class="nav-link {% if request.path == '/backtest' %}active{% endif %}">🧪 Backtest</a>
-            <a href="/contracts" class="nav-link {% if request.path == '/contracts' %}active{% endif %}">📜
-                Contracts</a>
-            <a href="/historic-oi" class="nav-link {% if request.path == '/historic-oi' %}active{% endif %}">📈 Historic
-                OI</a>
+            <!-- Contracts and Historic OI now live as Dashboard tabs (#contracts / #historic-oi) -->
             <!-- <a href="/options-chart" class="nav-link {% if request.path == '/options-chart' %}active{% endif %}">📉
                 Options Chart</a>
             <a href="/intraday-option" class="nav-link {% if request.path == '/intraday-option' %}active{% endif %}">💹
                 Intraday Option</a> -->
             <a href="/oi-profile" class="nav-link {% if request.path == '/oi-profile' %}active{% endif %}">📉 OI
                 Profile</a>
+            <a href="/oi-crossover"
+                class="nav-link {% if request.path == '/oi-crossover' %}active{% endif %}">🔀 OI
+                Crossover</a>
             <a href="/scanners" class="nav-link {% if request.path == '/scanners' %}active{% endif %}">🔍
                 Scanners</a>
             <a href="/algo" class="nav-link {% if request.path == '/algo' %}active{% endif %}">⚡ Algo</a>

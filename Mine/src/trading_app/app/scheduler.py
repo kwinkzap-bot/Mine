@@ -112,6 +112,28 @@ class MarketScheduler:
             misfire_grace_time=300,
         )
 
+        # OI Crossover scan — every 3 minutes through the session. One Fyers
+        # optionchain call per symbol across ~214 names, paced at 2.5 req/s to
+        # stay under the endpoint's per-minute quota, takes ~102s; a 1-minute
+        # cadence could not fit the sweep at all. The job itself is a no-op
+        # outside 9:15-15:40 — the cron's 9-15 hour range fires either side of
+        # the session and OICrossoverService.scan() turns those into skips.
+        # Offset to :45 so it never lands on the OI persistence job's :30.
+        self.oi_crossover_job = self.scheduler.add_job(
+            self._run_oi_crossover_task,
+            CronTrigger(
+                day_of_week='mon-fri',
+                hour='9-15',
+                minute='*/3',
+                second='45',
+                timezone='Asia/Kolkata',
+            ),
+            id='oi_crossover_scan',
+            name='OI Crossover Scan',
+            replace_existing=True,
+            misfire_grace_time=120,
+        )
+
         self.scheduler.add_job(
             self._run_fii_sector_task,
             CronTrigger(
@@ -532,6 +554,47 @@ class MarketScheduler:
         except Exception as e:
             logger.error(f"Unexpected error in OI persistence task: {e}", exc_info=True)
 
+
+    def _run_oi_crossover_task(self):
+        """Every 3 min in-session: sweep the F&O universe for CE/PE OI-change
+        crossovers. Skipped outside market hours — the change lines are
+        measured against the 9:15 open and simply don't move when the market
+        is shut, so an out-of-hours scan would only re-log the close.
+
+        The session gate itself lives in OICrossoverService.scan() — every
+        caller needs it, not just this job — so this only skips the obvious
+        non-days early to save building a provider for nothing."""
+        try:
+            if not self.is_trading_day():
+                return
+
+            from trading_app.app.routes.api import get_data_provider
+            provider = get_data_provider(user='Mine')
+            if not provider:
+                logger.warning("[OIX Scheduler] No data provider — skipping scan")
+                return
+
+            from trading_app.service.oi_crossover_service import OICrossoverService
+            svc = OICrossoverService(provider)
+
+            # Trim old series points once per session rather than on every
+            # scan: it's a whole-table delete and the row count only matters
+            # day-over-day.
+            today = datetime.now().strftime('%Y-%m-%d')
+            if getattr(self, '_oix_purged_on', None) != today:
+                self._oix_purged_on = today
+                removed = svc.purge()
+                if removed:
+                    logger.info(f"[OIX Scheduler] Purged {removed} old series rows")
+
+            result = svc.scan()
+            # The cron fires either side of the session (it is a 9-15 hour
+            # range), so a skip is the expected outcome several times a day
+            # and is not worth a warning. Only real failures are.
+            if not result.get('success') and not result.get('skipped'):
+                logger.warning(f"[OIX Scheduler] Scan failed: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"[OIX Scheduler] Error: {e}", exc_info=True)
 
     def _run_fii_sector_task(self):
         """4:00 PM IST: scrape NSE FPI sector limits and save to SQLite."""
