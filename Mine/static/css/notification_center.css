@@ -210,3 +210,35 @@
 
 /* Signal tables in the notification modal use the shared grid (DataGrid,
    components/data-grid.css) — no table CSS needed here. */
+
+/* A single algo entry is a label/value sheet, not a grid — one row of six
+   columns reads badly, so this one case gets its own two-column table. */
+.notif-detail-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.notif-detail-table td {
+    padding: 7px 0;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border-color, #f0f0f0);
+}
+
+.notif-detail-table tr:last-child td {
+    border-bottom: none;
+}
+
+.notif-detail-label {
+    color: var(--text-muted, #888);
+    white-space: nowrap;
+    width: 40%;
+}
+
+.notif-detail-value {
+    color: var(--text-color, #333);
+    font-weight: 600;
+    text-align: right;
+}
+
+.notif-detail-pos { color: var(--color-pos, #16a34a); }
+.notif-detail-neg { color: var(--color-neg, #dc2626); }

@@ -61,6 +61,7 @@ _NIFTY_FYERS    = 'NSE:NIFTY50-INDEX'
 _MAX_SPOT_FAILS = 60   # consecutive None returns before CRITICAL log (~1 minute of data gap)
 _FALLBACK_IV    = 0.15  # assumed annual IV when ATM IV cannot be computed (NIFTY typical 13–18%)
 _BREAKOUT_SCAN_SECS = 15  # cadence of the authoritative completed-candle first-breakout scan
+_MAX_QUOTE_AGE_SECS = 30  # a spot quote older than this is stale — never enter or exit on it
 
 # Live defaults: 2nd 30-Sec candle range, SL:Target 1:3, cut-off 3:25 PM, Buy-only.
 DEFAULT_PARAMS: Dict[str, Any] = {
@@ -157,6 +158,9 @@ class SecondCandleAlgo:
         self._range_date: Optional[str]   = None
         # Throttle for the authoritative completed-candle breakout scan
         self._last_breakout_scan: Optional[pd.Timestamp] = None
+        # Day on which the first breakout was found already resolved (armed too
+        # late to take it) — blocks chasing it for the rest of that day.
+        self._stale_signal_date: Optional[str] = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -276,6 +280,7 @@ class SecondCandleAlgo:
                 'pnl_pts':          pnl_pts,
                 'reason':           reason,
                 'entry_time':       trade.get('entry_time', ''),
+                'entry_spot_live':  trade.get('entry_spot_live'),
                 'exit_time':        datetime.now().isoformat(),
                 'strike':           trade.get('strike'),
                 'option_type':      trade.get('option_type', ''),
@@ -320,8 +325,50 @@ class SecondCandleAlgo:
         from trading_app.service.provider_logic import get_data_provider
         return get_data_provider(user=self.username)
 
+    @staticmethod
+    def _quote_age_secs(ts: Any) -> Optional[float]:
+        """Age of a quote's fetch timestamp in seconds, or None if unreadable."""
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts)
+            except ValueError:
+                return None
+        if not isinstance(ts, datetime):
+            return None
+        if ts.tzinfo is not None:
+            ts = ts.astimezone().replace(tzinfo=None)
+        return (datetime.now() - ts).total_seconds()
+
     def _get_nifty_spot(self, provider: Any) -> Optional[float]:
+        """Live NIFTY spot, with stale quotes rejected.
+
+        The Fyers adapter falls back to its on-disk quote cache whenever the API
+        fails, and a previous session's price passes every level check silently:
+        on 2026-08-10 a stale 24644.85 (day's actual high 24620.95) triggered the
+        entry and then an instant 'TARGET' exit 1.4s later. quote() carries the
+        fetch timestamp, so prefer it over ltp() and drop anything older than
+        _MAX_QUOTE_AGE_SECS — a missing spot is handled (retries, _spot_fail_count),
+        a wrong one is not.
+        """
         try:
+            qfn = getattr(provider, 'quote', None)
+            if qfn is not None:
+                try:
+                    quotes = qfn([_NIFTY_FYERS], priority=1)
+                except TypeError:        # Kite's quote() takes no priority kwarg
+                    quotes = qfn([_NIFTY_FYERS])
+                q   = (quotes or {}).get(_NIFTY_FYERS) or {}
+                ltp = q.get('last_price') or 0
+                if not ltp:
+                    return None
+                age = self._quote_age_secs(q.get('timestamp'))
+                if age is not None and age > _MAX_QUOTE_AGE_SECS:
+                    logger.warning(
+                        f"[SC] Ignoring stale spot {ltp} — quote is {age:.0f}s old"
+                    )
+                    return None
+                return float(ltp)
+
             data = provider.ltp([_NIFTY_FYERS])
             ltp = data.get(_NIFTY_FYERS, {}).get('last_price', 0)
             return float(ltp) if ltp else None
@@ -439,10 +486,51 @@ class SecondCandleAlgo:
                 'sl_level':     round(sl_level, 2),
                 'target_level': round(tgt_level, 2),
                 'entry_bar':    str(bar['datetime']),
+                'entry_bar_ts': bar['datetime'],
                 'range_high':   round(range_high, 2),
                 'range_low':    round(range_low, 2),
             }
 
+        return None
+
+    def _signal_already_resolved(
+        self, df: Optional[pd.DataFrame], sig: Dict[str, Any],
+        now_ist: pd.Timestamp,
+    ) -> Optional[str]:
+        """Has the backtest's trade for this breakout already finished?
+
+        _check_breakout returns the first breakout of the *day*, however old it
+        is. When the algo arms late — an app restart mid-session is the usual
+        cause — that signal can belong to a trade the backtest has already closed.
+        Entering then is not the backtest's trade: it fills at a completely
+        different price and, if SL/Target is already behind us, squares off on the
+        very next tick (2026-08-10: armed 09:18, took the 09:16:30 breakout,
+        exited 1.4s later for a broking-cost-only loss).
+
+        Scans completed bars from the breakout bar onward with the backtest's own
+        precedence (SL before Target within a bar). Returns 'SL'/'TARGET' when the
+        trade is already over, else None.
+        """
+        bar_ts = sig.get('entry_bar_ts')
+        if df is None or df.empty or bar_ts is None:
+            return None
+
+        completed = df[(df['datetime'] >= bar_ts) &
+                       (df['datetime'] <= (now_ist - pd.Timedelta(seconds=30)))]
+        is_long = sig['direction'] == 'BUY'
+        sl, tgt = float(sig['sl_level']), float(sig['target_level'])
+
+        for _, c in completed.iterrows():
+            if is_long:
+                if float(c['low'])  <= sl:
+                    return 'SL'
+                if float(c['high']) >= tgt:
+                    return 'TARGET'
+            else:
+                if float(c['high']) >= sl:
+                    return 'SL'
+                if float(c['low'])  <= tgt:
+                    return 'TARGET'
         return None
 
     # ── Live breakout (tick-by-tick against the range candle) ──────────────────
@@ -1012,19 +1100,22 @@ class SecondCandleAlgo:
 
     def _enter_trade(
         self, direction: str, entry_ref: float, sl_level: float,
-        target_level: float, provider: Any,
+        target_level: float, provider: Any, spot: Optional[float] = None,
     ) -> None:
         """Select delta strike, place BUY orders on all cached brokers, save state.
         SL/Target are computed by the caller from the 2nd-candle range."""
         opt_type = 'CE' if direction == 'BUY' else 'PE'
+        # Strike/IV selection keys off where NIFTY actually is now, not off the
+        # breakout level — those differ whenever the entry lands late in the bar.
+        ref_spot = float(spot) if spot else entry_ref
         t = _time_to_expiry_years(self._expiry) if self._expiry else 0.01
-        chain_deltas = self._fetch_fyers_chain_deltas(provider, entry_ref, t)
+        chain_deltas = self._fetch_fyers_chain_deltas(provider, ref_spot, t)
         strike_mode  = self._strike_mode()
-        strike, inst = self._select_strike(opt_type, entry_ref, provider, chain_deltas)
+        strike, inst = self._select_strike(opt_type, ref_spot, provider, chain_deltas)
 
         if inst is None:
             logger.error(
-                f"[SC] No strike found for {opt_type} near spot={entry_ref}"
+                f"[SC] No strike found for {opt_type} near spot={ref_spot}"
                 f" (mode={strike_mode})"
             )
             return
@@ -1076,6 +1167,10 @@ class SecondCandleAlgo:
         state['active_trade'] = {
             'direction':       direction,
             'entry_spot':      entry_ref,
+            # Where NIFTY actually was at the fill. entry_spot stays on the
+            # breakout level so points match the backtest; this makes the
+            # entry slippage visible instead of silently absorbing it.
+            'entry_spot_live': round(ref_spot, 2),
             'entry_time':      datetime.now().isoformat(),
             'sl_level':        sl_level,
             'target_level':    target_level,
@@ -1096,6 +1191,39 @@ class SecondCandleAlgo:
             f" sl={sl_level} tgt={target_level} expiry={self._expiry}"
             f" brokers={len(broker_entries)}"
         )
+
+    def _exit_reference_spot(self, provider: Any, trade: Dict[str, Any]) -> float:
+        """Spot to book a forced (cut-off / EOD) exit at.
+
+        Retries the live quote, then falls back to the last completed 30-sec
+        close. Booking 0.0 when no quote comes back writes a fantasy −24,000
+        point loss into the history and the P&L chart.
+        """
+        for attempt in range(5):
+            spot = self._get_nifty_spot(provider)
+            if spot:
+                return spot
+            if attempt < 4:
+                time.sleep(0.5)
+        try:
+            df = self._fetch_today_30s_candles(provider)
+            if df is not None and not df.empty:
+                close = float(df.iloc[-1]['close'])
+                logger.warning(
+                    f"[SC] No live spot for forced exit — booking at last 30s close {close}"
+                )
+                return close
+        except Exception as e:
+            logger.warning(f"[SC] Forced-exit close fallback failed: {e}")
+        entry = float(trade.get('entry_spot') or 0.0)
+        logger.error(
+            f"[SC] No spot and no candles for forced exit — booking at entry {entry} (0 pts)"
+        )
+        return entry
+
+    def _log_tick_exit(self, reason: str, spot: float, level: float) -> None:
+        """Record the tick that crossed the level, since the trade books at the level."""
+        logger.info(f"[SC] Live-spot {reason}: spot={spot} → booking at level {level}")
 
     def _exit_trade(self, reason: str, spot: float) -> None:
         """Square off option position on all brokers and clear active trade in state."""
@@ -1253,22 +1381,31 @@ class SecondCandleAlgo:
                 if (h > 15) or (h == 15 and m >= 28):
                     state = self._load_state()
                     if state.get('active_trade'):
-                        spot = None
-                        for _retry in range(5):
-                            spot = self._get_nifty_spot(provider)
-                            if spot:
-                                break
-                            if _retry < 4:
-                                time.sleep(0.5)
-                        self._exit_trade('EOD', spot or 0.0)
+                        self._exit_trade(
+                            'EOD',
+                            self._exit_reference_spot(provider, state['active_trade']),
+                        )
                     logger.info("[SC] EOD cutoff reached — monitor loop ending")
                     break
 
                 state  = self._load_state()
                 params = state.get('params') or dict(DEFAULT_PARAMS)
+                _p     = normalise_params(params)
+                cutoff = int(_p['exit_hour']) * 60 + int(_p['exit_minute'])
 
                 # ── In trade → check SL / Target every second (kill-switch never blocks exits)
                 if state.get('active_trade'):
+                    # Cut-off square-off (backtest's "Time Exit"). Without this the
+                    # position ran on to the 15:28 EOD sweep — three minutes the
+                    # backtest never holds.
+                    if (h * 60 + m) >= cutoff:
+                        self._exit_trade(
+                            'TIME_EXIT',
+                            self._exit_reference_spot(provider, state['active_trade']),
+                        )
+                        time.sleep(1)
+                        continue
+
                     spot = self._get_nifty_spot(provider)
                     if spot:
                         self._spot_fail_count = 0
@@ -1277,16 +1414,24 @@ class SecondCandleAlgo:
                         sl_level  = trade['sl_level']
                         tgt_level = trade['target_level']
 
+                        # Book at the level, not at the tick that crossed it — the
+                        # backtest fills SL/Target exactly at the level, so booking
+                        # the raw spot overstated the points (2026-08-10 recorded
+                        # +72.0 pts on a trade whose target was +44.7).
                         if direction == 'BUY':
                             if spot <= sl_level:
-                                self._exit_trade('SL', spot)
+                                self._log_tick_exit('SL', spot, sl_level)
+                                self._exit_trade('SL', sl_level)
                             elif spot >= tgt_level:
-                                self._exit_trade('TARGET', spot)
+                                self._log_tick_exit('TARGET', spot, tgt_level)
+                                self._exit_trade('TARGET', tgt_level)
                         else:  # SELL → PE bought
                             if spot >= sl_level:
-                                self._exit_trade('SL', spot)
+                                self._log_tick_exit('SL', spot, sl_level)
+                                self._exit_trade('SL', sl_level)
                             elif spot <= tgt_level:
-                                self._exit_trade('TARGET', spot)
+                                self._log_tick_exit('TARGET', spot, tgt_level)
+                                self._exit_trade('TARGET', tgt_level)
                     else:
                         self._spot_fail_count += 1
                         if self._spot_fail_count >= _MAX_SPOT_FAILS:
@@ -1311,7 +1456,13 @@ class SecondCandleAlgo:
                                         _ets = _ets.tz_localize('Asia/Kolkata')
                                     else:
                                         _ets = _ets.tz_convert('Asia/Kolkata')
-                                    _to_check = _completed[_completed['datetime'] >= _ets.floor('min')]
+                                    # Only bars that STARTED at/after the entry can
+                                    # exit the position. floor('min') reached up to
+                                    # 59s before the fill, so a pre-entry bar's H/L
+                                    # could square off a trade that was not open
+                                    # when that bar printed. The tick check above
+                                    # covers the rest of the entry bar.
+                                    _to_check = _completed[_completed['datetime'] >= _ets]
                                     _dir = _at['direction']
                                     _sl  = float(_at['sl_level'])
                                     _tgt = float(_at['target_level'])
@@ -1362,6 +1513,11 @@ class SecondCandleAlgo:
                         time.sleep(5)
                         continue
 
+                    # ── The day's breakout already played out before we armed
+                    if self._stale_signal_date == date.today().isoformat():
+                        time.sleep(5)
+                        continue
+
                     # ── No trade → detect the FIRST breakout of the range candle.
                     #
                     # A breakout on a COMPLETED 30-sec candle is authoritative: it
@@ -1377,9 +1533,7 @@ class SecondCandleAlgo:
                     # confirm/override direction with the completed-candle scan whenever
                     # we're about to enter, plus a throttled periodic scan so a missed
                     # earlier breakout is caught even before the spot moves again.
-                    _p       = normalise_params(params)
                     now_ist  = pd.Timestamp.now(tz='Asia/Kolkata')
-                    cutoff   = int(_p['exit_hour']) * 60 + int(_p['exit_minute'])
                     if (now_ist.hour * 60 + now_ist.minute) < cutoff and \
                             self._ensure_range(provider, _p, now_ist):
                         spot     = self._get_nifty_spot(provider)
@@ -1391,7 +1545,8 @@ class SecondCandleAlgo:
                         _due = (self._last_breakout_scan is None or
                                 (now_ist - self._last_breakout_scan).total_seconds()
                                     >= _BREAKOUT_SCAN_SECS)
-                        sig = None
+                        sig  = None
+                        _bdf = None
                         if live_sig is not None or _due:
                             self._last_breakout_scan = now_ist
                             _bdf       = self._fetch_today_30s_candles(provider)
@@ -1408,6 +1563,30 @@ class SecondCandleAlgo:
                                 )
 
                         if sig:
+                            # Never chase a breakout whose trade is already over —
+                            # see _signal_already_resolved.
+                            _resolved = self._signal_already_resolved(_bdf, sig, now_ist)
+                            if _resolved is None and spot:
+                                _is_long = sig['direction'] == 'BUY'
+                                _sl, _tg = float(sig['sl_level']), float(sig['target_level'])
+                                if _is_long:
+                                    _resolved = ('SL'     if spot <= _sl else
+                                                 'TARGET' if spot >= _tg else None)
+                                else:
+                                    _resolved = ('SL'     if spot >= _sl else
+                                                 'TARGET' if spot <= _tg else None)
+                            if _resolved:
+                                self._stale_signal_date = date.today().isoformat()
+                                logger.warning(
+                                    f"[SC] Skipping today's trade — the first breakout"
+                                    f" ({sig['direction']} @ {sig['entry_ref']},"
+                                    f" bar {sig.get('entry_bar', 'live-spot')}) already hit"
+                                    f" {_resolved} before the algo could enter (spot={spot})."
+                                    f" The backtest books this trade; live must not chase it."
+                                )
+                                time.sleep(5)
+                                continue
+
                             _src = 'live-spot' if sig is live_sig else 'candle'
                             logger.info(
                                 f"[SC] Breakout {sig['direction']} ({_src}) spot={spot}"
@@ -1418,6 +1597,7 @@ class SecondCandleAlgo:
                             self._enter_trade(
                                 sig['direction'], sig['entry_ref'],
                                 sig['sl_level'], sig['target_level'], provider,
+                                spot=spot,
                             )
 
             except Exception as e:

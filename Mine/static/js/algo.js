@@ -354,6 +354,7 @@ const _ALGO_REASON_TONE = {
     TARGET:        'pos',
     SL:            'neg',
     EOD:           'neutral',
+    TIME_EXIT:     'neutral',
     MANUAL:        'special',
     RANGE_RECLAIM: 'info',
 };

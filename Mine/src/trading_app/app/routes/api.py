@@ -2742,35 +2742,6 @@ def get_candlestick_filter_results() -> EndpointResponse:
     })
 
 
-@api_bp.route('/notify-whatsapp', methods=['POST'])
-@csrf.exempt
-def notify_whatsapp() -> EndpointResponse:
-    """Send a WhatsApp message using WhatsApp Cloud API credentials from env vars."""
-    auth_error = check_auth()
-    if auth_error:
-        return auth_error
-
-    data = request.get_json(silent=True) or {}
-    message = (data.get('message') or '').strip()
-    to_number = (data.get('to') or '').strip()
-
-    if not message:
-        return jsonify({'success': False, 'error': 'message is required'}), 400
-
-    try:
-        from trading_app.service.whatsapp_service import WhatsAppService
-
-        wa_service = WhatsAppService()
-        result = wa_service.send_text(message, to_number if to_number else None)
-
-        if result.get('success'):
-            return jsonify({'success': True})
-        return jsonify({'success': False, 'error': result.get('error', 'WhatsApp send failed')}), 500
-    except Exception as e:
-        logger.error(f"WhatsApp notify error: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-
 def _fno_lot_sizes():
     """{symbol: lot_size} for every F&O name in the cached NFO instrument
     dump, plus the indices that dump never carries.
@@ -5618,20 +5589,20 @@ def place_live_order() -> EndpointResponse:
 @api_bp.route('/send-notification', methods=['POST'])
 def send_notification() -> EndpointResponse:
     """
-    Send trend alert notifications via WhatsApp or SMS.
-    
+    Send trend alert notifications via Telegram.
+
     Request JSON:
     {
         "type": "trend_alert",
         "message": "🚀 Trend Changed: BUY → SELL",
         "timestamp": "2026-01-05T10:30:00"
     }
-    
+
     Returns:
     {
         "success": true/false,
         "message": "Notification sent successfully",
-        "method": "whatsapp" or "api"
+        "method": "telegram" or "log"
     }
     """
     try:
@@ -5651,32 +5622,29 @@ def send_notification() -> EndpointResponse:
         
         logger.info(f"Sending {alert_type} notification: {full_message}")
         
-        # Try to send via WhatsApp
+        # Try to send via Telegram — recipient comes from TELEGRAM_CHAT_ID
+        # rather than a hardcoded number, so this follows whoever the bot is
+        # configured to message.
         try:
-            from trading_app.service.whatsapp_service import WhatsAppService
-            
-            whatsapp = WhatsAppService()
-            # Use the mobile number: 8880802168 (India: +91)
-            response = whatsapp.send_text(
-                message=full_message,
-                to_number='918880802168'  # Format: country code + number
-            )
-            
+            from trading_app.service.telegram_service import TelegramService
+
+            response = TelegramService().send_text(full_message)
+
             if response.get('success'):
                 return jsonify({
                     'success': True,
-                    'message': 'Notification sent via WhatsApp',
-                    'method': 'whatsapp'
+                    'message': 'Notification sent via Telegram',
+                    'method': 'telegram'
                 }), 200
             else:
-                logger.warning(f"WhatsApp send failed: {response.get('error')}")
+                logger.warning(f"Telegram send failed: {response.get('error')}")
                 # Continue to fallback
         except Exception as e:
-            logger.warning(f"WhatsApp service unavailable: {e}")
+            logger.warning(f"Telegram service unavailable: {e}")
             # Continue to fallback
-        
+
         # Fallback: Log notification (can be extended for SMS/Email later)
-        logger.info(f"Notification logged (WhatsApp unavailable): {full_message}")
+        logger.info(f"Notification logged (Telegram unavailable): {full_message}")
         return jsonify({
             'success': True,
             'message': 'Notification logged successfully',

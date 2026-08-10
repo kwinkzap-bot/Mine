@@ -86,6 +86,38 @@
         return `<div class="notif-modal-section-title">${escapeHtml(title)} (${signals.length})</div>${grid}`;
     }
 
+    // A single paper entry, rendered as a label/value sheet rather than a grid
+    // — one row of six columns reads far worse than the trade card below.
+    function renderEmaEntry(payload) {
+        const tone = payload.direction === 'SELL' ? 'neg' : 'pos';
+        const money = v => (v === null || v === undefined || v === '') ? '—' : `₹${escapeHtml(v)}`;
+        // Every value below is already-escaped HTML.
+        const rows = [
+            ['Direction', `<span class="notif-detail-${tone}">${escapeHtml(payload.direction)}</span>`],
+            ['Entry', money(payload.entry_price)],
+            ['Stop loss', money(payload.sl_price)],
+            ['Target', money(payload.target_price) +
+                (payload.target_pct ? ` (${escapeHtml(payload.target_pct)}%)` : '')],
+            ['Quantity', escapeHtml(payload.qty) +
+                (payload.lot_size ? ` (${escapeHtml(payload.lots)} × ${escapeHtml(payload.lot_size)})` : '')],
+            ['Contract', escapeHtml(payload.future_month || '—')],
+            ['Signal date', escapeHtml(payload.signal_date || '—')],
+            // entry_time is a naive LOCAL isoformat() from the algo, so fmtTime
+            // (which tags its input as UTC) would shift it — show it as sent.
+            ['Entered at', escapeHtml((payload.entry_time || '—').replace('T', ' ').slice(0, 19))],
+            ['Mode', escapeHtml(payload.mode || 'paper')],
+        ];
+        return `
+            <div class="notif-modal-section-title">${escapeHtml(payload.symbol)}</div>
+            <table class="notif-detail-table">
+                ${rows.map(([label, valueHtml]) => `
+                    <tr>
+                        <td class="notif-detail-label">${escapeHtml(label)}</td>
+                        <td class="notif-detail-value">${valueHtml}</td>
+                    </tr>`).join('')}
+            </table>`;
+    }
+
     async function openDetail(id) {
         closeDropdown();
         try {
@@ -103,10 +135,14 @@
             const body = document.getElementById('notifModalBody');
             const payload = n.data || {};
             let html = '';
-            html += renderSignalTable('BUY signals', payload.buy);
-            html += renderSignalTable('SELL signals', payload.sell);
-            if (!payload.buy?.length && !payload.sell?.length) {
-                html += '<div class="notif-empty">No breakout signals in this scan.</div>';
+            if (n.category === 'ema_confluence_entry') {
+                html = renderEmaEntry(payload);
+            } else {
+                html += renderSignalTable('BUY signals', payload.buy);
+                html += renderSignalTable('SELL signals', payload.sell);
+                if (!payload.buy?.length && !payload.sell?.length) {
+                    html += '<div class="notif-empty">No breakout signals in this scan.</div>';
+                }
             }
             body.innerHTML = html;
             document.getElementById('notifModalTitle').textContent = n.title;

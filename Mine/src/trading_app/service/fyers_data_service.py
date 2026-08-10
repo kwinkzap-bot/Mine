@@ -65,16 +65,35 @@ _FYERS_SYMBOL_LOCK = threading.Lock()
 _PERSISTENT_QUOTES_FILE = os.path.join(os.path.dirname(__file__), "..", ".cache", "persistent_quotes.json")
 
 def _load_persistent_quotes():
+    """Rehydrate the quote cache from disk, keeping each quote's REAL fetch time.
+
+    Stamping the loaded quotes with datetime.now() made a previous session's
+    price look freshly fetched, so the first quote() call after a restart was
+    answered entirely from disk — no API call at all — for the whole cache TTL.
+    On 2026-08-10 the 2nd-candle algo armed at 09:18 right after a restart, read
+    a stale 24644.85 as the live NIFTY spot (the day's actual high was 24620.95),
+    entered on it and fired a bogus 'TARGET' exit 1.4s later.
+
+    Keeping the persisted timestamp means a stale quote is only ever served by
+    the explicit stale-cache fallback at the end of quote(), never as fresh data.
+    """
     try:
         if os.path.exists(_PERSISTENT_QUOTES_FILE):
             with open(_PERSISTENT_QUOTES_FILE, 'r') as f:
                 data = json.load(f)
-            # Reconstruct _FYERS_SYMBOL_CACHE with current timestamp
-            now = datetime.now()
+            stale = datetime.min          # unparseable timestamp → treat as ancient
             loaded = {}
             for sym, q in data.items():
-                loaded[sym] = (q, now)
-            logger.info(f"[FyersAdapter] Loaded {len(loaded)} persistent quotes from disk.")
+                ts = q.get('timestamp')
+                if isinstance(ts, str):
+                    try:
+                        ts = datetime.fromisoformat(ts)
+                    except ValueError:
+                        ts = stale
+                elif not isinstance(ts, datetime):
+                    ts = stale
+                loaded[sym] = (q, ts)
+            logger.info(f"[FyersAdapter] Loaded {len(loaded)} persistent quotes from disk (as stale).")
             return loaded
     except Exception as e:
         logger.warning(f"[FyersAdapter] Failed to load persistent quotes: {e}")

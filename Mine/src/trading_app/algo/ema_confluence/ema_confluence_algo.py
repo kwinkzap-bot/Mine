@@ -583,6 +583,90 @@ class EmaConfluenceAlgo:
             f"[PAPER] {symbol}: ENTERED {direction.upper()} future @ {entry_price} "
             f"sl={s['sl_level']} tgt={target_level} qty={qty}"
         )
+        self._notify_new_entry(symbol, s, lots)
+
+    # ── New-entry notification ───────────────────────────────────────────
+    # A breakout fills at most once per symbol per signal, so this fires only
+    # on the transition into a position — never on the marked-to-market ticks
+    # that follow. Nothing in here may raise or block: a notification failure
+    # must not cost us the paper trade that has already been recorded in
+    # state, and the Telegram round trip is slower than the _POLL_SECS tick.
+
+    def _notify_new_entry(self, symbol: str, s: Dict[str, Any], lots: int) -> None:
+        try:
+            payload = {
+                'symbol':        symbol,
+                'direction':     'BUY' if s['direction'] == 'Long' else 'SELL',
+                'entry_price':   s['entry_price'],
+                'sl_price':      s.get('sl_level'),
+                'target_price':  s.get('target_level'),
+                'target_pct':    s.get('target_pct'),
+                'qty':           s['qty'],
+                'lots':          max(1, lots),
+                'lot_size':      s.get('lot_size'),
+                'future_month':  s.get('future_month'),
+                'signal_date':   s.get('signal_date'),
+                'entry_time':    s.get('entry_time'),
+                'mode':          'paper',
+            }
+        except Exception as e:
+            self.log.error(f"{symbol}: entry notification payload failed: {e}")
+            return
+
+        if self._uvar('EMA_CONFLUENCE_NOTIFY', 'true').lower() != 'false':
+            try:
+                from trading_app.service.notification_service import create_notification
+                create_notification(
+                    category='ema_confluence_entry',
+                    title=f"EMA Confluence — {payload['direction']} {symbol}",
+                    summary=(f"Entry ₹{payload['entry_price']} · SL ₹{payload['sl_price']} · "
+                             f"Tgt ₹{payload['target_price']} · qty {payload['qty']}"),
+                    data=payload,
+                )
+            except Exception as e:
+                self.log.error(f"{symbol}: in-app entry notification failed: {e}")
+
+        self._send_entry_telegram(symbol, payload)
+
+    def _send_entry_telegram(self, symbol: str, payload: Dict[str, Any]) -> None:
+        """Fire-and-forget Telegram alert. Credentials come from the user's own
+        env file; with either unset this is silently a no-op, so the in-app bell
+        keeps working on an install that has never set Telegram up."""
+        if self._uvar('EMA_CONFLUENCE_TELEGRAM', 'true').lower() == 'false':
+            return
+        token   = self._uvar('TELEGRAM_BOT_TOKEN')
+        chat_id = self._uvar('TELEGRAM_CHAT_ID')
+        if not (token and chat_id):
+            return
+
+        tgt_pct = payload.get('target_pct')
+        entered = str(payload.get('entry_time') or '')[11:19]
+        message = '\n'.join([
+            f"📈 EMA Confluence — NEW ENTRY",
+            f"{symbol} · {payload['direction']} · {payload.get('future_month') or 'FUT'}",
+            f"Entry  ₹{payload['entry_price']}",
+            f"SL     ₹{payload['sl_price']}",
+            f"Target ₹{payload['target_price']}" + (f" ({tgt_pct}%)" if tgt_pct else ''),
+            f"Qty    {payload['qty']} ({payload['lots']} lot)",
+            f"Signal {payload.get('signal_date') or '-'} · entered {entered or '-'}",
+            "(paper trade)",
+        ])
+
+        def _send() -> None:
+            try:
+                from trading_app.service.telegram_service import TelegramService
+                result = TelegramService(token=token, chat_id=chat_id).send_text(message)
+                if result.get('success'):
+                    self.log.info(f"{symbol}: entry Telegram alert sent")
+                else:
+                    self.log.error(f"{symbol}: entry Telegram alert failed: {result.get('error')}")
+            except Exception as e:
+                self.log.error(f"{symbol}: entry Telegram alert failed: {e}")
+
+        # Off-thread: send_text allows a 10s HTTP timeout, which is most of a
+        # poll interval, and a batch of simultaneous entries would serialise.
+        threading.Thread(target=_send, daemon=True,
+                         name=f'EmaConfluenceNotify-{symbol}').start()
 
     def _record_exit(self, symbol: str, s: Dict[str, Any], exit_price: float, reason: str) -> None:
         direction   = s['direction']

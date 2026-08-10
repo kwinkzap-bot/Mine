@@ -217,7 +217,7 @@ const OptionsChartApp = (function () {
             // Send browser notification
             sendBrowserNotification('Trend Alert', message);
             
-            // Send mobile app message via WhatsApp/API
+            // Send mobile app message via the API relay (Telegram)
             sendMobileNotification(message);
             
             console.log('Trend change detected:', { from: previousTrend, to: trend });
@@ -358,31 +358,22 @@ const OptionsChartApp = (function () {
     }
 
     /**
-     * Send trend change notification to mobile via WhatsApp or app API
+     * Send trend change notification to mobile via the app API, which relays
+     * it to Telegram.
      */
     async function sendMobileNotification(message) {
         try {
-            // Check if WhatsApp service is available (from whatsapp_service.js)
-            if (window.WhatsAppService && typeof window.WhatsAppService.sendMessage === 'function') {
-                await window.WhatsAppService.sendMessage({
-                    title: 'Options Chart - Trend Alert',
-                    message: message
-                });
-                console.log('Mobile notification sent via WhatsApp');
-            } else {
-                // Fallback: Send via custom API endpoint
-                await fetch('/api/send-notification', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        type: 'trend_alert',
-                        message: message,
-                        timestamp: new Date().toISOString()
-                    })
-                }).then(res => {
-                    if (res.ok) console.log('Mobile notification sent via API');
-                }).catch(err => console.error('Error sending mobile notification:', err));
-            }
+            await fetch('/api/send-notification', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    type: 'trend_alert',
+                    message: message,
+                    timestamp: new Date().toISOString()
+                })
+            }).then(res => {
+                if (res.ok) console.log('Mobile notification sent via API');
+            }).catch(err => console.error('Error sending mobile notification:', err));
         } catch (error) {
             console.error('Error in sendMobileNotification:', error);
         }

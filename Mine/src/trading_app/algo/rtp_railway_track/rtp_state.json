@@ -1,28 +1,11 @@
 {
-  "active_trade": {
-    "direction": "SELL",
-    "entry_spot": 24524.65,
-    "entry_time": "2026-08-10T09:55:01.778515",
-    "sl_level": 24554.65,
-    "target_level": 24434.65,
-    "strike": 24800,
-    "option_type": "PE",
-    "lot_size": 65,
-    "expiry": "2026-08-11",
-    "broker_entries": [],
-    "fyers_sym": "NSE:NIFTY2681124800PE",
-    "tradingsymbol": "",
-    "total_quantity": 65,
-    "opt_entry_price": 263.15,
-    "strike_mode": "premium250",
-    "paper": true
-  },
-  "buy_needs_reset": false,
+  "active_trade": null,
+  "buy_needs_reset": true,
   "sell_needs_reset": true,
   "last_exit": {
     "reason": "EOD",
-    "spot": 24557.0,
-    "time": "2026-08-07T15:28:00.726619"
+    "spot": 24560.15,
+    "time": "2026-08-10T15:28:00.741173"
   },
   "pending_signal": null
 }
