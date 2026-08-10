@@ -4,9 +4,13 @@
  *   Runs over the fixed futures watchlist (indices + F&O stocks, defined by
  *   TOUCH_ALL_CONFIG in filters/ema_rsi_filter.py) and lists the instruments
  *   whose latest candle on the selected timeframe (Daily by default, Weekly or
- *   Monthly) engulfs the previous candle's body:
- *     Bullish Engulfing — down candle followed by a bigger up candle
- *     Bearish Engulfing — up candle followed by a bigger down candle
+ *   Monthly) AND the one before it are both strong candles that flip direction
+ *   — a strong candle being one whose body covers at least 60% of its own
+ *   high-low range (CANDLE_STRONG_BODY_PCT in filters/ema_rsi_filter.py):
+ *     Strong Bullish — strong red candle followed by a strong green one
+ *     Strong Bearish — strong green candle followed by a strong red one
+ *   There is no engulfing requirement; the second candle does not have to
+ *   swallow the first.
  *
  * Same background-job contract as the EMA Narrow / EMA Touch All tabs: the
  * first request starts the scan and answers {status:'running',
@@ -77,7 +81,7 @@ function updateCandleSectionLabel() {
     const badge = document.getElementById('candle-tf-badge');
     if (badge) badge.textContent = `📆 ${label}`;
     const title = document.getElementById('candleCardTitle');
-    if (title) title.textContent = `🕯️ ${label} Engulfing Candles`;
+    if (title) title.textContent = `🕯️ ${label} Strong Candles`;
 }
 
 // ─── Data Fetch ───────────────────────────────────────────────────────────────
@@ -166,7 +170,7 @@ function renderCandleProgress(progress) {
     el.innerHTML = `<div class="cpr-grid-status">
         <span class="cpr-grid-spinner"></span>
         🕯️ Scanning the futures watchlist for ${DataGrid.escape(label.toLowerCase())}
-        engulfing candles — ${DataGrid.escape(_candleProgressDetail(progress))}
+        strong candles — ${DataGrid.escape(_candleProgressDetail(progress))}
     </div>`;
 }
 function clearCandleProgress() {
@@ -204,8 +208,8 @@ function _candleColumns() {
               `${encodeURIComponent(symbol)}" target="_blank" rel="noopener noreferrer" ` +
               `class="symbol-link">${DataGrid.escape(symbol)}</a>` },
         { key: 'pattern_label', label: 'Pattern', sortable: true, strong: true,
-          format: v => v ? (v.startsWith('Bullish') ? '🟢 ' + v : '🔴 ' + v) : '—',
-          badge:  (v, row) => row.pattern === 'bullish_engulfing' ? 'pos' : 'neg' },
+          format: (v, row) => v ? ((row.pattern === 'bullish_strong' ? '🟢 ' : '🔴 ') + v) : '—',
+          badge:  (v, row) => row.pattern === 'bullish_strong' ? 'pos' : 'neg' },
         { key: 'signal', label: 'Signal', sortable: true, strong: true,
           format: v => v || '—',
           badge:  v => v === 'BUY' ? 'pos' : 'neg' },
@@ -223,15 +227,21 @@ function _candleColumns() {
         { key: 'change_pct', label: 'Change %', sortable: true, align: 'right',
           format: v => v != null ? Number(v).toFixed(2) + '%' : '—',
           tone:   v => v == null ? 'muted' : (v >= 0 ? 'pos' : 'neg') },
-        // The engulfed candle, so the pattern can be eyeballed without a chart.
+        // The preceding candle, so the pair can be eyeballed without a chart.
         { key: 'prev_open', label: 'Prev Open', sortable: true, align: 'right',
           format: v => v != null ? Number(v).toFixed(2) : '—' },
         { key: 'prev_close', label: 'Prev Close', sortable: true, align: 'right',
           format: v => v != null ? Number(v).toFixed(2) : '—' },
-        // How much bigger this body is than the one it swallowed — the strength
-        // of the pattern, and what the grid opens sorted on.
-        { key: 'engulf_ratio', label: 'Engulf ×', sortable: true, align: 'right',
-          strong: true, format: v => v != null ? Number(v).toFixed(2) + '×' : '—' },
+        // Body-to-range of the weaker of the two candles — how decisive the
+        // pair is as a whole, and what the grid opens sorted on.
+        { key: 'strength_pct', label: 'Strength %', sortable: true, align: 'right',
+          strong: true, format: v => v != null ? Number(v).toFixed(1) + '%' : '—' },
+        { key: 'body_strength', label: 'Body/Range %', sortable: true, align: 'right',
+          cellClass: 'dist-pct', format: v => v != null ? Number(v).toFixed(1) + '%' : '—' },
+        { key: 'prev_body_strength', label: 'Prev Body/Range %', sortable: true, align: 'right',
+          cellClass: 'dist-pct', format: v => v != null ? Number(v).toFixed(1) + '%' : '—' },
+        { key: 'body_ratio', label: 'Body ×', sortable: true, align: 'right',
+          format: v => v != null ? Number(v).toFixed(2) + '×' : '—' },
         { key: 'body_pct', label: 'Body %', sortable: true, align: 'right',
           cellClass: 'dist-pct', format: v => v != null ? Number(v).toFixed(2) + '%' : '—' },
         { key: 'range_pct', label: 'Candle Range %', sortable: true, align: 'right',
@@ -275,7 +285,7 @@ function renderCandleTable(results) {
         rows,
         columns: _candleColumns(),
         empty: 'No matches.',
-        defaultSort: { key: 'engulf_ratio', dir: 'desc' },
+        defaultSort: { key: 'strength_pct', dir: 'desc' },
     });
 }
 

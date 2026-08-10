@@ -110,8 +110,8 @@
         </select>
         <select id="candlePattern" class="date-picker tf-picker" title="Candlestick pattern">
             <option value="all" selected>All Patterns</option>
-            <option value="bullish_engulfing">Bullish Engulfing</option>
-            <option value="bearish_engulfing">Bearish Engulfing</option>
+            <option value="bullish_strong">Strong Bullish</option>
+            <option value="bearish_strong">Strong Bearish</option>
         </select>
         <input type="date" id="candleDateFilter" class="date-picker" title="Select analysis date">
         <button id="candlestick-refresh-btn" class="ema-refresh-btn" title="Refresh now">🔄 Refresh</button>
@@ -386,14 +386,15 @@
 <div id="candlestick-scanner-content" style="display: none;">
     <div class="ema-section-label">
         <span class="ema-tf-badge daily-badge" id="candle-tf-badge">📆 Daily</span>
-        <span class="ema-section-title">Candlesticks — futures watchlist, latest candle engulfs the
-            previous candle's body (bullish / bearish)</span>
+        <span class="ema-section-title">Candlesticks — futures watchlist, latest candle and the one
+            before it are both strong-bodied (body ≥ 60% of range) and flip direction:
+            red → green = Bullish, green → red = Bearish</span>
     </div>
     <div class="results-row">
         <div id="candlestickResults" class="results results-hidden results-block">
             <div class="dg-card">
                 <div class="dg-card-hdr">
-                    <span class="dg-card-title" id="candleCardTitle">🕯️ Daily Engulfing Candles</span>
+                    <span class="dg-card-title" id="candleCardTitle">🕯️ Daily Strong Candles</span>
                     <span class="dg-card-meta dg-badge dg-badge--neutral" id="candlestickCount">(0)</span>
                 </div>
                 <div id="candlestickGrid"></div>
@@ -408,9 +409,10 @@
     <!-- Empty State -->
     <div id="candlestick-empty-state" class="ema-empty-state ema-hidden">
         <div class="ema-empty-icon">🕯️</div>
-        <div class="ema-empty-title">No engulfing candles found</div>
-        <div class="ema-empty-sub">No symbol on the futures watchlist formed a bullish or bearish
-            engulfing candle on the selected timeframe.</div>
+        <div class="ema-empty-title">No strong candles found</div>
+        <div class="ema-empty-sub">No symbol on the futures watchlist closed two consecutive
+            strong-bodied candles that flip direction (red → green or green → red) on the
+            selected timeframe.</div>
     </div>
 </div>
 {% endblock %}

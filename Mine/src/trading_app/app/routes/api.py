@@ -2614,7 +2614,7 @@ def get_ema_touch_all_filter_results() -> EndpointResponse:
     })
 
 
-# Candlestick (engulfing) scanner — futures watchlist only, so it is much
+# Candlestick (strong candle pair) scanner — futures watchlist only, so it is much
 # shorter than the equity-wide scans, but it uses the same background-job +
 # poll contract so the UI code and the throttling behave identically.
 _candlestick_jobs: dict = {}
@@ -2624,7 +2624,9 @@ _candlestick_jobs_lock = threading.Lock()
 @api_bp.route('/candlestick-filter', methods=['GET'])
 @limiter.exempt
 def get_candlestick_filter_results() -> EndpointResponse:
-    """Scan the futures watchlist for bullish/bearish engulfing candles on the
+    """Scan the futures watchlist for bullish/bearish strong candle pairs (the
+    latest candle and the one before it are both strong-bodied and flip
+    direction — red then green is bullish, green then red bearish) on the
     selected timeframe (daily default, weekly, monthly).
 
     The first call starts a background scan and returns {'status': 'running',
@@ -2659,7 +2661,9 @@ def get_candlestick_filter_results() -> EndpointResponse:
     from trading_app.app.utils.cache import cpr_filter_cache  # reuse same cache backend
     cache_date = date_str or datetime.now().strftime('%Y-%m-%d')
     job_key    = f"{cache_date}:{timeframe}"
-    cache_key  = f"candlestick_v1:{job_key}"
+    # v2 = strong-candle-pair rule; bumped so cached engulfing payloads (old
+    # pattern keys, engulf_ratio) are never served to the new UI.
+    cache_key  = f"candlestick_v2:{job_key}"
 
     with _candlestick_jobs_lock:
         job = _candlestick_jobs.get(job_key)

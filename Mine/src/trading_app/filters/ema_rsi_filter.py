@@ -256,12 +256,12 @@ TOUCH_ALL_INDEX_MAP = {
 # it. Daily bars are the only thing fetched; weekly/monthly are resampled from
 # them, same as the EMA Narrow scanner does.
 CANDLE_PATTERN_LABELS = {
-    "bullish_engulfing": "Bullish Engulfing",
-    "bearish_engulfing": "Bearish Engulfing",
+    "bullish_strong": "Strong Bullish",
+    "bearish_strong": "Strong Bearish",
 }
 CANDLE_PATTERN_SIGNAL = {
-    "bullish_engulfing": "BUY",
-    "bearish_engulfing": "SELL",
+    "bullish_strong": "BUY",
+    "bearish_strong": "SELL",
 }
 CANDLE_TIMEFRAMES = {
     "daily":   {"resample": None, "fetch_days": 120},
@@ -270,24 +270,43 @@ CANDLE_TIMEFRAMES = {
 }
 CANDLE_DEFAULT_TIMEFRAME = "daily"
 
+# A candle counts as "strong" when its body covers at least this much of its
+# own high-low range — i.e. a decisive move with small wicks. 60% is the usual
+# marubozu-ish cut-off; raise it for cleaner (and fewer) matches.
+CANDLE_STRONG_BODY_PCT = 60.0
 
-def _detect_engulfing(po: float, pc: float, o: float, c: float) -> Optional[str]:
-    """Engulfing pattern for the latest candle, or None.
 
-    Bullish: a down candle followed by an up candle whose body covers it
-    (open <= prev close, close >= prev open); bearish is the mirror image.
-    Bodies are compared with >=/<= so a candle opening exactly at the previous
-    close still counts. A previous doji (open == close) is rejected outright —
-    a zero-height body is covered by anything, which would otherwise mark
-    almost every candle as engulfing."""
-    prev_body = abs(pc - po)
-    body      = abs(c - o)
-    if prev_body <= 0 or body < prev_body:
+def _body_strength_pct(o: float, h: float, l: float, c: float) -> Optional[float]:
+    """How much of the candle's high-low range its body covers, in percent.
+
+    None when the range is zero (a flat bar), which can't be judged strong."""
+    rng = h - l
+    if rng <= 0:
         return None
-    if c > o and pc < po and o <= pc and c >= po:
-        return "bullish_engulfing"
-    if c < o and pc > po and o >= pc and c <= po:
-        return "bearish_engulfing"
+    return abs(c - o) / rng * 100.0
+
+
+def _detect_strong_pair(po: float, ph: float, pl: float, pc: float,
+                        o: float, h: float, l: float, c: float) -> Optional[str]:
+    """Two consecutive strong candles that flip direction, or None.
+
+    Bullish: a red (down) previous candle followed by a green (up) latest one;
+    bearish is the mirror image. BOTH candles must be strong — body covering at
+    least CANDLE_STRONG_BODY_PCT of their own high-low range. There is no
+    engulfing requirement: the latest candle does not have to swallow the
+    previous body, the pair just has to be two decisive moves the opposite way.
+    A doji has a ~zero body, so it fails the strength test on its own and can
+    never be half of a match."""
+    prev_strength = _body_strength_pct(po, ph, pl, pc)
+    strength      = _body_strength_pct(o, h, l, c)
+    if prev_strength is None or strength is None:
+        return None
+    if prev_strength < CANDLE_STRONG_BODY_PCT or strength < CANDLE_STRONG_BODY_PCT:
+        return None
+    if pc < po and c > o:
+        return "bullish_strong"
+    if pc > po and c < o:
+        return "bearish_strong"
     return None
 
 
@@ -971,13 +990,13 @@ class EmaRsiFilterService:
         return final
 
     # ------------------------------------------------------------------
-    # Candlestick patterns (engulfing) on the futures watchlist
+    # Candlestick patterns (strong candle pairs) on the futures watchlist
     # ------------------------------------------------------------------
 
     def _analyse_candlestick(self, symbol: str, current_price: float,
                              df: Optional[pd.DataFrame],
                              resample: Optional[str] = None) -> Optional[Dict]:
-        """Latest candle vs. the one before it — engulfing or not.
+        """Latest candle plus the one before it — both strong and flipping direction, or not.
 
         Returns a row for every symbol with at least two candles (`pattern` is
         None and `matched` False when nothing fires), or None when there isn't
@@ -1004,9 +1023,11 @@ class EmaRsiFilterService:
         if o <= 0 or po <= 0 or l <= 0:
             return None
 
-        pattern    = _detect_engulfing(po, pc, o, c)
+        pattern    = _detect_strong_pair(po, ph, pl, pc, o, h, l, c)
         prev_body  = abs(pc - po)
         body       = abs(c - o)
+        strength      = _body_strength_pct(o, h, l, c)
+        prev_strength = _body_strength_pct(po, ph, pl, pc)
 
         def _vol(row) -> Optional[float]:
             try:
@@ -1032,9 +1053,16 @@ class EmaRsiFilterService:
             "prev_low":       round(pl, 2),
             "change_pct":     round((c - o) / o * 100, 2),
             "body_pct":       round(body / o * 100, 2),
-            # How much bigger this body is than the one it swallowed — the
-            # practical "strength" of the engulfing, and what results sort on.
-            "engulf_ratio":   round(body / prev_body, 2) if prev_body > 0 else None,
+            # Body-to-range of each candle, and the weaker of the two. Sorting
+            # on the weaker one puts the pairs where BOTH candles are decisive
+            # at the top, instead of one monster candle carrying a mediocre one.
+            "body_strength":      round(strength, 2) if strength is not None else None,
+            "prev_body_strength": round(prev_strength, 2) if prev_strength is not None else None,
+            "strength_pct":       (round(min(strength, prev_strength), 2)
+                                   if strength is not None and prev_strength is not None else None),
+            # Size of this body relative to the previous one — no longer part of
+            # the rule, kept as a read on whether the move is accelerating.
+            "body_ratio":     round(body / prev_body, 2) if prev_body > 0 else None,
             "range_pct":      round((h - l) / l * 100, 2),
             "volume":         volume,
             "volume_ratio":   (round(volume / prev_volume, 2)
@@ -1047,7 +1075,7 @@ class EmaRsiFilterService:
                                timeframe: str = CANDLE_DEFAULT_TIMEFRAME,
                                progress_cb=None) -> Dict:
         """Scan the futures watchlist (TOUCH_ALL_SYMBOLS) for bullish/bearish
-        engulfing candles on the selected timeframe (daily/weekly/monthly).
+        strong candle pairs on the selected timeframe (daily/weekly/monthly).
 
         Same background-job shape as run_ema_touch_all_filter: symbols are
         processed in batches and progress_cb(done, total, partial) is invoked
@@ -1057,7 +1085,7 @@ class EmaRsiFilterService:
         tf_cfg = CANDLE_TIMEFRAMES.get(timeframe) or CANDLE_TIMEFRAMES[CANDLE_DEFAULT_TIMEFRAME]
         stocks = list(TOUCH_ALL_SYMBOLS)
         logger.info(f"Candlestick filter: scanning {len(stocks)} futures watchlist "
-                    f"symbols for engulfing patterns on {timeframe}...")
+                    f"symbols for strong candle pairs on {timeframe}...")
 
         # Quote keys differ per instrument (indices aren't NSE:<symbol>), so keep
         # a reverse map to get back to the plain watchlist name.
@@ -1097,9 +1125,9 @@ class EmaRsiFilterService:
         batch_size = 50
 
         def _snapshot() -> Dict:
-            """Sorted copy of everything found so far (strongest engulfing first)."""
+            """Sorted copy of everything found so far (strongest pair first)."""
             return {
-                "results": sorted(results, key=lambda r: -(r.get("engulf_ratio") or 0)),
+                "results": sorted(results, key=lambda r: -(r.get("strength_pct") or 0)),
                 "scanned": len(all_results),
                 "total":   total,
                 "skipped": sorted(skipped),
