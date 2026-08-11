@@ -1,5 +1,5 @@
 {
-  "date": "2026-08-10",
+  "date": "2026-08-11",
   "eod_handled": true,
   "stocks": {
     "360ONE": {
@@ -78,7 +78,35 @@
       "phase": "no_setup"
     },
     "BPCL": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 317.6,
+      "sl_level": 318.95,
+      "sl_risk": 2124.9,
+      "ltp": 315.35,
+      "ltp_time": "2026-08-11T15:05:01.528999",
+      "qty": 1574,
+      "entry_time": "2026-08-11T10:50:16.997709",
+      "entry_placed_ts": 1786425616.99771,
+      "entry_limit_price": 316.85,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087046422091718656",
+          "filled": true,
+          "entry_price": 317.5,
+          "filled_qty": 1574,
+          "sl_order_id": "2087046423048019968",
+          "target_order_id": "2087046423681359872",
+          "closed": true
+        }
+      ],
+      "entry_price": 317.5,
+      "target_level": 314.9,
+      "exit_time": "2026-08-11T15:05:02.278960",
+      "exit_price": 315.35,
+      "exit_reason": "Time Exit",
+      "realized_pnl": 3384.1
     },
     "CANBK": {
       "phase": "no_setup"
@@ -129,7 +157,35 @@
       "phase": "no_setup"
     },
     "EXIDEIND": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 493.45,
+      "sl_level": 496.4,
+      "sl_risk": 2988.35,
+      "ltp": 484.3,
+      "ltp_time": "2026-08-11T15:05:01.529010",
+      "qty": 1013,
+      "entry_time": "2026-08-11T10:51:05.435440",
+      "entry_placed_ts": 1786425665.4354408,
+      "entry_limit_price": 492.35,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087046625251221504",
+          "filled": true,
+          "entry_price": 493.23884501480757,
+          "filled_qty": 1013,
+          "sl_order_id": "2087046648290533376",
+          "target_order_id": "2087046648936456192",
+          "closed": true
+        }
+      ],
+      "entry_price": 493.23884501480757,
+      "target_level": 478.8,
+      "exit_time": "2026-08-11T15:05:02.776787",
+      "exit_price": 484.66283316880555,
+      "exit_reason": "Time Exit",
+      "realized_pnl": 8687.5
     },
     "FEDERALBNK": {
       "phase": "no_setup"
@@ -141,45 +197,10 @@
       "phase": "no_setup"
     },
     "GLENMARK": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 2283.5,
-      "sl_level": 2270.5,
-      "sl_risk": 2834.0,
-      "ltp": 2269.0,
-      "ltp_time": "2026-08-10T11:03:49.286868",
-      "exit_reason": "Invalidated (SL hit before entry)"
+      "phase": "no_setup"
     },
     "GODREJCP": {
-      "phase": "done",
-      "direction": "long",
-      "trigger": 1028.4,
-      "sl_level": 1020.7,
-      "sl_risk": 3742.2,
-      "ltp": 1032.2,
-      "ltp_time": "2026-08-10T15:05:10.289524",
-      "qty": 486,
-      "entry_time": "2026-08-10T12:34:33.322283",
-      "entry_placed_ts": 1786345473.322285,
-      "entry_limit_price": 1030.5,
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2086710275142508544",
-          "filled": true,
-          "entry_price": 1027.8989711934153,
-          "filled_qty": 486,
-          "sl_order_id": "2086710276740538368",
-          "target_order_id": "2086710277361295360",
-          "closed": true
-        }
-      ],
-      "entry_price": 1027.8989711934153,
-      "target_level": 1052.5,
-      "exit_time": "2026-08-10T15:05:11.430318",
-      "exit_price": 1032.3041152263374,
-      "exit_reason": "Time Exit",
-      "realized_pnl": 2140.9
+      "phase": "no_setup"
     },
     "GODREJPROP": {
       "phase": "no_setup"
@@ -257,7 +278,35 @@
       "phase": "no_setup"
     },
     "KPITTECH": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 624.0,
+      "sl_level": 621.1,
+      "sl_risk": 2322.9,
+      "ltp": 632.4,
+      "ltp_time": "2026-08-11T12:12:32.533255",
+      "qty": 801,
+      "entry_time": "2026-08-11T10:55:24.028142",
+      "entry_placed_ts": 1786425924.0281432,
+      "entry_limit_price": 625.25,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087047709873070080",
+          "filled": true,
+          "entry_price": 624.4171036204743,
+          "filled_qty": 801,
+          "sl_order_id": "2087047710892285952",
+          "target_order_id": "2087047711538208768",
+          "closed": true
+        }
+      ],
+      "entry_price": 624.4171036204743,
+      "target_level": 632.5,
+      "exit_time": "2026-08-11T12:12:32.765421",
+      "exit_price": 632.5,
+      "exit_reason": "Target Hit",
+      "realized_pnl": 6474.4
     },
     "LICI": {
       "phase": "no_setup"
@@ -347,35 +396,7 @@
       "phase": "no_setup"
     },
     "PERSISTENT": {
-      "phase": "done",
-      "direction": "short",
-      "trigger": 5515.0,
-      "sl_level": 5543.5,
-      "sl_risk": 2565.0,
-      "ltp": 5478.0,
-      "ltp_time": "2026-08-10T14:06:00.648145",
-      "qty": 90,
-      "entry_time": "2026-08-10T10:55:58.493764",
-      "entry_placed_ts": 1786339558.493765,
-      "entry_limit_price": 5503.5,
-      "broker_positions": [
-        {
-          "broker_idx": 1,
-          "entry_order_id": "2086685466610294784",
-          "filled": true,
-          "entry_price": 5515.0,
-          "filled_qty": 90,
-          "sl_order_id": "2086685467570790400",
-          "target_order_id": "2086685468048941056",
-          "closed": true
-        }
-      ],
-      "entry_price": 5515.0,
-      "target_level": 5475.0,
-      "exit_time": "2026-08-10T14:06:00.850724",
-      "exit_price": 5475.0,
-      "exit_reason": "Target Hit",
-      "realized_pnl": 3600.0
+      "phase": "no_setup"
     },
     "PETRONET": {
       "phase": "no_setup"
@@ -396,7 +417,14 @@
       "phase": "no_setup"
     },
     "POLYCAB": {
-      "phase": "no_setup"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 9114.5,
+      "sl_level": 9055.0,
+      "sl_risk": 3213.0,
+      "ltp": 9050.0,
+      "ltp_time": "2026-08-11T11:50:36.568866",
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "POWERINDIA": {
       "phase": "no_setup"

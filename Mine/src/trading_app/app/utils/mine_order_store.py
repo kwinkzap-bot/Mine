@@ -53,6 +53,14 @@ class MineOrderStore:
             MineOrderStore._save(orders)
 
     @staticmethod
+    def get_order(order_id: str) -> dict:
+        with _lock:
+            for o in MineOrderStore._load():
+                if o['id'] == order_id:
+                    return o
+            return {}
+
+    @staticmethod
     def get_pending_orders() -> list:
         with _lock:
             orders = MineOrderStore._load()
@@ -86,13 +94,17 @@ class MineOrderStore:
                 MineOrderStore._save(orders)
             return found
 
+    # Editable = not yet filled. PENDING/EXECUTING are Mine-mode orders the
+    # backend monitor still owns; OPEN is a LIMIT order resting at the brokers.
+    EDITABLE_STATUSES = ('PENDING', 'EXECUTING', 'OPEN')
+
     @staticmethod
     def update_price(order_id: str, new_price: float) -> bool:
         with _lock:
             orders = MineOrderStore._load()
             found = False
             for o in orders:
-                if o['id'] == order_id and o.get('status') == 'PENDING':
+                if o['id'] == order_id and o.get('status') in MineOrderStore.EDITABLE_STATUSES:
                     o['price'] = new_price
                     found = True
                     break

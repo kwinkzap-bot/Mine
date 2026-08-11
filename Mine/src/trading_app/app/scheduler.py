@@ -689,8 +689,76 @@ class MarketScheduler:
                 },
             )
             logger.info(f"[Expiry H/L Notify] Saved notification — {summary}")
+
+            self._send_expiry_hl_telegram(buy_signals, sell_signals, time_label)
         except Exception as e:
             logger.error(f"[Expiry H/L Notify] Unexpected error: {e}", exc_info=True)
+
+    # Long lists would blow past Telegram's 4096-char cap and get silently
+    # truncated mid-symbol, so each side is capped and the rest counted.
+    _EXPIRY_HL_TG_MAX_PER_SIDE = 20
+
+    def _send_expiry_hl_telegram(self, buy_signals: list, sell_signals: list, time_label: str) -> None:
+        """Fire-and-forget Telegram alert for the hourly Expiry H/L breakout
+        scan. Unlike the in-app bell — which logs every hour so you can see the
+        scan ran — this only fires when at least one stock actually broke out;
+        an hourly 'no breakouts' ping would be pure noise.
+
+        Credentials come from the user's env file; with either unset, or with
+        EXPIRY_HL_TELEGRAM=false, this is silently a no-op and the bell keeps
+        working on an install that has never set Telegram up."""
+        if not (buy_signals or sell_signals):
+            return
+        try:
+            from trading_app.app.utils.user_env import UserEnvManager
+            user = self._rtp_username()
+
+            def _uvar(key: str, default: str = '') -> str:
+                return (UserEnvManager.get_user_var(user, key, default) or '').strip()
+
+            if _uvar('EXPIRY_HL_TELEGRAM', 'true').lower() == 'false':
+                return
+            token   = _uvar('TELEGRAM_BOT_TOKEN')
+            chat_id = _uvar('TELEGRAM_CHAT_ID')
+            if not (token and chat_id):
+                return
+
+            def _lines(signals: list, label: str, emoji: str) -> list:
+                if not signals:
+                    return []
+                out = [f"{emoji} {label} ({len(signals)})"]
+                for s in signals[:self._EXPIRY_HL_TG_MAX_PER_SIDE]:
+                    level = s.get('expiry_high') if label == 'BUY' else s.get('expiry_low')
+                    out.append(f"  {s.get('symbol')}  ₹{s.get('current_price')}  "
+                               f"(exp {'H' if label == 'BUY' else 'L'} ₹{level})")
+                extra = len(signals) - self._EXPIRY_HL_TG_MAX_PER_SIDE
+                if extra > 0:
+                    out.append(f"  …+{extra} more")
+                return out
+
+            message = '\n'.join(
+                [f"📊 Expiry H/L Breakout — {time_label} (1H)"]
+                + _lines(buy_signals, 'BUY', '🟢')
+                + _lines(sell_signals, 'SELL', '🔴')
+            )
+
+            def _send() -> None:
+                try:
+                    from trading_app.service.telegram_service import TelegramService
+                    result = TelegramService(token=token, chat_id=chat_id).send_text(message)
+                    if result.get('success'):
+                        logger.info("[Expiry H/L Notify] Telegram alert sent")
+                    else:
+                        logger.error(f"[Expiry H/L Notify] Telegram alert failed: {result.get('error')}")
+                except Exception as e:
+                    logger.error(f"[Expiry H/L Notify] Telegram alert failed: {e}")
+
+            # Off-thread: send_text allows a 10s HTTP timeout, and the scan job
+            # shouldn't sit on the scheduler's worker waiting for Telegram.
+            import threading
+            threading.Thread(target=_send, daemon=True, name='ExpiryHLNotify').start()
+        except Exception as e:
+            logger.error(f"[Expiry H/L Notify] Telegram alert setup failed: {e}")
 
     # ── RTP algo management ───────────────────────────────────────────────────
 

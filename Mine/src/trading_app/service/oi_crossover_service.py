@@ -93,6 +93,12 @@ RETRY_PAUSE_SEC = 20.0
 
 _BASEDIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
 DB_PATH = os.path.join(_BASEDIR, 'oi_data.db')
+
+# Historical mode only offers sessions from here on. Everything earlier in the
+# table came from backfill_from_oi_history(), which can only reconstruct the
+# index chains at a different resolution than the live scanner — offering those
+# days next to real ones invites comparing two different things.
+HISTORY_FLOOR_DATE = '2026-08-01'
 _CONSTITUENTS_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', '.cache', 'index_constituents.json')
 )
@@ -102,6 +108,16 @@ _CONSTITUENTS_PATH = os.path.abspath(
 # rate into the same 429 wall they are pacing to avoid, so a second one steps
 # aside rather than queueing behind the first.
 _SCAN_LOCK = threading.Lock()
+
+# symbol -> (fetched_at, quote). Shared across requests. Short-lived on
+# purpose: the quote carries a tradable premium, not just a strike, so it is
+# refreshed on roughly the grid's own cadence rather than the scanner's.
+_ATM_CACHE: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}
+_ATM_CACHE_TTL = 20.0  # see atm_quotes()
+
+# symbol -> lot size (None when unknown). Held for the process: a lot size
+# changes on an exchange revision, not intraday.
+_LOT_SIZE_CACHE: Dict[str, Optional[int]] = {}
 
 # The scanner's own session window. The scheduler already guards its job, but
 # the /scan endpoint and any script call scan() directly, and a sweep run when
@@ -241,6 +257,17 @@ class OICrossoverService:
                 ''')
                 c.execute('''CREATE INDEX IF NOT EXISTS idx_xevents_day_sym
                              ON oi_crossover_events (trade_date, symbol, ts)''')
+                # The market at the instant the lines crossed. Added after the
+                # first sessions were recorded: a cross that fired at 9:30 is a
+                # statement about 9:30's prices, and the screen was showing
+                # whatever the chain said at render time instead. Older events
+                # keep NULL — snapshot() recovers their spot from the series
+                # row at the same ts, but no premium was ever stored, so those
+                # rows show a dash rather than a price from the wrong moment.
+                ev_cols = {r[1] for r in c.execute('PRAGMA table_info(oi_crossover_events)')}
+                for col in ('spot', 'atm_strike', 'ce_ltp', 'pe_ltp'):
+                    if col not in ev_cols:
+                        c.execute(f'ALTER TABLE oi_crossover_events ADD COLUMN {col} REAL')
                 # Every scan attempt, good or bad. Without this a broker-auth
                 # failure is indistinguishable from "the market hasn't opened
                 # yet" — both leave the series table untouched, and the screen
@@ -343,6 +370,10 @@ class OICrossoverService:
         ce_oi = pe_oi = ce_chg = pe_chg = 0
         strikes = 0
         spot = None
+        # (strike, CE/PE, ltp) for every option row, so the ATM premium at this
+        # exact moment can be read off the chain we are already holding — see
+        # _atm_from_chain. Free: no second call, no second point in time.
+        chain: List[Tuple[float, str, Any]] = []
         for row in rows:
             opt_type = (row.get('option_type') or '').upper()
             if opt_type not in ('CE', 'PE'):
@@ -352,6 +383,8 @@ class OICrossoverService:
                     spot = row.get('ltp')
                 continue
             strikes += 1
+            if row.get('strike_price') is not None:
+                chain.append((float(row['strike_price']), opt_type, row.get('ltp')))
             oi = int(row.get('oi') or 0)
             oich = int(row.get('oich') or 0)
             if opt_type == 'CE':
@@ -373,6 +406,8 @@ class OICrossoverService:
         ce_oi = int(data.get('callOi') or ce_oi)
         pe_oi = int(data.get('putOi') or pe_oi)
 
+        atm = self._atm_from_chain(chain, spot)
+
         return {
             'symbol': symbol,
             'spot': spot,
@@ -381,7 +416,224 @@ class OICrossoverService:
             'ce_chg': ce_chg,
             'pe_chg': pe_chg,
             'pcr': round(pe_oi / ce_oi, 2) if ce_oi else 0.0,
+            'atm_strike': atm[0],
+            'atm_ce_ltp': atm[1],
+            'atm_pe_ltp': atm[2],
         }
+
+    @staticmethod
+    def _atm_from_chain(chain: List[Tuple[float, str, Any]], spot: Any
+                        ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+        """(strike, CE premium, PE premium) nearest the money, off chain rows.
+
+        Same rule as ``atm_quote`` — the strike is the chain's own, not spot
+        rounded to a step we guessed — but reading a chain the caller already
+        has instead of making a call. That is what makes it usable inside a
+        215-symbol sweep, and what lets a crossover record the premium at the
+        instant it fired rather than whenever the screen next asked.
+        """
+        if spot is None or not chain:
+            return (None, None, None)
+        try:
+            spot = float(spot)
+        except (TypeError, ValueError):
+            return (None, None, None)
+        strike = min({s for s, _t, _l in chain}, key=lambda s: abs(s - spot))
+
+        def leg(kind: str) -> Optional[float]:
+            ltp = next((l for s, t, l in chain if s == strike and t == kind), None)
+            # 0 is Fyers' answer for a contract that has not traded, and a
+            # premium of zero is not a real price — treat it as no quote.
+            return float(ltp) if ltp else None
+
+        return (strike, leg('CE'), leg('PE'))
+
+    # ── ATM quote ────────────────────────────────────────────────────
+
+    def atm_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """The ATM strike and both its premiums, off the live chain.
+
+        The strike is read from the chain rather than rounded off spot: the
+        step is not a constant the app can assume (it varies by symbol and
+        Fyers changes it as a scrip's price moves), and a strike we invented
+        is a strike the broker will reject. ``strikecount=1`` keeps this to
+        the rows around the money instead of the 50 a scan pulls.
+
+        Both sides come back because the caller knows the direction and this
+        does not — and the CE and PE are in the response either way, so
+        returning both costs nothing over returning one.
+        """
+        fyers = self._fyers()
+        if fyers is None:
+            return None
+        try:
+            from trading_app.service.fyers_data_service import _rate_limiter
+            _rate_limiter.wait()
+            resp = fyers.optionchain(data={'symbol': self.underlying_for(symbol),
+                                           'strikecount': 1})
+        except Exception as e:
+            logger.debug(f"[OIX] {symbol}: ATM chain fetch failed: {e}")
+            return None
+
+        if not isinstance(resp, dict) or resp.get('s') != 'ok':
+            return None
+
+        rows = (resp.get('data') or {}).get('optionsChain') or []
+        spot = next((r.get('ltp') for r in rows
+                     if (r.get('option_type') or '').upper() not in ('CE', 'PE')), None)
+        options = [r for r in rows
+                   if r.get('strike_price') is not None
+                   and (r.get('option_type') or '').upper() in ('CE', 'PE')]
+        if not options or spot is None:
+            return None
+
+        strike = min({float(r['strike_price']) for r in options},
+                     key=lambda s: abs(s - float(spot)))
+
+        def leg(kind: str) -> Optional[float]:
+            row = next((r for r in options
+                        if float(r['strike_price']) == strike
+                        and (r.get('option_type') or '').upper() == kind), None)
+            # 0 is what Fyers reports for a contract that has not traded, and
+            # a premium of zero is not a real price — treat it as no quote.
+            ltp = (row or {}).get('ltp')
+            return float(ltp) if ltp else None
+
+        return {'strike': strike, 'ce_ltp': leg('CE'), 'pe_ltp': leg('PE'),
+                'spot': float(spot), 'lot_size': self.lot_size(symbol)}
+
+    def lot_size(self, symbol: str) -> Optional[int]:
+        """Contract lot size for the symbol's derivatives.
+
+        A lookup in the provider's cached instrument dump, not an API call —
+        but the dump is scanned per lookup, so the answer is memoised for the
+        process: lot sizes change only on an exchange revision.
+        """
+        if symbol in _LOT_SIZE_CACHE:
+            return _LOT_SIZE_CACHE[symbol]
+        size = None
+        try:
+            if hasattr(self.provider, 'get_lot_size'):
+                raw = self.provider.get_lot_size(symbol)
+                # get_lot_size answers 1 for "not found", which is not a real
+                # F&O lot for anything this scanner covers — treat it as
+                # unknown rather than showing a wrong quantity beside a price.
+                size = int(raw) if raw and int(raw) > 1 else None
+        except Exception as e:
+            logger.debug(f"[OIX] {symbol}: lot size lookup failed: {e}")
+        _LOT_SIZE_CACHE[symbol] = size
+        return size
+
+    def atm_quotes(self, symbols: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
+        """ATM strike and premiums per symbol, one chain call each.
+
+        Deliberately caller-driven and not part of ``snapshot``: the grid asks
+        only for the rows the user is actually looking at. A snapshot can carry
+        200 symbols, and 200 extra chain calls on every 60s auto-refresh would
+        eat the app-wide Fyers budget that the scanner and every chart share.
+
+        The short cache only coalesces bursts — several renders inside one
+        refresh — rather than holding a price across refreshes: a premium the
+        user is about to trade on has to be roughly current, which is why this
+        TTL is well under the scanner's own 3-minute cadence.
+        """
+        now = time.time()
+        out: Dict[str, Optional[Dict[str, Any]]] = {}
+        for symbol in symbols:
+            hit = _ATM_CACHE.get(symbol)
+            if hit and now - hit[0] < _ATM_CACHE_TTL:
+                out[symbol] = hit[1]
+                continue
+            quote = self.atm_quote(symbol)
+            # Failures cache too, briefly: a symbol with no chain would
+            # otherwise be retried on every single refresh.
+            _ATM_CACHE[symbol] = (now, quote)
+            out[symbol] = quote
+        return out
+
+    # ── open positions ───────────────────────────────────────────────
+
+    def positions(self) -> Dict[str, Dict[str, Any]]:
+        """Today's filled OI-Crossover orders, valued at the live premium.
+
+        Keyed by symbol, which is what the grid joins on. Multiple buys of the
+        same contract net into one position at the quantity-weighted average
+        entry, so firing the button twice reads as one bigger position rather
+        than two rows fighting over the same cell.
+
+        The traded strike is priced, not the current ATM: spot drifts, and by
+        the afternoon the strike bought at 10 AM may be a step away from the
+        money. That is also why this pulls a wider chain than atm_quote does.
+        """
+        try:
+            from trading_app.app.utils.mine_order_store import MineOrderStore
+            # The store's own IST day boundary, rather than a second opinion
+            # about when "today" starts.
+            orders = MineOrderStore.get_today_orders() or []
+        except Exception as e:
+            logger.error(f"[OIX] positions: order store unreadable: {e}")
+            return {}
+
+        legs: Dict[Tuple[str, float, str], Dict[str, Any]] = {}
+        for o in orders:
+            if o.get('strategy') != 'oix' or o.get('status') != 'EXECUTED':
+                continue
+            qty = int(o.get('quantity') or 0)
+            entry = float(o.get('entry_price') or o.get('price') or 0)
+            if qty <= 0 or entry <= 0:
+                continue
+            # A SELL closes, so it nets against the buys on the same contract.
+            signed = qty if (o.get('action') or 'BUY').upper() == 'BUY' else -qty
+            key = (o['symbol'], float(o['strike']), (o.get('option_type') or '').upper())
+            leg = legs.setdefault(key, {'qty': 0, 'cost': 0.0})
+            leg['qty'] += signed
+            leg['cost'] += entry * signed
+
+        out: Dict[str, Dict[str, Any]] = {}
+        for (symbol, strike, opt_type), leg in legs.items():
+            if leg['qty'] <= 0:
+                continue  # flat or closed out — nothing left to value
+            entry = leg['cost'] / leg['qty']
+            ltp = self.strike_ltp(symbol, strike, opt_type)
+            out[symbol] = {
+                'strike': strike,
+                'option_type': opt_type,
+                'qty': leg['qty'],
+                'entry': round(entry, 2),
+                'ltp': ltp,
+                'pnl': round((ltp - entry) * leg['qty'], 2) if ltp is not None else None,
+            }
+        return out
+
+    def strike_ltp(self, symbol: str, strike: float,
+                   opt_type: str) -> Optional[float]:
+        """Live premium for one specific strike.
+
+        ``strikecount=10`` rather than the 1 an ATM lookup needs: the strike
+        being valued was at the money when it was bought, and this has to keep
+        finding it after spot has moved away from it.
+        """
+        fyers = self._fyers()
+        if fyers is None:
+            return None
+        try:
+            from trading_app.service.fyers_data_service import _rate_limiter
+            _rate_limiter.wait()
+            resp = fyers.optionchain(data={'symbol': self.underlying_for(symbol),
+                                           'strikecount': 10})
+        except Exception as e:
+            logger.debug(f"[OIX] {symbol}: strike quote failed: {e}")
+            return None
+        if not isinstance(resp, dict) or resp.get('s') != 'ok':
+            return None
+        for row in (resp.get('data') or {}).get('optionsChain') or []:
+            if (row.get('option_type') or '').upper() != opt_type:
+                continue
+            if row.get('strike_price') is None or float(row['strike_price']) != strike:
+                continue
+            ltp = row.get('ltp')
+            return float(ltp) if ltp else None
+        return None
 
     # ── scan ─────────────────────────────────────────────────────────
 
@@ -458,7 +710,9 @@ class OICrossoverService:
                 return True
             events.append((trade_date, symbol, ts,
                            'BULL' if diff > 0 else 'BEAR',
-                           totals['ce_chg'], totals['pe_chg']))
+                           totals['ce_chg'], totals['pe_chg'],
+                           totals['spot'], totals['atm_strike'],
+                           totals['atm_ce_ltp'], totals['atm_pe_ltp']))
             return True
 
         for symbol in symbols:
@@ -516,8 +770,9 @@ class OICrossoverService:
                        VALUES (?,?,?,?,?,?,?,?,?,?)''', rows)
                 conn.executemany(
                     '''INSERT OR IGNORE INTO oi_crossover_events
-                       (trade_date, symbol, ts, direction, ce_chg, pe_chg)
-                       VALUES (?,?,?,?,?,?)''', events)
+                       (trade_date, symbol, ts, direction, ce_chg, pe_chg,
+                        spot, atm_strike, ce_ltp, pe_ltp)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)''', events)
                 conn.commit()
         except Exception as e:
             logger.error(f"[OIX] Persist failed: {e}", exc_info=True)
@@ -640,10 +895,18 @@ class OICrossoverService:
                          ON s.symbol = m.symbol AND s.ts = m.ts
                        WHERE s.trade_date = ?''', (trade_date, trade_date)).fetchall()
 
+                # The series row at the same ts is the scan the cross was
+                # detected on, so its spot *is* the spot at the crossover —
+                # which recovers the price for every event recorded before the
+                # events table carried one of its own.
                 crosses: Dict[str, List[sqlite3.Row]] = {}
                 for row in conn.execute(
-                        '''SELECT * FROM oi_crossover_events
-                           WHERE trade_date = ? ORDER BY ts''', (trade_date,)):
+                        '''SELECT e.*, s.spot AS series_spot
+                           FROM oi_crossover_events e
+                           LEFT JOIN oi_crossover_series s
+                             ON s.trade_date = e.trade_date
+                            AND s.symbol = e.symbol AND s.ts = e.ts
+                           WHERE e.trade_date = ? ORDER BY e.ts''', (trade_date,)):
                     crosses.setdefault(row['symbol'], []).append(row)
 
                 last_ts = conn.execute(
@@ -661,10 +924,19 @@ class OICrossoverService:
             last = events[-1]
             ce_chg, pe_chg = row['ce_chg'], row['pe_chg']
             direction = last['direction']
+            # Everything below is the *latest* scan; these four are the market
+            # at the moment the cross fired. The premium is only the leg the
+            # cross implies (CE on a BULL, PE on a BEAR) — the other one is
+            # not the trade, so shipping it would only invite showing it.
+            cross_ltp = last['ce_ltp'] if direction == 'BULL' else last['pe_ltp']
             out.append({
                 'symbol': row['symbol'],
                 'direction': direction,
                 'spot': row['spot'],
+                'cross_spot': last['spot'] if last['spot'] is not None
+                              else last['series_spot'],
+                'cross_strike': last['atm_strike'],
+                'cross_ltp': cross_ltp,
                 'ce_oi': row['ce_oi'],
                 'pe_oi': row['pe_oi'],
                 'pcr': row['pcr'],
@@ -740,11 +1012,14 @@ class OICrossoverService:
                 'points': points, 'events': events}
 
     def available_dates(self, limit: int = 60) -> List[str]:
+        """Recorded sessions, newest first, no earlier than HISTORY_FLOOR_DATE."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 return [r[0] for r in conn.execute(
                     '''SELECT DISTINCT trade_date FROM oi_crossover_series
-                       ORDER BY trade_date DESC LIMIT ?''', (limit,))]
+                       WHERE trade_date >= ?
+                       ORDER BY trade_date DESC LIMIT ?''',
+                    (HISTORY_FLOOR_DATE, limit))]
         except Exception as e:
             logger.error(f"[OIX] available_dates failed: {e}")
             return []

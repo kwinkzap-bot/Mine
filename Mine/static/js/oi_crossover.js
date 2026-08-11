@@ -9,6 +9,10 @@
    per symbol that crossed today — a few hundred at most — so shipping the
    whole set once and narrowing it in the browser keeps every dropdown
    instant and costs one request per refresh instead of one per keystroke.
+
+   Lives as a tab on the Algo page, so it exposes window.OIX.activate() /
+   .deactivate() and does nothing until the tab is opened — a hidden tab
+   must not hold a 60s poll open. algoSwitch() in algo.js drives both.
    ================================================================ */
 
 (function () {
@@ -24,13 +28,31 @@
         scans: 0,
         symbols: 0,
         lastRun: null,
-        filters: { search: '', quality: 'all', crossCount: 0, oiChg: 0, sector: 'all' },
+        // Defaults mirror the `selected` options in the template; init() reads
+        // them back off the selects so the two can never drift, and so a soft
+        // reload (which restores the user's last dropdown values) doesn't leave
+        // the state saying one thing and the filter bar showing another.
+        filters: { search: '', quality: 'strong', crossCount: 0, oiChg: 10 },
         openSymbol: null,
         hiddenSeries: new Set(),
         chartMode: 'oi_change',
         chartData: null,
         displayRows: [],
         timer: null,
+        // symbol -> {strike, ce_ltp, pe_ltp}, filled in by a batch call for
+        // the rows on screen. null means "asked, and the chain had no answer",
+        // which is why it is distinguished from undefined ("not asked yet").
+        atm: {},
+        atmPending: false,
+        atmAt: 0,
+        // symbol -> {strike, option_type, qty, entry, ltp, pnl} for today's
+        // filled orders from this screen. Empty for every row never traded.
+        positions: {},
+        started: false,
+        // The row the open ticket is for. The order itself is built at send
+        // time, so the price the user typed is the price that goes out.
+        ticketRow: null,
+        ticketCloseTimer: null,
     };
 
     const $ = (id) => document.getElementById(id);
@@ -59,6 +81,10 @@
             maximumFractionDigits: Math.abs(n) < 1000 ? 2 : 1,
         });
     }
+
+    // Strikes come back as floats; Number() drops the trailing ".0" on the
+    // whole-rupee ones and leaves the half-rupee strikes intact.
+    const strikeText = (v) => String(Number(v));
 
     const hhmm = (ts) => (ts || '').slice(11, 16);
 
@@ -91,12 +117,70 @@
             if (f.quality !== 'all' && r.quality !== f.quality) return false;
             if (f.crossCount && r.cross_count > f.crossCount) return false;
             if (f.oiChg && r.oi_chg_pct < f.oiChg) return false;
-            if (f.sector !== 'all' && !(r.sectors || []).includes(f.sector)) return false;
             return true;
         });
     }
 
     // ── table ────────────────────────────────────────────────────────
+
+    // The cross direction picks the leg: a BULL buys the call, a BEAR the put.
+    // One definition, used by the two ATM columns, the Buy button and the
+    // ticket, so they can never disagree about which contract is meant.
+    const sideOf = (row) => (row.direction === 'BULL' ? 'CE' : 'PE');
+
+    // The resolved quote, or null while it is still pending or unavailable —
+    // callers that only care "do we have a strike" read this.
+    const atmOf = (row) => state.atm[row.symbol] || null;
+
+    // Live spot from the chain, falling back to the one the scan recorded.
+    // `live` says which, so the cell can dim a scan-age price — and so the
+    // column sorts on exactly the number it is showing.
+    const spotOf = (row) => {
+        const q = atmOf(row);
+        if (q && q.spot != null) return { value: q.spot, live: true };
+        if (row.spot != null) return { value: row.spot, live: false };
+        return null;
+    };
+
+    const atmPrice = (row) => {
+        const q = atmOf(row);
+        if (!q) return null;
+        const ltp = sideOf(row) === 'CE' ? q.ce_ltp : q.pe_ltp;
+        return (ltp === null || ltp === undefined) ? null : ltp;
+    };
+
+    // ── crossover-time prices ────────────────────────────────────────
+
+    // The row's headline numbers are the market at the moment the lines
+    // crossed, not the market now: a 9:30 cross is a statement about 9:30.
+    // The live price stays on screen underneath it, because the decision the
+    // row invites is "is this still worth taking", which needs both.
+    const num = (v) => (v === null || v === undefined ? null : Number(v));
+
+    // Percent move from the cross price to now — the number that says whether
+    // the signal has already been paid out. Null unless both ends are real.
+    function moveSince(from, to) {
+        if (from === null || to === null || !from) return null;
+        return (to - from) / Math.abs(from) * 100;
+    }
+
+    const signed = (pct) => `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+
+    // The second line under a cross-time price: what it is worth now, and how
+    // far it has come since. Historical mode has no live feed at all, so it
+    // gets nothing rather than a permanent "…".
+    function liveSub(row, liveValue, from, prefix) {
+        if (state.mode === 'historical') return '';
+        const wrap = (inner, cls) =>
+            `<span class="oix-live-sub${cls ? ' ' + cls : ''}">${inner}</span>`;
+        if (state.atm[row.symbol] === undefined) return wrap('…', 'oix-atm-wait');
+        if (liveValue === null) return wrap('—', 'oix-atm-wait');
+        const pct = moveSince(from, liveValue);
+        const move = pct === null ? ''
+            : ` <span class="oix-move oix-move-${pct >= 0 ? 'pos' : 'neg'}">` +
+              `${DataGrid.escape(signed(pct))}</span>`;
+        return wrap(`${prefix}${DataGrid.escape(money(liveValue))}${move}`);
+    }
 
     const COLUMNS = [
         {
@@ -107,6 +191,124 @@
         {
             key: 'direction', label: 'Crossover', sortable: true, align: 'center',
             badge: (v) => (v === 'BULL' ? 'pos' : 'neg'),
+        },
+        {
+            // The underlying where it was when the lines crossed, with the
+            // live price under it. Sorting follows the headline number, so
+            // the column orders by the price the cross actually happened at.
+            label: 'Spot', sortable: true, align: 'right', sortKey: 'spot_cross',
+            sortValue: (r) => {
+                const s = num(r.cross_spot);
+                return s === null ? -Infinity : s;
+            },
+            render: (_v, r) => {
+                const cross = num(r.cross_spot);
+                const live = spotOf(r);
+                const liveValue = live ? live.value : null;
+                if (cross === null) {
+                    // No spot recorded on the cross's own scan — fall back to
+                    // the live/scan price, dimmed, rather than an empty cell.
+                    if (liveValue === null) return '<span class="oix-atm-wait">—</span>';
+                    return `<span class="oix-spot-stale" title="No spot recorded at the ` +
+                           `crossover — this is the current price">` +
+                           `${DataGrid.escape(money(liveValue))}</span>`;
+                }
+                return `<span class="oix-spot" title="Spot at the ` +
+                       `${DataGrid.escape(clock12(r.cross_time))} crossover">` +
+                       `${DataGrid.escape(money(cross))}</span>` +
+                       liveSub(r, liveValue, cross, '');
+            },
+        },
+        {
+            // Resolved from the live chain, so it is the strike a broker will
+            // actually accept — not spot rounded to a step we guessed. Sorts
+            // on the number even while other rows are still resolving.
+            label: 'ATM Strike', sortable: true, align: 'right', sortKey: 'atm',
+            sortValue: (r) => atmOf(r) ? atmOf(r).strike : -Infinity,
+            render: (_v, r) => {
+                const q = state.atm[r.symbol];
+                // Historical rows have no live chain, so the cross's own
+                // strike is all there is — and all that is meaningful.
+                if (state.mode === 'historical' || q === undefined || q === null) {
+                    const at = num(r.cross_strike);
+                    if (at !== null) {
+                        return `<span class="oix-atm" title="ATM strike at the ` +
+                               `${DataGrid.escape(clock12(r.cross_time))} crossover">` +
+                               `${DataGrid.escape(strikeText(at))}</span>` +
+                               `<span class="oix-atm-side">${sideOf(r)}</span>`;
+                    }
+                    if (q === undefined) return '<span class="oix-atm-wait">…</span>';
+                    return '<span class="oix-atm-wait" ' +
+                           'title="No option chain for this symbol">—</span>';
+                }
+                // Live strike stays the headline: it is the contract the Buy
+                // button sends. The cross's strike only appears when spot has
+                // drifted far enough to move it, since that is exactly when
+                // the premium beside it belongs to a different contract.
+                const at = num(r.cross_strike);
+                const drifted = at !== null && at !== Number(q.strike);
+                return `<span class="oix-atm">${DataGrid.escape(strikeText(q.strike))}</span>` +
+                       `<span class="oix-atm-side">${sideOf(r)}</span>` +
+                       (drifted
+                           ? `<span class="oix-live-sub" title="ATM strike when the ` +
+                             `crossover fired — spot has moved since">was ` +
+                             `${DataGrid.escape(strikeText(at))}</span>`
+                           : '');
+            },
+        },
+        {
+            // The exchange lot for the symbol — one Buy sends lots × this many
+            // contracts, so it is the difference between a ₹24 premium costing
+            // ₹6,000 and costing ₹60,000.
+            label: 'Lot Size', sortable: true, align: 'right', sortKey: 'lot_size',
+            sortValue: (r) => {
+                const q = atmOf(r);
+                return q && q.lot_size ? q.lot_size : -Infinity;
+            },
+            render: (_v, r) => {
+                const q = state.atm[r.symbol];
+                if (q === undefined) return '<span class="oix-atm-wait">…</span>';
+                if (!q || !q.lot_size) {
+                    return '<span class="oix-atm-wait" title="Lot size not in the ' +
+                           'instrument dump">—</span>';
+                }
+                return `<span class="oix-lot">${DataGrid.escape(String(q.lot_size))}</span>`;
+            },
+        },
+        {
+            // The premium of the contract the Buy button would actually send —
+            // the CE on a BULL, the PE on a BEAR. Same chain call as the
+            // strike, so it costs nothing extra, and it is what turns the row
+            // into a decision: a 12% OI move behind a ₹4 option is not the
+            // same trade as one behind a ₹180 option.
+            label: 'ATM Price', sortable: true, align: 'right', sortKey: 'atm_ltp_cross',
+            sortValue: (r) => {
+                const at = num(r.cross_ltp);
+                return at === null ? -Infinity : at;
+            },
+            render: (_v, r) => {
+                const at = num(r.cross_ltp);
+                const live = atmPrice(r);
+                if (at === null) {
+                    // Crosses recorded before the scanner started storing the
+                    // premium. Showing the live price here would read as the
+                    // cross price, so the cell says so instead of guessing.
+                    if (state.mode === 'historical') {
+                        return '<span class="oix-atm-wait" title="This crossover was ' +
+                               'recorded before the crossover-time premium was stored">—</span>';
+                    }
+                    const q = state.atm[r.symbol];
+                    if (q === undefined) return '<span class="oix-atm-wait">…</span>';
+                    return '<span class="oix-atm-wait" title="No premium recorded at the ' +
+                           'crossover — only the live price below is known">—</span>' +
+                           liveSub(r, live, null, '₹');
+                }
+                return `<span class="oix-atm-ltp" title="Premium of the ` +
+                       `${DataGrid.escape(strikeText(r.cross_strike))} ${sideOf(r)} at the ` +
+                       `${DataGrid.escape(clock12(r.cross_time))} crossover">` +
+                       `₹${DataGrid.escape(money(at))}</span>` +
+                       liveSub(r, live, at, '₹');
+            },
         },
         { key: 'ce_oi', label: 'Call OI', sortable: true, align: 'right', format: compact },
         { key: 'pe_oi', label: 'Put OI', sortable: true, align: 'right', format: compact },
@@ -139,6 +341,57 @@
             tone: (v) => (v >= 10 ? 'muted' : null),
             title: (v) => (v >= 10 ? `${v} crosses today — choppy, treat the tag with care` : ''),
         },
+        {
+            // Only rows you have actually traded from this screen carry a
+            // number; everything else is blank rather than a zero, because a
+            // zero P&L and no position are not the same statement.
+            label: 'P&L', sortable: true, align: 'right', sortKey: 'pnl',
+            sortValue: (r) => {
+                const p = state.positions[r.symbol];
+                return p && p.pnl !== null && p.pnl !== undefined ? p.pnl : -Infinity;
+            },
+            render: (_v, r) => {
+                const p = state.positions[r.symbol];
+                if (!p) return '<span class="oix-pnl-none"></span>';
+                const held = `${p.qty} @ ₹${money(p.entry)} · ` +
+                             `${strikeText(p.strike)} ${p.option_type}`;
+                if (p.pnl === null || p.pnl === undefined) {
+                    return `<span class="oix-atm-wait" title="Holding ${DataGrid.escape(held)} — ` +
+                           `no live price for that strike">—</span>`;
+                }
+                const tone = p.pnl >= 0 ? 'pos' : 'neg';
+                return `<span class="oix-pnl oix-pnl-${tone}" ` +
+                       `title="${DataGrid.escape(held)}, now ₹${DataGrid.escape(money(p.ltp))}">` +
+                       `${DataGrid.escape(DataGrid.inr(p.pnl))}</span>`;
+            },
+        },
+        {
+            label: 'Order', align: 'center',
+            // Disabled until the ATM strike is known, because the strike is
+            // the one field of the order that cannot be inferred from the row.
+            // Historical mode never offers it: those crosses are days old and
+            // the strike shown is today's.
+            render: (_v, r) => {
+                const q = atmOf(r);
+                const ltp = atmPrice(r);
+                if (state.mode === 'historical') {
+                    return '<span class="oix-order-na" title="Live mode only">—</span>';
+                }
+                // Orders are limit-only, so a row without a premium has no
+                // price to start from and cannot be ordered here.
+                if (!q || ltp === null) {
+                    return '<button class="oix-order-btn" disabled ' +
+                           `title="${q ? 'No traded price for this contract'
+                                       : 'Waiting for the ATM strike'}">Buy</button>`;
+                }
+                const side = sideOf(r);
+                return `<button class="oix-order-btn oix-order-${side.toLowerCase()}" ` +
+                       `data-order="${DataGrid.escape(r.symbol)}" ` +
+                       `title="Buy ${DataGrid.escape(strikeText(q.strike))} ${side} ` +
+                       `at limit ₹${DataGrid.escape(money(toTick(ltp)))}">` +
+                       `Buy ${side}</button>`;
+            },
+        },
     ];
 
     // An empty grid has several quite different causes, and "no data" tells
@@ -164,8 +417,59 @@
         return `${state.symbols} symbols scanned ${state.scans}× — none have crossed yet today`;
     }
 
+    // ── ATM quotes ───────────────────────────────────────────────────
+
+    // One chain call per symbol on the server, so this asks only for the rows
+    // the filters left on screen. The endpoint caps a request at 40 symbols;
+    // a wider filter than that resolves the first 40 and picks up the rest on
+    // the next render.
+    const ATM_BATCH = 40;
+
+    // The strike alone could be fetched once and kept, but the premium beside
+    // it goes stale in seconds, so the whole quote is re-pulled on roughly the
+    // grid's own cadence. Slightly under REFRESH_MS so a refresh doesn't
+    // regularly just miss the window and leave the price a cycle behind.
+    const ATM_STALE_MS = 45_000;
+
+    function fetchAtm(rows) {
+        if (state.mode === 'historical' || state.atmPending) return;
+
+        // Re-ask for everything on screen once the quotes age out; in between,
+        // only for symbols a widened filter has newly brought into view. This
+        // is also what stops renderTable -> fetchAtm -> renderTable from
+        // looping: a fresh batch leaves nothing stale and nothing unknown.
+        const stale = Date.now() - state.atmAt > ATM_STALE_MS;
+        const want = rows.map((r) => r.symbol)
+            .filter((s) => stale || state.atm[s] === undefined)
+            .slice(0, ATM_BATCH);
+        if (!want.length) return;
+
+        state.atmPending = true;
+        fetch(`${API}/atm?symbols=${encodeURIComponent(want.join(','))}`)
+            .then((res) => res.json())
+            .then((data) => {
+                if (!data.success) throw new Error(data.error || 'ATM lookup failed');
+                Object.assign(state.atm, data.atm || {});
+                // Anything the server didn't answer for is marked resolved-as-
+                // unknown, so the next render doesn't ask for it all over again.
+                for (const s of want) {
+                    if (state.atm[s] === undefined) state.atm[s] = null;
+                }
+                state.atmAt = Date.now();
+                state.atmPending = false;
+                renderTable();
+            })
+            .catch((e) => {
+                // Left as-is rather than blanked: the previous quote with its
+                // age showing beats an empty column while the feed hiccups.
+                state.atmPending = false;
+                console.error('[OIX] atm', e);
+            });
+    }
+
     function renderTable() {
         const rows = visibleRows();
+        fetchAtm(rows);
         // Coverage matters as much as the count here: a session recorded
         // before the full-universe scanner existed holds only the three index
         // chains, and three rows would otherwise look like a quiet day rather
@@ -178,7 +482,9 @@
             rows,
             columns: COLUMNS,
             empty: emptyMessage(),
-            defaultSort: { key: 'cross_time', dir: 'desc' },
+            // Earliest cross first: a cross that fired at 9:45 has had the
+            // session to prove itself, and the late ones are usually unwinds.
+            defaultSort: { key: 'cross_time', dir: 'asc' },
             rowClass: (r) => `oix-row oix-${r.direction.toLowerCase()}` +
                              (r.symbol === state.openSymbol ? ' oix-row-open' : ''),
             rowAttrs: (r) => `data-symbol="${DataGrid.escape(r.symbol)}"`,
@@ -576,6 +882,157 @@
         renderTable();
     }
 
+    // ── order ticket ─────────────────────────────────────────────────
+
+    // NSE options move in 5-paise steps and the broker rejects a limit price
+    // that isn't on one, so every price this screen sends is snapped to the
+    // tick — including one typed by hand.
+    const TICK = 0.05;
+    const toTick = (v) => Math.round(Number(v) / TICK) * TICK;
+
+    // A cross is a signal about direction, so the order follows the direction:
+    // BULL buys the ATM call, BEAR buys the ATM put. Buying premium rather
+    // than writing the other side keeps the risk to the debit paid, which is
+    // the right default for a scanner signal fired by hand.
+    //
+    // Always LIMIT: a market order on a stock option walks whatever spread is
+    // sitting there, and on the thin strikes this scanner surfaces that spread
+    // is the trade. The price starts at the ATM premium shown on the row and
+    // is editable in the ticket.
+    const orderFor = (row, limitPrice) => ({
+        symbol: row.symbol,
+        strike: atmOf(row).strike,
+        option_type: sideOf(row),
+        action: 'BUY',
+        order_type: 'LIMIT',
+        limit_price: toTick(limitPrice),
+        strategy: 'oix',
+    });
+
+    function openTicket(symbol) {
+        const row = state.rows.find((r) => r.symbol === symbol);
+        if (!row) return;
+        const quote = atmOf(row);
+        if (!quote) return;
+        if (state.mode === 'historical') return;
+
+        // A limit order needs a price, and the only one this screen has is the
+        // ATM premium — so a contract with no traded price can't be ordered
+        // from here at all. The row's button is disabled for the same reason.
+        const ltp = atmPrice(row);
+        if (ltp === null) return;
+
+        // A successful order closes the ticket on a short delay so the "Order
+        // placed" line is readable. Reopening inside that window must cancel
+        // the pending close, or it would shut the ticket the user just opened
+        // for a different row.
+        clearTimeout(state.ticketCloseTimer);
+        state.ticketCloseTimer = null;
+        state.ticketRow = row;
+
+        $('oixTicketBody').innerHTML =
+            `<div class="oix-tk-line oix-tk-headline">` +
+              `<b>BUY</b> ${DataGrid.escape(symbol)} ` +
+              `${DataGrid.escape(strikeText(quote.strike))} ` +
+              `<b>${sideOf(row)}</b> — limit` +
+            `</div>` +
+            `<div class="oix-tk-price">` +
+              `<label for="oixTicketPrice">Limit price</label>` +
+              `<div class="oix-tk-price-box">` +
+                `<span>₹</span>` +
+                `<input type="number" id="oixTicketPrice" step="${TICK}" min="${TICK}" ` +
+                       `value="${DataGrid.escape(money(toTick(ltp)))}" ` +
+                       `inputmode="decimal" autocomplete="off">` +
+              `</div>` +
+              // Says where the number came from, so a stale prefill is
+              // recognisable as one rather than read as a live quote.
+              `<span class="oix-tk-price-hint">last traded ₹${
+                    DataGrid.escape(money(ltp))}</span>` +
+            `</div>` +
+            `<div class="oix-tk-grid">` +
+              `<span>Crossover</span><span class="oix-tk-${row.direction.toLowerCase()}">` +
+                `${DataGrid.escape(row.direction)}</span>` +
+              `<span>Quality</span><span>${DataGrid.escape(row.quality)}</span>` +
+              `<span>Cross time</span><span>${DataGrid.escape(clock12(row.cross_time))}</span>` +
+              `<span>Cross count</span><span>${DataGrid.escape(String(row.cross_count))}</span>` +
+              `<span>OI change</span><span>${DataGrid.escape(
+                    Number(row.oi_chg_pct).toFixed(1))}%</span>` +
+            `</div>` +
+            // Size and destination are server-side config, not a field here —
+            // saying so is better than showing a quantity box that the .env
+            // would override anyway.
+            `<div class="oix-tk-note">Limit order to every broker with ` +
+              `<code>BROKER_N_OIX_ACTIVE=true</code>, sized by ` +
+              `<code>BROKER_N_OIX_LOTS</code>. No stop-loss is attached.</div>`;
+
+        $('oixTicketMsg').textContent = '';
+        $('oixTicketMsg').className = 'oix-ticket-msg';
+        $('oixTicketSend').disabled = false;
+        $('oixTicketSend').textContent = 'Place order';
+        $('oixTicketBack').hidden = false;
+        $('oixTicketPrice').focus();
+        $('oixTicketPrice').select();
+    }
+
+    function closeTicket() {
+        clearTimeout(state.ticketCloseTimer);
+        state.ticketCloseTimer = null;
+        state.ticketRow = null;
+        $('oixTicketBack').hidden = true;
+    }
+
+    async function sendTicket() {
+        const row = state.ticketRow;
+        if (!row) return;
+        const send = $('oixTicketSend');
+        const msg = $('oixTicketMsg');
+
+        // Validated here rather than trusted from the input: number inputs
+        // hand back an empty string for "12x", and a zero or negative limit is
+        // a rejection at the broker at best.
+        const typed = Number($('oixTicketPrice').value);
+        if (!Number.isFinite(typed) || typed <= 0) {
+            msg.className = 'oix-ticket-msg oix-tk-err';
+            msg.textContent = 'Enter a limit price above zero';
+            return;
+        }
+        const order = orderFor(row, typed);
+        // Show what actually goes out when the tick snap moved it.
+        $('oixTicketPrice').value = money(order.limit_price);
+        // Guarded rather than merely styled: a double-click on a market order
+        // is two positions, and the button stays dead until the reply lands.
+        send.disabled = true;
+        send.textContent = 'Placing…';
+        msg.className = 'oix-ticket-msg';
+        msg.textContent = '';
+
+        try {
+            const res = await fetch('/api/orders/place', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    // /api/orders/place is not CSRF-exempt — without this the
+                    // order is rejected before it reaches the dispatcher.
+                    'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content,
+                },
+                body: JSON.stringify(order),
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Order rejected');
+            msg.className = 'oix-ticket-msg oix-tk-ok';
+            msg.textContent = 'Order placed';
+            send.textContent = 'Placed';
+            state.ticketCloseTimer = setTimeout(closeTicket, 1200);
+        } catch (e) {
+            // Left open on failure: the reason matters more than the dialog,
+            // and re-opening it means finding the row again.
+            msg.className = 'oix-ticket-msg oix-tk-err';
+            msg.textContent = e.message;
+            send.disabled = false;
+            send.textContent = 'Retry';
+        }
+    }
+
     // ── data ─────────────────────────────────────────────────────────
 
     async function loadSnapshot() {
@@ -603,10 +1060,49 @@
             setDot('err');
             console.error('[OIX]', e);
         }
+        // Alongside the rows, so a refresh re-values open positions with the
+        // same click that re-prices the grid.
+        await loadPositions();
         renderTable();
         // A refresh that drops the open symbol (filters changed, new session)
         // should close the panel rather than leave a stale chart on screen.
         if (state.openSymbol && !state.rows.some((r) => r.symbol === state.openSymbol)) closeDrill();
+    }
+
+    // The ↻ button. Distinct from the 60s poll in one way that matters: it
+    // also drops the quote cache, so prices are re-pulled even when the last
+    // batch is still inside its staleness window — a refresh that reloaded
+    // the rows but left the premiums untouched would be misleading on the one
+    // screen where the premium is what gets traded.
+    async function manualRefresh() {
+        const btn = $('oixRefresh');
+        if (btn.disabled) return;
+        btn.disabled = true;
+        btn.classList.add('oix-refreshing');
+        state.atmAt = 0;
+        try {
+            await loadSnapshot();
+        } finally {
+            btn.disabled = false;
+            btn.classList.remove('oix-refreshing');
+        }
+    }
+
+    // Positions are only worth pricing in Live mode, and only cost anything
+    // when one exists — the endpoint hits the chain once per held symbol and
+    // not at all when nothing has been traded.
+    async function loadPositions() {
+        if (state.mode === 'historical') { state.positions = {}; return; }
+        try {
+            const res = await fetch(`${API}/positions`);
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || 'Positions failed');
+            state.positions = data.positions || {};
+        } catch (e) {
+            // Kept as they were: a dropped poll shouldn't blank a P&L that was
+            // on screen a second ago.
+            console.error('[OIX] positions', e);
+        }
     }
 
     function setDot(status) {
@@ -621,11 +1117,8 @@
             const data = await res.json();
             if (!data.success) return;
 
-            const sector = $('oixSector');
-            for (const s of data.sectors || []) {
-                sector.insertAdjacentHTML('beforeend',
-                    `<option value="${DataGrid.escape(s)}">${DataGrid.escape(s)}</option>`);
-            }
+            // Only the historical date list is read off /meta now — the sector
+            // filter is gone, so data.sectors is ignored.
             const dateSel = $('oixDate');
             dateSel.innerHTML = (data.dates || [])
                 .map((d) => `<option value="${DataGrid.escape(d)}">${DataGrid.escape(d)}</option>`)
@@ -634,6 +1127,89 @@
             console.error('[OIX] meta', e);
         }
     }
+
+    // ── logic sheet ──────────────────────────────────────────────────
+
+    // Built on demand and thrown away on close, in the sm-modal/rtp-logic
+    // markup every other Logic button on the Algo page uses — the styling is
+    // already loaded here, and a shared shell means the panels can't drift
+    // apart. Deliberately short: the filter bar is the thing being explained,
+    // not the strategy behind it.
+    const LOGIC_HTML = `
+<div class="sm-modal-box rtp-logic-modal">
+    <div class="sm-modal-hdr">
+        <div class="sm-modal-icon-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"/><polyline points="4 15 9 9 13 13 20 5"/></svg>
+        </div>
+        <div class="sm-modal-hdr-text">
+            <span class="sm-modal-title">OI Crossover</span>
+            <span class="sm-modal-subtitle">How it reads &amp; what each filter does</span>
+        </div>
+        <button class="sm-modal-close" data-logic-close aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+    </div>
+
+    <div class="rtp-logic-body">
+
+        <div class="rtp-tf"><span class="rtp-tf-lbl">Signal</span><span class="rtp-tf-val">Call-OI vs Put-OI change</span><span class="rtp-tf-sub">from 9:15</span></div>
+
+        <p class="rtp-idea">Two lines per symbol, both measured from the open. A <b>crossover</b> is the moment they swap: puts ahead is <b class="oix-bull">BULL</b>, calls ahead is <b class="oix-bear">BEAR</b>. Not a PCR read — levels say where the book already was, these lines say where today's money went.</p>
+
+        <div class="rtp-blk-lbl entry">Filters &middot; all AND-ed &middot; instant, no refetch</div>
+        <div class="rtp-duo">
+            <div class="rtp-duo-card">
+                <div class="rtp-duo-hd">Quality <i>— exact match</i></div>
+                <div class="rtp-duo-row"><b>Strong</b> both legs agree &middot; default</div>
+                <div class="rtp-duo-row"><b>Aggressive</b> winner OI up only</div>
+                <div class="rtp-duo-row"><b>Covering</b> loser OI out only</div>
+                <div class="rtp-duo-row"><b>All</b> adds the weak crosses</div>
+            </div>
+            <div class="rtp-duo-card">
+                <div class="rtp-duo-hd">Cross Count <i>— a ceiling</i></div>
+                <div class="rtp-duo-row"><b>Any</b> no cap &middot; default</div>
+                <div class="rtp-duo-row"><b>Single</b> one clean turn</div>
+                <div class="rtp-duo-row"><b>Max 2 / 3</b> keeps 1–2 / 1–3</div>
+                <div class="rtp-duo-row">Double digits = chop</div>
+            </div>
+            <div class="rtp-duo-card">
+                <div class="rtp-duo-hd">OI Chg <i>— a floor</i></div>
+                <div class="rtp-duo-row">Bigger leg's move vs its own open</div>
+                <div class="rtp-duo-row"><b>&gt;10%</b> default &middot; <b>Any</b> turns it off</div>
+            </div>
+            <div class="rtp-duo-card">
+                <div class="rtp-duo-hd">Mode &amp; Date</div>
+                <div class="rtp-duo-row"><b>Live</b> re-reads every 60s</div>
+                <div class="rtp-duo-row"><b>Historical</b> frozen past session</div>
+                <div class="rtp-duo-row">Dates from <b>01-08-2026</b> on</div>
+            </div>
+        </div>
+        <div class="rtp-mode-note">Search is a plain symbol substring. The count at the right of the bar is what survived. <b>Strong</b> + <b>&gt;10%</b> returning nothing on a quiet morning is the session, not a fault. <b>CSV</b> ignores all of it and exports the whole day.</div>
+
+        <div class="rtp-blk-lbl exit">Order</div>
+        <div class="rtp-mode-note" style="margin-top:0">Buys the ATM option in the cross's direction — CE on BULL, PE on BEAR. Always a <b>limit</b> at the live ATM premium, editable, snapped to the 5-paise tick. No stop-loss is attached.</div>
+
+    </div>
+</div>`;
+
+    function openLogic() {
+        closeLogic();
+        const back = document.createElement('div');
+        back.id = 'oixLogicModal';
+        back.className = 'sm-modal-overlay';
+        back.innerHTML = LOGIC_HTML;
+        back.addEventListener('click', (e) => {
+            // Backdrop or the ✕ — a click on the sheet itself must not close it.
+            if (e.target === back || e.target.closest('[data-logic-close]')) closeLogic();
+        });
+        document.body.appendChild(back);
+    }
+
+    function closeLogic() {
+        document.getElementById('oixLogicModal')?.remove();
+    }
+
+    const logicOpen = () => !!document.getElementById('oixLogicModal');
 
     // ── wiring ───────────────────────────────────────────────────────
 
@@ -659,12 +1235,19 @@
     function init() {
         const f = state.filters;
 
-        // Portal the docked panel to <body>. Left inside .sw-wrap its
-        // position:fixed resolved against an ancestor box rather than the
-        // viewport, docking it partway up the page instead of at the bottom.
-        // A body-level overlay also can't be affected by whatever containing
-        // block a future page-chrome change introduces.
+        // Portal the docked panel and the order ticket to <body>. Left inside
+        // .sw-wrap their position:fixed resolved against an ancestor box
+        // rather than the viewport, docking the panel partway up the page
+        // instead of at the bottom. A body-level overlay also can't be
+        // affected by whatever containing block a future page-chrome change
+        // introduces — and on the Algo page the panel they sat in is itself
+        // toggled with `display`, which would have hidden them outright.
         document.body.appendChild($('oixDrill'));
+        document.body.appendChild($('oixTicketBack'));
+
+        f.quality    = $('oixQuality').value;
+        f.crossCount = Number($('oixCrossCount').value);
+        f.oiChg      = Number($('oixOiChg').value);
 
         $('oixSearch').addEventListener('input', (e) => {
             f.search = e.target.value;
@@ -673,7 +1256,6 @@
         $('oixQuality').addEventListener('change', (e) => { f.quality = e.target.value; renderTable(); });
         $('oixCrossCount').addEventListener('change', (e) => { f.crossCount = Number(e.target.value); renderTable(); });
         $('oixOiChg').addEventListener('change', (e) => { f.oiChg = Number(e.target.value); renderTable(); });
-        $('oixSector').addEventListener('change', (e) => { f.sector = e.target.value; renderTable(); });
 
         document.querySelectorAll('.oix-mode-btn').forEach((b) => {
             b.addEventListener('click', () => setMode(b.dataset.mode));
@@ -683,6 +1265,8 @@
             closeDrill();
             loadSnapshot();
         });
+
+        $('oixRefresh').addEventListener('click', manualRefresh);
 
         $('oixExport').addEventListener('click', () => {
             const qs = new URLSearchParams();
@@ -707,6 +1291,19 @@
         });
 
         document.addEventListener('keydown', (e) => {
+            // Topmost overlay first, so Escape always backs out of the thing
+            // being looked at rather than something underneath it.
+            if (logicOpen()) {
+                if (e.key === 'Escape') closeLogic();
+                return;
+            }
+            // The ticket is modal, so it takes the key before the chart panel
+            // does — Escape backs out of the order, not out of the drilldown
+            // sitting behind it.
+            if (!$('oixTicketBack').hidden) {
+                if (e.key === 'Escape') closeTicket();
+                return;
+            }
             if ($('oixDrill').hidden) return;
             if (e.key === 'Escape') closeDrill();
             else if (e.key === 'ArrowLeft') stepSymbol(-1);
@@ -716,6 +1313,13 @@
         // Delegated: the grid re-renders on every sort, filter and refresh,
         // so per-row handlers would need rebinding each time.
         $('oixGrid').addEventListener('click', (e) => {
+            // The order button sits inside the row, and opening a chart is not
+            // what someone clicking "Buy CE" is asking for.
+            const order = e.target.closest('[data-order]');
+            if (order) {
+                openTicket(order.dataset.order);
+                return;
+            }
             const tr = e.target.closest('tr[data-symbol]');
             if (!tr) return;
             const symbol = tr.dataset.symbol;
@@ -723,13 +1327,50 @@
             else openDrill(symbol);
         });
 
-        loadMeta().then(loadSnapshot);
-        state.timer = setInterval(loadSnapshot, REFRESH_MS);
+        $('oixLogicBtn').addEventListener('click', openLogic);
+
+        $('oixTicketClose').addEventListener('click', closeTicket);
+        $('oixTicketCancel').addEventListener('click', closeTicket);
+        $('oixTicketSend').addEventListener('click', sendTicket);
+        // Backdrop click closes; a click inside the dialog must not.
+        $('oixTicketBack').addEventListener('click', (e) => {
+            if (e.target === $('oixTicketBack')) closeTicket();
+        });
+
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
+    // ── lifecycle ────────────────────────────────────────────────────
+
+    // Wiring happens once, on the first activation, and the poll runs only
+    // while the tab is on screen. Nothing here fires at page load: the Algo
+    // page loads this file for a tab the user may never open, and a scanner
+    // that polls regardless would cost a request a minute for nothing.
+    function activate() {
+        if (!$('oixGrid')) return;          // panel not on this page
+        if (!state.started) {
+            state.started = true;
+            init();
+            loadMeta().then(loadSnapshot);
+        } else {
+            loadSnapshot();
+        }
+        if (!state.timer && state.mode === 'live') {
+            state.timer = setInterval(loadSnapshot, REFRESH_MS);
+        }
     }
+
+    function deactivate() {
+        clearInterval(state.timer);
+        state.timer = null;
+        // A chart, a half-filled ticket or the logic sheet left floating over
+        // another tab is the one thing a body-level overlay makes possible;
+        // close all three.
+        if (state.started) {
+            if (!$('oixDrill').hidden) closeDrill();
+            closeTicket();
+            closeLogic();
+        }
+    }
+
+    window.OIX = { activate, deactivate };
 })();

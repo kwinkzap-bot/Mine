@@ -1,0 +1,114 @@
+<!-- ════════════════════════════════════════════════════════════ -->
+<!-- OI Crossover panel                                          -->
+<!--                                                             -->
+<!-- Included by algo.html, which owns the tab bar. The ids are  -->
+<!-- the ones oi_crossover.js has always used, so the scanner    -->
+<!-- markup moved here unchanged apart from the panel wrapper —  -->
+<!-- the page kept its .sw-wrap/.oix-page classes because        -->
+<!-- oi_crossover.css hangs its whole layout off them.           -->
+<!-- ════════════════════════════════════════════════════════════ -->
+<div class="ag-panel" id="algo-oi-crossover-panel">
+<div class="sw-wrap oix-page">
+
+  <div class="sw-topbar">
+    <span class="sw-title">🔀 OI Crossover</span>
+    <!-- Same pill the other algo panels carry, so "Logic" means the same
+         thing and looks the same wherever it appears on this page. -->
+    <button class="ag-info-btn" id="oixLogicBtn"
+            title="How the scan reads and what each filter does" aria-label="Scanner logic">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="16" x2="12" y2="12"></line>
+        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+      </svg>
+      <span>Logic</span>
+    </button>
+    <input type="search" id="oixSearch" class="oix-search" placeholder="Search symbol…" autocomplete="off">
+    <button class="sw-refresh-btn" id="oixRefresh"
+            title="Reload the scan and re-price every row now"><span
+            class="oix-refresh-icon">↻</span> Refresh</button>
+    <button class="sw-refresh-btn" id="oixExport" title="Download CSV">⬇ CSV</button>
+    <span class="oix-asof" id="oixAsOf">—</span>
+    <span class="oix-dot" id="oixDot" title="Scan status"></span>
+  </div>
+
+  <div class="oix-filters">
+    <span class="oix-flabel">Mode:</span>
+    <div class="oix-mode">
+      <button class="oix-mode-btn active" data-mode="live">Live</button>
+      <button class="oix-mode-btn" data-mode="historical">Historical</button>
+    </div>
+    <div class="oix-date-wrap" id="oixDateWrap" hidden>
+      <select id="oixDate" class="oix-select"></select>
+    </div>
+
+    <!-- Opens on the highest-conviction slice: both legs agreeing, any number
+         of crosses, and enough OI behind the move to be worth a look. -->
+    <select id="oixQuality" class="oix-select">
+      <option value="all">All Crossovers</option>
+      <option value="strong" selected>Strong (Both)</option>
+      <option value="aggressive">Aggressive (+OI)</option>
+      <option value="covering">Covering (-OI)</option>
+    </select>
+
+    <select id="oixCrossCount" class="oix-select">
+      <option value="0" selected>Any Cross</option>
+      <option value="1">Single Cross</option>
+      <option value="2">Max 2 Cross</option>
+      <option value="3">Max 3 Cross</option>
+    </select>
+
+    <select id="oixOiChg" class="oix-select">
+      <option value="0">Any OI Chg</option>
+      <option value="1">&gt; 1% OI Chg</option>
+      <option value="2">&gt; 2% OI Chg</option>
+      <option value="5">&gt; 5% OI Chg</option>
+      <option value="10" selected>&gt; 10% OI Chg</option>
+    </select>
+
+    <span class="oix-count" id="oixCount"></span>
+  </div>
+
+  <div id="oixGrid"></div>
+
+  <!-- Row drilldown. Docked to the bottom of the viewport rather than placed
+       inline, so the table stays visible above it and stepping through
+       symbols with ‹ › doesn't move the page under the pointer. -->
+  <div class="oix-drill" id="oixDrill" hidden>
+    <div class="oix-drill-hdr">
+      <span class="oix-drill-sym" id="oixDrillSym"></span>
+      <div class="oix-drill-nav">
+        <button id="oixPrev" title="Previous symbol (←)">‹</button>
+        <button id="oixNext" title="Next symbol (→)">›</button>
+      </div>
+      <div class="oix-tabs" id="oixTabs">
+        <button data-mode="pcr">PCR</button>
+        <button data-mode="oi_change" class="active">OI Change</button>
+        <button data-mode="total_oi">Total OI</button>
+      </div>
+      <button class="oix-drill-close" id="oixDrillClose" title="Close (Esc)">✕</button>
+    </div>
+    <div class="oix-drill-body" id="oixDrillBody"></div>
+  </div>
+
+  <!-- Order ticket. Nothing reaches a broker without passing through here:
+       the grid button only ever opens this, and the confirm button is the
+       single place that POSTs. -->
+  <div class="oix-ticket-back" id="oixTicketBack" hidden>
+    <div class="oix-ticket" role="dialog" aria-modal="true" aria-labelledby="oixTicketTitle">
+      <div class="oix-ticket-hdr">
+        <span id="oixTicketTitle">Place order</span>
+        <button class="oix-ticket-close" id="oixTicketClose" title="Cancel (Esc)">✕</button>
+      </div>
+      <div class="oix-ticket-body" id="oixTicketBody"></div>
+      <div class="oix-ticket-foot">
+        <span class="oix-ticket-msg" id="oixTicketMsg"></span>
+        <button class="oix-ticket-cancel" id="oixTicketCancel">Cancel</button>
+        <button class="oix-ticket-send" id="oixTicketSend">Place order</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div><!-- #algo-oi-crossover-panel -->

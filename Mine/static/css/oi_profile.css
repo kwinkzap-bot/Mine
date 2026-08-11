@@ -15,6 +15,30 @@
     --oip-accent: #0969da;
 }
 
+/* Toolbar design tokens — one height, one radius, one focus ring for every
+   control in a header bar, instead of each rule picking its own. A toolbar row
+   only reads as a row when the pieces line up. */
+:root {
+    --oip-ctl-h: 22px;
+    --oip-ctl-radius: 5px;
+}
+
+/* The colour half of those tokens has to be declared on the same elements that
+   carry the theme vars, NOT on :root: a var() inside a custom property is
+   substituted where the property is *declared*, not where it is used. Declared
+   on :root these would freeze at the light-theme defaults above and every
+   control would stay pale on the dark/forest cards. body covers the app (the
+   theme class lives there) and .oip-page covers the .oip-page.*-theme form. */
+body,
+.oip-page {
+    /* Softer than the full border colour — for dividers and control outlines
+       that should read as structure, not as edges. */
+    --oip-hairline: color-mix(in srgb, var(--oip-border) 65%, transparent);
+    --oip-ring: color-mix(in srgb, var(--oip-accent) 18%, transparent);
+    --oip-ctl-bg: var(--oip-header-bg);
+    --oip-ctl-bg-hover: color-mix(in srgb, var(--oip-accent) 7%, var(--oip-header-bg));
+}
+
 /* Theme variables on body — cascade to ALL .oip-* children regardless of .oip-page */
 body.light-theme, .oip-page.light-theme {
     --oip-bg: #ffffff;
@@ -139,6 +163,9 @@ body.ocean-theme, .oip-page.ocean-theme {
 }
 
 .oip-title-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     background: #dcfce7;
     color: #166534;
     font-size: 10px;
@@ -149,6 +176,48 @@ body.ocean-theme, .oip-page.ocean-theme {
     letter-spacing: 0.05em;
     border: 1px solid #bbf7d0;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+/* Breathing dot — the badge claims a 1-second feed, so it should look like
+   something is still arriving rather than like a static label. */
+.oip-title-badge::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: oip-live-pulse 1s ease-in-out infinite;
+}
+
+/* The amber "manual refresh" variant is the opposite claim — nothing is
+   arriving on its own — so it drops the dot instead of pulsing a lie. */
+.oip-title-badge--manual::before {
+    display: none;
+}
+
+@keyframes oip-live-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.35; transform: scale(0.82); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .oip-title-badge::before { animation: none; }
+}
+
+/* :not() so this stays out of the amber --manual variant's way — it is defined
+   below with a lower specificity and would otherwise lose to this rule. */
+body.dark-theme .oip-title-badge:not(.oip-title-badge--manual),
+.oip-page.dark-theme .oip-title-badge:not(.oip-title-badge--manual) {
+    background: #052e21;
+    color: #6ee7b7;
+    border-color: #065f46;
+}
+
+body.dark-theme .oip-title-badge--manual,
+.oip-page.dark-theme .oip-title-badge--manual {
+    background: #3a2606;
+    color: #fcd34d;
+    border-color: #78350f;
 }
 
 /* Amber variant — "this block only updates when you press Refresh All",
@@ -206,27 +275,27 @@ body.dark-theme .oip-stale-chip,
 }
 
 .oip-select {
-    height: 22px;
-    background: var(--oip-card-bg);
+    height: var(--oip-ctl-h);
+    background: var(--oip-ctl-bg);
     color: var(--oip-text);
-    border: 1px solid var(--oip-border);
-    border-radius: 4px;
+    border: 1px solid var(--oip-hairline);
+    border-radius: var(--oip-ctl-radius);
     padding: 0 8px;
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 600;
     cursor: pointer;
     outline: none;
-    transition: all 0.2s;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
 
 .oip-select:hover {
     border-color: var(--oip-accent);
-    background: var(--oip-card-bg);
+    background: var(--oip-ctl-bg-hover);
 }
 
 .oip-select:focus {
     border-color: var(--oip-accent);
-    box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.1);
+    box-shadow: 0 0 0 3px var(--oip-ring);
     background: var(--oip-bg);
 }
 
@@ -274,19 +343,25 @@ body.dark-theme .oip-stale-chip,
 }
 
 .oip-btn {
-    height: 22px;
+    height: var(--oip-ctl-h);
     display: inline-flex;
     align-items: center;
     gap: 6px;
     padding: 0 10px;
-    border-radius: 4px;
+    border-radius: var(--oip-ctl-radius);
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
-    border: 1px solid var(--oip-border);
-    background: var(--oip-header-bg);
+    border: 1px solid var(--oip-hairline);
+    background: var(--oip-ctl-bg);
     color: var(--oip-text);
-    transition: 0.2s;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.oip-btn:focus-visible {
+    outline: none;
+    border-color: var(--oip-accent);
+    box-shadow: 0 0 0 3px var(--oip-ring);
 }
 
 /* Specific Order Buttons Style */
@@ -297,8 +372,8 @@ body.dark-theme .oip-stale-chip,
    reusing that class here would fire orders against Opt Prem's strike/price
    instead of this block's own. Same visual styling, different selector. */
 .oip-order-btn, .oip-rs-order-btn {
-    height: 20px;
-    padding: 0 10px;
+    height: var(--oip-ctl-h);
+    padding: 0 9px;
     border-radius: 4px;
     font-size: 9px;
     font-weight: 800;
@@ -306,17 +381,29 @@ body.dark-theme .oip-stale-chip,
     border: none;
     color: white;
     text-transform: uppercase;
-    transition: all 0.2s;
+    transition: filter 0.15s, transform 0.1s, box-shadow 0.15s;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     letter-spacing: 0.05em;
+    /* B/S/SL sit side by side in one group — a shared floor keeps the two-letter
+       and three-letter labels from stepping on each other's width. */
+    min-width: 38px;
+    /* The labels are written across two source lines ("B\n CE"), which used to
+       break them onto two stacked rows inside a 20px button. */
+    white-space: nowrap;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 
 .oip-order-btn:hover, .oip-rs-order-btn:hover {
-    filter: brightness(1.1);
+    filter: brightness(1.08);
     transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 2px 5px rgba(0, 0, 0, 0.14);
+}
+
+.oip-order-btn:focus-visible, .oip-rs-order-btn:focus-visible {
+    outline: 2px solid var(--oip-text);
+    outline-offset: 1px;
 }
 
 .oip-order-btn:active, .oip-rs-order-btn:active {
@@ -335,8 +422,10 @@ body.dark-theme .oip-stale-chip,
     background: #8b5cf6;
 }
 
+/* Still reads as the black button traders look for, but slate-950 rather than
+   pure #000 so it belongs to the same palette as the buttons beside it. */
 .pe-sell {
-    background: #000000;
+    background: #0f172a;
 }
 
 .exit-all {
@@ -367,9 +456,11 @@ body.dark-theme .oip-stale-chip,
     cursor: not-allowed;
 }
 
+/* Themed hover — the old #eff2f5 / #8c959f pair was invisible on the dark and
+   forest themes, where the button sits on a near-black card. */
 .oip-btn:hover:not(:disabled) {
-    background: #eff2f5;
-    border-color: #8c959f;
+    background: var(--oip-ctl-bg-hover);
+    border-color: var(--oip-accent);
 }
 
 .oip-radio {
@@ -400,10 +491,6 @@ body.dark-theme .oip-stale-chip,
     border-color: #1e293b;
 }
 
-.oip-hdr-metric:hover {
-    background: rgba(0, 0, 0, 0.02);
-}
-
 .oip-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -417,7 +504,7 @@ body.dark-theme .oip-stale-chip,
 
 /* Icon-only variant (e.g. Clear Rays) — square, no text gap/padding. */
 .oip-btn--icon {
-    width: 22px;
+    width: var(--oip-ctl-h);
     padding: 0;
     gap: 0;
     justify-content: center;
@@ -461,21 +548,17 @@ body.dark-theme .oip-stale-chip,
     /* grow/shrink, base 80px — wraps to 2 rows automatically */
     min-width: 64px;
     max-width: 110px;
-    padding: 3px 6px;
-    background: var(--oip-card-bg);
-    border: 1px solid var(--oip-border);
-    border-radius: 5px;
+    padding: 4px 6px;
+    background: var(--oip-ctl-bg);
+    border: 1px solid var(--oip-hairline);
+    border-radius: 6px;
     text-align: center;
-    transition: background 0.15s;
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
 
 .oip-hdr-metric:hover {
-    background: var(--oip-header-bg);
-}
-
-.oip-hdr-metric:last-child {
-    border-right: 1px solid var(--oip-border);
-    /* restore — no longer needed for separator */
+    background: var(--oip-ctl-bg-hover);
+    border-color: color-mix(in srgb, var(--oip-accent) 35%, transparent);
 }
 
 .oip-hdr-lbl {
@@ -483,18 +566,23 @@ body.dark-theme .oip-stale-chip,
     color: var(--oip-metric-lbl);
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     line-height: 1;
-    margin-bottom: 2px;
+    margin-bottom: 3px;
+    /* The strip is scanned label-first; keeping labels from wrapping is what
+       stops one long value from making a pill two lines taller than its
+       neighbours. */
+    white-space: nowrap;
 }
 
 .oip-hdr-val {
-    font-size: 11px;
+    font-size: 11.5px;
     font-weight: 800;
     color: var(--oip-text);
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.01em;
-    line-height: 1;
+    line-height: 1.05;
+    white-space: nowrap;
 }
 
 .oip-hdr-val.red {
@@ -525,12 +613,15 @@ body.dark-theme .oip-stale-chip,
 .oip-hdr-lbl-badge {
     display: inline-block;
     margin-left: 3px;
-    padding: 0 3px;
+    padding: 0 4px;
     border-radius: 3px;
-    background: var(--oip-header-bg);
+    /* Tinted rather than --oip-header-bg: the badge now sits on a pill that is
+       itself --oip-header-bg, so it needs its own contrast to be a badge. */
+    background: color-mix(in srgb, var(--oip-accent) 14%, transparent);
     color: var(--oip-accent);
     font-size: 8px;
     font-weight: 700;
+    letter-spacing: 0.02em;
 }
 
 /* ── Live Max Pain & PCR Indicator Styles ────────────────── */
@@ -1012,17 +1103,19 @@ body.ocean-theme .oip-tooltip {
 }
 
 .oip-input {
-    height: 22px;
+    height: var(--oip-ctl-h);
     width: 65px;
     padding: 0 6px;
-    border: 1px solid var(--oip-border);
-    border-radius: 4px;
+    border: 1px solid var(--oip-hairline);
+    border-radius: var(--oip-ctl-radius);
     font-size: 11px;
     font-weight: 600;
-    background: var(--oip-card-bg);
+    /* Same surface as the selects beside it — on a white card an input on
+       --oip-card-bg reads as a hole in the toolbar rather than a control. */
+    background: var(--oip-ctl-bg);
     color: var(--oip-text);
     outline: none;
-    transition: all 0.2s;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
 
 .oip-input::placeholder {
@@ -1033,7 +1126,7 @@ body.ocean-theme .oip-tooltip {
 .oip-input:focus {
     border-color: var(--oip-accent);
     background: var(--oip-bg);
-    box-shadow: 0 0 0 2px rgba(9, 105, 218, 0.1);
+    box-shadow: 0 0 0 3px var(--oip-ring);
 }
 
 .h-low-input {
@@ -1164,63 +1257,63 @@ body.ocean-theme .oip-tooltip {
     white-space: nowrap;
 }
 
-/* Full-width single row: title left, controls right */
+/* Full-width single row: title left, controls right. Wraps rather than spills:
+   on a narrow window the old nowrap pushed the order buttons and the open-order
+   strip out past the card's right edge, where they were unreachable. Groups are
+   the flex items, so a wrap breaks between clusters, never inside one. */
 .oip-prem-toolbar {
     display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: flex-end;
+    gap: 7px;
+    row-gap: 5px;
     margin-left: auto;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    min-width: 0;
 }
 
-/* Logical group of controls within the toolbar */
+/* Logical group of controls within the toolbar. Tighter inside a group than
+   between groups (7px above) so the eye reads the clusters without needing the
+   dividers to do all the work. */
 .oip-prem-group {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
 }
 
-/* Thin vertical divider between groups */
+/* The label sitting immediately before its own control ("CE" ▸ dropdown) —
+   pulled in closer than the group gap so the pair reads as one unit. */
+.oip-prem-group .oip-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-right: -1px;
+}
+
+/* Thin vertical divider between groups — full control height, so the toolbar
+   gets a visible baseline instead of dashes floating mid-row. */
 .oip-prem-sep {
     width: 1px;
-    height: 16px;
-    background: #e2e8f0;
+    height: var(--oip-ctl-h);
+    background: var(--oip-hairline);
     flex-shrink: 0;
 }
 
-/* Smaller select for compact toolbar */
+/* Compact toolbar controls all share the row height — the 20px/22px mix used to
+   leave the selects sitting a pixel low against the buttons beside them. */
 .oip-select--xs {
-    height: 20px;
+    height: var(--oip-ctl-h);
     font-size: 10px;
-    padding: 0 4px;
+    padding: 0 5px;
 }
 
 /* Price input: narrower */
 .oip-input--price {
-    width: 50px;
+    width: 52px;
     font-size: 10px;
-    height: 20px;
+    height: var(--oip-ctl-h);
     padding: 0 0 0 6px;
-}
-
-/* Order buttons — compact pill style */
-.oip-order-btn {
-    height: 20px;
-    padding: 0 8px;
-    border-radius: 4px;
-    /* Changed from pill to slightly rounded for better fit in groups */
-    font-size: 9px;
-    font-weight: 800;
-    border: none;
-    color: #fff;
-    cursor: pointer;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-    transition: filter 0.15s, transform 0.1s;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 38px;
 }
 
 /* ── IV Percentile Gauge & Alert ────────────────────────── */
@@ -1234,10 +1327,12 @@ body.ocean-theme .oip-tooltip {
 .oip-ivp-gauge-bg {
     width: 100%;
     height: 4px;
-    background: #f1f5f9;
+    /* Was a hardcoded #f1f5f9 — an unfilled gauge glowed white against the dark
+       and forest cards. */
+    background: color-mix(in srgb, var(--oip-metric-lbl) 25%, transparent);
     border-radius: 2px;
     overflow: hidden;
-    margin-top: 2px;
+    margin-top: 3px;
 }
 
 .oip-ivp-gauge-bar {
@@ -1318,23 +1413,41 @@ body.ocean-theme .oip-tooltip {
     display: none !important;
 }
 
+/* 1px of padding, not 2 — with the 18px buttons below, the group lands at
+   exactly --oip-ctl-h so it sits flush with the selects next to it instead of
+   standing a few pixels proud of the row. */
 .oip-order-side-group {
     display: flex;
     gap: 2px;
-    background: #f8fafc;
-    padding: 2px;
+    background: var(--oip-ctl-bg);
+    padding: 1px;
     border-radius: 6px;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--oip-hairline);
 }
 
+.oip-order-side-group .oip-order-btn,
+.oip-order-side-group .oip-rs-order-btn {
+    height: calc(var(--oip-ctl-h) - 4px);
+    box-shadow: none;
+}
+
+.oip-order-side-group .oip-order-btn:hover,
+.oip-order-side-group .oip-rs-order-btn:hover {
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.14);
+}
+
+/* Each group is tinted with its own side's colour so the CE and PE clusters are
+   distinguishable before you read a single label. */
 .oip-order-side-group--ce {
-    border-color: #10b98166;
-    /* Light green (semi-transparent) */
+    border-color: color-mix(in srgb, #10b981 45%, transparent);
+    background: color-mix(in srgb, #10b981 7%, var(--oip-ctl-bg));
 }
 
+/* Purple, matching this group's own B PE button — it used to be red, which
+   belongs to the CE sell button on the other side of the toolbar. */
 .oip-order-side-group--pe {
-    border-color: #ef444466;
-    /* Light red (semi-transparent) */
+    border-color: color-mix(in srgb, #8b5cf6 45%, transparent);
+    background: color-mix(in srgb, #8b5cf6 7%, var(--oip-ctl-bg));
 }
 
 .oip-order-btn:hover {
@@ -1388,23 +1501,30 @@ body.ocean-theme .oip-tooltip {
 
 /* Compact stats strip override */
 .oip-status-row--compact {
-    gap: 2px;
+    gap: 4px;
     padding: 0;
 }
 
 .oip-status-row--compact .oip-hdr-metric {
     flex: 1 1 72px;
     min-width: 58px;
-    padding: 2px 5px;
+    /* Above the base 110px cap — twelve capped pills stopped ~300px short of the
+       card's right edge on a wide monitor, which read as a broken row rather
+       than as deliberate space. */
+    max-width: 150px;
+    padding: 3px 6px;
+    /* One floor for every pill so the IVP card's extra gauge row sets the
+       height of the strip rather than leaving the other eleven short. */
+    min-height: 30px;
 }
 
 .oip-status-row--compact .oip-hdr-lbl {
     font-size: 8px;
-    margin-bottom: 1px;
+    margin-bottom: 2px;
 }
 
 .oip-status-row--compact .oip-hdr-val {
-    font-size: 10px;
+    font-size: 11px;
 }
 
 /* ── Indicators Popup ─────────────────────────────────────── */
@@ -1629,3 +1749,198 @@ body.ocean-theme .oip-tooltip {
     .oip-modal-hdr { padding: 10px 12px; }
     .oip-modal-title { font-size: 13px; }
 }
+/* ── Open Orders strip ───────────────────────────────────────────────────────
+   Sits under each order-control bar and lists the orders that have not filled
+   yet. Editing the price or hitting × fans the change out to every broker the
+   order was placed to. Hidden entirely while there is nothing open. */
+/* A band of its own, below the toolbar. It used to be a tail on the end of the
+   toolbar row, which meant the number of resting orders decided whether the
+   chart controls fitted on one line — a five-rung exit ladder wrapped the
+   toolbar in half. Nothing above it moves now, however many orders are live. */
+.oip-open-orders {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    margin-top: 6px;
+    padding: 5px 7px;
+    border: 1px solid var(--oip-hairline);
+    border-radius: 7px;
+    background: var(--oip-ctl-bg);
+}
+
+.oip-open-orders.is-empty { display: none; }
+
+.oip-oo-title {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--oip-metric-lbl);
+    white-space: nowrap;
+}
+
+.oip-oo-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    margin-right: 3px;
+    border-radius: 8px;
+    background: var(--oip-accent);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Header line — count on the left, Cancel all on the right, always together and
+   always on their own row. */
+.oip-oo-hd {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+}
+
+/* One contract, N orders. The name is said once for the group instead of once
+   per order — on a ladder that is most of the strip's width back.
+
+   It wraps internally and is capped at the band's width: a fourteen-rung ladder
+   is one group wider than the card, and a nowrap group simply ran off the right
+   edge, taking half the orders out of reach. */
+.oip-oo-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    row-gap: 4px;
+    max-width: 100%;
+    min-width: 0;
+    padding: 2px 2px 2px 6px;
+    border: 1px solid var(--oip-hairline);
+    border-radius: 7px;
+    background: var(--oip-card-bg);
+}
+
+.oip-oo-inst {
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    color: var(--oip-text);
+    margin-right: 2px;
+    white-space: nowrap;
+    /* Never squeezed or wrapped away from the pills it names. */
+    flex-shrink: 0;
+}
+
+/* One order: the side and the price, which is all that differs within a group. */
+.oip-oo-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 20px;
+    padding-right: 3px;
+    border: 1px solid var(--oip-hairline);
+    border-radius: 5px;
+    background: var(--oip-ctl-bg);
+}
+
+.oip-oo-pill.buy  { border-color: color-mix(in srgb, #10b981 40%, transparent); }
+.oip-oo-pill.sell { border-color: color-mix(in srgb, #ef4444 40%, transparent); }
+
+.oip-oo-side {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 18px;
+    border-radius: 4px 3px 3px 4px;
+    font-size: 9px;
+    font-weight: 900;
+    color: #fff;
+}
+
+.oip-oo-pill.buy  .oip-oo-side { background: #10b981; }
+.oip-oo-pill.sell .oip-oo-side { background: #ef4444; }
+
+/* Set on a pill whose order turned out to be already filled or already gone at
+   the broker. It survives only until the next poll redraws the band without
+   it — just long enough that the pill you clicked is visibly the one the
+   notification is talking about. */
+.oip-oo-pill--gone {
+    opacity: 0.45;
+    text-decoration: line-through;
+    border-color: color-mix(in srgb, var(--oip-metric-lbl) 60%, transparent);
+}
+
+/* Pushed to the far end of the header line: it cancels everything in the band,
+   so it should not sit among the single-order buttons it does not behave like. */
+.oip-oo-cancel-all {
+    margin-left: auto;
+    flex-shrink: 0;
+    height: var(--oip-ctl-h);
+    padding: 0 9px;
+    border-radius: var(--oip-ctl-radius);
+    border: 1px solid color-mix(in srgb, #ef4444 45%, transparent);
+    background: color-mix(in srgb, #ef4444 8%, var(--oip-ctl-bg));
+    color: #dc2626;
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.oip-oo-cancel-all:hover:not(:disabled) {
+    background: color-mix(in srgb, #ef4444 16%, var(--oip-ctl-bg));
+    border-color: #ef4444;
+}
+
+.oip-oo-cancel-all:disabled { opacity: 0.55; cursor: default; }
+
+body.dark-theme .oip-oo-cancel-all,
+.oip-page.dark-theme .oip-oo-cancel-all { color: #fca5a5; }
+
+/* Narrower than it was: inside a group the price is the only number on the
+   pill, so it no longer has to share the row with a repeated contract name. */
+.oip-oo-price {
+    width: 46px;
+    height: 18px;
+    padding: 0 0 0 5px;
+    font-size: 10px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    border: 1px solid var(--oip-hairline);
+    border-radius: 4px;
+    background: var(--oip-bg);
+    color: var(--oip-text);
+    outline: none;
+}
+
+.oip-oo-price:focus {
+    border-color: var(--oip-accent);
+    box-shadow: 0 0 0 2px var(--oip-ring);
+}
+
+.oip-oo-btn {
+    height: 18px;
+    min-width: 18px;
+    padding: 0 4px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1;
+    color: #fff;
+    transition: filter 0.15s;
+}
+
+.oip-oo-btn.save   { background: #0ea5e9; }
+.oip-oo-btn.cancel { background: #ef4444; }
+.oip-oo-btn:hover  { filter: brightness(1.12); }
+.oip-oo-btn:disabled { opacity: 0.5; cursor: default; }

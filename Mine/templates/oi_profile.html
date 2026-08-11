@@ -311,6 +311,13 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Unfilled orders — edit the price or cancel; either way the change
+                 is pushed to every broker the order went to. Its own row rather
+                 than a tail on the toolbar above: the number of resting orders is
+                 not the toolbar's business, and a ladder of six used to wrap the
+                 controls onto a second line. -->
+            <div class="oip-open-orders is-empty"></div>
             <!-- Stats strip — wrapping pill grid -->
             <div class="oip-status-row boxed oip-status-row--compact">
                 <div class="oip-hdr-metric">
@@ -707,6 +714,10 @@
 
                 </div>
             </div>
+
+            <!-- Same strip as the Round Strike block above — one row of its own,
+                 below the toolbar rather than inside it. -->
+            <div class="oip-open-orders is-empty"></div>
         </div>
 
         <div class="oip-chart-wrap" id="oipIntrinsicChartWrap">
@@ -1123,6 +1134,7 @@
 
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/orders.js') }}"></script>
+<script src="{{ url_for('static', filename='js/oi_profile_open_orders.js') }}?v={{ sv('js/oi_profile_open_orders.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_indicators.js') }}?v={{ sv('js/oi_indicators.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile.js') }}?v={{ sv('js/oi_profile.js') }}"></script>
 <script src="{{ url_for('static', filename='js/oi_profile_init.js') }}?v={{ sv('js/oi_profile_init.js') }}"></script>

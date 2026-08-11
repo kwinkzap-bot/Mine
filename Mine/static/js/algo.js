@@ -26,7 +26,7 @@ let _scHistoryTimer    = null;
 let _scLastEntryTime   = null;
 let _scLastActiveFlag  = false;
 let _activeTimer       = null;
-const _ALGO_TABS = ['active', 'rtp', 'sc', 'tmf', 'ema-confluence', 'swing-momentum'];
+const _ALGO_TABS = ['active', 'rtp', 'sc', 'tmf', 'ema-confluence', 'swing-momentum', 'oi-crossover'];
 // Sub-tabs nested inside the 'rtp' (EMA RTP) tab — 30s / 1m / 2m / 3m / 5m candles.
 const _ALGO_RTP_SUBTABS = ['rtp30s', 'rtp', 'rtp2m', 'rtp3m', 'rtp5m'];
 let _algoRtpActiveSub = 'rtp30s';
@@ -490,6 +490,10 @@ function algoSwitch(tab) {
     clearTimeout(_activeTimer);
     if (typeof _tmfClearTimers === 'function') _tmfClearTimers();
     if (typeof _emacClearTimers === 'function') _emacClearTimers();
+    // The scanner polls on a 60s timer of its own and draws an SVG on every
+    // refresh — both wasted while its tab is hidden, so it is stopped here
+    // and started again below only when its tab is the one being shown.
+    if (window.OIX) window.OIX.deactivate();
     if (tab === 'active') {
         _activeFetchAll();
     } else if (tab === 'rtp') {
@@ -506,6 +510,8 @@ function algoSwitch(tab) {
         _emacFetchHistory();
     } else if (tab === 'swing-momentum') {
         _smLiveFetchConfigs();
+    } else if (tab === 'oi-crossover') {
+        if (window.OIX) window.OIX.activate();
     }
 }
 

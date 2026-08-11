@@ -1116,7 +1116,7 @@ body.ocean-theme .sw-wrap {
     --sw-top-bg:     rgba(34,197,94,0.08);
 }
 
-.sw-wrap { padding-top: 5px; margin: 0 auto; color: var(--pf-text); }
+.sw-wrap { padding-top: 0px; color: var(--pf-text); }
 .sw-topbar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
 .sw-title { font-size: 13px; font-weight: 700; color: var(--pf-text); flex: 1; min-width: 110px; }
 .sw-updated { font-size: 10px; color: var(--pf-text-3); }

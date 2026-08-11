@@ -299,12 +299,24 @@
     // numbers even if one is the string "12.5". Compares raw field values,
     // not rendered text, so a formatted "₹1,234" cell sorts correctly without
     // stripping currency symbols back out of it.
+    // A string is numeric only if the *whole* of it is a number once the
+    // decoration a value may carry (₹, %, thousands commas) is stripped.
+    // parseFloat's leading-number rule was too generous: it read the date
+    // "2026-08-10 10:15:00" as 2026, so every row in a date column compared
+    // equal and clicking that header did nothing at all. Anything left over —
+    // dates, clock times — falls through to the string compare below, which
+    // orders zero-padded ISO dates and HH:MM times chronologically anyway.
+    const numericValue = (v) => {
+        if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+        if (typeof v !== 'string') return null;
+        const s = v.trim().replace(/[₹$,\s]/g, '').replace(/%$/, '');
+        return /^[+-]?(\d+\.?\d*|\.\d+)$/.test(s) ? Number(s) : null;
+    };
+
     function compareValues(a, b) {
-        const an = typeof a === 'number' ? a : parseFloat(a);
-        const bn = typeof b === 'number' ? b : parseFloat(b);
-        const bothNumeric = a != null && a !== '' && b != null && b !== ''
-            && !isNaN(an) && !isNaN(bn);
-        if (bothNumeric) return an === bn ? 0 : (an < bn ? -1 : 1);
+        const an = numericValue(a);
+        const bn = numericValue(b);
+        if (an !== null && bn !== null) return an === bn ? 0 : (an < bn ? -1 : 1);
         return String(a ?? '').localeCompare(String(b ?? ''));
     }
 

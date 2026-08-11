@@ -48,6 +48,46 @@ def series():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@oi_crossover_bp.route('/atm', methods=['GET'])
+@limiter.exempt
+def atm():
+    """ATM strike and premiums for the symbols the grid is currently showing.
+
+    Batched and caller-driven rather than folded into /snapshot: one chain
+    call per symbol is only affordable for the handful of rows left after the
+    filters, not for a 200-symbol snapshot on a 60s refresh.
+    """
+    raw = (request.args.get('symbols') or '').strip()
+    symbols = [s.upper().strip() for s in raw.split(',') if s.strip()]
+    if not symbols:
+        return jsonify({'success': False, 'error': 'symbols is required'}), 400
+    # A hard ceiling so a hand-rolled request can't turn into 200 chain calls
+    # and starve the shared Fyers budget.
+    if len(symbols) > 40:
+        return jsonify({'success': False,
+                        'error': 'at most 40 symbols per request'}), 400
+    try:
+        return jsonify({'success': True, 'atm': _service().atm_quotes(symbols)})
+    except Exception as e:
+        logger.error(f"[OIX API] atm failed: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@oi_crossover_bp.route('/positions', methods=['GET'])
+@limiter.exempt
+def positions():
+    """Today's filled OI-Crossover positions, valued at the live premium.
+
+    One chain call per symbol actually holding a position — normally none,
+    and never more than the handful the button has been pressed on.
+    """
+    try:
+        return jsonify({'success': True, 'positions': _service().positions()})
+    except Exception as e:
+        logger.error(f"[OIX API] positions failed: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @oi_crossover_bp.route('/meta', methods=['GET'])
 @limiter.exempt
 def meta():

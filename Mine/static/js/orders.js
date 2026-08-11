@@ -25,32 +25,51 @@ function _getCsrf() {
 
 // ─── Server Order API ─────────────────────────────────────────────────────────
 
+// sync=1 has the server reconcile today's resting orders against the broker
+// order books first, so the Pending tab lists what is genuinely still open. An
+// order the broker filled used to sit here as OPEN indefinitely, offering a
+// cancel and a price edit that both had nothing left to act on.
 async function _fetchOrders(history = false) {
     try {
-        const res = await fetch(`/api/orders?history=${history ? 1 : 0}`);
+        const res = await fetch(`/api/orders?history=${history ? 1 : 0}&sync=1`);
         if (!res.ok) return [];
         const data = await res.json();
         return data.orders || [];
     } catch (_) { return []; }
 }
 
+// A cancel or a price edit now travels all the way to every broker the order
+// was placed to, so both report what each broker said — silently swallowing the
+// response would let the grid show a price or a cancel that never landed.
 async function _deleteOrder(id) {
     try {
-        await fetch(`/api/orders/${id}`, {
+        const res = await fetch(`/api/orders/${id}`, {
             method: 'DELETE',
             headers: { 'X-CSRFToken': _getCsrf() }
         });
-    } catch (_) { /* best-effort */ }
+        return await res.json();
+    } catch (e) { return { success: false, error: e.message }; }
 }
 
 async function _updateOrderPrice(id, price) {
     try {
-        await fetch(`/api/orders/${id}/price`, {
+        const res = await fetch(`/api/orders/${id}/price`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': _getCsrf() },
             body: JSON.stringify({ price })
         });
-    } catch (_) { /* best-effort */ }
+        return await res.json();
+    } catch (e) { return { success: false, error: e.message }; }
+}
+
+/** "• ZERODHA 1: OK" per broker leg, for the toast. */
+function _brokerLines(r) {
+    if (!Array.isArray(r?.summary) || !r.summary.length) return '';
+    return '\n' + r.summary.map(s => {
+        const name = String(s.broker || '').replace(/_/g, ' ').toUpperCase();
+        const msg = s.result?.success ? 'OK' : (s.result?.error || 'Failed');
+        return `• ${name}: ${msg}`;
+    }).join('\n');
 }
 
 // ─── SVG Icons ────────────────────────────────────────────────────────────────
@@ -71,11 +90,16 @@ const _SVG = {
 
 let _historyMode = false;
 
+// Unfilled orders — the ones whose price can still be changed. OPEN is a LIMIT
+// order resting at the brokers; PENDING/EXECUTING are Mine orders the backend
+// monitor still holds.
+const _EDITABLE = ['PENDING', 'EXECUTING', 'OPEN'];
+
 async function renderOrdersGrid() {
     const activeTab = document.querySelector('.ord-tab.active')?.dataset.tab || 'pending';
     const allOrders = await _fetchOrders(_historyMode);
 
-    const pendingAll  = allOrders.filter(o => o.status === 'PENDING' || o.status === 'EXECUTING');
+    const pendingAll  = allOrders.filter(o => _EDITABLE.includes(o.status));
     const executedAll = allOrders.filter(o => o.status === 'EXECUTED');
 
     const pEl = document.getElementById('ordStatPendingCount');
@@ -104,7 +128,7 @@ async function renderOrdersGrid() {
     // Status → shared badge tone. Pending work is amber, a fill is green, a
     // cancel/reject is red; anything unrecognised stays neutral.
     const statusTone = s => ({
-        PENDING: 'warn', EXECUTING: 'warn', EXECUTED: 'pos',
+        PENDING: 'warn', EXECUTING: 'warn', OPEN: 'warn', EXECUTED: 'pos',
         CANCELLED: 'neg', REJECTED: 'neg',
     })[s] || 'neutral';
 
@@ -132,12 +156,12 @@ async function renderOrdersGrid() {
             { label: 'Action', render: (_, o) => DataGrid.badge(o.action,
                 o.action === 'BUY' ? 'pos' : 'neg') },
             { label: 'Price', cellClass: 'ord-td-price', render: (_, o) =>
-                (o.status === 'PENDING' || o.status === 'EXECUTING')
-                    ? `<input type="number" class="ord-price-input" value="${esc(o.price || 0)}" step="1" min="0">`
+                _EDITABLE.includes(o.status)
+                    ? `<input type="number" class="ord-price-input" value="${esc(o.price || 0)}" step="0.05" min="0">`
                     : `<span class="ord-price-val">₹${Number(o.price || 0).toFixed(2)}</span>` },
             { label: 'Status', render: (_, o) => DataGrid.badge(o.status, statusTone(o.status)) },
             { label: '', cellClass: 'ord-td-actions', render: (_, o) =>
-                (o.status === 'PENDING' || o.status === 'EXECUTING')
+                _EDITABLE.includes(o.status)
                     ? `<button class="ord-btn save-price" title="Update price">${_SVG.save}</button>` +
                       `<button class="ord-btn cancel-order" title="Cancel order">${_SVG.cancel}</button>`
                     : `<button class="ord-btn delete-order" title="Remove">${_SVG.trash}</button>` },
@@ -162,19 +186,29 @@ function _attachGridListeners() {
         if (!row) return;
         const id = row.dataset.id;
 
+        const notify = (msg, tone) => {
+            if (typeof showNotification === 'function') showNotification(msg, tone);
+        };
+
         if (e.target.closest('.cancel-order') || e.target.closest('.delete-order')) {
-            await _deleteOrder(id);
-            if (typeof showNotification === 'function') showNotification('Order cancelled', 'info');
+            const r = await _deleteOrder(id);
+            if (r?.success) notify(`Order cancelled${_brokerLines(r)}`, 'info');
+            // gone = the broker had already finished with it; the server has
+            // corrected the record, so the redraw moves it out of Pending.
+            else if (r?.gone) notify(r.error || 'Order is no longer open', 'warning');
+            else notify(`Cancel failed: ${r?.error || 'Unknown error'}${_brokerLines(r)}`, 'error');
             renderOrdersGrid();
         } else if (e.target.closest('.save-price')) {
             const input = row.querySelector('.ord-price-input');
             const newPrice = parseFloat(input?.value);
             if (isNaN(newPrice) || newPrice <= 0) {
-                if (typeof showNotification === 'function') showNotification('Enter a valid price', 'error');
+                notify('Enter a valid price', 'error');
                 return;
             }
-            await _updateOrderPrice(id, newPrice);
-            if (typeof showNotification === 'function') showNotification('Price updated', 'success');
+            const r = await _updateOrderPrice(id, newPrice);
+            if (r?.success) notify(`Price → ₹${newPrice}${_brokerLines(r)}`, 'success');
+            else if (r?.gone) notify(r.error || 'Order is no longer open', 'warning');
+            else notify(`Update failed: ${r?.error || 'Unknown error'}${_brokerLines(r)}`, 'error');
             renderOrdersGrid();
         }
     });

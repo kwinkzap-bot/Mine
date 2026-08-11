@@ -11,6 +11,9 @@
      for the EMA Confluence Live Algo tab (algo_ema_confluence.html). -->
 <link rel="stylesheet" href="{{ url_for('static', filename='css/oi_profile.css') }}?v={{ sv('css/oi_profile.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v={{ sv('css/dashboard.css') }}">
+<!-- OI Crossover tab (algo_oi_crossover.html). dashboard.css above already
+     carries the .sw-wrap shell the scanner sits in. -->
+<link rel="stylesheet" href="{{ url_for('static', filename='css/oi_crossover.css') }}?v={{ sv('css/oi_crossover.css') }}">
 {% endblock %}
 
 {% block content %}
@@ -25,6 +28,7 @@
         <button class="ag-tab"        id="algo-tab-tmf"             onclick="algoSwitch('tmf')">30-Min Fakeout</button>
         <button class="ag-tab"        id="algo-tab-ema-confluence"  onclick="algoSwitch('ema-confluence')">EMA Confluence</button>
         <button class="ag-tab"        id="algo-tab-swing-momentum"   onclick="algoSwitch('swing-momentum')">Swing Momentum</button>
+        <button class="ag-tab"        id="algo-tab-oi-crossover"    onclick="algoSwitch('oi-crossover')">OI Crossover</button>
     </div>
 
     <!-- ════════════════════════════════════════════════════════ -->
@@ -754,12 +758,16 @@
 
     </div><!-- #algo-swing-momentum-panel -->
 
+    {% include 'algo_oi_crossover.html' %}
+
 </div><!-- .algo-inner -->
 </div><!-- .algo-page -->
 
 <script src="{{ url_for('static', filename='js/algo_charges.js') }}?v={{ sv('js/algo_charges.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_tmf.js') }}?v={{ sv('js/algo_tmf.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo_ema_confluence.js') }}?v={{ sv('js/algo_ema_confluence.js') }}"></script>
+<!-- Registers window.OIX; algoSwitch() starts and stops it with the tab. -->
+<script src="{{ url_for('static', filename='js/oi_crossover.js') }}?v={{ sv('js/oi_crossover.js') }}"></script>
 <script src="{{ url_for('static', filename='js/algo.js') }}?v={{ sv('js/algo.js') }}"></script>
 <script>algoLoad();</script>
 {% endblock %}

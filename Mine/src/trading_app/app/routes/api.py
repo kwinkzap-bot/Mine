@@ -6747,6 +6747,29 @@ def place_order_unified() -> EndpointResponse:
             sec_id=data.get('sec_id'),
         )
 
+        # Quantity and average fill are recorded so a position can be valued
+        # later without replaying the .env that sized it — lots are config and
+        # config changes. Only legs the broker accepted are counted; a rejected
+        # broker contributes nothing to the position.
+        placed = [b for b in (result.get('summary') or [])
+                  if (b.get('result') or {}).get('success')]
+        total_qty = sum(int(b.get('quantity') or 0) for b in placed)
+        fills = [float((b.get('result') or {}).get('price') or 0) for b in placed]
+        fills = [p for p in fills if p > 0]
+        # The broker's own average fill when it reported one, else the price we
+        # asked for — never zero, which would read as a free entry.
+        avg_fill = round(sum(fills) / len(fills), 2) if fills else float(limit_price or 0)
+
+        # A MARKET order that any broker accepted is done — EXECUTED. A LIMIT
+        # order is only *resting* at the brokers, so it is OPEN: still editable
+        # and still cancellable, and the Orders grid keys off exactly that.
+        if not result.get('success'):
+            status = 'REJECTED'
+        elif order_type == 'LIMIT':
+            status = 'OPEN'
+        else:
+            status = 'EXECUTED'
+
         from trading_app.app.utils.mine_order_store import MineOrderStore
         MineOrderStore.add_order({
             'mode': 'broker',
@@ -6759,9 +6782,11 @@ def place_order_unified() -> EndpointResponse:
             'type': order_type,
             'instrument': 'NFO',
             'price': float(limit_price or 0),
-            'status': 'EXECUTED' if result.get('success') else 'REJECTED',
+            'quantity': total_qty,
+            'entry_price': avg_fill,
+            'status': status,
             'username': username,
-            'executed_at': int(_time.time() * 1000) if result.get('success') else None,
+            'executed_at': int(_time.time() * 1000) if status == 'EXECUTED' else None,
             'broker_order_ids': result.get('summary', []),
         })
 
@@ -6775,10 +6800,26 @@ def place_order_unified() -> EndpointResponse:
 @api_bp.route('/orders', methods=['GET'])
 @csrf.exempt
 def list_all_orders() -> EndpointResponse:
-    """Return all orders (broker + mine) from the server JSON store."""
+    """Return all orders (broker + mine) from the server JSON store.
+
+    sync=1 first reconciles today's still-open broker orders against the broker
+    order books, so a screen that lists unfilled orders never offers edit or
+    cancel on one the broker already filled. The sweep is TTL-throttled and
+    skips entirely when nothing is resting, so a quiet day costs no broker
+    calls at all.
+    """
     try:
         from trading_app.app.utils.mine_order_store import MineOrderStore
         history = request.args.get('history', '0') == '1'
+
+        if request.args.get('sync') == '1':
+            try:
+                _reconcile_open_orders(session.get('username', 'Mine'), dict(session))
+            except Exception as e:
+                # Reconciliation is an improvement on the listing, never a
+                # precondition for it.
+                logger.warning(f"[orders/list] status sync skipped: {e}")
+
         orders = MineOrderStore.get_all_orders() if history else MineOrderStore.get_today_orders()
         return jsonify({'success': True, 'orders': orders})
     except Exception as e:
@@ -6788,16 +6829,49 @@ def list_all_orders() -> EndpointResponse:
 
 @api_bp.route('/orders/<order_id>', methods=['DELETE'])
 def delete_order_record(order_id: str) -> EndpointResponse:
-    """Cancel/remove an order from the server JSON store.
-    For pending Mine orders the backend monitor will stop tracking them.
-    For placed Broker orders this removes them from our display only.
+    """Cancel an order everywhere it exists.
+
+    A Mine order that never left the app is just marked CANCELLED — the backend
+    monitor stops tracking it. A Broker order that is still resting at the
+    brokers is cancelled at each of them first, so the button means the same
+    thing on both modes. A filled order has nothing live to cancel, so this only
+    drops the record from the display.
     """
     try:
         from trading_app.app.utils.mine_order_store import MineOrderStore
-        found = MineOrderStore.cancel_order(order_id)
-        if found:
-            return jsonify({'success': True})
-        return jsonify({'success': False, 'error': 'Order not found'}), 404
+
+        order = MineOrderStore.get_order(order_id)
+        if not order:
+            return jsonify({'success': False, 'error': 'Order not found'}), 404
+
+        broker_result = None
+        if order.get('status') in MineOrderStore.EDITABLE_STATUSES and order.get('broker_order_ids'):
+            broker_result = _cancel_order_at_brokers(
+                order.get('broker_order_ids'),
+                session.get('username', 'Mine'),
+                dict(session),
+            )
+            # A broker that refuses the cancel (already filled, already gone)
+            # must not leave a stale CANCELLED row lying about the truth. Ask
+            # the order book why it refused: if the order is already filled or
+            # already gone, the record is corrected here and the caller is told
+            # the row is finished rather than being left to press a button that
+            # can only keep failing.
+            if not broker_result.get('success'):
+                _reconcile_open_orders(session.get('username', 'Mine'), dict(session),
+                                       order_id=order_id, force=True)
+                settled = MineOrderStore.get_order(order_id).get('status')
+                if settled not in MineOrderStore.EDITABLE_STATUSES:
+                    return jsonify({'success': False, 'gone': True, 'status': settled,
+                                    'error': f'Already {settled.lower()} at the broker — '
+                                             f'removed from the open list',
+                                    'summary': broker_result.get('summary', [])}), 409
+                return jsonify({'success': False,
+                                'error': broker_result.get('error') or 'Broker cancel failed',
+                                'summary': broker_result.get('summary', [])}), 400
+
+        MineOrderStore.cancel_order(order_id)
+        return jsonify({'success': True, 'summary': (broker_result or {}).get('summary', [])})
     except Exception as e:
         logger.error(f"[orders/delete] {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -6805,16 +6879,58 @@ def delete_order_record(order_id: str) -> EndpointResponse:
 
 @api_bp.route('/orders/<order_id>/price', methods=['PUT'])
 def update_order_price(order_id: str) -> EndpointResponse:
-    """Update the limit price of a pending Mine order."""
+    """Edit an unfilled order's price — at every broker it was placed to.
+
+    Mine orders live only in our store, so the new price is all the monitor
+    needs. Broker orders are already resting at N brokers, so the edit is fanned
+    out to all N and the stored price is only updated if at least one broker
+    accepted it — otherwise the record would show a price nobody is working.
+    """
     try:
         data = request.get_json()
         new_price = float(data.get('price', 0)) if data else 0
+        quantity = data.get('quantity') if data else None
         if new_price <= 0:
             return jsonify({'success': False, 'error': 'Invalid price'}), 400
+
         from trading_app.app.utils.mine_order_store import MineOrderStore
+
+        order = MineOrderStore.get_order(order_id)
+        if not order:
+            return jsonify({'success': False, 'error': 'Order not found'}), 404
+        if order.get('status') not in MineOrderStore.EDITABLE_STATUSES:
+            return jsonify({'success': False, 'gone': True, 'status': order.get('status'),
+                            'error': f"Order is {order.get('status')} — nothing left to modify"}), 409
+
+        if order.get('broker_order_ids'):
+            result = _modify_order_at_brokers(
+                order.get('broker_order_ids'),
+                session.get('username', 'Mine'),
+                dict(session),
+                price=new_price,
+                quantity=quantity,
+            )
+            if not result.get('success'):
+                # Same reasoning as the cancel path: a refused modify usually
+                # means the order filled while the strip was still showing it.
+                _reconcile_open_orders(session.get('username', 'Mine'), dict(session),
+                                       order_id=order_id, force=True)
+                settled = MineOrderStore.get_order(order_id).get('status')
+                if settled not in MineOrderStore.EDITABLE_STATUSES:
+                    return jsonify({'success': False, 'gone': True, 'status': settled,
+                                    'error': f'Already {settled.lower()} at the broker — '
+                                             f'removed from the open list',
+                                    'summary': result.get('summary', [])}), 409
+                return jsonify({'success': False, 'error': result.get('error'),
+                                'summary': result.get('summary', [])}), 400
+            MineOrderStore.update_price(order_id, new_price)
+            return jsonify({'success': True, 'price': new_price,
+                            'brokers_targeted': result.get('brokers_targeted'),
+                            'summary': result.get('summary', [])})
+
         found = MineOrderStore.update_price(order_id, new_price)
         if found:
-            return jsonify({'success': True})
+            return jsonify({'success': True, 'price': new_price, 'summary': []})
         return jsonify({'success': False, 'error': 'Order not found or not pending'}), 404
     except Exception as e:
         logger.error(f"[orders/price] {e}", exc_info=True)
@@ -6905,6 +7021,372 @@ def cancel_broker_order() -> EndpointResponse:
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _broker_order_legs(broker_legs):
+    """Normalise a stored ``broker_order_ids`` list into legs we can act on.
+
+    The list is whatever ``_dispatch_order_to_brokers`` returned as its summary
+    ({'broker': 'zerodha_1', 'instance': 1, 'result': {'order_id': ...}}), but
+    older records and the /orders/cancel payload use 'broker_type'/'order_id' at
+    the top level — both shapes are accepted. Legs the broker rejected carry no
+    order id and are dropped: there is nothing live to modify or cancel.
+    """
+    legs = []
+    for entry in broker_legs or []:
+        if not isinstance(entry, dict):
+            continue
+        b_type = (entry.get('broker') or entry.get('broker_type') or '').strip().lower()
+        result = entry.get('result') or {}
+        order_id = entry.get('order_id') or result.get('order_id')
+        if not b_type or not order_id:
+            continue
+        instance = entry.get('instance')
+        if instance is None:
+            tail = b_type.rsplit('_', 1)[-1]
+            instance = int(tail) if tail.isdigit() else 1
+        legs.append({'broker': b_type, 'instance': int(instance), 'order_id': str(order_id)})
+    return legs
+
+
+def _broker_client(broker, instance, username, session_data):
+    """Build an authenticated client for one already-configured broker instance.
+
+    Returns (kind, client) where kind is one of kite/fyers/dhan/kotak, or
+    (None, error_message). Session tokens win over the .env copy — same
+    precedence the placement path uses — so a fresh daily login is picked up
+    without a restart.
+    """
+    from trading_app.app.utils.user_env import UserEnvManager
+
+    if broker == 'kite' or broker.startswith('zerodha'):
+        kite = get_kite(instance=instance)
+        if not kite:
+            return None, f'Zerodha {instance} not connected'
+        if os.getenv('STATIC_IP_KEY', '').strip():
+            from trading_app.service.kite_order_services import apply_kite_proxy
+            apply_kite_proxy(kite)
+        return 'kite', kite
+
+    if broker == 'fyers':
+        token = session_data.get(f'fyers_{instance}_access_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance}_ACCESS_TOKEN')
+        app_id = UserEnvManager.get_user_var(username, f'BROKER_{instance}_APP_ID')
+        if not token:
+            return None, 'Fyers not authenticated'
+        from trading_app.service.fyers_order_services import FyersOrderService
+        return 'fyers', FyersOrderService(app_id=app_id, access_token=token)
+
+    if broker == 'dhan':
+        token = session_data.get(f'dhan_{instance}_access_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance}_ACCESS_TOKEN')
+        client_id = UserEnvManager.get_user_var(username, f'BROKER_{instance}_CLIENT_ID')
+        if not token:
+            return None, 'Dhan not authenticated'
+        from trading_app.service.dhan_order_services import DhanOrderService
+        return 'dhan', DhanOrderService(access_token=token, client_id=client_id)
+
+    if broker in ('kotak', 'kotak_neo'):
+        trading_token = session_data.get(f'kotak_{instance}_trading_token') or UserEnvManager.get_user_var(username, f'BROKER_{instance}_TRADING_TOKEN')
+        trading_sid = session_data.get(f'kotak_{instance}_trading_sid') or UserEnvManager.get_user_var(username, f'BROKER_{instance}_TRADING_SID')
+        base_url = UserEnvManager.get_user_var(username, f'BROKER_{instance}_BASE_URL') or 'https://gw-napi.kotaksecurities.com'
+        if not trading_token:
+            return None, 'Kotak not authenticated'
+        from trading_app.service.kotak_order_services import KotakOrderService
+        svc = KotakOrderService(access_token=trading_token)
+        svc.trading_token = trading_token
+        svc.trading_sid = trading_sid
+        svc.base_url = base_url
+        svc.inject_trading_tokens()
+        return 'kotak', svc
+
+    return None, f'Unknown broker type: {broker}'
+
+
+def _modify_order_at_brokers(broker_legs, username, session_data, price=None, quantity=None):
+    """Push a price/quantity edit to every broker leg of one already-placed order.
+
+    One order in our store is N live orders at N brokers, so an edit has to fan
+    out the same way the placement did. Each leg is reported separately: a leg
+    that already filled will be refused by its broker, and that must not hide a
+    successful edit on the others.
+    """
+    legs = _broker_order_legs(broker_legs)
+    if not legs:
+        return {'success': False, 'error': 'No live broker orders to modify', 'summary': []}
+
+    summary = []
+    for leg in legs:
+        broker, instance, order_id = leg['broker'], leg['instance'], leg['order_id']
+        try:
+            kind, client = _broker_client(broker, instance, username, session_data)
+            if not kind:
+                summary.append({'broker': broker, 'instance': instance,
+                                'result': {'success': False, 'error': client, 'order_id': order_id}})
+                continue
+
+            if kind == 'kite':
+                params = {'variety': 'regular', 'order_id': order_id}
+                if price is not None:
+                    params['price'] = float(price)
+                    params['order_type'] = 'LIMIT'
+                if quantity:
+                    params['quantity'] = int(quantity)
+                client.modify_order(**params)
+                res = {'success': True, 'order_id': order_id}
+
+            elif kind == 'fyers':
+                res = client.modify_order(
+                    order_id=order_id,
+                    order_type=1 if price is not None else None,   # 1 = LIMIT
+                    limit_price=float(price) if price is not None else None,
+                    quantity=int(quantity) if quantity else None,
+                )
+
+            elif kind == 'dhan':
+                res = client.modify_order(
+                    order_id=order_id,
+                    price=float(price) if price is not None else None,
+                    quantity=int(quantity) if quantity else None,
+                    order_type='LIMIT' if price is not None else None,
+                )
+
+            else:  # kotak
+                res = client.modify_order(
+                    order_id=order_id,
+                    price=float(price) if price is not None else None,
+                    quantity=int(quantity) if quantity else None,
+                )
+
+        except Exception as e:
+            logger.error(f"[orders/modify] {broker}_{instance} order {order_id}: {e}")
+            res = {'success': False, 'error': str(e), 'order_id': order_id}
+
+        summary.append({'broker': broker, 'instance': instance, 'result': res})
+
+    any_success = any((s['result'] or {}).get('success') for s in summary)
+    errors = [(s['result'] or {}).get('error') for s in summary if not (s['result'] or {}).get('success')]
+    return {
+        'success': any_success,
+        'error': None if any_success else (errors[0] if errors else 'Modify failed'),
+        'brokers_targeted': len(summary),
+        'summary': summary,
+    }
+
+
+def _cancel_order_at_brokers(broker_legs, username, session_data):
+    """Cancel every broker leg of one order. Mirrors _modify_order_at_brokers."""
+    legs = _broker_order_legs(broker_legs)
+    if not legs:
+        return {'success': False, 'error': 'No live broker orders to cancel', 'summary': []}
+
+    summary = []
+    for leg in legs:
+        broker, instance, order_id = leg['broker'], leg['instance'], leg['order_id']
+        try:
+            kind, client = _broker_client(broker, instance, username, session_data)
+            if not kind:
+                summary.append({'broker': broker, 'instance': instance,
+                                'result': {'success': False, 'error': client, 'order_id': order_id}})
+                continue
+
+            if kind == 'kite':
+                client.cancel_order(variety='regular', order_id=order_id)
+                res = {'success': True, 'order_id': order_id}
+            else:
+                res = client.cancel_order(order_id=order_id)
+                if not isinstance(res, dict):
+                    res = {'success': True, 'order_id': order_id, 'response': res}
+
+        except Exception as e:
+            logger.error(f"[orders/cancel] {broker}_{instance} order {order_id}: {e}")
+            res = {'success': False, 'error': str(e), 'order_id': order_id}
+
+        summary.append({'broker': broker, 'instance': instance, 'result': res})
+
+    any_success = any((s['result'] or {}).get('success') for s in summary)
+    errors = [(s['result'] or {}).get('error') for s in summary if not (s['result'] or {}).get('success')]
+    return {
+        'success': any_success,
+        'error': None if any_success else (errors[0] if errors else 'Cancel failed'),
+        'brokers_targeted': len(summary),
+        'summary': summary,
+    }
+
+
+# ── Broker order-status reconciliation ──────────────────────────────────────
+# A LIMIT order is written to the store as OPEN the moment a broker accepts it,
+# and until now nothing ever told the store what happened next. The broker fills
+# it, the store still says OPEN, and the order keeps its edit and cancel buttons
+# on every screen — buttons that can only fail, because there is nothing left at
+# the broker to modify. These helpers close that loop: ask the brokers what the
+# resting orders actually did, and write it back.
+
+# At most one order-book sweep per broker in this window. The open-orders strip
+# polls every 5s from every open tab, and the brokers share one app-wide request
+# budget with the chart feeds (see the Fyers 8 req/s cap).
+_ORDER_SYNC_TTL_S = 8.0
+_order_sync_last = {'ts': 0.0}
+_order_sync_lock = threading.Lock()
+
+
+def _normalize_broker_order(kind, o):
+    """One broker order-book row → (status, avg_price, filled_qty).
+
+    status is our own vocabulary — EXECUTED / CANCELLED / REJECTED / OPEN —
+    because each broker names the same three outcomes differently.
+    """
+    try:
+        if kind == 'kite':
+            raw = str(o.get('status') or '').upper()
+            status = ({'COMPLETE': 'EXECUTED', 'CANCELLED': 'CANCELLED',
+                       'REJECTED': 'REJECTED'}).get(raw, 'OPEN')
+            return status, o.get('average_price'), o.get('filled_quantity')
+
+        if kind == 'fyers':
+            # Fyers V3: 6=Pending, 4=Transit, 1=Cancelled, 2=Filled, 5=Rejected
+            raw = int(o.get('status') or 0)
+            status = ({2: 'EXECUTED', 1: 'CANCELLED', 5: 'REJECTED'}).get(raw, 'OPEN')
+            return status, o.get('tradedPrice') or o.get('avgPrice'), o.get('filledQty')
+
+        if kind == 'dhan':
+            raw = str(o.get('orderStatus') or '').upper()
+            status = ({'TRADED': 'EXECUTED', 'CANCELLED': 'CANCELLED',
+                       'EXPIRED': 'CANCELLED', 'REJECTED': 'REJECTED'}).get(raw, 'OPEN')
+            return status, o.get('averageTradedPrice'), o.get('filledQty') or o.get('filled_qty')
+
+        # kotak
+        raw = str(o.get('ordSt') or '').lower()
+        status = ({'complete': 'EXECUTED', 'traded': 'EXECUTED', 'cancelled': 'CANCELLED',
+                   'rejected': 'REJECTED'}).get(raw, 'OPEN')
+        return status, o.get('avgPrc'), o.get('fldQty')
+    except Exception:
+        # An unreadable row must never be mistaken for a terminal one — that
+        # would drop a live order off the strip while it is still resting.
+        return 'OPEN', None, None
+
+
+def _broker_order_book(kind, client):
+    """{order_id: (status, avg_price, filled_qty)} for one broker instance.
+
+    Empty on any failure, which the caller must read as "don't know" rather
+    than "no such order".
+    """
+    try:
+        if kind == 'kite':
+            rows = client.orders() or []
+            key = 'order_id'
+        elif kind == 'fyers':
+            rows = (client.get_orderbook() or {}).get('orders') or []
+            key = 'id'
+        elif kind == 'dhan':
+            rows = (client.get_order_book() or {}).get('orders') or []
+            key = 'orderId'
+        else:
+            rows = (client.get_orderbook() or {}).get('orders') or []
+            key = 'nOrdNo'
+
+        return {str(o.get(key)): _normalize_broker_order(kind, o)
+                for o in rows if o.get(key) is not None}
+    except Exception as e:
+        logger.warning(f"[orders/sync] {kind} order book fetch failed: {e}")
+        return {}
+
+
+def _resolve_order_at_brokers(order, username, session_data, books=None):
+    """What one stored order actually did at its brokers.
+
+    Returns (status, avg_price, filled_qty). A leg missing from the order book
+    is unknown, not gone: brokers drop yesterday's orders from today's book, and
+    a half-fetched book must not cancel a live order out of the list. Any leg
+    that traded makes the whole record EXECUTED — a partial fill is a real
+    position — and the record only goes CANCELLED/REJECTED when every leg says
+    so.
+    """
+    legs = _broker_order_legs(order.get('broker_order_ids'))
+    if not legs:
+        return None, None, None
+
+    books = books if books is not None else {}
+    seen, filled_qty, prices = [], 0, []
+
+    for leg in legs:
+        cache_key = (leg['broker'], leg['instance'])
+        if cache_key not in books:
+            kind, client = _broker_client(leg['broker'], leg['instance'], username, session_data)
+            books[cache_key] = _broker_order_book(kind, client) if kind else {}
+
+        row = books[cache_key].get(str(leg['order_id']))
+        if not row:
+            continue
+
+        status, avg, qty = row
+        seen.append(status)
+        if int(qty or 0) > 0:
+            filled_qty += int(qty or 0)
+            if avg:
+                prices.append(float(avg))
+
+    if not seen:
+        return None, None, None
+
+    avg_price = round(sum(prices) / len(prices), 2) if prices else None
+    if 'EXECUTED' in seen or filled_qty > 0:
+        return 'EXECUTED', avg_price, filled_qty
+    if all(s == 'REJECTED' for s in seen):
+        return 'REJECTED', None, 0
+    if all(s in ('CANCELLED', 'REJECTED') for s in seen):
+        return 'CANCELLED', None, 0
+    return 'OPEN', None, filled_qty
+
+
+def _reconcile_open_orders(username, session_data, order_id=None, force=False):
+    """Write back what the brokers say about every still-open broker order.
+
+    order_id limits the sweep to one record (used when an edit or a cancel is
+    refused, which is itself a strong hint that the order is already gone).
+    Returns the number of records whose status changed.
+    """
+    from trading_app.app.utils.mine_order_store import MineOrderStore
+
+    if not force and order_id is None:
+        with _order_sync_lock:
+            if (_time.time() - _order_sync_last['ts']) < _ORDER_SYNC_TTL_S:
+                return 0
+            _order_sync_last['ts'] = _time.time()
+
+    candidates = [
+        o for o in MineOrderStore.get_today_orders()
+        if o.get('status') in MineOrderStore.EDITABLE_STATUSES
+        and o.get('broker_order_ids')
+        and (order_id is None or o.get('id') == order_id)
+    ]
+    if not candidates:
+        return 0
+
+    books, changed = {}, 0
+    for order in candidates:
+        try:
+            status, avg_price, filled_qty = _resolve_order_at_brokers(
+                order, username, session_data, books)
+        except Exception as e:
+            logger.warning(f"[orders/sync] {order.get('id')}: {e}")
+            continue
+
+        if not status or status == order.get('status') or status == 'OPEN':
+            continue
+
+        updates = {'status': status}
+        if status == 'EXECUTED':
+            updates['executed_at'] = int(_time.time() * 1000)
+            if avg_price:
+                updates['entry_price'] = avg_price
+            if filled_qty:
+                updates['quantity'] = filled_qty
+        MineOrderStore.update_order(order['id'], updates)
+        changed += 1
+        logger.info(f"[orders/sync] {order.get('id')} {order.get('strike')}"
+                    f"{order.get('option_type')}: OPEN → {status}")
+
+    return changed
+
+
 def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, username, session_data,
                                quantity=None, tradingsymbol_override=None, expiry_override=None,
                                limit_price=None, sec_id=None):
@@ -6920,6 +7402,12 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
     _auto_exit_enabled = UserEnvManager.get_user_var(
         username, 'INTRINSIC_AUTO_EXIT', 'false'
     ).strip().lower() in ('true', '1', 'yes')
+
+    # The automatic stop below is a flat "entry - 20", which only makes sense
+    # for the index premiums the algos trade. Hand-fired orders — OI Profile
+    # and the OI Crossover grid — opt out: 20 rupees under a stock option
+    # trading at 30 is either an instant exit or a rejected trigger price.
+    _auto_sl = strategy not in ('intrinsic', 'oix')
 
     # A manual SELL closes the position — kill any running auto-exit monitors for this
     # strike so an orphaned monitor can't fire another SELL later.
@@ -6942,6 +7430,15 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                 logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): INTRINSIC_ACTIVE not enabled")
                 continue
 
+        # OI Crossover orders are hand-fired from the scanner grid, so they
+        # route by their own per-broker flag rather than following whatever
+        # BROKER_N_ACTIVE happens to be on. Default false: a broker opts in.
+        if strategy == 'oix':
+            raw_active = UserEnvManager.get_user_var(username, f'BROKER_{i}_OIX_ACTIVE', 'false').strip().lower()
+            if raw_active not in ('true', '1', 'yes'):
+                logger.info(f"[order-dispatch] Skipping broker {i} ({b_type}): OIX_ACTIVE not enabled")
+                continue
+
         if b_type == 'zerodha':
             targets.append({'type': f'zerodha_{i}', 'instance': i})
         elif b_type in ['kotak', 'kotak_neo']:
@@ -6956,10 +7453,17 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
     if not targets:
         if strategy == 'intrinsic':
             return {'success': False, 'error': 'No Intrinsic-enabled broker found. Set BROKER_N_INTRINSIC_ACTIVE=true in .env'}
+        elif strategy == 'oix':
+            return {'success': False, 'error': 'No OI-Crossover-enabled broker found. Set BROKER_N_OIX_ACTIVE=true in .env'}
         else:
             return {'success': False, 'error': 'No active broker found. Set BROKER_N_ACTIVE=true in .env'}
 
-    def _execute_single(broker, _active_instance):
+    # out_meta: an optional dict the caller passes in to receive facts the
+    # broker branches don't put in their own result — currently the dispatched
+    # quantity, which the order store needs to value a position later. Written
+    # here rather than inside each of the four broker branches, which all
+    # return their SDK's own result shape.
+    def _execute_single(broker, _active_instance, out_meta=None):
         is_zerodha_instance = (broker == 'zerodha' or broker.startswith('zerodha_'))
 
         if _active_instance is not None and not is_broker_active(username, _active_instance):
@@ -6971,7 +7475,25 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                 logger.info(f"[Intrinsic] Skipping broker {_active_instance} ({broker}) because BROKER_N_INTRINSIC_ACTIVE is FALSE")
                 return {'success': False, 'error': f'Intrinsic Orders for {broker} is DISABLED in config'}, 403
 
+        if strategy == 'oix':
+            oix_active = UserEnvManager.get_user_var(username, f'BROKER_{_active_instance}_OIX_ACTIVE', 'false').lower().strip() in ('true', '1', 'yes')
+            if not oix_active:
+                logger.info(f"[OIX] Skipping broker {_active_instance} ({broker}) because BROKER_N_OIX_ACTIVE is FALSE")
+                return {'success': False, 'error': f'OI Crossover orders for {broker} are DISABLED in config'}, 403
+
         order_lots = quantity
+
+        if strategy == 'oix' and not order_lots:
+            # Same precedence the intrinsic path uses: per-broker size first,
+            # then one app-wide default.
+            for var in (f'BROKER_{_active_instance}_OIX_LOTS', 'OIX_ORDER_LOTS'):
+                raw = UserEnvManager.get_user_var(username, var)
+                if raw:
+                    try:
+                        order_lots = int(str(raw))
+                        break
+                    except (TypeError, ValueError):
+                        pass
         if strategy == 'intrinsic' and not order_lots:
             symbol_upper = symbol.upper()
             raw_sym_intrinsic = UserEnvManager.get_user_var(username, f'INTRINSIC_{symbol_upper}_LOTS')
@@ -7023,6 +7545,10 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
             lot_size = 1
 
         main_qty = order_lots * lot_size
+        if out_meta is not None:
+            out_meta['quantity'] = main_qty
+            out_meta['lots'] = order_lots
+            out_meta['lot_size'] = lot_size
         sl_qty = main_qty
         sl_transaction_type = 'SELL' if action == 'BUY' else 'BUY'
 
@@ -7053,7 +7579,7 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                         if entry_price and entry_price > 0:
                             option_symbol = kite_service.get_option_symbol(symbol, strike, option_type)
                             sl_order_ids = []
-                            if strategy != 'intrinsic':
+                            if _auto_sl:
                                 sl_price = entry_price - 20
                                 if option_symbol:
                                     sl_res = kite_service.place_stoploss_order(tradingsymbol=option_symbol, trigger_price=sl_price, quantity=sl_qty, transaction_type=sl_transaction_type)
@@ -7101,7 +7627,7 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
                         if entry_price and entry_price > 0:
                             k_symbol = tradingsymbol_override
                             sl_order_ids = []
-                            if strategy != 'intrinsic':
+                            if _auto_sl:
                                 if k_symbol:
                                     sl_price = entry_price - 20
                                     sl_res = kotak_service.place_stoploss_order(symbol=k_symbol, trigger_price=sl_price, quantity=sl_qty, transaction_type=sl_transaction_type)
@@ -7152,7 +7678,7 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
 
                         if entry and entry > 0:
                             sl_order_ids = []
-                            if strategy != 'intrinsic':
+                            if _auto_sl:
                                 sl_p = entry - 20
                                 exchange_seg = 'BSE_FNO' if symbol.upper() == 'SENSEX' else 'NSE_FNO'
                                 sl_res = dhan_service.place_stoploss_order(security_id=_sec_id, trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', exchange_segment=exchange_seg, entry_price=entry, transaction_type=sl_transaction_type)
@@ -7203,7 +7729,7 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
 
                         if entry and entry > 0:
                             sl_order_ids = []
-                            if strategy != 'intrinsic':
+                            if _auto_sl:
                                 sl_p = entry - 20
                                 prefix = 'BSE' if symbol.upper() == 'SENSEX' else 'NSE'
                                 sl_res = fyers_service.place_stoploss_order(symbol=f'{prefix}:{kite_opt_sym}', trigger_price=sl_p, quantity=sl_qty, product_type='INTRADAY', transaction_type=sl_transaction_type)
@@ -7221,8 +7747,12 @@ def _dispatch_order_to_brokers(symbol, strike, option_type, action, strategy, us
 
     final_responses = []
     for target in targets:
-        res, code = _execute_single(target['type'], target['instance'])
-        final_responses.append({'broker': target['type'], 'instance': target['instance'], 'result': res, 'status': code})
+        meta = {}
+        res, code = _execute_single(target['type'], target['instance'], meta)
+        final_responses.append({'broker': target['type'], 'instance': target['instance'],
+                                'result': res, 'status': code,
+                                'quantity': meta.get('quantity'),
+                                'lots': meta.get('lots')})
 
     any_success = any(r['result'].get('success') for r in final_responses)
     top_error = None
@@ -7376,34 +7906,14 @@ def list_mine_orders() -> EndpointResponse:
 
 @api_bp.route('/mine-orders/<order_id>', methods=['DELETE'])
 def cancel_mine_order(order_id: str) -> EndpointResponse:
-    """Cancel a pending Mine order."""
-    try:
-        from trading_app.app.utils.mine_order_store import MineOrderStore
-        found = MineOrderStore.cancel_order(order_id)
-        if found:
-            return jsonify({'success': True})
-        return jsonify({'success': False, 'error': 'Order not found'}), 404
-    except Exception as e:
-        logger.error(f"[mine-orders/cancel] {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
+    """Cancel an order. Alias of /orders/<id> — one cancel path, both modes."""
+    return delete_order_record(order_id)
 
 
 @api_bp.route('/mine-orders/<order_id>/price', methods=['PUT'])
 def update_mine_order_price(order_id: str) -> EndpointResponse:
-    """Update the limit price of a pending Mine order."""
-    try:
-        data = request.get_json()
-        new_price = float(data.get('price', 0)) if data else 0
-        if new_price <= 0:
-            return jsonify({'success': False, 'error': 'Invalid price'}), 400
-        from trading_app.app.utils.mine_order_store import MineOrderStore
-        found = MineOrderStore.update_price(order_id, new_price)
-        if found:
-            return jsonify({'success': True})
-        return jsonify({'success': False, 'error': 'Order not found or not pending'}), 404
-    except Exception as e:
-        logger.error(f"[mine-orders/price] {e}", exc_info=True)
-        return jsonify({'success': False, 'error': str(e)}), 500
+    """Edit an order's price. Alias of /orders/<id>/price — one modify path."""
+    return update_order_price(order_id)
 
 
 def _start_mine_order_monitor():

@@ -104,8 +104,12 @@ def oi_profile():
 @require_user_auth
 @login_required
 def oi_crossover():
-    """OI Crossover scanner – symbols whose CE/PE OI-change lines crossed today."""
-    return render_template('oi_crossover.html')
+    """OI Crossover scanner – now a tab on the Algo page.
+
+    Kept as a redirect rather than deleted: it was a top-level nav entry, so
+    bookmarks and any link out to it still land on the scanner.
+    """
+    return redirect(url_for('pages.algo') + '#oi-crossover')
 
 @pages_bp.route('/ema-rsi-filter')
 @require_user_auth
