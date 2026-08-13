@@ -15,6 +15,19 @@ equity/index scale and compared directly against the future's LTP — no
 equity/future basis adjustment is applied (mirrors the approximations already
 accepted elsewhere in this codebase, e.g. TMF_EQUITY_LEVERAGE).
 
+A monthly future dies but a multi-day swing doesn't, so the position is CARRIED
+FORWARD: three trading days before the held contract's expiry, at 12:00, the
+open leg is booked out on that contract (history reason 'ROLL') and the same
+side is immediately re-entered on the next month's — keeping the SL/Target it
+was armed with, since both come from the signal candle on the underlying and so
+are contract-independent. Anything merely armed just switches which contract it
+quotes against, and a new entry inside that window opens on the far month to
+begin with. Expiry dates are the broker's real ones off the instrument master
+(list_future_contracts), not a calendar guess; the roll moment is counted in
+TRADING days via app/utils/trading_calendar, and because a passed roll moment
+stays due until the algo next ticks in a real session, a holiday simply defers
+the roll to the following session.
+
 Per-symbol lifecycle (state persists across days — unlike TMF, this is a
 multi-day SWING strategy, not an intraday one; there is no EOD square-off):
   pending_scan  -> not yet scanned today
@@ -59,12 +72,27 @@ A breakout that already fired while nothing was watching is NOT entered late
 (the fill price is gone); it's logged once and re-arms when that move ends.
 
 Gating (see env/Mine.env):
+  MARKET HOURS                        — every price-driven action (trigger
+                                          fills, SL/Target exits, mark-to-
+                                          market) happens only between 09:15
+                                          and 15:30 IST on a weekday, see
+                                          _in_session. The thread still starts
+                                          at 08:30 and the daily scan still
+                                          runs pre-open — it reads only closed
+                                          daily candles — so setups are armed
+                                          and logged before the bell, they just
+                                          cannot fill until the market opens.
   EMA_CONFLUENCE_ACTIVE = true/false   — gates entries (paper fills); the
                                           thread always scans/logs regardless
                                           (same convention as TMF/RTP).
   EMA_CONFLUENCE_MODE   = paper (default) | live (not implemented — falls
                                           back to paper).
   EMA_CONFLUENCE_LOTS   = 1             — paper lot count per entry.
+  EMA_CONFLUENCE_ROLL_DAYS = 3          — trading days before expiry at which
+                                          the contract roll fires (12:00 that
+                                          day). Raising it far above 3 opens
+                                          the window immediately, which is how
+                                          a roll is exercised off-hours.
 
 This module is PAPER-TRADE ONLY — no real broker orders are ever placed.
 """
@@ -74,7 +102,7 @@ import os
 import re
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -97,7 +125,22 @@ if not any(isinstance(h, RotatingFileHandler) and getattr(h, '_emac_sink', False
     logger.setLevel(logging.INFO)
 
 _POLL_SECS = 15          # daily-swing strategy — no need for an aggressive poll
+_MARKET_OPEN_MIN = 9 * 60 + 15  # 09:15 IST — first tick that can be a real trade
 _HARD_STOP_MIN = 15 * 60 + 30   # thread exits for the day at/after 15:30 IST
+
+# ── Contract roll ────────────────────────────────────────────────────────
+# A monthly future dies; a multi-day swing doesn't. Three trading days before
+# expiry, at noon, this algo stops trading a contract and moves to the next
+# month — an open position is exited on the near month and immediately
+# re-entered on the same side in the far month, and anything merely armed just
+# switches which contract it quotes against.
+_ROLL_SESSIONS_BEFORE_EXPIRY = 3     # trading days; EMA_CONFLUENCE_ROLL_DAYS overrides
+_ROLL_HOUR, _ROLL_MINUTE = 12, 0     # 12:00, server-local like every other clock here
+# The rolled leg keeps the SL/Target it was armed with: both come from the
+# signal candle on the UNDERLYING, so they carry across contracts untouched.
+# Re-deriving the target off each far-month entry would shift it by the roll
+# spread every month, compounding. Flip to True to re-price instead.
+_ROLL_REPRICE_TARGET = False
 # ~3.3 calendar years (≈820 trading bars). Must match the backtest's warm-up
 # (_EMA_BT_WARMUP_DAYS in routes/api.py): a 200-day EMA keeps drifting toward
 # its true value for hundreds of bars, so a shorter run-up here would have live
@@ -138,6 +181,46 @@ _instances: Dict[str, 'EmaConfluenceAlgo'] = {}
 _CONTRACT_RE = re.compile(r'(\d{2})([A-Z]{3})FUT$')
 
 
+def roll_due_at(expiry: date, sessions: int = _ROLL_SESSIONS_BEFORE_EXPIRY) -> datetime:
+    """The moment a contract stops being the one this algo trades: 12:00 on
+    the Nth trading day before its expiry.
+
+    Counting in SESSIONS means that day is a trading day by construction, so
+    the user's "if that date is a holiday, do it the next trading session"
+    is normally satisfied before it can bite. next_trading_day_inclusive is
+    the safety net for the case where it can: a year the holiday list doesn't
+    cover fails open (see trading_calendar), so a counted day can turn out to
+    be a holiday after all. Never later than expiry day itself — a holiday
+    cluster must not push the roll past the contract's own death.
+    """
+    from trading_app.app.utils.trading_calendar import (
+        next_trading_day_inclusive, trading_days_before)
+    day = min(next_trading_day_inclusive(trading_days_before(expiry, sessions)), expiry)
+    return datetime.combine(day, dt_time(_ROLL_HOUR, _ROLL_MINUTE))
+
+
+def select_contract(now: datetime, contracts: List[Dict[str, Any]],
+                    sessions: int = _ROLL_SESSIONS_BEFORE_EXPIRY) -> Optional[Dict[str, Any]]:
+    """Which contract should be traded right now — the nearest one that hasn't
+    reached its roll moment.
+
+    Deliberately an ABSOLUTE choice, not an offset off whatever is currently
+    held, because that one property answers both halves of the roll question
+    and dissolves the edge cases: a new entry or an armed setup inside the
+    window picks the far month; a position OPENED inside the window gets back
+    the very contract it is already on, so it cannot roll twice; an expired
+    contract was already dropped from the list by the provider; a single
+    listed contract hits the clamp below.
+    """
+    for c in contracts:
+        expiry = c.get('expiry')
+        if expiry is None:
+            continue       # never roll onto (or off) a contract whose expiry we don't know
+        if now < roll_due_at(expiry, sessions):
+            return c
+    return contracts[-1] if contracts else None
+
+
 def _is_weekend_signal(signal_date: Any) -> bool:
     """True for a stored signal_date ('YYYY-MM-DD') that lands on a weekend.
 
@@ -148,6 +231,16 @@ def _is_weekend_signal(signal_date: Any) -> bool:
         return datetime.strptime(str(signal_date), '%Y-%m-%d').weekday() >= 5
     except (TypeError, ValueError):
         return False
+
+
+def _parse_iso_date(value: Any) -> Optional[date]:
+    """'2026-08-25' -> date(2026, 8, 25); None for anything unparseable, so a
+    missing or corrupt state field degrades to "expiry unknown" rather than
+    raising inside the tick thread."""
+    try:
+        return datetime.strptime(str(value), '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return None
 
 
 def _contract_month_label(token: Any) -> Optional[str]:
@@ -176,6 +269,10 @@ class EmaConfluenceAlgo:
         self._stop_event = threading.Event()
         self._state_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        self._session_hold_logged = False
+        # Re-read from EMA_CONFLUENCE_ROLL_DAYS when the thread starts; the
+        # default keeps the pure helpers usable straight off the constructor.
+        self._roll_sessions = _ROLL_SESSIONS_BEFORE_EXPIRY
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -291,56 +388,98 @@ class EmaConfluenceAlgo:
         kite_indices = {'NIFTY': 256265, 'BANKNIFTY': 260105, 'SENSEX': 265}
         return kite_indices.get(symbol, symbol)
 
-    def _resolve_future(self, provider: Any, is_fyers: bool, symbol: str) -> Tuple[Optional[Any], int]:
-        """(ltp_token, lot_size) for symbol's nearest-expiry FUTURES contract."""
+    def _list_contracts(self, provider: Any, is_fyers: bool, symbol: str) -> List[Dict[str, Any]]:
+        """Every live monthly FUTURES contract for `symbol`, nearest first:
+        [{'symbol': token, 'expiry': date, 'lot_size': int}, ...]. Empty when
+        resolution fails — callers keep whatever they already had."""
         try:
             if is_fyers:
-                token = provider.find_future_symbol(symbol)
-                if not token:
-                    return None, 1
-                lot_size = int(provider.get_lot_size(symbol) or 1)
-                return token, lot_size
+                return provider.list_future_contracts(symbol) or []
             if symbol in _BSE_UNDERLYINGS:
                 # KiteService resolves futures out of the NFO master only, so a
                 # BSE contract would silently come back as a wrong/absent token.
                 # Better to skip the symbol outright than trade a bad one.
                 self.log.warning(f"{symbol}: BSE futures aren't resolvable on the Kite path — skipping")
-                return None, 1
+                return []
             from trading_app.service.kite_order_services import KiteService
             svc = KiteService(kite_instance=provider)
-            ts = svc.get_future_symbol(symbol)
-            if not ts:
-                return None, 1
-            lot_size = int(svc.get_lot_size(symbol) or 1)
-            return f'NFO:{ts}', lot_size
+            return [dict(c, symbol=f"NFO:{c['symbol']}")
+                    for c in (svc.list_future_contracts(symbol) or [])]
         except Exception as e:
             self.log.warning(f"{symbol}: future resolution failed: {e}")
-            return None, 1
+            return []
 
-    def _ensure_future_token(self, provider: Any, is_fyers: bool, symbol: str, s: Dict[str, Any]) -> Optional[Any]:
-        today_str = date.today().isoformat()
-        # The cached token names one specific monthly contract, so it goes dead
-        # at that month's expiry — re-resolve once a day so a symbol that is
-        # merely watching always arms against the current front-month future.
-        # An OPEN paper position stays pinned to the contract it was entered
-        # on: rolling mid-trade would re-price the position against a different
-        # instrument than the one the entry was filled on.
+    def _ensure_future_token(self, provider: Any, is_fyers: bool, symbol: str,
+                             s: Dict[str, Any], now: Optional[datetime] = None) -> Optional[Any]:
+        """The contract this symbol should be quoting against, resolving and
+        rolling as needed.
+
+        A cached token names one specific monthly contract, so it goes dead at
+        that month's expiry — re-resolve once a day, and again the moment the
+        held contract reaches its roll window (see roll_due_at). An OPEN paper
+        position is still PINNED to the contract it was entered on: it must
+        never be marked against an instrument it wasn't filled on, so a due
+        roll only records where it is going (`roll_to_*`) and leaves the swap
+        to _roll_position, which books the near leg first.
+        """
+        now = now or datetime.now()
+        today_str = now.date().isoformat()
+        token  = s.get('future_token')
+        expiry = _parse_iso_date(s.get('future_expiry'))
+        # Cheap short-circuit: no list scan on the ~99% of ticks nowhere near a
+        # roll window, so the daily-cache behaviour below is unchanged.
+        due = expiry is not None and now >= roll_due_at(expiry, self._roll_sessions)
         fresh = s.get('future_resolved_on') == today_str or s.get('phase') == 'in_position'
-        if s.get('future_token') and fresh:
+        # A symbol whose contract expiry we don't know yet must NOT take the
+        # short-circuit: for an open position that pins it forever (the daily
+        # re-resolve never runs), and for an armed one it would leave the roll
+        # check blind until tomorrow. Resolving once is what backfills
+        # future_expiry — every symbol carried over from before this field
+        # existed goes through here exactly once.
+        needs_expiry = token is not None and expiry is None
+        if token and fresh and not due and not needs_expiry:
             # Label a token resolved before this field existed (e.g. a position
             # already open when the app restarted) off the token itself — a
             # pinned contract must not be re-resolved just to name its month.
             if not s.get('future_month'):
-                s['future_month'] = _contract_month_label(s['future_token'])
-            return s['future_token']
-        token, lot_size = self._resolve_future(provider, is_fyers, symbol)
-        if token:
-            s['future_token']        = token
-            s['lot_size']            = lot_size
-            s['future_month']        = _contract_month_label(token)
-            s['future_resolved_on']  = today_str
-        # A failed re-resolution keeps yesterday's token rather than going dark.
-        return token or s.get('future_token')
+                s['future_month'] = _contract_month_label(token)
+            return token
+
+        contracts = self._list_contracts(provider, is_fyers, symbol)
+        target = select_contract(now, contracts, self._roll_sessions)
+        if target is None:
+            # A failed re-resolution keeps yesterday's token rather than going dark.
+            return token
+
+        if s.get('phase') == 'in_position' and token:
+            held = next((c for c in contracts if c['symbol'] == token), None)
+            # Delisted: the contract we hold is gone from the master, so no
+            # quote for it is ever coming again. _roll_position needs to know,
+            # or it would wait forever for a near-leg price.
+            s['future_delisted'] = held is None
+            if held is not None and expiry is None:
+                # One-time backfill for a position opened before future_expiry
+                # existed (the 5 positions live when this shipped).
+                s['future_expiry'] = held['expiry'].isoformat()
+            elif held is None:
+                self.log.warning(f"{symbol}: held contract {token} is no longer listed — "
+                                 f"rolling to {target['symbol']}")
+            if target['symbol'] != token:
+                s['roll_to_token']    = target['symbol']
+                s['roll_to_expiry']   = target['expiry'].isoformat()
+                s['roll_to_lot_size'] = int(target['lot_size'] or 1)
+            return token
+
+        if token and target['symbol'] != token and s.get('phase') == 'watching':
+            self.log.info(f"{symbol}: armed setup moved to the next contract — "
+                          f"{_contract_month_label(token)} -> {_contract_month_label(target['symbol'])} "
+                          f"(trigger {s.get('trigger_level')} unchanged)")
+        s['future_token']       = target['symbol']
+        s['lot_size']           = int(target['lot_size'] or 1)
+        s['future_month']       = _contract_month_label(target['symbol'])
+        s['future_expiry']      = target['expiry'].isoformat()
+        s['future_resolved_on'] = today_str
+        return target['symbol']
 
     def _get_future_ltp_batch(self, provider: Any, tokens: Dict[str, Any]) -> Dict[str, float]:
         uniq_tokens = list({t for t in tokens.values() if t})
@@ -628,7 +767,7 @@ class EmaConfluenceAlgo:
 
         self._send_entry_telegram(symbol, payload)
 
-    def _send_entry_telegram(self, symbol: str, payload: Dict[str, Any]) -> None:
+    def _send_telegram(self, symbol: str, message: str, tag: str = 'entry') -> None:
         """Fire-and-forget Telegram alert. Credentials come from the user's own
         env file; with either unset this is silently a no-op, so the in-app bell
         keeps working on an install that has never set Telegram up."""
@@ -639,6 +778,23 @@ class EmaConfluenceAlgo:
         if not (token and chat_id):
             return
 
+        def _send() -> None:
+            try:
+                from trading_app.service.telegram_service import TelegramService
+                result = TelegramService(token=token, chat_id=chat_id).send_text(message)
+                if result.get('success'):
+                    self.log.info(f"{symbol}: {tag} Telegram alert sent")
+                else:
+                    self.log.error(f"{symbol}: {tag} Telegram alert failed: {result.get('error')}")
+            except Exception as e:
+                self.log.error(f"{symbol}: {tag} Telegram alert failed: {e}")
+
+        # Off-thread: send_text allows a 10s HTTP timeout, which is most of a
+        # poll interval, and a batch of simultaneous entries would serialise.
+        threading.Thread(target=_send, daemon=True,
+                         name=f'EmaConfluenceNotify-{symbol}').start()
+
+    def _send_entry_telegram(self, symbol: str, payload: Dict[str, Any]) -> None:
         tgt_pct = payload.get('target_pct')
         entered = str(payload.get('entry_time') or '')[11:19]
         message = '\n'.join([
@@ -651,22 +807,56 @@ class EmaConfluenceAlgo:
             f"Signal {payload.get('signal_date') or '-'} · entered {entered or '-'}",
             "(paper trade)",
         ])
+        self._send_telegram(symbol, message, tag='entry')
 
-        def _send() -> None:
+    # ── Roll notification ────────────────────────────────────────────────
+    # Deliberately NOT the new-entry alert: a roll is the same swing trade
+    # changing contract, and firing "NEW ENTRY" every month for a long-held
+    # position would train the eye to ignore the real ones. Same contract as
+    # _notify_new_entry — nothing here may raise or block.
+
+    def _notify_roll(self, symbol: str, s: Dict[str, Any],
+                     old_month: Optional[str], near_ltp: float, booked_pnl: Any) -> None:
+        if self._uvar('EMA_CONFLUENCE_NOTIFY_ROLL', 'true').lower() == 'false':
+            return
+        new_month = s.get('future_month') or 'FUT'
+        old_month = old_month or 'FUT'
+        side = 'BUY' if s['direction'] == 'Long' else 'SELL'
+        payload = {
+            'symbol': symbol, 'direction': side, 'mode': 'paper',
+            'from_month': old_month, 'to_month': new_month,
+            'exit_price': round(float(near_ltp), 2), 'booked_pnl': booked_pnl,
+            'entry_price': s.get('entry_price'), 'sl_price': s.get('sl_level'),
+            'target_price': s.get('target_level'), 'qty': s.get('qty'),
+            'lot_size': s.get('lot_size'), 'signal_date': s.get('signal_date'),
+            'roll_count': s.get('roll_count'), 'entry_time': s.get('entry_time'),
+        }
+
+        if self._uvar('EMA_CONFLUENCE_NOTIFY', 'true').lower() != 'false':
             try:
-                from trading_app.service.telegram_service import TelegramService
-                result = TelegramService(token=token, chat_id=chat_id).send_text(message)
-                if result.get('success'):
-                    self.log.info(f"{symbol}: entry Telegram alert sent")
-                else:
-                    self.log.error(f"{symbol}: entry Telegram alert failed: {result.get('error')}")
+                from trading_app.service.notification_service import create_notification
+                create_notification(
+                    category='ema_confluence_roll',
+                    title=f"EMA Confluence — ROLLED {symbol} {old_month} → {new_month}",
+                    summary=(f"Booked ₹{booked_pnl} on {old_month} @ ₹{payload['exit_price']} · "
+                             f"re-entered {side} @ ₹{payload['entry_price']} · qty {payload['qty']}"),
+                    data=payload,
+                )
             except Exception as e:
-                self.log.error(f"{symbol}: entry Telegram alert failed: {e}")
+                self.log.error(f"{symbol}: in-app roll notification failed: {e}")
 
-        # Off-thread: send_text allows a 10s HTTP timeout, which is most of a
-        # poll interval, and a batch of simultaneous entries would serialise.
-        threading.Thread(target=_send, daemon=True,
-                         name=f'EmaConfluenceNotify-{symbol}').start()
+        message = '\n'.join([
+            f"🔁 EMA Confluence — CONTRACT ROLLED",
+            f"{symbol} · {side} · {old_month} → {new_month}",
+            f"Booked ₹{booked_pnl} (exit ₹{payload['exit_price']})",
+            f"Re-entry ₹{payload['entry_price']}",
+            f"SL     ₹{payload['sl_price']}  (unchanged)",
+            f"Target ₹{payload['target_price']}  (unchanged)",
+            f"Qty    {payload['qty']} · roll #{payload['roll_count']}",
+            f"Signal {payload.get('signal_date') or '-'}",
+            "(paper trade)",
+        ])
+        self._send_telegram(symbol, message, tag='roll')
 
     def _record_exit(self, symbol: str, s: Dict[str, Any], exit_price: float, reason: str) -> None:
         direction   = s['direction']
@@ -696,12 +886,95 @@ class EmaConfluenceAlgo:
 
     # Survives _reset_for_next_scan: the resolved contract (which doesn't
     # change intraday, so a same-symbol re-arm needn't re-resolve it) and the
-    # last closed paper trade's audit trail.
+    # last closed paper trade's audit trail. The roll_to_* keys deliberately
+    # do NOT survive — they describe one pending swap, and a symbol that has
+    # gone back to pending_scan has no position left to roll.
     _KEEP_ON_RESET = (
         'future_token', 'lot_size', 'future_month', 'future_resolved_on',
+        'future_expiry',
         'last_entry_time', 'last_entry_price', 'last_exit_time',
         'last_exit_price', 'last_exit_reason', 'last_pnl',
     )
+
+    def _roll_position(self, symbol: str, s: Dict[str, Any],
+                       near_ltp: Optional[float], far_ltp: Optional[float],
+                       lots: int, held_listed: bool = True) -> bool:
+        """Carry an open paper position from the expiring contract to the next
+        month: book the near leg, re-enter the same side on the far one.
+
+        The two legs are recorded as two trades because that is what a roll
+        actually is — two round trips, two sets of costs, and possibly two
+        different lot sizes. What makes them read as ONE setup is that
+        everything describing the setup is written in place and left alone:
+        direction, trigger_level, sl_level, target_level, target_pct and
+        signal_date all carry over untouched. In particular this must never
+        call _reset_for_next_scan, which would send the symbol back to
+        pending_scan and let tomorrow's scan arm a completely different setup.
+
+        Returns True when the roll happened.
+        """
+        far_token = s.get('roll_to_token')
+        if not far_token:
+            return False
+        if far_ltp is None:
+            # Never exit the near leg into a hole — a symbol left flat has no
+            # position to re-enter and no setup to re-arm. Once a day is enough.
+            today_str = date.today().isoformat()
+            if s.get('roll_warn_on') != today_str:
+                s['roll_warn_on'] = today_str
+                self.log.warning(f"{symbol}: roll to {far_token} deferred — no LTP for the "
+                                 f"far month; staying on {s.get('future_token')}")
+            return False
+        if near_ltp is None:
+            if held_listed:
+                return False        # transient quote failure — retry next tick
+            # The held contract is gone from the master: no quote is ever
+            # coming, so mark the near leg out at its last known price rather
+            # than stranding the position on a dead instrument.
+            near_ltp = s.get('ltp')
+            if near_ltp is None:
+                self.log.warning(f"{symbol}: held contract {s.get('future_token')} is delisted and "
+                                 f"has no last known price — cannot roll")
+                return False
+            self.log.warning(f"{symbol}: held contract {s.get('future_token')} is delisted — "
+                             f"booking the near leg at its last mark {near_ltp}")
+
+        old_month = s.get('future_month')
+        old_token = s.get('future_token')
+        self._record_exit(symbol, s, float(near_ltp), 'ROLL')
+        booked = s.get('last_pnl')
+
+        s['future_token']       = far_token
+        s['future_expiry']      = s.get('roll_to_expiry')
+        s['lot_size']           = int(s.get('roll_to_lot_size') or s.get('lot_size') or 1)
+        s['future_month']       = _contract_month_label(far_token)
+        s['future_resolved_on'] = date.today().isoformat()
+        for k in ('roll_to_token', 'roll_to_expiry', 'roll_to_lot_size',
+                  'roll_warn_on', 'future_delisted'):
+            s.pop(k, None)
+
+        entry_price = round(float(far_ltp), 2)
+        s['entry_price']    = entry_price
+        s['entry_time']     = datetime.now().isoformat()
+        s['qty']            = max(1, lots) * int(s['lot_size'])
+        s['ltp']            = entry_price
+        s['unrealized_pnl'] = 0.0
+        s['phase']          = 'in_position'
+        s['rolled_from']    = old_month
+        s['rolled_at']      = s['entry_time']
+        s['roll_count']     = int(s.get('roll_count', 0)) + 1
+        if _ROLL_REPRICE_TARGET:
+            pct = float(s.get('target_pct', 5.0))
+            s['target_level'] = round(entry_price * (1 + pct / 100), 2) if s['direction'] == 'Long' \
+                else round(entry_price * (1 - pct / 100), 2)
+
+        self.log.info(
+            f"[PAPER] {symbol}: ROLLED {s['direction'].upper()} {old_month} -> {s['future_month']} "
+            f"({old_token} @ {near_ltp} -> {far_token} @ {entry_price}), booked ₹{booked}, "
+            f"sl={s.get('sl_level')} tgt={s.get('target_level')} qty={s['qty']}"
+        )
+        self._notify_roll(symbol, s, old_month, float(near_ltp), booked)
+        return True
 
     def _reset_for_next_scan(self, s: Dict[str, Any]) -> None:
         kept = {k: s[k] for k in self._KEEP_ON_RESET if k in s}
@@ -711,8 +984,38 @@ class EmaConfluenceAlgo:
 
     # ── Main loop ────────────────────────────────────────────────────────
 
+    def _in_session(self, now: datetime) -> bool:
+        """True only while the market itself is open — 09:15 to 15:30 IST on a
+        day the NSE actually holds a session. Gates everything PRICE-driven;
+        the daily scan is not gated (it reads only completed daily candles, so
+        running it during the pre-open head start is both safe and the point of
+        starting early).
+
+        Outside the session a quote request still returns a price — the LAST
+        traded one — which is indistinguishable from a live tick here. That is
+        not a theoretical risk for this algo: trigger/SL levels are computed on
+        the equity/index scale but compared against the FUTURE's LTP (see the
+        module docstring), and the futures basis alone can leave yesterday's
+        close already beyond a trigger the morning scan has just armed. Without
+        this gate the 08:30 tick would fire a paper entry at a price that never
+        traded today — and exit an open position on the same stale quote.
+
+        Holidays are the same hazard: the scheduler's start job is only
+        weekday-gated, so on a mid-week holiday the thread comes up and every
+        quote it gets back is the previous session's close. It is also what
+        makes the roll's "if that date is a holiday, do it the next trading
+        session" true in practice — a roll moment that passes on a shut day
+        simply stays due until the next session ticks.
+        """
+        from trading_app.app.utils.trading_calendar import is_trading_day
+        if not is_trading_day(now.date()):   # weekend or NSE holiday
+            return False
+        now_mins = now.hour * 60 + now.minute
+        return _MARKET_OPEN_MIN <= now_mins < _HARD_STOP_MIN
+
     def _tick(self, provider: Any, is_fyers: bool, state: Dict[str, Any],
-              algo_active: bool, lots: int) -> None:
+              algo_active: bool, lots: int, now: Optional[datetime] = None) -> None:
+        now = now or datetime.now()
         today_str = date.today().isoformat()
         if state.get('last_scan_date') != today_str:
             self._run_daily_scan(provider, is_fyers, state)
@@ -723,6 +1026,15 @@ class EmaConfluenceAlgo:
             # instead of leaving them dark until tomorrow morning.
             self._run_daily_scan(provider, is_fyers, state, only_pending=True)
 
+        if not self._in_session(now):
+            # Logged once per hold, not once per 15s poll.
+            if not self._session_hold_logged:
+                self._session_hold_logged = True
+                self.log.info("Outside market hours — setups stay armed, but no fills, "
+                              "exits or LTP updates until 09:15")
+            return
+        self._session_hold_logged = False
+
         stocks = state['stocks']
         watching = {sym: s for sym, s in stocks.items() if s.get('phase') == 'watching'}
         inpos    = {sym: s for sym, s in stocks.items() if s.get('phase') == 'in_position'}
@@ -731,11 +1043,19 @@ class EmaConfluenceAlgo:
 
         tokens: Dict[str, Any] = {}
         for symbol, s in {**watching, **inpos}.items():
-            token = self._ensure_future_token(provider, is_fyers, symbol, s)
+            token = self._ensure_future_token(provider, is_fyers, symbol, s, now)
             if token:
                 tokens[symbol] = token
+        # A position due to roll needs BOTH contracts priced on the same tick —
+        # one to book the near leg out, one to open the far leg. The synthetic
+        # key keeps it a single batched ltp() call ('@' can't occur in an NSE
+        # root), so the roll costs no extra request against the 8 req/s budget.
+        quote_map = dict(tokens)
+        for symbol, s in inpos.items():
+            if s.get('roll_to_token'):
+                quote_map[f'{symbol}@roll'] = s['roll_to_token']
 
-        ltps = self._get_future_ltp_batch(provider, tokens)
+        ltps = self._get_future_ltp_batch(provider, quote_map)
 
         # Mark every armed/open symbol to market before acting on it, so the
         # status page can show the future's current value and — for an open
@@ -787,6 +1107,22 @@ class EmaConfluenceAlgo:
                 self._record_exit(symbol, s, exit_price, exit_reason)
                 self._reset_for_next_scan(s)
 
+        # Roll LAST. If SL or Target hit on the near leg this same tick, that
+        # is the strategy's own exit and it wins — the trade is over and there
+        # is nothing left to carry forward (those symbols are no longer
+        # in_position, hence the guard). The rolled leg's own SL/Target is
+        # evaluated on the next tick, 15s later; immaterial to a multi-day swing.
+        for symbol, s in inpos.items():
+            if s.get('phase') != 'in_position' or not s.get('roll_to_token'):
+                continue
+            self._roll_position(
+                symbol, s,
+                near_ltp=ltps.get(symbol),
+                far_ltp=ltps.get(f'{symbol}@roll'),
+                lots=lots,
+                held_listed=not s.get('future_delisted'),
+            )
+
     def _monitor_loop(self) -> None:
         try:
             self.log.info(f"Monitor thread started for {self.username}")
@@ -808,6 +1144,15 @@ class EmaConfluenceAlgo:
 
             lots = max(1, int(self._uvar('EMA_CONFLUENCE_LOTS', '1') or 1))
             algo_active = self._uvar('EMA_CONFLUENCE_ACTIVE', 'false').lower() == 'true'
+            try:
+                self._roll_sessions = max(0, int(
+                    self._uvar('EMA_CONFLUENCE_ROLL_DAYS', str(_ROLL_SESSIONS_BEFORE_EXPIRY))
+                    or _ROLL_SESSIONS_BEFORE_EXPIRY))
+            except ValueError:
+                self._roll_sessions = _ROLL_SESSIONS_BEFORE_EXPIRY
+            if self._roll_sessions != _ROLL_SESSIONS_BEFORE_EXPIRY:
+                self.log.warning(f"Rolling contracts {self._roll_sessions} trading days before "
+                                 f"expiry (EMA_CONFLUENCE_ROLL_DAYS override)")
             self._mode()  # logs the paper-only fallback warning once, if MODE=live was requested
 
             while not self._stop_event.is_set():
@@ -816,7 +1161,7 @@ class EmaConfluenceAlgo:
                 if now_mins >= _HARD_STOP_MIN:
                     break
                 try:
-                    self._tick(provider, is_fyers, state, algo_active, lots)
+                    self._tick(provider, is_fyers, state, algo_active, lots, now)
                 except Exception as e:
                     self.log.error(f"tick error: {e}", exc_info=True)
                 self._save_state(state)

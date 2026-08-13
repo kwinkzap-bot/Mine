@@ -1253,15 +1253,26 @@ class FyersDataServiceAdapter:
         logger.info(f"[FyersAdapter] Resolved option: {root} {strike} {opt_upper} -> {sym} ({expiry_type} expiry={chosen['expiry']})")
         return sym
 
-    def find_future_symbol(self, root: str, exchange: Optional[str] = None) -> Optional[str]:
+    def list_future_contracts(self, root: str, exchange: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Find the Fyers instrument_token (symbol string) for the nearest-
-        expiry FUTURES contract of a given underlying. Mirrors
-        find_option_symbol above, minus the strike/option-type match.
+        Every still-listed FUTURES contract for an underlying, nearest expiry
+        first:
 
-        exchange defaults to NFO, or BFO for the BSE-listed roots (SENSEX /
-        BANKEX have no NFO contract at all — same BSE vs NSE split
-        get_lot_size already handles).
+            [{'symbol': 'NSE:NHPC26AUGFUT', 'expiry': date(2026, 8, 25),
+              'lot_size': 5400}, ...]
+
+        find_future_symbol is the [0] of this — the list form exists for
+        callers that must roll from one contract month to the next (the EMA
+        Confluence live algo) and therefore need the real expiry dates the
+        instrument master already carries. Reads the same 1-hour instrument
+        cache, so enumerating costs no extra request.
+
+        Contracts with an unparseable expiry are dropped rather than sorted to
+        one end: a caller counting days to expiry must never be handed a
+        contract whose expiry we don't actually know.
+
+        (OICrossoverService._live_futures builds a similar map, but multi-root
+        and cross-exchange for its OI backfill — deliberately left separate.)
         """
         root_upper = root.strip().upper()
         from datetime import date as _date
@@ -1292,13 +1303,30 @@ class FyersDataServiceAdapter:
             if name_ok or ts_ok:
                 matches.append(inst)
 
-        if not matches:
+        matches.sort(key=lambda x: x['expiry'])
+        return [{
+            'symbol':   m['instrument_token'],
+            'expiry':   m['expiry'],
+            'lot_size': int(m.get('lot_size') or 1),
+        } for m in matches]
+
+    def find_future_symbol(self, root: str, exchange: Optional[str] = None) -> Optional[str]:
+        """
+        Find the Fyers instrument_token (symbol string) for the nearest-
+        expiry FUTURES contract of a given underlying. Mirrors
+        find_option_symbol above, minus the strike/option-type match.
+
+        exchange defaults to NFO, or BFO for the BSE-listed roots (SENSEX /
+        BANKEX have no NFO contract at all — same BSE vs NSE split
+        get_lot_size already handles).
+        """
+        contracts = self.list_future_contracts(root, exchange)
+        if not contracts:
             logger.warning(f"[FyersAdapter] No futures contract found for {root}")
             return None
 
-        matches.sort(key=lambda x: x['expiry'])
-        sym = matches[0]['instrument_token']
-        logger.info(f"[FyersAdapter] Resolved future: {root} -> {sym} (expiry={matches[0]['expiry']})")
+        sym = contracts[0]['symbol']
+        logger.info(f"[FyersAdapter] Resolved future: {root} -> {sym} (expiry={contracts[0]['expiry']})")
         return sym
 
     def get_lot_size(self, symbol: str) -> int:

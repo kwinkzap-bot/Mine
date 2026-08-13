@@ -186,7 +186,12 @@ function _emacRenderStocks() {
             // Which monthly contract the paper trade is on — resolved by the
             // algo, so it's the same future the fills are marked against.
             { key: 'future_month', label: 'Future',
-              format: (v, r) => v || _emacFutureFallback(r.future_token) },
+              format: (v, r) => v || _emacFutureFallback(r.future_token),
+              // A month changing mid-trade is a contract roll, not a new
+              // trade — say so, otherwise the column looks like it drifted.
+              title: (_, r) => r.roll_count
+                  ? `rolled ${r.roll_count}× · from ${r.rolled_from || '—'}`
+                  : (r.future_expiry ? `expires ${r.future_expiry}` : undefined) },
             { key: 'trigger_level', label: 'Trigger', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
             { key: 'sl_level', label: 'SL', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
             { key: 'entry_price_disp', label: 'Entry', format: v => v == null ? '—' : '₹' + Number(v).toFixed(2) },
@@ -224,6 +229,9 @@ function _emacFetchHistory() {
 const _EMAC_REASON_TONE = {
     'TARGET': 'pos',
     'SL':     'neg',
+    // Not a win or a loss — the leg was closed only because its contract was
+    // about to expire, and the same trade reopened on the next month.
+    'ROLL':   'warn',
 };
 
 // ── Brokerage — flat per round trip ─────────────────────────────────────────

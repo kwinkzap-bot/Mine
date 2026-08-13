@@ -582,30 +582,48 @@ class KiteService:
         logging.info(f"[KiteService] Resolved {name} {strike} {option_type} to {expiry_type} expiry ({chosen['expiry']}): {ts}")
         return ts
 
-    def get_future_symbol(self, name: str) -> Optional[str]:
-        """Nearest-expiry FUTURES tradingsymbol for an underlying. Mirrors
-        get_option_symbol above, minus the strike/option-type match."""
-        futures = [o for o in self.get_nfo_instruments(name) if o.get('instrument_type') == 'FUT']
-        if not futures:
-            return None
+    def list_future_contracts(self, name: str) -> List[Dict[str, Any]]:
+        """Every still-listed FUTURES contract for an underlying, nearest
+        expiry first:
 
+            [{'symbol': 'NHPC26AUGFUT', 'expiry': date(2026, 8, 25),
+              'lot_size': 5400}, ...]
+
+        'symbol' is the bare tradingsymbol with no exchange prefix, same as
+        get_future_symbol returns — callers add their own 'NFO:'. Kite's
+        master here is NFO-only, so BSE (SENSEX/BANKEX) futures never appear.
+        The list form exists for callers that must roll to the next contract
+        month and so need the real expiry dates."""
+        futures = [o for o in self.get_nfo_instruments(name) if o.get('instrument_type') == 'FUT']
         today = date.today()
+
         valid = []
         for o in futures:
             expiry = o.get('expiry')
-            if expiry:
-                if hasattr(expiry, 'date'):
-                    expiry = expiry.date()
-                if expiry >= today:
-                    valid.append(o)
+            if not expiry:
+                continue
+            if hasattr(expiry, 'date'):
+                expiry = expiry.date()
+            if expiry >= today:
+                valid.append((expiry, o))
 
-        if not valid:
+        valid.sort(key=lambda x: x[0])
+        return [{
+            'symbol':   o.get('tradingsymbol'),
+            'expiry':   expiry,
+            'lot_size': int(o.get('lot_size') or 1),
+        } for expiry, o in valid]
+
+    def get_future_symbol(self, name: str) -> Optional[str]:
+        """Nearest-expiry FUTURES tradingsymbol for an underlying. Mirrors
+        get_option_symbol above, minus the strike/option-type match."""
+        contracts = self.list_future_contracts(name)
+        if not contracts:
             logging.warning(f"[KiteService] No valid non-expired futures found for {name}")
             return None
 
-        valid.sort(key=lambda x: x['expiry'])
-        ts = valid[0].get('tradingsymbol')
-        logging.info(f"[KiteService] Resolved {name} future to nearest expiry ({valid[0]['expiry']}): {ts}")
+        ts = contracts[0]['symbol']
+        logging.info(f"[KiteService] Resolved {name} future to nearest expiry ({contracts[0]['expiry']}): {ts}")
         return ts
 
     def get_lot_size(self, symbol: str) -> int:

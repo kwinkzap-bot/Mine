@@ -1,7 +1,10 @@
 'use strict';
 
 // NSE trading holidays (YYYY-MM-DD, IST date).
-// Update this list each year from the NSE circular.
+// Update this list each year from the NSE circular — and keep it in step with
+// NSE_HOLIDAYS in src/trading_app/app/utils/trading_calendar.py, which the
+// backend uses to count trading sessions. tests/test_trading_calendar.py
+// asserts the two lists are identical.
 const NSE_HOLIDAYS = new Set([
     // 2026
     '2026-01-26', // Republic Day
@@ -31,7 +34,6 @@ const NSE_HOLIDAYS = new Set([
     '2025-08-15', // Independence Day
     '2025-08-27', // Ganesh Chaturthi
     '2025-10-02', // Gandhi Jayanti / Mahalaya
-    '2025-10-02', // Gandhi Jayanti
     '2025-10-20', // Diwali Laxmi Puja
     '2025-10-21', // Diwali Balipratipada
     '2025-11-05', // Gurunanak Jayanti
