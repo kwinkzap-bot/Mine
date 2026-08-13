@@ -1,435 +1,715 @@
 {
   "date": "2026-08-13",
-  "eod_handled": false,
+  "eod_handled": true,
   "stocks": {
     "360ONE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ADANIENSOL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ADANIENT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ADANIPORTS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ADANIPOWER": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 205.11,
+      "sl_level": 204.11,
+      "sl_risk": 2437.0,
+      "ltp": 205.71,
+      "ltp_time": "2026-08-13T15:05:05.633676",
+      "qty": 2437,
+      "entry_time": "2026-08-13T11:29:37.949569",
+      "entry_placed_ts": 1786600777.94957,
+      "entry_limit_price": 205.58,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087781100369141760",
+          "filled": true,
+          "entry_price": 205.1963479688141,
+          "filled_qty": 2437,
+          "sl_order_id": "2087781124045987840",
+          "target_order_id": "2087781124654161920",
+          "closed": true
+        }
+      ],
+      "entry_price": 205.1963479688141,
+      "target_level": 209.7,
+      "exit_time": "2026-08-13T15:05:06.218260",
+      "exit_price": 205.66032416906032,
+      "exit_reason": "Time Exit",
+      "realized_pnl": 1130.71
     },
     "ALKEM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "AMBUJACEM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ANGELONE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "APOLLOHOSP": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ASHOKLEY": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ASIANPAINT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ASTRAL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "AUROPHARMA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BAJAJ-AUTO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BAJAJFINSV": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BAJAJHLDNG": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BAJFINANCE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BANDHANBNK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BANKBARODA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BANKINDIA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BDL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BHARATFORG": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BHARTIARTL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BHEL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BOSCHLTD": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "BPCL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "CANBK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "CDSL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "CGPOWER": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "CHOLAFIN": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "COCHINSHIP": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "COLPAL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "CONCOR": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "CROMPTON": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 246.15,
+      "sl_level": 245.1,
+      "sl_risk": 2132.55,
+      "ltp": 248.35,
+      "ltp_time": "2026-08-13T11:57:36.843967",
+      "qty": 2031,
+      "entry_time": "2026-08-13T10:54:17.378414",
+      "entry_placed_ts": 1786598657.378415,
+      "entry_limit_price": 246.65,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087772206045519872",
+          "filled": true,
+          "entry_price": 246.31870999507638,
+          "filled_qty": 2031,
+          "sl_order_id": "2087772207077318656",
+          "target_order_id": "2087772207710658560",
+          "closed": true
+        }
+      ],
+      "entry_price": 246.31870999507638,
+      "target_level": 248.1,
+      "exit_time": "2026-08-13T11:57:37.050313",
+      "exit_price": 248.1,
+      "exit_reason": "Target Hit",
+      "realized_pnl": 3617.8
     },
     "CUMMINSIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "DABUR": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "DALBHARAT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "DIVISLAB": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "DIXON": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "DLF": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "DRREDDY": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "EICHERMOT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "EXIDEIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "FEDERALBNK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "FORCEMOT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GAIL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GLENMARK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GODREJCP": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GODREJPROP": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GRASIM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "GVT&D": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HAL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HAVELLS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HCLTECH": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HDFCAMC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HDFCBANK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HEROMOTOCO": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 5884.5,
+      "sl_level": 5862.0,
+      "sl_risk": 1890.0,
+      "ltp": 5862.0,
+      "ltp_time": "2026-08-13T10:52:50.465124",
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "HINDALCO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "HINDPETRO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ICICIGI": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "IDEA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "IDFCFIRSTB": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "INDHOTEL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "INDIANB": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "INDIGO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "INDUSINDBK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "IOC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "JINDALSTEL": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 1098.5,
+      "sl_level": 1095.4,
+      "sl_risk": 1410.5,
+      "ltp": 1095.5,
+      "ltp_time": "2026-08-13T10:54:50.988574",
+      "qty": 455,
+      "entry_time": "2026-08-13T10:48:41.579471",
+      "entry_placed_ts": 1786598321.5794718,
+      "entry_limit_price": 1100.8,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087770797640179712",
+          "filled": true,
+          "entry_price": 1098.3327472527471,
+          "filled_qty": 455,
+          "sl_order_id": "2087770798625841152",
+          "target_order_id": "2087770799246598144",
+          "closed": true
+        }
+      ],
+      "entry_price": 1098.3327472527471,
+      "target_level": 1106.5,
+      "exit_time": "2026-08-13T10:54:51.145777",
+      "exit_price": 1095.3485714285714,
+      "exit_reason": "SL Hit",
+      "realized_pnl": -1357.8
     },
     "JIOFIN": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "JSWSTEEL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "KAYNES": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "KEI": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "KFINTECH": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "KPITTECH": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "LICI": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "LODHA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "LT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "LTF": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 315.25,
+      "sl_level": 314.5,
+      "sl_risk": 1189.5,
+      "ltp": 314.15,
+      "ltp_time": "2026-08-13T11:24:13.670862",
+      "qty": 1586,
+      "entry_time": "2026-08-13T10:47:19.242933",
+      "entry_placed_ts": 1786598239.242935,
+      "entry_limit_price": 315.9,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087770452260216832",
+          "filled": true,
+          "entry_price": 315.3108133669609,
+          "filled_qty": 1586,
+          "sl_order_id": "2087770453216518144",
+          "target_order_id": "2087770453891801088",
+          "closed": true
+        }
+      ],
+      "entry_price": 315.3108133669609,
+      "target_level": 317.3,
+      "exit_time": "2026-08-13T11:24:13.827234",
+      "exit_price": 314.2843001261034,
+      "exit_reason": "SL Hit",
+      "realized_pnl": -1628.05
     },
     "LTM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "LUPIN": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 2262.1,
+      "sl_level": 2252.1,
+      "sl_risk": 2210.0,
+      "ltp": 2260.5,
+      "ltp_time": "2026-08-13T15:05:05.633686",
+      "qty": 221,
+      "entry_time": "2026-08-13T11:20:42.746717",
+      "entry_placed_ts": 1786600242.746718,
+      "entry_limit_price": 2267.6,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087778855573446657",
+          "filled": true,
+          "entry_price": 2263.1018099547514,
+          "filled_qty": 221,
+          "sl_order_id": "2087778857741901824",
+          "target_order_id": "2087778858257801216",
+          "closed": true
+        }
+      ],
+      "entry_price": 2263.1018099547514,
+      "target_level": 2278.0,
+      "exit_time": "2026-08-13T15:05:06.734913",
+      "exit_price": 2259.887330316742,
+      "exit_reason": "Time Exit",
+      "realized_pnl": -710.4
     },
     "M&M": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MANAPPURAM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MANKIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MARICO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MARUTI": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MAZDOCK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MCX": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MFSL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MOTHERSON": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MOTILALOFS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MPHASIS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "MUTHOOTFIN": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NAM-INDIA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NATIONALUM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NAUKRI": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NBCC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NESTLEIND": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 1516.0,
+      "sl_level": 1520.9,
+      "sl_risk": 1612.1,
+      "ltp": 1506.2,
+      "ltp_time": "2026-08-13T11:12:43.906655",
+      "qty": 329,
+      "entry_time": "2026-08-13T10:49:11.806288",
+      "entry_placed_ts": 1786598351.806289,
+      "entry_limit_price": 1512.9,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087770924396240896",
+          "filled": true,
+          "entry_price": 1515.806990881459,
+          "filled_qty": 329,
+          "sl_order_id": "2087770947385221120",
+          "target_order_id": "2087770948073086976",
+          "closed": true
+        }
+      ],
+      "entry_price": 1515.806990881459,
+      "target_level": 1503.9,
+      "exit_time": "2026-08-13T11:12:44.066225",
+      "exit_price": 1503.9,
+      "exit_reason": "Target Hit",
+      "realized_pnl": 3917.4
     },
     "NMDC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NTPC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "NYKAA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "OBEROIRLTY": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "OIL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ONGC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PERSISTENT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PETRONET": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PFC": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PGEL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PHOENIXLTD": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PIDILITIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "PIIND": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "POLYCAB": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "POWERINDIA": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 35635.0,
+      "sl_level": 35370.0,
+      "sl_risk": 3710.0,
+      "ltp": 35370.0,
+      "ltp_time": "2026-08-13T11:45:09.284501",
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "PRESTIGE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "RADICO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "RBLBANK": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 386.75,
+      "sl_level": 385.35,
+      "sl_risk": 1808.8,
+      "ltp": 387.45,
+      "ltp_time": "2026-08-13T15:05:05.633689",
+      "qty": 1292,
+      "entry_time": "2026-08-13T11:19:32.389689",
+      "entry_placed_ts": 1786600172.3896902,
+      "entry_limit_price": 387.65,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087778560458022912",
+          "filled": true,
+          "entry_price": 386.9,
+          "filled_qty": 1292,
+          "sl_order_id": "2087778562144133120",
+          "target_order_id": "2087778562760695808",
+          "closed": true
+        }
+      ],
+      "entry_price": 386.9,
+      "target_level": 389.5,
+      "exit_time": "2026-08-13T15:05:07.827821",
+      "exit_price": 387.20228328173374,
+      "exit_reason": "Time Exit",
+      "realized_pnl": 390.55
     },
     "RECLTD": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "RVNL": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 229.4,
+      "sl_level": 228.57,
+      "sl_risk": 1808.57,
+      "ltp": 228.57,
+      "ltp_time": "2026-08-13T11:26:37.859398",
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "SAIL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SAMMAANCAP": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SBICARD": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SBILIFE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SBIN": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SHREECEM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SIEMENS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SOLARINDS": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 19217.0,
+      "sl_level": 19450.0,
+      "sl_risk": 6058.0,
+      "ltp": 19460.0,
+      "ltp_time": "2026-08-13T14:29:32.963758",
+      "qty": 26,
+      "entry_time": "2026-08-13T10:58:27.724425",
+      "entry_placed_ts": 1786598907.724427,
+      "entry_limit_price": 19158.0,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087773256072749056",
+          "filled": true,
+          "entry_price": 19189.76923076923,
+          "filled_qty": 26,
+          "sl_order_id": "2087773257062604800",
+          "target_order_id": "2087773257788219392",
+          "closed": true
+        }
+      ],
+      "entry_price": 19189.76923076923,
+      "target_level": 18744.0,
+      "exit_time": "2026-08-13T14:29:33.127681",
+      "exit_price": 19450.0,
+      "exit_reason": "SL Hit",
+      "realized_pnl": -6766.0
     },
     "SRF": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "SUNPHARMA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TATACONSUM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TECHM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TIINDIA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TMPV": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TORNTPHARM": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TRENT": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "TVSMOTOR": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ULTRACEMCO": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "UNIONBANK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "UNITDSPR": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "short",
+      "trigger": 1527.9,
+      "sl_level": 1532.7,
+      "sl_risk": 1569.6,
+      "ltp": 1525.5,
+      "ltp_time": "2026-08-13T15:05:05.633692",
+      "qty": 327,
+      "entry_time": "2026-08-13T11:15:43.633094",
+      "entry_placed_ts": 1786599943.633095,
+      "entry_limit_price": 1524.8,
+      "broker_positions": [
+        {
+          "broker_idx": 1,
+          "entry_order_id": "2087777600985817088",
+          "filled": true,
+          "entry_price": 1527.6483180428131,
+          "filled_qty": 327,
+          "sl_order_id": "2087777605003960320",
+          "target_order_id": "2087777605452750848",
+          "closed": true
+        }
+      ],
+      "entry_price": 1527.6483180428131,
+      "target_level": 1517.2,
+      "exit_time": "2026-08-13T15:05:08.950491",
+      "exit_price": 1525.4,
+      "exit_reason": "Time Exit",
+      "realized_pnl": 735.2
     },
     "UNOMINDA": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "UPL": {
-      "phase": "pending_scan"
+      "phase": "done",
+      "direction": "long",
+      "trigger": 565.2,
+      "sl_level": 563.7,
+      "sl_risk": 1326.0,
+      "ltp": 563.7,
+      "ltp_time": "2026-08-13T10:55:56.320881",
+      "exit_reason": "Invalidated (SL hit before entry)"
     },
     "VBL": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "VOLTAS": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "YESBANK": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     },
     "ZYDUSLIFE": {
-      "phase": "pending_scan"
+      "phase": "no_setup"
     }
   }
 }

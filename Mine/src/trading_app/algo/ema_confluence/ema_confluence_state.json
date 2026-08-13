@@ -70,8 +70,8 @@
       "lot_size": 475,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-13",
-      "ltp": 1661.8,
-      "ltp_time": "2026-08-13T09:01:31.939139"
+      "ltp": 1660.0,
+      "ltp_time": "2026-08-13T15:29:57.135343"
     },
     "ADANIPOWER": {
       "phase": "no_setup",
@@ -97,8 +97,8 @@
       "sl_level": 7329.0,
       "target_pct": 15,
       "signal_date": "2026-08-07",
-      "ltp": 7019.5,
-      "ltp_time": "2026-08-13T09:01:31.939171"
+      "ltp": 7218.0,
+      "ltp_time": "2026-08-13T15:29:57.135349"
     },
     "AMBUJACEM": {
       "phase": "no_setup",
@@ -190,13 +190,13 @@
       "sl_level": 1901.3,
       "target_pct": 10,
       "signal_date": "2026-08-12",
-      "ltp": 1965.0,
-      "ltp_time": "2026-08-13T09:01:31.939249",
+      "ltp": 1950.7,
+      "ltp_time": "2026-08-13T15:29:57.135362",
       "entry_price": 1965.0,
       "target_level": 2161.5,
       "qty": 475,
       "entry_time": "2026-08-13T08:47:18.153712",
-      "unrealized_pnl": 0.0
+      "unrealized_pnl": -6792.5
     },
     "BIOCON": {
       "phase": "no_setup",
@@ -247,8 +247,8 @@
       "lot_size": 425,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-13",
-      "ltp": 1465.2,
-      "ltp_time": "2026-08-13T09:01:31.939180"
+      "ltp": 1466.0,
+      "ltp_time": "2026-08-13T15:29:57.135351"
     },
     "COALINDIA": {
       "phase": "no_setup",
@@ -290,8 +290,8 @@
       "sl_level": 423.7,
       "target_pct": 2.5,
       "signal_date": "2026-03-30",
-      "ltp": 472.5,
-      "ltp_time": "2026-08-13T09:01:31.939188"
+      "ltp": 471.45,
+      "ltp_time": "2026-08-13T15:29:57.135352"
     },
     "DMART": {
       "phase": "no_setup",
@@ -363,8 +363,8 @@
       "sl_level": 4433.7,
       "target_pct": 15,
       "signal_date": "2026-07-08",
-      "ltp": 5012.5,
-      "ltp_time": "2026-08-13T09:01:31.939197"
+      "ltp": 4949.8,
+      "ltp_time": "2026-08-13T15:29:57.135354"
     },
     "HAVELLS": {
       "phase": "no_setup",
@@ -389,13 +389,13 @@
       "lot_size": 300,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-04",
-      "ltp": 2507.0,
-      "ltp_time": "2026-08-13T09:01:31.939264",
+      "ltp": 2505.1,
+      "ltp_time": "2026-08-13T15:29:57.135364",
       "entry_price": 2562.1,
       "target_level": 2459.62,
       "qty": 300,
       "entry_time": "2026-08-04T11:38:16.248597",
-      "unrealized_pnl": 16530.0
+      "unrealized_pnl": 17100.0
     },
     "HDFCLIFE": {
       "phase": "no_setup",
@@ -448,8 +448,8 @@
       "sl_level": 548.0,
       "target_pct": 5,
       "signal_date": "2025-04-09",
-      "ltp": 896.0,
-      "ltp_time": "2026-08-13T09:01:31.939206"
+      "ltp": 894.85,
+      "ltp_time": "2026-08-13T15:29:57.135355"
     },
     "INDUSINDBK": {
       "phase": "watching",
@@ -466,8 +466,8 @@
       "sl_level": 868.0,
       "target_pct": 15,
       "signal_date": "2026-04-24",
-      "ltp": 1021.8,
-      "ltp_time": "2026-08-13T09:01:31.939213"
+      "ltp": 1025.9,
+      "ltp_time": "2026-08-13T15:29:57.135356"
     },
     "INFY": {
       "phase": "no_setup",
@@ -548,13 +548,13 @@
       "sl_level": 2373.3,
       "target_pct": 1.5,
       "signal_date": "2026-08-06",
-      "ltp": 2552.0,
-      "ltp_time": "2026-08-13T09:01:31.939279",
+      "ltp": 2586.0,
+      "ltp_time": "2026-08-13T15:29:57.135366",
       "entry_price": 2574.6,
       "target_level": 2613.22,
       "qty": 225,
       "entry_time": "2026-08-10T12:41:58.474682",
-      "unrealized_pnl": -5085.0
+      "unrealized_pnl": 2565.0
     },
     "MFSL": {
       "phase": "no_setup",
@@ -596,13 +596,13 @@
       "target_pct": 8,
       "signal_date": "2026-08-05",
       "future_resolved_on": "2026-08-06",
-      "ltp": 76.14,
-      "ltp_time": "2026-08-13T09:01:31.939294",
+      "ltp": 77.5,
+      "ltp_time": "2026-08-13T15:29:57.135368",
       "entry_price": 77.76,
       "target_level": 71.54,
       "qty": 6950,
       "entry_time": "2026-08-06T09:17:35.466242",
-      "unrealized_pnl": 11259.0
+      "unrealized_pnl": 1807.0
     },
     "NMDC": {
       "phase": "no_setup",
@@ -638,9 +638,9 @@
       "qty": 1400,
       "entry_time": "2026-07-30T09:52:33.286268",
       "future_month": "AUG 2026",
-      "ltp": 473.65,
-      "ltp_time": "2026-08-13T09:01:31.939304",
-      "unrealized_pnl": 21910.0
+      "ltp": 479.95,
+      "ltp_time": "2026-08-13T15:29:57.135370",
+      "unrealized_pnl": 30730.0
     },
     "ONGC": {
       "phase": "no_setup",
@@ -676,8 +676,8 @@
       "sl_level": 414.5,
       "target_pct": 15,
       "signal_date": "2026-08-07",
-      "ltp": 378.5,
-      "ltp_time": "2026-08-13T09:01:31.939220"
+      "ltp": 379.95,
+      "ltp_time": "2026-08-13T15:29:57.135357"
     },
     "PIIND": {
       "phase": "no_setup",
@@ -837,8 +837,8 @@
       "sl_level": 634.05,
       "target_pct": 5,
       "signal_date": "2026-05-11",
-      "ltp": 568.4,
-      "ltp_time": "2026-08-13T09:01:31.939226"
+      "ltp": 567.15,
+      "ltp_time": "2026-08-13T15:29:57.135358"
     },
     "VOLTAS": {
       "phase": "no_setup",
@@ -866,25 +866,19 @@
       "scanned_at": "2026-08-13T08:47:04.840740"
     },
     "APLAPOLLO": {
-      "phase": "in_position",
-      "scanned_candle": "2026-08-03",
-      "scanned_at": "2026-08-04T08:57:30.287954",
-      "direction": "Long",
-      "trigger_level": 1958.0,
-      "sl_level": 1820.3,
-      "target_pct": 3.5,
-      "signal_date": "2026-08-03",
+      "phase": "no_setup",
       "future_token": "NSE:APLAPOLLO26AUGFUT",
       "lot_size": 350,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-04",
-      "ltp": 2009.7,
-      "ltp_time": "2026-08-13T09:01:31.939315",
-      "entry_price": 1965.0,
-      "target_level": 2033.77,
-      "qty": 350,
-      "entry_time": "2026-08-04T09:15:03.765597",
-      "unrealized_pnl": 15645.0
+      "last_entry_time": "2026-08-04T09:15:03.765597",
+      "last_entry_price": 1965.0,
+      "last_exit_time": "2026-08-13T10:08:16.735957",
+      "last_exit_price": 2033.77,
+      "last_exit_reason": "TARGET",
+      "last_pnl": 24069.5,
+      "scanned_candle": "2026-08-12",
+      "scanned_at": "2026-08-13T10:08:31.845297"
     },
     "CROMPTON": {
       "phase": "no_setup",
@@ -906,8 +900,8 @@
       "sl_level": 7392.5,
       "target_pct": 8,
       "signal_date": "2026-06-30",
-      "ltp": 8040.0,
-      "ltp_time": "2026-08-13T09:01:31.939233"
+      "ltp": 8086.0,
+      "ltp_time": "2026-08-13T15:29:57.135359"
     },
     "ICICIPRULI": {
       "phase": "no_setup",
@@ -942,8 +936,8 @@
       "lot_size": 5425,
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-13",
-      "ltp": 88.37,
-      "ltp_time": "2026-08-13T09:01:31.939241"
+      "ltp": 88.78,
+      "ltp_time": "2026-08-13T15:29:57.135360"
     },
     "ITC": {
       "phase": "no_setup",

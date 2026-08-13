@@ -985,15 +985,20 @@ class OICrossoverService:
         The screen polls only while it is open and only every 60s, which makes
         an unwatched cross unreachable no matter how well the table behaves.
 
-        Gated hard on purpose. The scanner records roughly 460 crosses a day
-        and alerting on all of them would be indistinguishable from alerting on
-        none; the defaults here — held its sign, decisively separated legs,
-        both legs agreeing, and the symbol's first cross of the day — land at
-        12-25 a day on recorded sessions. Every gate is an env var so the
-        volume can be retuned without a code change.
+        Off unless OIX_NOTIFY or OIX_TELEGRAM is explicitly 'true' — the
+        scanner screen is how this is read in practice, and neither the bell
+        nor the Telegram message earned its volume.
+
+        When switched on it is gated hard on purpose. The scanner records
+        roughly 460 crosses a day and alerting on all of them would be
+        indistinguishable from alerting on none; the gates below — held its
+        sign, decisively separated legs, both legs agreeing, and the symbol's
+        first cross of the day — land at 12-25 a day on recorded sessions.
+        Every gate is an env var so the volume can be retuned without a code
+        change.
         """
-        if self._uvar('OIX_NOTIFY', 'true').lower() == 'false' \
-                and self._uvar('OIX_TELEGRAM', 'true').lower() == 'false':
+        if self._uvar('OIX_NOTIFY', 'false').lower() != 'true' \
+                and self._uvar('OIX_TELEGRAM', 'false').lower() != 'true':
             return
 
         try:
@@ -1053,7 +1058,7 @@ class OICrossoverService:
             'suppressed': extra,
         }
 
-        if self._uvar('OIX_NOTIFY', 'true').lower() != 'false':
+        if self._uvar('OIX_NOTIFY', 'false').lower() == 'true':
             try:
                 from trading_app.service.notification_service import create_notification
                 bull = sum(1 for e in picks if e['direction'] == 'BULL')
@@ -1071,10 +1076,10 @@ class OICrossoverService:
         self._send_telegram(payload)
 
     def _send_telegram(self, payload: Dict[str, Any]) -> None:
-        """Fire-and-forget Telegram alert. Credentials come from the user's own
-        env file; with either unset this is silently a no-op, so the in-app bell
-        keeps working on an install that has never set Telegram up."""
-        if self._uvar('OIX_TELEGRAM', 'true').lower() == 'false':
+        """Fire-and-forget Telegram alert. Off unless OIX_TELEGRAM is 'true';
+        credentials come from the user's own env file, and with either unset
+        this is silently a no-op even when the flag is on."""
+        if self._uvar('OIX_TELEGRAM', 'false').lower() != 'true':
             return
         token = self._uvar('TELEGRAM_BOT_TOKEN')
         chat_id = self._uvar('TELEGRAM_CHAT_ID')
