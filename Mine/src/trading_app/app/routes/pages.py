@@ -86,13 +86,6 @@ def open_interest():
     """Open interest chart page - displays options OI data."""
     return render_template('open_interest_chart.html')
 
-@pages_bp.route('/intraday-option')
-@require_user_auth
-@login_required
-def intraday_option():
-    """Intraday option trading page."""
-    return render_template('intraday_option.html')
-
 @pages_bp.route('/oi-profile')
 @require_user_auth
 @login_required

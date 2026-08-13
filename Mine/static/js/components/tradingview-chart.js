@@ -1,7 +1,7 @@
 /**
  * TradingView Lightweight Charts - Reusable Module
  * Provides a clean API for creating and managing candlestick charts
- * Used across multiple pages: options_chart.html, intraday_option.html, etc.
+ * Used across multiple pages: options_chart.html, oi_profile.html, etc.
  */
 
 // v5 markers helper — manages a createSeriesMarkers primitive cached on the
@@ -541,10 +541,6 @@ window.TradingViewChart = (function () {
          * @param {Object} config.options - Optional: { height: 400, width: '100%', theme: 'light' }
          * @param {string} config.ceColor - Optional: Color for CE candlesticks (default: '#10b981')
          * @param {string} config.peColor - Optional: Color for PE candlesticks (default: '#ef4444')
-         * @param {number} config.ce_high - Optional: CE intraday high (from symbol-payload)
-         * @param {number} config.ce_low - Optional: CE intraday low (from symbol-payload)
-         * @param {number} config.pe_high - Optional: PE intraday high (from symbol-payload)
-         * @param {number} config.pe_low - Optional: PE intraday low (from symbol-payload)
          * @returns {Object} Chart instance with methods
          */
         create: function (config) {
@@ -562,11 +558,7 @@ window.TradingViewChart = (function () {
                 timeframe = '5minute',
                 options = {},
                 ceColor = '#10b981',
-                peColor = '#ef4444',
-                ce_high = null,
-                ce_low = null,
-                pe_high = null,
-                pe_low = null
+                peColor = '#ef4444'
             } = config;
 
             if (!containerId) {
@@ -843,77 +835,6 @@ window.TradingViewChart = (function () {
             let storedPePdh = null;
             let storedPePdl = null;
 
-            // Add initial CE/PE high/low lines if provided
-            // CE High/Low lines (solid, dotted for differentiation)
-            if (ce_high && ce_high > 0) {
-                try {
-                    const ceHighLine = series.createPriceLine({
-                        price: ce_high,
-                        color: '#6366f1',  // Indigo for CE High
-                        lineWidth: 2,
-                        lineStyle: LightweightCharts.LineStyle.Solid,
-                        axisLabelVisible: true,
-                        title: `CE High: ${ce_high.toFixed(2)}`
-                    });
-                    priceLinesArray.push(ceHighLine);
-                    console.log(`[Chart Init] Added CE High: ${ce_high}`);
-                } catch (e) {
-                    console.warn('[Chart] Failed to add CE High line:', e);
-                }
-            }
-
-            if (ce_low && ce_low > 0) {
-                try {
-                    const ceLowLine = series.createPriceLine({
-                        price: ce_low,
-                        color: '#8b5cf6',  // Purple for CE Low
-                        lineWidth: 2,
-                        lineStyle: LightweightCharts.LineStyle.Dotted,
-                        axisLabelVisible: true,
-                        title: `CE Low: ${ce_low.toFixed(2)}`
-                    });
-                    priceLinesArray.push(ceLowLine);
-                    console.log(`[Chart Init] Added CE Low: ${ce_low}`);
-                } catch (e) {
-                    console.warn('[Chart] Failed to add CE Low line:', e);
-                }
-            }
-
-            // PE High/Low lines
-            if (pe_high && pe_high > 0) {
-                try {
-                    const peHighLine = series.createPriceLine({
-                        price: pe_high,
-                        color: '#06b6d4',  // Cyan for PE High
-                        lineWidth: 2,
-                        lineStyle: LightweightCharts.LineStyle.Solid,
-                        axisLabelVisible: true,
-                        title: `PE High: ${pe_high.toFixed(2)}`
-                    });
-                    priceLinesArray.push(peHighLine);
-                    console.log(`[Chart Init] Added PE High: ${pe_high}`);
-                } catch (e) {
-                    console.warn('[Chart] Failed to add PE High line:', e);
-                }
-            }
-
-            if (pe_low && pe_low > 0) {
-                try {
-                    const peLowLine = series.createPriceLine({
-                        price: pe_low,
-                        color: '#14b8a6',  // Teal for PE Low
-                        lineWidth: 2,
-                        lineStyle: LightweightCharts.LineStyle.Dotted,
-                        axisLabelVisible: true,
-                        title: `PE Low: ${pe_low.toFixed(2)}`
-                    });
-                    priceLinesArray.push(peLowLine);
-                    console.log(`[Chart Init] Added PE Low: ${pe_low}`);
-                } catch (e) {
-                    console.warn('[Chart] Failed to add PE Low line:', e);
-                }
-            }
-
             // Set visible range to show recent data (increased x-axis scaling/zoom)
             // Use a Promise to ensure the data is fully set before applying zoom
             if (formattedData.length > 0) {
@@ -1040,21 +961,16 @@ window.TradingViewChart = (function () {
                 },
 
                 /**
-                 * Updates chart with new data and reference lines
+                 * Updates chart with new data
                  * For combined charts: update(ceData, peData)
-                 * For single charts: update(data, referenceLines)
-                 *   where referenceLines = { ce_payload_high, ce_payload_low, pe_payload_high, pe_payload_low }
-                 * 
+                 * For single charts: update(data)
+                 *
                  * NOTE: Chart settings (zoom, timeScale, etc.) are initialized ONCE on creation
-                 * Subsequent updates only modify the data and reference lines
+                 * Subsequent updates only modify the data
                  */
                 update: function (newData, referenceOrPeData = null, refresh = false) {
                     // Check if this is a combined chart with PE data (array of candles)
                     const isCombinedUpdate = this.isCombined && referenceOrPeData && Array.isArray(referenceOrPeData);
-                    // Or check if it's a reference object (has price-level properties)
-                    const isReferenceUpdate = referenceOrPeData && typeof referenceOrPeData === 'object' && !Array.isArray(referenceOrPeData) &&
-                        (referenceOrPeData.ce_payload_high !== undefined || referenceOrPeData.pe_payload_high !== undefined ||
-                            referenceOrPeData.ce_payload_low !== undefined || referenceOrPeData.pe_payload_low !== undefined);
 
                     // If refresh flag is true, clear existing price lines and reset Y-scale
                     if (refresh) {
@@ -1140,11 +1056,6 @@ window.TradingViewChart = (function () {
                         }
                     }
 
-                    // Add cross-leg reference lines if provided (for intraday option charts)
-                    if (isReferenceUpdate) {
-                        this.addReferenceLines(referenceOrPeData);
-                    }
-
                     // Keep drawn rays reaching the newest candle instead of
                     // stopping wherever they were when drawn.
                     try { rayTool.extendRays(); } catch (e) {}
@@ -1224,97 +1135,6 @@ window.TradingViewChart = (function () {
                     }
 
                     return { text: status, className: className };
-                },
-
-                /**
-                 * Adds cross-leg reference lines to the chart
-                 * For CE chart: adds PE day high (green) and PE day low (red)
-                 * For PE chart: adds CE day high (green) and CE day low (red)
-                 * @param {Object} references - { ce_day_high, ce_day_low, pe_day_high, pe_day_low, ... }
-                 */
-                addReferenceLines: function (references) {
-                    if (!references || typeof references !== 'object') {
-                        console.log('[addReferenceLines] Skipped - no valid reference object:', references);
-                        return;
-                    }
-
-                    console.log('[addReferenceLines] Called with:', references);
-
-                    try {
-                        // Clear previous reference lines (keep PDH/PDL lines, remove only reference lines)
-                        // Expected structure: PDH/PDL lines are at indices 0-3 (ce_pdh, ce_pdl, pe_pdh, pe_pdl)
-                        // Reference lines (PE High/Low or CE High/Low) are added after that
-                        if (this.priceLinesArray && this.priceLinesArray.length > 4) {
-                            // Remove all lines starting from index 4 (reference lines only)
-                            for (let i = this.priceLinesArray.length - 1; i >= 4; i--) {
-                                try {
-                                    series.removePriceLine(this.priceLinesArray[i]);
-                                    this.priceLinesArray.pop();  // Remove from end to avoid index issues
-                                } catch (e) {
-                                    console.warn('[addReferenceLines] Error removing line at index', i, ':', e);
-                                }
-                            }
-                        }
-
-                        console.log(`[addReferenceLines] Cleared previous reference lines, keeping ${this.priceLinesArray.length} PDH/PDL lines`);
-
-                        // Determine which type of reference lines to add based on chart type
-                        if (type === 'CE') {
-                            // CE chart: show PE High and PE Low (from symbol payload)
-                            if (references.pe_payload_high && references.pe_payload_high > 0) {
-                                const peHighLine = series.createPriceLine({
-                                    price: references.pe_payload_high,
-                                    color: '#10b981',  // Green
-                                    lineWidth: 2,
-                                    lineStyle: LightweightCharts.LineStyle.Solid,
-                                    axisLabelVisible: true,
-                                    title: 'PE High'
-                                });
-                                this.priceLinesArray.push(peHighLine);
-                                console.log(`[CE Chart] Added PE High: ${references.pe_payload_high}`);
-                            }
-                            if (references.pe_payload_low && references.pe_payload_low > 0) {
-                                const peLowLine = series.createPriceLine({
-                                    price: references.pe_payload_low,
-                                    color: '#ef4444',  // Red
-                                    lineWidth: 2,
-                                    lineStyle: LightweightCharts.LineStyle.Solid,
-                                    axisLabelVisible: true,
-                                    title: 'PE Low'
-                                });
-                                this.priceLinesArray.push(peLowLine);
-                                console.log(`[CE Chart] Added PE Low: ${references.pe_payload_low}`);
-                            }
-                        } else if (type === 'PE') {
-                            // PE chart: show CE High and CE Low (from symbol payload)
-                            if (references.ce_payload_high && references.ce_payload_high > 0) {
-                                const ceHighLine = series.createPriceLine({
-                                    price: references.ce_payload_high,
-                                    color: '#10b981',  // Green
-                                    lineWidth: 2,
-                                    lineStyle: LightweightCharts.LineStyle.Solid,
-                                    axisLabelVisible: true,
-                                    title: 'CE High'
-                                });
-                                this.priceLinesArray.push(ceHighLine);
-                                console.log(`[PE Chart] Added CE High: ${references.ce_payload_high}`);
-                            }
-                            if (references.ce_payload_low && references.ce_payload_low > 0) {
-                                const ceLowLine = series.createPriceLine({
-                                    price: references.ce_payload_low,
-                                    color: '#ef4444',  // Red
-                                    lineWidth: 2,
-                                    lineStyle: LightweightCharts.LineStyle.Solid,
-                                    axisLabelVisible: true,
-                                    title: 'CE Low'
-                                });
-                                this.priceLinesArray.push(ceLowLine);
-                                console.log(`[PE Chart] Added CE Low: ${references.ce_payload_low}`);
-                            }
-                        }
-                    } catch (e) {
-                        console.warn('[Chart] Error adding reference lines:', e);
-                    }
                 },
 
                 /**

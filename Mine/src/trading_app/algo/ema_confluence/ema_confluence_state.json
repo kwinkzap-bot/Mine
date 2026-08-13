@@ -71,7 +71,7 @@
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-13",
       "ltp": 1661.8,
-      "ltp_time": "2026-08-13T08:55:12.267617"
+      "ltp_time": "2026-08-13T09:01:31.939139"
     },
     "ADANIPOWER": {
       "phase": "no_setup",
@@ -98,7 +98,7 @@
       "target_pct": 15,
       "signal_date": "2026-08-07",
       "ltp": 7019.5,
-      "ltp_time": "2026-08-13T08:55:12.267639"
+      "ltp_time": "2026-08-13T09:01:31.939171"
     },
     "AMBUJACEM": {
       "phase": "no_setup",
@@ -191,7 +191,7 @@
       "target_pct": 10,
       "signal_date": "2026-08-12",
       "ltp": 1965.0,
-      "ltp_time": "2026-08-13T08:55:12.267682",
+      "ltp_time": "2026-08-13T09:01:31.939249",
       "entry_price": 1965.0,
       "target_level": 2161.5,
       "qty": 475,
@@ -248,7 +248,7 @@
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-13",
       "ltp": 1465.2,
-      "ltp_time": "2026-08-13T08:55:12.267644"
+      "ltp_time": "2026-08-13T09:01:31.939180"
     },
     "COALINDIA": {
       "phase": "no_setup",
@@ -291,7 +291,7 @@
       "target_pct": 2.5,
       "signal_date": "2026-03-30",
       "ltp": 472.5,
-      "ltp_time": "2026-08-13T08:55:12.267649"
+      "ltp_time": "2026-08-13T09:01:31.939188"
     },
     "DMART": {
       "phase": "no_setup",
@@ -364,7 +364,7 @@
       "target_pct": 15,
       "signal_date": "2026-07-08",
       "ltp": 5012.5,
-      "ltp_time": "2026-08-13T08:55:12.267653"
+      "ltp_time": "2026-08-13T09:01:31.939197"
     },
     "HAVELLS": {
       "phase": "no_setup",
@@ -390,7 +390,7 @@
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-04",
       "ltp": 2507.0,
-      "ltp_time": "2026-08-13T08:55:12.267691",
+      "ltp_time": "2026-08-13T09:01:31.939264",
       "entry_price": 2562.1,
       "target_level": 2459.62,
       "qty": 300,
@@ -449,7 +449,7 @@
       "target_pct": 5,
       "signal_date": "2025-04-09",
       "ltp": 896.0,
-      "ltp_time": "2026-08-13T08:55:12.267658"
+      "ltp_time": "2026-08-13T09:01:31.939206"
     },
     "INDUSINDBK": {
       "phase": "watching",
@@ -467,7 +467,7 @@
       "target_pct": 15,
       "signal_date": "2026-04-24",
       "ltp": 1021.8,
-      "ltp_time": "2026-08-13T08:55:12.267662"
+      "ltp_time": "2026-08-13T09:01:31.939213"
     },
     "INFY": {
       "phase": "no_setup",
@@ -549,7 +549,7 @@
       "target_pct": 1.5,
       "signal_date": "2026-08-06",
       "ltp": 2552.0,
-      "ltp_time": "2026-08-13T08:55:12.267699",
+      "ltp_time": "2026-08-13T09:01:31.939279",
       "entry_price": 2574.6,
       "target_level": 2613.22,
       "qty": 225,
@@ -597,7 +597,7 @@
       "signal_date": "2026-08-05",
       "future_resolved_on": "2026-08-06",
       "ltp": 76.14,
-      "ltp_time": "2026-08-13T08:55:12.267706",
+      "ltp_time": "2026-08-13T09:01:31.939294",
       "entry_price": 77.76,
       "target_level": 71.54,
       "qty": 6950,
@@ -639,7 +639,7 @@
       "entry_time": "2026-07-30T09:52:33.286268",
       "future_month": "AUG 2026",
       "ltp": 473.65,
-      "ltp_time": "2026-08-13T08:55:12.267713",
+      "ltp_time": "2026-08-13T09:01:31.939304",
       "unrealized_pnl": 21910.0
     },
     "ONGC": {
@@ -677,7 +677,7 @@
       "target_pct": 15,
       "signal_date": "2026-08-07",
       "ltp": 378.5,
-      "ltp_time": "2026-08-13T08:55:12.267666"
+      "ltp_time": "2026-08-13T09:01:31.939220"
     },
     "PIIND": {
       "phase": "no_setup",
@@ -838,7 +838,7 @@
       "target_pct": 5,
       "signal_date": "2026-05-11",
       "ltp": 568.4,
-      "ltp_time": "2026-08-13T08:55:12.267670"
+      "ltp_time": "2026-08-13T09:01:31.939226"
     },
     "VOLTAS": {
       "phase": "no_setup",
@@ -879,7 +879,7 @@
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-04",
       "ltp": 2009.7,
-      "ltp_time": "2026-08-13T08:55:12.267719",
+      "ltp_time": "2026-08-13T09:01:31.939315",
       "entry_price": 1965.0,
       "target_level": 2033.77,
       "qty": 350,
@@ -907,7 +907,7 @@
       "target_pct": 8,
       "signal_date": "2026-06-30",
       "ltp": 8040.0,
-      "ltp_time": "2026-08-13T08:55:12.267674"
+      "ltp_time": "2026-08-13T09:01:31.939233"
     },
     "ICICIPRULI": {
       "phase": "no_setup",
@@ -943,7 +943,7 @@
       "future_month": "AUG 2026",
       "future_resolved_on": "2026-08-13",
       "ltp": 88.37,
-      "ltp_time": "2026-08-13T08:55:12.267678"
+      "ltp_time": "2026-08-13T09:01:31.939241"
     },
     "ITC": {
       "phase": "no_setup",
