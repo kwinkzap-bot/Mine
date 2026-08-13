@@ -2458,7 +2458,9 @@ async function oipPlaceSLOrders(btn, side = null) {
         // errors are nested inside results[] array from the backend
         const brokerErrors = (r.value?.results || [])
             .filter(b => !b.success)
-            .map(b => b.error || b.message || 'Unknown error');
+            // Named per account: the usual failure here is one broker's expired
+            // token, and an unlabelled list gives no clue which to re-login.
+            .map(b => `${b.broker || '?'}${b.instance ? ' ' + b.instance : ''}: ${b.error || b.message || 'Unknown error'}`);
         return brokerErrors.length ? brokerErrors.join(', ') : (r.value?.error || r.value?.message || 'Unknown error');
     };
 

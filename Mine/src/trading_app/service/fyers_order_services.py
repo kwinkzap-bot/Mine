@@ -623,16 +623,19 @@ class FyersOrderService:
             }
     
     def modify_order(self, order_id: str, order_type: Optional[int] = None,
-                    limit_price: Optional[float] = None, quantity: Optional[int] = None) -> Dict[str, Any]:
+                    limit_price: Optional[float] = None, quantity: Optional[int] = None,
+                    stop_price: Optional[float] = None) -> Dict[str, Any]:
         """
         Modify a pending order.
-        
+
         Args:
             order_id: Order ID to modify
             order_type: New order type (optional)
             limit_price: New limit price (optional)
             quantity: New quantity (optional)
-            
+            stop_price: New trigger price — moves a resting SL order's stop
+                (send with order_type=4 for SL-M)
+
         Returns:
             Dict with modification status
         """
@@ -658,7 +661,9 @@ class FyersOrderService:
                 payload["limitPrice"] = limit_price
             if quantity is not None:
                 payload["qty"] = quantity
-            
+            if stop_price is not None:
+                payload["stopPrice"] = stop_price
+
             logging.info(f"[modify_order] Modifying order {order_id}: {payload}")
             
             response = requests.put(url, headers=headers, json=payload, timeout=30)

@@ -268,6 +268,24 @@ class OICrossoverService:
                 for col in ('spot', 'atm_strike', 'ce_ltp', 'pe_ltp'):
                     if col not in ev_cols:
                         c.execute(f'ALTER TABLE oi_crossover_events ADD COLUMN {col} REAL')
+                # The *rating* of the cross, frozen at the instant it fired.
+                # Previously the screen re-derived quality and OI-change-% from
+                # the newest scan and filtered on those, so a signal that had
+                # not changed drifted in and out of the table all day — and
+                # because oi_chg_pct is measured against the 9:15 open it can
+                # only ripen late, which put the median cross on screen more
+                # than three hours after it fired, priced at a premium from
+                # three hours earlier. A cross is a statement about one moment;
+                # these columns are that moment, so filter membership can never
+                # move again. The live values still travel on the row, but as
+                # decay information rather than as the gate.
+                for col, decl in (('ce_oi', 'INTEGER'), ('pe_oi', 'INTEGER'),
+                                  ('quality', 'TEXT'), ('oi_chg_pct', 'REAL'),
+                                  ('separation', 'REAL'),
+                                  ('confirm_state', 'INTEGER')):
+                    if col not in ev_cols:
+                        c.execute(
+                            f'ALTER TABLE oi_crossover_events ADD COLUMN {col} {decl}')
                 # Every scan attempt, good or bad. Without this a broker-auth
                 # failure is indistinguishable from "the market hasn't opened
                 # yet" — both leave the series table untouched, and the screen
@@ -553,13 +571,18 @@ class OICrossoverService:
 
     # ── open positions ───────────────────────────────────────────────
 
-    def positions(self) -> Dict[str, Dict[str, Any]]:
+    def positions(self) -> Dict[int, Dict[str, Any]]:
         """Today's filled OI-Crossover orders, valued at the live premium.
 
-        Keyed by symbol, which is what the grid joins on. Multiple buys of the
-        same contract net into one position at the quantity-weighted average
-        entry, so firing the button twice reads as one bigger position rather
-        than two rows fighting over the same cell.
+        Keyed by the *cross* that was traded, not by the symbol. A symbol
+        crosses several times on a normal day and each cross is now its own
+        row, so a symbol-keyed P&L would print the same position against every
+        one of them and none of them would be the trade actually taken.
+
+        Multiple buys of the same contract on the same signal net into one
+        position at the quantity-weighted average entry, so firing the button
+        twice reads as one bigger position rather than two rows fighting over
+        the same cell.
 
         The traded strike is priced, not the current ATM: spot drifts, and by
         the afternoon the strike bought at 10 AM may be a step away from the
@@ -574,28 +597,34 @@ class OICrossoverService:
             logger.error(f"[OIX] positions: order store unreadable: {e}")
             return {}
 
-        legs: Dict[Tuple[str, float, str], Dict[str, Any]] = {}
-        for o in orders:
-            if o.get('strategy') != 'oix' or o.get('status') != 'EXECUTED':
-                continue
+        oix = [o for o in orders if o.get('strategy') == 'oix'
+               and o.get('status') == 'EXECUTED']
+        if not oix:
+            return {}
+
+        legs: Dict[Tuple[int, float, str], Dict[str, Any]] = {}
+        for o in oix:
             qty = int(o.get('quantity') or 0)
             entry = float(o.get('entry_price') or o.get('price') or 0)
             if qty <= 0 or entry <= 0:
                 continue
+            signal_id = self._signal_for_order(o)
+            if signal_id is None:
+                continue
             # A SELL closes, so it nets against the buys on the same contract.
             signed = qty if (o.get('action') or 'BUY').upper() == 'BUY' else -qty
-            key = (o['symbol'], float(o['strike']), (o.get('option_type') or '').upper())
-            leg = legs.setdefault(key, {'qty': 0, 'cost': 0.0})
+            key = (signal_id, float(o['strike']), (o.get('option_type') or '').upper())
+            leg = legs.setdefault(key, {'qty': 0, 'cost': 0.0, 'symbol': o['symbol']})
             leg['qty'] += signed
             leg['cost'] += entry * signed
 
-        out: Dict[str, Dict[str, Any]] = {}
-        for (symbol, strike, opt_type), leg in legs.items():
+        out: Dict[int, Dict[str, Any]] = {}
+        for (signal_id, strike, opt_type), leg in legs.items():
             if leg['qty'] <= 0:
                 continue  # flat or closed out — nothing left to value
             entry = leg['cost'] / leg['qty']
-            ltp = self.strike_ltp(symbol, strike, opt_type)
-            out[symbol] = {
+            ltp = self.strike_ltp(leg['symbol'], strike, opt_type)
+            out[signal_id] = {
                 'strike': strike,
                 'option_type': opt_type,
                 'qty': leg['qty'],
@@ -604,6 +633,46 @@ class OICrossoverService:
                 'pnl': round((ltp - entry) * leg['qty'], 2) if ltp is not None else None,
             }
         return out
+
+    def _signal_for_order(self, order: Dict[str, Any]) -> Optional[int]:
+        """Which cross an order was placed from.
+
+        The screen stamps ``signal_id`` at order time, which is authoritative.
+        Orders placed before it did so — and any placed from elsewhere against
+        an 'oix' strategy — are attributed to the symbol's most recent cross at
+        or before the moment the order went out, which is the one the button
+        would have been sitting on.
+        """
+        stamped = order.get('signal_id')
+        if stamped is not None:
+            try:
+                return int(stamped)
+            except (TypeError, ValueError):
+                pass
+
+        created = order.get('created_at')
+        symbol = order.get('symbol')
+        if not created or not symbol:
+            return None
+        try:
+            # The store writes epoch milliseconds; event timestamps are naive
+            # local IST strings, so the comparison is done in local time.
+            placed = datetime.fromtimestamp(float(created) / 1000.0)
+        except (TypeError, ValueError, OSError):
+            return None
+
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                hit = conn.execute(
+                    '''SELECT id FROM oi_crossover_events
+                       WHERE trade_date = ? AND symbol = ? AND ts <= ?
+                       ORDER BY ts DESC LIMIT 1''',
+                    (placed.strftime('%Y-%m-%d'), symbol,
+                     placed.strftime('%Y-%m-%dT%H:%M:%S'))).fetchone()
+        except Exception as e:
+            logger.error(f"[OIX] positions: could not attribute order: {e}")
+            return None
+        return hit[0] if hit else None
 
     def strike_ltp(self, symbol: str, strike: float,
                    opt_type: str) -> Optional[float]:
@@ -708,11 +777,21 @@ class OICrossoverService:
                 return True
             if (previous > 0) == (diff > 0):
                 return True
-            events.append((trade_date, symbol, ts,
-                           'BULL' if diff > 0 else 'BEAR',
+            # Rate the cross here, against the legs that produced it, and store
+            # the rating with it. Re-deriving these later from a newer scan
+            # judges the signal by a market it was never a statement about.
+            direction = 'BULL' if diff > 0 else 'BEAR'
+            events.append((trade_date, symbol, ts, direction,
                            totals['ce_chg'], totals['pe_chg'],
                            totals['spot'], totals['atm_strike'],
-                           totals['atm_ce_ltp'], totals['atm_pe_ltp']))
+                           totals['atm_ce_ltp'], totals['atm_pe_ltp'],
+                           totals['ce_oi'], totals['pe_oi'],
+                           self.classify(direction, totals['ce_chg'], totals['pe_chg']),
+                           self.oi_chg_pct(totals['ce_oi'], totals['pe_oi'],
+                                           totals['ce_chg'], totals['pe_chg']),
+                           self.separation(totals['ce_chg'], totals['pe_chg']),
+                           # Unconfirmed until a later scan shows the sign held.
+                           0))
             return True
 
         for symbol in symbols:
@@ -761,6 +840,7 @@ class OICrossoverService:
                 f'Feed frozen — all {len(rows)} symbols identical to the previous '
                 f'reading, so the market is shut (holiday) or the feed is stale.')
 
+        confirmed: List[Dict[str, Any]] = []
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.executemany(
@@ -771,12 +851,20 @@ class OICrossoverService:
                 conn.executemany(
                     '''INSERT OR IGNORE INTO oi_crossover_events
                        (trade_date, symbol, ts, direction, ce_chg, pe_chg,
-                        spot, atm_strike, ce_ltp, pe_ltp)
-                       VALUES (?,?,?,?,?,?,?,?,?,?)''', events)
+                        spot, atm_strike, ce_ltp, pe_ltp, ce_oi, pe_oi,
+                        quality, oi_chg_pct, separation, confirm_state)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', events)
+                # Same transaction as the inserts: a scan that dies midway must
+                # not leave half the day's crosses judged against a sweep whose
+                # series rows were rolled back.
+                confirmed = self._resolve_confirmations(conn, trade_date, ts, rows)
                 conn.commit()
         except Exception as e:
             logger.error(f"[OIX] Persist failed: {e}", exc_info=True)
             return self._log_run(0, len(failures), 0, elapsed, str(e))
+
+        if confirmed:
+            self._alert_confirmed(trade_date, confirmed)
 
         logger.info(f"[OIX] Scan done: {len(rows)}/{len(symbols)} symbols, "
                     f"{len(events)} crossovers, {len(failures)} failed, {elapsed}s")
@@ -879,6 +967,190 @@ class OICrossoverService:
             logger.error(f"[OIX] Could not read previous points: {e}")
         return out
 
+    @staticmethod
+    def _uvar(key: str, default: str = '') -> str:
+        """One env value, read the same way the scheduler's jobs read theirs."""
+        try:
+            from trading_app.app.utils.user_env import UserEnvManager
+            user = os.getenv('MONITORING_USERNAME', 'Mine')
+            return (UserEnvManager.get_user_var(user, key, default) or '').strip()
+        except Exception:
+            return default
+
+    def _alert_confirmed(self, trade_date: str,
+                         confirmed: List[Dict[str, Any]]) -> None:
+        """Notify on crosses that just held, so a signal doesn't need a human
+        watching a tab to be seen.
+
+        The screen polls only while it is open and only every 60s, which makes
+        an unwatched cross unreachable no matter how well the table behaves.
+
+        Gated hard on purpose. The scanner records roughly 460 crosses a day
+        and alerting on all of them would be indistinguishable from alerting on
+        none; the defaults here — held its sign, decisively separated legs,
+        both legs agreeing, and the symbol's first cross of the day — land at
+        12-25 a day on recorded sessions. Every gate is an env var so the
+        volume can be retuned without a code change.
+        """
+        if self._uvar('OIX_NOTIFY', 'true').lower() == 'false' \
+                and self._uvar('OIX_TELEGRAM', 'true').lower() == 'false':
+            return
+
+        try:
+            min_sep = float(self._uvar('OIX_ALERT_MIN_SEPARATION', '30'))
+        except ValueError:
+            min_sep = 30.0
+        want_quality = self._uvar('OIX_ALERT_QUALITY', 'strong').lower()
+        first_only = self._uvar('OIX_ALERT_FIRST_CROSS_ONLY', 'true').lower() != 'false'
+        try:
+            cap = int(self._uvar('OIX_ALERT_MAX_PER_SCAN', '15'))
+        except ValueError:
+            cap = 15
+
+        picks = []
+        for ev in confirmed:
+            if (ev.get('separation') or 0) < min_sep:
+                continue
+            if want_quality not in ('', 'any') and ev.get('quality') != want_quality:
+                continue
+            picks.append(ev)
+        if not picks:
+            return
+
+        if first_only:
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    firsts = {r[0] for r in conn.execute(
+                        '''SELECT MIN(id) FROM oi_crossover_events
+                           WHERE trade_date = ? GROUP BY symbol''', (trade_date,))}
+                picks = [e for e in picks if e['id'] in firsts]
+            except Exception as e:
+                logger.error(f"[OIX] first-cross gate failed: {e}")
+        if not picks:
+            return
+
+        picks.sort(key=lambda e: -(e.get('separation') or 0))
+        extra = max(0, len(picks) - cap)
+        picks = picks[:cap]
+
+        at = (picks[0]['ts'] or '')[11:16]
+        payload = {
+            'trade_date': trade_date,
+            'time': at,
+            'signals': [{
+                'symbol': e['symbol'],
+                'direction': e['direction'],
+                'quality': e['quality'],
+                'separation': e['separation'],
+                'oi_chg_pct': e['oi_chg_pct'],
+                'cross_time': (e['ts'] or '')[11:16],
+                'strike': e['atm_strike'],
+                # The premium at the cross, not now: it is the price the
+                # signal was a statement about.
+                'premium': e['ce_ltp'] if e['direction'] == 'BULL' else e['pe_ltp'],
+                'spot': e['spot'],
+            } for e in picks],
+            'suppressed': extra,
+        }
+
+        if self._uvar('OIX_NOTIFY', 'true').lower() != 'false':
+            try:
+                from trading_app.service.notification_service import create_notification
+                bull = sum(1 for e in picks if e['direction'] == 'BULL')
+                create_notification(
+                    category='oi_crossover',
+                    title=f"OI Crossover — {len(picks)} confirmed at {at}",
+                    summary=(f"{bull} BULL, {len(picks) - bull} BEAR · "
+                             + ', '.join(e['symbol'] for e in picks[:5])
+                             + (f" +{len(picks) - 5} more" if len(picks) > 5 else '')),
+                    data=payload,
+                )
+            except Exception as e:
+                logger.error(f"[OIX] in-app alert failed: {e}")
+
+        self._send_telegram(payload)
+
+    def _send_telegram(self, payload: Dict[str, Any]) -> None:
+        """Fire-and-forget Telegram alert. Credentials come from the user's own
+        env file; with either unset this is silently a no-op, so the in-app bell
+        keeps working on an install that has never set Telegram up."""
+        if self._uvar('OIX_TELEGRAM', 'true').lower() == 'false':
+            return
+        token = self._uvar('TELEGRAM_BOT_TOKEN')
+        chat_id = self._uvar('TELEGRAM_CHAT_ID')
+        if not (token and chat_id):
+            return
+
+        lines = [f"🔀 OI Crossover — confirmed at {payload['time']}"]
+        for s in payload['signals']:
+            arrow = '📈' if s['direction'] == 'BULL' else '📉'
+            side = 'CE' if s['direction'] == 'BULL' else 'PE'
+            strike = '' if s['strike'] is None else f" {int(s['strike'])}{side}"
+            prem = '' if s['premium'] is None else f" @ ₹{s['premium']}"
+            lines.append(f"{arrow} {s['symbol']} {s['direction']}{strike}{prem}"
+                         f"  ({s['cross_time']} · sep {s['separation']:.0f}%)")
+        if payload.get('suppressed'):
+            lines.append(f"…+{payload['suppressed']} more below the cap")
+        message = '\n'.join(lines)
+
+        def _send() -> None:
+            try:
+                from trading_app.service.telegram_service import TelegramService
+                result = TelegramService(token=token, chat_id=chat_id).send_text(message)
+                if not result.get('success'):
+                    logger.error(f"[OIX] Telegram alert failed: {result.get('error')}")
+            except Exception as e:
+                logger.error(f"[OIX] Telegram alert failed: {e}")
+
+        # Off-thread: send_text allows a 10s HTTP timeout, which would
+        # otherwise sit inside the scan's own 100s budget.
+        threading.Thread(target=_send, daemon=True, name='OixNotify').start()
+
+    @staticmethod
+    def _resolve_confirmations(conn: sqlite3.Connection, trade_date: str,
+                               ts: str, rows: List[Tuple]) -> List[Dict[str, Any]]:
+        """Settle every still-pending cross against this sweep.
+
+        A cross cannot be judged on the scan it fires — the sign has only just
+        flipped, and about a fifth of them flip straight back. So an event is
+        written pending and the *next* sweep to see that symbol decides: the
+        diff still on the event's side confirms it, the diff back the other way
+        marks it flipped. Both are terminal, so each cross is settled exactly
+        once and a symbol that chops afterwards can't relitigate it.
+
+        Returns the crosses that just confirmed, which is what a trader can
+        still act on and therefore the only thing worth alerting about.
+        """
+        # Symbol -> the side this sweep is on. A dead-flat diff states nothing,
+        # so those symbols leave their pending crosses pending.
+        sides = {row[2]: ('BULL' if row[7] - row[6] > 0 else 'BEAR')
+                 for row in rows if row[7] - row[6] != 0}
+        if not sides:
+            return []
+
+        conn.row_factory = sqlite3.Row
+        pending = conn.execute(
+            '''SELECT * FROM oi_crossover_events
+               WHERE trade_date = ? AND ts < ? AND COALESCE(confirm_state, 0) = 0''',
+            (trade_date, ts)).fetchall()
+
+        settled: List[Tuple[int, int]] = []
+        out: List[Dict[str, Any]] = []
+        for ev in pending:
+            side = sides.get(ev['symbol'])
+            if side is None:
+                continue
+            held = (side == ev['direction'])
+            settled.append((1 if held else -1, ev['id']))
+            if held:
+                out.append(dict(ev))
+
+        if settled:
+            conn.executemany(
+                'UPDATE oi_crossover_events SET confirm_state = ? WHERE id = ?',
+                settled)
+        return out
+
     # ── read side ────────────────────────────────────────────────────
 
     def snapshot(self, trade_date: Optional[str] = None) -> Dict[str, Any]:
@@ -916,43 +1188,98 @@ class OICrossoverService:
             logger.error(f"[OIX] snapshot failed: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
 
+        # Positions are deliberately not joined here: valuing one costs a chain
+        # call per holding, and /snapshot is polled every 60s. The grid joins
+        # them from /positions on its own cadence, keyed by the same signal id.
+        by_symbol = {row['symbol']: row for row in latest}
+
         out = []
-        for row in latest:
-            events = crosses.get(row['symbol'])
-            if not events:
-                continue  # never crossed today — not a signal, so not a row
-            last = events[-1]
-            ce_chg, pe_chg = row['ce_chg'], row['pe_chg']
-            direction = last['direction']
-            # Everything below is the *latest* scan; these four are the market
-            # at the moment the cross fired. The premium is only the leg the
-            # cross implies (CE on a BULL, PE on a BEAR) — the other one is
-            # not the trade, so shipping it would only invite showing it.
-            cross_ltp = last['ce_ltp'] if direction == 'BULL' else last['pe_ltp']
-            out.append({
-                'symbol': row['symbol'],
-                'direction': direction,
-                'spot': row['spot'],
-                'cross_spot': last['spot'] if last['spot'] is not None
-                              else last['series_spot'],
-                'cross_strike': last['atm_strike'],
-                'cross_ltp': cross_ltp,
-                'ce_oi': row['ce_oi'],
-                'pe_oi': row['pe_oi'],
-                'pcr': row['pcr'],
-                'ce_chg': ce_chg,
-                'pe_chg': pe_chg,
-                'cross_time': last['ts'],
-                'cross_count': len(events),
-                'quality': self.classify(direction, ce_chg, pe_chg),
-                'oi_chg_pct': self.oi_chg_pct(row['ce_oi'], row['pe_oi'], ce_chg, pe_chg),
-                'sectors': self.sectors_for(row['symbol']),
-            })
+        for symbol, events in crosses.items():
+            row = by_symbol.get(symbol)
+            for seq, ev in enumerate(events, start=1):
+                direction = ev['direction']
+                # The premium is only the leg the cross implies (CE on a BULL,
+                # PE on a BEAR) — the other one is not the trade, so shipping
+                # it would only invite showing it.
+                cross_ltp = ev['ce_ltp'] if direction == 'BULL' else ev['pe_ltp']
+                # Only the day's most recent cross for a symbol can still be
+                # running; the earlier ones were superseded by definition.
+                live = self._live_state(ev, row, current=(seq == len(events)))
+                out.append({
+                    'id': ev['id'],
+                    'symbol': symbol,
+                    'direction': direction,
+                    # ── frozen at the instant the lines crossed ──
+                    'cross_time': ev['ts'],
+                    'cross_spot': ev['spot'] if ev['spot'] is not None
+                                  else ev['series_spot'],
+                    'cross_strike': ev['atm_strike'],
+                    'cross_ltp': cross_ltp,
+                    'quality': ev['quality'],
+                    'oi_chg_pct': ev['oi_chg_pct'],
+                    'separation': ev['separation'],
+                    'confirm_state': ev['confirm_state'],
+                    'cross_seq': seq,
+                    'cross_total': len(events),
+                    # ── the latest scan, for decay only — never filtered on ──
+                    'status': live['status'],
+                    'status_note': live['note'],
+                    'live_quality': live['quality'],
+                    'live_oi_chg_pct': live['oi_chg_pct'],
+                    'spot': row['spot'] if row else None,
+                    'ce_oi': row['ce_oi'] if row else None,
+                    'pe_oi': row['pe_oi'] if row else None,
+                    'pcr': row['pcr'] if row else None,
+                    'ce_chg': row['ce_chg'] if row else None,
+                    'pe_chg': row['pe_chg'] if row else None,
+                    'sectors': self.sectors_for(symbol),
+                })
 
         out.sort(key=lambda r: r['cross_time'], reverse=True)
         return {'success': True, 'trade_date': trade_date, 'as_of': last_ts,
                 'scans': self.scan_count(trade_date), 'symbols': len(latest),
                 'last_run': self.last_run(trade_date), 'rows': out}
+
+    def _live_state(self, ev: sqlite3.Row, row: Optional[sqlite3.Row],
+                    current: bool) -> Dict[str, Any]:
+        """How a cross is holding up, as a label rather than as a deletion.
+
+        The screen used to express decay by dropping the row, which is the one
+        thing a trader cannot act on: a signal you took silently vanishing
+        tells you nothing about whether to stay in it. Every cross keeps its
+        row for the day and reports its own decay instead.
+        """
+        if not (ev['confirm_state'] or 0) and current:
+            return {'status': 'PENDING', 'quality': None, 'oi_chg_pct': None,
+                    'note': 'Waiting for the next scan to confirm the sign held'}
+        if row is None or row['ce_chg'] is None:
+            return {'status': 'UNKNOWN', 'quality': None, 'oi_chg_pct': None,
+                    'note': 'No scan since the cross'}
+
+        live_q = self.classify(ev['direction'], row['ce_chg'], row['pe_chg'])
+        live_pct = self.oi_chg_pct(row['ce_oi'], row['pe_oi'],
+                                   row['ce_chg'], row['pe_chg'])
+        base = {'quality': live_q, 'oi_chg_pct': live_pct}
+        at = (ev['ts'] or '')[11:16]
+
+        if ev['confirm_state'] == -1 or not current:
+            return {**base, 'status': 'FLIPPED',
+                    'note': f'The lines crossed back after {at}'}
+
+        diff = row['pe_chg'] - row['ce_chg']
+        side = 'BULL' if diff > 0 else 'BEAR'
+        if diff and side != ev['direction']:
+            return {**base, 'status': 'FLIPPED',
+                    'note': f'Now reading {side} against the {at} cross'}
+
+        # Same side, weaker flow. Ranked so "strong -> aggressive" is a fade
+        # but "aggressive -> strong" is not.
+        rank = {'strong': 3, 'aggressive': 2, 'covering': 1, 'weak': 0}
+        if rank.get(live_q, 0) < rank.get(ev['quality'], 0):
+            return {**base, 'status': 'FADED',
+                    'note': f'Was {ev["quality"]} at {at}, now {live_q}'}
+        return {**base, 'status': 'LIVE',
+                'note': f'Still {live_q} since the {at} cross'}
 
     @staticmethod
     def classify(direction: str, ce_chg: int, pe_chg: int) -> str:
@@ -981,6 +1308,26 @@ class OICrossoverService:
             if base > 0:
                 pct = max(pct, abs(chg) / base * 100.0)
         return round(pct, 2)
+
+    @staticmethod
+    def separation(ce_chg: int, pe_chg: int) -> float:
+        """How decisively the two lines are apart, 0-100.
+
+        The gap between the legs as a share of the total flow behind them, so
+        it reads the same on a 200-lot stock as on NIFTY. This is the strength
+        gate the screen actually needs: it is complete the instant the cross
+        fires, whereas oi_chg_pct measures against the 9:15 open and so
+        mechanically grows all session — a threshold on that is a clock, not a
+        filter.
+
+        A third of recorded crosses come in under 5. Those are the sign
+        flipping about in the noise band where the two lines sit on top of one
+        another, which is chop rather than a signal.
+        """
+        total = abs(ce_chg) + abs(pe_chg)
+        if not total:
+            return 0.0
+        return round(abs(pe_chg - ce_chg) / total * 100.0, 2)
 
     def series(self, symbol: str, trade_date: Optional[str] = None) -> Dict[str, Any]:
         """The two change-lines plus every cross — powers the row drilldown."""
@@ -1266,6 +1613,90 @@ class OICrossoverService:
                 return token if (exp - day).days < 28 else None
             seen_expired = True
         return None
+
+    def backfill_event_metrics(self) -> Dict[str, Any]:
+        """Fill the frozen rating on crosses recorded before it was stored.
+
+        Every one of them is recoverable: the series row written by the same
+        sweep carries the leg OI and the leg changes the cross was detected
+        from, so the rating can be reconstructed exactly rather than
+        approximated. Confirmation likewise — the next series row for that
+        symbol is what the live scanner would have judged it against.
+
+        Without this, Historical mode would filter every past session down to
+        nothing, because the new gates read columns that only today's scans
+        populate.
+
+        Idempotent: only rows still missing a rating are touched. A cross whose
+        series partner is absent stays NULL and is treated everywhere as
+        unrated — never as zero, which would silently sink it below every floor.
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                todo = conn.execute(
+                    '''SELECT e.id, e.direction, e.ts, e.symbol, e.trade_date,
+                              e.confirm_state,
+                              COALESCE(e.ce_chg, s.ce_chg) AS ce_chg,
+                              COALESCE(e.pe_chg, s.pe_chg) AS pe_chg,
+                              s.ce_oi AS ce_oi, s.pe_oi AS pe_oi
+                       FROM oi_crossover_events e
+                       LEFT JOIN oi_crossover_series s
+                         ON s.trade_date = e.trade_date
+                        AND s.symbol = e.symbol AND s.ts = e.ts
+                       WHERE e.quality IS NULL OR e.separation IS NULL
+                          OR e.confirm_state IS NULL''').fetchall()
+
+                rated: List[Tuple] = []
+                skipped = 0
+                for ev in todo:
+                    ce_chg, pe_chg = ev['ce_chg'], ev['pe_chg']
+                    if ce_chg is None or pe_chg is None:
+                        skipped += 1
+                        continue
+                    ce_oi, pe_oi = ev['ce_oi'], ev['pe_oi']
+                    # The rating needs the OI levels; without the series row
+                    # only separation is recoverable, and a partial rating
+                    # would filter as though the missing halves were zero.
+                    if ce_oi is None or pe_oi is None:
+                        skipped += 1
+                        continue
+
+                    # What the following sweep saw, which is exactly what the
+                    # live path resolves confirmation against.
+                    nxt = conn.execute(
+                        '''SELECT ce_chg, pe_chg FROM oi_crossover_series
+                           WHERE trade_date = ? AND symbol = ? AND ts > ?
+                             AND pe_chg - ce_chg != 0
+                           ORDER BY ts LIMIT 1''',
+                        (ev['trade_date'], ev['symbol'], ev['ts'])).fetchone()
+                    if nxt is None:
+                        confirm = 0  # last cross of the day, never settled
+                    else:
+                        side = 'BULL' if nxt['pe_chg'] - nxt['ce_chg'] > 0 else 'BEAR'
+                        confirm = 1 if side == ev['direction'] else -1
+
+                    rated.append((
+                        ce_oi, pe_oi,
+                        self.classify(ev['direction'], ce_chg, pe_chg),
+                        self.oi_chg_pct(ce_oi, pe_oi, ce_chg, pe_chg),
+                        self.separation(ce_chg, pe_chg),
+                        confirm, ce_chg, pe_chg, ev['id'],
+                    ))
+
+                conn.executemany(
+                    '''UPDATE oi_crossover_events
+                       SET ce_oi = ?, pe_oi = ?, quality = ?, oi_chg_pct = ?,
+                           separation = ?, confirm_state = ?, ce_chg = ?, pe_chg = ?
+                       WHERE id = ?''', rated)
+                conn.commit()
+        except Exception as e:
+            logger.error(f"[OIX] Event metric backfill failed: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+
+        logger.info(f"[OIX] Rated {len(rated)} past crossovers, {skipped} unrecoverable")
+        return {'success': True, 'rated': len(rated), 'skipped': skipped,
+                'considered': len(todo)}
 
     def scan_count(self, trade_date: Optional[str] = None) -> int:
         """Distinct scan timestamps for a day — the empty state needs this to

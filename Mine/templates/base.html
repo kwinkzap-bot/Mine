@@ -23,30 +23,39 @@
     <meta name="apple-mobile-web-app-title" content="Stock Scanner">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/icon-192.png') }}">
     {% endif %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/notifications.css') }}?v={{ sv('css/notifications.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/notification_center.css') }}?v={{ sv('css/notification_center.css') }}">
+    <link rel="stylesheet"
+        href="{{ url_for('static', filename='css/notifications.css') }}?v={{ sv('css/notifications.css') }}">
+    <link rel="stylesheet"
+        href="{{ url_for('static', filename='css/notification_center.css') }}?v={{ sv('css/notification_center.css') }}">
     <!-- Shared grid design — must precede page stylesheets so a page can
          still override a --dg-* token for its own surface. -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/components/data-grid.css') }}?v={{ sv('css/components/data-grid.css') }}">
-    {# DataGrid loads here, in <head>, and deliberately without `defer`. Several
-       pages put their page script inside the content block and call into it
-       inline (algo.html ends with `<script>algoLoad();</script>`), which runs
-       while <main> is parsing — before the script tags at the end of <body>,
-       and before any deferred script would fire. Anything those pages depend on
-       must already be defined, so this has to block. It is a small,
-       dependency-free IIFE; keep it that way.
+    <link rel="stylesheet"
+        href="{{ url_for('static', filename='css/components/data-grid.css') }}?v={{ sv('css/components/data-grid.css') }}">
+    {# DataGrid loads here, in
 
-       Note this is a Jinja comment, not an HTML one: Jinja parses tags inside
-       <!-- --> normally, so naming a block tag there would open a real block. #}
-    <script src="{{ url_for('static', filename='js/components/data-grid.js') }}?v={{ sv('js/components/data-grid.js') }}"></script>
-    <!-- Shared theme-switching logic (getActiveTheme/setTheme/cycleTheme) —
+    <head>, and deliberately without `defer`. Several
+        pages put their page script inside the content block and call into it
+        inline (algo.html ends with `
+        <script>algoLoad();</script>`), which runs
+        while <main> is parsing — before the script tags at the end of
+
+    <body>,
+        and before any deferred script would fire. Anything those pages depend on
+        must already be defined, so this has to block. It is a small,
+        dependency-free IIFE; keep it that way.
+
+        Note this is a Jinja comment, not an HTML one: Jinja parses tags inside
+        <!-- --> normally, so naming a block tag there would open a real block. #}
+        <script
+            src="{{ url_for('static', filename='js/components/data-grid.js') }}?v={{ sv('js/components/data-grid.js') }}"></script>
+        <!-- Shared theme-switching logic (getActiveTheme/setTheme/cycleTheme) —
          functions only, safe to load before <body> exists. -->
-    <script src="{{ url_for('static', filename='js/theme.js') }}?v={{ sv('js/theme.js') }}"></script>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
-        rel="stylesheet">
-    <title>{% block title %}Stock Scanner{% endblock %}</title>
-    {% block head %}{% endblock %}
+        <script src="{{ url_for('static', filename='js/theme.js') }}?v={{ sv('js/theme.js') }}"></script>
+        <link
+            href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
+            rel="stylesheet">
+        <title>{% block title %}Stock Scanner{% endblock %}</title>
+        {% block head %}{% endblock %}
 </head>
 
 <body class="{% if request.args.get('embed') %}embed-mode{% endif %}">
@@ -87,10 +96,10 @@
         {% if not request.args.get('embed') %}
         <div class="navigation-bar">
             <!-- <a href="/" class="nav-link home-link" title="Home">🏠</a> -->
-            <a href="/dashboard" class="nav-link {% if request.path in ['/dashboard', '/replay', '/trading', '/contracts', '/historic-oi'] %}active{% endif %}">📊
+            <a href="/dashboard"
+                class="nav-link {% if request.path in ['/dashboard', '/replay', '/trading', '/contracts', '/historic-oi'] %}active{% endif %}">📊
                 Dashboard</a>
-            <a href="/trend-detection"
-                class="nav-link {% if request.path == '/trend-detection' %}active{% endif %}">📈
+            <a href="/trend-detection" class="nav-link {% if request.path == '/trend-detection' %}active{% endif %}">📈
                 Trend</a>
             <a href="/backtest" class="nav-link {% if request.path == '/backtest' %}active{% endif %}">🧪 Backtest</a>
             <a href="/scanners" class="nav-link {% if request.path == '/scanners' %}active{% endif %}">🔍
@@ -101,9 +110,9 @@
                 Options Chart</a>
             <a href="/intraday-option" class="nav-link {% if request.path == '/intraday-option' %}active{% endif %}">💹
                 Intraday Option</a> -->
+            <a href="/algo" class="nav-link {% if request.path == '/algo' %}active{% endif %}">⚡ Algo</a>
             <a href="/oi-profile" class="nav-link {% if request.path == '/oi-profile' %}active{% endif %}">📉 OI
                 Profile</a>
-            <a href="/algo" class="nav-link {% if request.path == '/algo' %}active{% endif %}">⚡ Algo</a>
             <div class="login-dropdown">
                 {% if pwa_enabled %}
                 <button id="pwa-install-btn" title="Install as App" style="display:none">⬇️</button>

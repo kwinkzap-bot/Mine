@@ -108,7 +108,15 @@ print(f"\n=== snapshot: {snap['symbols']} symbols scanned, {len(snap['rows'])} c
 for row in snap['rows']:
     print(f"  {row['symbol']:11} {row['direction']:4} pcr={row['pcr']:.2f} "
           f"ce={row['ce_chg']:>10,} pe={row['pe_chg']:>10,} "
-          f"x{row['cross_count']} {row['quality']}")
+          f"{row['cross_seq']}/{row['cross_total']} {row['quality']} "
+          f"sep={row['separation']:.0f}% {row['status']}")
+
+# The rating travels with the cross rather than being re-derived per poll,
+# which is what stops a row drifting out of the filter it arrived under.
+for row in snap['rows']:
+    assert row['quality'] is not None, row
+    assert row['separation'] is not None, row
+    assert row['status'] in ('LIVE', 'PENDING', 'FADED', 'FLIPPED', 'UNKNOWN'), row
 
 crossed = {r['symbol']: r['direction'] for r in snap['rows']}
 assert snap['symbols'] == len(universe), snap['symbols']

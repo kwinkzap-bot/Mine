@@ -1020,7 +1020,11 @@ async function oipRSPlaceSLOrders(btn, side) {
         if (r.success) {
             showNotification(`SL placed for ${side} ${strike}.`, 'success');
         } else {
-            const brokerErrors = (r.results || []).filter(b => !b.success).map(b => b.error || b.message || 'Unknown error');
+            // Prefixed with broker + instance: the common failures here are
+            // per-account (an expired token on one login), and an unlabelled
+            // list gives no clue which account to fix.
+            const brokerErrors = (r.results || []).filter(b => !b.success)
+                .map(b => `${b.broker || '?'}${b.instance ? ' ' + b.instance : ''}: ${b.error || b.message || 'Unknown error'}`);
             showNotification(`SL failed: ${brokerErrors.length ? brokerErrors.join(', ') : (r.error || 'Unknown error')}`, 'error');
         }
     } catch (e) {

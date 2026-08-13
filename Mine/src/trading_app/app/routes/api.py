@@ -489,6 +489,60 @@ def get_broker_lot_size(username: str, instance_num: int, standard_lot: int) -> 
     return lots * standard_lot
 
 
+def intrinsic_order_lots(username: str, instance_num: int, symbol: str) -> int:
+    """Number of lots an intrinsic-strategy order uses on one broker.
+
+    Mirrors the precedence inside ``_dispatch_order_to_brokers._execute_single``
+    so an SL is sized like the entry it protects: per-symbol, then per-broker,
+    then the app-wide default, then the broker's generic lot count.
+
+    Kept as a separate function rather than shared with the dispatcher because
+    the entry path is live and working; if you ever touch the order in
+    _execute_single, change it here too — a mismatch means an SL that covers
+    only part of the position.
+    """
+    from trading_app.app.utils.user_env import UserEnvManager
+    for var in (f'INTRINSIC_{symbol.upper()}_LOTS',
+                f'BROKER_{instance_num}_INTRINSIC_LOTS',
+                'INTRINSIC_ORDER_LOTS',
+                f'BROKER_{instance_num}_LOT_SIZE'):
+        raw = UserEnvManager.get_user_var(username, var)
+        if raw:
+            try:
+                lots = int(str(raw).strip())
+                if lots > 0:
+                    return lots
+            except (TypeError, ValueError):
+                pass
+    return 1
+
+
+def resolve_standard_lot(symbol: str) -> Optional[int]:
+    """The symbol's exchange lot size, read from the active provider's instrument dump.
+
+    Never hardcoded: the exchange revises index lot sizes (NIFTY has been 25,
+    50, 65 …) and a stale table means every order is rejected for "quantity
+    should be multiple of N" — or worse, accepted at the wrong size.
+
+    Returns None when no provider can answer, so callers decide whether to fall
+    back or refuse; get_lot_size answers 1 for "not found", which is not a real
+    F&O lot for anything this app trades.
+    """
+    try:
+        provider = get_data_provider()
+        if not provider:
+            return None
+        if hasattr(provider, 'get_lot_size'):
+            raw = provider.get_lot_size(symbol)
+        else:
+            from trading_app.service.kite_order_services import KiteService
+            raw = KiteService(kite_instance=provider).get_lot_size(symbol)
+        return int(raw) if raw and int(raw) > 1 else None
+    except Exception as e:
+        logger.error(f"[lot-size] Resolution failed for {symbol}: {e}")
+        return None
+
+
 from trading_app.service.provider_logic import get_kite, get_data_provider
 
 
@@ -6629,7 +6683,6 @@ def exit_all_orders() -> EndpointResponse:
 @api_bp.route('/order/place-sl', methods=['POST'])
 def place_sl_order() -> EndpointResponse:
     """Place SL-Market order for a single option leg across all active brokers."""
-    _LOT_MAP = {'NIFTY': 25, 'BANKNIFTY': 15, 'SENSEX': 20, 'FINNIFTY': 40, 'MIDCPNIFTY': 75}
     try:
         _username = session.get('username', 'Mine')
         data = request.get_json() or {}
@@ -6644,12 +6697,31 @@ def place_sl_order() -> EndpointResponse:
         from trading_app.app.utils.user_env import UserEnvManager
         from trading_app.service.kite_order_services import KiteService
 
-        standard_lot = _LOT_MAP.get(symbol, 1)
+        # An SL is the leg that caps the loss, so a guessed quantity is worse
+        # than no order at all: too small leaves the position part-naked, too
+        # large flips it short on trigger. Refuse rather than fall back.
+        standard_lot = resolve_standard_lot(symbol)
+        if not standard_lot:
+            return jsonify({'success': False,
+                            'error': f'Could not resolve lot size for {symbol} — broker instrument list unavailable. '
+                                     f'Reconnect the data provider and retry.'}), 400
+
         results = []
 
         for i in range(1, 21):
             b_type = UserEnvManager.get_user_var(_username, f'BROKER_{i}_TYPE', '').strip().lower()
             if not b_type or not is_broker_active(_username, i):
+                continue
+
+            # The SL must land on exactly the accounts the entry landed on. The
+            # entry comes from this same panel as strategy='intrinsic', which
+            # _dispatch_order_to_brokers gates on BROKER_N_INTRINSIC_ACTIVE — so
+            # gate identically. Without this the SL sprays to every active
+            # broker, and an SL-M SELL on an account holding no position opens a
+            # naked short the moment it triggers.
+            if UserEnvManager.get_user_var(_username, f'BROKER_{i}_INTRINSIC_ACTIVE', 'false').strip().lower() \
+                    not in ('true', '1', 'yes'):
+                logger.info(f'[place-sl] Skipping broker {i} ({b_type}): INTRINSIC_ACTIVE not enabled')
                 continue
 
             if b_type in ('kite', 'zerodha'):
@@ -6659,7 +6731,7 @@ def place_sl_order() -> EndpointResponse:
                     continue
                 try:
                     svc = KiteService(kite_instance=kite)
-                    lot_qty = get_broker_lot_size(_username, i, standard_lot)
+                    lot_qty = intrinsic_order_lots(_username, i, symbol) * standard_lot
                     tradingsymbol = svc.get_option_symbol(symbol, strike, option_type)
                     if not tradingsymbol:
                         results.append({'broker': 'zerodha', 'instance': i, 'success': False,
@@ -6669,7 +6741,7 @@ def place_sl_order() -> EndpointResponse:
                                                   trigger_price=trigger_price,
                                                   quantity=lot_qty,
                                                   transaction_type='SELL')
-                    results.append({'broker': 'zerodha', 'instance': i, **r})
+                    results.append({'broker': 'zerodha', 'instance': i, 'quantity': lot_qty, **r})
                 except Exception as e:
                     logger.error(f'[place-sl] zerodha_{i} error: {e}')
                     results.append({'broker': 'zerodha', 'instance': i, 'success': False, 'error': str(e)})
@@ -6684,14 +6756,14 @@ def place_sl_order() -> EndpointResponse:
                         results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': 'No access token'})
                         continue
                     fyers_svc = FyersOrderService(app_id=fyers_id, access_token=fyers_at)
-                    lot_qty = get_broker_lot_size(_username, i, standard_lot)
+                    lot_qty = intrinsic_order_lots(_username, i, symbol) * standard_lot
                     fyers_sym = fyers_svc.get_option_symbol(symbol, strike, option_type) if hasattr(fyers_svc, 'get_option_symbol') else None
                     if not fyers_sym:
                         results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': 'Symbol resolution failed'})
                         continue
                     r = fyers_svc.place_stoploss_order(symbol=fyers_sym, trigger_price=trigger_price,
                                                         quantity=lot_qty, transaction_type='SELL')
-                    results.append({'broker': 'fyers', 'instance': i, **r})
+                    results.append({'broker': 'fyers', 'instance': i, 'quantity': lot_qty, **r})
                 except Exception as e:
                     logger.error(f'[place-sl] fyers_{i} error: {e}')
                     results.append({'broker': 'fyers', 'instance': i, 'success': False, 'error': str(e)})
@@ -6700,7 +6772,37 @@ def place_sl_order() -> EndpointResponse:
             return jsonify({'success': False, 'error': 'No active brokers found'}), 400
 
         overall = any(r.get('success') for r in results)
-        return jsonify({'success': overall, 'results': results})
+
+        # Record it like any other order. An SL-M rests at the broker exactly as
+        # a LIMIT does, so once it is in the store the Orders grid and the Open
+        # Orders strip give it the same edit and cancel buttons they give a
+        # LIMIT — nothing SL-specific was needed there. Before this it was
+        # fire-and-forget: placed, then invisible and unmanageable from the app.
+        #
+        # 'price' carries the trigger because every screen reads 'price'; the
+        # edit path keys off order_type 'SL-M' to send the new value to the
+        # broker as a trigger rather than as a limit.
+        placed = [r for r in results if r.get('success')]
+        from trading_app.app.utils.mine_order_store import MineOrderStore
+        record = MineOrderStore.add_order({
+            'mode': 'broker',
+            'symbol': symbol,
+            'strike': strike,
+            'option_type': option_type,
+            'action': 'SELL',
+            'strategy': 'intrinsic',
+            'order_type': 'SL-M',
+            'type': 'SL-M',
+            'instrument': 'BFO' if symbol == 'SENSEX' else 'NFO',
+            'price': trigger_price,
+            'trigger_price': trigger_price,
+            'quantity': sum(int(r.get('quantity') or 0) for r in placed),
+            'status': 'OPEN' if overall else 'REJECTED',
+            'username': _username,
+            'broker_order_ids': results,
+        })
+
+        return jsonify({'success': overall, 'results': results, 'order_id': record.get('id')})
 
     except Exception as e:
         logger.error(f'[place-sl] {e}', exc_info=True)
@@ -6728,6 +6830,11 @@ def place_order_unified() -> EndpointResponse:
         order_type   = data.get('order_type', 'MARKET').upper()
         limit_price  = data.get('limit_price')
         username     = session.get('username', 'Mine')
+        # Which screen row this came from, when the screen has one. The OI
+        # Crossover grid is a row per crossover and a symbol crosses several
+        # times a day, so without this its P&L could only be attributed to a
+        # symbol — and would then print against every cross that symbol made.
+        signal_id    = data.get('signal_id')
 
         if order_type == 'LIMIT' and not limit_price:
             return jsonify({'success': False, 'error': 'limit_price required for LIMIT order'}), 400
@@ -6788,6 +6895,7 @@ def place_order_unified() -> EndpointResponse:
             'username': username,
             'executed_at': int(_time.time() * 1000) if status == 'EXECUTED' else None,
             'broker_order_ids': result.get('summary', []),
+            **({'signal_id': signal_id} if signal_id is not None else {}),
         })
 
         return jsonify(result), (200 if result.get('success') else 400)
@@ -6885,6 +6993,11 @@ def update_order_price(order_id: str) -> EndpointResponse:
     needs. Broker orders are already resting at N brokers, so the edit is fanned
     out to all N and the stored price is only updated if at least one broker
     accepted it — otherwise the record would show a price nobody is working.
+
+    On an SL-M record the edited number is the stop's trigger, not a limit
+    price. Callers still send 'price' — every screen edits the field it
+    displays, and an SL row displays its trigger there — so the distinction is
+    made here, from the stored order type, rather than in each UI.
     """
     try:
         data = request.get_json()
@@ -6902,13 +7015,16 @@ def update_order_price(order_id: str) -> EndpointResponse:
             return jsonify({'success': False, 'gone': True, 'status': order.get('status'),
                             'error': f"Order is {order.get('status')} — nothing left to modify"}), 409
 
+        is_stop = str(order.get('order_type') or order.get('type') or '').upper().startswith('SL')
+
         if order.get('broker_order_ids'):
             result = _modify_order_at_brokers(
                 order.get('broker_order_ids'),
                 session.get('username', 'Mine'),
                 dict(session),
-                price=new_price,
+                price=None if is_stop else new_price,
                 quantity=quantity,
+                trigger_price=new_price if is_stop else None,
             )
             if not result.get('success'):
                 # Same reasoning as the cancel path: a refused modify usually
@@ -6924,13 +7040,15 @@ def update_order_price(order_id: str) -> EndpointResponse:
                 return jsonify({'success': False, 'error': result.get('error'),
                                 'summary': result.get('summary', [])}), 400
             MineOrderStore.update_price(order_id, new_price)
-            return jsonify({'success': True, 'price': new_price,
+            if is_stop:
+                MineOrderStore.update_order(order_id, {'trigger_price': new_price})
+            return jsonify({'success': True, 'price': new_price, 'is_stop': is_stop,
                             'brokers_targeted': result.get('brokers_targeted'),
                             'summary': result.get('summary', [])})
 
         found = MineOrderStore.update_price(order_id, new_price)
         if found:
-            return jsonify({'success': True, 'price': new_price, 'summary': []})
+            return jsonify({'success': True, 'price': new_price, 'is_stop': is_stop, 'summary': []})
         return jsonify({'success': False, 'error': 'Order not found or not pending'}), 404
     except Exception as e:
         logger.error(f"[orders/price] {e}", exc_info=True)
@@ -7099,13 +7217,19 @@ def _broker_client(broker, instance, username, session_data):
     return None, f'Unknown broker type: {broker}'
 
 
-def _modify_order_at_brokers(broker_legs, username, session_data, price=None, quantity=None):
+def _modify_order_at_brokers(broker_legs, username, session_data, price=None, quantity=None,
+                             trigger_price=None):
     """Push a price/quantity edit to every broker leg of one already-placed order.
 
     One order in our store is N live orders at N brokers, so an edit has to fan
     out the same way the placement did. Each leg is reported separately: a leg
     that already filled will be refused by its broker, and that must not hide a
     successful edit on the others.
+
+    trigger_price edits a resting SL-M and is mutually exclusive with price:
+    what moves on a stop is its trigger, and sending a plain price would convert
+    the stop into a LIMIT order sitting at that price — silently removing the
+    protection the order exists to provide.
     """
     legs = _broker_order_legs(broker_legs)
     if not legs:
@@ -7122,22 +7246,54 @@ def _modify_order_at_brokers(broker_legs, username, session_data, price=None, qu
                 continue
 
             if kind == 'kite':
-                params = {'variety': 'regular', 'order_id': order_id}
-                if price is not None:
-                    params['price'] = float(price)
-                    params['order_type'] = 'LIMIT'
-                if quantity:
-                    params['quantity'] = int(quantity)
-                client.modify_order(**params)
-                res = {'success': True, 'order_id': order_id}
+                if trigger_price is not None:
+                    # Not client.modify_order: the SDK cannot send
+                    # market_protection, without which Zerodha blocks any SL-M
+                    # on F&O. KiteService owns that workaround.
+                    from trading_app.service.kite_order_services import KiteService
+                    res = KiteService(kite_instance=client).modify_stoploss_order(
+                        order_id=order_id,
+                        trigger_price=trigger_price,
+                        quantity=int(quantity) if quantity else None,
+                    )
+                else:
+                    params = {'variety': 'regular', 'order_id': order_id}
+                    if price is not None:
+                        params['price'] = float(price)
+                        params['order_type'] = 'LIMIT'
+                    if quantity:
+                        params['quantity'] = int(quantity)
+                    client.modify_order(**params)
+                    res = {'success': True, 'order_id': order_id}
 
             elif kind == 'fyers':
-                res = client.modify_order(
-                    order_id=order_id,
-                    order_type=1 if price is not None else None,   # 1 = LIMIT
-                    limit_price=float(price) if price is not None else None,
-                    quantity=int(quantity) if quantity else None,
-                )
+                if trigger_price is not None:
+                    # type 4 = SL-M. limitPrice is sent alongside stopPrice
+                    # because Fyers requires a non-zero limit price even on a
+                    # stop-market — placement does the same (see
+                    # FyersOrderService.place_stoploss_order).
+                    res = client.modify_order(
+                        order_id=order_id,
+                        order_type=4,
+                        stop_price=float(trigger_price),
+                        limit_price=float(trigger_price),
+                        quantity=int(quantity) if quantity else None,
+                    )
+                else:
+                    res = client.modify_order(
+                        order_id=order_id,
+                        order_type=1 if price is not None else None,   # 1 = LIMIT
+                        limit_price=float(price) if price is not None else None,
+                        quantity=int(quantity) if quantity else None,
+                    )
+
+            elif trigger_price is not None:
+                # Only Zerodha and Fyers can carry an SL from this app (see
+                # place_sl_order), so a stop leg should never reach here. Say so
+                # plainly rather than falling through to a price edit that would
+                # turn the stop into a LIMIT order.
+                res = {'success': False, 'order_id': order_id,
+                       'error': f'{kind} stop-loss modify is not supported'}
 
             elif kind == 'dhan':
                 res = client.modify_order(

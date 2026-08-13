@@ -667,6 +667,26 @@ body.oix-drill-open .oix-page { padding-bottom: 430px; }
 }
 .oix-ticket-send:disabled { opacity: .6; cursor: default; }
 
+/* ── Seq ──────────────────────────────────────────────────────────
+   "2 of 5" — which of the symbol's crosses this row is. The total is
+   the quieter half: the position is the fact, the count is context. */
+.oix-seq { font-variant-numeric: tabular-nums; font-weight: 600; }
+.oix-seq-of {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--pf-text-3);
+}
+/* Ten crosses in a session means the lines are chopping around each other,
+   so the direction on that row is close to noise — the whole cell recedes. */
+.oix-seq-choppy { opacity: .55; }
+
+/* ── Status ───────────────────────────────────────────────────────
+   A cross that stops working now says so here instead of dropping out of
+   the table. Flipped is deliberately the quietest of the four: it is the
+   most common outcome by a distance, and it is the one you keep only so a
+   signal you took can still be found after it has been contradicted. */
+.oix-status-flipped { opacity: .7; }
+
 /* ── Narrow screens ───────────────────────────────────────────── */
 
 @media (max-width: 720px) {

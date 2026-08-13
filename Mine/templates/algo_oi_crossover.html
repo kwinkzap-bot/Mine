@@ -43,8 +43,10 @@
       <select id="oixDate" class="oix-select"></select>
     </div>
 
-    <!-- Opens on the highest-conviction slice: both legs agreeing, any number
-         of crosses, and enough OI behind the move to be worth a look. -->
+    <!-- Every gate here reads a value frozen at the instant the cross fired,
+         so a row that qualifies once qualifies all day. Opens on the
+         highest-conviction slice: both legs agreeing, decisively separated,
+         and not yet contradicted. -->
     <select id="oixQuality" class="oix-select">
       <option value="all">All Crossovers</option>
       <option value="strong" selected>Strong (Both)</option>
@@ -52,19 +54,50 @@
       <option value="covering">Covering (-OI)</option>
     </select>
 
+    <!-- Complete the moment the cross fires, which is what OI Chg % is not.
+         Defaults to Any because it is redundant against the default Quality:
+         "strong" means the two legs moved in opposite directions, which forces
+         separation to exactly 100%. This is the gate to reach for after
+         widening Quality to All — it is what separates a decisive
+         aggressive/covering cross from one that fired on noise. -->
+    <select id="oixSeparation" class="oix-select">
+      <option value="0" selected>Any Separation</option>
+      <option value="10">&gt; 10% Separation</option>
+      <option value="30">&gt; 30% Separation</option>
+      <option value="50">&gt; 50% Separation</option>
+      <option value="70">&gt; 70% Separation</option>
+    </select>
+
+    <!-- Defaults to Any so that nothing the table has ever shown can drop out
+         of it — the Status column reports decay instead. Narrow to Live when
+         hunting an entry; leave it on Any to keep a signal you have a position
+         in visible after it stops working, which is when you most need it. -->
+    <select id="oixStatus" class="oix-select">
+      <option value="all" selected>Any Status</option>
+      <option value="open">Live + Pending</option>
+      <option value="LIVE">Live only</option>
+      <option value="FADED">Faded</option>
+      <option value="FLIPPED">Flipped</option>
+    </select>
+
     <select id="oixCrossCount" class="oix-select">
       <option value="0" selected>Any Cross</option>
-      <option value="1">Single Cross</option>
+      <option value="1">First cross only</option>
       <option value="2">Max 2 Cross</option>
       <option value="3">Max 3 Cross</option>
     </select>
 
+    <!-- Defaults to Any deliberately. OI change is measured against the 9:15
+         open, so it grows through the session no matter what the symbol does —
+         a floor on it is a clock, not a filter, and the 10% default it used to
+         carry put the median cross on screen more than three hours after it
+         fired. Separation above is the strength gate now. -->
     <select id="oixOiChg" class="oix-select">
-      <option value="0">Any OI Chg</option>
+      <option value="0" selected>Any OI Chg</option>
       <option value="1">&gt; 1% OI Chg</option>
       <option value="2">&gt; 2% OI Chg</option>
       <option value="5">&gt; 5% OI Chg</option>
-      <option value="10" selected>&gt; 10% OI Chg</option>
+      <option value="10">&gt; 10% OI Chg</option>
     </select>
 
     <span class="oix-count" id="oixCount"></span>

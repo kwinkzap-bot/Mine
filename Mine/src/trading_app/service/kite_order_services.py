@@ -748,6 +748,46 @@ class KiteService:
             logging.error(f"[KiteService] Failed to place SL order: {e}")
             return {'success': False, 'error': str(e)}
 
+    def modify_stoploss_order(self, order_id: str, trigger_price: float,
+                              quantity: Optional[int] = None, variety: str = 'regular') -> Dict[str, Any]:
+        """Move a resting SL-M order's trigger price.
+
+        Goes through _put directly instead of kite.modify_order for the same
+        reason placement goes through _safe_place_order: the SDK exposes no
+        market_protection argument, and the exchange has discontinued bare SL-M
+        on F&O. Without it Zerodha rejects the modify outright —
+
+            "Stoploss Market orders (SL-M) are blocked for F&O contracts as they
+             have been discontinued by the exchange. Try placing SL-M order with
+             market protection enabled."
+
+        — which is exactly what the placement call already works around.
+        """
+        try:
+            logging.info(f"[KiteService] Modifying SL order {order_id}: trigger → {trigger_price}"
+                         + (f", qty → {quantity}" if quantity else ""))
+            params: Dict[str, Any] = {
+                'variety': variety,
+                'order_id': order_id,
+                'order_type': self.kite.ORDER_TYPE_SLM,
+                'trigger_price': float(trigger_price),
+                'market_protection': -1,   # -1 enables automatic market protection
+            }
+            if quantity:
+                params['quantity'] = int(quantity)
+
+            result = self.kite._put("order.modify",
+                                    url_args={'variety': variety, 'order_id': order_id},
+                                    params=params)
+            # Same unwrapping _safe_place_order does: the raw response is
+            # {'order_id': '...'}, and storing the whole dict as "the order id"
+            # would break every later lookup by id.
+            new_id = result.get('order_id') if isinstance(result, dict) else None
+            return {'success': True, 'order_id': str(new_id or order_id)}
+        except Exception as e:
+            logging.error(f"[KiteService] Failed to modify SL order {order_id}: {e}")
+            return {'success': False, 'error': str(e), 'order_id': order_id}
+
     def place_equity_order(self, tradingsymbol: str, transaction_type: str, quantity: int,
                             price: float, product: str = 'MIS') -> Dict[str, Any]:
         """Plain NSE cash-market LIMIT order at an exact price — no market/

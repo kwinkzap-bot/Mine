@@ -90,6 +90,9 @@ const _SVG = {
 
 let _historyMode = false;
 
+/** True for a resting stop-loss — its editable number is a trigger, not a limit. */
+const _isStop = o => String(o.order_type || o.type || '').toUpperCase().startsWith('SL');
+
 // Unfilled orders — the ones whose price can still be changed. OPEN is a LIMIT
 // order resting at the brokers; PENDING/EXECUTING are Mine orders the backend
 // monitor still holds.
@@ -137,7 +140,10 @@ async function renderOrdersGrid() {
         // Left border keys the row to its side; data-* are the click-delegation
         // hooks _attachGridListeners reads.
         rowClass: o => 'ord-row ord-action-' + o.action.toLowerCase(),
-        rowAttrs: o => `data-id="${esc(o.id)}" data-mode="${esc(o.mode || 'broker')}"`,
+        // data-stop marks a stop-loss row so the click handler can word its
+        // messages without re-deriving the type from the rendered cells.
+        rowAttrs: o => `data-id="${esc(o.id)}" data-mode="${esc(o.mode || 'broker')}"`
+                     + (_isStop(o) ? ' data-stop="1"' : ''),
         // render is called (value, row); these columns have no key, so they
         // read the order off the second arg.
         columns: [
@@ -149,21 +155,32 @@ async function renderOrdersGrid() {
                     : '<span class="ord-src-badge ord-src-broker" title="Broker mode">B</span>';
                 return date + esc(_formatTime(o.created_at)) + mode;
             } },
-            { label: 'Type', render: (_, o) => DataGrid.badge(o.type || 'MARKET',
-                (o.type || 'MARKET').toUpperCase() === 'LIMIT' ? 'special' : 'neutral') },
+            { label: 'Type', render: (_, o) => {
+                const t = (o.type || 'MARKET').toUpperCase();
+                // A stop gets its own tone: on a grid of entries it is the one
+                // row that closes a position rather than opening one.
+                const tone = t.startsWith('SL') ? 'warn' : (t === 'LIMIT' ? 'special' : 'neutral');
+                return DataGrid.badge(o.type || 'MARKET', tone);
+            } },
             { label: 'Instrument', cellClass: 'ord-td-inst',
               render: (_, o) => esc(`${o.symbol} ${o.strike} ${o.option_type}`) },
             { label: 'Action', render: (_, o) => DataGrid.badge(o.action,
                 o.action === 'BUY' ? 'pos' : 'neg') },
-            { label: 'Price', cellClass: 'ord-td-price', render: (_, o) =>
-                _EDITABLE.includes(o.status)
-                    ? `<input type="number" class="ord-price-input" value="${esc(o.price || 0)}" step="0.05" min="0">`
-                    : `<span class="ord-price-val">₹${Number(o.price || 0).toFixed(2)}</span>` },
+            // On an SL row this column is the stop's trigger, not a limit price.
+            // The input is the same one either way — the server reads the order
+            // type and sends the number to the broker as whichever it is.
+            { label: 'Price', cellClass: 'ord-td-price', render: (_, o) => {
+                const stop = _isStop(o);
+                return _EDITABLE.includes(o.status)
+                    ? `<input type="number" class="ord-price-input" value="${esc(o.price || 0)}" step="0.05" min="0"
+                        title="${stop ? 'Trigger price' : 'Limit price'}">`
+                    : `<span class="ord-price-val" title="${stop ? 'Trigger price' : 'Limit price'}">₹${Number(o.price || 0).toFixed(2)}</span>`;
+            } },
             { label: 'Status', render: (_, o) => DataGrid.badge(o.status, statusTone(o.status)) },
             { label: '', cellClass: 'ord-td-actions', render: (_, o) =>
                 _EDITABLE.includes(o.status)
-                    ? `<button class="ord-btn save-price" title="Update price">${_SVG.save}</button>` +
-                      `<button class="ord-btn cancel-order" title="Cancel order">${_SVG.cancel}</button>`
+                    ? `<button class="ord-btn save-price" title="Update ${_isStop(o) ? 'trigger' : 'price'}">${_SVG.save}</button>` +
+                      `<button class="ord-btn cancel-order" title="Cancel ${_isStop(o) ? 'stop-loss' : 'order'}">${_SVG.cancel}</button>`
                     : `<button class="ord-btn delete-order" title="Remove">${_SVG.trash}</button>` },
         ],
     });
@@ -190,9 +207,11 @@ function _attachGridListeners() {
             if (typeof showNotification === 'function') showNotification(msg, tone);
         };
 
+        const isStopRow = row.dataset.stop === '1';
+
         if (e.target.closest('.cancel-order') || e.target.closest('.delete-order')) {
             const r = await _deleteOrder(id);
-            if (r?.success) notify(`Order cancelled${_brokerLines(r)}`, 'info');
+            if (r?.success) notify(`${isStopRow ? 'Stop-loss' : 'Order'} cancelled${_brokerLines(r)}`, 'info');
             // gone = the broker had already finished with it; the server has
             // corrected the record, so the redraw moves it out of Pending.
             else if (r?.gone) notify(r.error || 'Order is no longer open', 'warning');
@@ -202,11 +221,11 @@ function _attachGridListeners() {
             const input = row.querySelector('.ord-price-input');
             const newPrice = parseFloat(input?.value);
             if (isNaN(newPrice) || newPrice <= 0) {
-                notify('Enter a valid price', 'error');
+                notify(`Enter a valid ${isStopRow ? 'trigger' : 'price'}`, 'error');
                 return;
             }
             const r = await _updateOrderPrice(id, newPrice);
-            if (r?.success) notify(`Price → ₹${newPrice}${_brokerLines(r)}`, 'success');
+            if (r?.success) notify(`${isStopRow ? 'Trigger' : 'Price'} → ₹${newPrice}${_brokerLines(r)}`, 'success');
             else if (r?.gone) notify(r.error || 'Order is no longer open', 'warning');
             else notify(`Update failed: ${r?.error || 'Unknown error'}${_brokerLines(r)}`, 'error');
             renderOrdersGrid();

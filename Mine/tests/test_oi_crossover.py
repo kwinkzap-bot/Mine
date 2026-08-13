@@ -101,13 +101,21 @@ for hm, ce, pe in walk:
         conn.commit()
 
 snap = svc.snapshot(DAY)
+# One row per cross, newest first — the four crosses are four rows now, each
+# keeping the entry it fired at rather than the last one overwriting the rest.
+for row in snap['rows']:
+    print(f"  {row['cross_seq']} of {row['cross_total']}  {row['direction']:4}  "
+          f"{row['cross_time'][11:16]}  {row['quality']}  {row['status']}")
+assert snap['success'] and len(snap['rows']) == 4, len(snap['rows'])
+assert [r['cross_seq'] for r in snap['rows']] == [4, 3, 2, 1]
+assert all(r['cross_total'] == 4 for r in snap['rows'])
+assert len({r['id'] for r in snap['rows']}) == 4, 'each cross needs its own id'
+
 row = snap['rows'][0]
-print(f"  direction={row['direction']}  cross_count={row['cross_count']}  "
-      f"cross_time={row['cross_time'][11:16]}  quality={row['quality']}")
-assert snap['success'] and len(snap['rows']) == 1
-assert row['cross_count'] == 4, row['cross_count']
 assert row['direction'] == 'BULL'
 assert row['cross_time'].endswith('09:35:00')
+# Superseded crosses report FLIPPED rather than disappearing.
+assert [r['status'] for r in snap['rows'][1:]] == ['FLIPPED'] * 3
 
 ser = svc.series('ACME', DAY)
 print(f"  series: {len(ser['points'])} points, {len(ser['events'])} events")
@@ -120,8 +128,23 @@ with sqlite3.connect(svc.db_path) as conn:
         VALUES (?,?,?,?,?,?,?,?,?)''',
         (DAY, f'{DAY}T09:20:00', 'QUIET', 50.0, 1000, 900, 10, 20, 0.9))
     conn.commit()
-assert [r['symbol'] for r in svc.snapshot(DAY)['rows']] == ['ACME']
+assert {r['symbol'] for r in svc.snapshot(DAY)['rows']} == {'ACME'}
 print("  non-crossing symbol correctly excluded")
+
+# The events above were written straight to the table without a rating, the
+# same shape as every cross recorded before the rating was stored. The backfill
+# has to recover them from the series row of the sweep that detected them,
+# or Historical mode would filter every past session down to nothing.
+assert all(r['quality'] is None for r in svc.snapshot(DAY)['rows'])
+res = svc.backfill_event_metrics()
+print(f"  backfill: rated={res['rated']} skipped={res['skipped']}")
+assert res['success'] and res['rated'] == 4, res
+rated = svc.snapshot(DAY)['rows']
+assert all(r['quality'] is not None and r['separation'] is not None for r in rated)
+print(f"  recovered: " + ', '.join(
+    f"{r['cross_time'][11:16]} {r['quality']}/{r['separation']:.0f}%" for r in rated))
+# Re-running must not touch anything it has already rated.
+assert svc.backfill_event_metrics()['rated'] == 0
 
 print(f"  dates available: {svc.available_dates()}")
 print("\nALL CHECKS PASSED")

@@ -32,8 +32,13 @@
         // them back off the selects so the two can never drift, and so a soft
         // reload (which restores the user's last dropdown values) doesn't leave
         // the state saying one thing and the filter bar showing another.
-        filters: { search: '', quality: 'strong', crossCount: 0, oiChg: 10 },
+        filters: { search: '', quality: 'strong', crossCount: 0, oiChg: 0,
+                   separation: 0, status: 'all' },
         openSymbol: null,
+        // The drilldown chart is per symbol, but the table is one row per
+        // cross, so a symbol can own several rows. Navigation and the open-row
+        // highlight track the row; only the chart fetch uses the symbol.
+        openId: null,
         hiddenSeries: new Set(),
         chartMode: 'oi_change',
         chartData: null,
@@ -109,16 +114,35 @@
 
     // ── filtering ────────────────────────────────────────────────────
 
+    // Every gate below reads a field frozen at the instant the cross fired,
+    // never the live one. That is the whole point: the row used to be judged
+    // against the newest 3-minute scan, so a signal that had not changed drifted
+    // in and out of the table and could not be traded from. Membership is now
+    // decided once, when the cross happens, and never moves again — the live
+    // numbers still ride along on the row, but only as the Status column's
+    // decay reading. The one exception is Status itself, which the user is
+    // explicitly asking to filter on.
     function visibleRows() {
         const f = state.filters;
         const needle = f.search.trim().toUpperCase();
         return state.rows.filter((r) => {
             if (needle && !r.symbol.includes(needle)) return false;
             if (f.quality !== 'all' && r.quality !== f.quality) return false;
-            if (f.crossCount && r.cross_count > f.crossCount) return false;
-            if (f.oiChg && r.oi_chg_pct < f.oiChg) return false;
+            if (f.crossCount && r.cross_seq > f.crossCount) return false;
+            if (f.oiChg && (r.oi_chg_pct === null || r.oi_chg_pct < f.oiChg)) return false;
+            if (f.separation && (r.separation === null || r.separation < f.separation)) return false;
+            if (!statusAllowed(r.status, f.status)) return false;
             return true;
         });
+    }
+
+    // 'open' is the default: what has not yet been contradicted. A flipped
+    // cross stays reachable rather than vanishing, because knowing a signal
+    // you took has been invalidated matters more than tidying it away.
+    function statusAllowed(status, want) {
+        if (want === 'all') return true;
+        if (want === 'open') return status === 'LIVE' || status === 'PENDING';
+        return status === want;
     }
 
     // ── table ────────────────────────────────────────────────────────
@@ -325,33 +349,75 @@
             format: compact, tone: DataGrid.sign,
         },
         {
+            // How far apart the two change-lines were when they crossed, as a
+            // share of the flow behind them. Unlike OI Chg % this is complete
+            // the moment the cross fires, which is what makes it the strength
+            // gate the screen filters on.
+            key: 'separation', label: 'Separation', sortable: true, align: 'right',
+            format: (v) => (v == null ? '—' : `${Number(v).toFixed(0)}%`),
+            tone: (v) => (v == null ? 'muted' : v >= 30 ? 'pos' : v < 5 ? 'muted' : null),
+            title: (v) => (v == null ? 'Recorded before the rating was stored'
+                : v < 5 ? 'The lines were on top of each other — this is chop, not a signal'
+                : ''),
+        },
+        {
+            // Frozen at the cross. The live reading sits underneath, so a row
+            // that has decayed says so instead of disappearing.
             key: 'quality', label: 'Quality', sortable: true, align: 'center',
             // 'weak' is the leftover bucket — the winning leg didn't add OI and
             // the losing leg didn't shed any, so the cross is drift, not flow.
-            badge: (v) => ({ strong: 'pos', aggressive: 'info', covering: 'warn' }[v] || 'neutral'),
+            render: (v, r) => {
+                if (!v) return '<span class="oix-atm-wait" title="Recorded before the ' +
+                               'rating was stored with the cross">—</span>';
+                const head = DataGrid.badge(
+                    v, { strong: 'pos', aggressive: 'info', covering: 'warn' }[v] || 'neutral');
+                if (state.mode === 'historical' || !r.live_quality
+                        || r.live_quality === v) return head;
+                return head + `<span class="oix-live-sub" title="What the legs are ` +
+                       `doing on the latest scan">now ${DataGrid.escape(r.live_quality)}</span>`;
+            },
         },
         {
             key: 'cross_time', label: 'Crossover Time', sortable: true, align: 'center',
             format: clock12,
         },
         {
-            key: 'cross_count', label: 'Cross Count', sortable: true, align: 'right',
-            // Double-digit counts mean the lines are chopping around each
-            // other, so the direction tag on that row is close to noise.
-            tone: (v) => (v >= 10 ? 'muted' : null),
-            title: (v) => (v >= 10 ? `${v} crosses today — choppy, treat the tag with care` : ''),
+            // Whether the cross is still standing. This column exists so decay
+            // is something the row *reports* rather than something that removes
+            // it from the table — a signal you have a position in must stay
+            // visible precisely when it stops working.
+            key: 'status', label: 'Status', sortable: true, align: 'center',
+            title: (_v, r) => r.status_note || '',
+            cellClass: (v) => `oix-status-${String(v || '').toLowerCase()}`,
+            render: (v) => DataGrid.badge(
+                v || '—', { LIVE: 'pos', PENDING: 'info', FADED: 'warn' }[v] || 'neutral'),
+        },
+        {
+            // Which of the symbol's crosses this row is. A symbol crossing five
+            // times is chop, and the later crosses inherit that doubt — but
+            // each one keeps its own row and its own entry price now, so the
+            // count no longer stands in for crosses you cannot see.
+            key: 'cross_seq', label: 'Seq', sortable: true, align: 'right',
+            title: (_v, r) => (r.cross_total >= 10
+                ? `${r.cross_total} crosses today — choppy, treat the direction with care`
+                : ''),
+            render: (v, r) => `<span class="oix-seq${r.cross_total >= 10 ? ' oix-seq-choppy' : ''}">` +
+                              `${DataGrid.escape(String(v))}` +
+                              `<span class="oix-seq-of"> of ${DataGrid.escape(String(r.cross_total))}</span></span>`,
         },
         {
             // Only rows you have actually traded from this screen carry a
             // number; everything else is blank rather than a zero, because a
-            // zero P&L and no position are not the same statement.
+            // zero P&L and no position are not the same statement. Keyed by the
+            // cross that was traded, so a symbol that crossed five times shows
+            // the position against the one signal it was taken on.
             label: 'P&L', sortable: true, align: 'right', sortKey: 'pnl',
             sortValue: (r) => {
-                const p = state.positions[r.symbol];
+                const p = state.positions[r.id];
                 return p && p.pnl !== null && p.pnl !== undefined ? p.pnl : -Infinity;
             },
             render: (_v, r) => {
-                const p = state.positions[r.symbol];
+                const p = state.positions[r.id];
                 if (!p) return '<span class="oix-pnl-none"></span>';
                 const held = `${p.qty} @ ₹${money(p.entry)} · ` +
                              `${strikeText(p.strike)} ${p.option_type}`;
@@ -386,7 +452,7 @@
                 }
                 const side = sideOf(r);
                 return `<button class="oix-order-btn oix-order-${side.toLowerCase()}" ` +
-                       `data-order="${DataGrid.escape(r.symbol)}" ` +
+                       `data-order="${DataGrid.escape(String(r.id))}" ` +
                        `title="Buy ${DataGrid.escape(strikeText(q.strike))} ${side} ` +
                        `at limit ₹${DataGrid.escape(money(toTick(ltp)))}">` +
                        `Buy ${side}</button>`;
@@ -486,12 +552,13 @@
             // session to prove itself, and the late ones are usually unwinds.
             defaultSort: { key: 'cross_time', dir: 'asc' },
             rowClass: (r) => `oix-row oix-${r.direction.toLowerCase()}` +
-                             (r.symbol === state.openSymbol ? ' oix-row-open' : ''),
-            rowAttrs: (r) => `data-symbol="${DataGrid.escape(r.symbol)}"`,
+                             (r.id === state.openId ? ' oix-row-open' : ''),
+            rowAttrs: (r) => `data-symbol="${DataGrid.escape(r.symbol)}" ` +
+                             `data-event-id="${DataGrid.escape(String(r.id))}"`,
             // Prev/next in the chart panel step through this exact order.
             onSorted: (sorted) => { state.displayRows = sorted; },
         });
-        if (state.openSymbol) syncNav();
+        if (state.openId !== null) syncNav();
     }
 
     // ── drilldown chart ──────────────────────────────────────────────
@@ -825,8 +892,9 @@
             });
         }).observe(body);
     }
-    async function openDrill(symbol) {
+    async function openDrill(symbol, eventId) {
         state.openSymbol = symbol;
+        state.openId = eventId === undefined ? null : eventId;
         renderTable();
         const drill = $('oixDrill');
         const body = $('oixDrillBody');
@@ -861,21 +929,22 @@
     // some hidden canonical order.
     function stepSymbol(delta) {
         const rows = state.displayRows.length ? state.displayRows : visibleRows();
-        const i = rows.findIndex((r) => r.symbol === state.openSymbol);
+        const i = rows.findIndex((r) => r.id === state.openId);
         if (i < 0) return;
         const next = rows[i + delta];
-        if (next) openDrill(next.symbol);
+        if (next) openDrill(next.symbol, next.id);
     }
 
     function syncNav() {
         const rows = state.displayRows.length ? state.displayRows : visibleRows();
-        const i = rows.findIndex((r) => r.symbol === state.openSymbol);
+        const i = rows.findIndex((r) => r.id === state.openId);
         $('oixPrev').disabled = i <= 0;
         $('oixNext').disabled = i < 0 || i >= rows.length - 1;
     }
 
     function closeDrill() {
         state.openSymbol = null;
+        state.openId = null;
         state.chartData = null;
         $('oixDrill').hidden = true;
         document.body.classList.remove('oix-drill-open');
@@ -907,11 +976,18 @@
         order_type: 'LIMIT',
         limit_price: toTick(limitPrice),
         strategy: 'oix',
+        // Which cross this was taken on, so the P&L lands on that row and not
+        // on every other cross the symbol happens to have made today.
+        signal_id: row.id,
     });
 
-    function openTicket(symbol) {
-        const row = state.rows.find((r) => r.symbol === symbol);
+    function openTicket(eventId) {
+        // By cross, not by symbol: a symbol owns several rows and the ticket
+        // must belong to the one whose Buy button was pressed, so the order
+        // can be stamped with the signal it was taken on.
+        const row = state.rows.find((r) => String(r.id) === String(eventId));
         if (!row) return;
+        const symbol = row.symbol;
         const quote = atmOf(row);
         if (!quote) return;
         if (state.mode === 'historical') return;
@@ -954,9 +1030,11 @@
                 `${DataGrid.escape(row.direction)}</span>` +
               `<span>Quality</span><span>${DataGrid.escape(row.quality)}</span>` +
               `<span>Cross time</span><span>${DataGrid.escape(clock12(row.cross_time))}</span>` +
-              `<span>Cross count</span><span>${DataGrid.escape(String(row.cross_count))}</span>` +
-              `<span>OI change</span><span>${DataGrid.escape(
-                    Number(row.oi_chg_pct).toFixed(1))}%</span>` +
+              `<span>Cross</span><span>${DataGrid.escape(String(row.cross_seq))} of ` +
+                `${DataGrid.escape(String(row.cross_total))}</span>` +
+              `<span>Separation</span><span>${row.separation === null ? '—'
+                    : DataGrid.escape(Number(row.separation).toFixed(0)) + '%'}</span>` +
+              `<span>Status</span><span>${DataGrid.escape(row.status || '—')}</span>` +
             `</div>` +
             // Size and destination are server-side config, not a field here —
             // saying so is better than showing a quantity box that the .env
@@ -1066,7 +1144,7 @@
         renderTable();
         // A refresh that drops the open symbol (filters changed, new session)
         // should close the panel rather than leave a stale chart on screen.
-        if (state.openSymbol && !state.rows.some((r) => r.symbol === state.openSymbol)) closeDrill();
+        if (state.openId !== null && !state.rows.some((r) => r.id === state.openId)) closeDrill();
     }
 
     // The ↻ button. Distinct from the 60s poll in one way that matters: it
@@ -1156,26 +1234,41 @@
 
         <p class="rtp-idea">Two lines per symbol, both measured from the open. A <b>crossover</b> is the moment they swap: puts ahead is <b class="oix-bull">BULL</b>, calls ahead is <b class="oix-bear">BEAR</b>. Not a PCR read — levels say where the book already was, these lines say where today's money went.</p>
 
+        <p class="rtp-idea">One row per <b>cross</b>, rated at the instant it fired and never re-rated. Every filter below reads that frozen rating, so a row that appears stays for the session — it can decay, but it cannot vanish. The <b>Status</b> column is where decay shows up.</p>
+
         <div class="rtp-blk-lbl entry">Filters &middot; all AND-ed &middot; instant, no refetch</div>
         <div class="rtp-duo">
             <div class="rtp-duo-card">
-                <div class="rtp-duo-hd">Quality <i>— exact match</i></div>
+                <div class="rtp-duo-hd">Quality <i>— at the cross</i></div>
                 <div class="rtp-duo-row"><b>Strong</b> both legs agree &middot; default</div>
                 <div class="rtp-duo-row"><b>Aggressive</b> winner OI up only</div>
                 <div class="rtp-duo-row"><b>Covering</b> loser OI out only</div>
                 <div class="rtp-duo-row"><b>All</b> adds the weak crosses</div>
             </div>
             <div class="rtp-duo-card">
-                <div class="rtp-duo-hd">Cross Count <i>— a ceiling</i></div>
+                <div class="rtp-duo-hd">Separation <i>— a floor</i></div>
+                <div class="rtp-duo-row">Gap between the legs &divide; flow behind them</div>
+                <div class="rtp-duo-row"><b>Strong is always 100%</b> — opposed legs force it, so this does nothing until Quality is widened</div>
+                <div class="rtp-duo-row">Under 5% the lines sat on top of each other — chop, not signal</div>
+            </div>
+            <div class="rtp-duo-card">
+                <div class="rtp-duo-hd">Status <i>— is it still standing</i></div>
+                <div class="rtp-duo-row"><b>Live</b> latest scan still agrees</div>
+                <div class="rtp-duo-row"><b>Pending</b> awaiting the next scan</div>
+                <div class="rtp-duo-row"><b>Faded</b> same side, weaker flow</div>
+                <div class="rtp-duo-row"><b>Flipped</b> the lines crossed back</div>
+            </div>
+            <div class="rtp-duo-card">
+                <div class="rtp-duo-hd">Seq <i>— a ceiling</i></div>
                 <div class="rtp-duo-row"><b>Any</b> no cap &middot; default</div>
-                <div class="rtp-duo-row"><b>Single</b> one clean turn</div>
+                <div class="rtp-duo-row"><b>First only</b> the day's opening turn</div>
                 <div class="rtp-duo-row"><b>Max 2 / 3</b> keeps 1–2 / 1–3</div>
                 <div class="rtp-duo-row">Double digits = chop</div>
             </div>
             <div class="rtp-duo-card">
-                <div class="rtp-duo-hd">OI Chg <i>— a floor</i></div>
+                <div class="rtp-duo-hd">OI Chg <i>— off by default</i></div>
                 <div class="rtp-duo-row">Bigger leg's move vs its own open</div>
-                <div class="rtp-duo-row"><b>&gt;10%</b> default &middot; <b>Any</b> turns it off</div>
+                <div class="rtp-duo-row">Grows all session no matter what the symbol does, so a floor here acts as a clock — it hides the morning's crosses until the afternoon</div>
             </div>
             <div class="rtp-duo-card">
                 <div class="rtp-duo-hd">Mode &amp; Date</div>
@@ -1248,6 +1341,8 @@
         f.quality    = $('oixQuality').value;
         f.crossCount = Number($('oixCrossCount').value);
         f.oiChg      = Number($('oixOiChg').value);
+        f.separation = Number($('oixSeparation').value);
+        f.status     = $('oixStatus').value;
 
         $('oixSearch').addEventListener('input', (e) => {
             f.search = e.target.value;
@@ -1256,6 +1351,8 @@
         $('oixQuality').addEventListener('change', (e) => { f.quality = e.target.value; renderTable(); });
         $('oixCrossCount').addEventListener('change', (e) => { f.crossCount = Number(e.target.value); renderTable(); });
         $('oixOiChg').addEventListener('change', (e) => { f.oiChg = Number(e.target.value); renderTable(); });
+        $('oixSeparation').addEventListener('change', (e) => { f.separation = Number(e.target.value); renderTable(); });
+        $('oixStatus').addEventListener('change', (e) => { f.status = e.target.value; renderTable(); });
 
         document.querySelectorAll('.oix-mode-btn').forEach((b) => {
             b.addEventListener('click', () => setMode(b.dataset.mode));
@@ -1320,11 +1417,11 @@
                 openTicket(order.dataset.order);
                 return;
             }
-            const tr = e.target.closest('tr[data-symbol]');
+            const tr = e.target.closest('tr[data-event-id]');
             if (!tr) return;
-            const symbol = tr.dataset.symbol;
-            if (symbol === state.openSymbol) closeDrill();
-            else openDrill(symbol);
+            const id = Number(tr.dataset.eventId);
+            if (id === state.openId) closeDrill();
+            else openDrill(tr.dataset.symbol, id);
         });
 
         $('oixLogicBtn').addEventListener('click', openLogic);

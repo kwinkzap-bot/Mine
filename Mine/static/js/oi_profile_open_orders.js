@@ -88,17 +88,30 @@ function _oipOOGroup(orders) {
     return [...groups.values()];
 }
 
+/** True for a resting stop — its editable number is a trigger, not a limit. */
+function _oipOOIsStop(o) {
+    return String(o.order_type || o.type || '').toUpperCase().startsWith('SL');
+}
+
 function _oipOOPill(o) {
     const legs = _oipOOLegCount(o);
     const where = o.mode === 'mine' ? 'app' : `${legs} broker${legs === 1 ? '' : 's'}`;
     const isBuy = o.action === 'BUY';
+    // A stop reads as neither a buy nor a sell pill: it is the exit guarding a
+    // position, and colouring it like a live SELL order would have it read as
+    // something already working the book.
+    const stop = _oipOOIsStop(o);
+    const cls = stop ? 'stop' : (isBuy ? 'buy' : 'sell');
+    const badge = stop ? 'SL' : (isBuy ? 'B' : 'S');
+    const badgeTitle = stop ? `Stop-loss — trigger, live at ${where}`
+                            : `${o.action} — live at ${where}`;
     return `
-        <span class="oip-oo-pill ${isBuy ? 'buy' : 'sell'}" data-id="${_oipOOEsc(o.id)}">
-            <span class="oip-oo-side" title="${_oipOOEsc(o.action)} — live at ${_oipOOEsc(where)}">${isBuy ? 'B' : 'S'}</span>
+        <span class="oip-oo-pill ${cls}" data-id="${_oipOOEsc(o.id)}">
+            <span class="oip-oo-side" title="${_oipOOEsc(badgeTitle)}">${badge}</span>
             <input type="number" class="oip-oo-price" step="0.05" min="0" value="${_oipOOEsc(o.price || 0)}"
-                title="New limit price — applied to all ${_oipOOEsc(where)}">
-            <button class="oip-oo-btn save" title="Update price at all brokers">&#10003;</button>
-            <button class="oip-oo-btn cancel" title="Cancel this order at all brokers">&times;</button>
+                title="New ${stop ? 'trigger' : 'limit'} price — applied to all ${_oipOOEsc(where)}">
+            <button class="oip-oo-btn save" title="Update ${stop ? 'trigger' : 'price'} at all brokers">&#10003;</button>
+            <button class="oip-oo-btn cancel" title="Cancel this ${stop ? 'stop-loss' : 'order'} at all brokers">&times;</button>
         </span>`;
 }
 
@@ -143,9 +156,11 @@ async function _oipOOSubmit(row, isCancel) {
     const id = row.dataset.id;
     const input = row.querySelector('.oip-oo-price');
     const price = parseFloat(input?.value);
+    const stop = row.classList.contains('stop');
+    const what = stop ? 'trigger' : 'price';
 
     if (!isCancel && (isNaN(price) || price <= 0)) {
-        _oipOONotify('Enter a valid price', 'error');
+        _oipOONotify(`Enter a valid ${what}`, 'error');
         return;
     }
 
@@ -158,8 +173,8 @@ async function _oipOOSubmit(row, isCancel) {
         });
         const r = await res.json();
         if (r.success) {
-            _oipOONotify(isCancel ? `Order cancelled${_oipOOBrokerLines(r)}`
-                                  : `Price → ₹${price}${_oipOOBrokerLines(r)}`, 'success');
+            _oipOONotify(isCancel ? `${stop ? 'Stop-loss' : 'Order'} cancelled${_oipOOBrokerLines(r)}`
+                                  : `${stop ? 'Trigger' : 'Price'} → ₹${price}${_oipOOBrokerLines(r)}`, 'success');
         } else if (r.gone) {
             // The order finished at the broker while it was still on the strip.
             // The server has already corrected the record, so the redraw below

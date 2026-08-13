@@ -118,13 +118,19 @@ def export():
 
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(['Symbol', 'Crossover', 'Call OI', 'Put OI', 'PCR',
-                     'Call OI Chg', 'Put OI Chg', 'OI Chg %', 'Quality',
-                     'Crossover Time', 'Cross Count'])
+    # Unfiltered, one line per cross — the whole day's signal log, which is
+    # what makes it worth exporting rather than a copy of what's on screen.
+    writer.writerow(['Symbol', 'Crossover', 'Crossover Time', 'Seq', 'Of',
+                     'Quality', 'Separation %', 'OI Chg %', 'Status',
+                     'Cross Spot', 'Cross Strike', 'Cross Premium',
+                     'Call OI', 'Put OI', 'PCR', 'Call OI Chg', 'Put OI Chg'])
     for r in data.get('rows', []):
-        writer.writerow([r['symbol'], r['direction'], r['ce_oi'], r['pe_oi'], r['pcr'],
-                         r['ce_chg'], r['pe_chg'], r['oi_chg_pct'], r['quality'],
-                         r['cross_time'][11:16], r['cross_count']])
+        writer.writerow([r['symbol'], r['direction'], r['cross_time'][11:16],
+                         r['cross_seq'], r['cross_total'], r['quality'],
+                         r['separation'], r['oi_chg_pct'], r['status'],
+                         r['cross_spot'], r['cross_strike'], r['cross_ltp'],
+                         r['ce_oi'], r['pe_oi'], r['pcr'],
+                         r['ce_chg'], r['pe_chg']])
 
     day = data.get('trade_date') or datetime.now().strftime('%Y-%m-%d')
     return Response(buf.getvalue(), mimetype='text/csv', headers={
@@ -158,6 +164,23 @@ def backfill_futures():
         return jsonify(result), (200 if result.get('success') else 500)
     except Exception as e:
         logger.error(f"[OIX API] futures backfill failed: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@oi_crossover_bp.route('/backfill-metrics', methods=['POST'])
+@csrf.exempt
+@limiter.exempt
+def backfill_metrics():
+    """Rate crossovers recorded before the rating was stored with them.
+
+    Historical mode filters on the frozen rating, so without this every past
+    session reads as empty. Safe to re-run — already-rated crosses are skipped.
+    """
+    try:
+        result = _service().backfill_event_metrics()
+        return jsonify(result), (200 if result.get('success') else 500)
+    except Exception as e:
+        logger.error(f"[OIX API] metric backfill failed: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
