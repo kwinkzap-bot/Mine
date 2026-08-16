@@ -151,46 +151,109 @@
                                     </span>
                                 </div>
 
+                                <!-- The four Decider step lines read as one group, so they
+                                     share a single colour/width/style like the CE/PE sections. -->
+                                <div class="oip-ind-section-title">Decider Line Style</div>
+                                <div class="oip-ind-item">
+                                    <span>Color</span>
+                                    <span class="oip-line-props">
+                                        <input type="color" id="oipRSDecLineColorInp" class="oip-ray-color-inp"
+                                            value="#ec4899"
+                                            title="Decider line color (applies to all 4 Decider lines)">
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Width</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSDecLineWidthSel" class="oip-ray-width-sel"
+                                            title="Decider line width">
+                                            <option value="1" selected>1px</option>
+                                            <option value="2">2px</option>
+                                            <option value="3">3px</option>
+                                            <option value="4">4px</option>
+                                        </select>
+                                    </span>
+                                </div>
+                                <div class="oip-ind-item">
+                                    <span>Style</span>
+                                    <span class="oip-line-props">
+                                        <select id="oipRSDecLineStyleSel" class="oip-ray-style-sel"
+                                            title="Decider line style">
+                                            <option value="0">Solid</option>
+                                            <option value="1">Dotted</option>
+                                            <option value="2" selected>Dashed</option>
+                                        </select>
+                                    </span>
+                                </div>
+
                                 <div class="oip-ind-section-title">Reference Lines</div>
-                                <label class="oip-ind-item">
+                                <!-- PDH/PDL step per day (each session sits at that leg's
+                                     previous-day extreme); Open and 5m High/Low are today-only
+                                     values, drawn as single full-width lines. -->
+                                <label class="oip-ind-item"
+                                    title="Each day held at the CE leg's previous-day high">
                                     <input type="checkbox" id="oipRSShowCePdh" checked><span style="color:#16a34a">CE
                                         PDH</span>
                                 </label>
-                                <label class="oip-ind-item">
+                                <label class="oip-ind-item" title="Each day held at the CE leg's previous-day low">
                                     <input type="checkbox" id="oipRSShowCePdl" checked><span style="color:#16a34a">CE
                                         PDL</span>
                                 </label>
-                                <label class="oip-ind-item">
+                                <label class="oip-ind-item" title="Each day held at the CE leg's own open">
                                     <input type="checkbox" id="oipRSShowCeOpen" checked><span style="color:#16a34a">CE
                                         Open</span>
                                 </label>
-                                <label class="oip-ind-item">
+                                <label class="oip-ind-item" title="Each day held at the CE leg's own first 5-minute (09:15-09:20) high">
                                     <input type="checkbox" id="oipRSShowCe5mHi" checked><span style="color:#16a34a">CE
                                         5m High</span>
                                 </label>
-                                <label class="oip-ind-item">
+                                <label class="oip-ind-item" title="Each day held at the CE leg's own first 5-minute (09:15-09:20) low">
                                     <input type="checkbox" id="oipRSShowCe5mLo" checked><span style="color:#16a34a">CE
                                         5m Low</span>
                                 </label>
-                                <label class="oip-ind-item">
+                                <label class="oip-ind-item"
+                                    title="Each day held at the PE leg's previous-day high">
                                     <input type="checkbox" id="oipRSShowPePdh" checked><span style="color:#2563eb">PE
                                         PDH</span>
                                 </label>
-                                <label class="oip-ind-item">
+                                <label class="oip-ind-item" title="Each day held at the PE leg's previous-day low">
                                     <input type="checkbox" id="oipRSShowPePdl" checked><span style="color:#2563eb">PE
                                         PDL</span>
                                 </label>
-                                <label class="oip-ind-item">
+                                <label class="oip-ind-item" title="Each day held at the PE leg's own open">
                                     <input type="checkbox" id="oipRSShowPeOpen" checked><span style="color:#2563eb">PE
                                         Open</span>
                                 </label>
-                                <label class="oip-ind-item">
+                                <label class="oip-ind-item" title="Each day held at the PE leg's own first 5-minute (09:15-09:20) high">
                                     <input type="checkbox" id="oipRSShowPe5mHi" checked><span style="color:#2563eb">PE
                                         5m High</span>
                                 </label>
-                                <label class="oip-ind-item">
+                                <label class="oip-ind-item" title="Each day held at the PE leg's own first 5-minute (09:15-09:20) low">
                                     <input type="checkbox" id="oipRSShowPe5mLo" checked><span style="color:#2563eb">PE
                                         5m Low</span>
+                                </label>
+                                <!-- Deciders — each session is held at the average of the
+                                     PREVIOUS day's CE and PE value for that field, so the
+                                     level re-bases every morning. -->
+                                <label class="oip-ind-item"
+                                    title="Each day held at the average of the previous day's CE and PE open">
+                                    <input type="checkbox" id="oipRSShowDecOpen" checked><span
+                                        style="color:#ec4899">Open Decider</span>
+                                </label>
+                                <label class="oip-ind-item"
+                                    title="Each day held at the average of the previous day's CE and PE high">
+                                    <input type="checkbox" id="oipRSShowDecHigh" checked><span
+                                        style="color:#ec4899">High Decider</span>
+                                </label>
+                                <label class="oip-ind-item"
+                                    title="Each day held at the average of the previous day's CE and PE low">
+                                    <input type="checkbox" id="oipRSShowDecLow" checked><span
+                                        style="color:#ec4899">Low Decider</span>
+                                </label>
+                                <label class="oip-ind-item"
+                                    title="Each day held at the average of the previous day's CE and PE close">
+                                    <input type="checkbox" id="oipRSShowDecClose" checked><span
+                                        style="color:#ec4899">Close Decider</span>
                                 </label>
                             </div>
                         </div>

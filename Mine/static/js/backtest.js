@@ -596,6 +596,47 @@ document.addEventListener('DOMContentLoaded', function() {
         el.textContent = isEmaAllMode() ? 'varies by stock' : '₹' + total.toLocaleString('en-IN');
     };
 
+    // ── Status filter: narrows the strategy dropdown to one maturity bucket ──
+    const strategyStatusSelect = document.getElementById('strategyStatusSelect');
+    const STRATEGY_STATUS = {
+        success: ['rtp', 'second_candle', 'expiry_breakout', 'thirty_min_fakeout',
+                  'swing_momentum', 'ema_pullback'],
+        testing: ['scalp_pullback'],
+        failure: ['vwap'],
+    };
+    // Keep every <option> node around — filtering re-appends from this list, so
+    // switching status back restores the original labels and order.
+    const _allStrategyOptions = strategySelect
+        ? Array.from(strategySelect.options)
+        : [];
+
+    function applyStrategyStatusFilter() {
+        if (!strategySelect || !strategyStatusSelect) return;
+        const allowed = STRATEGY_STATUS[strategyStatusSelect.value] || [];
+        const prev    = strategySelect.value;
+
+        strategySelect.innerHTML = '';
+        _allStrategyOptions
+            .filter(opt => allowed.includes(opt.value))
+            .forEach(opt => strategySelect.appendChild(opt));
+
+        if (!strategySelect.options.length) return;
+        // Selection survives only if the strategy is still in the bucket;
+        // otherwise fall back to the first one and rebuild the form for it.
+        if (allowed.includes(prev)) {
+            strategySelect.value = prev;
+        } else {
+            strategySelect.selectedIndex = 0;
+            updateStrategyView();
+            updateLiveFlagBadge();
+        }
+    }
+
+    if (strategyStatusSelect) {
+        strategyStatusSelect.addEventListener('change', applyStrategyStatusFilter);
+        applyStrategyStatusFilter();
+    }
+
     if (strategySelect) {
         strategySelect.addEventListener('change', updateStrategyView);
         // Set initial state

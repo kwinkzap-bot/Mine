@@ -31,12 +31,21 @@
  * on the page to Opt Prem's globals via a single page-wide querySelectorAll,
  * so sharing that class would fire orders against the wrong strike/price.
  *
- * Also draws 5 full-width horizontal reference lines per leg (createPriceLine
- * — spans the whole chart, left and right, like a support/resistance level):
- * Previous Day High, Previous Day Low, Current Day Open, and the First
- * 5-Minute (Opening Range, 09:15–09:20 IST) candle's High and Low — CE in
- * green, PE in blue — recomputed from that leg's own candles on every load
- * (see oipRSComputeRefLines / oipRSDrawRefLines).
+ * Also draws a set of level indicators, every one of them a STEP series that
+ * re-bases each session — so a day shows its own numbers and the history stays
+ * on the chart, rather than one flat line restating today's value everywhere:
+ *
+ *   - Five per leg, CE in green and PE in blue, from that leg's own candles
+ *     (oipRSComputeLegSeries): Previous Day High/Low — the day before's
+ *     extremes — plus that day's OWN Open and its first 5-minute (Opening
+ *     Range, 09:15–09:20 IST) candle's High and Low.
+ *
+ *   - Four Deciders (oipRSComputeDeciderSeries): Open/High/Low/Close Decider,
+ *     each session held at the average of the PREVIOUS day's CE and PE value
+ *     for that field.
+ *
+ * Both run through the same engine (_oipRSDayStep, and _oipRSPrevDayStep for
+ * the ones that look a day back). There are no createPriceLine()s left here.
  *
  * This block owns ALL of its data end to end: everything it draws — the CE/PE
  * candles, both volume overlays, and every pill in the stats strip above the
@@ -79,7 +88,8 @@ const OIP_RS_STORAGE_KEY_RAYS = 'oipRS_rays_v1';
 const OIP_RS_INDICATOR_CHECKBOX_IDS = [
     'oipRSShowVwap', 'oipRSShowVolume', 'oipRSShowBnfVolume', 'oipRSShow5mClose',
     'oipRSShowCePdh', 'oipRSShowCePdl', 'oipRSShowCeOpen', 'oipRSShowCe5mHi', 'oipRSShowCe5mLo',
-    'oipRSShowPePdh', 'oipRSShowPePdl', 'oipRSShowPeOpen', 'oipRSShowPe5mHi', 'oipRSShowPe5mLo'
+    'oipRSShowPePdh', 'oipRSShowPePdl', 'oipRSShowPeOpen', 'oipRSShowPe5mHi', 'oipRSShowPe5mLo',
+    'oipRSShowDecOpen', 'oipRSShowDecHigh', 'oipRSShowDecLow', 'oipRSShowDecClose'
 ];
 
 function oipRSSaveIndicatorState() {
@@ -133,24 +143,70 @@ function oipRSRestoreSavedRays() {
     });
 }
 
-// Horizontal reference lines — Previous Day High, Previous Day Low, Current
-// Day Open, and the First 5-Minute (Opening Range) candle's High/Low —
-// drawn per-leg (CE green, PE blue) as full-width createPriceLine()s,
-// recomputed from that leg's own option-premium candles on every load.
-// Keyed by name (not an array) so the Indicators popup checkboxes can
-// toggle each one individually.
-let oipRSCeRefLineObjs = { pdh: null, pdl: null, open: null, fiveMHi: null, fiveMLo: null };
-let oipRSPeRefLineObjs = { pdh: null, pdl: null, open: null, fiveMHi: null, fiveMLo: null };
+// ── Per-leg level indicators ─────────────────────────────────────────────────
+// Five step series per leg (CE green, PE blue), all built from that leg's own
+// option-premium candles and all re-based every session, so each day carries
+// its OWN levels and the history stays on the chart:
+//
+//   PDH / PDL      — the day before's high / low
+//   Open           — that day's own open
+//   5m High / Low  — that day's own first 5-minute (Opening Range,
+//                    09:15–09:20 IST) candle's high / low
+//
+// The first three used to be full-width createPriceLine()s, which could only
+// ever state TODAY's number and drew it across every other day too. There are
+// no price lines left in this block — everything is a plotted series.
+//
+// One colour/width/style per leg (the CE and PE pickers), one Indicators
+// checkbox each.
+let oipRSLegSeries = {};
 const OIP_RS_CE_REF_COLOR = '#16a34a'; // green
 const OIP_RS_PE_REF_COLOR = '#2563eb'; // blue
-const OIP_RS_REF_KEYS = ['pdh', 'pdl', 'open', 'fiveMHi', 'fiveMLo'];
+const OIP_RS_LEG_SPECS = {
+    cePdh: { side: 'Ce', field: 'pdh', checkbox: 'oipRSShowCePdh', title: 'CE PDH' },
+    cePdl: { side: 'Ce', field: 'pdl', checkbox: 'oipRSShowCePdl', title: 'CE PDL' },
+    ceOpen: { side: 'Ce', field: 'open', checkbox: 'oipRSShowCeOpen', title: 'CE Open' },
+    ce5mHi: { side: 'Ce', field: 'fiveMHi', checkbox: 'oipRSShowCe5mHi', title: 'CE 5m H' },
+    ce5mLo: { side: 'Ce', field: 'fiveMLo', checkbox: 'oipRSShowCe5mLo', title: 'CE 5m L' },
+    pePdh: { side: 'Pe', field: 'pdh', checkbox: 'oipRSShowPePdh', title: 'PE PDH' },
+    pePdl: { side: 'Pe', field: 'pdl', checkbox: 'oipRSShowPePdl', title: 'PE PDL' },
+    peOpen: { side: 'Pe', field: 'open', checkbox: 'oipRSShowPeOpen', title: 'PE Open' },
+    pe5mHi: { side: 'Pe', field: 'fiveMHi', checkbox: 'oipRSShowPe5mHi', title: 'PE 5m H' },
+    pe5mLo: { side: 'Pe', field: 'fiveMLo', checkbox: 'oipRSShowPe5mLo', title: 'PE 5m L' }
+};
+const OIP_RS_LEG_KEYS = Object.keys(OIP_RS_LEG_SPECS);
+const OIP_RS_LEG_FIELDS = ['pdh', 'pdl', 'open', 'fiveMHi', 'fiveMLo'];
 
-// Per-side (CE / PE) reference-line style pickers — one color/width/style
-// applies to ALL 5 lines of that side at once (PDH, PDL, Open, 5m Hi, 5m Lo),
-// same idea as the Ray tool's style pickers. Persisted alongside indicator
-// show/hide state.
+// ── Decider indicators ───────────────────────────────────────────────────────
+// Four plotted indicator series, computed from BOTH legs at once: each holds
+// the average of the previous day's CE and PE value for that OHLC field —
+//   Open Decider  = (CE prev-day open  + PE prev-day open)  / 2
+//   High Decider  = (CE prev-day high  + PE prev-day high)  / 2
+//   Low Decider   = (CE prev-day low   + PE prev-day low)   / 2
+//   Close Decider = (CE prev-day close + PE prev-day close) / 2
+//
+// Step series like the leg levels above — each day is drawn at the day before
+// it. Data comes from oipRSComputeDeciderSeries.
+//
+// They blend the two legs, so there is one set of them rather than one per leg
+// — both legs share this chart's single price scale, so the values sit on the
+// same axis as the candles either way.
+let oipRSDeciderSeries = { openD: null, highD: null, lowD: null, closeD: null };
+const OIP_RS_DECIDER_KEYS = ['openD', 'highD', 'lowD', 'closeD'];
+const OIP_RS_DECIDER_TITLES = { openD: 'O Dec', highD: 'H Dec', lowD: 'L Dec', closeD: 'C Dec' };
+const OIP_RS_DECIDER_CHECKBOX_IDS = { openD: 'oipRSShowDecOpen', highD: 'oipRSShowDecHigh', lowD: 'oipRSShowDecLow', closeD: 'oipRSShowDecClose' };
+// All four share ONE colour — they read as a group, and the axis label on each
+// series says which is which — over a shared width/style, the way the CE/PE
+// sections work. Pink is clear of the CE candles' green/red, the PE candles'
+// violet/grey and the amber 5m-close border. The picker changes all four.
+const OIP_RS_DECIDER_COLOR = '#ec4899';
+
+// Per-side (CE / PE) style pickers — one color/width/style applies to ALL 5
+// lines of that side at once (PDH, PDL, Open, 5m Hi, 5m Lo), same idea as the
+// Ray tool's style pickers. Persisted alongside indicator show/hide state.
 const OIP_RS_CE_STYLE_IDS = { color: 'oipRSCeLineColorInp', width: 'oipRSCeLineWidthSel', style: 'oipRSCeLineStyleSel' };
 const OIP_RS_PE_STYLE_IDS = { color: 'oipRSPeLineColorInp', width: 'oipRSPeLineWidthSel', style: 'oipRSPeLineStyleSel' };
+const OIP_RS_DEC_STYLE_IDS = { color: 'oipRSDecLineColorInp', width: 'oipRSDecLineWidthSel', style: 'oipRSDecLineStyleSel' };
 const OIP_RS_STORAGE_KEY_LINESTYLE = 'oipRS_lineStyle_v1';
 
 function oipRSLineStyleFromPickers(ids, fallbackColor) {
@@ -161,10 +217,16 @@ function oipRSLineStyleFromPickers(ids, fallbackColor) {
     };
 }
 
+// Style shared by all four Decider lines.
+function oipRSDeciderStyle() {
+    return oipRSLineStyleFromPickers(OIP_RS_DEC_STYLE_IDS, OIP_RS_DECIDER_COLOR);
+}
+
 function oipRSSaveLineStyleState() {
     const state = {
         ce: oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR),
         pe: oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR),
+        dec: oipRSDeciderStyle(),
         // 5m Close Border has a colour only (no width/style — see oipRSMark5mCloseBorders).
         fiveMClose: document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.value || OIP_RS_5M_CLOSE_DEFAULT
     };
@@ -183,11 +245,12 @@ function oipRSRestoreLineStyleState() {
     };
     apply(OIP_RS_CE_STYLE_IDS, state.ce);
     apply(OIP_RS_PE_STYLE_IDS, state.pe);
+    apply(OIP_RS_DEC_STYLE_IDS, state.dec);
     const f = document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID);
     if (f && state.fiveMClose) f.value = state.fiveMClose;
 }
 
-// Reflects the current CE/PE colors onto the reference-line checkbox labels
+// Reflects the current CE/PE/Decider colors onto the indicator checkbox labels
 // in the Indicators popup, so the swatch text always matches what's drawn.
 function oipRSUpdateCheckboxSpanColors() {
     const ceColor = document.getElementById(OIP_RS_CE_STYLE_IDS.color)?.value || OIP_RS_CE_REF_COLOR;
@@ -200,35 +263,71 @@ function oipRSUpdateCheckboxSpanColors() {
         const span = document.getElementById(id)?.nextElementSibling;
         if (span) span.style.color = peColor;
     });
+    const decColor = oipRSDeciderStyle().color;
+    OIP_RS_DECIDER_KEYS.forEach(key => {
+        const span = document.getElementById(OIP_RS_DECIDER_CHECKBOX_IDS[key])?.nextElementSibling;
+        if (span) span.style.color = decColor;
+    });
     const fiveMSpan = document.getElementById('oipRSShow5mClose')?.nextElementSibling;
     if (fiveMSpan) fiveMSpan.style.color = document.getElementById(OIP_RS_5M_CLOSE_COLOR_ID)?.value || OIP_RS_5M_CLOSE_DEFAULT;
 }
 
-// Live-restyles already-drawn price lines (no data refetch/redraw needed) —
-// used when a style picker changes.
-function oipRSApplyLineStyleLive(lineObjRef, style) {
-    lineObjRef._style = style;
-    OIP_RS_REF_KEYS.forEach(key => {
-        const line = lineObjRef[key];
-        if (line) {
-            try { line.applyOptions({ color: style.color, lineWidth: style.width, lineStyle: style.lineStyle }); } catch (e) {}
-        }
+// Style shared by all 5 of a leg's level series.
+function oipRSLegStyle(side) {
+    return side === 'Ce'
+        ? oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR)
+        : oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR);
+}
+
+// Restyles one leg's level series in place — no refetch, data is unchanged.
+function oipRSApplyLegStyleLive(side, style) {
+    OIP_RS_LEG_KEYS.filter(key => OIP_RS_LEG_SPECS[key].side === side).forEach(key => {
+        try {
+            oipRSLegSeries[key]?.applyOptions({ color: style.color, lineWidth: style.width, lineStyle: style.lineStyle });
+        } catch (e) {}
     });
 }
 
 function oipRSOnCeStyleChange() {
-    const style = oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR);
-    oipRSApplyLineStyleLive(oipRSCeRefLineObjs, style);
+    oipRSApplyLegStyleLive('Ce', oipRSLegStyle('Ce'));
     oipRSUpdateCheckboxSpanColors();
     oipRSSaveLineStyleState();
 }
 
 function oipRSOnPeStyleChange() {
-    const style = oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR);
-    oipRSApplyLineStyleLive(oipRSPeRefLineObjs, style);
+    oipRSApplyLegStyleLive('Pe', oipRSLegStyle('Pe'));
     oipRSUpdateCheckboxSpanColors();
     oipRSSaveLineStyleState();
 }
+
+// Show/hide, straight off the ten CE/PE level checkboxes.
+function oipRSSyncLegVisibility() {
+    OIP_RS_LEG_KEYS.forEach(key => {
+        const visible = document.getElementById(OIP_RS_LEG_SPECS[key].checkbox)?.checked ?? true;
+        try { oipRSLegSeries[key]?.applyOptions({ visible }); } catch (e) {}
+    });
+}
+
+// Restyles all four Decider series in place — no refetch, data is unchanged.
+function oipRSOnDeciderStyleChange() {
+    const style = oipRSDeciderStyle();
+    OIP_RS_DECIDER_KEYS.forEach(key => {
+        try {
+            oipRSDeciderSeries[key]?.applyOptions({ color: style.color, lineWidth: style.width, lineStyle: style.lineStyle });
+        } catch (e) {}
+    });
+    oipRSUpdateCheckboxSpanColors();
+    oipRSSaveLineStyleState();
+}
+
+// Show/hide, straight off the four checkboxes.
+function oipRSSyncDeciderVisibility() {
+    OIP_RS_DECIDER_KEYS.forEach(key => {
+        const visible = document.getElementById(OIP_RS_DECIDER_CHECKBOX_IDS[key])?.checked ?? true;
+        try { oipRSDeciderSeries[key]?.applyOptions({ visible }); } catch (e) {}
+    });
+}
+
 // Bar duration (minutes) per interval — used to find which loaded bar(s)
 // OVERLAP the 09:15–09:20 Opening Range window rather than start exactly
 // inside it (matters for coarser intervals like 15m/30m).
@@ -242,116 +341,125 @@ function oipRSComputeStrikes(openPrice) {
     return { ceStrike: near50 - 50, peStrike: near50 + 50 };
 }
 
-// Computes Previous Day High, Previous Day Low, Current Day Open, and the
-// First 5-Minute (Opening Range, 09:15–09:20 IST) candle's High/Low from a
-// single leg's own option-premium candles (CE or PE) — grouped by trading
-// day via the shared _oipGroupCandlesByDay helper (oi_indicators.js).
-function oipRSComputeRefLines(candles) {
-    if (!candles || !candles.length || typeof _oipGroupCandlesByDay !== 'function') return null;
-    const { map, order } = _oipGroupCandlesByDay(candles);
-    if (!order.length) return null;
+// ── Per-day step series (leg levels + Deciders) ──────────────────────────────
+// The trading-day key for a bar. "Fake IST Epoch" timestamps, so the UTC
+// getters already read as IST clock time (the convention _oipGroupCandlesByDay
+// relies on too).
+function _oipRSDayKey(time) {
+    const d = new Date(time * 1000);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+}
 
-    const todayKey = order[order.length - 1];
-    const todayCandles = map[todayKey] || [];
-    const todayOpen = todayCandles.length ? Number(todayCandles[0].open) : null;
+// One trading day's OHLC from its bars, or null when the day has none usable.
+function _oipRSDayOHLC(dayCandles) {
+    if (!dayCandles || !dayCandles.length) return null;
+    const o = Number(dayCandles[0].open);
+    const c = Number(dayCandles[dayCandles.length - 1].close);
+    const h = Math.max(...dayCandles.map(x => Number(x.high)));
+    const l = Math.min(...dayCandles.map(x => Number(x.low)));
+    return [o, h, l, c].some(v => !isFinite(v)) ? null : { o, h, l, c };
+}
 
-    let pdh = null, pdl = null;
-    if (order.length >= 2) {
-        const prevCandles = map[order[order.length - 2]] || [];
-        if (prevCandles.length) {
-            pdh = Math.max(...prevCandles.map(c => Number(c.high)));
-            pdl = Math.min(...prevCandles.map(c => Number(c.low)));
-        }
-    }
-
-    // First 5-min candle (09:15–09:20 IST) — the classic Opening Range.
-    // "Fake IST Epoch" timestamps, so UTC getHours/getMinutes already read
-    // as IST clock time (same convention _oipGroupCandlesByDay relies on).
+// That day's first 5-minute (Opening Range, 09:15–09:20 IST) high/low, or null
+// when the day has no bar in the window. Bars are matched by OVERLAP rather
+// than by starting inside it, so coarser intervals (15m/30m) still resolve.
+// "Fake IST Epoch" timestamps, so the UTC getters already read as IST clock
+// time (the convention _oipGroupCandlesByDay relies on too).
+function _oipRSOpeningRange(dayCandles) {
     const barMin = OIP_RS_BAR_MINUTES[oipRSInterval] || 1;
     const WIN_START = 9 * 60 + 15, WIN_END = 9 * 60 + 20;
-    const w = todayCandles.filter(c => {
+    const w = (dayCandles || []).filter(c => {
         const d = new Date(c.time * 1000);
         const startMin = d.getUTCHours() * 60 + d.getUTCMinutes();
         return startMin < WIN_END && (startMin + barMin) > WIN_START;
     });
-    let fiveMHi = null, fiveMLo = null;
-    if (w.length) {
-        const hi = Math.max(...w.map(c => Number(c.high)));
-        const lo = Math.min(...w.map(c => Number(c.low)));
-        if (isFinite(hi) && isFinite(lo)) { fiveMHi = hi; fiveMLo = lo; }
+    if (!w.length) return null;
+    const hi = Math.max(...w.map(c => Number(c.high)));
+    const lo = Math.min(...w.map(c => Number(c.low)));
+    return (isFinite(hi) && isFinite(lo)) ? { hi, lo } : null;
+}
+
+// The engine behind every step indicator here. `dayVal` maps a day key to that
+// day's values ({key: number}); it is painted flat across each day's bars on
+// `axisCandles`. Returns one {time, value} array per key; a day with no value
+// plots nothing, so a gap stays visible as a gap.
+function _oipRSDayStep(axisCandles, dayVal, keys) {
+    const out = {};
+    keys.forEach(k => out[k] = []);
+    axisCandles.forEach(candle => {
+        const v = dayVal[_oipRSDayKey(candle.time)];
+        if (!v) return;
+        keys.forEach(k => { if (v[k] != null) out[k].push({ time: candle.time, value: v[k] }); });
+    });
+    return out;
+}
+
+// Same, one day later: each session is held at the PREVIOUS day's numbers —
+// the "previous day's value, flat across the next session" convention shared
+// with oipCalculatePrevDayCloseAvg in oi_indicators.js. A day whose
+// predecessor has no value plots nothing rather than reaching further back.
+function _oipRSPrevDayStep(axisCandles, order, dayVal, keys) {
+    const prevVal = {};
+    for (let i = 1; i < order.length; i++) {
+        const prev = dayVal[order[i - 1]];
+        if (prev) prevVal[order[i]] = prev;
     }
-
-    return { pdh, pdl, todayOpen, fiveMHi, fiveMLo };
+    return _oipRSDayStep(axisCandles, prevVal, keys);
 }
 
-// Creates/removes individual full-width price lines on `lineObjRef` to
-// match `vis` ({pdh,pdl,open,fiveMHi,fiveMLo} booleans), using the values/
-// series/color cached on it by oipRSDrawRefLines. Uses lightweight-charts'
-// native createPriceLine() — spans the whole chart, left and right, like a
-// support/resistance level, and is always correctly positioned by the
-// library itself (no manual point/index handling needed).
-function oipRSApplyRefVisibility(lineObjRef, vis) {
-    const series = lineObjRef._series;
-    const refs = lineObjRef._refs;
-    const style = lineObjRef._style || {};
-    const color = style.color;
-    const lineWidth = style.width || 1;
-    const lineStyle = style.lineStyle ?? LightweightCharts.LineStyle.Solid;
-    if (!series || !refs) return;
+// One leg's five level series, each re-based per session:
+//   pdh / pdl              — the day BEFORE's high / low
+//   open, fiveMHi, fiveMLo — that day's OWN open and opening-range high/low
+// Returns {pdh, pdl, open, fiveMHi, fiveMLo}, each an array of {time, value}.
+function oipRSComputeLegSeries(candles) {
+    const empty = {};
+    OIP_RS_LEG_FIELDS.forEach(f => empty[f] = []);
+    if (!candles?.length || typeof _oipGroupCandlesByDay !== 'function') return empty;
+    const { map, order } = _oipGroupCandlesByDay(candles);
 
-    const titles = { pdh: 'PDH', pdl: 'PDL', open: 'Open', fiveMHi: '5m H', fiveMLo: '5m L' };
-    const values = { pdh: refs.pdh, pdl: refs.pdl, open: refs.todayOpen, fiveMHi: refs.fiveMHi, fiveMLo: refs.fiveMLo };
-    OIP_RS_REF_KEYS.forEach(key => {
-        const price = values[key];
-        const hasValue = price != null && !isNaN(price);
-        const shouldShow = (vis[key] !== false) && hasValue;
-        if (shouldShow && !lineObjRef[key]) {
-            try {
-                lineObjRef[key] = series.createPriceLine({
-                    price, color, lineWidth, lineStyle,
-                    axisLabelVisible: true, title: titles[key]
-                });
-            } catch (e) {}
-        } else if (!shouldShow && lineObjRef[key]) {
-            try { series.removePriceLine(lineObjRef[key]); } catch (e) {}
-            lineObjRef[key] = null;
-        }
+    const dayHiLo = {};   // shifted forward a day -> PDH/PDL
+    const dayOwn = {};    // stays on its own day -> Open, 5m Hi/Lo
+    order.forEach(day => {
+        const d = _oipRSDayOHLC(map[day]);
+        if (!d) return;
+        dayHiLo[day] = { pdh: d.h, pdl: d.l };
+        const or = _oipRSOpeningRange(map[day]);
+        dayOwn[day] = { open: d.o, fiveMHi: or?.hi ?? null, fiveMLo: or?.lo ?? null };
     });
-}
 
-// Clears the previously-drawn reference lines, caches the new `refs`/style
-// on `lineObjRef` (so later visibility-only toggles can recreate lines
-// without a full reload), and draws whichever are enabled per `visibility`.
-// `lineObjRef` is the persistent {pdh, pdl, open, ...} object (by
-// reference) tracking this leg's price-line instances. `style` is
-// {color, width, lineStyle} — one setting shared by all 5 lines of this leg.
-function oipRSDrawRefLines(series, lineObjRef, refs, style, visibility) {
-    OIP_RS_REF_KEYS.forEach(key => {
-        if (lineObjRef[key]) { try { series.removePriceLine(lineObjRef[key]); } catch (e) {} }
-        lineObjRef[key] = null;
-    });
-    lineObjRef._series = series;
-    lineObjRef._refs = refs;
-    lineObjRef._style = style;
-    oipRSApplyRefVisibility(lineObjRef, visibility || {});
-}
-
-// Reads the Indicators popup's 6 reference-line checkboxes and adds/removes
-// price lines to match (does not refetch data).
-function oipRSRefVisibilityFromCheckboxes(side) {
-    const get = id => document.getElementById(id)?.checked ?? true;
     return {
-        pdh: get(`oipRSShow${side}Pdh`),
-        pdl: get(`oipRSShow${side}Pdl`),
-        open: get(`oipRSShow${side}Open`),
-        fiveMHi: get(`oipRSShow${side}5mHi`),
-        fiveMLo: get(`oipRSShow${side}5mLo`)
+        ..._oipRSPrevDayStep(candles, order, dayHiLo, ['pdh', 'pdl']),
+        ..._oipRSDayStep(candles, dayOwn, ['open', 'fiveMHi', 'fiveMLo'])
     };
 }
 
-function oipRSSyncRefLineVisibility() {
-    oipRSApplyRefVisibility(oipRSCeRefLineObjs, oipRSRefVisibilityFromCheckboxes('Ce'));
-    oipRSApplyRefVisibility(oipRSPeRefLineObjs, oipRSRefVisibilityFromCheckboxes('Pe'));
+// The four Decider step series — each session held at the average of the
+// PREVIOUS day's CE and PE value for that field (open = the day's first bar's
+// open, high/low = the day's extremes, close = its last bar's close).
+//
+// Returns {openD, highD, lowD, closeD}, each an array of {time, value} on the
+// CE candles' timestamps. A day is skipped where either leg is missing it — a
+// half average would be a plain CE (or PE) line wearing the Decider's colour.
+function oipRSComputeDeciderSeries(ceCandles, peCandles) {
+    const empty = { openD: [], highD: [], lowD: [], closeD: [] };
+    if (!ceCandles?.length || !peCandles?.length || typeof _oipGroupCandlesByDay !== 'function') return empty;
+
+    const ce = _oipGroupCandlesByDay(ceCandles);
+    const pe = _oipGroupCandlesByDay(peCandles);
+
+    const dayVal = {};
+    ce.order.forEach(day => {
+        const c = _oipRSDayOHLC(ce.map[day]);
+        const p = _oipRSDayOHLC(pe.map[day]);
+        if (!c || !p) return;
+        dayVal[day] = {
+            openD: (c.o + p.o) / 2,
+            highD: (c.h + p.h) / 2,
+            lowD: (c.l + p.l) / 2,
+            closeD: (c.c + p.c) / 2
+        };
+    });
+    return _oipRSPrevDayStep(ceCandles, ce.order, dayVal, OIP_RS_DECIDER_KEYS);
 }
 
 function oipRSInitCharts() {
@@ -412,6 +520,31 @@ function oipRSInitCharts() {
         oipRSVwapCESeries?.applyOptions({ visible: v });
         oipRSVwapPESeries?.applyOptions({ visible: v });
         oipRSSaveIndicatorState();
+    });
+
+    // Every level line on this chart — the two legs' 5 each plus the 4 Deciders
+    // — is a step series, fed per render from that leg's (or both legs')
+    // candles. autoscaleInfoProvider is left at null (as the VWAP lines above
+    // do) so a level sitting far from today's premium can't stretch the price
+    // scale and squash the candles.
+    const addStepSeries = (style, title, visible) => oipRSChart.chart.addSeries(LightweightCharts.LineSeries, {
+        color: style.color, lineWidth: style.width, lineStyle: style.lineStyle, title, visible,
+        priceLineVisible: false, lastValueVisible: true, autoscaleInfoProvider: () => null
+    });
+
+    const legStyle = { Ce: oipRSLegStyle('Ce'), Pe: oipRSLegStyle('Pe') };
+    OIP_RS_LEG_KEYS.forEach(key => {
+        const spec = OIP_RS_LEG_SPECS[key];
+        oipRSLegSeries[key] = addStepSeries(
+            legStyle[spec.side], spec.title,
+            document.getElementById(spec.checkbox)?.checked ?? true);
+    });
+
+    const decStyle = oipRSDeciderStyle();
+    OIP_RS_DECIDER_KEYS.forEach(key => {
+        oipRSDeciderSeries[key] = addStepSeries(
+            decStyle, OIP_RS_DECIDER_TITLES[key],
+            document.getElementById(OIP_RS_DECIDER_CHECKBOX_IDS[key])?.checked ?? true);
     });
 
     // Volume histograms — the same future volumes used on the main OI Profile
@@ -517,13 +650,19 @@ function oipRSInitIndicatorsPopup() {
         });
     }
 
-    [
-        'oipRSShowCePdh', 'oipRSShowCePdl', 'oipRSShowCeOpen', 'oipRSShowCe5mHi', 'oipRSShowCe5mLo',
-        'oipRSShowPePdh', 'oipRSShowPePdl', 'oipRSShowPeOpen', 'oipRSShowPe5mHi', 'oipRSShowPe5mLo'
-    ].forEach(id => document.getElementById(id)?.addEventListener('change', () => {
-        oipRSSyncRefLineVisibility();
-        oipRSSaveIndicatorState();
-    }));
+    OIP_RS_LEG_KEYS.forEach(key => {
+        document.getElementById(OIP_RS_LEG_SPECS[key].checkbox)?.addEventListener('change', () => {
+            oipRSSyncLegVisibility();
+            oipRSSaveIndicatorState();
+        });
+    });
+
+    OIP_RS_DECIDER_KEYS.forEach(key => {
+        document.getElementById(OIP_RS_DECIDER_CHECKBOX_IDS[key])?.addEventListener('change', () => {
+            oipRSSyncDeciderVisibility();
+            oipRSSaveIndicatorState();
+        });
+    });
 
     [OIP_RS_CE_STYLE_IDS.color, OIP_RS_CE_STYLE_IDS.width, OIP_RS_CE_STYLE_IDS.style].forEach(id => {
         const el = document.getElementById(id);
@@ -532,6 +671,10 @@ function oipRSInitIndicatorsPopup() {
     [OIP_RS_PE_STYLE_IDS.color, OIP_RS_PE_STYLE_IDS.width, OIP_RS_PE_STYLE_IDS.style].forEach(id => {
         const el = document.getElementById(id);
         el?.addEventListener(el.type === 'color' ? 'input' : 'change', oipRSOnPeStyleChange);
+    });
+    [OIP_RS_DEC_STYLE_IDS.color, OIP_RS_DEC_STYLE_IDS.width, OIP_RS_DEC_STYLE_IDS.style].forEach(id => {
+        const el = document.getElementById(id);
+        el?.addEventListener(el.type === 'color' ? 'input' : 'change', oipRSOnDeciderStyleChange);
     });
     // 5m Close Border — toggle + colour both re-tag the loaded candles in place.
     document.getElementById('oipRSShow5mClose')?.addEventListener('change', oipRSOn5mCloseChange);
@@ -746,8 +889,18 @@ function oipRSRenderChart(data) {
         if (oipRSVwapPESeries) oipRSVwapPESeries.setData(oipCalculateVWAP(peData));
     }
 
-    if (oipRSCESeries) oipRSDrawRefLines(oipRSCESeries, oipRSCeRefLineObjs, oipRSComputeRefLines(ceData), oipRSLineStyleFromPickers(OIP_RS_CE_STYLE_IDS, OIP_RS_CE_REF_COLOR), oipRSRefVisibilityFromCheckboxes('Ce'));
-    if (oipRSPESeries) oipRSDrawRefLines(oipRSPESeries, oipRSPeRefLineObjs, oipRSComputeRefLines(peData), oipRSLineStyleFromPickers(OIP_RS_PE_STYLE_IDS, OIP_RS_PE_REF_COLOR), oipRSRefVisibilityFromCheckboxes('Pe'));
+    // Step series. Each leg's five levels come from its own candles; the
+    // Deciders blend the two, so they're built once here from both.
+    const legLevels = { Ce: oipRSComputeLegSeries(ceData), Pe: oipRSComputeLegSeries(peData) };
+    OIP_RS_LEG_KEYS.forEach(key => {
+        const spec = OIP_RS_LEG_SPECS[key];
+        if (oipRSLegSeries[key]) oipRSLegSeries[key].setData(legLevels[spec.side][spec.field]);
+    });
+
+    const deciders = oipRSComputeDeciderSeries(ceData, peData);
+    OIP_RS_DECIDER_KEYS.forEach(key => {
+        if (oipRSDeciderSeries[key]) oipRSDeciderSeries[key].setData(deciders[key]);
+    });
 
     const setText = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
     setText('oipRSLegendCombinedCE', `${ceStrike} CE`);

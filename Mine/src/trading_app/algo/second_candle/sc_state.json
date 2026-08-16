@@ -1,18 +1,18 @@
 {
   "active_trade": null,
   "traded_today": true,
-  "trade_date": "2026-08-13",
+  "trade_date": "2026-08-14",
   "params": {
     "candle_index": 2,
-    "rr_ratio": 3.0,
+    "rr_ratio": 2.5,
     "exit_hour": 15,
     "exit_minute": 25,
     "enable_long": true,
-    "enable_short": false
+    "enable_short": true
   },
   "last_exit": {
     "reason": "SL",
-    "spot": 24350.1,
-    "time": "2026-08-13T13:16:19.260970"
+    "spot": 24318.5,
+    "time": "2026-08-14T09:18:57.419412"
   }
 }
